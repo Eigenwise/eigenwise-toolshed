@@ -38,17 +38,15 @@ Built by **Kenny Vaneetvelde** (AKA Eigenwise).
 
 - 🌐 Writing & projects — [eigenwise.io](https://eigenwise.io)
 - 𝕏 — [@Kenny_V](https://x.com/Kenny_V)
-- 🧱 Atomic Agents — [github.com/eigenwise/atomic-agents](https://github.com/eigenwise/atomic-agents)
+- 🧱 Check out [Atomic Agents](https://github.com/eigenwise/atomic-agents)
 
 ## Support
 
-These plugins are **free and open**. If they save you time, a coffee or a GitHub sponsorship genuinely helps me keep building and maintaining them.
+These plugins are **free and open**. If they save you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining them.
 
-<p>
-  <a href="https://ko-fi.com/eigenwise"><img height="36" alt="Support me on Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg"></a>
-  &nbsp;
-  <a href="https://github.com/sponsors/Eigenwise"><img height="36" alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a>
-</p>
+| Ko-fi | GitHub Sponsors |
+|:-----:|:---------------:|
+| <a href="https://ko-fi.com/eigenwise"><img height="32" alt="Support me on Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg"></a> | <a href="https://github.com/sponsors/Eigenwise"><img height="32" alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a> |
 
 ## License
 
