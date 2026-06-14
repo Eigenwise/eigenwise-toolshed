@@ -1,8 +1,6 @@
 # 🧰 claude-toolshed
 
-A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins by
-**[Kenny Vaneetvelde](https://eigenwise.io)** — creator of
-[Atomic Agents](https://github.com/eigenwise/atomic-agents).
+A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins.
 
 > Sharp little tools for Claude Code, kept in one shed. 🛠️
 
