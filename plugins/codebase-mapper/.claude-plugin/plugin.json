@@ -1,6 +1,6 @@
 {
   "name": "codebase-mapper",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Self-maintaining, language-agnostic codebase map. Generates atomic docs in .claude/.codebase-info/, re-injects them on every prompt via a UserPromptSubmit hook, and keeps them in sync as the code changes. Works on greenfield or existing projects, any stack.",
   "author": {
     "name": "Eigenwise",
