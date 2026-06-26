@@ -16,7 +16,7 @@
  * Design constraints (shared with the rest of live-rules):
  *   - No external dependencies (Node stdlib only).
  *   - Cross-platform (Windows / macOS / Linux).
- *   - Silent when there is no .claude/rules/ for the project.
+ *   - Silent when there is no live-rules file for the project.
  *   - Never breaks a prompt: any error -> exit 0 with no output.
  */
 
@@ -54,7 +54,7 @@ function main() {
   const header =
     '=== LIVE RULES (live-rules) ===\n' +
     'Project rules currently in effect. Follow them for the work in this session. ' +
-    'Source: .claude/rules/';
+    'Source: ' + lib.displayPath(projectDir, lib.getRulesFile(projectDir));
 
   lib.emit('UserPromptSubmit', lib.renderRules(selected, header));
   process.exit(0);

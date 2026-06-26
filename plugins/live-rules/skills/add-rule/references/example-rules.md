@@ -1,11 +1,33 @@
 # Example Rules
 
-Copy and adapt these. Each is a complete `.claude/rules/<name>.md` file. They are illustrative, so
-swap in the real conventions of the project.
+Copy and adapt these. Each is one rule **section** for your live-rules file (`.claude/live-rules.md`
+by default). Drop the sections you want into the file, one after another; the `---` fence is what
+separates them. They are illustrative, so swap in the real conventions of the project.
+
+A small complete file looks like this:
+
+```markdown
+# Live rules
+
+---
+description: House writing style
+---
+- No em dashes. Use commas, colons, parentheses, or periods.
+- Prefer plain words over jargon. Write like a human, not a press release.
+
+---
+description: React component conventions
+globs: ["**/*.tsx", "**/*.jsx"]
+---
+- Function components with hooks only; no class components.
+- No inline styles; use CSS modules.
+```
+
+The rest of this file shows individual sections by scope.
 
 ## Global (always-on)
 
-`house-style.md` - injected on every prompt:
+Injected on every prompt:
 
 ```markdown
 ---
@@ -14,8 +36,6 @@ description: House writing style
 - No em dashes. Use commas, colons, parentheses, or periods.
 - Prefer plain words over jargon. Write like a human, not a press release.
 ```
-
-`commit-hygiene.md`:
 
 ```markdown
 ---
@@ -29,7 +49,7 @@ priority: 5
 
 ## Path / glob scope
 
-`react-components.md` - injected before editing a React component:
+Injected before editing a React component:
 
 ```markdown
 ---
@@ -41,7 +61,7 @@ globs: ["**/*.tsx", "**/*.jsx"]
 - Co-locate the test as ComponentName.test.tsx next to the component.
 ```
 
-`sql-safety.md` - any SQL file, at any depth (no slash in the glob):
+Any SQL file, at any depth (no slash in the glob):
 
 ```markdown
 ---
@@ -52,8 +72,6 @@ priority: 10
 - Always use parameterized queries; never string-concatenate user input.
 - Every destructive migration needs a tested down-migration.
 ```
-
-`python-style.md`:
 
 ```markdown
 ---
@@ -67,7 +85,7 @@ globs: ["**/*.py"]
 
 ## Directory scope
 
-`api-layer.md` - injected when editing anything under the API package:
+Injected when editing anything under the API package:
 
 ```markdown
 ---
@@ -80,7 +98,7 @@ dirs: ["packages/api", "services/gateway"]
 
 ## Prompt-keyword scope
 
-`deploy-checklist.md` - injected when the prompt mentions deploying:
+Injected when the prompt mentions deploying:
 
 ```markdown
 ---
@@ -92,7 +110,7 @@ prompt: ["deploy", "release", "ship to prod"]
 - Post in #releases after the rollout completes.
 ```
 
-`migration-care.md` - regex match across "migrate" / "migration":
+Regex match across "migrate" / "migration":
 
 ```markdown
 ---
@@ -105,7 +123,7 @@ prompt: ["/migrat(e|ion)/i"]
 
 ## Combined scope
 
-`auth-care.md` - fires both when editing auth files and when the prompt mentions auth:
+Fires both when editing auth files and when the prompt mentions auth:
 
 ```markdown
 ---
@@ -121,7 +139,7 @@ priority: 20
 
 ## Temporarily disabling a rule
 
-Keep the file, flip one field:
+Keep the section, flip one field:
 
 ```markdown
 ---

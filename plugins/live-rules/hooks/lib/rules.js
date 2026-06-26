@@ -7,7 +7,10 @@
  * file degrades to "skip that rule", never to a thrown error that could break a
  * prompt or an edit. The entry scripts wrap everything in try/catch and exit 0.
  *
- * A "rule" is a Markdown file in .claude/rules/ with optional YAML frontmatter:
+ * All rules live in ONE Markdown file (by default .claude/live-rules.md at the
+ * project root; override with the LIVE_RULES_PATH env var). The file holds any
+ * number of rules, each a YAML frontmatter block followed by its body, with the
+ * next "---" fence starting the next rule:
  *
  *   ---
  *   description: React component conventions   # human title for the rule
@@ -25,6 +28,7 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 // Stay safely under Claude Code's 10,000-char cap on injected context; the
@@ -287,8 +291,8 @@ function toArray(v) {
   return (Array.isArray(v) ? v : [v]).map(String).map((s) => s.trim()).filter(Boolean);
 }
 
-function buildRule(id, raw) {
-  const { data, body } = parseFrontmatter(raw);
+function buildRule(id, data, body) {
+  data = data || {};
   const globs = toArray(data.globs).concat(toArray(data.glob));
   const dirs = toArray(data.dirs).concat(toArray(data.dir)).map(normalizeDir).filter(Boolean);
   const prompts = toArray(data.prompt)
@@ -318,43 +322,89 @@ function isAlways(rule) {
   return rule.globs.length === 0 && rule.dirs.length === 0 && rule.prompts.length === 0;
 }
 
-function findRuleFiles(dir) {
-  const out = [];
-  const stack = [{ abs: dir, rel: '' }];
-  let guard = 0;
-  while (stack.length && guard < 5000) {
-    guard++;
-    const { abs, rel } = stack.pop();
-    let entries;
-    try {
-      entries = fs.readdirSync(abs, { withFileTypes: true });
-    } catch (_) {
-      continue;
-    }
-    for (const e of entries) {
-      if (e.name.startsWith('.')) continue;
-      const childRel = rel ? rel + '/' + e.name : e.name;
-      if (e.isDirectory()) {
-        if (childRel.split('/').length <= 8) {
-          stack.push({ abs: path.join(abs, e.name), rel: childRel });
-        }
-      } else if (e.isFile() && /\.md$/i.test(e.name) && e.name.toLowerCase() !== 'readme.md') {
-        out.push({ full: path.join(abs, e.name), id: childRel });
-      }
-    }
+// Default single-file location, relative to the project root. Overridable with
+// the LIVE_RULES_PATH env var (absolute, project-relative, or "~"-relative).
+const DEFAULT_RULES_FILE = path.join('.claude', 'live-rules.md');
+
+function expandHome(p) {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
+// Resolve the one Markdown file that holds every rule. The env override lets a
+// user keep rules anywhere convenient (a shared doc, a home-dir file, etc.).
+function getRulesFile(projectDir) {
+  const env = process.env.LIVE_RULES_PATH;
+  const raw = env && String(env).trim() ? expandHome(String(env).trim()) : DEFAULT_RULES_FILE;
+  return path.isAbsolute(raw) ? raw : path.join(projectDir, raw);
+}
+
+// A short, readable form of the rules-file path for headers: repo-relative with
+// forward slashes when the file is inside the project, otherwise the full path.
+function displayPath(projectDir, file) {
+  try {
+    const rel = path.relative(projectDir, file).replace(/\\/g, '/');
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
+  } catch (_) {
+    /* fall through */
   }
-  return out;
+  return String(file).replace(/\\/g, '/');
+}
+
+function isFence(line) {
+  return line.replace(/^﻿/, '').trim() === '---';
+}
+
+/**
+ * Split the rules file into rule sections. Each rule is a frontmatter block
+ * (between two "---" fences) followed by its body, which runs up to the next
+ * opening fence. The "---" lines pair up as open/close, open/close, ...:
+ * fences[0..1] fence the first rule's frontmatter and fences[1..2] bound its
+ * body, and so on. Content before the first fence (a title or intro) is ignored,
+ * and a dangling unmatched fence at the end is skipped. A body must therefore
+ * not contain a bare "---" line (use *** or ___ for a horizontal rule).
+ */
+function splitSections(text) {
+  const lines = String(text).replace(/^﻿/, '').split(/\r?\n/);
+  const fences = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (isFence(lines[i])) fences.push(i);
+  }
+  const sections = [];
+  for (let k = 0; k + 1 < fences.length; k += 2) {
+    const open = fences[k];
+    const close = fences[k + 1];
+    const next = k + 2 < fences.length ? fences[k + 2] : lines.length;
+    const fmSrc = lines.slice(open + 1, close).join('\n');
+    const body = lines.slice(close + 1, next).join('\n');
+    let data = {};
+    try {
+      data = parseYamlSubset(fmSrc);
+    } catch (_) {
+      data = {};
+    }
+    sections.push({ data, body });
+  }
+  return sections;
 }
 
 function loadRules(projectDir) {
-  const dir = path.join(projectDir, '.claude', 'rules');
-  const files = findRuleFiles(dir);
+  const file = getRulesFile(projectDir);
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (_) {
+    return []; // no rules file -> no rules, silently
+  }
+  const base = path.basename(file);
+  const sections = splitSections(text);
   const rules = [];
-  for (const f of files) {
+  for (let i = 0; i < sections.length; i++) {
     try {
-      rules.push(buildRule(f.id, fs.readFileSync(f.full, 'utf8')));
+      rules.push(buildRule(base + '#' + (i + 1), sections[i].data, sections[i].body));
     } catch (_) {
-      /* skip unreadable rule */
+      /* skip malformed section */
     }
   }
   return rules;
@@ -438,7 +488,7 @@ function selectForEdit(rules, relPath) {
  * ------------------------------------------------------------------ */
 
 function renderRules(selected, header) {
-  const TRUNC = '\n(rule body truncated to fit the context limit; see .claude/rules/)\n';
+  const TRUNC = '\n(rule body truncated to fit the context limit; see your live-rules file)\n';
   let out = header + '\n';
   let included = 0;
   for (let k = 0; k < selected.length; k++) {
@@ -454,14 +504,14 @@ function renderRules(selected, header) {
         out +=
           '\n(' +
           remaining +
-          ' more matching rule(s) not shown to stay within the context limit; see .claude/rules/.)\n';
+          ' more matching rule(s) not shown to stay within the context limit; see your live-rules file.)\n';
       } else {
         // The highest-priority rule alone overflows: truncate its body so the
         // emitted string still honors the cap rather than spilling whole.
         const budget = CONTEXT_CAP - out.length - TRUNC.length;
         if (budget > 0) out += block.slice(0, budget) + TRUNC;
         if (remaining > 1 && out.length + 80 < CONTEXT_CAP) {
-          out += '(' + (remaining - 1) + ' more matching rule(s) not shown; see .claude/rules/.)\n';
+          out += '(' + (remaining - 1) + ' more matching rule(s) not shown; see your live-rules file.)\n';
         }
       }
       break;
@@ -492,6 +542,9 @@ module.exports = {
   compilePromptPattern,
   buildRule,
   isAlways,
+  getRulesFile,
+  displayPath,
+  splitSections,
   loadRules,
   selectForPrompt,
   selectForEdit,

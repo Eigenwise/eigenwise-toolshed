@@ -1,7 +1,8 @@
 ---
 name: add-rule
 description: >-
-  Create or edit a live-rules rule: an atomic Markdown file in .claude/rules/ that gets injected into
+  Create or edit a live-rules rule: a frontmatter-plus-body section in the project's live-rules file
+  (.claude/live-rules.md by default, or wherever LIVE_RULES_PATH points) that gets injected into
   Claude's context automatically when it applies. Use when the user asks to "add a rule", "create a
   rule", "make a rule that...", "add a coding guideline/guardrail/convention", "enforce that ...",
   "always do X", "whenever I edit *.tsx do Y", "when I work in packages/api do Z", "when my prompt
@@ -13,29 +14,37 @@ description: >-
 # Add Rule
 
 Turn a request like *"always run the linter before committing"* or *"when editing `*.tsx`, prefer
-function components"* into a **rule file** under `.claude/rules/`. The plugin's hooks inject each
+function components"* into a **rule** in the project's live-rules file. The plugin's hooks inject each
 rule automatically, at the moment it applies, so the user does not have to remember to paste it.
 
 Read `references/rule-format.md` for the full frontmatter spec and `references/example-rules.md` for
 ready-to-adapt examples before writing your first rule.
 
-**Do not edit `CLAUDE.md`.** The hooks are the only delivery mechanism; rules live entirely in
-`.claude/rules/`.
+**Do not edit `CLAUDE.md`.** The hooks are the only delivery mechanism; rules live entirely in the
+live-rules file.
 
 ## Process
 
-### Step 1 - Make sure the rules directory exists
+### Step 1 - Find the rules file
 
-Rules live in `.claude/rules/` at the project root. If it does not exist yet, create it. On the very
-first rule, also drop a short `README.md` in that folder (it is ignored by the hooks) so a teammate
-opening the repo understands what the folder is:
+All rules live in **one Markdown file**. Resolve it in this order:
 
+1. If the `LIVE_RULES_PATH` environment variable is set (commonly in `.claude/settings.json` under
+   `env`), that path is the file (it may be project-relative, absolute, or `~`-relative).
+2. Otherwise it is `.claude/live-rules.md` at the project root.
+
+If the file does not exist yet, create it with a short title line so a teammate opening it understands
+what it is:
+
+```markdown
+# Live rules
+
+These rules are re-injected into Claude's context every turn (and before relevant edits) so they stay
+in front of the model. Each rule below is a frontmatter block plus body. Edit freely; changes take
+effect on the next prompt. Commit this file so the team shares the rules.
 ```
-.claude/rules/README.md
-```
-> These are live-rules: Markdown rule files that Claude Code injects into context automatically when
-> they apply. See the live-rules plugin for the format. Edit or add files freely; changes take effect
-> on the next prompt. Commit this folder so the whole team shares the rules.
+
+Anything above the first `---` fence is ignored by the hooks, so this intro is safe.
 
 ### Step 2 - Understand the rule
 
@@ -56,10 +65,10 @@ A rule can combine scopes (e.g. `globs` + `prompt`); it is injected when any of 
 match. If you are unsure whether something is global or scoped, ask one short question rather than
 guessing, because an over-broad rule adds noise to every prompt.
 
-### Step 3 - Write the rule file
+### Step 3 - Append the rule section
 
-Pick a short, descriptive kebab-case filename ending in `.md` (e.g. `no-em-dashes.md`,
-`react-components.md`, `sql-parameterized.md`). Then write the file:
+Add a new section to the file: a frontmatter block followed by the body. Separate it from the
+previous rule with a blank line; the `---` fence is what actually starts a new rule.
 
 ```markdown
 ---
@@ -69,14 +78,17 @@ priority: 0                 # optional; higher injects first (default 0)
 enabled: true              # optional; default true
 ---
 - Write the rule body as tight, imperative bullet points.
-- One concern per file; create a second rule file rather than overloading this one.
+- One concern per section; add a separate section rather than overloading this one.
 ```
 
 Guidelines for a good rule:
 - **Imperative and concrete.** "Do X", "Never Y", with a real symbol/path/command where possible.
 - **Short.** Injected context is capped (~10k chars across all matching rules), so keep each body to
   a handful of lines. Long rationale belongs in a linked doc, not the rule.
-- **Atomic.** One rule per file. It keeps scoping precise and lets the user disable just that one.
+- **Atomic.** One concern per section. It keeps scoping precise and lets the user disable just that
+  one.
+- **No bare `---` in the body.** A line that is exactly `---` would be read as the next rule's fence.
+  Use `***` or `___` for a horizontal rule inside a body.
 - **Globs are gitignore-style:** a pattern with no `/` (like `*.sql`) matches that name at any depth;
   a pattern with a `/` (like `src/**/*.ts`) is anchored to the repo-relative path. See
   `references/rule-format.md`.
@@ -87,29 +99,32 @@ Before finishing:
 - Confirm any `globs` actually correspond to files that exist (or clearly will) in this repo, so the
   rule will really fire. If a glob matches nothing, say so.
 - If a `prompt` entry is a `/regex/flags`, make sure it is a valid expression.
-- Re-read the body: is it short, concrete, and free of contradictions with existing rules? Skim the
-  other files in `.claude/rules/` for overlap or conflicts.
+- Re-read the body: is it short, concrete, and free of contradictions with the other sections already
+  in the file? Skim them for overlap or conflicts.
+- Make sure the new section's fences are intact (an opening `---`, the frontmatter, a closing `---`,
+  then the body) so the file still parses cleanly.
 
 ### Step 5 - Confirm
 
-Tell the user what you created: the filename, the scope (when it will fire), and a one-line summary.
-Remind them that it takes effect on the **next prompt** (no restart) and to **commit
-`.claude/rules/`** so the team shares it. Note they can disable it any time by setting
-`enabled: false` (or via the manage-rules skill) instead of deleting it.
+Tell the user what you added: the rule's title, the scope (when it will fire), and a one-line summary.
+Remind them that it takes effect on the **next prompt** (no restart) and to **commit the live-rules
+file** so the team shares it. Note they can disable it any time by setting `enabled: false` (or via
+the manage-rules skill) instead of deleting it.
 
 ## Guidelines
 
-- **Never touch `CLAUDE.md`** (or `CLAUDE.local.md`). Rules live only in `.claude/rules/`.
-- **One concern per file.** Prefer several small rules over one big one.
+- **Never touch `CLAUDE.md`** (or `CLAUDE.local.md`). Rules live only in the live-rules file.
+- **One concern per section.** Prefer several small rules over one big one.
 - **Scope tightly.** Global rules hit every prompt; reserve them for things that truly always apply.
 - **Don't leak secrets.** A rule can say where config lives, never actual credential values.
 
 ## Success criteria
 
-- [ ] `.claude/rules/` exists (with a `README.md` if it was just created)
-- [ ] New rule file written with a `description`, the correct scope fields, and a concise body
+- [ ] The live-rules file exists (resolved from `LIVE_RULES_PATH` or defaulting to `.claude/live-rules.md`)
+- [ ] New rule section appended with a `description`, the correct scope fields, and a concise body
 - [ ] Scope verified (globs match real paths; any regex compiles)
-- [ ] User told the filename, when it fires, and to commit `.claude/rules/`
+- [ ] File still parses (intact fences; no stray `---` in any body)
+- [ ] User told the rule's title, when it fires, and to commit the file
 - [ ] `CLAUDE.md` left untouched
 
 ## References

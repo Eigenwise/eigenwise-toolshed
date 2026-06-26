@@ -2,7 +2,7 @@
   "name": "claude-toolshed",
   "owner": {
     "name": "Eigenwise",
-    "email": "kenny.vaneetvelde@gmail.com"
+    "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
   "version": "1.1.0",
@@ -10,7 +10,7 @@
     {
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
-      "description": "Self-maintaining, language-agnostic codebase map. Generates atomic docs in .claude/.codebase-info/, re-injects them on every prompt via a UserPromptSubmit hook, and keeps them in sync as the code changes. Works on greenfield or existing projects, any stack.",
+      "description": "A self-maintaining codebase map: atomic docs that Claude re-injects on every prompt and keeps in sync as the code changes. Any stack; greenfield or existing.",
       "version": "2.2.0",
       "author": {
         "name": "Eigenwise"
@@ -33,8 +33,8 @@
     {
       "name": "live-rules",
       "source": "./plugins/live-rules",
-      "description": "Developer-friendly live rules for Claude Code. Drop atomic Markdown rule files in .claude/rules/ and a pair of hooks inject the ones that apply, right when they apply: global and prompt-keyword rules on every prompt, path/glob and directory rules right before Claude edits a matching file. Read fresh each time, so edits take effect on the next prompt with no restart.",
-      "version": "1.0.0",
+      "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart.",
+      "version": "2.0.0",
       "author": {
         "name": "Eigenwise"
       },

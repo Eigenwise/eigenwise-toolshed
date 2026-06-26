@@ -1,10 +1,16 @@
 # Rule Format
 
-A rule is a single Markdown file in `.claude/rules/` (subfolders allowed). It has optional YAML
-frontmatter between `---` fences, followed by the rule body. The body is the instruction Claude
-sees; the frontmatter decides **when** it is injected.
+All rules live in **one Markdown file**: by default `.claude/live-rules.md` at the project root, or
+wherever the `LIVE_RULES_PATH` environment variable points (project-relative, absolute, or
+`~`-relative; usually set in `.claude/settings.json` under `env`).
+
+The file is a sequence of rules. Each rule is a YAML frontmatter block between `---` fences, followed
+by its body, and the next `---` begins the next rule. The body is the instruction Claude sees; the
+frontmatter decides **when** it is injected.
 
 ```markdown
+# Live rules (optional title; anything before the first --- is ignored)
+
 ---
 description: React component conventions
 globs: ["**/*.tsx", "**/*.jsx"]
@@ -14,7 +20,23 @@ enabled: true
 - Prefer function components with hooks over class components.
 - No inline styles; use CSS modules.
 - Co-locate the test file next to the component.
+
+---
+description: House style
+---
+- No em dashes. Use commas, colons, parentheses, or periods.
 ```
+
+## How the file is parsed
+
+- The `---` lines pair up as open/close, open/close, ... Each pair fences one rule's frontmatter, and
+  the body runs from the closing fence to the next opening fence (or the end of the file).
+- **Anything before the first fence** (a title or intro) is ignored.
+- A **rule body must not contain a line that is exactly `---`**: it would be read as the next rule's
+  fence and split the rule in two. For a horizontal rule inside a body, use `***` or `___`.
+- A dangling unmatched `---` at the very end is skipped.
+- Parsing is **fail-soft**: a malformed section is skipped, never fatal, and a missing file produces
+  no output at all.
 
 ## Frontmatter fields
 
@@ -52,10 +74,10 @@ both is simply eligible on both paths.)
   forgotten.
 - **Glob / directory rules** are injected each time Claude is about to edit a matching file, so the
   reminder lands exactly when it is relevant.
-- The hooks read the rule files **fresh every time**. Editing, adding, disabling, or deleting a rule
-  takes effect on the next prompt or next edit. No restart, no `/reload`.
-- Everything is **fail-soft**: a malformed rule file is skipped, never fatal, and a project with no
-  `.claude/rules/` produces no output at all.
+- The hooks read the file **fresh every time**. Editing, adding, disabling, or deleting a rule takes
+  effect on the next prompt or next edit. No restart, no `/reload`.
+- Everything is **fail-soft**: a malformed section is skipped, never fatal, and a project with no
+  live-rules file produces no output at all.
 
 ## Glob syntax
 
@@ -105,5 +127,5 @@ equals it or starts with it plus `/`.
 All matching rules for one event share a budget of about **10,000 characters** of injected context
 (Claude Code's cap). The hooks stay safely under it and, if too many rules match at once, inject the
 highest-priority ones and note how many were held back. So: keep each body to a few tight lines, use
-`priority` to float the important rules to the top, and split unrelated guidance into separate files
-rather than growing one giant rule.
+`priority` to float the important rules to the top, and split unrelated guidance into separate
+sections rather than growing one giant rule.
