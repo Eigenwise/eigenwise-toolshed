@@ -40,12 +40,16 @@ Two skills run it: `map-codebase` builds the map and `update-codebase-map` refre
 matters when you touch a `.tsx` file, a deploy checklist only matters when you deploy. Put it all in
 `CLAUDE.md` and it is either permanently in your context or quietly buried. live-rules fixes that:
 
-- You write small, atomic rule files in `.claude/rules/`, each with a bit of frontmatter saying **when**
-  it applies (global, a file glob, a directory, or a prompt keyword).
+- You keep your rules in one Markdown file (`.claude/live-rules.md`, or wherever `LIVE_RULES_PATH`
+  points), each a short frontmatter block saying **when** it applies (global, a file glob, a directory,
+  or a prompt keyword).
 - Two bundled hooks inject only the rules that apply, right when they apply: global and keyword rules on
   every prompt, file and directory rules the moment Claude is about to edit a matching file.
 - Rules are read fresh every time, so editing one takes effect on the **next prompt**, no restart.
-- Commit `.claude/rules/` and the whole team shares the same rules.
+- A rule can also `include:` a live file, so its current contents ride along every prompt. That makes
+  live-rules a general way to keep any file in front of Claude, a codebase map included: it is the same
+  mechanism codebase-mapper uses, so a single rule reproduces that auto-loading.
+- Commit the file and the whole team shares the same rules.
 
 Two skills help: `add-rule` writes a rule from a plain-English request, and `manage-rules` lists,
 audits, and toggles them. Hand-editing works just as well. The [plugin README](./plugins/live-rules)

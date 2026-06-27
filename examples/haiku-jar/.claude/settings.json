@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "codebase-mapper@claude-toolshed": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-toolshed": {
+      "source": {
+        "source": "directory",
+        "path": "C:\\dev\\eigenwise-public\\claude-toolshed"
+      }
+    }
+  }
+}

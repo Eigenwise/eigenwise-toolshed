@@ -48,7 +48,7 @@ function main() {
 
   const promptText = data && typeof data.prompt === 'string' ? data.prompt : '';
 
-  const selected = lib.selectForPrompt(rules, { promptText, cwdRel });
+  const selected = lib.attachIncludes(lib.selectForPrompt(rules, { promptText, cwdRel }), projectDir);
   if (!selected.length) process.exit(0);
 
   const header =

@@ -59,7 +59,7 @@ function main() {
     process.exit(0);
   }
 
-  const selected = lib.selectForEdit(rules, relPath);
+  const selected = lib.attachIncludes(lib.selectForEdit(rules, relPath), projectDir);
   if (!selected.length) process.exit(0);
 
   const header =

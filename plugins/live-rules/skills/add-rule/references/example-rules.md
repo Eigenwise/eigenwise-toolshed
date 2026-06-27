@@ -137,6 +137,32 @@ priority: 20
 - Use the existing session helpers in src/auth/session.ts; do not roll your own.
 ```
 
+## Include a live file
+
+Inject a file's current contents under the body every prompt. This rule is a self-loading codebase
+map: the body is the protocol, the `include:` is the map. If the map file does not exist, the rule
+stays silent.
+
+```markdown
+---
+description: Codebase map protocol
+include: .claude/.codebase-info/INDEX.md
+---
+This repo has a maintained codebase map. Before starting any task, say which doc(s)
+from .claude/.codebase-info/ you will read, and read them before exploring. After
+changing code, review whether the map needs updating.
+```
+
+Any file works. Keep a planning doc in front of Claude while a feature is in flight:
+
+```markdown
+---
+description: Current sprint focus
+include: docs/sprint.md
+---
+- Work toward the goals in the included sprint doc; flag anything that pulls away from them.
+```
+
 ## Temporarily disabling a rule
 
 Keep the section, flip one field:

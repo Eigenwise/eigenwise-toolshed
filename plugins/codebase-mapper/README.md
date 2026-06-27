@@ -37,6 +37,23 @@ It is silent in projects that have no map, and it never touches your `CLAUDE.md`
 
 Commit `.claude/.codebase-info/` so the whole team shares the map.
 
+## Relationship to live-rules
+
+This plugin does two jobs: it **generates and maintains** the map (the `map-codebase` /
+`update-codebase-map` skills), and it **auto-loads** it (the `UserPromptSubmit` hook). The loading half
+is just "re-inject a live file every prompt," which the sibling [live-rules](../live-rules) plugin can
+do with its `include:` field. So you have a choice:
+
+- **Want the whole thing, turnkey?** Install codebase-mapper. The skills build and update the docs; the
+  hook keeps them in front of Claude. Nothing to wire up.
+- **Already run live-rules and just want a map loaded?** Skip this plugin and add one `include:` rule
+  pointing at `.claude/.codebase-info/INDEX.md` (see live-rules' "Including a live file"). You then own
+  the docs yourself, by hand or however you like. The [haiku-jar example](../../examples/haiku-jar)
+  shows both wirings side by side.
+
+Same idea behind both plugins (re-inject salient context every turn so it never gets buried); this one
+is the batteries-included version aimed squarely at codebase maps.
+
 ## Clean up
 
 - Docs: delete `.claude/.codebase-info/`.

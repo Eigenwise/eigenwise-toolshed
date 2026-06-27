@@ -6,9 +6,10 @@ description: >-
   Claude's context automatically when it applies. Use when the user asks to "add a rule", "create a
   rule", "make a rule that...", "add a coding guideline/guardrail/convention", "enforce that ...",
   "always do X", "whenever I edit *.tsx do Y", "when I work in packages/api do Z", "when my prompt
-  mentions 'deploy' remind me to ...", or "set up live-rules". Picks the right scope (global,
-  path/glob, directory, or prompt-keyword) and writes valid frontmatter. To list, audit, enable, or
-  disable existing rules instead, use manage-rules.
+  mentions 'deploy' remind me to ...", "load my codebase map into every session", "keep file X in
+  front of you", or "set up live-rules". Picks the right scope (global, path/glob, directory, or
+  prompt-keyword) and writes valid frontmatter, including an `include:` payload to inject a live file's
+  contents. To list, audit, enable, or disable existing rules instead, use manage-rules.
 ---
 
 # Add Rule
@@ -64,6 +65,14 @@ Pin down two things from the user's request:
 A rule can combine scopes (e.g. `globs` + `prompt`); it is injected when any of its conditions
 match. If you are unsure whether something is global or scoped, ask one short question rather than
 guessing, because an over-broad rule adds noise to every prompt.
+
+**Including a live file.** If the request is "load my codebase map", "keep `<file>` in front of you",
+or "inject the contents of `<file>` every prompt", that is the `include:` field, not a scope. Add
+`include: <path>` to the rule and write the body as the protocol for using that file (for a codebase
+map: "say which docs you will read, read them before exploring, review the map after edits"). The file
+is read fresh each injection, and if it does not exist the rule stays silent. A pure-include rule (no
+`globs`/`dirs`/`prompt`) is global, so the file rides along on every prompt. See the "Including a live
+file" section of `references/rule-format.md`.
 
 ### Step 3 - Append the rule section
 

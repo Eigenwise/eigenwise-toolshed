@@ -42,9 +42,20 @@ alone. Your job is just to write the docs in `.claude/.codebase-info/`.
 └── .map-state.json         # Machine state (last-mapped commit + date) for staleness checks
 ```
 
-Create **only the documents that apply.** Skip `database.md` if there's no datastore, `docker.md`
-if there are no containers, `dependencies.md` if there's no dependency manifest, and so on. A tiny
-project might only need `INDEX.md`, `architecture.md`, `tech-landscape.md`, and `onboarding.md`.
+**This list is a menu, not a checklist.** Create only the documents that earn their place in *this*
+codebase, and feel free to go beyond the list when a project has a major aspect the standard docs do
+not cover. Two directions:
+
+- **Omit what does not apply.** Skip `database.md` if there's no datastore, `docker.md` if there are
+  no containers, `dependencies.md` if there's no dependency manifest, and so on. A tiny project might
+  only need `INDEX.md`, `architecture.md`, `tech-landscape.md`, and `onboarding.md`.
+- **Add what the project actually warrants.** If a major aspect deserves its own doc and none of the
+  standard names fit, create one (e.g. `ml-pipeline.md` for a training/inference flow, `cli-reference.md`
+  for a tool with many subcommands, `realtime.md` for a websocket/event core, `iac.md` for substantial
+  infrastructure-as-code). List any such doc in `INDEX.md` and in the state file the same as the rest.
+
+The test for every doc, standard or not, is the same: would a future session be meaningfully faster
+for having it? If yes, write it; if not, leave it out.
 
 ## Process
 
@@ -110,8 +121,11 @@ actually does.
 
 ### Step 7 — Write the atomic documents
 
-Create each applicable file in `.claude/.codebase-info/` using the templates in
-`references/document-templates.md`. For each document:
+First decide the doc set: walk the aspects you found in Steps 1–6 and pick the documents this project
+warrants (see "This list is a menu, not a checklist" above). Then create each one in
+`.claude/.codebase-info/` using the templates in `references/document-templates.md`. For a
+non-standard doc with no matching template, follow the same shape (title, `Last Updated` line, concrete
+paths, tables/diagrams where they help). For each document:
 - Put a real `*Last Updated: YYYY-MM-DD*` line under the title.
 - Use concrete file paths (`src/auth/guard.ts`), not vague descriptions.
 - Prefer tables for structured data (routes, modules, deps) and ASCII/Mermaid for architecture.

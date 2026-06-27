@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "plugins": [
     {
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
       "description": "A self-maintaining codebase map: atomic docs that Claude re-injects on every prompt and keeps in sync as the code changes. Any stack; greenfield or existing.",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "author": {
         "name": "Eigenwise"
       },
@@ -33,8 +33,8 @@
     {
       "name": "live-rules",
       "source": "./plugins/live-rules",
-      "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart.",
-      "version": "2.0.0",
+      "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart. A rule can also inject a live file, like a codebase map.",
+      "version": "2.2.0",
       "author": {
         "name": "Eigenwise"
       },

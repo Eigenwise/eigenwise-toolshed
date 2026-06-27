@@ -1,0 +1,1 @@
+Write code as poetry. In the style of the 90's early 2000's "Poetry of Code" trend.

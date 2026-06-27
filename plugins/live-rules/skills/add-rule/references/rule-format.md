@@ -29,8 +29,12 @@ description: House style
 
 ## How the file is parsed
 
-- The `---` lines pair up as open/close, open/close, ... Each pair fences one rule's frontmatter, and
-  the body runs from the closing fence to the next opening fence (or the end of the file).
+- **A file with no complete frontmatter block** (fewer than two `---` fences) is treated as a
+  **single global rule** whose body is the whole file. So a plain `Write code as poetry.` with no
+  frontmatter just works as an always-on rule. An empty file produces no rule.
+- Once there is at least one `--- ... ---` block, the `---` lines pair up as open/close, open/close,
+  ... Each pair fences one rule's frontmatter, and the body runs from the closing fence to the next
+  opening fence (or the end of the file).
 - **Anything before the first fence** (a title or intro) is ignored.
 - A **rule body must not contain a line that is exactly `---`**: it would be read as the next rule's
   fence and split the rule in two. For a horizontal rule inside a body, use `***` or `___`.
@@ -46,11 +50,12 @@ description: House style
 | `globs` | list of strings | none | **Path/glob scope.** Injected right before Claude edits a file matching any of these globs. |
 | `dirs` | list of strings | none | **Directory scope.** Injected before editing a file under any of these directories, and on prompts when the session's working dir is inside one. |
 | `prompt` | list of strings | none | **Prompt-keyword scope.** Injected on a prompt whose text matches any entry (literal substring, case-insensitive, or `/regex/flags`). |
+| `include` | string or list | none | **Live file payload.** When the rule is injected, the current contents of these file(s) are read fresh and appended under the body. See "Including a live file" below. |
 | `priority` | number | `0` | Higher numbers are injected first when several rules match. |
 | `enabled` | boolean | `true` | Set `false` to switch a rule off without deleting it. |
 
-Singular aliases are accepted (`glob`, `dir`) as are `prompts`/`keywords` for the prompt field, so a
-quick hand-edit does not trip on a missing `s`.
+Singular aliases are accepted (`glob`, `dir`) as are `prompts`/`keywords` for the prompt field and
+`includes` for `include`, so a quick hand-edit does not trip on a missing `s`.
 
 ## Scope is inferred from the fields present
 
@@ -66,6 +71,37 @@ A rule may declare more than one scope. Conditions are combined with **OR**: the
 applicable condition matches. (Global and prompt-keyword rules arrive via the `UserPromptSubmit`
 hook; glob and directory rules arrive via the `PreToolUse` hook just before the edit. A rule with
 both is simply eligible on both paths.)
+
+## Including a live file
+
+`include:` is **not a scope** (it does not change *when* a rule fires); it is a payload that changes
+*what* the rule injects. When a rule with `include:` fires, the current contents of each listed file
+are read fresh and appended under the body, each in its own `--- included: <path> ---` block. Because
+the file is read on every injection, edits to it show up on the next prompt with no restart, exactly
+like the rules file itself.
+
+```markdown
+---
+description: Codebase map protocol
+include: .claude/.codebase-info/INDEX.md
+---
+This repo has a maintained codebase map. Before starting any task, say which doc(s)
+from .claude/.codebase-info/ you will read, and read them before exploring. After
+changing code, review whether the map needs updating.
+```
+
+That one rule reproduces what the **codebase-mapper** plugin's hook does: a forceful protocol in the
+body plus the live map injected every prompt. `include:` works on any file, so it is equally good for
+a live TODO, an ADR index, the current sprint doc, or an API schema you want kept in front of Claude.
+
+- **Path resolution.** Project-relative by default (like `dirs` and `globs`). Absolute paths and
+  `~`-relative paths are also honored, the same as `LIVE_RULES_PATH`.
+- **Skip when missing.** If a rule declares `include:` and **none** of its files can be read, the rule
+  is dropped and injects nothing. So a "consult the map" rule stays silent in a project that has no map
+  yet. If at least one listed file resolves, the rule is injected with whatever was read.
+- **Budget.** Included contents count against the same ~10,000-char injection budget as the rule body
+  (see "Keep rules small" below). A compact file is ideal; an oversized one gets the same "truncated to
+  fit" treatment as a long body. Point `include:` at a compact hub (an `INDEX.md`), not a giant doc.
 
 ## How injection works
 

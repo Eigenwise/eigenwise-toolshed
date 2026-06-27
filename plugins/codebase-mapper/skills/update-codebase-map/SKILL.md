@@ -45,7 +45,22 @@ find . -type f -newer .claude/.codebase-info/INDEX.md \
   -not -path '*/dist/*' -not -path '*/build/*' -not -path '*/target/*' -not -path '*/.venv/*'
 ```
 
-### Step 3 — Map changes to documents
+### Step 3 — Re-assess the warranted doc set, then map changes to documents
+
+An update is not only "edit the docs that exist." First **re-evaluate which documents this codebase
+now warrants**, because the right set drifts as the project grows. The map should always carry the docs
+that apply now, no more and no less:
+
+- **A new aspect appeared → add its doc.** The project gained its first `Dockerfile`/`compose.yaml`, so
+  create `docker.md` now even though the last map had none. First datastore → add `database.md`. First
+  dependency manifest → add `dependencies.md`. A new major subsystem that no standard doc covers → add
+  a custom doc (e.g. `ml-pipeline.md`, `realtime.md`), the same way `map-codebase` would. This is the
+  common case the user cares about: you don't make `docker.md` until there's Docker, and once the code
+  is dockerized, the next update is exactly when it should appear.
+- **An aspect vanished → prune its doc.** A service, integration, or datastore was removed, so delete
+  the now-empty doc and its `INDEX.md` row.
+
+Then map the remaining changes onto the existing documents:
 
 | If this changed… | Update… |
 |------------------|---------|
@@ -71,13 +86,12 @@ For each affected document:
 2. Make focused edits — change only what's now different; don't rewrite the whole file.
 3. Update its `*Last Updated: YYYY-MM-DD*` line to today's real date.
 
-Handle structural shifts:
-- **New area that has no doc yet** (e.g. a `Dockerfile` or first database appeared): create the
-  document from the matching template in
-  `../map-codebase/references/document-templates.md`, then add it to `INDEX.md` and to the
-  `documents` list in state.
-- **Removed area** (e.g. a service or integration is gone): delete the now-empty doc (and its
-  `INDEX.md` row), or prune the stale sections from a shared doc. Remove orphaned references.
+Then carry out the additions and removals you identified in Step 3:
+- **New doc for an aspect that appeared:** create it from the matching template in
+  `../map-codebase/references/document-templates.md` (or, for a non-standard aspect, follow the same
+  shape), then add it to `INDEX.md` and to the `documents` list in state.
+- **Prune a doc for an aspect that vanished:** delete the now-empty doc (and its `INDEX.md` row), or
+  prune the stale sections from a shared doc. Remove orphaned references.
 
 ### Step 5 — Re-record state
 
@@ -103,6 +117,8 @@ commit the changes so the team and future sessions stay in sync.
 ## Success criteria
 
 - [ ] Changes since the last map detected (via stored commit, or mtime fallback)
+- [ ] Warranted doc set re-assessed: docs added for aspects that appeared (e.g. Docker, a datastore),
+      docs pruned for aspects that vanished
 - [ ] Only affected documents edited; new areas documented; removed areas pruned
 - [ ] `INDEX.md` reflects any added/removed docs
 - [ ] `Last Updated` dates current on every touched doc

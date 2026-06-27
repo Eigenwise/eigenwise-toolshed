@@ -299,6 +299,8 @@ function buildRule(id, data, body) {
     .concat(toArray(data.prompts))
     .concat(toArray(data.keywords));
 
+  const includes = toArray(data.include).concat(toArray(data.includes));
+
   let priority = 0;
   if (typeof data.priority === 'number' && Number.isFinite(data.priority)) {
     priority = data.priority;
@@ -312,6 +314,7 @@ function buildRule(id, data, body) {
     globs,
     dirs,
     prompts,
+    includes,
     priority,
     enabled: data.enabled !== false,
     body: String(body || '').trim(),
@@ -340,6 +343,13 @@ function getRulesFile(projectDir) {
   return path.isAbsolute(raw) ? raw : path.join(projectDir, raw);
 }
 
+// Resolve an `include:` target to an absolute path. Like getRulesFile: a path is
+// project-relative by default, but absolute and "~"-relative paths are honored.
+function resolveIncludePath(projectDir, p) {
+  const raw = expandHome(String(p).trim());
+  return path.isAbsolute(raw) ? raw : path.join(projectDir, raw);
+}
+
 // A short, readable form of the rules-file path for headers: repo-relative with
 // forward slashes when the file is inside the project, otherwise the full path.
 function displayPath(projectDir, file) {
@@ -364,12 +374,22 @@ function isFence(line) {
  * body, and so on. Content before the first fence (a title or intro) is ignored,
  * and a dangling unmatched fence at the end is skipped. A body must therefore
  * not contain a bare "---" line (use *** or ___ for a horizontal rule).
+ *
+ * Fallback for the simplest case: a file with no complete frontmatter block
+ * (fewer than two "---" fences) is treated as ONE global rule whose body is the
+ * whole file. So a plain "Write code as poetry." with no frontmatter just works
+ * as an always-on rule, no fences required.
  */
 function splitSections(text) {
   const lines = String(text).replace(/^﻿/, '').split(/\r?\n/);
   const fences = [];
   for (let i = 0; i < lines.length; i++) {
     if (isFence(lines[i])) fences.push(i);
+  }
+  if (fences.length < 2) {
+    // No fenced frontmatter: the entire file is a single global rule. Empty
+    // file -> no rule (keeps the hooks silent on a blank rules file).
+    return String(text).trim() ? [{ data: {}, body: String(text) }] : [];
   }
   const sections = [];
   for (let k = 0; k + 1 < fences.length; k += 2) {
@@ -401,8 +421,11 @@ function loadRules(projectDir) {
   const sections = splitSections(text);
   const rules = [];
   for (let i = 0; i < sections.length; i++) {
+    // A single-rule file is just "<file>"; multiple sections get "<file>#N" so
+    // an un-described rule still has a distinct, locatable id.
+    const id = sections.length > 1 ? base + '#' + (i + 1) : base;
     try {
-      rules.push(buildRule(base + '#' + (i + 1), sections[i].data, sections[i].body));
+      rules.push(buildRule(id, sections[i].data, sections[i].body));
     } catch (_) {
       /* skip malformed section */
     }
@@ -484,6 +507,43 @@ function selectForEdit(rules, relPath) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Includes: resolve each selected rule's `include:` files to live content
+ * ------------------------------------------------------------------ */
+
+/**
+ * For every selected rule that declares `include:`, read the live contents of
+ * each target file and stash them on the entry as `entry.includes`. A rule with
+ * no `include:` is passed through untouched. A rule that declares includes but
+ * whose files ALL fail to read is dropped from the selection, so a "consult the
+ * map" rule stays silent when there is no map (codebase-mapper parity). Reads are
+ * fail-soft: an unreadable file is simply skipped, never thrown.
+ */
+function attachIncludes(selected, projectDir) {
+  const out = [];
+  for (const entry of selected) {
+    const paths = (entry.rule && entry.rule.includes) || [];
+    if (!paths.length) {
+      out.push(entry);
+      continue;
+    }
+    const resolved = [];
+    for (const p of paths) {
+      try {
+        const abs = resolveIncludePath(projectDir, p);
+        const content = fs.readFileSync(abs, 'utf8');
+        resolved.push({ display: displayPath(projectDir, abs), content: content.trim() });
+      } catch (_) {
+        /* missing/unreadable include -> skip this file */
+      }
+    }
+    if (!resolved.length) continue; // all includes missing -> drop the rule
+    entry.includes = resolved;
+    out.push(entry);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  *  Rendering + output
  * ------------------------------------------------------------------ */
 
@@ -492,10 +552,16 @@ function renderRules(selected, header) {
   let out = header + '\n';
   let included = 0;
   for (let k = 0; k < selected.length; k++) {
-    const { rule, label } = selected[k];
+    const { rule, label, includes } = selected[k];
     const title = rule.description || rule.id;
     const body = rule.body ? '\n' + rule.body : '';
-    const block = '\n[' + label + '] ' + title + body + '\n';
+    let inc = '';
+    if (includes && includes.length) {
+      for (const f of includes) {
+        inc += '\n--- included: ' + f.display + ' ---\n' + f.content + '\n';
+      }
+    }
+    const block = '\n[' + label + '] ' + title + body + inc + '\n';
 
     if (out.length + block.length > CONTEXT_CAP) {
       const remaining = selected.length - k;
@@ -543,11 +609,13 @@ module.exports = {
   buildRule,
   isAlways,
   getRulesFile,
+  resolveIncludePath,
   displayPath,
   splitSections,
   loadRules,
   selectForPrompt,
   selectForEdit,
+  attachIncludes,
   renderRules,
   emit,
 };

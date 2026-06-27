@@ -50,7 +50,9 @@ back to its position in the file):
 | Strict lint gate | glob | editing `**/*.ts` | 0 | **no** |
 
 Derive the scope the same way the hooks do: no scope fields means **global**; otherwise list whichever
-of `globs` / `dirs` / `prompt` are present. A rule can have more than one scope.
+of `globs` / `dirs` / `prompt` are present. A rule can have more than one scope. If a rule also
+declares `include:`, note it (e.g. "+ includes `.claude/.codebase-info/INDEX.md`"); `include:` is a
+payload, not a scope, so a rule with only `include:` is still global.
 
 ### Audit the rules
 
@@ -64,6 +66,9 @@ Check each rule and report concrete issues (name the rule by its description):
   (`git ls-files`, or a recursive listing minus the usual noise dirs). A glob matching zero files is
   probably a typo or a stale path.
 - **Invalid prompt regexes** (`/.../flags` that does not compile).
+- **An `include:` target that does not exist:** resolve each include path (project-relative, or
+  absolute / `~`-relative) and check the file is there. A rule whose includes are *all* missing is
+  silently dropped and injects nothing, so a broken path means the rule never fires. Flag it.
 - **Duplicates / conflicts:** two rules giving contradictory instructions, or near-identical rules
   that should be merged.
 - **Oversized rules:** a body long enough to crowd the ~10k-char injection budget. Suggest trimming
@@ -90,6 +95,9 @@ walk the rules and report which ones would be injected and why, mirroring the ho
 - **Before an edit to a file:** glob rules matching that file (gitignore-style: a slash-free pattern
   matches at any depth; a pattern with `/` is repo-anchored), plus dir rules whose directory contains
   it. Global and prompt rules do not fire on edits.
+
+A rule that carries `include:` only fires if at least one of its included files exists; if they are all
+missing it is dropped, so factor that in when explaining why a rule did or did not appear.
 
 This is the fastest way to answer "why did Claude just follow rule X" or "why didn't it".
 

@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "live-rules@claude-toolshed": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-toolshed": {
+      "source": {
+        "source": "directory",
+        "path": "C:\\dev\\eigenwise-public\\claude-toolshed"
+      }
+    }
+  }
+}

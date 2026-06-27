@@ -1,6 +1,6 @@
 {
   "name": "codebase-mapper",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "A self-maintaining codebase map: atomic docs that Claude re-injects on every prompt and keeps in sync as the code changes. Any stack; greenfield or existing.",
   "author": {
     "name": "Eigenwise",

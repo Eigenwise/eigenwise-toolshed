@@ -1,0 +1,17 @@
+{
+  "tool": "codebase-mapper",
+  "version": "2.2.0",
+  "mappedAt": "2026-06-26",
+  "gitCommit": "eaf25d54931571f665db84f221d5c44f65996d81",
+  "documents": [
+    "INDEX.md",
+    "architecture.md",
+    "tech-landscape.md",
+    "directory-structure.md",
+    "entry-points.md",
+    "modules.md",
+    "patterns.md",
+    "coding-style.md",
+    "onboarding.md"
+  ]
+}

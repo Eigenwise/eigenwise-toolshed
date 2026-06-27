@@ -1,7 +1,7 @@
 {
   "name": "live-rules",
-  "version": "2.0.0",
-  "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart.",
+  "version": "2.2.0",
+  "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart. A rule can also inject a live file, like a codebase map.",
   "author": {
     "name": "Eigenwise",
     "email": "kenny@eigenwise.io"

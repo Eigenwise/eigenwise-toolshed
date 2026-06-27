@@ -41,7 +41,19 @@ guardrails that need to stay in front of the model. live-rules never touches `CL
 
 ## Quick start
 
-Create one file, `.claude/live-rules.md`:
+The simplest possible rules file has no frontmatter at all. Create `.claude/live-rules.md` with one
+line:
+
+```markdown
+Write code as poetry. Prefer plain words over jargon.
+```
+
+A file with no `---` fences is treated as a **single global rule**: its whole text is injected on
+every prompt. That is all you need to get started.
+
+When you want **scoped** rules (only when editing certain files, or when your prompt mentions a
+keyword), add frontmatter blocks. Each rule is a `--- ... ---` block followed by its body, and the
+next `---` starts the next rule:
 
 ```markdown
 # Live rules (re-injected every turn)
@@ -170,6 +182,39 @@ prompt: ["deploy", "release", "/ship.*prod/i"]
 
 Scopes combine. A rule with both `globs` and `prompt` fires on either condition (OR).
 
+## Including a live file
+
+The four fields above decide **when** a rule fires. `include:` decides **what extra it carries**: the
+live contents of one or more files, read fresh and appended under the body every time the rule is
+injected. It is not a scope, it is a payload, and it composes with any scope.
+
+```markdown
+---
+description: Codebase map protocol
+include: .claude/.codebase-info/INDEX.md
+---
+This repo has a maintained codebase map. Before starting any task, say which doc(s)
+from .claude/.codebase-info/ you will read, and read them before exploring. After
+changing code, review whether the map needs updating.
+```
+
+That single rule is a self-loading codebase map: a forceful protocol in the body, plus the map file
+re-injected on every prompt so it stays salient. It is exactly what the
+[codebase-mapper](../codebase-mapper) plugin's hook does, rebuilt as one live-rules rule. The
+difference is division of labor: this gives you the **auto-loading**; codebase-mapper additionally
+ships the skills that **generate and maintain** the map docs. Same idea, your choice of how much to
+install. `include:` is just as useful for a live TODO, an ADR index, the current sprint doc, or an API
+schema you want kept in front of Claude.
+
+- **Paths** resolve project-relative by default; absolute and `~`-relative paths work too, like
+  `LIVE_RULES_PATH`.
+- **Missing files stay silent.** If none of a rule's `include:` files can be read, the rule is dropped
+  and injects nothing, so a "consult the map" rule produces nothing in a project with no map. If at
+  least one resolves, the rule fires with whatever was read.
+- **It shares the size budget.** Included contents count against the same ~10,000-char cap as rule
+  bodies (below), and an oversized include is truncated the same way. Point `include:` at a compact hub
+  like an `INDEX.md`, not a sprawling document.
+
 ## File format reference
 
 The rules file is a sequence of rules. Each rule is a YAML frontmatter block between `---` fences,
@@ -193,6 +238,7 @@ enabled: true                      # default true; set false to switch off
 | `globs` | list | none | Path/glob scope (also accepts singular `glob`). |
 | `dirs` | list | none | Directory scope (also accepts singular `dir`). |
 | `prompt` | list | none | Prompt-keyword scope (also accepts `prompts` / `keywords`). |
+| `include` | string or list | none | Live file payload: inject the current contents of these file(s) under the body (also accepts `includes`). See [Including a live file](#including-a-live-file). |
 | `priority` | number | `0` | Ordering when several rules match; higher first. |
 | `enabled` | boolean | `true` | `false` switches the rule off without deleting it. |
 
