@@ -1,10 +1,16 @@
 # Rule Format
 
-A rule is a single Markdown file in `.claude/rules/` (subfolders allowed). It has optional YAML
-frontmatter between `---` fences, followed by the rule body. The body is the instruction Claude
-sees; the frontmatter decides **when** it is injected.
+All rules live in **one Markdown file**: by default `.claude/live-rules.md` at the project root, or
+wherever the `LIVE_RULES_PATH` environment variable points (project-relative, absolute, or
+`~`-relative; usually set in `.claude/settings.json` under `env`).
+
+The file is a sequence of rules. Each rule is a YAML frontmatter block between `---` fences, followed
+by its body, and the next `---` begins the next rule. The body is the instruction Claude sees; the
+frontmatter decides **when** it is injected.
 
 ```markdown
+# Live rules (optional title; anything before the first --- is ignored)
+
 ---
 description: React component conventions
 globs: ["**/*.tsx", "**/*.jsx"]
@@ -14,7 +20,27 @@ enabled: true
 - Prefer function components with hooks over class components.
 - No inline styles; use CSS modules.
 - Co-locate the test file next to the component.
+
+---
+description: House style
+---
+- No em dashes. Use commas, colons, parentheses, or periods.
 ```
+
+## How the file is parsed
+
+- **A file with no complete frontmatter block** (fewer than two `---` fences) is treated as a
+  **single global rule** whose body is the whole file. So a plain `Write code as poetry.` with no
+  frontmatter just works as an always-on rule. An empty file produces no rule.
+- Once there is at least one `--- ... ---` block, the `---` lines pair up as open/close, open/close,
+  ... Each pair fences one rule's frontmatter, and the body runs from the closing fence to the next
+  opening fence (or the end of the file).
+- **Anything before the first fence** (a title or intro) is ignored.
+- A **rule body must not contain a line that is exactly `---`**: it would be read as the next rule's
+  fence and split the rule in two. For a horizontal rule inside a body, use `***` or `___`.
+- A dangling unmatched `---` at the very end is skipped.
+- Parsing is **fail-soft**: a malformed section is skipped, never fatal, and a missing file produces
+  no output at all.
 
 ## Frontmatter fields
 
@@ -24,11 +50,12 @@ enabled: true
 | `globs` | list of strings | none | **Path/glob scope.** Injected right before Claude edits a file matching any of these globs. |
 | `dirs` | list of strings | none | **Directory scope.** Injected before editing a file under any of these directories, and on prompts when the session's working dir is inside one. |
 | `prompt` | list of strings | none | **Prompt-keyword scope.** Injected on a prompt whose text matches any entry (literal substring, case-insensitive, or `/regex/flags`). |
+| `include` | string or list | none | **Live file payload.** When the rule is injected, the current contents of these file(s) are read fresh and appended under the body. See "Including a live file" below. |
 | `priority` | number | `0` | Higher numbers are injected first when several rules match. |
 | `enabled` | boolean | `true` | Set `false` to switch a rule off without deleting it. |
 
-Singular aliases are accepted (`glob`, `dir`) as are `prompts`/`keywords` for the prompt field, so a
-quick hand-edit does not trip on a missing `s`.
+Singular aliases are accepted (`glob`, `dir`) as are `prompts`/`keywords` for the prompt field and
+`includes` for `include`, so a quick hand-edit does not trip on a missing `s`.
 
 ## Scope is inferred from the fields present
 
@@ -45,6 +72,37 @@ applicable condition matches. (Global and prompt-keyword rules arrive via the `U
 hook; glob and directory rules arrive via the `PreToolUse` hook just before the edit. A rule with
 both is simply eligible on both paths.)
 
+## Including a live file
+
+`include:` is **not a scope** (it does not change *when* a rule fires); it is a payload that changes
+*what* the rule injects. When a rule with `include:` fires, the current contents of each listed file
+are read fresh and appended under the body, each in its own `--- included: <path> ---` block. Because
+the file is read on every injection, edits to it show up on the next prompt with no restart, exactly
+like the rules file itself.
+
+```markdown
+---
+description: Codebase map protocol
+include: .claude/.codebase-info/INDEX.md
+---
+This repo has a maintained codebase map. Before starting any task, say which doc(s)
+from .claude/.codebase-info/ you will read, and read them before exploring. After
+changing code, review whether the map needs updating.
+```
+
+That one rule reproduces what the **codebase-mapper** plugin's hook does: a forceful protocol in the
+body plus the live map injected every prompt. `include:` works on any file, so it is equally good for
+a live TODO, an ADR index, the current sprint doc, or an API schema you want kept in front of Claude.
+
+- **Path resolution.** Project-relative by default (like `dirs` and `globs`). Absolute paths and
+  `~`-relative paths are also honored, the same as `LIVE_RULES_PATH`.
+- **Skip when missing.** If a rule declares `include:` and **none** of its files can be read, the rule
+  is dropped and injects nothing. So a "consult the map" rule stays silent in a project that has no map
+  yet. If at least one listed file resolves, the rule is injected with whatever was read.
+- **Budget.** Included contents count against the same ~10,000-char injection budget as the rule body
+  (see "Keep rules small" below). A compact file is ideal; an oversized one gets the same "truncated to
+  fit" treatment as a long body. Point `include:` at a compact hub (an `INDEX.md`), not a giant doc.
+
 ## How injection works
 
 - **Global / prompt / cwd rules** are re-evaluated and re-injected on **every prompt**. This is
@@ -52,10 +110,10 @@ both is simply eligible on both paths.)
   forgotten.
 - **Glob / directory rules** are injected each time Claude is about to edit a matching file, so the
   reminder lands exactly when it is relevant.
-- The hooks read the rule files **fresh every time**. Editing, adding, disabling, or deleting a rule
-  takes effect on the next prompt or next edit. No restart, no `/reload`.
-- Everything is **fail-soft**: a malformed rule file is skipped, never fatal, and a project with no
-  `.claude/rules/` produces no output at all.
+- The hooks read the file **fresh every time**. Editing, adding, disabling, or deleting a rule takes
+  effect on the next prompt or next edit. No restart, no `/reload`.
+- Everything is **fail-soft**: a malformed section is skipped, never fatal, and a project with no
+  live-rules file produces no output at all.
 
 ## Glob syntax
 
@@ -105,5 +163,5 @@ equals it or starts with it plus `/`.
 All matching rules for one event share a budget of about **10,000 characters** of injected context
 (Claude Code's cap). The hooks stay safely under it and, if too many rules match at once, inject the
 highest-priority ones and note how many were held back. So: keep each body to a few tight lines, use
-`priority` to float the important rules to the top, and split unrelated guidance into separate files
-rather than growing one giant rule.
+`priority` to float the important rules to the top, and split unrelated guidance into separate
+sections rather than growing one giant rule.

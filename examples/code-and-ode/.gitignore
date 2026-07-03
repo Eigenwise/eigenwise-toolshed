@@ -1,0 +1,14 @@
+# Runtime data written when you actually run the example
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/

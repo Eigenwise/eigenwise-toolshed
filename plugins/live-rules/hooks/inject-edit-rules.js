@@ -16,7 +16,7 @@
  * Design constraints:
  *   - No external dependencies (Node stdlib only).
  *   - Cross-platform (Windows / macOS / Linux).
- *   - Silent when there is no map / no matching rule.
+ *   - Silent when there is no live-rules file / no matching rule.
  *   - Never blocks or breaks an edit: any error -> exit 0 with no output.
  *     (Exit 2 would block the tool; we never do that.)
  */
@@ -59,7 +59,7 @@ function main() {
     process.exit(0);
   }
 
-  const selected = lib.selectForEdit(rules, relPath);
+  const selected = lib.attachIncludes(lib.selectForEdit(rules, relPath), projectDir);
   if (!selected.length) process.exit(0);
 
   const header =

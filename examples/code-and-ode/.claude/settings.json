@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "live-rules@eigenwise-toolshed": true
+  },
+  "extraKnownMarketplaces": {
+    "eigenwise-toolshed": {
+      "source": {
+        "source": "directory",
+        "path": "C:\\dev\\eigenwise-public\\eigenwise-toolshed"
+      }
+    }
+  }
+}

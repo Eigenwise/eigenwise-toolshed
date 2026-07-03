@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "haiku-jar"
+version = "0.1.0"
+description = "A tiny jar that keeps haiku and draws one back out at random."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Eigenwise" }]
+# No runtime dependencies on purpose: the standard library is the whole pantry.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+haiku-jar = "haiku_jar.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/haiku_jar"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]  # line length is the formatter's job
+
+[tool.ruff.lint.isort]
+known-first-party = ["haiku_jar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

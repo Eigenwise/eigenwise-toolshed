@@ -1,16 +1,77 @@
 # codebase-mapper
 
-A self-maintaining, language-agnostic **codebase map** for Claude Code.
+A self-maintaining **codebase map** for Claude Code: small Markdown docs under
+`.claude/.codebase-info/` that describe how your project is built, re-injected into context on every
+prompt so Claude starts each session already knowing the layout instead of grepping around blind.
 
-Map your project once into small, focused Markdown docs under `.claude/.codebase-info/`, keep them in
-sync as the code changes, and have every Claude session start already grounded in how the project is
-built.
+You install one plugin, run one skill, and get a map generated from your actual code: a compact
+`INDEX.md` hub plus the detailed docs your project warrants. A bundled hook keeps that hub in front of
+Claude on every prompt, and a second skill keeps the docs current as the code changes. So every
+session starts oriented, and **the map maintains itself** instead of going stale the week after you
+write it.
+
+## Where it came from: live-rules
+
+codebase-mapper grew out of a smaller plugin, [live-rules](../live-rules), and that foundation is worth
+seeing, because you can rebuild a basic version of codebase-mapper with live-rules by hand.
+
+live-rules is built on one trick: a `UserPromptSubmit` hook that reads a Markdown file and injects it
+into Claude's context **every time you submit a prompt**. Because it runs every turn, the file stays in
+front of the model instead of getting buried as the session grows. One of its fields, `include:`,
+appends the **live contents** of another file under a rule, read fresh on every injection. So a rule
+can carry whatever a separate file currently says, not just the text you typed into it.
+
+## The by-hand version
+
+Put those two pieces together and you have a codebase map with nothing but live-rules installed. It
+takes:
+
+1. Some Markdown docs describing your project, committed in the repo (say under
+   `.claude/.codebase-info/`, with an `INDEX.md` as the hub).
+2. One live-rules rule that loads them on every prompt:
+
+```markdown
+---
+description: Codebase map protocol
+include: .claude/.codebase-info/INDEX.md
+---
+This repo has a maintained codebase map. Before starting any task, say which
+doc(s) from .claude/.codebase-info/ you will read, and read them first. After
+changing code, review whether the map needs updating.
+```
+
+That single rule is a self-loading codebase map. The body tells Claude to consult and update the map,
+and `include:` re-injects the hub doc on every prompt so it stays salient deep into a long session.
+Write the docs once, add the rule, commit, and the map works with nothing else installed. This is the
+worked example in the [live-rules README](../live-rules#including-a-live-file), and **your own repo can
+be the example.**
+
+## Why install the plugin
+
+The by-hand version works well for one repo you are happy to tend yourself. It does not scale across
+repos, though: you still write the docs in the first place, and update them as the code changes, in
+every project, forever. That is the work codebase-mapper takes over. It is the same hook idea, plus the
+skills that build and maintain the map for you:
+
+- **Generates the map** from your actual code, picking the docs the project warrants (the
+  `map-codebase` skill).
+- **Keeps it current** as the code changes, adding and pruning docs as the project grows (the
+  `update-codebase-map` skill).
+- **Loads it on every prompt** through its own bundled hook, so you do not need live-rules installed at
+  all.
+
+So the choice is about reuse. For one repo where you will maintain the docs yourself, use live-rules
+and the rule above. When you want the map generated for you, kept in sync automatically, and the same
+setup repeatable across every project, install codebase-mapper.
+
+The [haiku-jar example](../../examples/haiku-jar) is a small project with a full generated map
+committed beside it, so you can see what the docs look like in practice.
 
 ## Install
 
 ```text
-/plugin marketplace add Eigenwise/claude-toolshed
-/plugin install codebase-mapper@claude-toolshed
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install codebase-mapper@eigenwise-toolshed
 ```
 
 ## Skills
@@ -20,27 +81,32 @@ built.
 | `map-codebase` | "map the codebase", "onboard me", or `/codebase-mapper:map-codebase` | Builds the full atomic map |
 | `update-codebase-map` | "update the codebase map", or `/codebase-mapper:update-codebase-map` | Refreshes only the docs affected by recent changes |
 
-Works on any stack and on both existing and brand-new (greenfield) projects.
+Works on any stack, and on both existing and brand-new (greenfield) projects.
 
 ## What it creates
 
-A set of atomic docs in `.claude/.codebase-info/` (only the ones that apply): `INDEX.md`,
-`architecture.md`, `tech-landscape.md`, `directory-structure.md`, `entry-points.md`, `modules.md`,
-`communication.md`, `database.md`, `dependencies.md`, `patterns.md`, `coding-style.md`, `docker.md`,
-and `onboarding.md`. Plus a `.map-state.json` used to detect staleness on the next update.
+A set of atomic docs in `.claude/.codebase-info/`, and only the ones your project actually warrants.
+The usual set is `INDEX.md`, `architecture.md`, `tech-landscape.md`, `directory-structure.md`,
+`entry-points.md`, `modules.md`, `communication.md`, `database.md`, `dependencies.md`, `patterns.md`,
+`coding-style.md`, `docker.md`, and `onboarding.md`. A project with no database or containers gets no
+`database.md` or `docker.md`, and a project with a major aspect none of those cover gets a doc of its
+own (say `ml-pipeline.md`). There is also a `.map-state.json` the update skill uses to detect what
+changed since the last map.
+
+`INDEX.md` is the compact hub that gets injected every prompt; the detailed docs are read on demand.
 
 ## Auto-loading
 
-A `UserPromptSubmit` hook (bundled, Node-based) re-injects the map on every prompt when one exists,
+A bundled, Node-based `UserPromptSubmit` hook re-injects `INDEX.md` on every prompt when a map exists,
 so it stays salient deep into a long session and Claude keeps consulting and updating it as you work.
 It is silent in projects that have no map, and it never touches your `CLAUDE.md`.
 
-Commit `.claude/.codebase-info/` so the whole team shares the map.
+Commit `.claude/.codebase-info/` so the whole team and every future session share the map.
 
 ## Clean up
 
 - Docs: delete `.claude/.codebase-info/`.
-- Plugin: `/plugin uninstall codebase-mapper@claude-toolshed`.
+- Plugin: `/plugin uninstall codebase-mapper@eigenwise-toolshed`.
 
 ## License
 

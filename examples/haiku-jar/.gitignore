@@ -1,0 +1,14 @@
+# The jar's contents when you actually run it
+haiku-jar.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
