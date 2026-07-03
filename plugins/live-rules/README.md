@@ -15,8 +15,8 @@ rules**, scoped to the moment they matter.
 ## Install
 
 ```text
-/plugin marketplace add Eigenwise/claude-toolshed
-/plugin install live-rules@claude-toolshed
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install live-rules@eigenwise-toolshed
 ```
 
 Then run `/reload-plugins` (or restart Claude Code).
@@ -304,7 +304,7 @@ during a refactor and turn it back on later.
 ## Clean up
 
 - Rules: delete `.claude/live-rules.md` (or individual sections inside it).
-- Plugin: `/plugin uninstall live-rules@claude-toolshed`.
+- Plugin: `/plugin uninstall live-rules@eigenwise-toolshed`.
 
 ## License
 

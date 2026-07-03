@@ -1,11 +1,11 @@
 {
-  "name": "claude-toolshed",
+  "name": "eigenwise-toolshed",
   "owner": {
     "name": "Eigenwise",
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "plugins": [
     {
       "name": "codebase-mapper",
@@ -15,8 +15,8 @@
       "author": {
         "name": "Eigenwise"
       },
-      "homepage": "https://github.com/Eigenwise/claude-toolshed/tree/main/plugins/codebase-mapper",
-      "repository": "https://github.com/Eigenwise/claude-toolshed",
+      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/codebase-mapper",
+      "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
       "license": "MIT",
       "category": "documentation",
       "keywords": [
@@ -38,8 +38,8 @@
       "author": {
         "name": "Eigenwise"
       },
-      "homepage": "https://github.com/Eigenwise/claude-toolshed/tree/main/plugins/live-rules",
-      "repository": "https://github.com/Eigenwise/claude-toolshed",
+      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/live-rules",
+      "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
       "license": "MIT",
       "category": "workflow",
       "keywords": [

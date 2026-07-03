@@ -6,8 +6,8 @@
     "name": "Eigenwise",
     "email": "kenny@eigenwise.io"
   },
-  "homepage": "https://github.com/Eigenwise/claude-toolshed/tree/main/plugins/codebase-mapper",
-  "repository": "https://github.com/Eigenwise/claude-toolshed",
+  "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/codebase-mapper",
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
   "license": "MIT",
   "keywords": [
     "documentation",

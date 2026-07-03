@@ -1,4 +1,4 @@
-# 🧰 claude-toolshed
+# 🧰 eigenwise-toolshed
 
 A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins.
 
@@ -16,9 +16,9 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 ## Install
 
 ```text
-/plugin marketplace add Eigenwise/claude-toolshed
-/plugin install codebase-mapper@claude-toolshed
-/plugin install live-rules@claude-toolshed
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install codebase-mapper@eigenwise-toolshed
+/plugin install live-rules@eigenwise-toolshed
 ```
 
 Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.

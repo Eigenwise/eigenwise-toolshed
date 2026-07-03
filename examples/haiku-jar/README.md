@@ -58,8 +58,8 @@ that apply.
 ### 1. Install the plugin (once)
 
 ```text
-/plugin marketplace add Eigenwise/claude-toolshed
-/plugin install codebase-mapper@claude-toolshed
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install codebase-mapper@eigenwise-toolshed
 ```
 
 Then `/reload-plugins` (or restart Claude Code).
