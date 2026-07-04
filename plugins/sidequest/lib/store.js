@@ -339,6 +339,7 @@ function createTicket(slug, fields) {
     priority: coercePriority(fields.priority, 'normal'),
     labels: normalizeLabels(fields.labels),
     assets,
+    claim: null,               // { by, at } when an agent has claimed it to work on
     source: String(fields.source || 'manual'),
     // Who/what last touched this ticket, and how. The dashboard uses these to
     // decide whether a change was made by the user (source "dashboard") or by
@@ -449,7 +450,196 @@ function deleteTicket(slug, idOrRef) {
   } catch (_) {
     /* best effort */
   }
+  try {
+    fs.unlinkSync(ticketLockPath(slug, t.id));
+  } catch (_) {
+    /* best effort */
+  }
   return true;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Claiming: safe hand-off of a ticket to a worker (agent)
+ *
+ *  Several agents (or Claude sessions / dashboard tabs) can share a board, so a
+ *  ticket must be *claimed* before anyone works it, and the claim must be
+ *  atomic: two workers can never both win the same ticket. We serialize the
+ *  check-and-set with a per-ticket lock file created via O_EXCL (an atomic
+ *  "create only if absent" on every mainstream filesystem). The lock is held
+ *  only for the few milliseconds it takes to re-read the ticket and stamp the
+ *  claim; the claim itself lives on the ticket as `claim: { by, at }`.
+ *
+ *  Because the claim is checked against a *fresh* read under the lock, "don't
+ *  pick it up before checking it's still there" is guaranteed: if the ticket was
+ *  deleted, finished, or grabbed by another worker in the meantime, the claim
+ *  fails instead of double-working it.
+ * ------------------------------------------------------------------ */
+
+const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
+
+function priorityRank(p) {
+  return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? PRIORITY_RANK[p] : 9;
+}
+
+// How long a claim stays valid without being refreshed before another worker
+// may take it over (a crashed/abandoned worker must never wedge a ticket).
+function claimTtlMs() {
+  const min = Number(process.env.SIDEQUEST_CLAIM_TTL_MIN);
+  return (Number.isFinite(min) && min > 0 ? min : 60) * 60 * 1000;
+}
+
+function isClaimStale(claim) {
+  if (!claim || !claim.at) return true;
+  const t = Date.parse(claim.at);
+  if (!Number.isFinite(t)) return true;
+  return Date.now() - t > claimTtlMs();
+}
+
+function ticketLockPath(slug, id) {
+  return path.join(ticketsDir(slug), '.' + path.basename(String(id)) + '.lock');
+}
+
+// A tiny synchronous pause. The lock is contended only under genuinely
+// simultaneous claims and is held for microseconds, so this never runs long.
+function busyWait(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    /* spin */
+  }
+}
+
+// Acquire a short-lived exclusive lock for a ticket. A lock file older than a
+// few seconds is treated as abandoned (holder crashed mid-claim) and reclaimed,
+// so a crash can never permanently wedge a ticket.
+function acquireLock(lockPath) {
+  const STALE_LOCK_MS = 5000;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      try {
+        fs.writeSync(fd, String(process.pid) + ' ' + new Date().toISOString());
+      } catch (_) {
+        /* ignore */
+      }
+      fs.closeSync(fd);
+      return true;
+    } catch (e) {
+      if (!e || e.code !== 'EEXIST') return false;
+      try {
+        const st = fs.statSync(lockPath);
+        if (Date.now() - st.mtimeMs > STALE_LOCK_MS) {
+          try {
+            fs.unlinkSync(lockPath);
+          } catch (_) {
+            /* ignore */
+          }
+          continue;
+        }
+      } catch (_) {
+        continue; // lock vanished between open and stat: retry immediately
+      }
+      busyWait(5);
+    }
+  }
+  return false;
+}
+
+function releaseLock(lockPath) {
+  try {
+    fs.unlinkSync(lockPath);
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function withTicketLock(slug, id, fn) {
+  const lock = ticketLockPath(slug, id);
+  if (!acquireLock(lock)) return { ok: false, reason: 'busy' };
+  try {
+    return fn();
+  } finally {
+    releaseLock(lock);
+  }
+}
+
+// Atomically claim a ticket for worker `by`. Refuses (ok:false) if the ticket is
+// gone, already done, or actively claimed by someone else — unless that claim is
+// stale or opts.force is set. On success sets claim and moves it to "doing"
+// (unless opts.status === false).
+function claimTicket(slug, idOrRef, by, opts) {
+  opts = opts || {};
+  by = String(by || 'agent');
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id); // fresh read, under the lock
+    if (!t) return { ok: false, reason: 'not_found' };
+    if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
+    const held = t.claim;
+    if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
+      return { ok: false, reason: 'claimed', ticket: t, claim: held };
+    }
+    t.claim = { by, at: new Date().toISOString() };
+    if (opts.status !== false) t.status = coerceStatus(opts.status || 'doing', t.status);
+    t.lastEventType = 'status';
+    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+    t.updatedAt = new Date().toISOString();
+    writeJson(ticketFile(slug, t.id), t);
+    return { ok: true, ticket: t };
+  });
+}
+
+// Release a claim. Only the owner (or a stale claim) may release unless
+// opts.force; opts.status optionally moves the ticket at the same time.
+function releaseTicket(slug, idOrRef, by, opts) {
+  opts = opts || {};
+  by = String(by || 'agent');
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    const held = t.claim;
+    if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
+      return { ok: false, reason: 'not_owner', ticket: t, claim: held };
+    }
+    t.claim = null;
+    if (opts.status) t.status = coerceStatus(opts.status, t.status);
+    t.lastEventType = 'status';
+    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+    t.updatedAt = new Date().toISOString();
+    writeJson(ticketFile(slug, t.id), t);
+    return { ok: true, ticket: t };
+  });
+}
+
+// Complete a ticket: mark it done and clear its claim.
+function completeTicket(slug, idOrRef, by, opts) {
+  opts = opts || {};
+  return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, { status: 'done' }));
+}
+
+// Atomically claim the best available ticket in a project: highest priority
+// first, oldest-first within a priority. Skips done tickets and ones actively
+// claimed by another worker. Returns { ok:true, ticket } or { reason:'empty' }.
+function claimNext(slug, by, opts) {
+  opts = opts || {};
+  by = String(by || 'agent');
+  const candidates = listTickets(slug)
+    .filter((t) => t.status !== 'done')
+    .filter((t) => !t.claim || isClaimStale(t.claim) || t.claim.by === by)
+    .filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase())
+    .sort((a, b) => {
+      const pr = priorityRank(a.priority) - priorityRank(b.priority);
+      if (pr !== 0) return pr;
+      return String(a.createdAt).localeCompare(String(b.createdAt));
+    });
+  for (const cand of candidates) {
+    const res = claimTicket(slug, cand.id, by, { source: opts.source });
+    if (res.ok) return res;
+    // Lost the race or it changed under us — try the next candidate.
+  }
+  return { ok: false, reason: 'empty' };
 }
 
 /* ------------------------------------------------------------------ *
@@ -489,6 +679,11 @@ module.exports = {
   createTicket,
   updateTicket,
   deleteTicket,
+  claimTicket,
+  releaseTicket,
+  completeTicket,
+  claimNext,
+  isClaimStale,
   normalizeLabels,
   readServerInfo,
   writeServerInfo,

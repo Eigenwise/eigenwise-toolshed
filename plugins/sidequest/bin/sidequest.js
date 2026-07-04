@@ -20,6 +20,7 @@
  */
 
 const path = require('path');
+const os = require('os');
 const http = require('http');
 const { spawn } = require('child_process');
 const store = require('../lib/store');
@@ -37,6 +38,7 @@ const ALIASES = {
   l: 'label',
   i: 'image',
   s: 'status',
+  b: 'by',
 };
 
 function parseArgs(argv) {
@@ -63,7 +65,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'open', 'help']);
+      const BOOL = new Set(['json', 'open', 'help', 'force']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -154,7 +156,8 @@ function cmdList(opts) {
       const pr = PRIORITY_MARK[t.priority] ? ` ${PRIORITY_MARK[t.priority]}` : '';
       const labels = t.labels.length ? `  #${t.labels.join(' #')}` : '';
       const imgs = t.assets.length ? `  \u{1F5BC}${t.assets.length}` : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}`);
+      const clm = t.claim && t.claim.by ? `  @${t.claim.by}${store.isClaimStale(t.claim) ? ' (stale)' : ''}` : '';
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${clm}`);
     }
   }
 }
@@ -187,6 +190,101 @@ function cmdRm(opts, positional) {
   const ok = store.deleteTicket(slug, idOrRef);
   if (!ok) fail(`rm: no ticket "${idOrRef}" in ${meta.name}`);
   console.log(`✓ removed ${idOrRef} from ${meta.name}`);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Claiming (safe hand-off to a worker)
+ * ------------------------------------------------------------------ */
+
+// A stable identity for the worker doing the claim, so the same worker can later
+// release/complete it. Pass --by to be explicit; otherwise fall back to an env
+// hint or the machine name. Distinct concurrent workers should pass distinct --by.
+function workerId(opts) {
+  return String(
+    opts.by || process.env.SIDEQUEST_AGENT || process.env.CLAUDE_SESSION_ID || 'agent@' + os.hostname()
+  );
+}
+
+function reportClaimFailure(action, idOrRef, res, meta) {
+  process.exitCode = 1;
+  const c = res.claim || {};
+  const messages = {
+    not_found: `${idOrRef} no longer exists on ${meta.name} — nothing to ${action}.`,
+    done: `${idOrRef} is already done — skip it.`,
+    claimed: `${idOrRef} is already claimed by "${c.by}" (since ${c.at}). Do NOT work it.`,
+    not_owner: `${idOrRef} is claimed by "${c.by}", not you — use --force only if you are certain.`,
+    busy: `${idOrRef} is locked by another claim right now — retry in a moment.`,
+    empty: `no available tickets in ${meta.name}.`,
+  };
+  console.log(`✗ ${messages[res.reason] || action + ' failed: ' + res.reason}`);
+}
+
+function cmdClaim(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('claim: pass a ticket id or ref, e.g. sidequest claim SQ-3 --by me');
+  const { slug, meta } = resolveProject(opts);
+  const by = workerId(opts);
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) {
+    console.log(`✓ claimed ${res.ticket.ref} as "${by}"  [${res.ticket.status}]  — ${meta.name}`);
+    console.log(`  "${res.ticket.title}"`);
+  } else {
+    reportClaimFailure('claim', idOrRef, res, meta);
+  }
+}
+
+function cmdRelease(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('release: pass a ticket id or ref, e.g. sidequest release SQ-3');
+  const { slug, meta } = resolveProject(opts);
+  const by = workerId(opts);
+  const res = store.releaseTicket(slug, idOrRef, by, { force: !!opts.force, status: opts.status, source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) console.log(`✓ released ${res.ticket.ref}  [${res.ticket.status}]  — ${meta.name}`);
+  else reportClaimFailure('release', idOrRef, res, meta);
+}
+
+function cmdDone(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('done: pass a ticket id or ref, e.g. sidequest done SQ-3');
+  const { slug, meta } = resolveProject(opts);
+  const by = workerId(opts);
+  const res = store.completeTicket(slug, idOrRef, by, { force: !!opts.force, source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) console.log(`✓ ${res.ticket.ref} done  — ${meta.name}`);
+  else reportClaimFailure('complete', idOrRef, res, meta);
+}
+
+function cmdNext(opts) {
+  const { slug, meta } = resolveProject(opts);
+  const by = workerId(opts);
+  const res = store.claimNext(slug, by, { priority: opts.priority, source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) {
+    const t = res.ticket;
+    console.log(`✓ claimed next: ${t.ref} [${t.priority}]  "${t.title}"  as "${by}" — ${meta.name}`);
+    if (t.description) console.log(`  ${t.description}`);
+  } else {
+    process.exitCode = 1;
+    console.log(`No available tickets to claim in ${meta.name}.`);
+  }
 }
 
 function cmdProjects(opts) {
@@ -335,6 +433,13 @@ Usage:
   sidequest serve [--port N]                     run the board server in the foreground
   sidequest stop                                 stop the running board server
 
+Working the board safely (multi-agent):
+  sidequest claim <id|SQ-n> [--by who] [--force]   atomically take a ticket (fails if gone/done/claimed)
+  sidequest next [--by who] [-p priority]          claim the best available ticket (highest priority first)
+  sidequest done <id|SQ-n> [--by who]              mark it done and release the claim
+  sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
+  A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
+
 Project selection:
   Defaults to $CLAUDE_PROJECT_DIR or the current directory.
   --project <path-or-slug>   target another board  ·  --name <name>   set its display name
@@ -378,6 +483,23 @@ async function main() {
     case 'remove':
     case 'delete':
       cmdRm(opts, positional);
+      break;
+    case 'claim':
+    case 'take':
+      cmdClaim(opts, positional);
+      break;
+    case 'next':
+    case 'grab':
+      cmdNext(opts);
+      break;
+    case 'done':
+    case 'complete':
+    case 'finish':
+      cmdDone(opts, positional);
+      break;
+    case 'release':
+    case 'unclaim':
+      cmdRelease(opts, positional);
       break;
     case 'projects':
     case 'boards':

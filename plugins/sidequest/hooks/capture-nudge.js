@@ -124,6 +124,14 @@ function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
 }
 
+// The small always-on reminder can be turned off with SIDEQUEST_NUDGE=off for
+// anyone who finds a per-prompt nudge too chatty (the marker-triggered capture
+// and board-control blocks still fire).
+function nudgeOff() {
+  const v = String(process.env.SIDEQUEST_NUDGE || '').trim().toLowerCase();
+  return v === 'off' || v === '0' || v === 'false' || v === 'no';
+}
+
 function emit(context) {
   process.stdout.write(
     JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: context } })
@@ -141,11 +149,25 @@ function main() {
   const isMgmt = looksLikeBoardManagement(prompt);
   const strongCapture = mentionsImage || hasStrongCapture(prompt);
 
-  // Stay silent unless the message is plausibly about capturing an issue or
-  // about the board itself.
-  if (!isCapture && !isMgmt) process.exit(0);
-
   const cli = `node "${path.join(pluginRoot(), 'bin', 'sidequest.js')}"`;
+
+  // No capture/board signal in this message: keep a short standing reminder in
+  // front of Claude (unless opted out) so it actually uses sidequest rather than
+  // forgetting the system is here. The heavier blocks below fire on a match.
+  if (!isCapture && !isMgmt) {
+    if (nudgeOff()) process.exit(0);
+    emit(
+      '=== sidequest (active) ===\n' +
+        'This project tracks work in sidequest. When the user raises — or you notice — a bug, task, or ' +
+        'idea SEPARATE from your current work, capture it as a ticket right away rather than only noting ' +
+        'it: spawn the `ticket-filer` agent (background), or run `' +
+        cli +
+        ' add -t "..." -p high -l bug`. Board: `' +
+        cli +
+        ' dashboard`.'
+    );
+    process.exit(0);
+  }
 
   // Board management (e.g. "show me the dashboard", "list my tickets", "close
   // SQ-3"): give Claude the resolved CLI path and the exact commands. Capture
@@ -160,6 +182,11 @@ function main() {
         `  Move / edit a ticket:                ${cli} update SQ-3 --status done   (status: todo|doing|done; also -p, -t, -d, -l)\n` +
         `  Remove a ticket:                     ${cli} rm SQ-3\n` +
         `  List every project's board:          ${cli} projects\n` +
+        '\nTo WORK a ticket safely (other agents may share this board): claim it FIRST, then work, then finish.\n' +
+        `  ${cli} claim SQ-3 --by <you>   (or ${cli} next --by <you> to grab the top-priority ticket)\n` +
+        `  ${cli} done SQ-3 --by <you>    when finished  ·  ${cli} release SQ-3 --by <you>  to drop it\n` +
+        'Claiming is atomic: if it fails (already claimed / done / gone) do NOT work the ticket — pick another. ' +
+        'For a small ticket you may spawn a subagent to do the work, but only AFTER the claim succeeds.\n' +
         'Tickets are stored centrally, so `dashboard` shows every project at once. To open the board, ' +
         'just run the dashboard command — it starts the local server if needed and opens the browser, ' +
         'then report the URL it prints.'

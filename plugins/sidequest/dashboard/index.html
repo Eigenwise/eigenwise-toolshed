@@ -209,6 +209,12 @@
   .label { font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--line-soft); padding: 2px 7px; border-radius: 999px; }
   .label::before { content: "#"; color: var(--text-faint); }
   .time { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+  /* An agent has claimed this ticket and is working it. */
+  .claimchip { font-family: var(--mono); font-size: 10px; color: var(--mint); background: rgba(53,214,160,.10); border: 1px solid rgba(53,214,160,.32); padding: 2px 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .claimchip .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; box-shadow: 0 0 0 0 rgba(53,214,160,.5); animation: claimpulse 2s ease-out infinite; }
+  .claimchip.stale { color: var(--text-faint); background: var(--panel-2); border-color: var(--line-soft); }
+  .claimchip.stale .pulse { animation: none; }
+  @keyframes claimpulse { 0% { box-shadow: 0 0 0 0 rgba(53,214,160,.5); } 70%,100% { box-shadow: 0 0 0 5px rgba(53,214,160,0); } }
 
   /* ---------- Modal ---------- */
   .overlay { position: fixed; inset: 0; background: rgba(6,9,18,.62); backdrop-filter: blur(6px); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 20px; z-index: 40; opacity: 0; pointer-events: none; transition: opacity .16s; overflow-y: auto; }
@@ -459,6 +465,13 @@
   function isBackgroundChange(t) {
     return t.lastEventSource && t.lastEventSource !== "dashboard" && (t.lastEventType === "status" || t.lastEventType === "created");
   }
+  // A claim past the default TTL is likely abandoned; shown muted. (Display only —
+  // the CLI enforces the real, possibly env-configured, timeout.)
+  function claimStale(claim) {
+    if (!claim || !claim.at) return true;
+    var t = Date.parse(claim.at);
+    return !isFinite(t) || Date.now() - t > 60 * 60 * 1000;
+  }
   function unseenCount(slug) {
     var since = state.lastSeen[slug] || 0;
     var n = 0;
@@ -654,12 +667,18 @@
     }
     var labels = (t.labels || []).slice(0, 4).map(function (l) { return '<span class="label">' + esc(l) + '</span>'; }).join("");
     var desc = t.description ? '<div class="desc">' + esc(t.description) + '</div>' : "";
+    var claim = "";
+    if (t.claim && t.claim.by) {
+      var stale = claimStale(t.claim);
+      claim = '<span class="claimchip' + (stale ? " stale" : "") + '" title="' + (stale ? "stale claim by " : "being worked by ") +
+        esc(t.claim.by) + '"><span class="pulse"></span>' + esc(t.claim.by) + (stale ? " (stale)" : "") + '</span>';
+    }
 
     c.innerHTML =
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge +
       '<span class="prio-tag" data-p="' + t.priority + '">' + t.priority + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
-      '<div class="foot">' + labels + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
+      '<div class="foot">' + claim + labels + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
 
     c.addEventListener("click", function (e) { if (e.target.tagName === "IMG") { openLightbox(e.target.src); return; } openEditor(t); });
     c.addEventListener("keydown", function (e) { if (e.key === "Enter") openEditor(t); });

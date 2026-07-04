@@ -42,6 +42,10 @@ going**. The decision to file stays with Claude, so an ordinary on-task prompt c
   ticket; you'll see the thumbnail on the card and full-size in the board's lightbox.
 - **It doesn't derail the current task.** Capture happens on a background subagent (or a single quick
   CLI call), then Claude continues what it was doing.
+- **A quiet standing reminder.** On other prompts the hook injects one short line keeping Claude aware
+  that this project uses sidequest, so it reaches for the board instead of forgetting the system exists.
+  Find it too chatty? Set `SIDEQUEST_NUDGE=off` — the capture and board blocks above still fire on a
+  match.
 
 You can also just ask directly: *"make a ticket for the flaky signup test, high priority."*
 
@@ -102,6 +106,32 @@ Ask in plain language and the `sidequest` skill maps it to the CLI:
 | "bump SQ-5 to urgent" | Changes priority |
 | "delete SQ-4" | Removes the ticket |
 
+## Working the board (safe with multiple agents)
+
+sidequest isn't just a place to *record* work — Claude (or several agents at once) can **work** it. The
+board may be shared across sessions, browser tabs, or teammates, so a ticket must be **claimed** before
+anyone touches it, and claiming is **atomic**: two workers can never both win the same ticket.
+
+```bash
+sidequest next --by <you>          # atomically claim the top-priority available ticket
+sidequest claim SQ-3 --by <you>    # or claim a specific one
+sidequest done SQ-3 --by <you>     # finished: mark done + release the claim
+sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status todo)
+```
+
+- **Claim before work, always.** The claim is the atomic check that the ticket is *still there and still
+  free*. If it fails — already claimed by someone else, already done, or deleted — the CLI says so and
+  exits non-zero, and you just don't work it. That's the whole guarantee: **it never hurts if another
+  agent picked it up first.** You never re-do their work, even for a ticket you filed yourself moments
+  ago.
+- **`--by`** is your worker id (a session id or a short label); use a stable one so you can finish what
+  you claimed. Concurrent workers must use distinct ids.
+- **Delegate small tickets.** Once you've claimed a ticket, you can spawn a subagent to do the actual
+  work while you orchestrate, then mark it `done` when it reports back.
+- **Crash-safe.** A claim left by a worker that crashed or wandered off becomes reclaimable after a
+  timeout (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). On the dashboard, a claimed ticket shows a green
+  "working" chip with the worker's id (muted once the claim goes stale).
+
 ## CLI
 
 Every action is a thin wrapper over one script, usable directly too:
@@ -111,6 +141,9 @@ node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui 
 node <plugin>/bin/sidequest.js list [--status todo|doing|done] [--json]
 node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -i
 node <plugin>/bin/sidequest.js rm SQ-3
+node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
+node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket
+node <plugin>/bin/sidequest.js done SQ-3 --by <you>           # finish + release  (release = drop unfinished)
 node <plugin>/bin/sidequest.js projects [--json]
 node <plugin>/bin/sidequest.js dashboard [--port N] [--no-open]
 node <plugin>/bin/sidequest.js serve [--port N]               # run the server in the foreground
@@ -145,6 +178,8 @@ Two optional environment variables (set them in `.claude/settings.json` under `e
 |---|---|---|
 | `SIDEQUEST_HOME` | `~/.claude/sidequest` | Where the central store lives. Point several machines at a synced folder to share boards. |
 | `SIDEQUEST_PORT` | `41730` | Preferred dashboard port. If taken, the next free port is used. |
+| `SIDEQUEST_CLAIM_TTL_MIN` | `60` | Minutes before an unrefreshed claim is treated as stale and another worker may take it over. |
+| `SIDEQUEST_NUDGE` | `on` | Set to `off` to silence the small per-prompt "use sidequest" reminder (the marker-triggered capture and board blocks still fire). |
 
 ## Troubleshooting
 

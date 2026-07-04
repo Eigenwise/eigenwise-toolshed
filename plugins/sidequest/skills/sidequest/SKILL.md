@@ -5,9 +5,12 @@ description: >-
   from the CLI. Use when the user says "show me the dashboard", "open the board", "open the sidequest /
   ticket board", "open the kanban", "show my tickets", "what's on my board", or wants to file, list,
   update, move, close, prioritize, label, or delete tickets — e.g. "make a ticket for X", "add a bug
-  ticket", "close SQ-3", "move SQ-2 to done", "bump SQ-5 to urgent", "what tickets are open". Tickets
-  are stored centrally, so one dashboard shows every project's board at once. For capturing a side
-  issue mentioned mid-task, prefer the ticket-filer agent (the capture hook nudges you to it).
+  ticket", "close SQ-3", "move SQ-2 to done", "bump SQ-5 to urgent", "what tickets are open". Also use
+  when the user wants to WORK the board — "work on the tickets", "grab the next task", "pick up SQ-3",
+  "start on the backlog" — which requires atomically CLAIMING a ticket before working it so shared
+  boards stay safe across agents. Tickets are stored centrally, so one dashboard shows every project's
+  board at once. For capturing a side issue mentioned mid-task, prefer the ticket-filer agent (the
+  capture hook nudges you to it).
 ---
 
 # sidequest
@@ -83,6 +86,33 @@ sidequest rm SQ-3                                     # delete
 
 "Close", "mark done", "ship it", "resolve" → `--status done`. "Start", "in progress", "working on it"
 → `--status doing`.
+
+## Work a ticket (safe with other agents)
+
+The board may be shared — other Claude sessions, other tabs, or teammates can be working it too. So a
+ticket must be **claimed** before you touch it, and claiming is **atomic**: two workers can never both
+win the same ticket.
+
+**Never start work on a ticket you haven't successfully claimed.** The claim is the check that it's
+still there and still free — don't skip it just because you filed the ticket yourself a moment ago.
+
+```bash
+sidequest next --by <you>              # atomically claim the top-priority available ticket
+sidequest claim SQ-3 --by <you>        # or claim a specific one
+#   ... do the work (yourself, or spawn a subagent for it — see below) ...
+sidequest done SQ-3 --by <you>         # mark done + release the claim
+sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --status todo)
+```
+
+- **`--by`** identifies you as the worker; use a stable id (your session id, or a short label) so you
+  can release/finish what you claimed. Distinct concurrent workers must use distinct `--by` values.
+- **If a claim fails**, the CLI says why (`already claimed by X`, `already done`, `no longer exists`) and
+  exits non-zero. **Do not work that ticket** — pick another, or stop. This is the whole safety
+  guarantee: it never hurts if another agent grabbed it first.
+- **Small enough to delegate?** After you've claimed the ticket, you may spawn a subagent to actually do
+  the work while you orchestrate — just claim first, and mark it `done` once the subagent reports back.
+- **Stale claims** (a worker that crashed or wandered off) are reclaimable after a timeout
+  (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min); `--force` overrides a live claim only when you're sure.
 
 ## Guidelines
 

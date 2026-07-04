@@ -74,6 +74,9 @@ neither:
 - When Claude changes the board while you're heads-down elsewhere, you get a **desktop notification**
   and an **unread badge** on that project in the sidebar — but only for Claude's changes, never your
   own dashboard edits.
+- Claude (or several agents at once) can **work** the board, not just fill it: a ticket is **claimed
+  atomically** before anyone touches it, so two agents never do the same task — it's safe to point
+  several sessions at one board.
 - **One board for every project.** Tickets are stored centrally under `~/.claude/sidequest` (keyed by
   project path, never inside your repos), so a single dashboard covers every folder you work in at
   once. The server binds to `127.0.0.1` only — nothing leaves your machine.
