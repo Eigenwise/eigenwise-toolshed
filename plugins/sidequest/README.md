@@ -67,27 +67,61 @@ local server (idempotently — it reuses one that's already running) and opens y
 
 It's a self-contained page — no CDN, no fonts, no network calls beyond its own local API.
 
-### Notifications and unread badges
+### Notifications and the bell inbox
 
 When **Claude** changes the board while you're working elsewhere, sidequest tells you — but it never
-nags you about your own edits:
+nags you about your own edits. Notifications live in a small **persistent queue on the server**, not
+just in the open tab, so they survive a reload and pile up even while no dashboard is open.
 
-- **Sidebar unread badge.** Each project shows a small gold badge counting the tickets Claude
+- **The bell is an inbox.** Click it to open a readable list of what happened — questions, comments,
+  new tickets, status changes — newest first, each linking straight to its ticket. A gold badge on the
+  bell shows the unread count; click a notification (or **mark all read**) to clear it.
+- **Sidebar unread badge.** Each project also shows a small gold badge counting the tickets Claude
   created or moved between columns since you last opened that board. Open the board and the badge
-  clears. Changes *you* make in the dashboard (in any tab) never raise a badge.
-- **Desktop notification.** When Claude does something in the background — and you're *not* looking at
-  the dashboard — you get a native desktop toast ("❓ Question · SQ-6", "💬 Comment · SQ-3", "New side
-  quest · SQ-7", "SQ-3 → done"). Click it to jump straight to that board. Click the **bell** in the top
-  bar to turn notifications on (the browser asks once for permission). With several dashboard tabs open,
-  a change only pops one notification, not one per tab.
-- **Choose what pings you.** The **gear** menu next to the bell lets you pick which events notify (and
-  badge): **questions**, **comments**, **new tickets**, **status changes** — each a toggle. A question
-  from Claude is the one you'll usually want on, since it means Claude is waiting on your answer.
+  clears. Changes *you* make in the dashboard (in any tab) never raise a badge or an inbox entry.
+- **Desktop notification.** Toggle this from the **gear** menu ("Desktop notifications") — when Claude
+  does something in the background and you're not looking at the dashboard, you get a native toast on
+  top of the inbox entry. Click it to jump straight to that board.
+- **Choose what pings you.** The gear menu lets you pick which events notify (and queue): **questions**,
+  **comments**, **new tickets**, **status changes** — each a toggle, honored server-side so an opted-out
+  kind never queues even with no tab open. A question from Claude is the one you'll usually want on,
+  since it means Claude is waiting on your answer.
 
 The distinction is by origin: a change made through the dashboard is *you*; a change made by the CLI or
-a subagent is *Claude*. Only the latter notifies or badges. (While a board's tab is fully backgrounded,
-the browser throttles its timers, so a notification can lag a little; it catches up the moment you
-focus the tab.)
+a subagent is *Claude*. Only the latter notifies, badges, or queues. (While a board's tab is fully
+backgrounded, the browser throttles its timers, so a desktop toast can lag a little; the inbox itself
+doesn't need the tab open at all.)
+
+## Reminders
+
+Set a time-based nudge on any ticket — it fires into the bell inbox later, even if you've closed the
+tab (as long as the dashboard server is running).
+
+```bash
+sidequest remind SQ-3 --in 1h                    # presets: 1h | 3h | tomorrow (9am)
+sidequest remind SQ-3 --at "2026-07-05T09:00"    # or a specific date/time
+sidequest unremind SQ-3                          # cancel a pending one
+```
+
+On the dashboard, a ticket's editor has the same presets plus a custom datetime picker, and a
+cancellable "🔔 in 1h" chip shows on the card and in the modal while one's pending. A reminder due
+while the server was down fires on the very next tick after it's back up — nothing is lost.
+
+## Assigning tickets
+
+Separate from a **claim** (atomic, expires, gates `next`/`ready`), a ticket can also carry a persistent
+**assignee** — normally you, the human, tracking who owns it rather than who's actively working it.
+
+```bash
+sidequest assign SQ-3               # assign to "you"
+sidequest assign SQ-3 --to Kenny    # or a specific name
+sidequest unassign SQ-3             # clear it
+```
+
+The dashboard has an assignee chip on each card and a filter in the toolbar (**Everyone** / **Mine** /
+**Agents** / **Unassigned**) — "Agents" means a live claim (or a non-"you" assignee), "Unassigned" means
+neither. Assignment never expires and never blocks an agent from claiming and working an assigned
+ticket.
 
 ## Multiple projects
 
@@ -213,6 +247,8 @@ node <plugin>/bin/sidequest.js done SQ-3 --by <you>           # finish + release
 node <plugin>/bin/sidequest.js link SQ-4 depends-on SQ-3      # dependencies (blocks | depends-on | related)
 node <plugin>/bin/sidequest.js comment SQ-3 -m "note"         # ask = question (pause + await the reply)
 node <plugin>/bin/sidequest.js archive --done                # tuck away all done  ·  unarchive <ref> restores
+node <plugin>/bin/sidequest.js assign SQ-3 [--to who=you]     # persistent owner  ·  unassign SQ-3 clears it
+node <plugin>/bin/sidequest.js remind SQ-3 --in 1h            # or --at "<date/time>"  ·  unremind SQ-3 cancels
 node <plugin>/bin/sidequest.js projects [--json]
 node <plugin>/bin/sidequest.js dashboard [--port N] [--no-open]
 node <plugin>/bin/sidequest.js serve [--port N]               # run the server in the foreground

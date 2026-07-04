@@ -83,6 +83,10 @@ neither:
 - Because claiming is atomic, Claude **fans out over independent ready tickets** — one subagent per
   ticket, in parallel — instead of grinding through them one at a time. And finished work **archives**
   out of the way (a quiet, restorable side view) so the board stays about what's left.
+- A persistent **notification inbox** (the bell) keeps every question, comment, and status change
+  Claude raised while you were away — read it whenever, it survives a reload or a closed tab. Set a
+  **reminder** on any ticket (a preset or a custom time) to get pinged later, and hand a ticket a
+  persistent **assignee** — yourself or an agent — filterable right on the board.
 - **One board for every project.** Tickets are stored centrally under `~/.claude/sidequest` (keyed by
   project path, never inside your repos), so a single dashboard covers every folder you work in at
   once. The server binds to `127.0.0.1` only — nothing leaves your machine.
