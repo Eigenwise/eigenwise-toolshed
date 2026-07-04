@@ -360,6 +360,7 @@ function createTicket(slug, fields) {
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
     claim: null,               // { by, at } when an agent has claimed it to work on
+    assignee: normalizeAssignee(fields.assignee), // who it's assigned to (usually the human "you"); distinct from an agent claim
     archived: false,           // hidden from the board (kept, restorable) once true
     archivedAt: null,
     source: String(fields.source || 'manual'),
@@ -409,6 +410,14 @@ function normalizeLabels(labels) {
   return out.slice(0, 12);
 }
 
+// An assignee is a free-form name (the human "you", or an agent). Empty/blank
+// clears it back to null (unassigned).
+function normalizeAssignee(v) {
+  if (v == null) return null;
+  const s = String(v).trim().slice(0, 60);
+  return s || null;
+}
+
 // Apply a partial update. Only known fields are written; unknown keys ignored.
 // Locked (like every other mutator) so a concurrent comment/claim/link append
 // can never be silently overwritten by an update whose read predates it.
@@ -423,6 +432,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.status != null) t.status = coerceStatus(patch.status, t.status);
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
+    if (patch.assignee !== undefined) t.assignee = normalizeAssignee(patch.assignee);
     if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
     // Attach any newly supplied images (by path from the CLI, or base64 from the
     // dashboard). Also allow removing an attached asset by filename.
@@ -765,6 +775,26 @@ function claimNext(slug, by, opts) {
   return { ok: false, reason: 'empty' };
 }
 
+// Assign (or, with a null/blank assignee, unassign) a ticket. Assignment is a
+// persistent "who owns this" marker — unlike claimTicket it has no TTL, does not
+// move the ticket to "doing", and does not gate ready/next. It's how a human
+// takes a ticket for themselves (assignee "you") or an agent hands one back.
+function assignTicket(slug, idOrRef, assignee, opts) {
+  opts = opts || {};
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    t.assignee = normalizeAssignee(assignee);
+    t.lastEventType = 'edit';
+    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+    t.updatedAt = new Date().toISOString();
+    writeJson(ticketFile(slug, t.id), t);
+    return { ok: true, ticket: t };
+  });
+}
+
 /* ------------------------------------------------------------------ *
  *  Comments
  *
@@ -936,6 +966,167 @@ function isBlocked(slug, ticket) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Notifications
+ *
+ *  A single, persistent, per-user queue (one notifications.json under
+ *  projectsRoot(), a sibling to the project dirs). Unlike the old client-side
+ *  toasts/badges — which were derived on the fly from ticket diffs and lost on
+ *  reload — these survive a server restart, because reminders must be able to
+ *  fire even when no dashboard tab is open. Appends/mutations go through a single
+ *  queue lock so two writers can never clobber each other, mirroring the
+ *  read-modify-write-under-lock pattern used for tickets.
+ * ------------------------------------------------------------------ */
+
+const NOTIFICATION_KINDS = ['question', 'comment', 'created', 'status', 'reminder'];
+
+// How many *read* notifications to retain. Unread ones are always kept; this
+// only caps the tail of already-seen history so the file can't grow forever.
+const MAX_READ_KEPT = 100;
+
+function notificationsFile() {
+  return path.join(projectsRoot(), 'notifications.json');
+}
+function notificationsLockPath() {
+  return path.join(projectsRoot(), '.notifications.lock');
+}
+
+function newNotificationId() {
+  return 'nt_' + Date.now().toString(36) + '_' + crypto.randomBytes(3).toString('hex');
+}
+
+// Fail-soft read: a missing/corrupt file degrades to an empty queue.
+function readNotifications() {
+  const data = readJson(notificationsFile(), null);
+  return data && Array.isArray(data.notifications) ? data.notifications : [];
+}
+function writeNotifications(list) {
+  writeJson(notificationsFile(), { notifications: list });
+}
+
+// Serialize every mutation on the queue behind one lock (best-effort, like the
+// ticket mutators: still applies if contention outlasts the retries).
+function withNotificationsLock(fn) {
+  const lock = notificationsLockPath();
+  const locked = acquireLock(lock);
+  try {
+    return fn();
+  } finally {
+    if (locked) releaseLock(lock);
+  }
+}
+
+// Drop the oldest read notifications past the cap; never touches unread ones.
+function pruneReadList(list) {
+  const read = list.filter((n) => n.readAt);
+  if (read.length <= MAX_READ_KEPT) return list;
+  read.sort((a, b) => String(b.readAt).localeCompare(String(a.readAt)));
+  const dropIds = new Set(read.slice(MAX_READ_KEPT).map((n) => n.id));
+  return list.filter((n) => !dropIds.has(n.id));
+}
+
+// List notifications, newest first. opts: { projectSlug, kind, unreadOnly,
+// includePending, limit }. A reminder scheduled for the future (fireAt > now) is
+// hidden until it's due unless includePending is set.
+function listNotifications(opts) {
+  opts = opts || {};
+  const now = Date.now();
+  let list = readNotifications();
+  if (opts.projectSlug) list = list.filter((n) => n.projectSlug === opts.projectSlug);
+  if (opts.kind) list = list.filter((n) => n.kind === opts.kind);
+  if (opts.unreadOnly) list = list.filter((n) => !n.readAt);
+  if (!opts.includePending) {
+    list = list.filter((n) => !(n.fireAt && Number.isFinite(Date.parse(n.fireAt)) && Date.parse(n.fireAt) > now));
+  }
+  list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  if (opts.limit != null && Number.isFinite(Number(opts.limit))) list = list.slice(0, Number(opts.limit));
+  return list;
+}
+
+// Append a notification and return it. Unknown kinds coerce to "comment".
+// fireAt is only meaningful for reminders (a scheduled future time); everything
+// else leaves it null. Prunes read history in the same locked write.
+function addNotification(fields) {
+  fields = fields || {};
+  const kind = NOTIFICATION_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : 'comment';
+  const now = new Date().toISOString();
+  const notification = {
+    id: newNotificationId(),
+    kind,
+    title: String(fields.title || '').slice(0, 300),
+    body: String(fields.body || '').slice(0, 4000),
+    projectSlug: fields.projectSlug ? String(fields.projectSlug) : null,
+    ticketRef: fields.ticketRef ? String(fields.ticketRef) : null,
+    ticketId: fields.ticketId ? String(fields.ticketId) : null,
+    createdAt: now,
+    readAt: null,
+    fireAt: fields.fireAt ? String(fields.fireAt) : null,
+  };
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    list.push(notification);
+    writeNotifications(pruneReadList(list));
+    return notification;
+  });
+}
+
+// Mark one notification read (idempotent). Returns the updated record, or null
+// if no such id.
+function markRead(id) {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    let updated = null;
+    for (const n of list) {
+      if (n.id === id) {
+        if (!n.readAt) n.readAt = new Date().toISOString();
+        updated = n;
+        break;
+      }
+    }
+    if (updated) writeNotifications(list);
+    return updated;
+  });
+}
+
+// Mark every unread notification read. Returns how many were flipped.
+function markAllRead() {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const n of list) {
+      if (!n.readAt) {
+        n.readAt = now;
+        count++;
+      }
+    }
+    if (count) writeNotifications(list);
+    return count;
+  });
+}
+
+// Remove a notification outright. Returns true if one was removed.
+function dismiss(id) {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    const kept = list.filter((n) => n.id !== id);
+    if (kept.length === list.length) return false;
+    writeNotifications(kept);
+    return true;
+  });
+}
+
+// Trim read history down to the cap. Returns how many were removed.
+function pruneRead() {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    const pruned = pruneReadList(list);
+    const removed = list.length - pruned.length;
+    if (removed) writeNotifications(pruned);
+    return removed;
+  });
+}
+
+/* ------------------------------------------------------------------ *
  *  Server lockfile (used by CLI + server to find/reuse a running dashboard)
  * ------------------------------------------------------------------ */
 
@@ -976,6 +1167,7 @@ module.exports = {
   releaseTicket,
   completeTicket,
   claimNext,
+  assignTicket,
   readyTickets,
   addComment,
   needsResponse,
@@ -990,6 +1182,13 @@ module.exports = {
   listActive,
   isClaimStale,
   normalizeLabels,
+  NOTIFICATION_KINDS,
+  listNotifications,
+  addNotification,
+  markRead,
+  markAllRead,
+  dismiss,
+  pruneRead,
   readServerInfo,
   writeServerInfo,
   clearServerInfo,

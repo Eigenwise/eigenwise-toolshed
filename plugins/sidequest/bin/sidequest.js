@@ -164,12 +164,13 @@ function cmdList(opts) {
       const labels = t.labels.length ? `  #${t.labels.join(' #')}` : '';
       const imgs = t.assets.length ? `  \u{1F5BC}${t.assets.length}` : '';
       const clm = t.claim && t.claim.by ? `  @${t.claim.by}${store.isClaimStale(t.claim) ? ' (stale)' : ''}` : '';
+      const asn = t.assignee ? `  \u{1F464}${t.assignee}` : '';
       const blockers = store.openBlockers(slug, t);
       const blk = blockers.length ? `  ⛔ blocked-by ${blockers.join(',')}` : '';
       const lnk = t.links && t.links.length ? `  ⇄${t.links.length}` : '';
       const cmt = t.comments && t.comments.length ? `  \u{1F4AC}${t.comments.length}` : '';
       const ask = store.needsResponse(t) ? '  ❓ awaiting reply' : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${cmt}${lnk}${blk}${clm}${ask}`);
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${cmt}${lnk}${blk}${clm}${asn}${ask}`);
     }
   }
 }
@@ -185,6 +186,7 @@ function cmdUpdate(opts, positional) {
   if (opts.priority != null) patch.priority = opts.priority;
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
+  if (opts.assignee != null) patch.assignee = opts.assignee;
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
   const updated = store.updateTicket(slug, idOrRef, patch);
   if (!updated) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
@@ -297,6 +299,24 @@ function cmdNext(opts) {
     process.exitCode = 1;
     console.log(`No available tickets to claim in ${meta.name}.`);
   }
+}
+
+// Assign a ticket to someone (defaults to the human "you"), or clear it with
+// `unassign`. Assignment is persistent and separate from an agent claim.
+function cmdAssign(opts, positional, clear) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail(`${clear ? 'unassign' : 'assign'}: pass a ticket id or ref, e.g. sidequest ${clear ? 'unassign SQ-3' : 'assign SQ-3 --to you'}`);
+  const { slug, meta } = resolveProject(opts);
+  const who = clear ? null : (opts.to != null ? opts.to : (opts.by != null ? opts.by : 'you'));
+  const res = store.assignTicket(slug, idOrRef, who, { source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (!res.ok) fail(`${clear ? 'unassign' : 'assign'}: no ticket "${idOrRef}" in ${meta.name}`);
+  if (res.ticket.assignee) console.log(`✓ ${res.ticket.ref} assigned to "${res.ticket.assignee}"  — ${meta.name}`);
+  else console.log(`✓ ${res.ticket.ref} unassigned  — ${meta.name}`);
 }
 
 /* ------------------------------------------------------------------ *
@@ -676,6 +696,10 @@ Working the board safely (multi-agent):
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
   When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.
 
+Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
+  sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
+  sidequest unassign <id|SQ-n>                      clear the assignee
+
 Comments:
   sidequest comment <id|SQ-n> -m "body" [--by who] [--kind comment|question]   a note-to-self; keep going
   sidequest ask <id|SQ-n> -m "question?" [--by who]   post a question — then AWAIT it, don't just continue
@@ -752,6 +776,12 @@ async function main() {
     case 'release':
     case 'unclaim':
       cmdRelease(opts, positional);
+      break;
+    case 'assign':
+      cmdAssign(opts, positional, false);
+      break;
+    case 'unassign':
+      cmdAssign(opts, positional, true);
       break;
     case 'ask':
       opts.kind = 'question'; // `ask` always posts a question — never overridable by --kind

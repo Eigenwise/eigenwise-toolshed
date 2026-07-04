@@ -137,6 +137,32 @@
   .chip.active { color: var(--ink); background: var(--gold); border-color: var(--gold); font-weight: 600; }
   .chip .swatch { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
 
+  /* Sort control: a pill button that opens a small options popover (same family as
+     the filter chips + the notification-settings popover). */
+  .sortbtn {
+    cursor: pointer; font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
+    background: var(--panel); border: 1px solid var(--line-soft); color: var(--text-dim);
+    padding: 6px 10px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; transition: all .13s;
+  }
+  .sortbtn:hover { color: var(--text); border-color: var(--line); }
+  .sortbtn .sortval { color: var(--text); text-transform: none; letter-spacing: .01em; }
+  .sortbtn.sorted, .sortbtn.filtered { color: var(--gold); border-color: var(--gold-line); background: var(--gold-soft); }
+  .sortbtn.sorted .sortval, .sortbtn.filtered .sortval { color: var(--gold-bright); }
+  .sortbtn.on { border-color: var(--gold-line); }
+  .sortbtn .caret { transition: transform .16s; opacity: .8; }
+  .sortbtn.on .caret { transform: rotate(180deg); }
+  .popover.sort { width: 216px; padding: 6px; }
+  .sort-opt { display: flex; align-items: center; gap: 10px; padding: 8px 9px; border-radius: 8px; cursor: pointer; }
+  .sort-opt:hover { background: var(--panel); }
+  .sort-opt .si { color: var(--text-faint); flex: none; }
+  .sort-opt span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .sort-opt b { font-size: 13px; font-weight: 550; color: var(--text-dim); }
+  .sort-opt em { font-style: normal; font-size: 11px; color: var(--text-faint); }
+  .sort-opt .tick { margin-left: auto; color: var(--gold); flex: none; opacity: 0; }
+  .sort-opt.on b { color: var(--text); }
+  .sort-opt.on .si { color: var(--gold); }
+  .sort-opt.on .tick { opacity: 1; }
+
   .iconbtn { cursor: pointer; background: var(--panel); border: 1px solid var(--line-soft); color: var(--text-dim); width: 36px; height: 35px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; transition: all .13s; flex: none; }
   .iconbtn:hover { color: var(--text); border-color: var(--gold-line); }
   .iconbtn.on { color: var(--gold); border-color: var(--gold-line); }
@@ -254,6 +280,12 @@
   .claimchip.stale { color: var(--text-faint); background: var(--panel-2); border-color: var(--line-soft); }
   .claimchip.stale .pulse { animation: none; }
   @keyframes claimpulse { 0% { box-shadow: 0 0 0 0 rgba(53,214,160,.5); } 70%,100% { box-shadow: 0 0 0 5px rgba(53,214,160,0); } }
+  /* A ticket assigned to a person; the human "you" gets the gold treatment. */
+  .assignchip { font-family: var(--mono); font-size: 10px; color: var(--indigo); background: rgba(124,140,255,.10); border: 1px solid rgba(124,140,255,.32); padding: 2px 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .assignchip.mine { color: var(--gold-bright); background: var(--gold-soft); border-color: var(--gold-line); }
+  .assignchip svg { flex: none; }
+  .claim-hint { margin-top: 7px; font-family: var(--mono); font-size: 11px; color: var(--text-faint); display: flex; align-items: center; gap: 6px; }
+  .claim-hint b { color: var(--mint); font-weight: 600; }
 
   /* ---------- Modal ---------- */
   .overlay { position: fixed; inset: 0; background: rgba(6,9,18,.62); backdrop-filter: blur(6px); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 20px; z-index: 40; opacity: 0; pointer-events: none; transition: opacity .16s; overflow-y: auto; }
@@ -392,6 +424,22 @@
         <input id="search" type="text" placeholder="Search tickets" aria-label="Search tickets" />
       </div>
       <div class="filters" id="filters"></div>
+      <div class="popwrap">
+        <button class="sortbtn" id="assignBtn" title="Filter by assignee" aria-haspopup="menu" aria-expanded="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span class="sortval" id="assignLabel">Everyone</span>
+          <svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="popover sort" id="assignPop" role="menu" aria-label="Filter by assignee"></div>
+      </div>
+      <div class="popwrap">
+        <button class="sortbtn" id="sortBtn" title="Sort tickets" aria-haspopup="menu" aria-expanded="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="9" y1="18" x2="15" y2="18"/></svg>
+          <span class="sortval" id="sortLabel">Manual</span>
+          <svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="popover sort" id="sortPop" role="menu" aria-label="Sort tickets"></div>
+      </div>
       <button class="iconbtn off" id="notifyBtn" title="Desktop notifications" aria-label="Toggle desktop notifications">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
       </button>
@@ -453,6 +501,11 @@
         </div>
       </div>
       <div class="field">
+        <label>Assignee</label>
+        <div class="seg assignee" id="mAssignee"></div>
+        <div class="claim-hint" id="mClaimHint" style="display:none"></div>
+      </div>
+      <div class="field">
         <label for="mLabels">Labels</label>
         <input id="mLabels" type="text" placeholder="bug, frontend  (comma-separated)" />
       </div>
@@ -512,6 +565,24 @@
     { k: "doing", label: "Doing" },
     { k: "done",  label: "Done"  }
   ];
+  // How each column can be ordered. "manual" is the drag order (the .order field);
+  // the rest sort every column by a ticket field, newest/most-urgent first.
+  var SORTS = [
+    { k: "manual",   label: "Manual",   hint: "your drag order" },
+    { k: "priority", label: "Priority", hint: "urgent first" },
+    { k: "latest",   label: "Latest",   hint: "recently updated" },
+    { k: "newest",   label: "Newest",   hint: "recently created" }
+  ];
+  var PRIO_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
+  // The human's identity on their own board (matches the "you" used for comments).
+  // A ticket assigned to this name is "mine"; agents hold tickets via .claim instead.
+  var ME = "you";
+  var ASSIGN_FILTERS = [
+    { k: "all",        label: "Everyone",   hint: "no assignee filter" },
+    { k: "mine",       label: "Mine",       hint: "assigned to you" },
+    { k: "agents",     label: "Agents",     hint: "claimed by Claude" },
+    { k: "unassigned", label: "Unassigned", hint: "nobody yet" }
+  ];
   var POLL_MS = 2500;
 
   // ---------------- state ----------------
@@ -521,6 +592,8 @@
     allTickets: [],           // every project's tickets (each carries .project/.projectName)
     tickets: [],              // the current view, derived from allTickets
     filterPriority: "all",
+    filterAssignee: "all",    // "all" | "mine" | "agents" | "unassigned" (session-only, like the priority filter)
+    sortMode: "manual",       // how columns are ordered (persisted); see SORTS
     query: "",
     seen: null,               // Set of ticket ids we've already rendered (for pickup anim)
     dragging: false,
@@ -549,6 +622,12 @@
   var notifyPrefs = NOTIFY_DEFAULTS;
   try { notifyPrefs = Object.assign({}, NOTIFY_DEFAULTS, JSON.parse(localStorage.getItem("sq_notify") || "{}")); } catch (_) {}
   function saveNotifyPrefs() { try { localStorage.setItem("sq_notify", JSON.stringify(notifyPrefs)); } catch (_) {} }
+
+  // Sort choice is board-wide and persisted across reloads.
+  try {
+    var savedSort = localStorage.getItem("sq_sort");
+    if (savedSort && SORTS.some(function (s) { return s.k === savedSort; })) state.sortMode = savedSort;
+  } catch (_) {}
 
   // ---------------- helpers ----------------
   var $ = function (id) { return document.getElementById(id); };
@@ -612,6 +691,15 @@
     var t = Date.parse(claim.at);
     return !isFinite(t) || Date.now() - t > 60 * 60 * 1000;
   }
+  // Assignment predicates (the assignee filter's building blocks). "Mine" is the
+  // human; an agent "holds" a ticket via a live claim (or by being the assignee).
+  function isMine(t) { return String(t.assignee || "").toLowerCase() === ME; }
+  function agentHeld(t) {
+    if (t.claim && t.claim.by && !claimStale(t.claim)) return true;
+    var a = String(t.assignee || "");
+    return !!a && a.toLowerCase() !== ME;
+  }
+  function isUnassigned(t) { return !isMine(t) && !agentHeld(t); }
   function unseenCount(slug) {
     var since = state.lastSeen[slug] || 0;
     var n = 0;
@@ -731,10 +819,85 @@
     });
   }
 
+  // Comparator for the tickets within a single column, per the active sort mode.
+  // Every mode falls back to the manual drag order so ties stay stable.
+  function sortComparator(mode) {
+    var byOrder = function (a, b) { return (b.order || 0) - (a.order || 0); };
+    if (mode === "priority") {
+      return function (a, b) {
+        var ra = PRIO_RANK[a.priority], rb = PRIO_RANK[b.priority];
+        if (ra == null) ra = 2; if (rb == null) rb = 2;
+        return ra - rb || byOrder(a, b);
+      };
+    }
+    if (mode === "latest") {
+      return function (a, b) { return String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) || byOrder(a, b); };
+    }
+    if (mode === "newest") {
+      return function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")) || byOrder(a, b); };
+    }
+    return byOrder;
+  }
+
+  function renderSortMenu() {
+    var pop = $("sortPop");
+    pop.innerHTML = "";
+    SORTS.forEach(function (s) {
+      var on = state.sortMode === s.k;
+      var row = el("div", "sort-opt" + (on ? " on" : ""));
+      row.dataset.k = s.k;
+      row.setAttribute("role", "menuitemradio");
+      row.setAttribute("aria-checked", on ? "true" : "false");
+      row.innerHTML =
+        '<svg class="si" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="9" y1="18" x2="15" y2="18"/></svg>' +
+        '<span><b>' + esc(s.label) + '</b><em>' + esc(s.hint) + '</em></span>' +
+        '<svg class="tick" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      pop.appendChild(row);
+    });
+    var cur = SORTS.filter(function (s) { return s.k === state.sortMode; })[0] || SORTS[0];
+    $("sortLabel").textContent = cur.label;
+    $("sortBtn").classList.toggle("sorted", state.sortMode !== "manual");
+  }
+  function setSort(k) {
+    state.sortMode = k;
+    try { localStorage.setItem("sq_sort", k); } catch (_) {}
+    renderSortMenu();
+    renderBoard();
+  }
+
+  function renderAssignMenu() {
+    var pop = $("assignPop");
+    pop.innerHTML = "";
+    ASSIGN_FILTERS.forEach(function (s) {
+      var on = state.filterAssignee === s.k;
+      var row = el("div", "sort-opt" + (on ? " on" : ""));
+      row.dataset.k = s.k;
+      row.setAttribute("role", "menuitemradio");
+      row.setAttribute("aria-checked", on ? "true" : "false");
+      row.innerHTML =
+        '<svg class="si" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' +
+        '<span><b>' + esc(s.label) + '</b><em>' + esc(s.hint) + '</em></span>' +
+        '<svg class="tick" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      pop.appendChild(row);
+    });
+    var cur = ASSIGN_FILTERS.filter(function (s) { return s.k === state.filterAssignee; })[0] || ASSIGN_FILTERS[0];
+    $("assignLabel").textContent = cur.label;
+    $("assignBtn").classList.toggle("filtered", state.filterAssignee !== "all");
+  }
+  function setAssignFilter(k) {
+    state.filterAssignee = k;
+    renderAssignMenu();
+    renderBoard();
+  }
+
   function visibleTickets() {
     var q = state.query.trim().toLowerCase();
     return state.tickets.filter(function (t) {
       if (state.filterPriority !== "all" && t.priority !== state.filterPriority) return false;
+      var fa = state.filterAssignee;
+      if (fa === "mine" && !isMine(t)) return false;
+      if (fa === "agents" && !agentHeld(t)) return false;
+      if (fa === "unassigned" && !isUnassigned(t)) return false;
       if (q) {
         var hay = (t.ref + " " + t.title + " " + t.description + " " + t.labels.join(" ")).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
@@ -773,7 +936,7 @@
     var newSeen = new Set();
     board.innerHTML = "";
     STATUSES.forEach(function (col) {
-      var items = tickets.filter(function (t) { return t.status === col.k; }).sort(function (a, b) { return (b.order || 0) - (a.order || 0); });
+      var items = tickets.filter(function (t) { return t.status === col.k; }).sort(sortComparator(state.sortMode));
       var colEl = el("div", "col");
       colEl.dataset.status = col.k;
       var headExtra = col.k === "done" && items.length ? '<button class="col-archive" id="archiveAllBtn">Archive all</button>' : "";
@@ -824,6 +987,14 @@
         esc(t.claim.by) + '"><span class="pulse"></span>' + esc(t.claim.by) + (stale ? " (stale)" : "") + '</span>';
     }
 
+    var assign = "";
+    if (t.assignee) {
+      var mine = isMine(t);
+      assign = '<span class="assignchip' + (mine ? " mine" : "") + '" title="assigned to ' + esc(t.assignee) + '">' +
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' +
+        esc(mine ? "you" : t.assignee) + '</span>';
+    }
+
     var blockers = openBlockersClient(t);
     var blockedChip = blockers.length ? '<span class="blockchip" title="blocked by ' + esc(blockers.join(", ")) + '">⛔ blocked</span>' : "";
     var qChip = needsResponseClient(t)
@@ -837,7 +1008,7 @@
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge +
       '<span class="prio-tag" data-p="' + esc(t.priority) + '">' + esc(t.priority) + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
-      '<div class="foot">' + qChip + blockedChip + claim + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
+      '<div class="foot">' + qChip + blockedChip + assign + claim + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
 
     c.addEventListener("click", function (e) { if (e.target.tagName === "IMG") { openLightbox(e.target.src); return; } openEditor(t); });
     c.addEventListener("keydown", function (e) { if (e.key === "Enter") openEditor(t); });
@@ -900,6 +1071,15 @@
       b.addEventListener("click", function () { setSeg(sc, s.k); });
       sc.appendChild(b);
     });
+    // Assignee: the human picks between "Me" and "Unassigned". (Agent claims are a
+    // separate axis, shown as a read-only hint below when present.)
+    var ac = $("mAssignee"); ac.innerHTML = "";
+    [{ k: "unassigned", label: "Unassigned" }, { k: "me", label: "Me" }].forEach(function (a) {
+      var b = el("button", "", a.label);
+      b.type = "button"; b.dataset.k = a.k;
+      b.addEventListener("click", function () { setSeg(ac, a.k); });
+      ac.appendChild(b);
+    });
   }
   function setSeg(container, k) { Array.prototype.forEach.call(container.children, function (b) { b.classList.toggle("on", b.dataset.k === k); }); }
   function segValue(container) { var on = container.querySelector(".on"); return on ? on.dataset.k : null; }
@@ -915,6 +1095,18 @@
     $("mLabels").value = isEdit ? (ticket.labels || []).join(", ") : "";
     setSeg($("mPriority"), isEdit ? ticket.priority : "normal");
     setSeg($("mStatus"), isEdit ? ticket.status : "todo");
+    setSeg($("mAssignee"), isEdit && isMine(ticket) ? "me" : "unassigned");
+    // Show any agent claim as a read-only hint (it's a separate axis from assignee).
+    var hint = $("mClaimHint");
+    if (isEdit && ticket.claim && ticket.claim.by) {
+      var st = claimStale(ticket.claim);
+      hint.style.display = "";
+      hint.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a5 5 0 0 0-5 5v3H5a2 2 0 0 0-2 2v7h18v-7a2 2 0 0 0-2-2h-2V7a5 5 0 0 0-5-5z"/></svg> ' +
+        (st ? 'stale claim by ' : 'being worked by ') + '<b>' + esc(ticket.claim.by) + '</b>' + (st ? ' (stale)' : '');
+    } else {
+      hint.style.display = "none";
+      hint.innerHTML = "";
+    }
     $("mDelete").style.display = isEdit ? "" : "none";
     var ab = $("mArchive");
     ab.style.display = isEdit ? "" : "none";
@@ -1069,6 +1261,7 @@
       description: $("mDesc").value.trim(),
       priority: segValue($("mPriority")),
       status: segValue($("mStatus")),
+      assignee: segValue($("mAssignee")) === "me" ? ME : null,
       labels: $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       imagesData: ed.attachments.map(function (a) { return { name: a.name, base64: a.base64 }; })
     };
@@ -1289,6 +1482,8 @@
   function wire() {
     buildSegments();
     renderFilters();
+    renderSortMenu();
+    renderAssignMenu();
 
     $("newBtn").addEventListener("click", function () { openEditor(null); });
     $("notifyBtn").addEventListener("click", requestNotify);
@@ -1312,15 +1507,49 @@
       }
     });
 
-    // Notification settings popover.
+    // Toolbar popovers (assignee filter, sort, notification settings) — only one open at a time.
     var pop = $("settingsPop");
+    var sortPop = $("sortPop"), sortBtn = $("sortBtn");
+    var assignPop = $("assignPop"), assignBtn = $("assignBtn");
+    function closeSort() { sortPop.classList.remove("show"); sortBtn.classList.remove("on"); sortBtn.setAttribute("aria-expanded", "false"); }
+    function closeAssign() { assignPop.classList.remove("show"); assignBtn.classList.remove("on"); assignBtn.setAttribute("aria-expanded", "false"); }
+    function closeSettings() { pop.classList.remove("show"); $("settingsBtn").classList.remove("on"); }
+
+    assignBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      closeSort(); closeSettings();
+      var open = assignPop.classList.toggle("show");
+      assignBtn.classList.toggle("on", open);
+      assignBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    assignPop.addEventListener("click", function (e) {
+      var opt = e.target.closest(".sort-opt"); if (!opt) return;
+      setAssignFilter(opt.dataset.k);
+      closeAssign();
+    });
+
+    sortBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      closeAssign(); closeSettings();
+      var open = sortPop.classList.toggle("show");
+      sortBtn.classList.toggle("on", open);
+      sortBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    sortPop.addEventListener("click", function (e) {
+      var opt = e.target.closest(".sort-opt"); if (!opt) return;
+      setSort(opt.dataset.k);
+      closeSort();
+    });
+
     $("settingsBtn").addEventListener("click", function (e) {
       e.stopPropagation();
+      closeSort(); closeAssign();
       pop.classList.toggle("show");
       $("settingsBtn").classList.toggle("on", pop.classList.contains("show"));
     });
     document.addEventListener("click", function (e) {
-      if (pop.classList.contains("show") && !e.target.closest(".popwrap")) { pop.classList.remove("show"); $("settingsBtn").classList.remove("on"); }
+      if (e.target.closest(".popwrap")) return;
+      closeSettings(); closeSort(); closeAssign();
     });
     pop.querySelectorAll("input[data-notif]").forEach(function (box) {
       box.checked = notifyPrefs[box.dataset.notif] !== false;
