@@ -201,7 +201,15 @@
   .linkpill.blocks { border-color: rgba(124,140,255,.35); }
   .linkpill .x { cursor: pointer; color: var(--text-faint); padding: 0 3px; border-radius: 4px; }
   .linkpill .x:hover { color: var(--urgent); background: rgba(255,84,104,.12); }
+  .linkpill.reminder { border-color: var(--gold-line); background: var(--gold-soft); color: var(--gold-bright); font-size: 12px; padding: 5px 6px 5px 10px; }
   .none { font-size: 12px; color: var(--text-faint); }
+
+  /* Remind-me: presets are plain .seg buttons (one-shot actions, no "on" state);
+     the custom row pairs a datetime picker with a Set button, same shape as
+     the add-link row below it. */
+  .reminder-presets { margin-bottom: 8px; }
+  .reminder-custom { display: flex; gap: 8px; }
+  .reminder-custom input[type="datetime-local"] { flex: 1; }
 
   .btn {
     cursor: pointer; font-family: var(--sans); font-size: 13px; font-weight: 600; border-radius: 9px;
@@ -299,10 +307,11 @@
   .modal-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 
   .field label { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 6px; }
-  .field input[type="text"], .field textarea, .field select {
+  .field input[type="text"], .field input[type="datetime-local"], .field textarea, .field select {
     width: 100%; background: var(--ink); border: 1px solid var(--line-soft); color: var(--text);
     border-radius: 9px; padding: 10px 12px; font-family: var(--sans); font-size: 14px; transition: border-color .14s;
   }
+  .field input[type="datetime-local"] { color-scheme: dark; }
   .field textarea { resize: vertical; min-height: 78px; line-height: 1.5; }
   .field input:focus, .field textarea:focus, .field select:focus { outline: none; border-color: var(--gold-line); }
   .field .title-input { font-size: 16px; font-weight: 600; }
@@ -514,6 +523,21 @@
         <div class="dropzone" id="dropzone">Paste (Ctrl/Cmd&nbsp;V) or drop an image here</div>
         <div class="att-grid" id="attGrid"></div>
       </div>
+      <div class="field" id="reminderField" style="display:none">
+        <label>Remind me</label>
+        <div class="reminder-chip-wrap" id="reminderChipWrap" style="display:none;margin-bottom:8px">
+          <span class="linkpill reminder" id="reminderChip"></span>
+        </div>
+        <div class="seg reminder-presets" id="reminderPresets">
+          <button type="button" data-preset="1h">In 1 hour</button>
+          <button type="button" data-preset="3h">In 3 hours</button>
+          <button type="button" data-preset="tomorrow">Tomorrow morning</button>
+        </div>
+        <div class="reminder-custom">
+          <input type="datetime-local" id="reminderCustom" aria-label="Custom reminder time" />
+          <button class="btn btn-ghost" id="reminderSetBtn" type="button">Set</button>
+        </div>
+      </div>
       <div class="field" id="linksField" style="display:none">
         <label>Links &amp; dependencies</label>
         <div class="linklist" id="linkList"></div>
@@ -584,6 +608,16 @@
     { k: "unassigned", label: "Unassigned", hint: "nobody yet" }
   ];
   var POLL_MS = 2500;
+  // Quick "Remind me" presets in the ticket editor -> a Date to fire at.
+  var REMINDER_PRESETS = {
+    "1h": function () { return new Date(Date.now() + 60 * 60 * 1000); },
+    "3h": function () { return new Date(Date.now() + 3 * 60 * 60 * 1000); },
+    tomorrow: function () {
+      var d = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      d.setHours(9, 0, 0, 0);
+      return d;
+    }
+  };
 
   // ---------------- state ----------------
   var state = {
@@ -639,6 +673,12 @@
   function pushNotifyPrefs() {
     api("/api/notify-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(notifyPrefs) }).catch(function () {});
   }
+
+  // Sort choice is board-wide and persisted across reloads.
+  try {
+    var savedSort = localStorage.getItem("sq_sort");
+    if (savedSort && SORTS.some(function (s) { return s.k === savedSort; })) state.sortMode = savedSort;
+  } catch (_) {}
 
   // Sort choice is board-wide and persisted across reloads.
   try {
@@ -740,6 +780,18 @@
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
   function fullTime(iso) { if (!iso) return ""; return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
+
+  // Short "in Xh" style label for a future timestamp — the mirror of relTime,
+  // used for the reminder chip ("bell in 1h").
+  function futureRel(iso) {
+    if (!iso) return "";
+    var s = (new Date(iso) - new Date()) / 1000;
+    if (s <= 30) return "any moment";
+    if (s < 3600) return "in " + Math.max(1, Math.round(s / 60)) + "m";
+    if (s < 86400) return "in " + Math.round(s / 3600) + "h";
+    if (s < 172800) return "tomorrow " + new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return "in " + Math.round(s / 86400) + "d";
+  }
 
   function toast(msg) {
     var t = el("div", "toast", esc(msg));
@@ -1020,12 +1072,15 @@
     var cmtCount = t.comments && t.comments.length
       ? '<span style="font-family:var(--mono);font-size:10px;color:var(--text-faint)" title="' + t.comments.length + ' comment(s)">\u{1F4AC} ' + t.comments.length + '</span>'
       : "";
+    var reminderChip = t.reminder
+      ? '<span class="blockchip" style="color:var(--gold-bright);background:var(--gold-soft);border-color:var(--gold-line)" title="Reminder ' + esc(futureRel(t.reminder.fireAt)) + '">\u{1F514} ' + esc(futureRel(t.reminder.fireAt)) + '</span>'
+      : "";
 
     c.innerHTML =
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge +
       '<span class="prio-tag" data-p="' + esc(t.priority) + '">' + esc(t.priority) + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
-      '<div class="foot">' + qChip + blockedChip + assign + claim + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
+      '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
 
     c.addEventListener("click", function (e) { if (e.target.tagName === "IMG") { openLightbox(e.target.src); return; } openEditor(t); });
     c.addEventListener("keydown", function (e) { if (e.key === "Enter") openEditor(t); });
@@ -1140,10 +1195,18 @@
       pf.style.display = "none";
     }
 
-    // Links + comments only make sense for an existing ticket.
+    // Reminders + links + comments only make sense for an existing ticket.
+    $("reminderField").style.display = isEdit ? "" : "none";
     $("linksField").style.display = isEdit ? "" : "none";
     $("commentsField").style.display = isEdit ? "" : "none";
-    if (isEdit) { renderLinks(ticket); renderThread(ticket); populateLinkTargets(ticket); $("cmtBody").value = ""; }
+    if (isEdit) {
+      renderReminder(ticket);
+      $("reminderCustom").value = "";
+      renderLinks(ticket);
+      renderThread(ticket);
+      populateLinkTargets(ticket);
+      $("cmtBody").value = "";
+    }
 
     renderAttachments();
     $("overlay").classList.add("show");
@@ -1230,6 +1293,43 @@
         refresh(true);
       })
       .catch(function (e) { toast("Unlink failed: " + e.message); });
+  }
+
+  // ---------------- reminders ----------------
+  function renderReminder(ticket) {
+    var wrap = $("reminderChipWrap"), chip = $("reminderChip");
+    var r = ticket && ticket.reminder;
+    if (!r) { wrap.style.display = "none"; chip.innerHTML = ""; return; }
+    wrap.style.display = "";
+    chip.innerHTML = '<span class="lt">\u{1F514}</span> bell ' + esc(futureRel(r.fireAt)) + ' <span class="x" title="Cancel reminder">✕</span>';
+    chip.querySelector(".x").addEventListener("click", cancelReminder);
+  }
+
+  function setReminder(fireAt) {
+    var ed = state.editor; if (!ed || !ed.ticket) return;
+    var slug = editorSlug();
+    mutate("POST", "/api/tickets/" + ed.ticket.id + "/reminder?project=" + encodeURIComponent(slug), { fireAt: fireAt })
+      .then(function (r) {
+        ed.ticket.reminder = r.notification;
+        renderReminder(ed.ticket);
+        $("reminderCustom").value = "";
+        toast("Reminder set — " + futureRel(r.notification.fireAt));
+        refresh(true);
+      })
+      .catch(function (e) { toast("Reminder failed: " + e.message); });
+  }
+
+  function cancelReminder() {
+    var ed = state.editor; if (!ed || !ed.ticket) return;
+    var slug = editorSlug();
+    mutate("DELETE", "/api/tickets/" + ed.ticket.id + "/reminder?project=" + encodeURIComponent(slug))
+      .then(function () {
+        ed.ticket.reminder = null;
+        renderReminder(ed.ticket);
+        toast("Reminder cancelled");
+        refresh(true);
+      })
+      .catch(function (e) { toast("Cancel failed: " + e.message); });
   }
 
   function renderAttachments() {
@@ -1507,6 +1607,20 @@
     $("cmtBtn").addEventListener("click", function () { postComment("comment"); });
     $("askBtn").addEventListener("click", function () { postComment("question"); });
     $("addLinkBtn").addEventListener("click", addLink);
+    Array.prototype.forEach.call($("reminderPresets").querySelectorAll("button[data-preset]"), function (b) {
+      b.addEventListener("click", function () {
+        var fn = REMINDER_PRESETS[b.dataset.preset];
+        if (fn) setReminder(fn().toISOString());
+      });
+    });
+    $("reminderSetBtn").addEventListener("click", function () {
+      var v = $("reminderCustom").value;
+      if (!v) { toast("Pick a date & time first"); return; }
+      var d = new Date(v);
+      if (isNaN(d.getTime())) { toast("That date/time didn't parse"); return; }
+      if (d.getTime() <= Date.now()) { toast("Pick a time in the future"); return; }
+      setReminder(d.toISOString());
+    });
     $("archiveBtn").addEventListener("click", openArchive);
     $("mArchive").addEventListener("click", archiveModalTicket);
 
