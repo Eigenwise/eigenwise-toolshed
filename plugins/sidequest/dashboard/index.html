@@ -201,14 +201,22 @@
   .blockchip { font-family: var(--mono); font-size: 10px; color: var(--urgent); background: rgba(178,59,59,.08); border: 1px solid rgba(178,59,59,.32); padding: 2px 7px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 4px; }
 
   /* Comment thread + link pills (ticket detail modal) */
-  .thread { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; padding-right: 2px; }
-  .cmt { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 8px 10px; }
+  .thread { display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; padding-right: 2px; }
+  .cmt { position: relative; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 9px 12px 10px 15px; overflow: hidden; }
+  /* Left accent stripe: who wrote it (indigo = you, sage = an agent), same
+     visual language as the card priority stripe. Question bg wins either way. */
+  .cmt::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--mint); }
+  .cmt.mine::before { background: var(--indigo); }
   .cmt.question { border-color: var(--gold-line); background: var(--gold-soft); }
-  .cmt-head { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin-bottom: 4px; }
-  .cmt-head .who { color: var(--text-dim); }
+  .cmt.question::before { background: var(--gold-bright); }
+  .cmt-head { display: flex; align-items: baseline; gap: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin-bottom: 6px; }
+  .cmt-head .who { color: var(--text); font-weight: 600; }
   .cmt.question .cmt-head .tag { color: var(--gold-bright); }
-  .cmt-body { font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
-  .cmt-empty { font-size: 12.5px; color: var(--text-faint); padding: 2px; }
+  .cmt-body { font-size: 13.5px; line-height: 1.55; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cmt-body strong { font-weight: 700; }
+  .cmt-body em { font-style: italic; }
+  .cmt-body code { font-family: var(--mono); font-size: .92em; font-weight: 500; color: var(--gold-bright); background: var(--gold-soft); padding: .1em .35em; border-radius: var(--radius-sm); }
+  .cmt-empty { font-size: 12.5px; color: var(--text-faint); line-height: 1.6; padding: 10px 2px; }
   .addcmt { display: flex; gap: 8px; margin-top: 10px; align-items: flex-start; }
   .addcmt textarea { flex: 1; min-height: 40px; }
   .linklist { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -315,24 +323,40 @@
   /* ---------- Modal ---------- */
   .overlay { position: fixed; inset: 0; background: rgba(28,30,43,.4); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 20px; z-index: 40; opacity: 0; pointer-events: none; transition: opacity .16s; overflow-y: auto; }
   .overlay.show { opacity: 1; pointer-events: auto; }
-  .modal { width: 100%; max-width: 580px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); transform: translateY(6px); transition: transform .18s; }
+  .modal { width: 100%; max-width: min(1040px, 95vw); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); transform: translateY(6px); transition: transform .18s; }
   .overlay.show .modal { transform: none; }
   .modal-head { display: flex; align-items: center; gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--line-soft); }
   .modal-head .ref { font-size: 12px; }
   .modal-head .x { margin-left: auto; cursor: pointer; color: var(--text-faint); background: transparent; border: 0; padding: 4px; border-radius: var(--radius-sm); display: flex; }
   .modal-head .x:hover { color: var(--text); background: var(--panel); }
-  .modal-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+  /* Landscape layout: a wide main column (title, details, comments) beside a
+     narrower metadata sidebar (priority, status, assignee, labels, images,
+     reminder, links) — a ticket reads more like a document, less like a form. */
+  .modal-body { padding: 20px; display: grid; grid-template-columns: 1fr 248px; gap: 22px 26px; align-items: start; }
+  .modal-body > #projField { grid-column: 1 / -1; }
+  .modal-main { grid-column: 1; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+  .modal-side { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  @media (max-width: 720px) {
+    .modal-body { grid-template-columns: 1fr; }
+    .modal-main, .modal-side { grid-column: 1; }
+  }
 
-  .field label { display: block; font-family: var(--sans); font-weight: 700; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 6px; }
+  .field label { display: block; font-family: var(--sans); font-weight: 700; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 7px; }
   .field input[type="text"], .field input[type="datetime-local"], .field textarea, .field select {
     width: 100%; background: var(--bg); border: 1px solid var(--line-soft); color: var(--text);
     border-radius: var(--radius-sm); padding: 10px 12px; font-family: var(--sans); font-size: 14px; transition: border-color .14s;
   }
-  .field textarea { resize: vertical; min-height: 78px; line-height: 1.5; }
+  .field textarea { resize: vertical; min-height: 78px; line-height: 1.6; }
   .field input:focus, .field textarea:focus, .field select:focus { outline: none; border-color: var(--gold-line); }
   .field .title-input { font-family: var(--serif); font-size: 17px; font-weight: 500; }
-  .row { display: flex; gap: 12px; }
-  .row .field { flex: 1; }
+  /* Details: the longest-lived field in the modal — sized and spaced to read
+     like a short paragraph, not a cramped bug-report box. Shown rendered
+     (like a comment) until clicked, then swaps to the plain textarea. */
+  #mDesc { min-height: 160px; font-size: 14.5px; line-height: 1.65; }
+  .desc-view { min-height: 160px; padding: 10px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 14.5px; line-height: 1.65; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; transition: border-color .14s, background .14s; }
+  .desc-view:hover { background: var(--bg); border-color: var(--line-soft); }
+  .desc-view.empty { color: var(--text-faint); font-style: italic; }
+  .desc-view code { font-family: var(--mono); font-size: .92em; font-weight: 500; color: var(--gold-bright); background: var(--gold-soft); padding: .1em .35em; border-radius: var(--radius-sm); }
   .seg { display: flex; gap: 6px; flex-wrap: wrap; }
   .seg button { cursor: pointer; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; background: var(--bg); border: 1px solid var(--line-soft); color: var(--text-dim); padding: 8px 11px; border-radius: var(--radius-sm); transition: all .12s; }
   .seg button .sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
@@ -522,15 +546,29 @@
         <label for="mProject">Board</label>
         <select id="mProject"></select>
       </div>
-      <div class="field">
-        <label for="mTitle">Title</label>
-        <input class="title-input" id="mTitle" type="text" placeholder="What's the side quest?" />
+      <div class="modal-main">
+        <div class="field">
+          <label for="mTitle">Title</label>
+          <input class="title-input" id="mTitle" type="text" placeholder="What's the side quest?" />
+        </div>
+        <div class="field">
+          <label for="mDesc">Details</label>
+          <div class="desc-view" id="mDescView" tabindex="0" role="button" aria-label="Click to edit details"></div>
+          <textarea id="mDesc" placeholder="What's happening, and how to reproduce it." style="display:none"></textarea>
+        </div>
+        <div class="field" id="commentsField" style="display:none">
+          <label>Comments</label>
+          <div class="thread" id="thread"></div>
+          <div class="addcmt">
+            <textarea id="cmtBody" placeholder="Reply, or leave a note…"></textarea>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <button class="btn btn-primary" id="cmtBtn" type="button">Comment</button>
+              <button class="btn btn-ghost" id="askBtn" type="button" title="Post as a question">Ask</button>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="field">
-        <label for="mDesc">Details</label>
-        <textarea id="mDesc" placeholder="What's happening, and how to reproduce it."></textarea>
-      </div>
-      <div class="row">
+      <div class="modal-side">
         <div class="field">
           <label>Priority</label>
           <div class="seg prio" id="mPriority"></div>
@@ -539,53 +577,42 @@
           <label>Column</label>
           <div class="seg status" id="mStatus"></div>
         </div>
-      </div>
-      <div class="field">
-        <label>Assignee</label>
-        <div class="seg assignee" id="mAssignee"></div>
-        <div class="claim-hint" id="mClaimHint" style="display:none"></div>
-      </div>
-      <div class="field">
-        <label for="mLabels">Labels</label>
-        <input id="mLabels" type="text" placeholder="bug, frontend  (comma-separated)" />
-      </div>
-      <div class="field">
-        <label>Images</label>
-        <div class="dropzone" id="dropzone">Paste (Ctrl/Cmd&nbsp;V) or drop an image here</div>
-        <div class="att-grid" id="attGrid"></div>
-      </div>
-      <div class="field" id="reminderField" style="display:none">
-        <label>Remind me</label>
-        <div class="reminder-chip-wrap" id="reminderChipWrap" style="display:none;margin-bottom:8px">
-          <span class="linkpill reminder" id="reminderChip"></span>
+        <div class="field">
+          <label>Assignee</label>
+          <div class="seg assignee" id="mAssignee"></div>
+          <div class="claim-hint" id="mClaimHint" style="display:none"></div>
         </div>
-        <div class="seg reminder-presets" id="reminderPresets">
-          <button type="button" data-preset="1h">In 1 hour</button>
-          <button type="button" data-preset="3h">In 3 hours</button>
-          <button type="button" data-preset="tomorrow">Tomorrow morning</button>
+        <div class="field">
+          <label for="mLabels">Labels</label>
+          <input id="mLabels" type="text" placeholder="bug, frontend  (comma-separated)" />
         </div>
-        <div class="reminder-custom">
-          <input type="datetime-local" id="reminderCustom" aria-label="Custom reminder time" />
-          <button class="btn btn-ghost" id="reminderSetBtn" type="button">Set</button>
+        <div class="field">
+          <label>Images</label>
+          <div class="dropzone" id="dropzone">Paste (Ctrl/Cmd&nbsp;V) or drop an image here</div>
+          <div class="att-grid" id="attGrid"></div>
         </div>
-      </div>
-      <div class="field" id="linksField" style="display:none">
-        <label>Links &amp; dependencies</label>
-        <div class="linklist" id="linkList"></div>
-        <div class="addlink" style="display:flex;gap:8px;margin-top:8px">
-          <select id="linkVerb"><option value="blocks">blocks</option><option value="depends-on">depends on</option><option value="related">related to</option></select>
-          <select id="linkTarget"></select>
-          <button class="btn btn-ghost" id="addLinkBtn" type="button">Link</button>
+        <div class="field" id="reminderField" style="display:none">
+          <label>Remind me</label>
+          <div class="reminder-chip-wrap" id="reminderChipWrap" style="display:none;margin-bottom:8px">
+            <span class="linkpill reminder" id="reminderChip"></span>
+          </div>
+          <div class="seg reminder-presets" id="reminderPresets">
+            <button type="button" data-preset="1h">In 1 hour</button>
+            <button type="button" data-preset="3h">In 3 hours</button>
+            <button type="button" data-preset="tomorrow">Tomorrow morning</button>
+          </div>
+          <div class="reminder-custom">
+            <input type="datetime-local" id="reminderCustom" aria-label="Custom reminder time" />
+            <button class="btn btn-ghost" id="reminderSetBtn" type="button">Set</button>
+          </div>
         </div>
-      </div>
-      <div class="field" id="commentsField" style="display:none">
-        <label>Comments</label>
-        <div class="thread" id="thread"></div>
-        <div class="addcmt">
-          <textarea id="cmtBody" placeholder="Reply, or leave a note…"></textarea>
-          <div style="display:flex;flex-direction:column;gap:6px">
-            <button class="btn btn-primary" id="cmtBtn" type="button">Comment</button>
-            <button class="btn btn-ghost" id="askBtn" type="button" title="Post as a question">Ask</button>
+        <div class="field" id="linksField" style="display:none">
+          <label>Links &amp; dependencies</label>
+          <div class="linklist" id="linkList"></div>
+          <div class="addlink" style="display:flex;gap:8px;margin-top:8px">
+            <select id="linkVerb"><option value="blocks">blocks</option><option value="depends-on">depends on</option><option value="related">related to</option></select>
+            <select id="linkTarget"></select>
+            <button class="btn btn-ghost" id="addLinkBtn" type="button">Link</button>
           </div>
         </div>
       </div>
@@ -1275,6 +1302,7 @@
     $("modalTitle").textContent = isEdit ? "Edit ticket" : "Capture a side quest";
     $("mTitle").value = isEdit ? ticket.title : "";
     $("mDesc").value = isEdit ? ticket.description : "";
+    showDescView();
     $("mLabels").value = isEdit ? (ticket.labels || []).join(", ") : "";
     setSeg($("mPriority"), isEdit ? ticket.priority : "normal");
     setSeg($("mStatus"), isEdit ? ticket.status : "todo");
@@ -1350,16 +1378,41 @@
       : '<option value="">No other tickets to link</option>';
   }
 
+  // A light, safe markdown subset for comment bodies: **bold**, *italic*, `code`.
+  // Input is HTML-escaped first, so the source text can never inject markup.
+  function renderRich(s) {
+    var t = esc(s);
+    t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[\s([])\*([^*\n]+)\*(?=[\s).,!?:;\]]|$)/g, "$1<em>$2</em>");
+    return t;
+  }
+
+  // Details field: rendered (like a comment) until clicked, then swaps to the
+  // plain textarea for editing; blurring swaps back to the rendered view.
+  function showDescView() {
+    var view = $("mDescView"), box = $("mDesc");
+    var text = box.value;
+    view.classList.toggle("empty", !text.trim());
+    view.innerHTML = text.trim() ? renderRich(text) : esc(box.getAttribute("placeholder"));
+    view.style.display = ""; box.style.display = "none";
+  }
+  function showDescEdit() {
+    $("mDescView").style.display = "none";
+    var box = $("mDesc"); box.style.display = ""; box.focus();
+  }
+
   function renderThread(ticket) {
     var box = $("thread");
     var comments = ticket.comments || [];
     if (!comments.length) { box.innerHTML = '<div class="cmt-empty">No comments yet. Leave a note, or Claude will ask here when it needs input.</div>'; return; }
     box.innerHTML = "";
     comments.forEach(function (c) {
-      var d = el("div", "cmt" + (c.kind === "question" ? " question" : ""));
+      var mine = String(c.by || "").toLowerCase() === ME;
+      var d = el("div", "cmt" + (c.kind === "question" ? " question" : "") + (mine ? " mine" : ""));
       var tag = c.kind === "question" ? "❓ question" : "💬";
       d.innerHTML = '<div class="cmt-head"><span class="tag">' + tag + '</span> <span class="who">' + esc(c.by) + '</span> · ' + relTime(c.at) + '</div>' +
-        '<div class="cmt-body">' + esc(c.body) + '</div>';
+        '<div class="cmt-body">' + renderRich(c.body) + '</div>';
       box.appendChild(d);
     });
     box.scrollTop = box.scrollHeight;
@@ -1722,6 +1775,9 @@
     renderAssignMenu();
 
     $("newBtn").addEventListener("click", function () { openEditor(null); });
+    $("mDescView").addEventListener("click", showDescEdit);
+    $("mDescView").addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showDescEdit(); } });
+    $("mDesc").addEventListener("blur", showDescView);
     $("cmtBtn").addEventListener("click", function () { postComment("comment"); });
     $("askBtn").addEventListener("click", function () { postComment("question"); });
     $("addLinkBtn").addEventListener("click", addLink);

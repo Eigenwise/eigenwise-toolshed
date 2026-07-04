@@ -91,6 +91,10 @@ kind of ticket:
 If you don't have enough of that detail, ask a quick clarifying question rather than filing a vague
 ticket — a thin ticket just costs the next reader (you, another agent, or the user) another round trip.
 
+**Descriptions and comments render a light markdown subset** in the dashboard — `**bold**`, `*italic*`,
+and `` `code` ``. Use it where it actually improves scanability (e.g. `` `functionName` `` or a file
+path in code font, **bold** for the one thing that matters most) — don't force it into every line.
+
 For a side issue the user tosses out **while you're mid-task** ("oh, and the footer link is broken"),
 don't stop your current work: spawn the **`ticket-filer`** subagent (ideally `run_in_background: true`)
 with the issue text, any pasted image path, and the CLI command. It files the ticket while you keep
@@ -215,6 +219,9 @@ sidequest comments SQ-3                                       # read the thread
   the user's own reply clears it.
 - Check `sidequest list` or `sidequest comments <ref>` for a "❓ awaiting reply" marker — that flags a
   question of yours still unanswered, including ones asked earlier in a different session.
+- Comment bodies render the same light markdown as descriptions (`**bold**`, `*italic*`, `` `code` ``) —
+  reach for it when it aids scanning (a ticket ref, a file path, a command), not as a rule to follow
+  everywhere.
 
 ## Assign a ticket to the human
 
