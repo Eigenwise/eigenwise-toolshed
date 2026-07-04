@@ -1069,11 +1069,19 @@
     $("inboxPop").classList.remove("show");
     $("notifyBtn").classList.remove("on");
     if (!n.readAt) markNotificationRead(n.id);
-    if (n.ticketRef) {
-      var t = ticketByRef(n.ticketRef);
-      if (t) openEditor(t);
+    if (!n.ticketRef) return;
+    var t = ticketByRef(n.ticketRef);
+    if (t) { openEditor(t); return; }
+    // Not in the active set — it may have been archived since the notification
+    // fired (e.g. a "done" status-change followed by an Archive-all-done).
+    var slug = n.projectSlug;
+    if (!slug) { toast("Couldn't find ticket " + n.ticketRef); return; }
+    api("/api/tickets?project=" + encodeURIComponent(slug) + "&archived=1").then(function (d) {
+      var ref = String(n.ticketRef).toUpperCase();
+      var found = (d.tickets || []).filter(function (x) { return String(x.ref).toUpperCase() === ref; })[0];
+      if (found) { found._slug = slug; openEditor(found); }
       else toast("Couldn't find ticket " + n.ticketRef);
-    }
+    }).catch(function () { toast("Couldn't find ticket " + n.ticketRef); });
   }
 
   function markNotificationRead(id) {
