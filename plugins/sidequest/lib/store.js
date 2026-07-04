@@ -936,6 +936,277 @@ function isBlocked(slug, ticket) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Notifications
+ *
+ *  A single, persistent, per-user queue (one notifications.json under
+ *  projectsRoot(), a sibling to the project dirs). Unlike the old client-side
+ *  toasts/badges — which were derived on the fly from ticket diffs and lost on
+ *  reload — these survive a server restart, because reminders must be able to
+ *  fire even when no dashboard tab is open. Appends/mutations go through a single
+ *  queue lock so two writers can never clobber each other, mirroring the
+ *  read-modify-write-under-lock pattern used for tickets.
+ * ------------------------------------------------------------------ */
+
+const NOTIFICATION_KINDS = ['question', 'comment', 'created', 'status', 'reminder'];
+
+// How many *read* notifications to retain. Unread ones are always kept; this
+// only caps the tail of already-seen history so the file can't grow forever.
+const MAX_READ_KEPT = 100;
+
+function notificationsFile() {
+  return path.join(projectsRoot(), 'notifications.json');
+}
+function notificationsLockPath() {
+  return path.join(projectsRoot(), '.notifications.lock');
+}
+
+function newNotificationId() {
+  return 'nt_' + Date.now().toString(36) + '_' + crypto.randomBytes(3).toString('hex');
+}
+
+// Fail-soft read: a missing/corrupt file degrades to an empty queue.
+function readNotifications() {
+  const data = readJson(notificationsFile(), null);
+  return data && Array.isArray(data.notifications) ? data.notifications : [];
+}
+function writeNotifications(list) {
+  writeJson(notificationsFile(), { notifications: list });
+}
+
+// Serialize every mutation on the queue behind one lock (best-effort, like the
+// ticket mutators: still applies if contention outlasts the retries).
+function withNotificationsLock(fn) {
+  const lock = notificationsLockPath();
+  const locked = acquireLock(lock);
+  try {
+    return fn();
+  } finally {
+    if (locked) releaseLock(lock);
+  }
+}
+
+// Drop the oldest read notifications past the cap; never touches unread ones.
+function pruneReadList(list) {
+  const read = list.filter((n) => n.readAt);
+  if (read.length <= MAX_READ_KEPT) return list;
+  read.sort((a, b) => String(b.readAt).localeCompare(String(a.readAt)));
+  const dropIds = new Set(read.slice(MAX_READ_KEPT).map((n) => n.id));
+  return list.filter((n) => !dropIds.has(n.id));
+}
+
+// List notifications, newest first. opts: { projectSlug, kind, unreadOnly,
+// includePending, limit }. A reminder scheduled for the future (fireAt > now) is
+// hidden until it's due unless includePending is set.
+function listNotifications(opts) {
+  opts = opts || {};
+  const now = Date.now();
+  let list = readNotifications();
+  if (opts.projectSlug) list = list.filter((n) => n.projectSlug === opts.projectSlug);
+  if (opts.kind) list = list.filter((n) => n.kind === opts.kind);
+  if (opts.unreadOnly) list = list.filter((n) => !n.readAt);
+  if (!opts.includePending) {
+    list = list.filter((n) => !(n.fireAt && Number.isFinite(Date.parse(n.fireAt)) && Date.parse(n.fireAt) > now));
+  }
+  list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  if (opts.limit != null && Number.isFinite(Number(opts.limit))) list = list.slice(0, Number(opts.limit));
+  return list;
+}
+
+// Append a notification and return it. Unknown kinds coerce to "comment".
+// fireAt is only meaningful for reminders (a scheduled future time); everything
+// else leaves it null. Prunes read history in the same locked write.
+function addNotification(fields) {
+  fields = fields || {};
+  const kind = NOTIFICATION_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : 'comment';
+  const now = new Date().toISOString();
+  const notification = {
+    id: newNotificationId(),
+    kind,
+    title: String(fields.title || '').slice(0, 300),
+    body: String(fields.body || '').slice(0, 4000),
+    projectSlug: fields.projectSlug ? String(fields.projectSlug) : null,
+    ticketRef: fields.ticketRef ? String(fields.ticketRef) : null,
+    ticketId: fields.ticketId ? String(fields.ticketId) : null,
+    createdAt: now,
+    readAt: null,
+    fireAt: fields.fireAt ? String(fields.fireAt) : null,
+    // Set by fireDueReminders() the first tick after a reminder's fireAt has
+    // passed. Purely bookkeeping — visibility in the live queue already follows
+    // from fireAt <= now (see listNotifications), so nothing reads this to
+    // decide whether to show the notification. It just marks "the scheduler has
+    // seen this one go off", which is what a restart-safe scheduler needs to be
+    // idempotent about.
+    firedAt: null,
+  };
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    list.push(notification);
+    writeNotifications(pruneReadList(list));
+    return notification;
+  });
+}
+
+// Mark one notification read (idempotent). Returns the updated record, or null
+// if no such id.
+function markRead(id) {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    let updated = null;
+    for (const n of list) {
+      if (n.id === id) {
+        if (!n.readAt) n.readAt = new Date().toISOString();
+        updated = n;
+        break;
+      }
+    }
+    if (updated) writeNotifications(list);
+    return updated;
+  });
+}
+
+// Mark every unread notification read. Returns how many were flipped.
+function markAllRead() {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    const now = new Date().toISOString();
+    let count = 0;
+    for (const n of list) {
+      if (!n.readAt) {
+        n.readAt = now;
+        count++;
+      }
+    }
+    if (count) writeNotifications(list);
+    return count;
+  });
+}
+
+// Remove a notification outright. Returns true if one was removed.
+function dismiss(id) {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    const kept = list.filter((n) => n.id !== id);
+    if (kept.length === list.length) return false;
+    writeNotifications(kept);
+    return true;
+  });
+}
+
+// Trim read history down to the cap. Returns how many were removed.
+function pruneRead() {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    const pruned = pruneReadList(list);
+    const removed = list.length - pruned.length;
+    if (removed) writeNotifications(pruned);
+    return removed;
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ *  Reminders
+ *
+ *  A reminder *is* a notification (kind: 'reminder') whose fireAt is set in
+ *  the future — listNotifications() above already hides those from the normal
+ *  feed and shows them (unread) the instant fireAt passes. That means the
+ *  "pending -> live" transition needs no explicit step: it's a pure function
+ *  of the wall clock re-evaluated on every read, so it survives a server
+ *  restart for free (nothing in memory to lose — it's re-derived from the
+ *  persisted fireAt every time). What's left for this section: a per-ticket
+ *  lookup so the dashboard can render a "bell in 1h" chip and offer to cancel
+ *  it, and a small idempotent tick the running server can call periodically.
+ * ------------------------------------------------------------------ */
+
+// ticketId -> the single soonest still-pending (fireAt in the future) reminder
+// for that ticket, built from one read of the notifications file. A ticket
+// only ever has at most one pending reminder (setReminder enforces that), but
+// this tolerates more turning up (e.g. hand-edited data) by picking the
+// earliest.
+function pendingReminders() {
+  const now = Date.now();
+  const map = new Map();
+  for (const n of readNotifications()) {
+    if (n.kind !== 'reminder' || !n.ticketId) continue;
+    if (!n.fireAt || !Number.isFinite(Date.parse(n.fireAt)) || Date.parse(n.fireAt) <= now) continue;
+    const existing = map.get(n.ticketId);
+    if (!existing || Date.parse(n.fireAt) < Date.parse(existing.fireAt)) map.set(n.ticketId, n);
+  }
+  return map;
+}
+
+// The pending reminder for a single ticket, or null.
+function getPendingReminder(ticketId) {
+  if (!ticketId) return null;
+  return pendingReminders().get(ticketId) || null;
+}
+
+// Schedule (or reschedule) a reminder on a ticket. fireAt must parse to a
+// moment in the future. At most one pending reminder per ticket — setting a
+// new one cancels whatever was pending, same as "snoozing" it.
+function setReminder(slug, idOrRef, fireAt) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket) return { ok: false, reason: 'not_found' };
+  const when = fireAt ? new Date(String(fireAt)) : null;
+  if (!when || Number.isNaN(when.getTime())) return { ok: false, reason: 'bad_fireAt' };
+  if (when.getTime() <= Date.now()) return { ok: false, reason: 'in_past' };
+  cancelReminder(slug, ticket.id);
+  const notification = addNotification({
+    kind: 'reminder',
+    title: 'Reminder: ' + ticket.title,
+    body: ticket.ref + ' — ' + ticket.title,
+    projectSlug: slug,
+    ticketRef: ticket.ref,
+    ticketId: ticket.id,
+    fireAt: when.toISOString(),
+  });
+  return { ok: true, notification };
+}
+
+// Cancel whatever reminder is currently pending on a ticket. Not finding one
+// isn't an error — cancelling a reminder that already fired (or never
+// existed) is a no-op the caller can treat as success.
+function cancelReminder(slug, idOrRef) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket) return { ok: false, reason: 'not_found' };
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    const now = Date.now();
+    let removed = 0;
+    const kept = list.filter((n) => {
+      const pending = n.kind === 'reminder' && n.ticketId === ticket.id &&
+        n.fireAt && Number.isFinite(Date.parse(n.fireAt)) && Date.parse(n.fireAt) > now;
+      if (pending) { removed++; return false; }
+      return true;
+    });
+    if (removed) writeNotifications(kept);
+    return { ok: true, removed };
+  });
+}
+
+// Called periodically (and once at boot) by the running dashboard server.
+// Marks any reminder whose fireAt has passed as fired — idempotent bookkeeping
+// only, since the notification is already showing up (unread) in the live
+// feed by virtue of fireAt <= now (see listNotifications). Re-reading the
+// persisted fireAt on every call is what makes this restart-safe: a reminder
+// due while the server was down is caught on the very next tick after it
+// comes back up, with no separate "replay" logic needed.
+function fireDueReminders() {
+  return withNotificationsLock(() => {
+    const list = readNotifications();
+    const now = Date.now();
+    let fired = 0;
+    for (const n of list) {
+      if (n.kind !== 'reminder' || n.firedAt) continue;
+      if (!n.fireAt || !Number.isFinite(Date.parse(n.fireAt)) || Date.parse(n.fireAt) > now) continue;
+      n.firedAt = new Date().toISOString();
+      fired++;
+    }
+    if (fired) writeNotifications(list);
+    return fired;
+  });
+}
+
+/* ------------------------------------------------------------------ *
  *  Server lockfile (used by CLI + server to find/reuse a running dashboard)
  * ------------------------------------------------------------------ */
 
@@ -990,6 +1261,18 @@ module.exports = {
   listActive,
   isClaimStale,
   normalizeLabels,
+  NOTIFICATION_KINDS,
+  listNotifications,
+  addNotification,
+  markRead,
+  markAllRead,
+  dismiss,
+  pruneRead,
+  pendingReminders,
+  getPendingReminder,
+  setReminder,
+  cancelReminder,
+  fireDueReminders,
   readServerInfo,
   writeServerInfo,
   clearServerInfo,

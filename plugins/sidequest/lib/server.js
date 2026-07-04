@@ -92,6 +92,16 @@ function aggregateTickets(archivedOnly) {
   return out;
 }
 
+// Stamp each ticket with its pending reminder (or null), computed from one
+// read of the notifications file rather than one per ticket. The reminder
+// itself lives in the notifications store, not the ticket file, so this is
+// purely a response-shape convenience for the dashboard's "bell in 1h" chip.
+function annotateReminders(tickets) {
+  const map = store.pendingReminders();
+  for (const t of tickets) t.reminder = map.get(t.id) || null;
+  return tickets;
+}
+
 /* ------------------------------------------------------------------ *
  *  Routing
  * ------------------------------------------------------------------ */
@@ -137,7 +147,7 @@ async function handle(req, res) {
     // Board shows active tickets; ?archived=1 returns the archive instead.
     const archivedOnly = q.archived === '1' || q.archived === 'true';
     if (project === 'all' || project === '') {
-      sendJson(res, 200, { project: 'all', archived: archivedOnly, tickets: aggregateTickets(archivedOnly) });
+      sendJson(res, 200, { project: 'all', archived: archivedOnly, tickets: annotateReminders(aggregateTickets(archivedOnly)) });
     } else {
       const meta = store.readMeta(project);
       if (!meta) {
@@ -145,7 +155,7 @@ async function handle(req, res) {
         return;
       }
       const tickets = store.listTickets(project).filter((t) => (archivedOnly ? t.archived : !t.archived));
-      sendJson(res, 200, { project, archived: archivedOnly, tickets });
+      sendJson(res, 200, { project, archived: archivedOnly, tickets: annotateReminders(tickets) });
     }
     return;
   }
@@ -208,6 +218,7 @@ async function handle(req, res) {
         sendJson(res, 404, { error: 'ticket not found' });
         return;
       }
+      updated.reminder = store.getPendingReminder(updated.id);
       sendJson(res, 200, { ticket: updated });
       return;
     }
@@ -242,6 +253,37 @@ async function handle(req, res) {
     }
     sendJson(res, 201, result);
     return;
+  }
+
+  // --- Tickets: reminder (/api/tickets/:id/reminder) ---
+  const rm = /^\/api\/tickets\/([^/]+)\/reminder$/.exec(pathname);
+  if (rm) {
+    const slug = q.project ? String(q.project) : null;
+    if (!slug || slug === 'all') {
+      sendJson(res, 400, { error: 'project query param is required' });
+      return;
+    }
+    if (req.method === 'POST') {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        sendJson(res, 400, { error: 'bad JSON body' });
+        return;
+      }
+      const result = store.setReminder(slug, rm[1], body.fireAt);
+      if (!result.ok) {
+        sendJson(res, result.reason === 'not_found' ? 404 : 400, { error: result.reason });
+        return;
+      }
+      sendJson(res, 201, result);
+      return;
+    }
+    if (req.method === 'DELETE') {
+      const result = store.cancelReminder(slug, rm[1]);
+      sendJson(res, result.ok ? 200 : 404, result);
+      return;
+    }
   }
 
   // --- Tickets: link (/api/tickets/:id/link) ---
@@ -309,6 +351,55 @@ async function handle(req, res) {
     return;
   }
 
+  // --- Notifications: list (?project=slug&unread=1&kind=&limit=) ---
+  if (req.method === 'GET' && pathname === '/api/notifications') {
+    const opts = {};
+    if (q.project && q.project !== 'all') opts.projectSlug = String(q.project);
+    if (q.kind) opts.kind = String(q.kind);
+    if (q.unread === '1' || q.unread === 'true') opts.unreadOnly = true;
+    if (q.includePending === '1' || q.includePending === 'true') opts.includePending = true;
+    if (q.limit) opts.limit = Number(q.limit);
+    const notifications = store.listNotifications(opts);
+    const unread = store.listNotifications(Object.assign({}, opts, { unreadOnly: true, limit: undefined })).length;
+    sendJson(res, 200, { notifications, unread });
+    return;
+  }
+
+  // --- Notifications: mark read ({ id } or { all: true }) ---
+  if (req.method === 'POST' && pathname === '/api/notifications/read') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    if (body.all) {
+      const count = store.markAllRead();
+      sendJson(res, 200, { ok: true, count });
+      return;
+    }
+    if (!body.id) {
+      sendJson(res, 400, { error: 'id or all is required' });
+      return;
+    }
+    const updated = store.markRead(String(body.id));
+    if (!updated) {
+      sendJson(res, 404, { error: 'notification not found' });
+      return;
+    }
+    sendJson(res, 200, { ok: true, notification: updated });
+    return;
+  }
+
+  // --- Notifications: dismiss (/api/notifications/:id) ---
+  const nm = /^\/api\/notifications\/([^/]+)$/.exec(pathname);
+  if (req.method === 'DELETE' && nm) {
+    const ok = store.dismiss(nm[1]);
+    sendJson(res, ok ? 200 : 404, { ok });
+    return;
+  }
+
   // --- Assets: /api/asset/:slug/:id/:filename ---
   const am = /^\/api\/asset\/([^/]+)\/([^/]+)\/(.+)$/.exec(pathname);
   if (req.method === 'GET' && am) {
@@ -327,6 +418,35 @@ async function handle(req, res) {
   }
 
   sendJson(res, 404, { error: 'not found' });
+}
+
+/* ------------------------------------------------------------------ *
+ *  Reminder scheduler
+ *
+ *  Reminders already surface themselves: listNotifications() treats a
+ *  reminder's fireAt as a live/pending switch evaluated fresh on every read,
+ *  so a poll from the dashboard after fireAt has passed shows it unread with
+ *  no help from the server. What a poll alone *can't* do is fire while nobody
+ *  is polling (dashboard closed, tab backgrounded past its throttled timer).
+ *  This tick exists for that gap: a small idempotent sweep, run on its own
+ *  timer independent of any client, that stamps reminders as fired the moment
+ *  their time comes due. It reads the persisted fireAt fresh each time, so a
+ *  restart never loses a scheduled reminder — the very first tick after boot
+ *  catches anything that came due while the process was down.
+ * ------------------------------------------------------------------ */
+
+const REMINDER_TICK_MS = 15 * 1000;
+
+function startReminderScheduler() {
+  const tick = () => {
+    try {
+      store.fireDueReminders();
+    } catch (_) {
+      /* best effort — never let a scheduler hiccup take the server down */
+    }
+  };
+  tick(); // catch anything that fired while the server was down
+  return setInterval(tick, REMINDER_TICK_MS);
 }
 
 /* ------------------------------------------------------------------ *
@@ -370,7 +490,10 @@ async function start(requestedPort) {
   const info = { port, pid: process.pid, url: `http://${host}:${port}`, startedAt: START_TIME };
   store.writeServerInfo(info);
 
+  const reminderTimer = startReminderScheduler();
+
   const cleanup = () => {
+    clearInterval(reminderTimer);
     const cur = store.readServerInfo();
     if (cur && cur.pid === process.pid) store.clearServerInfo();
   };
