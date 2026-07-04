@@ -360,8 +360,19 @@ async function cmdAwait(opts, positional) {
   const pollMs = (Number(opts.poll) > 0 ? Number(opts.poll) : 5) * 1000;
   const since = new Date().toISOString();
 
+  // Reports "gone" the same way regardless of --json, matching the other three
+  // terminal states (not_awaiting/answered/timeout) instead of a bare stderr exit.
+  const gone = () => {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ ok: false, waited: false, reason: 'not_found' }, null, 2) + '\n');
+      process.exitCode = 1;
+      return;
+    }
+    fail(`await: no ticket "${idOrRef}" in ${meta.name}`);
+  };
+
   let t = store.getTicket(slug, idOrRef);
-  if (!t) fail(`await: no ticket "${idOrRef}" in ${meta.name}`);
+  if (!t) return gone();
   if (!store.needsResponse(t)) {
     if (opts.json) {
       process.stdout.write(JSON.stringify({ ok: true, waited: false, reason: 'not_awaiting', ticket: t }, null, 2) + '\n');
@@ -374,13 +385,13 @@ async function cmdAwait(opts, positional) {
   if (!opts.json) console.log(`Waiting for a reply on ${t.ref} (poll every ${pollMs / 1000}s, timeout ${timeoutMs / 1000}s)…`);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    await delay(pollMs);
+    await delay(Math.max(0, Math.min(pollMs, deadline - Date.now())));
     t = store.getTicket(slug, idOrRef);
-    if (!t) fail(`await: ${idOrRef} no longer exists in ${meta.name}`);
+    if (!t) return gone();
     if (!store.needsResponse(t)) {
       const replies = (t.comments || []).filter((c) => c.at > since);
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ ok: true, waited: true, ticket: t, replies }, null, 2) + '\n');
+        process.stdout.write(JSON.stringify({ ok: true, waited: true, reason: 'answered', ticket: t, replies }, null, 2) + '\n');
         return;
       }
       console.log(`✓ ${t.ref} got a reply:`);
@@ -667,7 +678,7 @@ async function main() {
       cmdRelease(opts, positional);
       break;
     case 'ask':
-      if (opts.kind == null) opts.kind = 'question'; // `ask` posts a question by default
+      opts.kind = 'question'; // `ask` always posts a question — never overridable by --kind
       cmdComment(opts, positional);
       break;
     case 'comment':

@@ -553,6 +553,17 @@
     }
     return null;
   }
+  // Mirrors store.needsResponse: true while the most recent agent-asked question
+  // hasn't yet been followed by a reply from the dashboard (the human). A self-note
+  // the agent leaves in between doesn't count as an answer — keep walking past it.
+  function needsResponseClient(t) {
+    var comments = (t && t.comments) || [];
+    for (var i = comments.length - 1; i >= 0; i--) {
+      if (comments[i].source === "dashboard") return false;
+      if (comments[i].kind === "question") return true;
+    }
+    return false;
+  }
   // Refs blocking this ticket that aren't done yet (computed from the loaded set).
   function openBlockersClient(t) {
     if (!t || !t.links) return [];
@@ -775,8 +786,7 @@
 
     var blockers = openBlockersClient(t);
     var blockedChip = blockers.length ? '<span class="blockchip" title="blocked by ' + esc(blockers.join(", ")) + '">⛔ blocked</span>' : "";
-    var lastC = t.comments && t.comments.length ? t.comments[t.comments.length - 1] : null;
-    var qChip = lastC && lastC.kind === "question"
+    var qChip = needsResponseClient(t)
       ? '<span class="blockchip" style="color:var(--gold-bright);background:var(--gold-soft);border-color:var(--gold-line)" title="Claude asked a question — open the ticket to reply">❓ needs reply</span>'
       : "";
     var cmtCount = t.comments && t.comments.length

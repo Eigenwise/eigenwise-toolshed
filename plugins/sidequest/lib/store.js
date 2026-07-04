@@ -162,12 +162,27 @@ function readMeta(slug) {
   return readJson(metaFile(slug), null);
 }
 
+function metaLockPath(slug) {
+  return path.join(projectDir(slug), '.meta.lock');
+}
+
+// Locked read-modify-write so two concurrent createTicket calls never mint the
+// same human-facing SQ-N ref (a bare read+increment+write here would race).
+// acquireLock already retries internally on contention; if it still can't get
+// the lock (e.g. a wedged/unwritable dir), fall back to an unlocked bump rather
+// than blocking ticket creation entirely.
 function nextSeq(slug) {
-  const mf = metaFile(slug);
-  const meta = readJson(mf, null) || { seq: 0 };
-  meta.seq = (typeof meta.seq === 'number' ? meta.seq : 0) + 1;
-  writeJson(mf, meta);
-  return meta.seq;
+  const lock = metaLockPath(slug);
+  const locked = acquireLock(lock);
+  try {
+    const mf = metaFile(slug);
+    const meta = readJson(mf, null) || { seq: 0 };
+    meta.seq = (typeof meta.seq === 'number' ? meta.seq : 0) + 1;
+    writeJson(mf, meta);
+    return meta.seq;
+  } finally {
+    if (locked) releaseLock(lock);
+  }
 }
 
 // List every registered project with live ticket counts. Sorted by most recent

@@ -12,7 +12,11 @@ description: >-
   board at once. For capturing a side issue mentioned mid-task, prefer the ticket-filer agent (the
   capture hook nudges you to it). ALSO use this when the user hands you a substantial or multi-part
   task, a feature with several pieces, or says "split this into tickets" / "plan this out" — decompose
-  it into linked tickets on the board BEFORE implementing, then work them one at a time.
+  it into linked tickets on the board BEFORE implementing, then work them one at a time. ALSO use when
+  you need to leave a note or ask the user something on a ticket ("comment on SQ-3", "ask on the ticket
+  whether..."), or check for/wait on a reply to a question you asked — a question needs a pause-and-
+  wait via `sidequest await`, unlike a plain note-to-self comment. ALSO use for relating tickets
+  ("SQ-4 depends on SQ-3", "what's blocking this ticket").
 ---
 
 # sidequest
@@ -132,6 +136,37 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
   the work while you orchestrate — just claim first, and mark it `done` once the subagent reports back.
 - **Stale claims** (a worker that crashed or wandered off) are reclaimable after a timeout
   (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min); `--force` overrides a live claim only when you're sure.
+
+## Comments & questions
+
+Every ticket has a comment thread. Post one with `sidequest comment` or `sidequest ask` — the two
+have **different follow-up behavior**, so pick deliberately:
+
+```bash
+sidequest comment SQ-3 -m "Reused the SQ-1 fixtures here."   # a note-to-self: keep working, no pause
+sidequest ask     SQ-3 -m "Cover the v2 API too?"            # addressed to the user: needs a reply
+sidequest comments SQ-3                                       # read the thread
+```
+
+- **A plain `comment`** is a log entry for continuity (progress note, decision record, a thought for
+  later). It never blocks anything — post it and keep going.
+- **An `ask`** (or `comment --kind question`) is addressed to the user and means you need their
+  input before continuing. **`ask` only posts the question — it does not itself pause.** Follow it
+  with `sidequest await`:
+
+  ```bash
+  sidequest await SQ-3                          # blocks up to 120s (poll every 5s) for a reply
+  sidequest await SQ-3 --timeout 900 --poll 10  # a longer wait, polling less often
+  ```
+
+  `await` exits `0` with the new reply text once the user answers (through the dashboard), or exits
+  `1` on timeout if they haven't yet. **Do not just continue past your own question as if it were
+  answered.** On timeout, either `await` again (loop it, or use a longer `--timeout`) or tell the
+  user you're blocked on their reply and stop — don't guess and proceed. An ordinary follow-up
+  `comment` you leave yourself in between (e.g. a progress note) does not count as an answer; only
+  the user's own reply clears it.
+- Check `sidequest list` or `sidequest comments <ref>` for a "❓ awaiting reply" marker — that flags a
+  question of yours still unanswered, including ones asked earlier in a different session.
 
 ## Guidelines
 
