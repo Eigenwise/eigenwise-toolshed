@@ -163,22 +163,41 @@
   .sort-opt.on .si { color: var(--gold); }
   .sort-opt.on .tick { opacity: 1; }
 
-  .iconbtn { cursor: pointer; background: var(--panel); border: 1px solid var(--line-soft); color: var(--text-dim); width: 36px; height: 35px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; transition: all .13s; flex: none; }
+  .iconbtn { position: relative; cursor: pointer; background: var(--panel); border: 1px solid var(--line-soft); color: var(--text-dim); width: 36px; height: 35px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; transition: all .13s; flex: none; }
   .iconbtn:hover { color: var(--text); border-color: var(--gold-line); }
   .iconbtn.on { color: var(--gold); border-color: var(--gold-line); }
   .iconbtn.off { color: var(--text-faint); }
+  /* Bell badge overlaps the top-right corner of the icon button. */
+  .iconbtn .newbadge { position: absolute; top: -6px; right: -6px; }
 
-  /* Notification settings popover */
+  /* Notification settings / inbox popovers */
   .popwrap { position: relative; }
   .popover { position: absolute; right: 0; top: 44px; width: 288px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 8px; z-index: 45; display: none; }
   .popover.show { display: block; }
-  .pop-head { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); padding: 6px 8px 4px; }
+  .pop-head { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); padding: 6px 8px 4px; }
+  .pop-head .mark-all { margin-left: auto; cursor: pointer; font-family: var(--sans); font-size: 11px; letter-spacing: 0; text-transform: none; color: var(--text-dim); background: transparent; border: 1px solid var(--line-soft); padding: 3px 8px; border-radius: 999px; transition: all .12s; }
+  .pop-head .mark-all:hover { color: var(--gold-bright); border-color: var(--gold-line); }
   .pop-row { display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 8px; cursor: pointer; }
   .pop-row:hover { background: var(--panel); }
   .pop-row input { margin-top: 2px; accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
   .pop-row span { font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 1px; }
   .pop-row em { font-style: normal; font-size: 11px; color: var(--text-faint); }
   .pop-foot { font-size: 10.5px; color: var(--text-faint); padding: 8px; line-height: 1.45; border-top: 1px solid var(--line-soft); margin-top: 4px; }
+
+  /* Notification inbox */
+  #inboxPop { width: 328px; }
+  .inbox-list { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+  .inbox-row { position: relative; display: flex; align-items: flex-start; gap: 9px; padding: 9px 8px 9px 6px; border-radius: 8px; cursor: pointer; }
+  .inbox-row:hover { background: var(--panel); }
+  .inbox-row .idot { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); flex: none; }
+  .inbox-row.read .idot { background: transparent; box-shadow: none; }
+  .inbox-row .ibody { flex: 1 1 auto; min-width: 0; }
+  .inbox-row .ititle { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .inbox-row.read .ititle { color: var(--text-dim); font-weight: 550; }
+  .inbox-row .ititle .iref { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--gold); flex: none; }
+  .inbox-row .itext { margin-top: 2px; font-size: 12px; line-height: 1.42; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .inbox-row .itime { flex: none; margin-top: 1px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+  .inbox-empty { padding: 26px 10px; text-align: center; font-size: 12.5px; line-height: 1.6; color: var(--text-faint); }
 
   /* Blocked indicator */
   .blockchip { font-family: var(--mono); font-size: 10px; color: var(--urgent); background: rgba(255,84,104,.10); border: 1px solid rgba(255,84,104,.32); padding: 2px 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 4px; }
@@ -449,14 +468,29 @@
         </button>
         <div class="popover sort" id="sortPop" role="menu" aria-label="Sort tickets"></div>
       </div>
-      <button class="iconbtn off" id="notifyBtn" title="Desktop notifications" aria-label="Toggle desktop notifications">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
-      </button>
+      <div class="popwrap">
+        <button class="iconbtn" id="notifyBtn" title="Notifications" aria-label="Notifications">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+          <span class="newbadge" id="bellBadge" style="display:none"></span>
+        </button>
+        <div class="popover" id="inboxPop" role="menu" aria-label="Notifications">
+          <div class="pop-head"><span>Notifications</span><button class="mark-all" id="markAllReadBtn" type="button">Mark all read</button></div>
+          <div class="inbox-list" id="inboxList"></div>
+          <div class="inbox-empty" id="inboxEmpty" style="display:none">Nothing queued yet. Claude will drop questions, comments and status changes here as they happen.</div>
+        </div>
+      </div>
       <div class="popwrap">
         <button class="iconbtn" id="settingsBtn" title="Notification settings" aria-label="Notification settings">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
         <div class="popover" id="settingsPop" role="menu" aria-label="Notification settings">
+          <div class="pop-head">Desktop notifications</div>
+          <div class="pop-row" id="desktopNotifRow" role="button" tabindex="0">
+            <span id="desktopNotifIcon" style="width:15px;height:15px;margin-top:2px;flex:none;color:var(--text-faint);display:inline-flex">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+            </span>
+            <span><b>Desktop toasts</b><em id="desktopNotifSub">Off — click to allow this site to notify you</em></span>
+          </div>
           <div class="pop-head">Notify me about</div>
           <label class="pop-row"><input type="checkbox" data-notif="question" /><span><b>Questions</b> from Claude<em>a comment that needs your reply</em></span></label>
           <label class="pop-row"><input type="checkbox" data-notif="comment" /><span>Comments<em>notes Claude leaves on a ticket</em></span></label>
@@ -636,9 +670,12 @@
     notified: null,           // Set of "id|updatedAt" already handled for notifications (null = first load)
     lastSeen: {},             // slug -> ms epoch you last viewed that board (persisted)
     view: "board",            // "board" | "archive"
-    archivedTickets: []       // loaded on demand for the archive view
+    archivedTickets: [],      // loaded on demand for the archive view
+    notifications: [],        // queued notifications from /api/notifications (newest first)
+    unread: 0                 // unread count reported by the server
   };
   var lastSig = "";
+  var lastUnread = null;      // previous unread count, to know when the bell badge should "pop"
 
   // Per-project "last seen" drives the sidebar unread badges; persist it so the
   // badges survive a reload and stay consistent across tabs.
@@ -818,6 +855,14 @@
       : state.allTickets.filter(function (t) { return t.project === state.current; });
   }
 
+  // The inbox is global (spans every project), independent of the currently selected board.
+  function loadNotifications() {
+    return api("/api/notifications?project=all&limit=50").then(function (d) {
+      state.notifications = (d.notifications || []).slice().sort(function (a, b) { return new Date(b.createdAt) - new Date(a.createdAt); });
+      state.unread = typeof d.unread === "number" ? d.unread : state.notifications.filter(function (n) { return !n.readAt; }).length;
+    });
+  }
+
   function signature() {
     // A compact fingerprint of what's on screen, so polling only re-renders on real change.
     var parts = state.projects.map(function (p) { return p.slug + ":" + p.counts.todo + "," + p.counts.doing + "," + p.counts.done; });
@@ -957,6 +1002,75 @@
     state.filterAssignee = k;
     renderAssignMenu();
     renderBoard();
+  }
+
+  // ---------------- notification inbox ----------------
+  function renderBell() {
+    var b = $("bellBadge"); if (!b) return;
+    var n = state.unread || 0;
+    if (n <= 0) {
+      b.style.display = "none"; b.textContent = "";
+    } else {
+      var grew = lastUnread !== null && n > lastUnread;
+      b.style.display = "";
+      b.textContent = n > 99 ? "99+" : String(n);
+      b.title = n + " unread notification" + (n === 1 ? "" : "s");
+      if (grew) { b.classList.remove("pop"); void b.offsetWidth; b.classList.add("pop"); }
+    }
+    lastUnread = n;
+  }
+
+  function renderInbox() {
+    var list = $("inboxList"), empty = $("inboxEmpty");
+    var items = state.notifications;
+    list.innerHTML = "";
+    empty.style.display = items.length ? "none" : "";
+    items.forEach(function (n) {
+      var row = el("div", "inbox-row" + (n.readAt ? " read" : ""));
+      row.dataset.id = n.id;
+      var refPill = n.ticketRef ? '<span class="iref">' + esc(n.ticketRef) + '</span>' : "";
+      row.innerHTML =
+        '<span class="idot"></span>' +
+        '<span class="ibody">' +
+          '<span class="ititle">' + esc(n.title || "Notification") + refPill + '</span>' +
+          (n.body ? '<div class="itext">' + esc(n.body) + '</div>' : "") +
+        '</span>' +
+        '<span class="itime" title="' + esc(fullTime(n.createdAt)) + '">' + relTime(n.createdAt) + '</span>';
+      row.addEventListener("click", function () { openNotification(n); });
+      list.appendChild(row);
+    });
+  }
+
+  function openNotification(n) {
+    $("inboxPop").classList.remove("show");
+    $("notifyBtn").classList.remove("on");
+    if (!n.readAt) markNotificationRead(n.id);
+    if (n.ticketRef) {
+      var t = ticketByRef(n.ticketRef);
+      if (t) openEditor(t);
+      else toast("Couldn't find ticket " + n.ticketRef);
+    }
+  }
+
+  function markNotificationRead(id) {
+    var n = state.notifications.filter(function (x) { return x.id === id; })[0];
+    if (!n || n.readAt) return;
+    n.readAt = new Date().toISOString();          // optimistic
+    state.unread = Math.max(0, state.unread - 1);
+    renderBell(); renderInbox();
+    mutate("POST", "/api/notifications/read", { id: id })
+      .catch(function () { loadNotifications().then(function () { renderBell(); renderInbox(); }); });
+  }
+
+  function markAllNotificationsRead() {
+    if (!state.notifications.some(function (n) { return !n.readAt; })) return;
+    var now = new Date().toISOString();
+    state.notifications.forEach(function (n) { if (!n.readAt) n.readAt = now; }); // optimistic
+    state.unread = 0;
+    renderBell(); renderInbox();
+    mutate("POST", "/api/notifications/read", { all: true })
+      .then(function () { toast("All notifications marked read"); })
+      .catch(function (e) { toast("Failed: " + e.message); loadNotifications().then(function () { renderBell(); renderInbox(); }); });
   }
 
   function visibleTickets() {
@@ -1484,9 +1598,11 @@
 
   // ---------------- polling ----------------
   function refresh(force) {
-    return Promise.all([loadProjects(), loadTickets()]).then(function () {
+    return Promise.all([loadProjects(), loadTickets(), loadNotifications()]).then(function () {
       processEvents();         // fire desktop notifications for background changes
       renderRail();            // reflect unread badges (may change even when the board doesn't)
+      renderBell();
+      if ($("inboxPop").classList.contains("show")) renderInbox();
       if (state.view === "archive") {
         return loadArchived().then(renderArchive);
       }
@@ -1559,14 +1675,20 @@
       link.rel = "icon"; link.href = iconDataUrl; document.head.appendChild(link);
     } catch (_) {}
   }
+  // Desktop-notification on/off now lives as a row inside the settings popover
+  // (the bell itself opens the notification inbox instead — see wire()).
   function updateBell() {
-    var b = $("notifyBtn"); if (!b) return;
-    b.classList.remove("on", "off");
-    if (!("Notification" in window)) { b.classList.add("off"); b.title = "Desktop notifications aren't supported here"; return; }
+    var icon = $("desktopNotifIcon"), sub = $("desktopNotifSub"), row = $("desktopNotifRow");
+    if (!icon || !sub) return;
+    if (!("Notification" in window)) {
+      icon.style.color = "var(--text-faint)"; sub.textContent = "Not supported in this browser";
+      if (row) row.style.cursor = "default";
+      return;
+    }
     var p = Notification.permission;
-    if (p === "granted") { b.classList.add("on"); b.title = "Desktop notifications: on"; }
-    else if (p === "denied") { b.classList.add("off"); b.title = "Notifications are blocked — allow them for this site in your browser"; }
-    else { b.classList.add("off"); b.title = "Turn on desktop notifications for Claude's background changes"; }
+    if (p === "granted") { icon.style.color = "var(--mint)"; sub.textContent = "On — you'll get toasts for the kinds below"; }
+    else if (p === "denied") { icon.style.color = "var(--urgent)"; sub.textContent = "Blocked — allow notifications for this site in your browser"; }
+    else { icon.style.color = "var(--text-dim)"; sub.textContent = "Off — click to allow this site to notify you"; }
   }
   function requestNotify() {
     if (!("Notification" in window)) { toast("This browser has no desktop notifications"); return; }
@@ -1603,7 +1725,6 @@
     renderAssignMenu();
 
     $("newBtn").addEventListener("click", function () { openEditor(null); });
-    $("notifyBtn").addEventListener("click", requestNotify);
     $("cmtBtn").addEventListener("click", function () { postComment("comment"); });
     $("askBtn").addEventListener("click", function () { postComment("question"); });
     $("addLinkBtn").addEventListener("click", addLink);
@@ -1638,17 +1759,19 @@
       }
     });
 
-    // Toolbar popovers (assignee filter, sort, notification settings) — only one open at a time.
-    var pop = $("settingsPop");
+    // Toolbar popovers (assignee filter, sort, notification inbox, settings) — only one open at a time.
+    var settingsPop = $("settingsPop");
     var sortPop = $("sortPop"), sortBtn = $("sortBtn");
     var assignPop = $("assignPop"), assignBtn = $("assignBtn");
+    var inboxPop = $("inboxPop");
     function closeSort() { sortPop.classList.remove("show"); sortBtn.classList.remove("on"); sortBtn.setAttribute("aria-expanded", "false"); }
     function closeAssign() { assignPop.classList.remove("show"); assignBtn.classList.remove("on"); assignBtn.setAttribute("aria-expanded", "false"); }
-    function closeSettings() { pop.classList.remove("show"); $("settingsBtn").classList.remove("on"); }
+    function closeSettings() { settingsPop.classList.remove("show"); $("settingsBtn").classList.remove("on"); }
+    function closeInbox() { inboxPop.classList.remove("show"); $("notifyBtn").classList.remove("on"); }
 
     assignBtn.addEventListener("click", function (e) {
       e.stopPropagation();
-      closeSort(); closeSettings();
+      closeSort(); closeSettings(); closeInbox();
       var open = assignPop.classList.toggle("show");
       assignBtn.classList.toggle("on", open);
       assignBtn.setAttribute("aria-expanded", open ? "true" : "false");
@@ -1661,7 +1784,7 @@
 
     sortBtn.addEventListener("click", function (e) {
       e.stopPropagation();
-      closeAssign(); closeSettings();
+      closeAssign(); closeSettings(); closeInbox();
       var open = sortPop.classList.toggle("show");
       sortBtn.classList.toggle("on", open);
       sortBtn.setAttribute("aria-expanded", open ? "true" : "false");
@@ -1672,17 +1795,32 @@
       closeSort();
     });
 
+    // Notification inbox popover — the bell now opens a readable list of queued
+    // notifications instead of toggling desktop permission directly.
+    $("notifyBtn").addEventListener("click", function (e) {
+      e.stopPropagation();
+      closeSort(); closeAssign(); closeSettings();
+      var opening = !inboxPop.classList.contains("show");
+      inboxPop.classList.toggle("show", opening);
+      $("notifyBtn").classList.toggle("on", opening);
+      if (opening) loadNotifications().then(renderInbox);
+    });
+    $("markAllReadBtn").addEventListener("click", function (e) { e.stopPropagation(); markAllNotificationsRead(); });
+
     $("settingsBtn").addEventListener("click", function (e) {
       e.stopPropagation();
-      closeSort(); closeAssign();
-      pop.classList.toggle("show");
-      $("settingsBtn").classList.toggle("on", pop.classList.contains("show"));
+      closeSort(); closeAssign(); closeInbox();
+      var opening = !settingsPop.classList.contains("show");
+      settingsPop.classList.toggle("show", opening);
+      $("settingsBtn").classList.toggle("on", opening);
     });
     document.addEventListener("click", function (e) {
       if (e.target.closest(".popwrap")) return;
-      closeSettings(); closeSort(); closeAssign();
+      closeSettings(); closeSort(); closeAssign(); closeInbox();
     });
-    pop.querySelectorAll("input[data-notif]").forEach(function (box) {
+    $("desktopNotifRow").addEventListener("click", requestNotify);
+    $("desktopNotifRow").addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); requestNotify(); } });
+    settingsPop.querySelectorAll("input[data-notif]").forEach(function (box) {
       box.checked = notifyPrefs[box.dataset.notif] !== false;
       box.addEventListener("change", function () {
         notifyPrefs[box.dataset.notif] = box.checked;
