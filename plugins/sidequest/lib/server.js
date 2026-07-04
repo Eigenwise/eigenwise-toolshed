@@ -309,6 +309,75 @@ async function handle(req, res) {
     return;
   }
 
+  // --- Notifications: list (?project=slug&unread=1&kind=&limit=) ---
+  if (req.method === 'GET' && pathname === '/api/notifications') {
+    const opts = {};
+    if (q.project && q.project !== 'all') opts.projectSlug = String(q.project);
+    if (q.kind) opts.kind = String(q.kind);
+    if (q.unread === '1' || q.unread === 'true') opts.unreadOnly = true;
+    if (q.includePending === '1' || q.includePending === 'true') opts.includePending = true;
+    if (q.limit) opts.limit = Number(q.limit);
+    const notifications = store.listNotifications(opts);
+    const unread = store.listNotifications(Object.assign({}, opts, { unreadOnly: true, limit: undefined })).length;
+    sendJson(res, 200, { notifications, unread });
+    return;
+  }
+
+  // --- Notifications: mark read ({ id } or { all: true }) ---
+  if (req.method === 'POST' && pathname === '/api/notifications/read') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    if (body.all) {
+      const count = store.markAllRead();
+      sendJson(res, 200, { ok: true, count });
+      return;
+    }
+    if (!body.id) {
+      sendJson(res, 400, { error: 'id or all is required' });
+      return;
+    }
+    const updated = store.markRead(String(body.id));
+    if (!updated) {
+      sendJson(res, 404, { error: 'notification not found' });
+      return;
+    }
+    sendJson(res, 200, { ok: true, notification: updated });
+    return;
+  }
+
+  // --- Notifications: dismiss (/api/notifications/:id) ---
+  const nm = /^\/api\/notifications\/([^/]+)$/.exec(pathname);
+  if (req.method === 'DELETE' && nm) {
+    const ok = store.dismiss(nm[1]);
+    sendJson(res, ok ? 200 : 404, { ok });
+    return;
+  }
+
+  // --- Notify prefs: which background-event kinds get queued as notifications
+  // (question/comment/created/status). Kept server-side (not just the
+  // dashboard's localStorage) so the queue can honor an opt-out even with no
+  // dashboard tab open — see store.queueEventNotification(). ---
+  if (req.method === 'GET' && pathname === '/api/notify-prefs') {
+    sendJson(res, 200, { prefs: store.getNotifyPrefs() });
+    return;
+  }
+  if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/notify-prefs') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    sendJson(res, 200, { prefs: store.setNotifyPrefs(body) });
+    return;
+  }
+
   // --- Assets: /api/asset/:slug/:id/:filename ---
   const am = /^\/api\/asset\/([^/]+)\/([^/]+)\/(.+)$/.exec(pathname);
   if (req.method === 'GET' && am) {
