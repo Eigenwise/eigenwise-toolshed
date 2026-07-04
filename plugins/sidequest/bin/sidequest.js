@@ -319,6 +319,65 @@ function cmdAssign(opts, positional, clear) {
   else console.log(`✓ ${res.ticket.ref} unassigned  — ${meta.name}`);
 }
 
+// Same presets the dashboard's ticket editor offers, so `--in` matches what a
+// human clicking "Remind me" would get.
+const REMINDER_PRESETS = {
+  '1h': () => new Date(Date.now() + 60 * 60 * 1000),
+  '3h': () => new Date(Date.now() + 3 * 60 * 60 * 1000),
+  tomorrow: () => {
+    const d = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    d.setHours(9, 0, 0, 0);
+    return d;
+  },
+};
+
+// Schedule a reminder on a ticket: `--in 1h|3h|tomorrow` or `--at "<date/time>"`.
+// It's just a kind:'reminder' notification with a future fireAt — see
+// store.setReminder(). Setting a new one replaces whatever was pending.
+function cmdRemind(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('remind: pass a ticket id or ref and a time, e.g. sidequest remind SQ-3 --in 1h  (or --at "2026-07-05T09:00")');
+  const { slug, meta } = resolveProject(opts);
+  let when;
+  if (opts.in) {
+    const preset = REMINDER_PRESETS[String(opts.in)];
+    if (!preset) fail(`remind: --in must be one of ${Object.keys(REMINDER_PRESETS).join('|')}`);
+    when = preset();
+  } else if (opts.at) {
+    when = new Date(String(opts.at));
+    if (Number.isNaN(when.getTime())) fail(`remind: couldn't parse --at "${opts.at}"`);
+  } else {
+    fail('remind: pass --in 1h|3h|tomorrow or --at "<date/time>"');
+  }
+  const res = store.setReminder(slug, idOrRef, when.toISOString());
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (!res.ok) {
+    const reasons = { not_found: `no ticket "${idOrRef}" in ${meta.name}`, bad_fireAt: 'bad --at value', in_past: 'that time is in the past' };
+    fail(`remind: ${reasons[res.reason] || res.reason}`);
+  }
+  console.log(`✓ reminder set on ${idOrRef} for ${when.toLocaleString()}  — ${meta.name}`);
+}
+
+// Cancel whatever reminder is pending on a ticket (a no-op, not an error, if
+// there wasn't one — see store.cancelReminder()).
+function cmdUnremind(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('unremind: pass a ticket id or ref, e.g. sidequest unremind SQ-3');
+  const { slug, meta } = resolveProject(opts);
+  const res = store.cancelReminder(slug, idOrRef);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (!res.ok) fail(`unremind: no ticket "${idOrRef}" in ${meta.name}`);
+  console.log(res.removed ? `✓ cancelled reminder on ${idOrRef}  — ${meta.name}` : `no pending reminder on ${idOrRef}  — ${meta.name}`);
+}
+
 /* ------------------------------------------------------------------ *
  *  Comments
  * ------------------------------------------------------------------ */
@@ -700,6 +759,11 @@ Assigning (persistent owner, e.g. handing a ticket to the human — separate fro
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
   sidequest unassign <id|SQ-n>                      clear the assignee
 
+Reminders (fires into the notification queue/bell inbox when the dashboard server is running):
+  sidequest remind <id|SQ-n> --in 1h|3h|tomorrow   schedule a reminder from a preset
+  sidequest remind <id|SQ-n> --at "<date/time>"    or a specific date/time
+  sidequest unremind <id|SQ-n>                      cancel a pending reminder
+
 Comments:
   sidequest comment <id|SQ-n> -m "body" [--by who] [--kind comment|question]   a note-to-self; keep going
   sidequest ask <id|SQ-n> -m "question?" [--by who]   post a question — then AWAIT it, don't just continue
@@ -782,6 +846,12 @@ async function main() {
       break;
     case 'unassign':
       cmdAssign(opts, positional, true);
+      break;
+    case 'remind':
+      cmdRemind(opts, positional);
+      break;
+    case 'unremind':
+      cmdUnremind(opts, positional);
       break;
     case 'ask':
       opts.kind = 'question'; // `ask` always posts a question — never overridable by --kind

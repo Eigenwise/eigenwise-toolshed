@@ -29,8 +29,11 @@ Your task prompt contains some or all of:
 
 1. **Compose the ticket** from the issue:
    - **title**: one concrete line, ideally under ~70 chars (e.g. "Contact form does not send").
-   - **description**: 1–3 sentences of the useful detail (what's wrong, where, any repro). Omit if the
-     title already says everything.
+   - **description**: 1–3 sentences of the useful detail, shaped by what kind of issue this is:
+     - **bug** → steps to reproduce (what happened, what was expected, where)
+     - **feature/task** → the requirements — what "done" looks like
+     - **question/spike** → what's actually unknown
+     Only omit it if the title already fully captures that detail.
    - **priority**: one of `low | normal | high | urgent`. Use `urgent` only for "broken in
      production / blocks work", `high` for clear bugs, `normal` by default, `low` for polish/nits.
    - **labels**: 0–3 short tags you can infer with confidence (e.g. `bug`, `frontend`, `payments`).
