@@ -75,11 +75,14 @@ nags you about your own edits:
 - **Sidebar unread badge.** Each project shows a small gold badge counting the tickets Claude
   created or moved between columns since you last opened that board. Open the board and the badge
   clears. Changes *you* make in the dashboard (in any tab) never raise a badge.
-- **Desktop notification.** When a ticket is filed or changes status in the background — and you're
-  *not* looking at the dashboard — you get a native desktop toast ("New side quest · SQ-7", "SQ-3 →
-  done"). Click it to jump straight to that board. Click the **bell** in the top bar to turn
-  notifications on (the browser asks once for permission). With several dashboard tabs open, a change
-  only pops one notification, not one per tab.
+- **Desktop notification.** When Claude does something in the background — and you're *not* looking at
+  the dashboard — you get a native desktop toast ("❓ Question · SQ-6", "💬 Comment · SQ-3", "New side
+  quest · SQ-7", "SQ-3 → done"). Click it to jump straight to that board. Click the **bell** in the top
+  bar to turn notifications on (the browser asks once for permission). With several dashboard tabs open,
+  a change only pops one notification, not one per tab.
+- **Choose what pings you.** The **gear** menu next to the bell lets you pick which events notify (and
+  badge): **questions**, **comments**, **new tickets**, **status changes** — each a toggle. A question
+  from Claude is the one you'll usually want on, since it means Claude is waiting on your answer.
 
 The distinction is by origin: a change made through the dashboard is *you*; a change made by the CLI or
 a subagent is *Claude*. Only the latter notifies or badges. (While a board's tab is fully backgrounded,
@@ -131,6 +134,37 @@ sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status tod
 - **Crash-safe.** A claim left by a worker that crashed or wandered off becomes reclaimable after a
   timeout (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). On the dashboard, a claimed ticket shows a green
   "working" chip with the worker's id (muted once the claim goes stale).
+
+## Comments & questions
+
+Every ticket has a comment thread. Claude leaves a **comment** as a note-to-self, or a **question**
+when it needs your input — and a question is the signal to *pause and wait for your reply*, not guess.
+
+```bash
+sidequest comment SQ-3 -m "Reusing the SQ-1 examples here."          # a note
+sidequest ask     SQ-3 -m "Should this cover the v2 API too?"        # a question (pauses; waits for you)
+sidequest comments SQ-3                                              # show the thread
+```
+
+On the dashboard, open a ticket to read the thread and reply; a ticket whose latest comment is an
+unanswered question shows a gold **❓ needs reply** chip on its card. A question from Claude notifies you
+(see below) so you can answer without watching the board.
+
+## Links & dependencies
+
+Relate tickets so the order of work is explicit. Links are stored on both tickets — set one side and
+the inverse is written automatically.
+
+```bash
+sidequest link SQ-4 depends-on SQ-3     # SQ-4 is blocked-by SQ-3 (and SQ-3 blocks SQ-4)
+sidequest link SQ-1 blocks SQ-2         # the other direction
+sidequest link SQ-5 related SQ-6        # a non-blocking association
+sidequest unlink SQ-4 SQ-3              # remove it
+```
+
+A ticket that is **blocked by an unfinished ticket** is shown as **⛔ blocked** and is **skipped by
+`next`** — an agent grabbing the top task never picks up work that isn't ready. Once the blocker is
+`done`, it unblocks automatically. On the dashboard, links (and an unlink ✕) live in the ticket detail.
 
 ## CLI
 

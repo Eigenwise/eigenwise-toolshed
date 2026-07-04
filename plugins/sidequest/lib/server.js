@@ -211,6 +211,65 @@ async function handle(req, res) {
     }
   }
 
+  // --- Tickets: add a comment (/api/tickets/:id/comment) ---
+  const cm = /^\/api\/tickets\/([^/]+)\/comment$/.exec(pathname);
+  if (req.method === 'POST' && cm) {
+    const slug = q.project ? String(q.project) : null;
+    if (!slug || slug === 'all') {
+      sendJson(res, 400, { error: 'project query param is required' });
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    // A comment posted through the dashboard is the user's own; source "dashboard"
+    // so it doesn't notify them about their own message.
+    const result = store.addComment(slug, cm[1], { by: body.by || 'you', body: body.body, kind: body.kind, source: 'dashboard' });
+    if (!result.ok) {
+      sendJson(res, result.reason === 'not_found' ? 404 : 400, { error: result.reason });
+      return;
+    }
+    sendJson(res, 201, result);
+    return;
+  }
+
+  // --- Tickets: link (/api/tickets/:id/link) ---
+  const lk = /^\/api\/tickets\/([^/]+)\/link$/.exec(pathname);
+  if (req.method === 'POST' && lk) {
+    const slug = q.project ? String(q.project) : null;
+    if (!slug || slug === 'all') {
+      sendJson(res, 400, { error: 'project query param is required' });
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    const result = store.linkTickets(slug, lk[1], body.verb, body.to);
+    sendJson(res, result.ok ? 200 : 400, result);
+    return;
+  }
+
+  // --- Tickets: unlink (/api/tickets/:id/link/:other) ---
+  const ulk = /^\/api\/tickets\/([^/]+)\/link\/([^/]+)$/.exec(pathname);
+  if (req.method === 'DELETE' && ulk) {
+    const slug = q.project ? String(q.project) : null;
+    if (!slug || slug === 'all') {
+      sendJson(res, 400, { error: 'project query param is required' });
+      return;
+    }
+    const result = store.unlinkTickets(slug, ulk[1], ulk[2]);
+    sendJson(res, result.ok ? 200 : 404, result);
+    return;
+  }
+
   // --- Assets: /api/asset/:slug/:id/:filename ---
   const am = /^\/api\/asset\/([^/]+)\/([^/]+)\/(.+)$/.exec(pathname);
   if (req.method === 'GET' && am) {

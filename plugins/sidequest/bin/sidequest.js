@@ -10,6 +10,10 @@
  *   sidequest list [--status todo] [--json]
  *   sidequest update <id|SQ-n> [-t] [-d] [-p] [-s] [-l ...] [-i ...]
  *   sidequest rm <id|SQ-n>
+ *   sidequest comment <id|SQ-n> -m "body" [--by who] [--kind comment|question]
+ *   sidequest ask <id|SQ-n> -m "question?" [--by who]
+ *   sidequest comments <id|SQ-n> [--json]
+ *   sidequest await <id|SQ-n> [--timeout secs] [--poll secs]
  *   sidequest projects
  *   sidequest dashboard [--port N] [--no-open]      # ensure server + open browser
  *   sidequest serve [--port N]                       # run the server in foreground
@@ -39,6 +43,7 @@ const ALIASES = {
   i: 'image',
   s: 'status',
   b: 'by',
+  m: 'body',
 };
 
 function parseArgs(argv) {
@@ -157,7 +162,12 @@ function cmdList(opts) {
       const labels = t.labels.length ? `  #${t.labels.join(' #')}` : '';
       const imgs = t.assets.length ? `  \u{1F5BC}${t.assets.length}` : '';
       const clm = t.claim && t.claim.by ? `  @${t.claim.by}${store.isClaimStale(t.claim) ? ' (stale)' : ''}` : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${clm}`);
+      const blockers = store.openBlockers(slug, t);
+      const blk = blockers.length ? `  ⛔ blocked-by ${blockers.join(',')}` : '';
+      const lnk = t.links && t.links.length ? `  ⇄${t.links.length}` : '';
+      const cmt = t.comments && t.comments.length ? `  \u{1F4AC}${t.comments.length}` : '';
+      const ask = store.needsResponse(t) ? '  ❓ awaiting reply' : '';
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${cmt}${lnk}${blk}${clm}${ask}`);
     }
   }
 }
@@ -284,6 +294,150 @@ function cmdNext(opts) {
   } else {
     process.exitCode = 1;
     console.log(`No available tickets to claim in ${meta.name}.`);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Comments
+ * ------------------------------------------------------------------ */
+
+function cmdComment(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('comment: pass a ticket id or ref, e.g. sidequest comment SQ-3 -m "note" [--kind question]');
+  const body = opts.body;
+  if (!body || !String(body).trim()) fail('comment: -m/--body is required, e.g. sidequest comment SQ-3 -m "note"');
+  const { slug, meta } = resolveProject(opts);
+  const by = workerId(opts);
+  const kind = opts.kind === 'question' ? 'question' : 'comment';
+  const res = store.addComment(slug, idOrRef, { by, body, kind, source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) {
+    const tag = kind === 'question' ? '?' : '»';
+    console.log(`✓ ${tag} comment added to ${res.ticket.ref} by "${by}"  — ${meta.name}`);
+  } else {
+    process.exitCode = 1;
+    const messages = { not_found: `no ticket "${idOrRef}" in ${meta.name}.`, empty: 'comment body cannot be empty.', busy: `${idOrRef} is locked right now — retry in a moment.` };
+    console.log(`✗ ${messages[res.reason] || 'comment failed: ' + res.reason}`);
+  }
+}
+
+function cmdComments(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('comments: pass a ticket id or ref, e.g. sidequest comments SQ-3');
+  const { slug, meta } = resolveProject(opts);
+  const t = store.getTicket(slug, idOrRef);
+  if (!t) fail(`comments: no ticket "${idOrRef}" in ${meta.name}`);
+  const comments = Array.isArray(t.comments) ? t.comments : [];
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ project: slug, ticket: t.ref, comments }, null, 2) + '\n');
+    return;
+  }
+  if (!comments.length) {
+    console.log(`No comments on ${t.ref}.`);
+    return;
+  }
+  console.log(`${t.ref} — ${comments.length} comment(s)`);
+  for (const c of comments) {
+    const tag = c.kind === 'question' ? '?' : '»';
+    console.log(`  ${tag} [${c.at}] ${c.by}: ${c.body}`);
+  }
+}
+
+// Bounded poll for a reply to a pending question. A plain comment (note-to-
+// self) never blocks anything; only `ask`/`--kind question` sets needsResponse,
+// and only a reply posted through the dashboard (the human) clears it — see
+// store.needsResponse. Defaults are sized to fit inside a typical Bash-tool
+// call (2 min) with no flags; pass --timeout for a longer wait.
+async function cmdAwait(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('await: pass a ticket id or ref, e.g. sidequest await SQ-3 [--timeout 120] [--poll 5]');
+  const { slug, meta } = resolveProject(opts);
+  const timeoutMs = (Number(opts.timeout) > 0 ? Number(opts.timeout) : 120) * 1000;
+  const pollMs = (Number(opts.poll) > 0 ? Number(opts.poll) : 5) * 1000;
+  const since = new Date().toISOString();
+
+  let t = store.getTicket(slug, idOrRef);
+  if (!t) fail(`await: no ticket "${idOrRef}" in ${meta.name}`);
+  if (!store.needsResponse(t)) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ ok: true, waited: false, reason: 'not_awaiting', ticket: t }, null, 2) + '\n');
+      return;
+    }
+    console.log(`${t.ref} is not currently awaiting a reply.`);
+    return;
+  }
+
+  if (!opts.json) console.log(`Waiting for a reply on ${t.ref} (poll every ${pollMs / 1000}s, timeout ${timeoutMs / 1000}s)…`);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await delay(pollMs);
+    t = store.getTicket(slug, idOrRef);
+    if (!t) fail(`await: ${idOrRef} no longer exists in ${meta.name}`);
+    if (!store.needsResponse(t)) {
+      const replies = (t.comments || []).filter((c) => c.at > since);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ ok: true, waited: true, ticket: t, replies }, null, 2) + '\n');
+        return;
+      }
+      console.log(`✓ ${t.ref} got a reply:`);
+      for (const c of replies) console.log(`  » [${c.at}] ${c.by}: ${c.body}`);
+      return;
+    }
+  }
+  process.exitCode = 1;
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ ok: false, waited: false, reason: 'timeout', ticket: t }, null, 2) + '\n');
+    return;
+  }
+  console.log(`✗ timed out waiting for a reply on ${t.ref} — still awaiting.`);
+}
+
+function cmdLink(opts, positional) {
+  // sidequest link SQ-1 <blocks|depends-on|related> SQ-2
+  const a = positional[0];
+  const verb = positional[1];
+  const b = positional[2];
+  if (!a || !verb || !b) fail('link: usage — sidequest link SQ-1 <blocks|depends-on|related> SQ-2');
+  const { slug, meta } = resolveProject(opts);
+  const res = store.linkTickets(slug, a, verb, b);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) {
+    console.log(`✓ linked ${res.from.ref} ${res.type} ${res.to.ref}  — ${meta.name}`);
+  } else {
+    process.exitCode = 1;
+    const messages = {
+      bad_type: `unknown relationship "${verb}" — use blocks, depends-on, or related.`,
+      from_not_found: `no ticket "${a}" in ${meta.name}.`,
+      to_not_found: `no ticket "${b}" in ${meta.name}.`,
+      self: 'a ticket cannot link to itself.',
+    };
+    console.log(`✗ ${messages[res.reason] || 'link failed: ' + res.reason}`);
+  }
+}
+
+function cmdUnlink(opts, positional) {
+  const a = positional[0];
+  const b = positional[1];
+  if (!a || !b) fail('unlink: usage — sidequest unlink SQ-1 SQ-2');
+  const { slug, meta } = resolveProject(opts);
+  const res = store.unlinkTickets(slug, a, b);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) console.log(`✓ unlinked ${a} ✕ ${b}  — ${meta.name}`);
+  else {
+    process.exitCode = 1;
+    console.log(`✗ unlink failed: ${res.reason === 'not_found' ? 'one of those tickets does not exist' : res.reason}`);
   }
 }
 
@@ -440,6 +594,17 @@ Working the board safely (multi-agent):
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
 
+Comments:
+  sidequest comment <id|SQ-n> -m "body" [--by who] [--kind comment|question]   a note-to-self; keep going
+  sidequest ask <id|SQ-n> -m "question?" [--by who]   post a question — then AWAIT it, don't just continue
+  sidequest comments <id|SQ-n> [--json]            list a ticket's comment thread
+  sidequest await <id|SQ-n> [--timeout secs=120] [--poll secs=5]   block until the human replies (or times out)
+
+Links / dependencies:
+  sidequest link <id|SQ-n> <blocks|depends-on|related> <id|SQ-n>   relate two tickets (inverse auto-set)
+  sidequest unlink <id|SQ-n> <id|SQ-n>             remove the link between two tickets
+  A ticket blocked by an unfinished ticket is skipped by 'next' and shown as blocked.
+
 Project selection:
   Defaults to $CLAUDE_PROJECT_DIR or the current directory.
   --project <path-or-slug>   target another board  ·  --name <name>   set its display name
@@ -500,6 +665,26 @@ async function main() {
     case 'release':
     case 'unclaim':
       cmdRelease(opts, positional);
+      break;
+    case 'ask':
+      if (opts.kind == null) opts.kind = 'question'; // `ask` posts a question by default
+      cmdComment(opts, positional);
+      break;
+    case 'comment':
+      cmdComment(opts, positional);
+      break;
+    case 'comments':
+      cmdComments(opts, positional);
+      break;
+    case 'await':
+    case 'wait':
+      await cmdAwait(opts, positional);
+      break;
+    case 'link':
+      cmdLink(opts, positional);
+      break;
+    case 'unlink':
+      cmdUnlink(opts, positional);
       break;
     case 'projects':
     case 'boards':

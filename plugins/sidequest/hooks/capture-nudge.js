@@ -158,11 +158,18 @@ function main() {
     if (nudgeOff()) process.exit(0);
     emit(
       '=== sidequest (active) ===\n' +
-        'This project tracks work in sidequest. When the user raises — or you notice — a bug, task, or ' +
-        'idea SEPARATE from your current work, capture it as a ticket right away rather than only noting ' +
-        'it: spawn the `ticket-filer` agent (background), or run `' +
+        'This project tracks work in sidequest — use the board, do not keep the plan only in your head.\n' +
+        '• CAPTURE: when the user raises — or you notice — a bug/task/idea SEPARATE from your current work, ' +
+        'file it as a ticket right away (background `ticket-filer` agent, or `' +
         cli +
-        ' add -t "..." -p high -l bug`. Board: `' +
+        ' add ...`).\n' +
+        '• PLAN: before starting a substantial or multi-part task — several distinct deliverables, or the ' +
+        'user says "split into tickets" — create one ticket per piece on the board FIRST and link ' +
+        'dependencies (`' +
+        cli +
+        ' link A depends-on B`), then work them one at a time (claim → do → `done`) rather than ' +
+        'implementing everything ad hoc.\n' +
+        'Board: `' +
         cli +
         ' dashboard`.'
     );

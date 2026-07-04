@@ -339,6 +339,8 @@ function createTicket(slug, fields) {
     priority: coercePriority(fields.priority, 'normal'),
     labels: normalizeLabels(fields.labels),
     assets,
+    comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
+    links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
     claim: null,               // { by, at } when an agent has claimed it to work on
     source: String(fields.source || 'manual'),
     // Who/what last touched this ticket, and how. The dashboard uses these to
@@ -440,6 +442,7 @@ function updateTicket(slug, idOrRef, patch) {
 function deleteTicket(slug, idOrRef) {
   const t = getTicket(slug, idOrRef);
   if (!t) return false;
+  const deletedRef = t.ref;
   try {
     fs.unlinkSync(ticketFile(slug, t.id));
   } catch (_) {
@@ -452,6 +455,17 @@ function deleteTicket(slug, idOrRef) {
   }
   try {
     fs.unlinkSync(ticketLockPath(slug, t.id));
+  } catch (_) {
+    /* best effort */
+  }
+  // Drop any links other tickets had pointing at the one we just removed, so no
+  // dangling "blocked-by SQ-deleted" leaves a ticket falsely blocked forever.
+  try {
+    for (const other of listTickets(slug)) {
+      if (Array.isArray(other.links) && other.links.some((l) => upperRef(l.ref) === upperRef(deletedRef))) {
+        stripLinksTo(slug, other.id, deletedRef);
+      }
+    }
   } catch (_) {
     /* best effort */
   }
@@ -629,6 +643,7 @@ function claimNext(slug, by, opts) {
     .filter((t) => t.status !== 'done')
     .filter((t) => !t.claim || isClaimStale(t.claim) || t.claim.by === by)
     .filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase())
+    .filter((t) => opts.includeBlocked || !isBlocked(slug, t)) // never auto-hand-out blocked work
     .sort((a, b) => {
       const pr = priorityRank(a.priority) - priorityRank(b.priority);
       if (pr !== 0) return pr;
@@ -640,6 +655,176 @@ function claimNext(slug, by, opts) {
     // Lost the race or it changed under us — try the next candidate.
   }
   return { ok: false, reason: 'empty' };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Comments
+ *
+ *  Each ticket carries a thread of comments. A comment of kind "question" is how
+ *  an agent (or the user) flags that it needs a reply — the dashboard treats it
+ *  as a higher-signal notification. Appends happen under the ticket lock so two
+ *  simultaneous comments never clobber each other.
+ * ------------------------------------------------------------------ */
+
+const COMMENT_KINDS = ['comment', 'question', 'answer'];
+
+function newCommentId() {
+  return 'c_' + Date.now().toString(36) + '_' + crypto.randomBytes(3).toString('hex');
+}
+
+function addComment(slug, idOrRef, fields) {
+  fields = fields || {};
+  const body = String(fields.body || '').trim();
+  if (!body) return { ok: false, reason: 'empty' };
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    if (!Array.isArray(t.comments)) t.comments = [];
+    const kind = COMMENT_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : 'comment';
+    const source = fields.source ? String(fields.source) : 'cli';
+    const comment = {
+      id: newCommentId(),
+      by: String(fields.by || 'agent'),
+      kind,
+      body: body.slice(0, 4000),
+      source, // 'cli' (agent) or 'dashboard' (the human) — who needsResponse() listens for
+      at: new Date().toISOString(),
+    };
+    t.comments.push(comment);
+    t.lastEventType = kind === 'question' ? 'question' : 'comment';
+    t.lastEventSource = source;
+    t.updatedAt = comment.at;
+    writeJson(ticketFile(slug, t.id), t);
+    return { ok: true, ticket: t, comment };
+  });
+}
+
+// True while the most recent agent-asked question (kind=question, source=cli)
+// has not yet been followed by any comment from the dashboard (the human). An
+// agent-authored follow-up comment in between (e.g. a note-to-self) does not
+// count as an answer — only the human replying does.
+function needsResponse(ticket) {
+  const comments = (ticket && Array.isArray(ticket.comments)) ? ticket.comments : [];
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const c = comments[i];
+    if (c.source === 'dashboard') return false;
+    if (c.kind === 'question') return true;
+  }
+  return false;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Links / dependencies
+ *
+ *  A link is stored on both tickets with the correct direction, so either side
+ *  can see the relationship. User-facing verbs map onto three stored types:
+ *  blocks / blocked-by / related. "A depends-on B" == "A blocked-by B" (B must
+ *  finish first) == "B blocks A".
+ * ------------------------------------------------------------------ */
+
+const LINK_TYPES = ['blocks', 'blocked-by', 'related'];
+
+// Map a user verb to [typeStoredOnFrom, typeStoredOnTo].
+function linkTypePair(verb) {
+  switch (String(verb || '').toLowerCase().replace(/_/g, '-')) {
+    case 'blocks':
+    case 'blocking':
+      return ['blocks', 'blocked-by'];
+    case 'blocked-by':
+    case 'blockedby':
+    case 'depends-on':
+    case 'dependson':
+    case 'depends':
+    case 'needs':
+    case 'after':
+      return ['blocked-by', 'blocks'];
+    case 'related':
+    case 'related-to':
+    case 'relates-to':
+    case 'relates':
+      return ['related', 'related'];
+    default:
+      return null;
+  }
+}
+
+function upperRef(r) {
+  return String(r).toUpperCase();
+}
+
+// Add one directed link to a single ticket (idempotent), under its lock.
+function addLinkToTicket(slug, idOrRef, type, otherRef) {
+  const found = getTicket(slug, idOrRef);
+  if (!found) return;
+  withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return;
+    if (!Array.isArray(t.links)) t.links = [];
+    const ref = upperRef(otherRef);
+    if (!t.links.some((l) => l.type === type && upperRef(l.ref) === ref)) {
+      t.links.push({ type, ref });
+      t.updatedAt = new Date().toISOString();
+      writeJson(ticketFile(slug, t.id), t);
+    }
+  });
+}
+
+// Link two tickets by a verb, writing the correct direction on each side.
+function linkTickets(slug, fromRef, verb, toRef) {
+  const pair = linkTypePair(verb);
+  if (!pair) return { ok: false, reason: 'bad_type' };
+  const from = getTicket(slug, fromRef);
+  const to = getTicket(slug, toRef);
+  if (!from) return { ok: false, reason: 'from_not_found' };
+  if (!to) return { ok: false, reason: 'to_not_found' };
+  if (from.id === to.id) return { ok: false, reason: 'self' };
+  addLinkToTicket(slug, from.id, pair[0], to.ref);
+  addLinkToTicket(slug, to.id, pair[1], from.ref);
+  return { ok: true, from: getTicket(slug, from.id), to: getTicket(slug, to.id), type: pair[0] };
+}
+
+// Remove every link between two tickets (both directions).
+function unlinkTickets(slug, aRef, bRef) {
+  const a = getTicket(slug, aRef);
+  const b = getTicket(slug, bRef);
+  if (!a || !b) return { ok: false, reason: 'not_found' };
+  stripLinksTo(slug, a.id, b.ref);
+  stripLinksTo(slug, b.id, a.ref);
+  return { ok: true };
+}
+
+function stripLinksTo(slug, idOrRef, otherRef) {
+  const found = getTicket(slug, idOrRef);
+  if (!found) return;
+  withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t || !Array.isArray(t.links)) return;
+    const ref = upperRef(otherRef);
+    const kept = t.links.filter((l) => upperRef(l.ref) !== ref);
+    if (kept.length !== t.links.length) {
+      t.links = kept;
+      t.updatedAt = new Date().toISOString();
+      writeJson(ticketFile(slug, t.id), t);
+    }
+  });
+}
+
+// The refs a ticket is blocked-by that are not yet done (i.e. genuinely blocking).
+function openBlockers(slug, ticket) {
+  if (!ticket || !Array.isArray(ticket.links)) return [];
+  const out = [];
+  for (const l of ticket.links) {
+    if (l.type !== 'blocked-by') continue;
+    const blocker = getTicket(slug, l.ref);
+    if (blocker && blocker.status !== 'done') out.push(blocker.ref);
+  }
+  return out;
+}
+
+function isBlocked(slug, ticket) {
+  return openBlockers(slug, ticket).length > 0;
 }
 
 /* ------------------------------------------------------------------ *
@@ -683,6 +868,12 @@ module.exports = {
   releaseTicket,
   completeTicket,
   claimNext,
+  addComment,
+  needsResponse,
+  linkTickets,
+  unlinkTickets,
+  openBlockers,
+  isBlocked,
   isClaimStale,
   normalizeLabels,
   readServerInfo,

@@ -138,6 +138,41 @@
   .iconbtn.on { color: var(--gold); border-color: var(--gold-line); }
   .iconbtn.off { color: var(--text-faint); }
 
+  /* Notification settings popover */
+  .popwrap { position: relative; }
+  .popover { position: absolute; right: 0; top: 44px; width: 288px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 8px; z-index: 45; display: none; }
+  .popover.show { display: block; }
+  .pop-head { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); padding: 6px 8px 4px; }
+  .pop-row { display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 8px; cursor: pointer; }
+  .pop-row:hover { background: var(--panel); }
+  .pop-row input { margin-top: 2px; accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
+  .pop-row span { font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 1px; }
+  .pop-row em { font-style: normal; font-size: 11px; color: var(--text-faint); }
+  .pop-foot { font-size: 10.5px; color: var(--text-faint); padding: 8px; line-height: 1.45; border-top: 1px solid var(--line-soft); margin-top: 4px; }
+
+  /* Blocked indicator */
+  .blockchip { font-family: var(--mono); font-size: 10px; color: var(--urgent); background: rgba(255,84,104,.10); border: 1px solid rgba(255,84,104,.32); padding: 2px 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 4px; }
+
+  /* Comment thread + link pills (ticket detail modal) */
+  .thread { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; padding-right: 2px; }
+  .cmt { background: var(--ink); border: 1px solid var(--line-soft); border-radius: 9px; padding: 8px 10px; }
+  .cmt.question { border-color: var(--gold-line); background: var(--gold-soft); }
+  .cmt-head { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin-bottom: 4px; }
+  .cmt-head .who { color: var(--text-dim); }
+  .cmt.question .cmt-head .tag { color: var(--gold-bright); }
+  .cmt-body { font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cmt-empty { font-size: 12.5px; color: var(--text-faint); padding: 2px; }
+  .addcmt { display: flex; gap: 8px; margin-top: 10px; align-items: flex-start; }
+  .addcmt textarea { flex: 1; min-height: 40px; }
+  .linklist { display: flex; flex-wrap: wrap; gap: 6px; }
+  .linkpill { font-family: var(--mono); font-size: 11px; padding: 3px 4px 3px 8px; border-radius: 999px; border: 1px solid var(--line-soft); background: var(--ink); color: var(--text-dim); display: inline-flex; align-items: center; gap: 6px; }
+  .linkpill .lt { color: var(--text-faint); }
+  .linkpill.blocked-by { border-color: rgba(255,84,104,.35); }
+  .linkpill.blocks { border-color: rgba(124,140,255,.35); }
+  .linkpill .x { cursor: pointer; color: var(--text-faint); padding: 0 3px; border-radius: 4px; }
+  .linkpill .x:hover { color: var(--urgent); background: rgba(255,84,104,.12); }
+  .none { font-size: 12px; color: var(--text-faint); }
+
   .btn {
     cursor: pointer; font-family: var(--sans); font-size: 13px; font-weight: 600; border-radius: 9px;
     padding: 8px 14px; border: 1px solid transparent; display: inline-flex; align-items: center; gap: 7px; transition: all .13s;
@@ -333,6 +368,19 @@
       <button class="iconbtn off" id="notifyBtn" title="Desktop notifications" aria-label="Toggle desktop notifications">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
       </button>
+      <div class="popwrap">
+        <button class="iconbtn" id="settingsBtn" title="Notification settings" aria-label="Notification settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <div class="popover" id="settingsPop" role="menu" aria-label="Notification settings">
+          <div class="pop-head">Notify me about</div>
+          <label class="pop-row"><input type="checkbox" data-notif="question" /><span><b>Questions</b> from Claude<em>a comment that needs your reply</em></span></label>
+          <label class="pop-row"><input type="checkbox" data-notif="comment" /><span>Comments<em>notes Claude leaves on a ticket</em></span></label>
+          <label class="pop-row"><input type="checkbox" data-notif="created" /><span>New tickets<em>filed by Claude in the background</em></span></label>
+          <label class="pop-row"><input type="checkbox" data-notif="status" /><span>Status changes<em>Claude moved a ticket between columns</em></span></label>
+          <div class="pop-foot">Applies to desktop toasts and the sidebar badges. Your own dashboard edits never notify.</div>
+        </div>
+      </div>
       <button class="btn btn-primary" id="newBtn">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         New ticket
@@ -385,6 +433,26 @@
         <label>Images</label>
         <div class="dropzone" id="dropzone">Paste (Ctrl/Cmd&nbsp;V) or drop an image here</div>
         <div class="att-grid" id="attGrid"></div>
+      </div>
+      <div class="field" id="linksField" style="display:none">
+        <label>Links &amp; dependencies</label>
+        <div class="linklist" id="linkList"></div>
+        <div class="addlink" style="display:flex;gap:8px;margin-top:8px">
+          <select id="linkVerb"><option value="blocks">blocks</option><option value="depends-on">depends on</option><option value="related">related to</option></select>
+          <select id="linkTarget"></select>
+          <button class="btn btn-ghost" id="addLinkBtn" type="button">Link</button>
+        </div>
+      </div>
+      <div class="field" id="commentsField" style="display:none">
+        <label>Comments</label>
+        <div class="thread" id="thread"></div>
+        <div class="addcmt">
+          <textarea id="cmtBody" placeholder="Reply, or leave a note…"></textarea>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <button class="btn btn-primary" id="cmtBtn" type="button">Comment</button>
+            <button class="btn btn-ghost" id="askBtn" type="button" title="Post as a question">Ask</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="modal-foot">
@@ -446,6 +514,12 @@
     saveLastSeen();
   }
 
+  // Which background event kinds produce a notification + badge (persisted).
+  var NOTIFY_DEFAULTS = { question: true, comment: true, created: true, status: true };
+  var notifyPrefs = NOTIFY_DEFAULTS;
+  try { notifyPrefs = Object.assign({}, NOTIFY_DEFAULTS, JSON.parse(localStorage.getItem("sq_notify") || "{}")); } catch (_) {}
+  function saveNotifyPrefs() { try { localStorage.setItem("sq_notify", JSON.stringify(notifyPrefs)); } catch (_) {} }
+
   // ---------------- helpers ----------------
   var $ = function (id) { return document.getElementById(id); };
   function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
@@ -462,8 +536,33 @@
 
   // A change worth flagging: a ticket that Claude/the CLI (not the dashboard)
   // created or moved between columns. Edits and your own dashboard actions don't count.
+  // A change made by Claude/CLI (not the dashboard) of a kind you've opted into.
   function isBackgroundChange(t) {
-    return t.lastEventSource && t.lastEventSource !== "dashboard" && (t.lastEventType === "status" || t.lastEventType === "created");
+    if (!t.lastEventSource || t.lastEventSource === "dashboard") return false;
+    var k = t.lastEventType;
+    if (k === "created") return !!notifyPrefs.created;
+    if (k === "status") return !!notifyPrefs.status;
+    if (k === "comment") return !!notifyPrefs.comment;
+    if (k === "question") return !!notifyPrefs.question;
+    return false;
+  }
+  function ticketByRef(ref) {
+    var u = String(ref).toUpperCase();
+    for (var i = 0; i < state.allTickets.length; i++) {
+      if (String(state.allTickets[i].ref).toUpperCase() === u) return state.allTickets[i];
+    }
+    return null;
+  }
+  // Refs blocking this ticket that aren't done yet (computed from the loaded set).
+  function openBlockersClient(t) {
+    if (!t || !t.links) return [];
+    var out = [];
+    for (var i = 0; i < t.links.length; i++) {
+      if (t.links[i].type !== "blocked-by") continue;
+      var b = ticketByRef(t.links[i].ref);
+      if (b && b.status !== "done") out.push(b.ref);
+    }
+    return out;
   }
   // A claim past the default TTL is likely abandoned; shown muted. (Display only —
   // the CLI enforces the real, possibly env-configured, timeout.)
@@ -674,11 +773,21 @@
         esc(t.claim.by) + '"><span class="pulse"></span>' + esc(t.claim.by) + (stale ? " (stale)" : "") + '</span>';
     }
 
+    var blockers = openBlockersClient(t);
+    var blockedChip = blockers.length ? '<span class="blockchip" title="blocked by ' + esc(blockers.join(", ")) + '">⛔ blocked</span>' : "";
+    var lastC = t.comments && t.comments.length ? t.comments[t.comments.length - 1] : null;
+    var qChip = lastC && lastC.kind === "question"
+      ? '<span class="blockchip" style="color:var(--gold-bright);background:var(--gold-soft);border-color:var(--gold-line)" title="Claude asked a question — open the ticket to reply">❓ needs reply</span>'
+      : "";
+    var cmtCount = t.comments && t.comments.length
+      ? '<span style="font-family:var(--mono);font-size:10px;color:var(--text-faint)" title="' + t.comments.length + ' comment(s)">\u{1F4AC} ' + t.comments.length + '</span>'
+      : "";
+
     c.innerHTML =
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge +
       '<span class="prio-tag" data-p="' + t.priority + '">' + t.priority + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
-      '<div class="foot">' + claim + labels + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
+      '<div class="foot">' + qChip + blockedChip + claim + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
 
     c.addEventListener("click", function (e) { if (e.target.tagName === "IMG") { openLightbox(e.target.src); return; } openEditor(t); });
     c.addEventListener("keydown", function (e) { if (e.key === "Enter") openEditor(t); });
@@ -769,9 +878,96 @@
       pf.style.display = "none";
     }
 
+    // Links + comments only make sense for an existing ticket.
+    $("linksField").style.display = isEdit ? "" : "none";
+    $("commentsField").style.display = isEdit ? "" : "none";
+    if (isEdit) { renderLinks(ticket); renderThread(ticket); populateLinkTargets(ticket); $("cmtBody").value = ""; }
+
     renderAttachments();
     $("overlay").classList.add("show");
     setTimeout(function () { $("mTitle").focus(); }, 40);
+  }
+
+  function editorSlug() { return state.editor && state.editor.ticket ? slugOf(state.editor.ticket) : state.current; }
+
+  function renderLinks(ticket) {
+    var box = $("linkList");
+    var links = ticket.links || [];
+    if (!links.length) { box.innerHTML = '<span class="none">No links yet.</span>'; return; }
+    var verb = { "blocked-by": "blocked by", blocks: "blocks", related: "related to" };
+    box.innerHTML = "";
+    links.forEach(function (l) {
+      var target = ticketByRef(l.ref);
+      var doneMark = target && target.status === "done" ? " ✓" : "";
+      var pill = el("span", "linkpill " + l.type);
+      pill.innerHTML = '<span class="lt">' + (verb[l.type] || l.type) + '</span> ' + esc(l.ref) + doneMark + ' <span class="x" title="Remove link">✕</span>';
+      pill.querySelector(".x").addEventListener("click", function () { removeLink(ticket, l.ref); });
+      box.appendChild(pill);
+    });
+  }
+
+  function populateLinkTargets(ticket) {
+    var sel = $("linkTarget");
+    var here = state.allTickets.filter(function (t) { return t.project === slugOf(ticket) && t.id !== ticket.id; });
+    sel.innerHTML = here.length
+      ? here.map(function (t) { return '<option value="' + esc(t.ref) + '">' + esc(t.ref + " · " + t.title.slice(0, 40)) + "</option>"; }).join("")
+      : '<option value="">No other tickets to link</option>';
+  }
+
+  function renderThread(ticket) {
+    var box = $("thread");
+    var comments = ticket.comments || [];
+    if (!comments.length) { box.innerHTML = '<div class="cmt-empty">No comments yet. Leave a note, or Claude will ask here when it needs input.</div>'; return; }
+    box.innerHTML = "";
+    comments.forEach(function (c) {
+      var d = el("div", "cmt" + (c.kind === "question" ? " question" : ""));
+      var tag = c.kind === "question" ? "❓ question" : "💬";
+      d.innerHTML = '<div class="cmt-head"><span class="tag">' + tag + '</span> <span class="who">' + esc(c.by) + '</span> · ' + relTime(c.at) + '</div>' +
+        '<div class="cmt-body">' + esc(c.body) + '</div>';
+      box.appendChild(d);
+    });
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function postComment(kind) {
+    var ed = state.editor; if (!ed || !ed.ticket) return;
+    var body = $("cmtBody").value.trim();
+    if (!body) { $("cmtBody").focus(); return; }
+    var slug = editorSlug();
+    mutate("POST", "/api/tickets/" + ed.ticket.id + "/comment?project=" + encodeURIComponent(slug), { body: body, kind: kind, by: "you" })
+      .then(function (r) {
+        if (r && r.ticket) { ed.ticket = r.ticket; renderThread(r.ticket); }
+        $("cmtBody").value = "";
+        toast(kind === "question" ? "Question posted" : "Comment added");
+        refresh(true);
+      })
+      .catch(function (e) { toast("Comment failed: " + e.message); });
+  }
+
+  function addLink() {
+    var ed = state.editor; if (!ed || !ed.ticket) return;
+    var verb = $("linkVerb").value, to = $("linkTarget").value;
+    if (!to) return;
+    var slug = editorSlug();
+    mutate("POST", "/api/tickets/" + ed.ticket.id + "/link?project=" + encodeURIComponent(slug), { verb: verb, to: to })
+      .then(function (r) {
+        if (r && r.from) { ed.ticket = r.from; renderLinks(r.from); }
+        toast("Linked " + ed.ticket.ref + " " + (r.type || verb) + " " + to);
+        refresh(true);
+      })
+      .catch(function (e) { toast("Link failed: " + e.message); });
+  }
+
+  function removeLink(ticket, otherRef) {
+    var slug = slugOf(ticket);
+    mutate("DELETE", "/api/tickets/" + ticket.id + "/link/" + encodeURIComponent(otherRef) + "?project=" + encodeURIComponent(slug))
+      .then(function () {
+        ticket.links = (ticket.links || []).filter(function (l) { return String(l.ref).toUpperCase() !== String(otherRef).toUpperCase(); });
+        renderLinks(ticket);
+        toast("Link removed");
+        refresh(true);
+      })
+      .catch(function (e) { toast("Unlink failed: " + e.message); });
   }
 
   function renderAttachments() {
@@ -904,8 +1100,13 @@
     // Only ping when you're not actively looking at the dashboard; when you are,
     // the sidebar badge and the live board already show it.
     if (document.hasFocus && document.hasFocus()) return;
-    var title = t.lastEventType === "created" ? "New side quest · " + t.ref : t.ref + " → " + t.status;
-    var body = t.title + (state.projects.length > 1 && t.projectName ? "  ·  " + t.projectName : "");
+    var lastC = t.comments && t.comments.length ? t.comments[t.comments.length - 1] : null;
+    var title, body;
+    if (t.lastEventType === "question") { title = "❓ Question · " + t.ref; body = lastC ? lastC.body : t.title; }
+    else if (t.lastEventType === "comment") { title = "💬 Comment · " + t.ref; body = (lastC ? lastC.body + "  —  " : "") + t.title; }
+    else if (t.lastEventType === "created") { title = "New side quest · " + t.ref; body = t.title; }
+    else { title = t.ref + " → " + t.status; body = t.title; }
+    if (state.projects.length > 1 && t.projectName) body += "  ·  " + t.projectName;
     try {
       // The tag collapses duplicates when several dashboard tabs are open.
       var n = new Notification(title, { body: body, tag: "sq:" + t.id + ":" + t.updatedAt, icon: iconDataUrl || undefined, silent: false });
@@ -975,6 +1176,29 @@
 
     $("newBtn").addEventListener("click", function () { openEditor(null); });
     $("notifyBtn").addEventListener("click", requestNotify);
+    $("cmtBtn").addEventListener("click", function () { postComment("comment"); });
+    $("askBtn").addEventListener("click", function () { postComment("question"); });
+    $("addLinkBtn").addEventListener("click", addLink);
+
+    // Notification settings popover.
+    var pop = $("settingsPop");
+    $("settingsBtn").addEventListener("click", function (e) {
+      e.stopPropagation();
+      pop.classList.toggle("show");
+      $("settingsBtn").classList.toggle("on", pop.classList.contains("show"));
+    });
+    document.addEventListener("click", function (e) {
+      if (pop.classList.contains("show") && !e.target.closest(".popwrap")) { pop.classList.remove("show"); $("settingsBtn").classList.remove("on"); }
+    });
+    pop.querySelectorAll("input[data-notif]").forEach(function (box) {
+      box.checked = notifyPrefs[box.dataset.notif] !== false;
+      box.addEventListener("change", function () {
+        notifyPrefs[box.dataset.notif] = box.checked;
+        saveNotifyPrefs();
+        lastSig = ""; renderRail(); renderBoard(); // recompute badges under new prefs
+      });
+    });
+
     $("modalClose").addEventListener("click", closeModal);
     $("mCancel").addEventListener("click", closeModal);
     $("mSave").addEventListener("click", saveEditor);

@@ -77,6 +77,9 @@ neither:
 - Claude (or several agents at once) can **work** the board, not just fill it: a ticket is **claimed
   atomically** before anyone touches it, so two agents never do the same task — it's safe to point
   several sessions at one board.
+- Tickets carry **comment threads** — Claude leaves a **question** when it needs your input (and you
+  get pinged) and waits for your reply — and **link into dependencies** (`blocks` / `depends-on`), so a
+  blocked ticket is shown as blocked and skipped by "grab the next task" until its blocker is done.
 - **One board for every project.** Tickets are stored centrally under `~/.claude/sidequest` (keyed by
   project path, never inside your repos), so a single dashboard covers every folder you work in at
   once. The server binds to `127.0.0.1` only — nothing leaves your machine.

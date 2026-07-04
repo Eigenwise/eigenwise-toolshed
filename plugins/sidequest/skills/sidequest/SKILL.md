@@ -10,10 +10,29 @@ description: >-
   "start on the backlog" — which requires atomically CLAIMING a ticket before working it so shared
   boards stay safe across agents. Tickets are stored centrally, so one dashboard shows every project's
   board at once. For capturing a side issue mentioned mid-task, prefer the ticket-filer agent (the
-  capture hook nudges you to it).
+  capture hook nudges you to it). ALSO use this when the user hands you a substantial or multi-part
+  task, a feature with several pieces, or says "split this into tickets" / "plan this out" — decompose
+  it into linked tickets on the board BEFORE implementing, then work them one at a time.
 ---
 
 # sidequest
+
+## Plan substantial work on the board first
+
+When the user gives you a task that is **more than a single small change** — a feature with several
+parts, a request with multiple deliverables, or an explicit "split this into tickets" / "make tickets
+for this" — do this **before writing any code**:
+
+1. **Decompose** it into one ticket per distinct piece of work (`sidequest add ...`).
+2. **Link dependencies** so the order is explicit: `sidequest link SQ-4 depends-on SQ-3`,
+   `sidequest link SQ-2 blocks SQ-8`. (See "Link tickets" below.)
+3. **Work them one at a time**: `claim` a ticket, do it (yourself or via a subagent), `done`, repeat —
+   letting the board be the source of truth for what's left, instead of holding the whole plan in your
+   head or an ad-hoc todo list.
+
+This is the point of having the board: the plan is visible, survives context loss, and other agents can
+pick up unblocked pieces. Don't skip it for anything non-trivial. For a genuinely trivial one-step
+change, just do it — no need to ticket everything.
 
 sidequest is a Trello-light quest log. Tickets live in a central store under `~/.claude/sidequest`
 (keyed by project path), and a bundled dashboard shows them as a live Kanban board — every project at
