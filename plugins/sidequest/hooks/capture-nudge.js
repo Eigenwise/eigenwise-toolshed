@@ -167,8 +167,12 @@ function main() {
         'user says "split into tickets" — create one ticket per piece on the board FIRST and link ' +
         'dependencies (`' +
         cli +
-        ' link A depends-on B`), then work them one at a time (claim → do → `done`) rather than ' +
-        'implementing everything ad hoc.\n' +
+        ' link A depends-on B`), then work the tickets (claim → do → `done`) rather than implementing ' +
+        'everything ad hoc.\n' +
+        '• FAN OUT: when 2+ ready tickets are INDEPENDENT (unblocked, and not editing the same files), ' +
+        'you MUST work them in parallel — spawn one background subagent per ticket, each CLAIMING first ' +
+        '(distinct `--by`); do not grind through independent tickets one at a time. Keep dependent or ' +
+        'same-file tickets sequential.\n' +
         'Board: `' +
         cli +
         ' dashboard`.'

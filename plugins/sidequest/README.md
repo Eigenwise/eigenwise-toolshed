@@ -135,6 +135,20 @@ sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status tod
   timeout (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). On the dashboard, a claimed ticket shows a green
   "working" chip with the worker's id (muted once the claim goes stale).
 
+## Fan out over independent tickets
+
+Because claiming is atomic, Claude doesn't have to work a backlog one ticket at a time — when several
+tickets are **ready and independent**, it works them **in parallel**, one subagent per ticket.
+
+```bash
+sidequest ready [--json]   # the fan-out set: unclaimed, unblocked, not done, not archived
+```
+
+Each subagent `claim`s a different ticket (distinct `--by`) → does the work → `done`; if a claim loses
+a race it just moves on, so two agents never collide. Only **independent** tickets are parallelized —
+anything that shares files or has a `depends-on` link stays sequential (blocked tickets aren't even in
+`ready`). The bundled hook and skill make this the default behavior, not an afterthought.
+
 ## Comments & questions
 
 Every ticket has a comment thread. Claude leaves a **comment** as a note-to-self, or a **question**
@@ -163,8 +177,25 @@ sidequest unlink SQ-4 SQ-3              # remove it
 ```
 
 A ticket that is **blocked by an unfinished ticket** is shown as **⛔ blocked** and is **skipped by
-`next`** — an agent grabbing the top task never picks up work that isn't ready. Once the blocker is
-`done`, it unblocks automatically. On the dashboard, links (and an unlink ✕) live in the ticket detail.
+`next`/`ready`** — an agent grabbing the top task never picks up work that isn't ready. Once the blocker
+is `done`, it unblocks automatically. On the dashboard, links (and an unlink ✕) live in the ticket detail.
+
+## Archive
+
+Finished work piles up in **Done**. Archive it to tuck it away — kept and fully restorable, just out of
+the board's way (hidden from the columns, the counts, `next`, and `ready`).
+
+```bash
+sidequest archive --done       # archive every done ticket (the usual "clear out Done")
+sidequest archive SQ-3         # archive one
+sidequest unarchive SQ-3       # restore it
+sidequest list --archived      # see what's archived
+```
+
+On the dashboard, the **Done** column header has an **Archive all** button, each ticket has an
+**Archive** action in its detail, and a quiet **Archive** entry at the bottom of the sidebar opens a
+separate, list-style archive view (with **Restore** on every row) — deliberately plain and off to the
+side, so it never competes with the live board.
 
 ## CLI
 
@@ -175,9 +206,13 @@ node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui 
 node <plugin>/bin/sidequest.js list [--status todo|doing|done] [--json]
 node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -i
 node <plugin>/bin/sidequest.js rm SQ-3
+node <plugin>/bin/sidequest.js ready [--json]                 # the fan-out set (unclaimed, unblocked)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
 node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket
 node <plugin>/bin/sidequest.js done SQ-3 --by <you>           # finish + release  (release = drop unfinished)
+node <plugin>/bin/sidequest.js link SQ-4 depends-on SQ-3      # dependencies (blocks | depends-on | related)
+node <plugin>/bin/sidequest.js comment SQ-3 -m "note"         # ask = question (pause + await the reply)
+node <plugin>/bin/sidequest.js archive --done                # tuck away all done  ·  unarchive <ref> restores
 node <plugin>/bin/sidequest.js projects [--json]
 node <plugin>/bin/sidequest.js dashboard [--port N] [--no-open]
 node <plugin>/bin/sidequest.js serve [--port N]               # run the server in the foreground

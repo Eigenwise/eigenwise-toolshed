@@ -70,7 +70,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'open', 'help', 'force']);
+      const BOOL = new Set(['json', 'open', 'help', 'force', 'done', 'archived', 'all']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -142,6 +142,8 @@ function cmdAdd(opts) {
 function cmdList(opts) {
   const { slug, meta } = resolveProject(opts);
   let tickets = store.listTickets(slug);
+  // Archived tickets are hidden from the board by default; `--archived` shows only them.
+  tickets = opts.archived ? tickets.filter((t) => t.archived) : tickets.filter((t) => !t.archived);
   if (opts.status) tickets = tickets.filter((t) => t.status === String(opts.status).toLowerCase());
   if (opts.json) {
     process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, tickets }, null, 2) + '\n');
@@ -452,6 +454,73 @@ function cmdUnlink(opts, positional) {
   }
 }
 
+// The set to fan subagents out over: unclaimed, unblocked, not-done, not-archived.
+function cmdReady(opts) {
+  const { slug, meta } = resolveProject(opts);
+  const tickets = store.readyTickets(slug);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, tickets }, null, 2) + '\n');
+    return;
+  }
+  if (!tickets.length) {
+    console.log(`Nothing ready to work in ${meta.name}.`);
+    return;
+  }
+  console.log(`${meta.name} — ${tickets.length} ready to work (unclaimed, unblocked):`);
+  for (const t of tickets) {
+    const pr = PRIORITY_MARK[t.priority] ? ` ${PRIORITY_MARK[t.priority]}` : '';
+    console.log(`    ${t.ref}${pr}  ${t.title}`);
+  }
+  if (tickets.length > 1) {
+    console.log('\nIf these are independent (no shared files), fan out: one subagent per ticket — each claim --by <id> → do → done.');
+  }
+}
+
+function cmdArchive(opts, positional) {
+  const { slug, meta } = resolveProject(opts);
+  // Bulk: archive every done ticket.
+  if (opts.done || opts.all || positional[0] === 'done' || positional[0] === 'all') {
+    const res = store.archiveAllDone(slug, { source: opts.source || 'cli' });
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+      return;
+    }
+    const n = res.archived.length;
+    console.log(`✓ archived ${n} done ticket(s)${n ? ': ' + res.archived.join(', ') : ''}  — ${meta.name}`);
+    return;
+  }
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('archive: pass a ticket ref, or --done to archive all done. e.g. sidequest archive SQ-3  |  sidequest archive --done');
+  const res = store.archiveTicket(slug, idOrRef, { source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) console.log(`✓ archived ${res.ticket.ref}  — ${meta.name}`);
+  else {
+    process.exitCode = 1;
+    console.log(`✗ archive: no ticket "${idOrRef}" in ${meta.name}`);
+  }
+}
+
+function cmdUnarchive(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('unarchive: pass a ticket ref, e.g. sidequest unarchive SQ-3');
+  const { slug, meta } = resolveProject(opts);
+  const res = store.unarchiveTicket(slug, idOrRef, { source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) console.log(`✓ restored ${res.ticket.ref}  — ${meta.name}`);
+  else {
+    process.exitCode = 1;
+    console.log(`✗ unarchive: no ticket "${idOrRef}" in ${meta.name}`);
+  }
+}
+
 function cmdProjects(opts) {
   const projects = store.listProjects();
   if (opts.json) {
@@ -599,11 +668,13 @@ Usage:
   sidequest stop                                 stop the running board server
 
 Working the board safely (multi-agent):
+  sidequest ready [--json]                         the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force]   atomically take a ticket (fails if gone/done/claimed)
   sidequest next [--by who] [-p priority]          claim the best available ticket (highest priority first)
   sidequest done <id|SQ-n> [--by who]              mark it done and release the claim
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
+  When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.
 
 Comments:
   sidequest comment <id|SQ-n> -m "body" [--by who] [--kind comment|question]   a note-to-self; keep going
@@ -614,7 +685,12 @@ Comments:
 Links / dependencies:
   sidequest link <id|SQ-n> <blocks|depends-on|related> <id|SQ-n>   relate two tickets (inverse auto-set)
   sidequest unlink <id|SQ-n> <id|SQ-n>             remove the link between two tickets
-  A ticket blocked by an unfinished ticket is skipped by 'next' and shown as blocked.
+  A ticket blocked by an unfinished ticket is skipped by 'next'/'ready' and shown as blocked.
+
+Archive (put finished work out of the way, restorable):
+  sidequest archive <id|SQ-n>                      archive one ticket    ·    --done archives ALL done
+  sidequest unarchive <id|SQ-n>                    restore an archived ticket
+  sidequest list --archived                        list archived tickets
 
 Project selection:
   Defaults to $CLAUDE_PROJECT_DIR or the current directory.
@@ -696,6 +772,16 @@ async function main() {
       break;
     case 'unlink':
       cmdUnlink(opts, positional);
+      break;
+    case 'ready':
+      cmdReady(opts);
+      break;
+    case 'archive':
+      cmdArchive(opts, positional);
+      break;
+    case 'unarchive':
+    case 'restore':
+      cmdUnarchive(opts, positional);
       break;
     case 'projects':
     case 'boards':

@@ -201,17 +201,20 @@ function listProjects() {
     if (!meta) continue;
     const tickets = listTickets(slug);
     const counts = { todo: 0, doing: 0, done: 0 };
+    let archived = 0;
     let lastActivity = meta.createdAt || null;
     for (const t of tickets) {
-      if (counts[t.status] != null) counts[t.status]++;
       if (t.updatedAt && (!lastActivity || t.updatedAt > lastActivity)) lastActivity = t.updatedAt;
+      if (t.archived) { archived++; continue; } // archived tickets don't count toward the board
+      if (counts[t.status] != null) counts[t.status]++;
     }
     out.push({
       slug,
       name: meta.name || slug,
       path: meta.path || '',
       counts,
-      total: tickets.length,
+      total: tickets.length - archived,
+      archived,
       open: counts.todo + counts.doing,
       lastActivity,
     });
@@ -357,6 +360,8 @@ function createTicket(slug, fields) {
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
     claim: null,               // { by, at } when an agent has claimed it to work on
+    archived: false,           // hidden from the board (kept, restorable) once true
+    archivedAt: null,
     source: String(fields.source || 'manual'),
     // Who/what last touched this ticket, and how. The dashboard uses these to
     // decide whether a change was made by the user (source "dashboard") or by
@@ -405,74 +410,94 @@ function normalizeLabels(labels) {
 }
 
 // Apply a partial update. Only known fields are written; unknown keys ignored.
+// Locked (like every other mutator) so a concurrent comment/claim/link append
+// can never be silently overwritten by an update whose read predates it.
 function updateTicket(slug, idOrRef, patch) {
-  const t = getTicket(slug, idOrRef);
-  if (!t) return null;
+  const found = getTicket(slug, idOrRef);
+  if (!found) return null;
   patch = patch || {};
-  const prevStatus = t.status;
-  if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
-  if (patch.description != null) t.description = String(patch.description).trim();
-  if (patch.status != null) t.status = coerceStatus(patch.status, t.status);
-  if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
-  if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
-  if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
-  // Attach any newly supplied images (by path from the CLI, or base64 from the
-  // dashboard). Also allow removing an attached asset by filename.
-  const imgs = Array.isArray(patch.images) ? patch.images : [];
-  for (const src of imgs) {
-    try {
-      t.assets.push(copyAsset(slug, t.id, src));
-    } catch (e) {
-      if (patch.onAssetError) patch.onAssetError(src, e);
-    }
-  }
-  for (const d of asDataImages(patch.imagesData)) {
-    try {
-      t.assets.push(saveAssetData(slug, t.id, d.name, d.buffer));
-    } catch (_) {
-      /* skip */
-    }
-  }
-  if (Array.isArray(patch.removeAssets) && patch.removeAssets.length) {
-    const drop = new Set(patch.removeAssets.map((f) => path.basename(String(f))));
-    t.assets = t.assets.filter((a) => {
-      if (!drop.has(a)) return true;
+  const apply = (t) => {
+    const prevStatus = t.status;
+    if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
+    if (patch.description != null) t.description = String(patch.description).trim();
+    if (patch.status != null) t.status = coerceStatus(patch.status, t.status);
+    if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
+    if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
+    if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
+    // Attach any newly supplied images (by path from the CLI, or base64 from the
+    // dashboard). Also allow removing an attached asset by filename.
+    const imgs = Array.isArray(patch.images) ? patch.images : [];
+    for (const src of imgs) {
       try {
-        fs.unlinkSync(assetPath(slug, t.id, a));
-      } catch (_) {
-        /* ignore */
+        t.assets.push(copyAsset(slug, t.id, src));
+      } catch (e) {
+        if (patch.onAssetError) patch.onAssetError(src, e);
       }
-      return false;
-    });
+    }
+    for (const d of asDataImages(patch.imagesData)) {
+      try {
+        t.assets.push(saveAssetData(slug, t.id, d.name, d.buffer));
+      } catch (_) {
+        /* skip */
+      }
+    }
+    if (Array.isArray(patch.removeAssets) && patch.removeAssets.length) {
+      const drop = new Set(patch.removeAssets.map((f) => path.basename(String(f))));
+      t.assets = t.assets.filter((a) => {
+        if (!drop.has(a)) return true;
+        try {
+          fs.unlinkSync(assetPath(slug, t.id, a));
+        } catch (_) {
+          /* ignore */
+        }
+        return false;
+      });
+    }
+    // Record the event: a status move vs. a plain edit, and who made it. Source
+    // defaults to "cli" (the CLI / a subagent), so only the dashboard tags itself.
+    t.lastEventType = t.status !== prevStatus ? 'status' : 'edit';
+    t.lastEventSource = patch.source ? String(patch.source) : 'cli';
+    t.updatedAt = new Date().toISOString();
+    writeJson(ticketFile(slug, t.id), t);
+    return t;
+  };
+  const lock = ticketLockPath(slug, found.id);
+  const locked = acquireLock(lock); // best-effort: still applies the update if contention outlasts the retries
+  try {
+    const t = getTicket(slug, found.id); // fresh read, under the lock when we have it
+    if (!t) return null;
+    return apply(t);
+  } finally {
+    if (locked) releaseLock(lock);
   }
-  // Record the event: a status move vs. a plain edit, and who made it. Source
-  // defaults to "cli" (the CLI / a subagent), so only the dashboard tags itself.
-  t.lastEventType = t.status !== prevStatus ? 'status' : 'edit';
-  t.lastEventSource = patch.source ? String(patch.source) : 'cli';
-  t.updatedAt = new Date().toISOString();
-  writeJson(ticketFile(slug, t.id), t);
-  return t;
 }
 
+// Locked so a delete can never yank the ticket/lock file out from under a
+// concurrent addComment/claimTicket that still believes it holds the lock.
 function deleteTicket(slug, idOrRef) {
-  const t = getTicket(slug, idOrRef);
-  if (!t) return false;
-  const deletedRef = t.ref;
+  const found = getTicket(slug, idOrRef);
+  if (!found) return false;
+  const deletedRef = found.ref;
+  const lock = ticketLockPath(slug, found.id);
+  const locked = acquireLock(lock);
+  let ok = true;
   try {
-    fs.unlinkSync(ticketFile(slug, t.id));
-  } catch (_) {
-    return false;
+    try {
+      fs.unlinkSync(ticketFile(slug, found.id));
+    } catch (_) {
+      ok = false;
+    }
+    if (ok) {
+      try {
+        fs.rmSync(assetsDir(slug, found.id), { recursive: true, force: true });
+      } catch (_) {
+        /* best effort */
+      }
+    }
+  } finally {
+    if (locked) releaseLock(lock); // also removes the lock file itself
   }
-  try {
-    fs.rmSync(assetsDir(slug, t.id), { recursive: true, force: true });
-  } catch (_) {
-    /* best effort */
-  }
-  try {
-    fs.unlinkSync(ticketLockPath(slug, t.id));
-  } catch (_) {
-    /* best effort */
-  }
+  if (!ok) return false;
   // Drop any links other tickets had pointing at the one we just removed, so no
   // dangling "blocked-by SQ-deleted" leaves a ticket falsely blocked forever.
   try {
@@ -485,6 +510,57 @@ function deleteTicket(slug, idOrRef) {
     /* best effort */
   }
   return true;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Archiving: put finished work out of the way without deleting it
+ *
+ *  An archived ticket is kept (and fully restorable) but hidden from the board,
+ *  the counts, and `next`. This is how "clear out the Done column" works without
+ *  losing the record.
+ * ------------------------------------------------------------------ */
+
+function setArchived(slug, idOrRef, archived, opts) {
+  opts = opts || {};
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    t.archived = !!archived;
+    t.archivedAt = archived ? new Date().toISOString() : null;
+    t.lastEventType = archived ? 'archived' : 'restored';
+    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+    t.updatedAt = new Date().toISOString();
+    writeJson(ticketFile(slug, t.id), t);
+    return { ok: true, ticket: t };
+  });
+}
+
+function archiveTicket(slug, idOrRef, opts) {
+  return setArchived(slug, idOrRef, true, opts);
+}
+function unarchiveTicket(slug, idOrRef, opts) {
+  return setArchived(slug, idOrRef, false, opts);
+}
+
+// Archive every done, not-yet-archived ticket in a project. Returns the refs.
+function archiveAllDone(slug, opts) {
+  const refs = [];
+  for (const t of listTickets(slug)) {
+    if (t.status === 'done' && !t.archived) {
+      const res = setArchived(slug, t.id, true, opts);
+      if (res.ok) refs.push(res.ticket.ref);
+    }
+  }
+  return { ok: true, archived: refs };
+}
+
+function listArchived(slug) {
+  return listTickets(slug).filter((t) => t.archived);
+}
+function listActive(slug) {
+  return listTickets(slug).filter((t) => !t.archived);
 }
 
 /* ------------------------------------------------------------------ *
@@ -648,6 +724,22 @@ function completeTicket(slug, idOrRef, by, opts) {
   return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, { status: 'done' }));
 }
 
+// The tickets that are ready to be worked right now: not done, not archived, not
+// actively claimed, and not blocked by an unfinished ticket. This is the set to
+// fan subagents out over (each still claims before working). Priority-ordered.
+function readyTickets(slug) {
+  return listTickets(slug)
+    .filter((t) => !t.archived)
+    .filter((t) => t.status !== 'done')
+    .filter((t) => !t.claim || isClaimStale(t.claim))
+    .filter((t) => !isBlocked(slug, t))
+    .sort((a, b) => {
+      const pr = priorityRank(a.priority) - priorityRank(b.priority);
+      if (pr !== 0) return pr;
+      return String(a.createdAt).localeCompare(String(b.createdAt));
+    });
+}
+
 // Atomically claim the best available ticket in a project: highest priority
 // first, oldest-first within a priority. Skips done tickets and ones actively
 // claimed by another worker. Returns { ok:true, ticket } or { reason:'empty' }.
@@ -655,6 +747,7 @@ function claimNext(slug, by, opts) {
   opts = opts || {};
   by = String(by || 'agent');
   const candidates = listTickets(slug)
+    .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
     .filter((t) => !t.claim || isClaimStale(t.claim) || t.claim.by === by)
     .filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase())
@@ -681,7 +774,7 @@ function claimNext(slug, by, opts) {
  *  simultaneous comments never clobber each other.
  * ------------------------------------------------------------------ */
 
-const COMMENT_KINDS = ['comment', 'question', 'answer'];
+const COMMENT_KINDS = ['comment', 'question'];
 
 function newCommentId() {
   return 'c_' + Date.now().toString(36) + '_' + crypto.randomBytes(3).toString('hex');
@@ -883,12 +976,18 @@ module.exports = {
   releaseTicket,
   completeTicket,
   claimNext,
+  readyTickets,
   addComment,
   needsResponse,
   linkTickets,
   unlinkTickets,
   openBlockers,
   isBlocked,
+  archiveTicket,
+  unarchiveTicket,
+  archiveAllDone,
+  listArchived,
+  listActive,
   isClaimStale,
   normalizeLabels,
   readServerInfo,

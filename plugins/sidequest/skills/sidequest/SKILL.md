@@ -137,6 +137,30 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
 - **Stale claims** (a worker that crashed or wandered off) are reclaimable after a timeout
   (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min); `--force` overrides a live claim only when you're sure.
 
+## Fan out over independent tickets (do this by default)
+
+When several tickets are **ready and independent**, **work them in parallel** — do not grind through
+them one at a time. This is safe precisely because claiming is atomic: each subagent claims a different
+ticket, and any race just sends the loser to the next one.
+
+A ticket is **ready** when it's not done, not archived, not already claimed, and **not blocked** by an
+unfinished ticket (`sidequest ready` lists exactly this set). Two ready tickets are **independent** when
+neither depends on the other **and** they don't edit the same files.
+
+**How to fan out:**
+
+1. `sidequest ready --json` to see the fan-out-able set.
+2. Spawn **one subagent per ticket**, in a single batch (parallel), each told to:
+   `sidequest claim <ref> --by <unique-id>` → if the claim succeeds, do the work, then
+   `sidequest done <ref> --by <same-id>`; if it fails, stop (someone else has it).
+   Give each a **distinct `--by`** (e.g. the ticket ref).
+3. When a batch finishes, the dependents it unblocked become ready — fan out over the next wave.
+
+**Keep sequential** (don't parallelize) tickets that **depend on each other** or that **touch the same
+files** — parallel edits to one file collide. Link such tickets with `depends-on` so `ready`/`next`
+naturally serialize them. For a large fan-out you may use a subagent workflow; otherwise a batch of
+background subagents is enough.
+
 ## Comments & questions
 
 Every ticket has a comment thread. Post one with `sidequest comment` or `sidequest ask` — the two
@@ -167,6 +191,21 @@ sidequest comments SQ-3                                       # read the thread
   the user's own reply clears it.
 - Check `sidequest list` or `sidequest comments <ref>` for a "❓ awaiting reply" marker — that flags a
   question of yours still unanswered, including ones asked earlier in a different session.
+
+## Link tickets
+
+Relate tickets so the order of work is explicit — a link is stored on both tickets, so set it once
+from either side:
+
+```bash
+sidequest link SQ-4 depends-on SQ-3   # SQ-4 is blocked-by SQ-3 (and SQ-3 blocks SQ-4)
+sidequest link SQ-1 blocks SQ-2       # the other direction
+sidequest link SQ-5 related SQ-6      # a non-blocking association
+sidequest unlink SQ-4 SQ-3            # remove it
+```
+
+A ticket that's `blocked-by` an unfinished one is skipped by `sidequest next` and shown as blocked in
+`sidequest list`, so an agent grabbing top-priority work never picks up something that isn't ready yet.
 
 ## Guidelines
 

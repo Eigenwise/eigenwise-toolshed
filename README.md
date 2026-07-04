@@ -80,6 +80,9 @@ neither:
 - Tickets carry **comment threads** — Claude leaves a **question** when it needs your input (and you
   get pinged) and waits for your reply — and **link into dependencies** (`blocks` / `depends-on`), so a
   blocked ticket is shown as blocked and skipped by "grab the next task" until its blocker is done.
+- Because claiming is atomic, Claude **fans out over independent ready tickets** — one subagent per
+  ticket, in parallel — instead of grinding through them one at a time. And finished work **archives**
+  out of the way (a quiet, restorable side view) so the board stays about what's left.
 - **One board for every project.** Tickets are stored centrally under `~/.claude/sidequest` (keyed by
   project path, never inside your repos), so a single dashboard covers every folder you work in at
   once. The server binds to `127.0.0.1` only — nothing leaves your machine.

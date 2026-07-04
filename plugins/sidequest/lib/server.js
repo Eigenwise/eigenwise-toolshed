@@ -70,18 +70,22 @@ function readBody(req, limitBytes) {
 async function readJsonBody(req) {
   const raw = await readBody(req);
   if (!raw.length) return {};
-  return JSON.parse(raw.toString('utf8'));
+  const parsed = JSON.parse(raw.toString('utf8'));
+  // A body of "null"/"42"/"\"x\"" parses without throwing but isn't an object —
+  // callers do body.foo unconditionally, so coerce here instead of 500ing.
+  return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
 /* ------------------------------------------------------------------ *
  *  Aggregate ticket listing (used by the "All projects" view)
  * ------------------------------------------------------------------ */
 
-function aggregateTickets() {
+function aggregateTickets(archivedOnly) {
   const projects = store.listProjects();
   const out = [];
   for (const p of projects) {
     for (const t of store.listTickets(p.slug)) {
+      if (archivedOnly ? !t.archived : t.archived) continue;
       out.push(Object.assign({}, t, { project: p.slug, projectName: p.name }));
     }
   }
@@ -130,15 +134,18 @@ async function handle(req, res) {
   // --- Tickets: list ---
   if (req.method === 'GET' && pathname === '/api/tickets') {
     const project = q.project ? String(q.project) : 'all';
+    // Board shows active tickets; ?archived=1 returns the archive instead.
+    const archivedOnly = q.archived === '1' || q.archived === 'true';
     if (project === 'all' || project === '') {
-      sendJson(res, 200, { project: 'all', tickets: aggregateTickets() });
+      sendJson(res, 200, { project: 'all', archived: archivedOnly, tickets: aggregateTickets(archivedOnly) });
     } else {
       const meta = store.readMeta(project);
       if (!meta) {
         sendJson(res, 404, { error: 'unknown project' });
         return;
       }
-      sendJson(res, 200, { project, tickets: store.listTickets(project) });
+      const tickets = store.listTickets(project).filter((t) => (archivedOnly ? t.archived : !t.archived));
+      sendJson(res, 200, { project, archived: archivedOnly, tickets });
     }
     return;
   }
@@ -267,6 +274,38 @@ async function handle(req, res) {
     }
     const result = store.unlinkTickets(slug, ulk[1], ulk[2]);
     sendJson(res, result.ok ? 200 : 404, result);
+    return;
+  }
+
+  // --- Tickets: archive / unarchive (/api/tickets/:id/archive|unarchive) ---
+  const ar = /^\/api\/tickets\/([^/]+)\/(archive|unarchive)$/.exec(pathname);
+  if (req.method === 'POST' && ar) {
+    const slug = q.project ? String(q.project) : null;
+    if (!slug || slug === 'all') {
+      sendJson(res, 400, { error: 'project query param is required' });
+      return;
+    }
+    const fn = ar[2] === 'archive' ? store.archiveTicket : store.unarchiveTicket;
+    const result = fn(slug, ar[1], { source: 'dashboard' });
+    sendJson(res, result.ok ? 200 : 404, result);
+    return;
+  }
+
+  // --- Archive all done in a project (/api/archive-done) ---
+  if (req.method === 'POST' && pathname === '/api/archive-done') {
+    const slug = q.project ? String(q.project) : 'all';
+    if (slug === 'all') {
+      // Archive done across every project.
+      const all = [];
+      for (const p of store.listProjects()) all.push(...store.archiveAllDone(p.slug, { source: 'dashboard' }).archived);
+      sendJson(res, 200, { ok: true, archived: all });
+      return;
+    }
+    if (!store.readMeta(slug)) {
+      sendJson(res, 404, { error: 'unknown project' });
+      return;
+    }
+    sendJson(res, 200, store.archiveAllDone(slug, { source: 'dashboard' }));
     return;
   }
 

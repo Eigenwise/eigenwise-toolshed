@@ -100,8 +100,12 @@
   .newbadge.pop { animation: badgepop .35s cubic-bezier(.2,.8,.3,1.2) both; }
   @keyframes badgepop { from { transform: scale(.4); opacity: 0; } }
 
-  .rail-foot { padding: 12px; border-top: 1px solid var(--line-soft); display: flex; align-items: center; gap: 10px; }
-  .live { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); letter-spacing: .04em; }
+  .rail-foot { padding: 10px; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+  .archive-btn { display: flex; align-items: center; gap: 8px; width: 100%; cursor: pointer; background: transparent; border: 1px solid transparent; color: var(--text-faint); font-family: inherit; font-size: 12.5px; padding: 8px 10px; border-radius: 8px; transition: background .13s, color .13s, border-color .13s; }
+  .archive-btn:hover { background: var(--panel-2); color: var(--text-dim); }
+  .archive-btn.active { background: var(--card); border-color: var(--line); color: var(--text); }
+  .archive-btn .ac { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+  .live { display: flex; align-items: center; gap: 7px; padding: 0 4px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); letter-spacing: .04em; }
   .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 0 rgba(53,214,160,.5); }
   .live.on .dot { animation: ping 2.4s ease-out infinite; }
   @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(53,214,160,.45);} 70%,100% { box-shadow: 0 0 0 6px rgba(53,214,160,0);} }
@@ -307,6 +311,25 @@
   .board-empty p { margin: 0; font-size: 13px; max-width: 420px; line-height: 1.6; }
   .board-empty code { font-family: var(--mono); font-size: 12px; color: var(--gold); background: var(--gold-soft); padding: 2px 6px; border-radius: 5px; }
 
+  /* Archive: a quiet, list-style view, deliberately plainer than the board */
+  .archive-wrap { grid-column: 1 / -1; max-width: 860px; }
+  .archive-top { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+  .archive-top h2 { margin: 0; font-size: 16px; font-weight: 600; color: var(--text-dim); }
+  .archive-top .sub { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+  .arow { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel); margin-bottom: 8px; opacity: .82; transition: opacity .13s, border-color .13s; }
+  .arow:hover { opacity: 1; border-color: var(--line); }
+  .arow .ref { flex: none; }
+  .arow .adot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .arow .atitle { flex: 1 1 auto; font-size: 13.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .arow:hover .atitle { color: var(--text); }
+  .arow .aproj { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+  .arow .awhen { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); flex: none; }
+  .arow .restore { flex: none; cursor: pointer; font-family: var(--sans); font-size: 12px; color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--line-soft); padding: 5px 11px; border-radius: 7px; transition: all .12s; }
+  .arow .restore:hover { color: var(--mint); border-color: rgba(53,214,160,.4); }
+  .archive-empty { color: var(--text-faint); font-size: 13px; padding: 6vh 4px; text-align: center; }
+  .col-archive { margin-left: auto; cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--text-faint); background: transparent; border: 1px solid var(--line-soft); padding: 3px 9px; border-radius: 7px; transition: all .12s; }
+  .col-archive:hover { color: var(--text-dim); border-color: var(--line); background: var(--panel-2); }
+
   /* ---------- Responsive ---------- */
   @media (max-width: 820px) {
     .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
@@ -348,6 +371,10 @@
     <div class="rail-head">Boards</div>
     <nav class="projects" id="projects" aria-label="Projects"></nav>
     <div class="rail-foot">
+      <button class="archive-btn" id="archiveBtn" title="View archived tickets">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+        <span>Archive</span><span class="ac" id="archiveCount"></span>
+      </button>
       <span class="live on" id="live"><span class="dot"></span><span id="liveText">live</span></span>
     </div>
   </aside>
@@ -457,6 +484,7 @@
     </div>
     <div class="modal-foot">
       <button class="btn btn-danger" id="mDelete" style="display:none">Delete</button>
+      <button class="btn btn-ghost" id="mArchive" style="display:none">Archive</button>
       <span class="meta" id="mMeta"></span>
       <span class="spacer"></span>
       <button class="btn btn-ghost" id="mCancel">Cancel</button>
@@ -499,7 +527,9 @@
     mutating: 0,              // count of in-flight mutations; pause poll-render while >0
     editor: null,             // { mode:'new'|'edit', ticket, attachments:[{name,base64,url}] }
     notified: null,           // Set of "id|updatedAt" already handled for notifications (null = first load)
-    lastSeen: {}              // slug -> ms epoch you last viewed that board (persisted)
+    lastSeen: {},             // slug -> ms epoch you last viewed that board (persisted)
+    view: "board",            // "board" | "archive"
+    archivedTickets: []       // loaded on demand for the archive view
   };
   var lastSig = "";
 
@@ -647,6 +677,15 @@
     nav.appendChild(projButton({ slug: "all", name: "All boards", path: state.projects.length + " project" + (state.projects.length === 1 ? "" : "s"), counts: totals, open: totals.open }, true));
 
     state.projects.forEach(function (p) { nav.appendChild(projButton(p, false)); });
+
+    // Archive button reflects the archived count for the current scope + active state.
+    var arch = state.projects.reduce(function (n, p) {
+      return n + (state.current === "all" || state.current === p.slug ? p.archived || 0 : 0);
+    }, 0);
+    var ac = $("archiveCount"); if (ac) ac.textContent = arch ? String(arch) : "";
+    var ab = $("archiveBtn"); if (ab) ab.classList.toggle("active", state.view === "archive");
+    // While viewing the archive, no project row is the "active" board.
+    if (state.view === "archive") { nav.querySelectorAll(".proj.active").forEach(function (el2) { el2.classList.remove("active"); }); }
   }
 
   function projButton(p, isAll) {
@@ -737,7 +776,8 @@
       var items = tickets.filter(function (t) { return t.status === col.k; }).sort(function (a, b) { return (b.order || 0) - (a.order || 0); });
       var colEl = el("div", "col");
       colEl.dataset.status = col.k;
-      colEl.innerHTML = '<div class="col-head"><span class="flag"></span><span class="h">' + col.label + '</span><span class="n">' + items.length + '</span></div>';
+      var headExtra = col.k === "done" && items.length ? '<button class="col-archive" id="archiveAllBtn">Archive all</button>' : "";
+      colEl.innerHTML = '<div class="col-head"><span class="flag"></span><span class="h">' + col.label + '</span><span class="n">' + items.length + '</span>' + headExtra + '</div>';
       var body = el("div", "col-body");
       if (!items.length) {
         body.appendChild(el("div", "empty", col.k === "todo" ? "Quiet for now.<br><b>New quests appear here.</b>" : (col.k === "doing" ? "Nothing in progress." : "Nothing shipped yet.")));
@@ -795,7 +835,7 @@
 
     c.innerHTML =
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge +
-      '<span class="prio-tag" data-p="' + t.priority + '">' + t.priority + '</span></div>' +
+      '<span class="prio-tag" data-p="' + esc(t.priority) + '">' + esc(t.priority) + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
       '<div class="foot">' + qChip + blockedChip + claim + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
 
@@ -876,6 +916,9 @@
     setSeg($("mPriority"), isEdit ? ticket.priority : "normal");
     setSeg($("mStatus"), isEdit ? ticket.status : "todo");
     $("mDelete").style.display = isEdit ? "" : "none";
+    var ab = $("mArchive");
+    ab.style.display = isEdit ? "" : "none";
+    if (isEdit) ab.textContent = ticket.archived ? "Restore" : "Archive";
     $("mMeta").textContent = isEdit ? ("created " + fullTime(ticket.createdAt) + " · updated " + fullTime(ticket.updatedAt)) : "";
 
     // Board selector: shown only when creating from the "All boards" view.
@@ -910,7 +953,7 @@
       var target = ticketByRef(l.ref);
       var doneMark = target && target.status === "done" ? " ✓" : "";
       var pill = el("span", "linkpill " + l.type);
-      pill.innerHTML = '<span class="lt">' + (verb[l.type] || l.type) + '</span> ' + esc(l.ref) + doneMark + ' <span class="x" title="Remove link">✕</span>';
+      pill.innerHTML = '<span class="lt">' + esc(verb[l.type] || l.type) + '</span> ' + esc(l.ref) + doneMark + ' <span class="x" title="Remove link">✕</span>';
       pill.querySelector(".x").addEventListener("click", function () { removeLink(ticket, l.ref); });
       box.appendChild(pill);
     });
@@ -1054,13 +1097,32 @@
     }).catch(function (e) { toast("Delete failed: " + e.message); });
   }
 
+  function archiveAction(id, slug, archive) {
+    mutate("POST", "/api/tickets/" + id + "/" + (archive ? "archive" : "unarchive") + "?project=" + encodeURIComponent(slug))
+      .then(function () { toast(archive ? "Archived" : "Restored"); refresh(true); })
+      .catch(function (e) { toast((archive ? "Archive" : "Restore") + " failed: " + e.message); });
+  }
+  function archiveModalTicket() {
+    var ed = state.editor; if (!ed || !ed.ticket) return;
+    var t = ed.ticket;
+    closeModal();
+    archiveAction(t.id, slugOf(t), !t.archived);
+  }
+  function archiveAllDone() {
+    mutate("POST", "/api/archive-done?project=" + encodeURIComponent(state.current))
+      .then(function (r) { var n = (r.archived || []).length; toast(n ? "Archived " + n + " done ticket" + (n > 1 ? "s" : "") : "Nothing done to archive"); refresh(true); })
+      .catch(function (e) { toast("Archive failed: " + e.message); });
+  }
+
   // ---------------- lightbox ----------------
   function openLightbox(src) { $("lightboxImg").src = src; $("lightbox").classList.add("show"); }
 
   // ---------------- navigation ----------------
   function selectProject(slug) {
-    if (state.current === slug) return;
+    var wasArchive = state.view === "archive";
+    if (state.current === slug && !wasArchive) return;
     state.current = slug;
+    state.view = "board";
     state.seen = null;
     lastSig = "";
     markSeen(slug);            // opening a board clears its unread badge
@@ -1069,11 +1131,55 @@
     loadTickets().then(function () { renderBoard(); lastSig = signature(); });
   }
 
+  // ---------------- archive view ----------------
+  function loadArchived() {
+    return api("/api/tickets?archived=1&project=" + encodeURIComponent(state.current)).then(function (d) {
+      state.archivedTickets = (d.tickets || []).map(function (t) { t._slug = t.project || state.current; return t; });
+    });
+  }
+  function openArchive() {
+    if (state.view === "archive") { selectProject(state.current); return; } // toggle back to board
+    state.view = "archive";
+    lastSig = "";
+    renderRail();
+    loadArchived().then(renderArchive);
+  }
+  function renderArchive() {
+    var board = $("board");
+    var items = state.archivedTickets.slice().sort(function (a, b) { return String(b.archivedAt || b.updatedAt).localeCompare(String(a.archivedAt || a.updatedAt)); });
+    var scopeName = state.current === "all" ? "all boards" : (state.projects.filter(function (p) { return p.slug === state.current; })[0] || {}).name || state.current;
+    $("boardTitle").textContent = "Archive";
+    $("boardSub").textContent = "finished work, tucked away · " + esc(scopeName);
+    var head =
+      '<div class="archive-top"><h2>Archive</h2><span class="sub">' + items.length + " archived · " + esc(scopeName) + "</span></div>";
+    if (!items.length) {
+      board.innerHTML = '<div class="archive-wrap">' + head + '<div class="archive-empty">Nothing archived yet. Finish tickets, then use <b>Archive all</b> on the Done column to tuck them away here.</div></div>';
+      return;
+    }
+    var pcolor = { urgent: "var(--urgent)", high: "var(--high)", normal: "var(--normal)", low: "var(--low)" };
+    var rows = items.map(function (t) {
+      var badge = state.current === "all" && t.projectName ? '<span class="aproj">' + esc(t.projectName) + "</span>" : "";
+      return (
+        '<div class="arow" data-id="' + t.id + '" data-slug="' + esc(t._slug) + '">' +
+        '<span class="adot" style="background:' + (pcolor[t.priority] || "var(--normal)") + '"></span>' +
+        '<span class="ref">' + esc(t.ref) + "</span>" +
+        '<span class="atitle">' + esc(t.title) + "</span>" + badge +
+        '<span class="awhen">' + relTime(t.archivedAt || t.updatedAt) + "</span>" +
+        '<button class="restore" data-restore="' + t.id + '" data-slug="' + esc(t._slug) + '">Restore</button>' +
+        "</div>"
+      );
+    }).join("");
+    board.innerHTML = '<div class="archive-wrap">' + head + rows + "</div>";
+  }
+
   // ---------------- polling ----------------
   function refresh(force) {
     return Promise.all([loadProjects(), loadTickets()]).then(function () {
       processEvents();         // fire desktop notifications for background changes
       renderRail();            // reflect unread badges (may change even when the board doesn't)
+      if (state.view === "archive") {
+        return loadArchived().then(renderArchive);
+      }
       var sig = signature();
       if (force || (sig !== lastSig && !state.dragging && state.mutating === 0)) {
         renderBoard();
@@ -1189,6 +1295,22 @@
     $("cmtBtn").addEventListener("click", function () { postComment("comment"); });
     $("askBtn").addEventListener("click", function () { postComment("question"); });
     $("addLinkBtn").addEventListener("click", addLink);
+    $("archiveBtn").addEventListener("click", openArchive);
+    $("mArchive").addEventListener("click", archiveModalTicket);
+
+    // Delegated clicks inside the board area: Archive-all (Done column), and the
+    // archive view's Restore buttons + row titles.
+    $("board").addEventListener("click", function (e) {
+      if (e.target.closest("#archiveAllBtn")) { archiveAllDone(); return; }
+      var rb = e.target.closest("[data-restore]");
+      if (rb) { archiveAction(rb.getAttribute("data-restore"), rb.getAttribute("data-slug"), false); return; }
+      var title = e.target.closest(".arow .atitle");
+      if (title) {
+        var row = title.closest(".arow");
+        var t = state.archivedTickets.filter(function (x) { return x.id === row.getAttribute("data-id"); })[0];
+        if (t) openEditor(t);
+      }
+    });
 
     // Notification settings popover.
     var pop = $("settingsPop");
