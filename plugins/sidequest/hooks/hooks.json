@@ -1,0 +1,16 @@
+{
+  "description": "sidequest: on every prompt, nudge Claude to capture a mentioned side issue as a ticket without derailing the current task",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/capture-nudge.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

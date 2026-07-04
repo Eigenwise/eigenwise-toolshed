@@ -5,8 +5,33 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "plugins": [
+    {
+      "name": "sidequest",
+      "source": "./plugins/sidequest",
+      "description": "A Trello-light quest log for Claude Code. Side issues you mention mid-task (\"oh, and the contact form doesn't send\") get captured as tickets on the spot, with any pasted images attached, and managed on a live, self-hosted Kanban dashboard that spans every project you work in.",
+      "version": "1.1.0-pre.1",
+      "author": {
+        "name": "Eigenwise"
+      },
+      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest",
+      "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+      "license": "MIT",
+      "category": "workflow",
+      "keywords": [
+        "tickets",
+        "kanban",
+        "trello",
+        "board",
+        "issues",
+        "todo",
+        "dashboard",
+        "workflow",
+        "hooks",
+        "capture"
+      ]
+    },
     {
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",

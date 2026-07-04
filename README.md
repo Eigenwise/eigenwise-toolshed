@@ -10,6 +10,7 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 |--------|--------------|
 | [**codebase-mapper**](./plugins/codebase-mapper) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
 | [**live-rules**](./plugins/live-rules) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
+| [**sidequest**](./plugins/sidequest) | A Trello-light quest log. The stray issues you mention mid-task ("oh, and the contact form doesn't send") get captured as tickets on the spot, with any pasted image attached, and land on a live, self-hosted Kanban dashboard that spans every project you work in. |
 
 *More tools will move into the shed over time.*
 
@@ -19,6 +20,7 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 /plugin marketplace add Eigenwise/eigenwise-toolshed
 /plugin install codebase-mapper@eigenwise-toolshed
 /plugin install live-rules@eigenwise-toolshed
+/plugin install sidequest@eigenwise-toolshed
 ```
 
 Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.
@@ -54,6 +56,30 @@ matters when you touch a `.tsx` file, a deploy checklist only matters when you d
 Two skills help: `add-rule` writes a rule from a plain-English request, and `manage-rules` lists,
 audits, and toggles them. Hand-editing works just as well. The [plugin README](./plugins/live-rules)
 is a full userguide.
+
+## Why sidequest?
+
+You're mid-task and you toss out a stray issue: *"oh, and the checkout throws on Safari."* Normally
+that either derails what Claude is doing or gets forgotten three messages later. sidequest does
+neither:
+
+- A bundled `UserPromptSubmit` hook spots the side issue and nudges Claude to **capture it as a ticket
+  without stopping** the work in progress — a background `ticket-filer` subagent writes it while the
+  main task keeps moving.
+- **Pasted images become attachments.** Paste a screenshot with your message and it's copied into the
+  ticket (as real bytes, so it survives Claude Code's ephemeral image cache) and shown on the card.
+- Ask *"show me the dashboard"* (or run `/sidequest:board`) and a **live, self-hosted Kanban board**
+  opens in your browser. It polls, so new tickets appear and animate in on their own; drag cards
+  between To do / Doing / Done, edit, filter, and search.
+- When Claude changes the board while you're heads-down elsewhere, you get a **desktop notification**
+  and an **unread badge** on that project in the sidebar — but only for Claude's changes, never your
+  own dashboard edits.
+- **One board for every project.** Tickets are stored centrally under `~/.claude/sidequest` (keyed by
+  project path, never inside your repos), so a single dashboard covers every folder you work in at
+  once. The server binds to `127.0.0.1` only — nothing leaves your machine.
+
+Manage it all from chat ("make a ticket for X", "close SQ-3", "what's open") or the bundled CLI. The
+[plugin README](./plugins/sidequest) is the full userguide.
 
 ## About
 
