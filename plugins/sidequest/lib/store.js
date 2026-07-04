@@ -374,6 +374,7 @@ function createTicket(slug, fields) {
     order: Date.now(),
   };
   writeJson(ticketFile(slug, id), ticket);
+  queueEventNotification(slug, ticket, 'created', ticket.lastEventSource);
   return ticket;
 }
 
@@ -469,6 +470,7 @@ function updateTicket(slug, idOrRef, patch) {
     t.lastEventSource = patch.source ? String(patch.source) : 'cli';
     t.updatedAt = new Date().toISOString();
     writeJson(ticketFile(slug, t.id), t);
+    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return t;
   };
   const lock = ticketLockPath(slug, found.id);
@@ -700,6 +702,7 @@ function claimTicket(slug, idOrRef, by, opts) {
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
     writeJson(ticketFile(slug, t.id), t);
+    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t };
   });
 }
@@ -724,6 +727,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
     writeJson(ticketFile(slug, t.id), t);
+    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t };
   });
 }
@@ -835,6 +839,7 @@ function addComment(slug, idOrRef, fields) {
     t.lastEventSource = source;
     t.updatedAt = comment.at;
     writeJson(ticketFile(slug, t.id), t);
+    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource, { commentBody: comment.body });
     return { ok: true, ticket: t, comment };
   });
 }
@@ -979,6 +984,13 @@ function isBlocked(slug, ticket) {
 
 const NOTIFICATION_KINDS = ['question', 'comment', 'created', 'status', 'reminder'];
 
+// The four background-event kinds a user can opt in/out of from the dashboard's
+// settings popover (a 'reminder' notification isn't optional this way — only
+// *when* it fires is, via fireAt). Kept server-side, not just in the dashboard's
+// localStorage, so the queue below can honor the same opt-outs even when no
+// dashboard tab is open to gate on the client's behalf.
+const NOTIFY_PREF_DEFAULTS = { question: true, comment: true, created: true, status: true };
+
 // How many *read* notifications to retain. Unread ones are always kept; this
 // only caps the tail of already-seen history so the file can't grow forever.
 const MAX_READ_KEPT = 100;
@@ -1060,12 +1072,90 @@ function addNotification(fields) {
     createdAt: now,
     readAt: null,
     fireAt: fields.fireAt ? String(fields.fireAt) : null,
+    // Only set by queueEventNotification(), purely to dedupe a background-event
+    // notification against the ticket mutation that produced it; unused/null
+    // for a manually-scheduled reminder.
+    ticketEventAt: fields.ticketEventAt ? String(fields.ticketEventAt) : null,
   };
   return withNotificationsLock(() => {
     const list = readNotifications();
     list.push(notification);
     writeNotifications(pruneReadList(list));
     return notification;
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ *  Notify prefs (server-side mirror of the dashboard's opt-in/out settings)
+ *
+ *  A tiny sibling file to notifications.json. The dashboard used to keep this
+ *  purely in localStorage, which meant the client had to be open to gate a
+ *  background event; now the queue below checks the same server-side copy so
+ *  an opted-out kind is never enqueued in the first place, tab or no tab.
+ * ------------------------------------------------------------------ */
+
+function notifyPrefsFile() {
+  return path.join(projectsRoot(), 'notify-prefs.json');
+}
+
+// Read the saved opt-in/out settings. Missing/corrupt file -> all on, matching
+// the dashboard's own NOTIFY_DEFAULTS.
+function getNotifyPrefs() {
+  const saved = readJson(notifyPrefsFile(), null);
+  const merged = Object.assign({}, NOTIFY_PREF_DEFAULTS, saved && typeof saved === 'object' ? saved : {});
+  const out = {};
+  for (const k of Object.keys(NOTIFY_PREF_DEFAULTS)) out[k] = merged[k] !== false;
+  return out;
+}
+
+// Persist a partial or full set of opt-in/out prefs. Unknown keys are dropped.
+function setNotifyPrefs(patch) {
+  const next = Object.assign({}, getNotifyPrefs(), patch || {});
+  const out = {};
+  for (const k of Object.keys(NOTIFY_PREF_DEFAULTS)) out[k] = next[k] !== false;
+  writeJson(notifyPrefsFile(), out);
+  return out;
+}
+
+// Build the title/body for a background-event notification, mirroring the
+// dashboard's own maybeNotify() toast copy so a persisted inbox entry reads the
+// same as the desktop toast the user may also have seen for the same event.
+function eventNotificationCopy(ticket, kind, extra) {
+  extra = extra || {};
+  const ref = ticket.ref;
+  if (kind === 'question') return { title: `❓ Question · ${ref}`, body: extra.commentBody || ticket.title };
+  if (kind === 'comment') {
+    return { title: `💬 Comment · ${ref}`, body: extra.commentBody ? `${extra.commentBody}  —  ${ticket.title}` : ticket.title };
+  }
+  if (kind === 'created') return { title: `New side quest · ${ref}`, body: ticket.title };
+  return { title: `${ref} → ${ticket.status}`, body: ticket.title }; // 'status'
+}
+
+// The server-side counterpart to the dashboard's old isBackgroundChange(): a
+// mutation made by something other than the dashboard itself (Claude/the CLI),
+// of a kind the user hasn't opted out of, gets a durable inbox entry. Called
+// right where each mutator below stamps lastEventType/lastEventSource, so it
+// fires exactly once per real event — no polling/diffing needed — and works
+// even with no dashboard tab open (the whole point: reminders and this queue
+// now share one seam instead of the client deriving toasts from ticket diffs).
+// Dedupes on ticketId+kind+the ticket's own updatedAt so a retried mutation (or
+// any other double-call) can never enqueue the same event twice.
+function queueEventNotification(slug, ticket, kind, source, extra) {
+  if (!ticket || !source || String(source) === 'dashboard') return null; // your own action never notifies you
+  if (NOTIFY_PREF_DEFAULTS[kind] == null) return null; // not an opt-in-able kind (e.g. 'edit'/'archived')
+  if (!getNotifyPrefs()[kind]) return null; // opted out in settings
+  const eventAt = ticket.updatedAt;
+  const dup = readNotifications().some((n) => n.ticketId === ticket.id && n.kind === kind && n.ticketEventAt === eventAt);
+  if (dup) return null;
+  const copy = eventNotificationCopy(ticket, kind, extra);
+  return addNotification({
+    kind,
+    title: copy.title,
+    body: copy.body,
+    projectSlug: slug,
+    ticketRef: ticket.ref,
+    ticketId: ticket.id,
+    ticketEventAt: eventAt,
   });
 }
 
@@ -1189,6 +1279,8 @@ module.exports = {
   markAllRead,
   dismiss,
   pruneRead,
+  getNotifyPrefs,
+  setNotifyPrefs,
   readServerInfo,
   writeServerInfo,
   clearServerInfo,

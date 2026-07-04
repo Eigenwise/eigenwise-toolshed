@@ -622,6 +622,23 @@
   var notifyPrefs = NOTIFY_DEFAULTS;
   try { notifyPrefs = Object.assign({}, NOTIFY_DEFAULTS, JSON.parse(localStorage.getItem("sq_notify") || "{}")); } catch (_) {}
   function saveNotifyPrefs() { try { localStorage.setItem("sq_notify", JSON.stringify(notifyPrefs)); } catch (_) {} }
+  // The server keeps its own copy of these prefs so it can gate the persistent
+  // notification queue the same way even with no dashboard tab open (see
+  // store.queueEventNotification). Pull it in on load — server wins over a
+  // stale localStorage copy — and push local changes back out when they happen.
+  function syncNotifyPrefsFromServer() {
+    return api("/api/notify-prefs").then(function (d) {
+      if (!d || !d.prefs) return;
+      notifyPrefs = Object.assign({}, NOTIFY_DEFAULTS, d.prefs);
+      saveNotifyPrefs();
+      var pop = $("settingsPop");
+      if (pop) pop.querySelectorAll("input[data-notif]").forEach(function (box) { box.checked = notifyPrefs[box.dataset.notif] !== false; });
+      lastSig = ""; renderRail();
+    }).catch(function () { /* offline, or an older server without this route yet - keep local prefs */ });
+  }
+  function pushNotifyPrefs() {
+    api("/api/notify-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(notifyPrefs) }).catch(function () {});
+  }
 
   // Sort choice is board-wide and persisted across reloads.
   try {
@@ -1556,6 +1573,7 @@
       box.addEventListener("change", function () {
         notifyPrefs[box.dataset.notif] = box.checked;
         saveNotifyPrefs();
+        pushNotifyPrefs(); // keep the server's gate for the persistent inbox in sync too
         lastSig = ""; renderRail(); renderBoard(); // recompute badges under new prefs
       });
     });
@@ -1591,6 +1609,7 @@
   wire();
   makeIcon();
   initNotifications();
+  syncNotifyPrefsFromServer();
   refresh(true).then(function () {
     // Land on the busiest single board if there's exactly one, else keep "All".
     if (state.projects.length === 1) selectProject(state.projects[0].slug);

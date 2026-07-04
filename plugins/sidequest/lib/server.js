@@ -359,6 +359,26 @@ async function handle(req, res) {
     return;
   }
 
+  // --- Notify prefs: which background-event kinds get queued as notifications
+  // (question/comment/created/status). Kept server-side (not just the
+  // dashboard's localStorage) so the queue can honor an opt-out even with no
+  // dashboard tab open — see store.queueEventNotification(). ---
+  if (req.method === 'GET' && pathname === '/api/notify-prefs') {
+    sendJson(res, 200, { prefs: store.getNotifyPrefs() });
+    return;
+  }
+  if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/notify-prefs') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    sendJson(res, 200, { prefs: store.setNotifyPrefs(body) });
+    return;
+  }
+
   // --- Assets: /api/asset/:slug/:id/:filename ---
   const am = /^\/api\/asset\/([^/]+)\/([^/]+)\/(.+)$/.exec(pathname);
   if (req.method === 'GET' && am) {
