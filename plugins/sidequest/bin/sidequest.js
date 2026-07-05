@@ -112,18 +112,43 @@ function resolveProject(opts) {
 
 const PRIORITY_MARK = { urgent: '!!', high: '!', normal: '', low: '·' };
 
-// Routing marker for a ticket: "⚙tier", "⚙tier·effort", or "⚙any·effort" when
-// only the thinking depth is pinned. Empty when neither is set.
+// Routing marker for a ticket. New tickets carry a complexity score and render
+// "⚙C<n>→tier·effort" (routing derived from the score). Legacy tickets (no
+// complexity, but a stored model/effort) keep the old "⚙tier·effort" form.
 function modelMark(t) {
+  if (t.complexity) return `  ⚙C${t.complexity}→${t.model}${t.effort ? '·' + t.effort : ''}`;
   if (!t.model && !t.effort) return '';
   return `  ⚙${t.model || 'any'}${t.effort ? '·' + t.effort : ''}`;
 }
 
+// Routing is derived from a task-complexity score (1..10) plus a written
+// justification — the filing agent never tags a model/effort directly. `--model`
+// and `--effort` are no longer accepted on either add or update. `requireScore`
+// = add (a valid `--complexity` and a substantive `--why` are both mandatory).
+const WHY_MIN = 20;
+function failDirectRouting() {
+  fail('--model/--effort are no longer set directly — score the task with --complexity (+ --why) and routing is derived from it (see sidequest models for the current ladder)');
+}
+function failComplexity() {
+  fail('--complexity is required on every ticket — an integer 1-10. Score the task: 1-2 mechanical edit, 3-4 routine implementation, 5-6 multi-file feature, 7-8 cross-cutting design, 9-10 novel/hard debugging. Routing (model+effort) is derived from it.');
+}
+function failWhy() {
+  fail('--why is required — motivate the complexity score against the actual task (min 20 chars). This is what makes the score honest.');
+}
+// Reject any explicit --model/--effort on add or update; the routing vocabulary
+// is complexity-based now.
+function guardDirectRouting(opts) {
+  if (opts.model != null || opts.effort != null) failDirectRouting();
+}
+
 function cmdAdd(opts) {
   if (!opts.title) fail('add: --title is required (e.g. sidequest add -t "Contact form does not send")');
+  guardDirectRouting(opts);
+  if (store.coerceComplexity(opts.complexity) == null) failComplexity();
+  if (!opts.why || String(opts.why).trim().length < WHY_MIN) failWhy();
   const { slug, meta } = resolveProject(opts);
   const warnings = [];
-  const ticket = store.createTicket(slug, {
+  const created = store.createTicket(slug, {
     title: opts.title,
     description: opts.desc || opts.description || '',
     priority: opts.priority,
@@ -132,11 +157,14 @@ function cmdAdd(opts) {
     images: opts.image || [],
     files: opts.file,
     storyId: opts.story,
-    model: opts.model,
-    effort: opts.effort,
+    complexity: opts.complexity,
+    complexityWhy: opts.why,
     source: opts.source || 'cli',
     onAssetError: (src) => warnings.push(`could not attach image: ${src}`),
   });
+  // Re-read through getTicket so the returned ticket carries its derived
+  // model/effort (stamped from complexity at read time) for display/JSON.
+  const ticket = store.getTicket(slug, created.ref) || created;
 
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, ticket, warnings }, null, 2) + '\n');
@@ -192,6 +220,7 @@ function cmdList(opts) {
 function cmdUpdate(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('update: pass a ticket id or ref, e.g. sidequest update SQ-4 --status done');
+  guardDirectRouting(opts); // --model/--effort are no longer accepted; route via --complexity
   const { slug, meta } = resolveProject(opts);
   const patch = {};
   if (opts.title != null) patch.title = opts.title;
@@ -202,12 +231,19 @@ function cmdUpdate(opts, positional) {
   if (opts.image != null) patch.images = opts.image;
   if (opts.file != null) patch.files = (opts.file.length === 1 && String(opts.file[0]).toLowerCase() === 'none') ? [] : opts.file;
   if (opts.assignee != null) patch.assignee = opts.assignee;
-  if (opts.model != null) patch.model = opts.model; // tier (opus|sonnet|…) or "any"/"none"/null to clear
-  if (opts.effort != null) patch.effort = opts.effort; // low|medium|high|xhigh|max, or "any"/"none" to clear
+  if (opts.complexity != null) {
+    // A changed score must arrive with a fresh justification — routing derives
+    // from it, so an unmotivated re-score is rejected.
+    if (!opts.why || String(opts.why).trim().length < WHY_MIN) fail('a changed score needs a fresh motivation — pass --why "<motivation>" (min 20 chars) alongside --complexity');
+    patch.complexity = opts.complexity; // coerced/validated in store; invalid score is ignored there
+    patch.complexityWhy = opts.why;
+  }
   if (opts.story != null) patch.storyId = opts.story; // link (US-n / raw id) or clear ("none"/null)
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
-  const updated = store.updateTicket(slug, idOrRef, patch);
-  if (!updated) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
+  const saved = store.updateTicket(slug, idOrRef, patch);
+  if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
+  // Re-read so derived model/effort (stamped from complexity at read time) show.
+  const updated = store.getTicket(slug, saved.ref) || saved;
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, ticket: updated }, null, 2) + '\n');
     return;
@@ -641,14 +677,20 @@ function cmdUnarchive(opts, positional) {
 function cmdModels(opts) {
   const prefs = store.getModelPrefs();
   const routing = prefs.routing !== false;
+  const ladder = store.routingLadder(prefs);
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ routing, models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ routing, models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS, ladder }, null, 2) + '\n');
     return;
   }
   console.log(`Routing: ${routing ? 'on' : 'off'}`);
   console.log('Model tiers (toggle in the dashboard settings):');
   for (const m of store.VALID_MODELS) console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}`);
   console.log(`Effort levels: ${store.VALID_EFFORTS.join(', ')}  (haiku has no effort support)`);
+  console.log('Complexity ladder (score → derived routing):');
+  for (const rung of ladder) {
+    const label = `C${rung.complexity}`.padEnd(3);
+    console.log(`  ${label}  ${rung.model}${rung.effort ? '·' + rung.effort : ''}`);
+  }
 }
 
 function cmdProjects(opts) {
@@ -905,9 +947,9 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done] [--model tier]
+  sidequest add -t "title" --complexity 1-10 --why "<motivation>" [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json]
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--model tier|any]
+  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--complexity 1-10 --why "<motivation>"]
   sidequest rm <id|SQ-n>
   sidequest projects [--json]
   sidequest dashboard [--port N] [--no-open]     open the live board in the browser
@@ -926,15 +968,17 @@ Working the board safely (multi-agent):
     several; "none" clears (update only). 'ready' groups tickets into parallel-safe waves by declared file
     scope: tickets in the same wave never touch overlapping files/directories; untagged tickets never conflict.
 
-Model tier + effort (route work by capability AND thinking depth):
-  sidequest add ... --model <opus|sonnet|haiku|fable|any> [--effort <low|medium|high|xhigh|max|any>]
-  sidequest update <id|SQ-n> --model <tier|any> --effort <level|any>   set/clear either half of the dial
-  sidequest ready --model <tier>  ·  sidequest next --model <tier>   only claim tickets tagged that tier or untagged
-  sidequest models [--json]                        which tiers the user allows (dashboard setting) + effort levels
-  Tag planning/design work for the top tier and execution work a tier below (e.g. --model sonnet --effort low for
-  mechanical fixes, --model opus --effort xhigh for hard design). A --model X worker only picks up X-tagged or
-  untagged tickets. Sidequest can't force a model or effort — it records the tag (⚙tier·effort on list/ready) and
-  the orchestrator routes by reading it. Haiku has no effort support; never combine haiku with an effort level.
+Complexity → routing (score the task; model + effort are derived, never tagged directly):
+  sidequest add ... --complexity <1-10> --why "<motivation>"
+    BOTH are REQUIRED on add. Score the task (1-2 mechanical edit, 3-4 routine implementation, 5-6 multi-file
+    feature, 7-8 cross-cutting design, 9-10 novel/hard debugging); --why motivates it (min 20 chars). Routing
+    (model+effort) is derived from the score — see "sidequest models" for the current ladder.
+  sidequest update <id|SQ-n> --complexity <1-10> --why "<motivation>"   re-score (a changed score needs a fresh --why)
+  --model / --effort are no longer accepted — routing comes from the complexity score.
+  sidequest ready --model <tier>  ·  sidequest next --model <tier>   FILTER by the derived tier (still valid)
+  sidequest models [--json]                        which tiers the user allows + the live complexity ladder
+  Sidequest can't force a model or effort — it records the score and derives the tag (⚙C<n>→tier·effort on
+  list/ready); the orchestrator routes by reading it. Haiku rungs have no effort.
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)

@@ -107,7 +107,7 @@ Claude decides on its own whether an incoming request is a standalone ticket or 
 
 ```bash
 sidequest story add -t "Checkout revamp" --color teal    # prints its US-n ref
-sidequest add -t "Cart totals wrong" --story US-1        # file a ticket straight into the story
+sidequest add -t "Cart totals wrong" --story US-1 --complexity 3 --why "..."   # file a ticket straight into the story
 sidequest update SQ-7 --story US-1                       # or move an existing ticket in (--story none clears)
 sidequest story list                                     # stories with their color + ticket count
 sidequest story show US-1                                # the story and every ticket in it
@@ -119,36 +119,36 @@ story's color as a top rail and a chip, a **Story** filter in the toolbar narrow
 story, and the ticket editor has a **Story** field to pick, clear, or create a story inline. Deleting a
 story keeps its tickets — they're just detached.
 
-## Target model tier + reasoning effort
+## Complexity-driven routing
 
-Tag a ticket with the **agent tier** that should work it and, optionally, the **reasoning effort** it
-deserves — plan with the strongest model thinking hard, execute with a cheaper one thinking light —
-and Claude routes accordingly when working the board.
+Agents don't pick models — they **score the task**. Every ticket is filed with a **complexity score
+(1–10)** and a **mandatory motivation** for it (writing the why is what forces an honest look at the
+task), and sidequest **derives** which model tier works the ticket and at what reasoning effort by
+banding the score over the tiers *you* have enabled. Effort spreads `low → max` within each band —
+the philosophy is **exhaust effort before escalating tier**, since thinking harder on a cheap model
+costs less than renting a bigger one.
 
 ```bash
-sidequest add -t "Design the migration" --model opus --effort xhigh   # hard reasoning
-sidequest add -t "Apply the codemod"    --model sonnet --effort low   # mechanical execution
-sidequest update SQ-8 --model any --effort any                        # clear either half
-sidequest models                                                      # which tiers you allow + effort levels
+sidequest add -t "Apply the codemod" --complexity 2 --why "single mechanical transform, node -c verifies"
+sidequest add -t "Design the migration" --complexity 8 --why "reshapes the store contract; all three consumers must stay compatible"
+sidequest update SQ-8 --complexity 5 --why "wider than scored: it also rewires the reader"   # rescoring needs a fresh why
+sidequest models   # the live ladder: which score routes where right now
 ```
 
-Tiers are `opus | sonnet | haiku | fable` (untagged = any); efforts `low…max` (unset = session
-default). Each card shows a `⚙tier·effort` chip, and `sidequest next --model sonnet` / `ready
---model sonnet` only hand out `sonnet`-tagged **or untagged** tickets — an execution worker never
-picks up a plan-only ticket.
+With `sonnet + opus + fable` enabled the ladder runs `C1-3 → sonnet·low/high/max`, `C4-6 →
+opus·low/high/max`, `C7-10 → fable·low/med/xhigh/max`. **It scales dynamically**: derivation happens
+at read time from the score, so toggling a tier in the gear menu's *Available models* instantly
+re-routes every open ticket — disable fable and your C9s become `opus·xhigh`, no migration. Cards
+show a `⚙C7→opus·max` chip; `ready`/`next --model <tier>` filter by the *derived* tier, so an
+executor never grabs work priced for another tier. Direct `--model`/`--effort` tagging is rejected.
 
-sidequest doesn't *force* a model (nothing can make a running model swap itself mid-task); it records
-the tag and the bundled skill **enforces the routing rules** on Claude: executor models must come from
-what's actually available, **never above the main session's own tier**, chosen by task complexity when
-untagged — and effort is honored via bundled executor agents (`sidequest-exec-low` … `-max`) spawned
-with the ticket's model, since model is set per spawn but effort per agent definition. (Haiku has no
-effort support and is never paired with one.)
-
-**You choose which tiers are offered at all**: gear menu → *Available models* — disable a tier (say,
-haiku) and it disappears from the ticket editor's picker, and Claude treats it as unavailable when
-routing (falling back to the nearest allowed lower tier). Stored server-side; at least one tier always
-stays enabled. The same *Available models* section has a master switch to turn routing off entirely —
-then Claude may work any ticket itself and the ⚙tags become purely informational.
+sidequest doesn't *force* a model (nothing can make a running model swap itself mid-task); the bundled
+skill enforces the flow on Claude: derived routing is honored via bundled executor agents
+(`sidequest-exec-low` … `-max`) spawned with the derived tier — effort lives in the agent definition,
+model in the spawn, so the two compose. (Haiku has no effort support; haiku-derived work uses a plain
+agent.) The same *Available models* section has a master switch to turn routing off entirely — then
+Claude may work any ticket itself and the chips become purely informational. At least one tier always
+stays enabled.
 
 ## File scopes & parallel waves
 
@@ -156,7 +156,7 @@ Declare which files a ticket will touch and the board can tell you **what's safe
 mechanically, instead of hoping two agents don't collide.
 
 ```bash
-sidequest add -t "CLI part" --file bin/cli.js --file README.md   # repeatable; dir prefixes cover subtrees
+sidequest add -t "CLI part" --file bin/cli.js --file README.md --complexity 3 --why "..."   # --file repeatable; dir prefixes cover subtrees
 sidequest update SQ-7 --file none                                # clear the scope
 sidequest ready                                                  # groups the ready set into waves
 ```
@@ -227,6 +227,11 @@ Ask in plain language and the `sidequest` skill maps it to the CLI:
 sidequest isn't just a place to *record* work — Claude (or several agents at once) can **work** it. The
 board may be shared across sessions, browser tabs, or teammates, so a ticket must be **claimed** before
 anyone touches it, and claiming is **atomic**: two workers can never both win the same ticket.
+
+Because tickets get *executed* by agents (often smaller ones), the skill holds descriptions to a
+**developer-to-developer standard**: exact files and functions, the behavioral contract, bounds, and
+how to verify — never a manager's one-liner. The further down the tier ladder a ticket routes, the more
+complete its spec has to be; precision substitutes for model capability.
 
 ```bash
 sidequest next --by <you>          # atomically claim the top-priority available ticket
@@ -315,14 +320,15 @@ side, so it never competes with the live board.
 Every action is a thin wrapper over one script, usable directly too:
 
 ```bash
-node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui -i /path/to/shot.png
+node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui -i /path/to/shot.png --complexity 4 --why "..."
 node <plugin>/bin/sidequest.js list [--status todo|doing|done] [--json]
 node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -i  ·  --story US-1|none
 node <plugin>/bin/sidequest.js rm SQ-3
 node <plugin>/bin/sidequest.js story add -t "Epic" [--color teal]   # group tickets; file into it with --story US-n
 node <plugin>/bin/sidequest.js story list|show US-1|update US-1|rm US-1
-node <plugin>/bin/sidequest.js add -t "Task" --model sonnet --effort low   # tier opus|sonnet|haiku|fable · effort low..max
-node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only sonnet-tagged or untagged work
+node <plugin>/bin/sidequest.js add -t "Task" --complexity 5 --why "..."   # score 1-10 + motivation — BOTH required; routing derived
+node <plugin>/bin/sidequest.js models                               # the live complexity -> tier·effort ladder
+node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only work whose DERIVED tier is sonnet
 node <plugin>/bin/sidequest.js models [--json]                      # the tiers you allow (dashboard setting) + efforts
 node <plugin>/bin/sidequest.js ready [--json]                 # the fan-out set (unclaimed, unblocked)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)

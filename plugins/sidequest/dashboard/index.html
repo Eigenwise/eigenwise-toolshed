@@ -360,6 +360,15 @@
   /* Target-model tier chip: which agent tier should work the ticket. */
   .modelchip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; text-transform: lowercase; }
   .modelchip svg { flex: none; opacity: .9; }
+  /* Live routing ladder in the settings popover: one compact row per rung, so a
+     tier toggle visibly reshapes the complexity -> model·effort mapping. */
+  .ladder-view { display: flex; flex-direction: column; gap: 1px; padding: 2px 4px 4px; }
+  .ladder-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: var(--radius-sm); font-family: var(--mono); font-size: 11px; }
+  .ladder-row:hover { background: var(--panel); }
+  .ladder-row .lc { color: var(--text-faint); width: 24px; flex: none; }
+  .ladder-row .ldot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .ladder-row .lr { color: var(--text-dim); }
+  .ladder-empty { font-size: 11.5px; color: var(--text-faint); padding: 4px 6px; }
   /* Story field in the ticket editor: a swatch beside the select, and the
      inline "new story" panel with a palette picker. */
   .story-select-row { display: flex; align-items: center; gap: 9px; }
@@ -600,6 +609,8 @@
           <div class="proj-notify-list" id="projNotifyList"></div>
           <div class="pop-head">Available models</div>
           <div class="model-pref-list" id="modelPrefList"></div>
+          <div class="pop-head">Routing ladder</div>
+          <div class="ladder-view" id="ladderView"></div>
           <div class="pop-foot">The kinds above apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
         </div>
       </div>
@@ -681,12 +692,13 @@
           </div>
         </div>
         <div class="field">
-          <label>Model</label>
-          <div class="seg model" id="mModel"></div>
+          <label>Complexity</label>
+          <div class="seg complexity" id="mComplexity"></div>
+          <div class="claim-hint" id="mDerived" style="display:none"></div>
         </div>
         <div class="field">
-          <label>Effort</label>
-          <div class="seg effort" id="mEffort"></div>
+          <label for="mWhy">Why this score</label>
+          <textarea id="mWhy" placeholder="Why this score? Reference the actual work (min 20 chars)" style="min-height:48px"></textarea>
         </div>
         <div class="field">
           <label for="mLabels">Labels</label>
@@ -779,19 +791,18 @@
   // Mirrors store.STORY_PALETTE — the swatches offered when creating a story from
   // the dashboard. The server still auto-assigns when none is picked.
   var STORY_PALETTE = ["#c2683f", "#3f8f8a", "#7a5ba8", "#7d8a3f", "#b45573", "#4a72a8", "#c19a3e", "#4f8f6a"];
-  // Target-model tiers (mirrors store.VALID_MODELS). "Any" = untagged. Each tier
-  // gets a distinct on-brand accent so the card chip is glanceable.
+  // Target-model tiers (mirrors store.VALID_MODELS). Mandatory on every ticket
+  // — the filer must pick one; there is no default. Each tier gets a distinct
+  // on-brand accent so the card chip is glanceable.
   var MODELS = [
-    { k: "any", label: "Any" }, { k: "opus", label: "Opus" }, { k: "sonnet", label: "Sonnet" },
+    { k: "opus", label: "Opus" }, { k: "sonnet", label: "Sonnet" },
     { k: "haiku", label: "Haiku" }, { k: "fable", label: "Fable" }
   ];
   var MODEL_COLORS = { opus: "#404683", sonnet: "#3f8f8a", haiku: "#a8672e", fable: "#7a5ba8" };
-  // Reasoning-effort levels (mirrors store.VALID_EFFORTS). "Default" = unset —
-  // the executor inherits the session's effort. Rides with model as one dial.
-  var EFFORTS = [
-    { k: "any", label: "Default" }, { k: "low", label: "Low" }, { k: "medium", label: "Med" },
-    { k: "high", label: "High" }, { k: "xhigh", label: "XHigh" }, { k: "max", label: "Max" }
-  ];
+  // Complexity is the single mandatory dial (1..10) the filer sets; the server
+  // derives model·effort from it via the routing ladder. No default — the filer
+  // must judge and score, with a written rationale.
+  var COMPLEXITY = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
   var POLL_MS = 2500;
   // Quick "Remind me" presets in the ticket editor -> a Date to fire at.
   var REMINDER_PRESETS = {
@@ -874,12 +885,34 @@
   function modelEnabled(k) { return modelPrefs[k] !== false; }
   function syncModelPrefsFromServer() {
     return api("/api/model-prefs").then(function (d) {
-      if (d && d.prefs) { modelPrefs = d.prefs; renderModelPrefSettings(); buildModelSegment(); }
+      if (d && d.prefs) { modelPrefs = d.prefs; renderModelPrefSettings(); refreshLadder(); }
     }).catch(function () { /* older server without this route — offer everything */ });
   }
   function pushModelPrefs() {
     api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) }).catch(function () {});
   }
+
+  // The live complexity(1..10) -> model·effort ladder, fetched from
+  // /api/routing-ladder. Cached here; the editor's derived line and the settings
+  // popover read it. Refreshed on editor-open and after a tier toggle so both
+  // views reshape the moment the enabled tiers change.
+  var routingLadderCache = null;
+  function fetchRoutingLadder() {
+    return api("/api/routing-ladder").then(function (d) {
+      if (d && d.ladder) routingLadderCache = d.ladder;
+      return routingLadderCache;
+    }).catch(function () { return routingLadderCache; });
+  }
+  // Refetch, then re-render whatever's showing the ladder (settings row + the
+  // open editor's derived line).
+  function refreshLadder() {
+    return fetchRoutingLadder().then(function () {
+      renderLadderView();
+      if (state.editor) { var s = segValue($("mComplexity")); renderDerivedLine(s ? Number(s) : null); }
+    });
+  }
+  function ladderRung(k) { return (routingLadderCache && k) ? (routingLadderCache[k - 1] || null) : null; }
+  function routeLabelFor(model, effort) { return (model || "any") + (effort ? "·" + effort : ""); }
 
   // Sort choice is board-wide and persisted across reloads.
   try {
@@ -1064,7 +1097,7 @@
   function signature() {
     // A compact fingerprint of what's on screen, so polling only re-renders on real change.
     var parts = state.projects.map(function (p) { return p.slug + ":" + p.counts.todo + "," + p.counts.doing + "," + p.counts.done; });
-    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || "") + (t.model || "") + (t.effort || "") + (t.files || []).length; });
+    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || "") + (t.complexity || "") + (t.model || "") + (t.effort || "") + (t.files || []).length; });
     var ss = state.stories.map(function (s) { return s.id + s.color + s.title; });
     return state.current + "|" + parts.join(";") + "||" + ts.sort().join(";") + "||" + ss.sort().join(";");
   }
@@ -1363,20 +1396,39 @@
     });
     box.appendChild(routeRow);
     MODELS.forEach(function (m) {
-      if (m.k === "any") return;
       var on = modelEnabled(m.k);
       var row = el("label", "proj-notify-row" + (on ? "" : " muted"));
       row.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' /><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:' + (MODEL_COLORS[m.k] || "var(--line)") + '"></span><span class="pn-name">' + esc(m.label) + (m.k === "haiku" ? ' <em style="font-style:normal;font-size:10.5px;color:var(--text-faint)">(no effort support)</em>' : '') + '</span>';
       var cb = row.querySelector("input");
       cb.addEventListener("change", function () {
         var next = {}; next[m.k] = cb.checked;
-        var enabledCount = MODELS.filter(function (x) { return x.k !== "any" && modelEnabled(x.k); }).length;
+        var enabledCount = MODELS.filter(function (x) { return modelEnabled(x.k); }).length;
         if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one model tier must stay enabled"); return; }
         modelPrefs[m.k] = cb.checked;
-        renderModelPrefSettings(); buildModelSegment();
+        renderModelPrefSettings();
         pushModelPrefs();
+        refreshLadder();   // the ladder reshapes when the enabled tiers change — show it
         toast(cb.checked ? m.label + " enabled" : m.label + " hidden from the picker");
       });
+      box.appendChild(row);
+    });
+  }
+  // The live routing ladder, one compact row per rung (C1 sonnet·low …), so a
+  // tier toggle visibly reshapes the complexity -> model·effort mapping.
+  function renderLadderView() {
+    var box = $("ladderView"); if (!box) return;
+    if (!routingLadderCache) {
+      box.innerHTML = '<div class="ladder-empty">Loading ladder…</div>';
+      fetchRoutingLadder().then(function () { if (routingLadderCache) renderLadderView(); });
+      return;
+    }
+    box.innerHTML = "";
+    routingLadderCache.forEach(function (r) {
+      var mc = MODEL_COLORS[r.model] || "var(--text-faint)";
+      var row = el("div", "ladder-row");
+      row.innerHTML = '<span class="lc">C' + r.complexity + '</span>' +
+        '<span class="ldot" style="background:' + mc + '"></span>' +
+        '<span class="lr">' + esc(r.model + (r.effort ? "·" + r.effort : "")) + '</span>';
       box.appendChild(row);
     });
   }
@@ -1569,13 +1621,21 @@
       ? '<span class="storychip" title="' + esc((story.ref || "") + " · " + story.title) + '" style="color:' + esc(story.color) + ';background:' + tint(story.color, 0.1) + ';border-color:' + tint(story.color, 0.4) + '"><span class="sdot" style="background:' + esc(story.color) + '"></span>' + esc(story.title || story.ref) + '</span>'
       : "";
 
-    // Routing chip: target model tier and/or reasoning effort ("sonnet·low",
-    // "opus·xhigh", or "any·high" when only effort is pinned), tinted per tier.
+    // Routing chip: complexity score prefixing its derived tier·effort
+    // ("C7·opus·max"). Legacy tickets with a stored tag but no score keep the
+    // old model·effort chip. Tinted per (derived) model tier.
+    var chipSvg = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>';
     var modelChip = "";
-    if (t.model || t.effort) {
-      var mc = (t.model && MODEL_COLORS[t.model]) || "#52545f"; // neutral for effort-only
-      var routeLabel = (t.model || "any") + (t.effort ? "·" + t.effort : "");
-      modelChip = '<span class="modelchip" title="routing: ' + esc((t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "")) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>' + esc(routeLabel) + '</span>';
+    if (t.complexity) {
+      var mc = (t.model && MODEL_COLORS[t.model]) || "#52545f";
+      var routeLabel = "C" + t.complexity + (t.model ? "·" + t.model : "") + (t.effort ? "·" + t.effort : "");
+      var whySnip = t.complexityWhy ? String(t.complexityWhy).slice(0, 80) : "";
+      var cTitle = "complexity " + t.complexity + " → " + (t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "") + (whySnip ? " — " + whySnip : "");
+      modelChip = '<span class="modelchip" title="' + esc(cTitle) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '">' + chipSvg + esc(routeLabel) + '</span>';
+    } else if (t.model || t.effort) {
+      var mcL = (t.model && MODEL_COLORS[t.model]) || "#52545f"; // neutral for effort-only
+      var routeLabelL = (t.model || "any") + (t.effort ? "·" + t.effort : "");
+      modelChip = '<span class="modelchip" title="routing: ' + esc((t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "")) + '" style="color:' + mcL + ';background:' + tint(mcL, 0.1) + ';border-color:' + tint(mcL, 0.4) + '">' + chipSvg + esc(routeLabelL) + '</span>';
     }
 
     c.innerHTML = storyTop +
@@ -1654,34 +1714,59 @@
       b.addEventListener("click", function () { setSeg(ac, a.k); autosave({ assignee: a.k === "me" ? ME : null }); });
       ac.appendChild(b);
     });
-    buildModelSegment();
-    // Reasoning effort: "Default" (inherit the session) or a pinned level.
-    var me = $("mEffort"); me.innerHTML = "";
-    EFFORTS.forEach(function (ef) {
-      var b = el("button", "", ef.label);
-      b.type = "button"; b.dataset.k = ef.k;
-      b.addEventListener("click", function () { setSeg(me, ef.k); autosave({ effort: ef.k === "any" ? null : ef.k }); });
-      me.appendChild(b);
+    // Complexity: the single mandatory dial. Ten small buttons 1..10; the server
+    // derives model·effort from the score. A new ticket starts UNSELECTED (the
+    // user must judge and score; saveEditor blocks otherwise).
+    var cc = $("mComplexity"); cc.innerHTML = "";
+    COMPLEXITY.forEach(function (n) {
+      var b = el("button", "", String(n));
+      b.type = "button"; b.dataset.k = String(n);
+      b.addEventListener("click", function () { onComplexityClick(n); });
+      cc.appendChild(b);
     });
   }
 
-  // Target-model tier segment: "Any" (untagged) or a tier the orchestrator routes
-  // to. Rebuilt whenever the allowlist changes — a user-disabled tier isn't
-  // offered, except when the open ticket already carries it (so the tag stays
-  // visible/clearable rather than silently vanishing).
-  function buildModelSegment(keepTier) {
-    var mm = $("mModel");
-    var current = keepTier || segValue(mm);
-    mm.innerHTML = "";
-    MODELS.forEach(function (m) {
-      if (m.k !== "any" && !modelEnabled(m.k) && m.k !== current) return; // hidden by the allowlist
-      var sw = (m.k !== "any" && MODEL_COLORS[m.k]) ? '<span class="sw" style="background:' + MODEL_COLORS[m.k] + '"></span>' : "";
-      var b = el("button", "", sw + m.label);
-      b.type = "button"; b.dataset.k = m.k;
-      b.addEventListener("click", function () { setSeg(mm, m.k); autosave({ model: m.k === "any" ? null : m.k }); });
-      mm.appendChild(b);
-    });
-    if (current) setSeg(mm, current);
+  // Clicking a score. New mode just selects (Create carries it). Edit mode
+  // autosaves the new score, but only once its rationale is written: if the why
+  // field is under 20 chars, focus it and nudge instead of saving — click the
+  // score again once motivated.
+  function onComplexityClick(n) {
+    var ed = state.editor; if (!ed) return;
+    if (ed.mode !== "edit" || !ed.ticket) {
+      setSeg($("mComplexity"), String(n));
+      renderDerivedLine(n);
+      return;
+    }
+    var why = $("mWhy").value.trim();
+    if (why.length < 20) {
+      $("mWhy").focus();
+      toast("Motivate the new score (min 20 chars), then click the score again");
+      return;
+    }
+    setSeg($("mComplexity"), String(n));
+    renderDerivedLine(n);
+    autosave({ complexity: n, complexityWhy: why });
+  }
+
+  // The derived-routing line under the complexity segment: the selected score's
+  // model·effort per the live ladder ("C7 → opus·max"). With no score, a legacy
+  // ticket shows its stored tag and a nudge to set one; otherwise it hides.
+  function renderDerivedLine(selected) {
+    var box = $("mDerived"); if (!box) return;
+    if (selected) {
+      var rung = ladderRung(selected);
+      box.style.display = "";
+      box.innerHTML = 'C' + selected + ' → <b>' + (rung ? esc(routeLabelFor(rung.model, rung.effort)) : "…") + '</b>';
+      return;
+    }
+    var t = state.editor && state.editor.ticket;
+    if (t && (t.model || t.effort)) {
+      box.style.display = "";
+      box.innerHTML = '<b>' + esc(routeLabelFor(t.model, t.effort)) + '</b> (legacy tag — set a score)';
+    } else {
+      box.style.display = "none";
+      box.innerHTML = "";
+    }
   }
   function setSeg(container, k) { Array.prototype.forEach.call(container.children, function (b) { b.classList.toggle("on", b.dataset.k === k); }); }
   function segValue(container) { var on = container.querySelector(".on"); return on ? on.dataset.k : null; }
@@ -1703,9 +1788,15 @@
     setSeg($("mPriority"), isEdit ? ticket.priority : "normal");
     setSeg($("mStatus"), isEdit ? ticket.status : "todo");
     setSeg($("mAssignee"), isEdit && isMine(ticket) ? "me" : "unassigned");
-    buildModelSegment(isEdit && ticket.model ? ticket.model : "any"); // re-offer per allowlist, keeping this ticket's tier
-    setSeg($("mModel"), isEdit && ticket.model ? ticket.model : "any");
-    setSeg($("mEffort"), isEdit && ticket.effort ? ticket.effort : "any");
+    // Complexity is mandatory: edit mode shows the stored score + rationale (a
+    // legacy ticket with no score shows the segment unselected and its stored
+    // tag on the derived line); a new ticket starts blank so the user must score.
+    var initialC = isEdit && ticket.complexity ? String(ticket.complexity) : "";
+    setSeg($("mComplexity"), initialC);
+    $("mWhy").value = isEdit && ticket.complexityWhy ? ticket.complexityWhy : "";
+    renderDerivedLine(initialC ? Number(initialC) : null);
+    // Refresh the ladder once per open, then re-render the derived line off it.
+    refreshLadder();
     // Show any agent claim as a read-only hint (it's a separate axis from assignee).
     var hint = $("mClaimHint");
     if (isEdit && ticket.claim && ticket.claim.by) {
@@ -2099,6 +2190,12 @@
     var ed = state.editor; if (!ed) return;
     var title = $("mTitle").value.trim();
     if (!title) { $("mTitle").focus(); toast("A title is required"); return; }
+    // Complexity + a motivated why are mandatory — the server 400s without them,
+    // so block here with a clear nudge instead of a failed request.
+    var complexity = segValue($("mComplexity"));
+    if (!complexity) { toast("Score the complexity first (1-10)"); return; }
+    var why = $("mWhy").value.trim();
+    if (why.length < 20) { toast("Motivate the score (min 20 chars)"); return; }
     var payload = {
       title: title,
       description: $("mDesc").value.trim(),
@@ -2108,8 +2205,8 @@
       labels: $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       files: $("mFiles").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       storyId: ($("mStory").value && $("mStory").value !== "__new") ? $("mStory").value : null,
-      model: segValue($("mModel")) === "any" ? null : segValue($("mModel")),
-      effort: segValue($("mEffort")) === "any" ? null : segValue($("mEffort")),
+      complexity: parseInt(complexity, 10),
+      complexityWhy: why,
       imagesData: ed.attachments.map(function (a) { return { name: a.name, base64: a.base64 }; })
     };
 
@@ -2378,6 +2475,13 @@
       var files = $("mFiles").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
       if (files.join("") !== (ed.ticket.files || []).join("")) autosave({ files: files });
     });
+    // Why: blur commits the rationale on its own (≥20 chars) when it changed —
+    // so a filer can refine the motivation without re-clicking the score.
+    $("mWhy").addEventListener("blur", function () {
+      var ed = state.editor; if (!ed || !ed.ticket) return;
+      var v = $("mWhy").value.trim();
+      if (v.length >= 20 && v !== (ed.ticket.complexityWhy || "")) autosave({ complexityWhy: v });
+    });
     $("cmtBtn").addEventListener("click", function () { postComment("comment"); });
     $("askBtn").addEventListener("click", function () { postComment("question"); });
     $("addLinkBtn").addEventListener("click", addLink);
@@ -2482,7 +2586,7 @@
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
-      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); }
+      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderLadderView(); }
     });
     document.addEventListener("click", function (e) {
       if (e.target.closest(".popwrap")) return;

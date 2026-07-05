@@ -29,23 +29,33 @@ Your task prompt contains some or all of:
 
 1. **Compose the ticket** from the issue:
    - **title**: one concrete line, ideally under ~70 chars (e.g. "Contact form does not send").
-   - **description**: 1–3 sentences of the useful detail, shaped by what kind of issue this is:
-     - **bug** → steps to reproduce (what happened, what was expected, where)
-     - **feature/task** → the requirements — what "done" looks like
+   - **description**: written **developer-to-developer** — technical detail the implementer needs,
+     not a manager's summary. Include whatever of this the issue text gives you: the file/page/
+     function where it happens, the concrete behavior (what happened → what was expected), and how
+     to reproduce or verify. Shaped by kind:
+     - **bug** → reproduction steps (what happened, what was expected, where in the code/UI)
+     - **feature/task** → the requirements at a technical level — what "done" looks like, verifiable
      - **question/spike** → what's actually unknown
-     Only omit it if the title already fully captures that detail.
+     Only omit it if the title already fully captures that detail. Never water detail down — the
+     ticket may be executed by a smaller model that needs every specific you have.
    - **priority**: one of `low | normal | high | urgent`. Use `urgent` only for "broken in
      production / blocks work", `high` for clear bugs, `normal` by default, `low` for polish/nits.
    - **labels**: 0–3 short tags you can infer with confidence (e.g. `bug`, `frontend`, `payments`).
      Don't invent labels you're unsure about.
+   - **complexity + why** (BOTH required — the CLI errors without them): score the task 1–10 and
+     motivate it in one concrete sentence (min 20 chars) referencing the actual work. Rubric:
+     1–2 mechanical edit · 3–4 routine one-area fix/feature · 5–6 multi-file feature · 7–8
+     cross-cutting design · 9–10 novel/unknown-cause debugging. Routing (which model tier and
+     effort) is derived from the score — you never pass a model.
 
 2. **Run the CLI** with the command prefix you were given, appending:
 
    ```
-   <prefix> add -t "TITLE" -d "DESCRIPTION" -p PRIORITY -l LABEL -l LABEL -i "IMAGE_PATH"
+   <prefix> add -t "TITLE" -d "DESCRIPTION" -p PRIORITY -l LABEL -l LABEL -i "IMAGE_PATH" --complexity N --why "MOTIVATION"
    ```
 
    - Repeat `-l` per label and `-i` per image. Drop `-d`, `-l`, or `-i` if you have nothing for them.
+     `--complexity` and `--why` can never be dropped.
    - Quote every value. On Windows the CLI is invoked via `node "<path>/sidequest.js"`.
    - If you were **not** given a command prefix, use
      `node "$CLAUDE_PLUGIN_ROOT/bin/sidequest.js"`; if that variable is empty, look for

@@ -286,6 +286,17 @@ async function handle(req, res) {
       sendJson(res, 404, { error: 'unknown project' });
       return;
     }
+    // Model and effort are mandatory at every entry point — sidequest never
+    // defaults either; the filing side judges the task's complexity and picks.
+    // (PATCH stays permissive: the store guard ignores invalid values there.)
+    if (!store.coerceComplexity(body.complexity)) {
+      sendJson(res, 400, { error: 'complexity is required (an integer 1-10; routing is derived from it)' });
+      return;
+    }
+    if (!body.complexityWhy || String(body.complexityWhy).trim().length < 20) {
+      sendJson(res, 400, { error: 'complexityWhy is required — motivate the score against the actual task (min 20 chars)' });
+      return;
+    }
     const ticket = store.createTicket(slug, {
       title: body.title,
       description: body.description,
@@ -293,14 +304,16 @@ async function handle(req, res) {
       priority: body.priority,
       labels: body.labels,
       storyId: body.storyId,
-      model: body.model,
-      effort: body.effort,
+      complexity: body.complexity,
+      complexityWhy: body.complexityWhy,
       files: body.files,
       assignee: body.assignee,
       imagesData: body.imagesData,
       source: 'dashboard',
     });
-    sendJson(res, 201, { ticket });
+    // Re-read so the response carries the derived model/effort (derivation is
+    // read-time; createTicket returns the raw stored shape).
+    sendJson(res, 201, { ticket: store.getTicket(slug, ticket.id) || ticket });
     return;
   }
 
@@ -543,6 +556,14 @@ async function handle(req, res) {
   // orchestrator (via the CLI) when choosing an executor tier. ---
   if (req.method === 'GET' && pathname === '/api/model-prefs') {
     sendJson(res, 200, { prefs: store.getModelPrefs() });
+    return;
+  }
+
+  // --- Routing ladder: the live complexity(1-10) -> model·effort mapping,
+  // derived from the enabled tiers. The dashboard renders it in the ticket
+  // editor (derived-routing line) and the settings popover. ---
+  if (req.method === 'GET' && pathname === '/api/routing-ladder') {
+    sendJson(res, 200, { ladder: store.routingLadder(), prefs: store.getModelPrefs() });
     return;
   }
   if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/model-prefs') {

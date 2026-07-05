@@ -84,20 +84,32 @@ the browser didn't pop up. The server binds to `127.0.0.1` only; it's a private,
 ## File a ticket
 
 ```bash
-sidequest add -t "Contact form does not send" -d "Submit does nothing; no email arrives." -p high -l bug -l frontend
+sidequest add -t "Contact form does not send" -d "Submit does nothing; no email arrives." -p high -l bug -l frontend \
+  --complexity 4 --why "one form handler + its endpoint; reproduce, fix, verify the mail path"
 ```
 
 - `-t` title (required) · `-d` description · `-p` priority `low|normal|high|urgent` (default `normal`)
+- `--complexity 1-10` + `--why "<motivation>"` (BOTH required — routing is derived from the score; see
+  "Complexity-driven routing" below for the rubric; `--model`/`--effort` are not accepted)
 - `-l` label (repeat for several) · `-s` status `todo|doing|done` (default `todo`)
 - `-i` image path (repeat for several) — attach a pasted screenshot by its file path
 
-**Write a description that lets someone else pick up the ticket cold** — what it needs depends on the
-kind of ticket:
-- **Bug** → clear steps to reproduce (what you did, what happened, what you expected). "Doesn't work"
-  is not a description.
-- **Feature / task** → the requirements — what "done" looks like, any constraints, and known
-  out-of-scope. Enough to start without re-asking the user.
-- **Question / spike** → what's actually unknown and why it matters.
+**Descriptions are developer-to-developer technical specs — write them as one developer handing work
+to another, never as a project manager summarizing.** "Improve the checkout flow" is not a ticket; a
+ticket says *which* files and functions, *what* behavior changes (inputs → outputs, edge cases), and
+*how to verify*. Concretely, a description must carry:
+- **Where**: the exact files/functions/anchors the work lands in (you often know — say so).
+- **The contract**: what changes at a code level — inputs → outputs, edge cases, error behavior.
+- **Bounds**: constraints, known out-of-scope, what must NOT change.
+- **Verification**: the command, test, or reproduction that proves it done.
+- **Bug tickets** additionally need the reproduction (what you did / what happened / what you
+  expected); **spikes** state what's actually unknown and why it matters.
+
+**Scale the spec to the executor, inversely.** The lower the tier that will work the ticket (its
+derived routing), the *more* complete the description must be — a cheap executor supplies less
+judgment, so the spec substitutes for tier. Work routed far below the filer should read near
+patch-level: exact anchors, exact expected strings, the precise verification commands. This is the
+flip side of decompose-for-parallelism: a well-shrunk ticket *is* mostly its spec.
 
 If you don't have enough of that detail, ask a quick clarifying question rather than filing a vague
 ticket — a thin ticket just costs the next reader (you, another agent, or the user) another round trip.
@@ -208,9 +220,9 @@ knock out simultaneously. The thinking stays at the top; the labor gets cheap an
 2. **Declare each ticket's file scope** when filing: `sidequest add ... --file bin/cli.js --file lib/`
    (repeatable; a directory prefix covers everything under it). This is what makes independence
    *mechanical* instead of guesswork.
-3. **Shrink until the tier drops.** If a piece still needs the top tier, it's usually two pieces — a
-   small design/contract decision (top tier) and a mechanical application of it (lower tier at low
-   effort). Tag accordingly (`--model`, `--effort`).
+3. **Shrink until the complexity drops.** If a piece still scores 7+, it's usually two pieces — a
+   small design/contract decision (high score) and a mechanical application of it (low score). The
+   score is what routes each piece to the right tier, so shrinking scores is shrinking cost.
 4. **Shape the story as: design → wave(s) → integrate.** A top-tier design/contract ticket blocks the
    wave; the parallel executor tickets form the wave(s); an integration/verify ticket depends on all
    of them. Encode that with `depends-on` links so `ready` naturally serializes the phases.
@@ -246,65 +258,63 @@ files** — parallel edits to one file collide. Link such tickets with `depends-
 naturally serialize them. For a large fan-out you may use a subagent workflow; otherwise a batch of
 background subagents is enough.
 
-## Route work by model tier + effort (ENFORCED)
+## Complexity-driven routing (ENFORCED)
 
-A ticket can carry a **target model tier** (which agent tier works it) and a **reasoning effort**
-(how hard that tier thinks) — together the cost dial: plan with the strongest model at high effort,
-execute with a cheaper one at low effort.
+You never pick a model or effort directly. **You score the task's COMPLEXITY (1–10) with a mandatory
+motivation, and sidequest derives which tier works it and how hard it thinks** — by banding the score
+over the tiers the user has enabled in the model picker (effort spreads low→max within each band:
+exhaust effort before escalating tier). The derivation is live: toggling a tier in the picker
+instantly re-routes every open ticket. `sidequest models` prints the current ladder.
+
+**Every ticket MUST be filed with `--complexity 1-10` AND `--why "<motivation>"` — sidequest errors
+without them, and `--model`/`--effort` are rejected as direct inputs.** The motivation must reference
+the actual work (files, moving parts, unknowns), not restate the number — writing it is what forces
+you to look at the task properly. Score with this rubric:
+
+- **1–2** — mechanical: a rename, a dedup, a config bump; the diff is obvious before you start.
+- **3–4** — routine implementation: one file/area, a known pattern, clear verification.
+- **5–6** — a multi-file feature: several coordinated edits, a contract to respect, real edge cases.
+- **7–8** — cross-cutting design: new architecture inside existing constraints, tricky state,
+  careful integration.
+- **9–10** — novel design or debugging under uncertainty: unknown root cause, no established
+  pattern, correctness is the hard part.
 
 ```bash
-sidequest add -t "Design the migration" --model opus --effort xhigh   # hard reasoning
-sidequest add -t "Apply the codemod"    --model sonnet --effort low   # mechanical execution
-sidequest update SQ-8 --model any --effort any                        # clear either half
-sidequest models --json                                               # tiers the user allows + effort levels
+sidequest add -t "Apply the codemod" --complexity 2 --why "single mechanical transform over bin/cli.js, verified by node -c"
+sidequest add -t "Design the migration" --complexity 8 --why "reshapes the store contract; every consumer (CLI, server, dashboard) must stay compatible mid-rollout"
+sidequest update SQ-8 --complexity 5 --why "wider than scored: it also rewires the reader path"   # rescore needs a fresh why
+sidequest models        # the live ladder: which score routes to which tier·effort right now
 ```
 
-**These are rules you MUST follow when spawning a ticket's executor — the same register as
-"never work a ticket you haven't claimed", not suggestions:**
+**Rules for working the board — the same register as "never work a ticket you haven't claimed":**
 
-0. **MUST check the routing master switch FIRST.** Run `sidequest models --json` before anything else;
-   if `routing` is `false`, the MUST rules below **stand down** — the user has turned routing off, so
-   you may work any ticket yourself regardless of its tags (⚙tier/effort stay purely informational).
-   Only when `routing` is `true` (the default, and the case for a `model-prefs.json` with no `routing`
-   key) do rules 1–7 apply.
-1. **MUST route, not self-execute a tagged ticket.** You cannot change your own model mid-run and
-   sidequest cannot force one; the only control point is the model you pick when **spawning a
-   subagent**. A ticket tagged below your tier gets an executor subagent at its tagged tier.
-2. **MUST pick only from models actually available** in your environment (the Task/Agent tool's model
-   list, e.g. `opus|sonnet|haiku|fable`). Never invent or guess an alias.
-3. **MUST respect the user's model allowlist.** Run `sidequest models --json` first; a tier disabled
-   there is treated as unavailable, even if the ticket is tagged with it — fall back to the nearest
-   **lower** allowed tier.
-4. **MUST NOT spawn above your own tier.** Tier order: `fable > opus > sonnet > haiku`. If your main
-   session runs opus, you never spawn a fable executor — a ticket tagged above your tier is capped
-   **down** to your tier.
-5. **Untagged tickets: MUST choose by complexity.** Trivial/mechanical (rename, dedup, config bump) →
-   lowest allowed tier; standard implementation → a mid tier; hard reasoning/design/debugging → the
-   top allowed tier (≤ yours).
-6. **Effort: MUST map `ticket.effort` onto the spawn.** Effort is set per agent **definition**, not
-   per invocation — sidequest bundles executor agents for exactly this:
-   spawn `subagent_type: sidequest-exec-<effort>` (low|medium|high|xhigh|max) **with**
-   `model: <resolved tier>`; the two compose. No effort tag → any agent type (it inherits your
-   session's effort). **Never pair an effort executor with haiku** — haiku has no effort support.
-7. **Claim by tier when working the board as a given tier:** `sidequest next --model X` /
-   `ready --model X` only hand out X-tagged or untagged tickets, so an executor never grabs work
-   reserved for another tier.
+0. **Routing master switch first.** `sidequest models --json` → if `routing` is `false` the rules
+   below stand down: work any ticket yourself; derived tags are informational.
+1. **Route, don't self-execute.** A ticket whose DERIVED tier is below yours gets an executor
+   subagent at that tier — you cannot change your own model mid-run; the spawn is the only control
+   point. **Unless the user's request is trivial, route every task through the board this way** —
+   decompose, score, fan out; don't quietly do laborer work at orchestrator prices.
+2. **The ticket's derived `model`/`effort` ARE the routing** — they come stamped on every read
+   (`list`/`ready --json`), already shaped by the user's allowlist, so there is nothing to re-derive.
+   Cap at your own tier if the ladder tops out above you (`fable > opus > sonnet > haiku`), and only
+   spawn models that actually exist in your environment.
+3. **Map effort via the bundled executors:** spawn `subagent_type: sidequest-exec-<derived effort>`
+   **with** `model: <derived tier>` (effort lives in the agent definition, model in the spawn — they
+   compose). A haiku-derived ticket has no effort: use a plain agent with `model: haiku`.
+4. **Claim by tier:** `next --model X` / `ready --model X` hand out only tickets whose derived tier
+   is X — an executor never grabs work priced for another tier.
 
-**Decision procedure (walk it per ticket, in order):**
-0. Routing off (`sidequest models --json` → `routing: false`)? Stop here — work the ticket yourself, tags ignored (rule 0).
-1. `tier = ticket.model` (or complexity-based if unset, rule 5).
-2. Cap: `tier = min(tier, your own tier)` (rule 4).
-3. Allowlist: while `tier` is disabled in `sidequest models`, step down to the next allowed tier (rule 3).
-4. `effort = ticket.effort` → executor `sidequest-exec-<effort>`; unset → `general-purpose` (rule 6;
-   if `tier` is haiku, ignore effort and note it in the report).
-5. Spawn `subagent_type` from step 4 with `model: tier`; the executor claims → works → verifies → dones.
+**Decision procedure:** routing on? → read the ticket's derived `model`/`effort` → cap at your tier →
+spawn `sidequest-exec-<effort>` (or plain agent for haiku) with `model: <tier>` → executor claims →
+works → verifies → dones.
 
-*Worked example:* main session = opus; ticket `SQ-12 ⚙sonnet·low`; user has haiku disabled.
-sonnet ≤ opus ✓, sonnet allowed ✓, effort low → `Agent(subagent_type: "sidequest-exec-low",
-model: "sonnet", prompt: claim SQ-12 → fix → verify → done)`.
+*Worked example:* main session = fable, haiku disabled; ticket `SQ-12 ⚙C3→sonnet·max`.
+`Agent(subagent_type: "sidequest-exec-max", model: "sonnet", prompt: claim SQ-12 → fix → verify →
+done)`. The user re-enables haiku later → the same open ticket re-reads as `C3→sonnet·low` or lower —
+always spawn from the freshest read.
 
-A ticket's routing shows as a `⚙tier·effort` chip on its card and in `list`/`ready` output; the
-user picks which tiers are offered at all in the dashboard's settings (gear → Available models).
+A ticket shows `⚙C<score>→tier·effort` on its card and in `list`/`ready`; the user shapes the ladder
+in the dashboard settings (gear → Available models), where the live mapping is displayed.
 
 ## Comments & questions
 

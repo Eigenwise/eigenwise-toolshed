@@ -132,13 +132,17 @@ const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 
 // The agent tier a ticket wants working it — the same aliases Claude Code's Task
 // tool accepts, so the orchestrator can pass a ticket's tag straight through as a
-// subagent's model (plan with the top tier, execute a tier down). null = any.
+// subagent's model (plan with the top tier, execute a tier down). Required on
+// every ticket at the entry points; the filing agent chooses by complexity.
 // sidequest can't *force* a model (only the orchestrator picks one at spawn
 // time); this tag drives that routing and the `next`/`ready` --model filter.
 const VALID_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
 
-// Normalize a requested model tier to one of VALID_MODELS, or null (any). Blank
-// / "any" / "none" / an unknown alias all clear it to null.
+// Normalize a requested model tier to one of VALID_MODELS, or null. Blank
+// / "any" / "none" / an unknown alias all coerce to null — which is exactly
+// what the entry points (CLI add, dashboard POST) reject: every ticket must
+// be filed with a real tier, and sidequest never picks one for you. The data
+// layer itself stays permissive/fail-soft (the capture hook must never crash).
 function coerceModel(v) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
@@ -149,8 +153,10 @@ function coerceModel(v) {
 // How hard the executor should think — the reasoning-effort levels Claude Code
 // supports in agent-definition frontmatter. Rides alongside `model` as the other
 // half of the cost dial (model = capability tier, effort = thinking depth).
-// null = unset (executor inherits the session default). Note: Haiku has no
-// effort support at all — routing guidance lives in the skill, not enforced here.
+// Like model, effort is required at the entry points: "any"/"none"/"default"
+// coerce to null here, and null is rejected by CLI add / dashboard POST.
+// Note: Haiku has no effort support at all — routing guidance lives in the
+// skill, not enforced here.
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 function coerceEffort(v) {
@@ -158,6 +164,79 @@ function coerceEffort(v) {
   const s = String(v).trim().toLowerCase();
   if (!s || s === 'any' || s === 'none' || s === 'null' || s === 'default') return null;
   return VALID_EFFORTS.indexOf(s) !== -1 ? s : null;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Complexity-driven routing
+ *
+ *  The filing agent scores a ticket's complexity 1–10 (with a mandatory
+ *  motivation — enforced at the entry points, like model/effort before it) and
+ *  sidequest derives WHICH tier works it and HOW hard it thinks, by banding the
+ *  score over the tiers the user has enabled in the model picker. Derivation
+ *  happens at read time (listTickets/getTicket stamp the ticket in memory), so
+ *  toggling a tier in the picker instantly re-routes every open ticket —
+ *  nothing stored ever goes stale. A stored model/effort is honored only for
+ *  legacy tickets that carry no complexity.
+ * ------------------------------------------------------------------ */
+
+// Capability order, weakest first — the axis the ladder scales along.
+// (VALID_MODELS is unordered vocabulary; this is the ranking.)
+const MODEL_CAPABILITY_ORDER = ['haiku', 'sonnet', 'opus', 'fable'];
+
+// An integer score 1..10, or null when absent/garbage.
+function coerceComplexity(v) {
+  if (v == null || String(v).trim() === '') return null;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 1 && n <= 10 ? n : null;
+}
+
+// Build the 10-rung ladder for the currently enabled tiers: split 1..10 into
+// one contiguous band per enabled tier (top tiers get the larger bands, so
+// resolution is finest where cost matters most), then spread effort low→max
+// across each band — "exhaust effort before escalating tier", because thinking
+// harder on a cheap model costs less than renting a bigger one. Haiku has no
+// effort support, so its band derives effort null. Returns
+// [{ complexity: 1..10, model, effort }].
+function routingLadder(prefs) {
+  prefs = prefs || getModelPrefs();
+  let enabled = MODEL_CAPABILITY_ORDER.filter((m) => prefs[m] !== false);
+  if (!enabled.length) enabled = ['sonnet']; // unreachable via setModelPrefs, but never return an empty ladder
+  const k = enabled.length;
+  const rungs = [];
+  for (let x = 0; x < 10; x++) {
+    rungs.push({ complexity: x + 1, tierIdx: (k - 1) - Math.floor(((9 - x) * k) / 10) });
+  }
+  for (let t = 0; t < k; t++) {
+    const band = rungs.filter((r) => r.tierIdx === t);
+    band.forEach((r, i) => {
+      const frac = band.length === 1 ? 0.5 : i / (band.length - 1);
+      r.model = enabled[t];
+      r.effort = enabled[t] === 'haiku' ? null : VALID_EFFORTS[Math.round(frac * (VALID_EFFORTS.length - 1))];
+    });
+  }
+  return rungs.map((r) => ({ complexity: r.complexity, model: r.model, effort: r.effort }));
+}
+
+// { model, effort } for a score under the current (or given) prefs, or null
+// for a null/invalid score.
+function deriveRouting(complexity, prefs) {
+  const c = coerceComplexity(complexity);
+  if (!c) return null;
+  const rung = routingLadder(prefs)[c - 1];
+  return { model: rung.model, effort: rung.effort };
+}
+
+// Stamp a ticket's derived model/effort in memory from its complexity (when it
+// has one). Reads are the single seam every consumer goes through, so chips,
+// claim filters and waves all reflect the ladder of the moment.
+function applyDerivedRouting(t, prefs) {
+  if (!t || !t.complexity) return t;
+  const r = deriveRouting(t.complexity, prefs);
+  if (r) {
+    t.model = r.model;
+    t.effort = r.effort;
+  }
+  return t;
 }
 
 // A user story groups several tickets. Its colour is what the board uses to tint
@@ -394,9 +473,10 @@ function listTickets(slug) {
     return [];
   }
   const out = [];
+  const prefs = getModelPrefs(); // one read; the ladder is the same for every ticket in the pass
   for (const f of files) {
     const t = readJson(path.join(ticketsDir(slug), f), null);
-    if (t && t.id) out.push(t);
+    if (t && t.id) out.push(applyDerivedRouting(t, prefs));
   }
   // Newest first by order (falls back to createdAt); the UI re-groups by column.
   out.sort((a, b) => (b.order || 0) - (a.order || 0));
@@ -405,7 +485,7 @@ function listTickets(slug) {
 
 function getTicket(slug, idOrRef) {
   const direct = readJson(ticketFile(slug, idOrRef), null);
-  if (direct && direct.id) return direct;
+  if (direct && direct.id) return applyDerivedRouting(direct, null);
   // Allow lookup by human ref like "SQ-4" (case-insensitive).
   const wanted = String(idOrRef).toUpperCase();
   for (const t of listTickets(slug)) {
@@ -456,8 +536,10 @@ function createTicket(slug, fields) {
     priority: coercePriority(fields.priority, 'normal'),
     labels: normalizeLabels(fields.labels),
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
-    model: coerceModel(fields.model),             // the agent tier that should work it (null = any)
-    effort: coerceEffort(fields.effort),          // how hard that tier should think (null = session default)
+    complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
+    complexityWhy: String(fields.complexityWhy || '').trim().slice(0, 1000), // the mandatory motivation for the score
+    model: coerceModel(fields.model),             // legacy direct tag; overridden at read time when complexity is set
+    effort: coerceEffort(fields.effort),          // legacy direct tag; overridden at read time when complexity is set
     files: normalizeFiles(fields.files),          // declared file scope, for parallel-wave planning
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
@@ -593,8 +675,12 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
-    if (patch.model !== undefined) t.model = coerceModel(patch.model);
-    if (patch.effort !== undefined) t.effort = coerceEffort(patch.effort);
+    if (patch.model !== undefined) { const m = coerceModel(patch.model); if (m) t.model = m; }     // never clears the tier: an invalid/'any'/'none' patch leaves it unchanged
+    if (patch.effort !== undefined) { const e = coerceEffort(patch.effort); if (e) t.effort = e; } // same for effort: once set it can only change to another valid level
+    // Complexity can move to another valid score, never clear; a fresh motivation
+    // rides along whenever one is provided (the CLI demands one on change).
+    if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
+    if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
     if (patch.files !== undefined) t.files = normalizeFiles(patch.files);
     if (patch.assignee !== undefined) t.assignee = normalizeAssignee(patch.assignee);
     if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
@@ -902,17 +988,17 @@ function completeTicket(slug, idOrRef, by, opts) {
 }
 
 // True when a ticket may be handed to a worker running as tier `want`: either the
-// worker didn't specify a tier, or the ticket is untagged (anyone can take it), or
-// the tags match. So a tier-X worker never grabs a ticket reserved for a different
-// tier, but untagged work stays available to everyone.
+// worker didn't specify a tier, or the tags match. Every ticket now carries a
+// tier, so a filtered tier-X worker only gets exact-tier matches (no untagged
+// pass-through).
 function modelMatches(ticketModel, want) {
-  return !want || !ticketModel || ticketModel === want;
+  return !want || ticketModel === want;
 }
 
 // The tickets that are ready to be worked right now: not done, not archived, not
 // actively claimed, and not blocked by an unfinished ticket. This is the set to
 // fan subagents out over (each still claims before working). Priority-ordered.
-// opts.model restricts to that tier's work (tagged-for-it or untagged).
+// opts.model restricts to that tier's work (exact-tier matches only).
 function readyTickets(slug, opts) {
   opts = opts || {};
   const want = coerceModel(opts.model);
@@ -941,7 +1027,7 @@ function claimNext(slug, by, opts) {
     .filter((t) => t.status !== 'done')
     .filter((t) => !t.claim || isClaimStale(t.claim) || t.claim.by === by)
     .filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase())
-    .filter((t) => modelMatches(t.model, want)) // a tier-X worker only claims X-tagged or untagged work
+    .filter((t) => modelMatches(t.model, want)) // a tier-X worker only claims X-tagged work
     .filter((t) => opts.includeBlocked || !isBlocked(slug, t)) // never auto-hand-out blocked work
     .sort((a, b) => {
       const pr = priorityRank(a.priority) - priorityRank(b.priority);
@@ -1691,6 +1777,10 @@ module.exports = {
   VALID_PRIORITY,
   VALID_MODELS,
   VALID_EFFORTS,
+  MODEL_CAPABILITY_ORDER,
+  coerceComplexity,
+  routingLadder,
+  deriveRouting,
   getModelPrefs,
   setModelPrefs,
   homeRoot,

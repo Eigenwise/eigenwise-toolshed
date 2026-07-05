@@ -229,9 +229,10 @@ function main() {
     '(low|normal|high|urgent), any labels, and any pasted image path.\n' +
     '\n' +
     'Or file it directly in one command:\n' +
-    `  ${cli} add -t "Short title" -d "What is wrong" -p high -l bug` +
+    `  ${cli} add -t "Short title" -d "What is wrong" -p high -l bug --complexity <1-10> --why "<motivation>"` +
     (images.length ? ` -i "${images[0]}"` : '') +
     '\n' +
+    '  (both required — score 1-10 by real task complexity and motivate it in one concrete sentence; routing is derived)\n' +
     imageHint +
     'Do NOT ask permission first and do NOT stop your current task to do this — capture, then continue. ' +
     'Say one short line noting the ticket ref (e.g. "filed SQ-5") when done.';
