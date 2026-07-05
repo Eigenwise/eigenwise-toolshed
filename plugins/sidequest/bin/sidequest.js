@@ -130,7 +130,7 @@ function failDirectRouting() {
   fail('--model/--effort are no longer set directly — score the task with --complexity (+ --why) and routing is derived from it (see sidequest models for the current ladder)');
 }
 function failComplexity() {
-  fail('--complexity is required on every ticket — an integer 1-10. Score the task: 1-2 mechanical edit, 3-4 routine implementation, 5-6 multi-file feature, 7-8 cross-cutting design, 9-10 novel/hard debugging. Routing (model+effort) is derived from it.');
+  fail('--complexity is required on every ticket — an integer 1-10, absolute scale: 1 = summarize a README, ~5 = simple HTML work, 10 = frontier AI research (new models, RL training). Normal coding lands ~1-7; 9-10 should fire rarely. Routing (model+effort) is derived from it.');
 }
 function failWhy() {
   fail('--why is required — motivate the complexity score against the actual task (min 20 chars). This is what makes the score honest.');
@@ -679,18 +679,73 @@ function cmdModels(opts) {
   const routing = prefs.routing !== false;
   const ladder = store.routingLadder(prefs);
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ routing, models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS, ladder }, null, 2) + '\n');
+    process.stdout.write(
+      JSON.stringify({ routing, bias: prefs.routingBias, models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS, enabledEfforts: store.VALID_EFFORTS.filter((e) => prefs[e]), ladder }, null, 2) + '\n'
+    );
     return;
   }
   console.log(`Routing: ${routing ? 'on' : 'off'}`);
+  console.log(`Bias: ${prefs.routingBias}  (${biasLabel(prefs.routingBias)} — see "sidequest bias")`);
   console.log('Model tiers (toggle in the dashboard settings):');
   for (const m of store.VALID_MODELS) console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}`);
-  console.log(`Effort levels: ${store.VALID_EFFORTS.join(', ')}  (haiku has no effort support)`);
+  console.log('Effort levels (toggle in the dashboard settings):');
+  for (const e of store.VALID_EFFORTS) console.log(`  ${prefs[e] ? '✓' : '✗'} ${e}${prefs[e] ? '' : '  (disabled by user)'}`);
+  console.log('  (haiku has no effort support — its rungs carry no effort)');
+  printLadder(ladder);
+}
+
+// Shared with cmdBias so "models" and "bias" render the ladder identically.
+function printLadder(ladder) {
   console.log('Complexity ladder (score → derived routing):');
   for (const rung of ladder) {
     const label = `C${rung.complexity}`.padEnd(3);
     console.log(`  ${label}  ${rung.model}${rung.effort ? '·' + rung.effort : ''}`);
   }
+}
+
+// -5..+5, mirrors store.js's ROUTING_BIAS_MIN/MAX (not exported — the CLI's
+// own range check, kept in sync by the comment above coerceRoutingBias there).
+const BIAS_MIN = -5;
+const BIAS_MAX = 5;
+function biasLabel(n) {
+  if (n === 0) return 'neutral';
+  return n < 0 ? 'frugal' : 'generous';
+}
+
+// `sidequest bias [<int>]` — read or set the routingBias dial, then print the
+// ladder it shapes (same presentation as `models`). Takes rawArgs straight
+// from argv (see main()) because a negative value like "-5" would otherwise
+// be swallowed by the generic --flag parser.
+function cmdBias(rawArgs) {
+  const json = rawArgs.includes('--json');
+  const valueArgs = rawArgs.filter((a) => a !== '--json');
+
+  if (valueArgs.length === 0) {
+    const prefs = store.getModelPrefs();
+    const ladder = store.routingLadder(prefs);
+    if (json) {
+      process.stdout.write(JSON.stringify({ bias: prefs.routingBias, ladder }, null, 2) + '\n');
+      return;
+    }
+    console.log(`Bias: ${prefs.routingBias}  (${biasLabel(prefs.routingBias)})`);
+    printLadder(ladder);
+    return;
+  }
+
+  if (valueArgs.length > 1) fail(`bias: pass a single integer ${BIAS_MIN}..${BIAS_MAX}, e.g. sidequest bias 3 (got: ${valueArgs.join(' ')})`);
+  const raw = valueArgs[0];
+  if (!/^-?\d+$/.test(raw)) fail(`bias: "${raw}" is not an integer — pass a whole number ${BIAS_MIN}..${BIAS_MAX}, e.g. sidequest bias -2`);
+  const n = parseInt(raw, 10);
+  if (n < BIAS_MIN || n > BIAS_MAX) fail(`bias: ${n} is out of range — must be an integer ${BIAS_MIN}..${BIAS_MAX} (negative = frugal, positive = generous, 0 = neutral)`);
+
+  const prefs = store.setModelPrefs({ routingBias: n });
+  const ladder = store.routingLadder(prefs);
+  if (json) {
+    process.stdout.write(JSON.stringify({ bias: prefs.routingBias, ladder }, null, 2) + '\n');
+    return;
+  }
+  console.log(`✓ Bias set to ${prefs.routingBias}  (${biasLabel(prefs.routingBias)})`);
+  printLadder(ladder);
 }
 
 function cmdProjects(opts) {
@@ -970,13 +1025,16 @@ Working the board safely (multi-agent):
 
 Complexity → routing (score the task; model + effort are derived, never tagged directly):
   sidequest add ... --complexity <1-10> --why "<motivation>"
-    BOTH are REQUIRED on add. Score the task (1-2 mechanical edit, 3-4 routine implementation, 5-6 multi-file
-    feature, 7-8 cross-cutting design, 9-10 novel/hard debugging); --why motivates it (min 20 chars). Routing
-    (model+effort) is derived from the score — see "sidequest models" for the current ladder.
+    BOTH are REQUIRED on add. Score is ABSOLUTE: 1 = summarize a README, ~5 = simple HTML work, 6-8 =
+    hard multi-file work or novel debugging, 9-10 = frontier AI research (rare by design; normal
+    coding lands ~1-7). --why motivates it (min 20 chars). Routing (model+effort) is derived from the
+    score — see "sidequest models" for the current ladder.
   sidequest update <id|SQ-n> --complexity <1-10> --why "<motivation>"   re-score (a changed score needs a fresh --why)
   --model / --effort are no longer accepted — routing comes from the complexity score.
   sidequest ready --model <tier>  ·  sidequest next --model <tier>   FILTER by the derived tier (still valid)
-  sidequest models [--json]                        which tiers the user allows + the live complexity ladder
+  sidequest models [--json]                        which tiers + effort levels the user allows + the live complexity ladder
+  sidequest bias [<int>] [--json]                  read (no arg) or set (-5..5) the routing bias dial, then
+    print the reshaped ladder; negative = frugal (escalate tier later), positive = generous (escalate sooner)
   Sidequest can't force a model or effort — it records the score and derives the tag (⚙C<n>→tier·effort on
   list/ready); the orchestrator routes by reading it. Haiku rungs have no effort.
 
@@ -1032,6 +1090,15 @@ function fail(msg) {
 async function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
+
+  // `bias` takes a signed integer positional (e.g. "-5"), which the generic
+  // --flag parser below would mistake for a flag — handle its raw args
+  // directly, before anything routes through parseArgs.
+  if (cmd === 'bias') {
+    cmdBias(argv.slice(1));
+    return;
+  }
+
   const { opts, positional } = parseArgs(argv.slice(1));
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || opts.help) {

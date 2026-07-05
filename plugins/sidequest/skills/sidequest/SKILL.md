@@ -261,23 +261,41 @@ background subagents is enough.
 ## Complexity-driven routing (ENFORCED)
 
 You never pick a model or effort directly. **You score the task's COMPLEXITY (1–10) with a mandatory
-motivation, and sidequest derives which tier works it and how hard it thinks** — by banding the score
-over the tiers the user has enabled in the model picker (effort spreads low→max within each band:
-exhaust effort before escalating tier). The derivation is live: toggling a tier in the picker
-instantly re-routes every open ticket. `sidequest models` prints the current ladder.
+motivation, and sidequest derives which tier works it and how hard it thinks** — by mapping the score
+onto **one capability-ranked ladder** of model×effort rungs built from the tiers the user enabled in
+the model picker. The ladder is a single merged sequence, not per-tier bands: tiers overlap and cross
+over (`sonnet·xhigh` outranks `opus·low` — capability orders the rungs, not tier), and adjacent scores
+may share a rung. **Max effort is held out of the normal spread**: only complexity 10 on the top
+enabled tier gets `·max` (and 9 only at bias +5) — deliberately rare, per Anthropic's "use max
+sparingly for the hardest tasks." The derivation is live: toggling a tier instantly re-routes every
+open ticket. `sidequest models` prints the current ladder.
+
+**Bias is the user's dial, not yours.** You always score complexity honestly against the absolute
+anchored scale below — bias tunes only HOW eagerly those scores escalate to pricier rungs, never what
+you score. The user sets it with `sidequest bias <n>` (or the dashboard slider): `-5` Frugal … `0`
+neutral (default) … `+5` Generous, gamma-curving the score→rung map. Extremes stay invariant:
+complexity 1 always hits the cheapest rung and 10 the top rung at any bias.
 
 **Every ticket MUST be filed with `--complexity 1-10` AND `--why "<motivation>"` — sidequest errors
 without them, and `--model`/`--effort` are rejected as direct inputs.** The motivation must reference
 the actual work (files, moving parts, unknowns), not restate the number — writing it is what forces
-you to look at the task properly. Score with this rubric:
+you to look at the task properly. The scale is **absolute** — anchored to concrete reference points,
+not to "hard for me right now":
 
-- **1–2** — mechanical: a rename, a dedup, a config bump; the diff is obvious before you start.
-- **3–4** — routine implementation: one file/area, a known pattern, clear verification.
-- **5–6** — a multi-file feature: several coordinated edits, a contract to respect, real edge cases.
-- **7–8** — cross-cutting design: new architecture inside existing constraints, tricky state,
-  careful integration.
-- **9–10** — novel design or debugging under uncertainty: unknown root cause, no established
-  pattern, correctness is the hard part.
+- **1** — trivial: summarizing a README, a one-line lookup, skimming logs for a fact.
+- **2–3** — routine: a single-file edit or script, a rename, a dedup, a config bump.
+- **4–5** — everyday build: one area, a known pattern, a few edge cases; **~5 anchors to simple HTML
+  work** — a static page, a form, a plain component.
+- **6–7** — hard: a multi-file feature or cross-cutting refactor — several coordinated edits, a
+  contract multiple consumers must respect, real edge cases.
+- **8** — gnarly: novel debugging with an unknown root cause, or designing an algorithm/architecture
+  under real constraints.
+- **9–10** — frontier: developing new AI models, RL training, research-grade problems with no
+  established solution. **10 is the extreme end**, not "a hard day."
+
+Normal day-to-day coding legitimately lands **1–7**. Scores of **9–10 firing rarely is intended** —
+the top rung (·max effort) is reserved for genuinely extreme work, same spirit as Anthropic's own
+guidance to use max effort "sparingly for the hardest tasks." If you're unsure, score lower.
 
 ```bash
 sidequest add -t "Apply the codemod" --complexity 2 --why "single mechanical transform over bin/cli.js, verified by node -c"
@@ -315,6 +333,8 @@ always spawn from the freshest read.
 
 A ticket shows `⚙C<score>→tier·effort` on its card and in `list`/`ready`; the user shapes the ladder
 in the dashboard settings (gear → Available models), where the live mapping is displayed.
+Effort levels can be excluded there too, exactly like tiers — an excluded effort never appears in
+the derived ladder.
 
 ## Comments & questions
 

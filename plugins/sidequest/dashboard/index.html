@@ -369,6 +369,22 @@
   .ladder-row .ldot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .ladder-row .lr { color: var(--text-dim); }
   .ladder-empty { font-size: 11.5px; color: var(--text-faint); padding: 4px 6px; }
+  /* Routing-bias dial in the settings popover: slide toward Frugal (cheaper
+     rungs) or Generous (roomier rungs) and the ladder above/below reshapes live.
+     Flat + hairline like the rest of the control cluster; the thumb borrows the
+     ring language of the story swatches. */
+  .bias-view { display: flex; flex-direction: column; gap: 6px; padding: 4px 8px 6px; }
+  .bias-top { display: flex; align-items: baseline; gap: 8px; }
+  .bias-name { font-family: var(--sans); font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .bias-val { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--gold); }
+  .bias-range { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; margin: 3px 0; background: var(--line-soft); border-radius: 2px; outline: none; cursor: pointer; }
+  .bias-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 15px; height: 15px; border-radius: 50%; background: var(--gold); border: 2px solid var(--card); box-shadow: 0 0 0 1px var(--gold-line); cursor: pointer; transition: transform .1s; }
+  .bias-range::-webkit-slider-thumb:hover { transform: scale(1.12); }
+  .bias-range::-webkit-slider-thumb:active { transform: scale(1.12); background: var(--gold-bright); }
+  .bias-range::-moz-range-thumb { width: 15px; height: 15px; border-radius: 50%; background: var(--gold); border: 2px solid var(--card); box-shadow: 0 0 0 1px var(--gold-line); cursor: pointer; }
+  .bias-range::-moz-range-track { height: 4px; background: var(--line-soft); border-radius: 2px; }
+  .bias-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 1px var(--gold-line), 0 0 0 3px var(--gold-soft); }
+  .bias-ends { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); }
   /* Story field in the ticket editor: a swatch beside the select, and the
      inline "new story" panel with a palette picker. */
   .story-select-row { display: flex; align-items: center; gap: 9px; }
@@ -609,6 +625,8 @@
           <div class="proj-notify-list" id="projNotifyList"></div>
           <div class="pop-head">Available models</div>
           <div class="model-pref-list" id="modelPrefList"></div>
+          <div class="pop-head">Routing bias</div>
+          <div class="bias-view" id="biasView"></div>
           <div class="pop-head">Routing ladder</div>
           <div class="ladder-view" id="ladderView"></div>
           <div class="pop-foot">The kinds above apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
@@ -692,7 +710,7 @@
           </div>
         </div>
         <div class="field">
-          <label>Complexity</label>
+          <label title="Absolute scale — 1 = summarize a README, ~5 = simple HTML work, 10 = frontier AI research. Normal coding lands ~1-7; hover a number for its anchor.">Complexity</label>
           <div class="seg complexity" id="mComplexity"></div>
           <div class="claim-hint" id="mDerived" style="display:none"></div>
         </div>
@@ -799,10 +817,29 @@
     { k: "haiku", label: "Haiku" }, { k: "fable", label: "Fable" }
   ];
   var MODEL_COLORS = { opus: "#404683", sonnet: "#3f8f8a", haiku: "#a8672e", fable: "#7a5ba8" };
+  // Reasoning-effort levels (mirrors store.VALID_EFFORTS). Toggleable exactly
+  // like the tiers: a disabled effort never appears in the derived ladder.
+  var EFFORTS = [
+    { k: "low", label: "low" }, { k: "medium", label: "medium" }, { k: "high", label: "high" },
+    { k: "xhigh", label: "xhigh" }, { k: "max", label: "max" }
+  ];
   // Complexity is the single mandatory dial (1..10) the filer sets; the server
   // derives model·effort from it via the routing ladder. No default — the filer
-  // must judge and score, with a written rationale.
+  // must judge and score, with a written rationale. The scale is ABSOLUTE, anchored
+  // to concrete reference points (see SKILL.md) — hover a button for its anchor.
   var COMPLEXITY = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  var COMPLEXITY_HINT = {
+    1: "1 — trivial: summarizing a README",
+    2: "2-3 — routine: single-file edit or script, a rename, a config bump",
+    3: "2-3 — routine: single-file edit or script, a rename, a config bump",
+    4: "4-5 — everyday build: one area, a few edge cases (~5 = simple HTML work)",
+    5: "4-5 — everyday build: one area, a few edge cases (~5 = simple HTML work)",
+    6: "6-7 — hard: multi-file feature or cross-cutting refactor",
+    7: "6-7 — hard: multi-file feature or cross-cutting refactor",
+    8: "8 — gnarly: novel debugging or algorithm/architecture design",
+    9: "9-10 — frontier: new AI models, RL training, research-grade problems (rare by design)",
+    10: "9-10 — frontier: new AI models, RL training, research-grade problems (rare by design)"
+  };
   var POLL_MS = 2500;
   // Quick "Remind me" presets in the ticket editor -> a Date to fire at.
   var REMINDER_PRESETS = {
@@ -889,7 +926,39 @@
     }).catch(function () { /* older server without this route — offer everything */ });
   }
   function pushModelPrefs() {
-    api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) }).catch(function () {});
+    return api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) }).catch(function () {});
+  }
+
+  // Routing-bias dial (-5 frugal .. 0 neutral .. +5 generous). Reflected from the
+  // already-synced modelPrefs on popover open; dragging pushes through the same
+  // model-prefs path (debounced) then refetches the ladder so the curve reshapes
+  // live under the slider.
+  var BIAS_MIN = -5, BIAS_MAX = 5, biasDebounce = null;
+  function coerceBias(n) { n = Math.round(Number(n) || 0); return n < BIAS_MIN ? BIAS_MIN : n > BIAS_MAX ? BIAS_MAX : n; }
+  function biasName(n) { return n === 0 ? "Neutral" : (n < 0 ? "Frugal" : "Generous"); }
+  function updateBiasReadout(v) {
+    var nm = $("biasName"); if (nm) nm.textContent = biasName(v);
+    var vv = $("biasVal"); if (vv) vv.textContent = (v > 0 ? "+" : "") + v;
+  }
+  function renderBiasControl() {
+    var box = $("biasView"); if (!box) return;
+    var bias = coerceBias(modelPrefs.routingBias);
+    box.innerHTML =
+      '<div class="bias-top"><span class="bias-name" id="biasName"></span><span class="bias-val" id="biasVal"></span></div>' +
+      '<input type="range" class="bias-range" id="biasRange" min="' + BIAS_MIN + '" max="' + BIAS_MAX + '" step="1" aria-label="Routing bias (frugal to generous)" />' +
+      '<div class="bias-ends"><span>Frugal</span><span>Generous</span></div>';
+    var range = $("biasRange");
+    range.value = String(bias);
+    updateBiasReadout(bias);
+    range.addEventListener("input", function () {
+      var v = coerceBias(Number(range.value));
+      updateBiasReadout(v);                 // label + value track the drag immediately
+      modelPrefs.routingBias = v;
+      if (biasDebounce) clearTimeout(biasDebounce);
+      biasDebounce = setTimeout(function () {
+        pushModelPrefs().then(function () { refreshLadder(); });  // persist, then reshape the ladder
+      }, 150);
+    });
   }
 
   // The live complexity(1..10) -> model·effort ladder, fetched from
@@ -1412,6 +1481,28 @@
       });
       box.appendChild(row);
     });
+    // Effort levels, toggled the same way the tiers are: unchecking one drops
+    // it from the derived ladder; at least one effort always stays on.
+    var effHead = el("div", "pop-row");
+    effHead.style.cssText = "font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;margin-top:6px";
+    effHead.textContent = "Effort levels";
+    box.appendChild(effHead);
+    EFFORTS.forEach(function (ef) {
+      var on = modelPrefs[ef.k] !== false;
+      var row = el("label", "proj-notify-row" + (on ? "" : " muted"));
+      row.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' /><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:var(--line)"></span><span class="pn-name">' + esc(ef.label) + (ef.k === "max" ? ' <em style="font-style:normal;font-size:10.5px;color:var(--text-faint)">(top rung, C10 only)</em>' : '') + '</span>';
+      var cb = row.querySelector("input");
+      cb.addEventListener("change", function () {
+        var enabledCount = EFFORTS.filter(function (x) { return modelPrefs[x.k] !== false; }).length;
+        if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one effort level must stay enabled"); return; }
+        modelPrefs[ef.k] = cb.checked;
+        renderModelPrefSettings();
+        pushModelPrefs();
+        refreshLadder();   // the ladder reshapes when the enabled efforts change — show it
+        toast(cb.checked ? ef.label + " effort enabled" : ef.label + " effort excluded from the ladder");
+      });
+      box.appendChild(row);
+    });
   }
   // The live routing ladder, one compact row per rung (C1 sonnet·low …), so a
   // tier toggle visibly reshapes the complexity -> model·effort mapping.
@@ -1720,7 +1811,7 @@
     var cc = $("mComplexity"); cc.innerHTML = "";
     COMPLEXITY.forEach(function (n) {
       var b = el("button", "", String(n));
-      b.type = "button"; b.dataset.k = String(n);
+      b.type = "button"; b.dataset.k = String(n); b.title = COMPLEXITY_HINT[n];
       b.addEventListener("click", function () { onComplexityClick(n); });
       cc.appendChild(b);
     });
@@ -2586,7 +2677,7 @@
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
-      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderLadderView(); }
+      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderBiasControl(); renderLadderView(); }
     });
     document.addEventListener("click", function (e) {
       if (e.target.closest(".popwrap")) return;

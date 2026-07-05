@@ -123,10 +123,11 @@ story keeps its tickets — they're just detached.
 
 Agents don't pick models — they **score the task**. Every ticket is filed with a **complexity score
 (1–10)** and a **mandatory motivation** for it (writing the why is what forces an honest look at the
-task), and sidequest **derives** which model tier works the ticket and at what reasoning effort by
-banding the score over the tiers *you* have enabled. Effort spreads `low → max` within each band —
-the philosophy is **exhaust effort before escalating tier**, since thinking harder on a cheap model
-costs less than renting a bigger one.
+task), and sidequest **derives** which model tier works the ticket and at what reasoning effort from
+that score. Routing is **one capability-ranked ladder** of model×effort rungs — not per-tier bands —
+so tiers overlap and cross over (`sonnet·xhigh` outranks `opus·low`; capability, not tier, orders the
+rungs). Its philosophy is still **exhaust effort before escalating tier**, since thinking harder on a
+cheap model costs less than renting a bigger one.
 
 ```bash
 sidequest add -t "Apply the codemod" --complexity 2 --why "single mechanical transform, node -c verifies"
@@ -135,20 +136,29 @@ sidequest update SQ-8 --complexity 5 --why "wider than scored: it also rewires t
 sidequest models   # the live ladder: which score routes where right now
 ```
 
-With `sonnet + opus + fable` enabled the ladder runs `C1-3 → sonnet·low/high/max`, `C4-6 →
-opus·low/high/max`, `C7-10 → fable·low/med/xhigh/max`. **It scales dynamically**: derivation happens
-at read time from the score, so toggling a tier in the gear menu's *Available models* instantly
-re-routes every open ticket — disable fable and your C9s become `opus·xhigh`, no migration. Cards
-show a `⚙C7→opus·max` chip; `ready`/`next --model <tier>` filter by the *derived* tier, so an
-executor never grabs work priced for another tier. Direct `--model`/`--effort` tagging is rejected.
+Complexity 1..10 maps onto that rung sequence, so adjacent scores may share a rung. **Max effort is
+held out of the normal spread** — only complexity 10 on the top enabled tier gets `·max` (and 9 too,
+only at the most generous bias); it's deliberately rare, in the spirit of Anthropic's "use max
+sparingly for the hardest tasks." **It scales dynamically**: derivation happens at read time, so
+toggling a tier in the gear menu's *Available models* instantly re-routes every open ticket — disable
+fable and your C9s drop onto the next rung down, no migration. Cards show a `⚙C7→opus·high` chip;
+`ready`/`next --model <tier>` filter by the *derived* tier, so an executor never grabs work priced for
+another tier. Direct `--model`/`--effort` tagging is rejected.
+
+**Bias slider.** Agents score complexity honestly against the absolute anchored scale; *you* tune how
+eagerly those scores climb the ladder with a bias dial (`sidequest bias <n>`, or the dashboard
+slider): `-5` Frugal … `0` neutral (default) … `+5` Generous. It gamma-curves the score→rung mapping —
+0 keeps the standard curve, higher biases escalate to pricier rungs sooner — but the extremes are
+invariant: complexity 1 always lands the cheapest rung and 10 the top rung at any bias.
 
 sidequest doesn't *force* a model (nothing can make a running model swap itself mid-task); the bundled
 skill enforces the flow on Claude: derived routing is honored via bundled executor agents
 (`sidequest-exec-low` … `-max`) spawned with the derived tier — effort lives in the agent definition,
 model in the spawn, so the two compose. (Haiku has no effort support; haiku-derived work uses a plain
 agent.) The same *Available models* section has a master switch to turn routing off entirely — then
-Claude may work any ticket itself and the chips become purely informational. At least one tier always
-stays enabled.
+Claude may work any ticket itself and the chips become purely informational. Effort levels can be
+excluded in that same *Available models* section, exactly like tiers — an excluded effort never
+appears in the ladder. At least one tier and one effort always stay enabled.
 
 ## File scopes & parallel waves
 

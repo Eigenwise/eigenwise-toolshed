@@ -190,31 +190,122 @@ function coerceComplexity(v) {
   return Number.isFinite(n) && n >= 1 && n <= 10 ? n : null;
 }
 
-// Build the 10-rung ladder for the currently enabled tiers: split 1..10 into
-// one contiguous band per enabled tier (top tiers get the larger bands, so
-// resolution is finest where cost matters most), then spread effort low→max
-// across each band — "exhaust effort before escalating tier", because thinking
-// harder on a cheap model costs less than renting a bigger one. Haiku has no
-// effort support, so its band derives effort null. Returns
-// [{ complexity: 1..10, model, effort }].
+// The routing bias: an integer dial ROUTING_BIAS_MIN..ROUTING_BIAS_MAX (default
+// 0) that warps the complexity→tier ladder without changing which tiers are
+// enabled. Negative = frugal (hold cheaper tiers for longer before escalating),
+// positive = generous (escalate to pricier tiers sooner), 0 = today's neutral
+// ladder. Clamped to range on write; anything unparseable degrades to 0, so a
+// missing/garbage pref can never perturb the default routing.
+const ROUTING_BIAS_MIN = -5;
+const ROUTING_BIAS_MAX = 5;
+function coerceRoutingBias(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(ROUTING_BIAS_MIN, Math.min(ROUTING_BIAS_MAX, n));
+}
+
+// Capability score for a rung: score = tierRank * LADDER_TIER_GAP + effortIndex,
+// where tierRank is a model's ABSOLUTE position in MODEL_CAPABILITY_ORDER (haiku 0
+// … fable 3 — NOT its position among the enabled subset, so capability distances
+// stay true when a middle tier is disabled) and effortIndex is the effort's
+// position in the non-max effort list (low 0 … xhigh 3). The gap (2) is
+// deliberately SMALLER than the full effort span (3, across low..xhigh) so
+// CAPABILITY-ADJACENT TIERS OVERLAP: a lower tier's top effort outranks the bottom
+// effort(s) of the very next tier (e.g. sonnet·xhigh > opus·low), because
+// capability is NOT tier-major — a cheaper model thinking hard can beat a pricier
+// one thinking little. Tiers two apart (gap 4 > span 3) never overlap. Bump the
+// gap toward the span to weaken the overlap (more tier-major); drop it toward 1 to
+// widen crossovers.
+const LADDER_TIER_GAP = 2;
+// The effort axis the score indexes along (max held out — it's the sparing top
+// rung, ranked separately). Position in this list == a rung's effortIndex.
+const LADDER_EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh'];
+
+// Build the 10-rung ladder for the currently enabled prefs as ONE merged,
+// capability-ranked sequence of (model, effort) rungs — not tier bands. Every
+// enabled (tier × non-max effort) combo participates as a rung, scored by
+// capability (see LADDER_TIER_GAP) so tiers overlap and crossovers happen; haiku
+// carries no effort and contributes a single null rung below every richer tier's
+// low rung. `max` is held out of that sequence and reserved for the very top of
+// the scale ("use sparingly for the hardest tasks"). routingBias then curves how
+// complexity 1..10 maps onto the sequence index (SQ-76 gamma remap), bending the
+// whole combined model+effort cost curve. Returns [{ complexity: 1..10, model,
+// effort }] — the shape every consumer (CLI, dashboard, read-time derivation)
+// already expects.
 function routingLadder(prefs) {
   prefs = prefs || getModelPrefs();
   let enabled = MODEL_CAPABILITY_ORDER.filter((m) => prefs[m] !== false);
   if (!enabled.length) enabled = ['sonnet']; // unreachable via setModelPrefs, but never return an empty ladder
-  const k = enabled.length;
-  const rungs = [];
-  for (let x = 0; x < 10; x++) {
-    rungs.push({ complexity: x + 1, tierIdx: (k - 1) - Math.floor(((9 - x) * k) / 10) });
+  let enabledEfforts = VALID_EFFORTS.filter((e) => prefs[e] !== false);
+  if (!enabledEfforts.length) enabledEfforts = ['medium']; // unreachable via setModelPrefs, but never index an empty list
+
+  // `max` is excluded from the normal ranked sequence — it's the sparing top rung
+  // handled below. The one exception: if the user left ONLY max enabled it has to
+  // carry the sequence (maxInSequence), so there's no separate sparing rung.
+  const maxEnabled = enabledEfforts.indexOf('max') !== -1;
+  let seqEfforts = enabledEfforts.filter((e) => e !== 'max');
+  const maxInSequence = seqEfforts.length === 0;
+  if (maxInSequence) seqEfforts = enabledEfforts.slice();
+
+  // ENUMERATE every enabled combo programmatically and score it by capability.
+  // Haiku → a single effort-null rung; every other tier → one rung per enabled
+  // non-max effort (opus·xhigh included, etc.).
+  const seq = [];
+  for (let t = 0; t < enabled.length; t++) {
+    const model = enabled[t];
+    const tierRank = MODEL_CAPABILITY_ORDER.indexOf(model); // absolute, not enabled-relative
+    if (model === 'haiku') {
+      seq.push({ model: 'haiku', effort: null, tierRank, score: tierRank * LADDER_TIER_GAP });
+    } else {
+      for (const eff of seqEfforts) {
+        // 'max' only appears here in the only-max-enabled fallback; rank it above
+        // the normal effort scale so it stays the strongest rung of its tier.
+        const idx = eff === 'max' ? LADDER_EFFORT_ORDER.length : LADDER_EFFORT_ORDER.indexOf(eff);
+        seq.push({ model, effort: eff, tierRank, score: tierRank * LADDER_TIER_GAP + idx });
+      }
+    }
   }
-  for (let t = 0; t < k; t++) {
-    const band = rungs.filter((r) => r.tierIdx === t);
-    band.forEach((r, i) => {
-      const frac = band.length === 1 ? 0.5 : i / (band.length - 1);
-      r.model = enabled[t];
-      r.effort = enabled[t] === 'haiku' ? null : VALID_EFFORTS[Math.round(frac * (VALID_EFFORTS.length - 1))];
-    });
+  // RANK ascending by capability; exact cross-tier score ties (e.g. sonnet·high ==
+  // opus·low) break by higher tier ranking above — one merged total order.
+  seq.sort((a, b) => (a.score - b.score) || (a.tierRank - b.tierRank));
+
+  // MAX SPARINGLY: the strongest enabled tier's ·max rung sits ABOVE the whole
+  // sequence and is only reached at the very top of the complexity scale. Haiku
+  // has no ·max, so there's no max rung when it's the only tier; and if max is
+  // already carrying the sequence, the sequence's own top is the ceiling.
+  const topTier = enabled[enabled.length - 1];
+  const hasMaxRung = maxEnabled && !maxInSequence && topTier !== 'haiku';
+  const full = hasMaxRung ? seq.concat([{ model: topTier, effort: 'max' }]) : seq;
+
+  // BIAS curves complexity → sequence index via the SQ-76 gamma remap. Reserve the
+  // top complexities for the max rung: complexity 10 always, and 9 too only at the
+  // most generous bias (+5); never below 9, at any bias. With no max rung, 10
+  // lands the top of the normal sequence instead.
+  const bias = coerceRoutingBias(prefs.routingBias);
+  const gamma = Math.pow(3, -bias / 5);
+  const maxCount = hasMaxRung ? (bias >= ROUTING_BIAS_MAX ? 2 : 1) : 0;
+  const normalCount = 10 - maxCount;      // complexities 1..normalCount hit the sequence
+  const maxIdx = full.length - 1;         // index of the max rung (only used when hasMaxRung)
+  const lastNormal = seq.length - 1;      // top index of the normal sequence
+
+  const out = [];
+  for (let c = 1; c <= 10; c++) {
+    let rung;
+    if (hasMaxRung && c > normalCount) {
+      rung = full[maxIdx];
+    } else {
+      // p in [0,1]: normalized complexity within the non-max range. gamma bends it
+      // (bias>0 -> higher index sooner; ends invariant, so c=1 -> rung 0 and the top
+      // non-max complexity -> the sequence's top rung). Duplicates across adjacent
+      // complexities are fine; we never index outside the enabled sequence.
+      const p = normalCount > 1 ? (c - 1) / (normalCount - 1) : 0;
+      const frac = Math.pow(p, gamma);
+      const idx = lastNormal <= 0 ? 0 : Math.round(frac * lastNormal);
+      rung = seq[idx];
+    }
+    out.push({ complexity: c, model: rung.model, effort: rung.effort });
   }
-  return rungs.map((r) => ({ complexity: r.complexity, model: r.model, effort: r.effort }));
+  return out;
 }
 
 // { model, effort } for a score under the current (or given) prefs, or null
@@ -1510,42 +1601,55 @@ function setNotifyPrefs(patch) {
 }
 
 /* ------------------------------------------------------------------ *
- *  Model prefs (which agent tiers the user wants offered at all)
+ *  Model prefs (which agent tiers AND effort levels the user wants offered)
  *
- *  A per-user allowlist over VALID_MODELS, stored like notify-prefs. This is a
- *  UI/routing preference, not a data rule: the dashboard hides disabled tiers
- *  from its Model picker and the skill tells the orchestrator to treat a
- *  disabled tier as unavailable when choosing an executor — but coerceModel
- *  stays permissive, so a ticket already tagged with a disabled tier keeps its
- *  tag (and still renders) rather than silently losing data.
+ *  A per-user allowlist over VALID_MODELS *and* VALID_EFFORTS, stored like
+ *  notify-prefs. This is a UI/routing preference, not a data rule: the dashboard
+ *  hides disabled tiers from its Model picker, routingLadder drops disabled
+ *  effort levels from the within-band spread, and the skill tells the
+ *  orchestrator to treat a disabled tier/effort as unavailable — but coerceModel
+ *  / coerceEffort stay permissive, so a ticket already tagged with a disabled
+ *  tier/effort keeps its tag (and still renders) rather than losing data.
  * ------------------------------------------------------------------ */
 
 function modelPrefsFile() {
   return path.join(projectsRoot(), 'model-prefs.json');
 }
 
-// Missing/corrupt file -> every tier enabled and routing on. `routing` is the
-// master switch: when false the skill's model/effort enforcement stands down and
-// the main agent may work any ticket itself (tags become informational).
+// Missing/corrupt file -> every tier and every effort enabled, routing on, and a
+// neutral (0) bias. `routing` is the master switch: when false the skill's
+// model/effort enforcement stands down and the main agent may work any ticket
+// itself (tags become informational). `routingBias` (-5..+5) warps the
+// complexity ladder routingLadder() derives from the enabled tiers (see
+// coerceRoutingBias). The per-effort booleans (low/medium/high/xhigh/max) are
+// carried through exactly like the tier booleans and gate which effort levels
+// routingLadder may assign.
 function getModelPrefs() {
   const saved = readJson(modelPrefsFile(), null);
   const merged = saved && typeof saved === 'object' ? saved : {};
   const out = {};
   for (const m of VALID_MODELS) out[m] = merged[m] !== false;
+  for (const e of VALID_EFFORTS) out[e] = merged[e] !== false;
   out.routing = merged.routing !== false;
+  out.routingBias = coerceRoutingBias(merged.routingBias);
   return out;
 }
 
 // Persist a partial or full set. Unknown keys are dropped; refuses to disable
 // every tier at once (the last enabled tier stays on) so routing always has
-// somewhere to go. The `routing` master switch is carried through independently
-// of the tier guard (it can't satisfy or break the at-least-one-tier rule).
+// somewhere to go, and mirrors that guard for effort so at least one effort
+// level always stays enabled. The `routing` master switch and `routingBias` dial
+// are carried through independently of those guards (neither can satisfy or
+// break the at-least-one rules); routingBias is clamped to range on write.
 function setModelPrefs(patch) {
   const next = Object.assign({}, getModelPrefs(), patch || {});
   const out = {};
   for (const m of VALID_MODELS) out[m] = next[m] !== false;
   if (!VALID_MODELS.some((m) => out[m])) out[VALID_MODELS.indexOf('sonnet') !== -1 ? 'sonnet' : VALID_MODELS[0]] = true;
+  for (const e of VALID_EFFORTS) out[e] = next[e] !== false;
+  if (!VALID_EFFORTS.some((e) => out[e])) out[VALID_EFFORTS.indexOf('medium') !== -1 ? 'medium' : VALID_EFFORTS[0]] = true;
   out.routing = next.routing !== false;
+  out.routingBias = coerceRoutingBias(next.routingBias);
   writeJson(modelPrefsFile(), out);
   return out;
 }
