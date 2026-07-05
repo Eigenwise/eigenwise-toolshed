@@ -222,30 +222,59 @@ files** — parallel edits to one file collide. Link such tickets with `depends-
 naturally serialize them. For a large fan-out you may use a subagent workflow; otherwise a batch of
 background subagents is enough.
 
-## Route work by model tier
+## Route work by model tier + effort (ENFORCED)
 
-A ticket can carry a **target model tier** — which agent tier should work it — so you plan with the
-strongest model and execute with a cheaper one. Tag it with `--model` (the aliases the Task tool
-accepts: `opus | sonnet | haiku | fable`; untagged = any):
+A ticket can carry a **target model tier** (which agent tier works it) and a **reasoning effort**
+(how hard that tier thinks) — together the cost dial: plan with the strongest model at high effort,
+execute with a cheaper one at low effort.
 
 ```bash
-sidequest add -t "Design the migration" --model opus     # planning / hard reasoning → top tier
-sidequest add -t "Apply the codemod"    --model sonnet   # execution → a tier down
-sidequest update SQ-8 --model haiku                       # set/adjust later ( --model any clears it )
+sidequest add -t "Design the migration" --model opus --effort xhigh   # hard reasoning
+sidequest add -t "Apply the codemod"    --model sonnet --effort low   # mechanical execution
+sidequest update SQ-8 --model any --effort any                        # clear either half
+sidequest models --json                                               # tiers the user allows + effort levels
 ```
 
-**How to honor the tag when working the board:**
-- **You can't change your own model mid-run, and sidequest can't force one** — only the orchestrator
-  picks a model, and only for the **subagents it spawns**. So when a ticket is tagged, spawn its
-  executor subagent at that tier (the Task tool's `model` parameter) instead of doing the tier-down
-  work yourself. Reading the tag and routing is the whole mechanism.
-- **Claim by tier.** `sidequest next --model sonnet` / `sidequest ready --model sonnet` only hand out
-  tickets tagged `sonnet` **or untagged**, so a sonnet-tier worker never grabs an opus-only planning
-  ticket. Pass the tier the worker is running as.
-- **The pattern:** decompose on the top tier (tag planning/design tickets `opus`), tag the execution
-  tickets a tier down (`sonnet`/`haiku`), then fan out — each execution subagent spawned at its
-  ticket's tagged tier. It's advisory routing, not a hard gate: the point is that the right tier picks
-  up the right work. A ticket's tier shows as a chip on its card and in `list`/`ready` output.
+**These are rules you MUST follow when spawning a ticket's executor — the same register as
+"never work a ticket you haven't claimed", not suggestions:**
+
+1. **MUST route, not self-execute a tagged ticket.** You cannot change your own model mid-run and
+   sidequest cannot force one; the only control point is the model you pick when **spawning a
+   subagent**. A ticket tagged below your tier gets an executor subagent at its tagged tier.
+2. **MUST pick only from models actually available** in your environment (the Task/Agent tool's model
+   list, e.g. `opus|sonnet|haiku|fable`). Never invent or guess an alias.
+3. **MUST respect the user's model allowlist.** Run `sidequest models --json` first; a tier disabled
+   there is treated as unavailable, even if the ticket is tagged with it — fall back to the nearest
+   **lower** allowed tier.
+4. **MUST NOT spawn above your own tier.** Tier order: `fable > opus > sonnet > haiku`. If your main
+   session runs opus, you never spawn a fable executor — a ticket tagged above your tier is capped
+   **down** to your tier.
+5. **Untagged tickets: MUST choose by complexity.** Trivial/mechanical (rename, dedup, config bump) →
+   lowest allowed tier; standard implementation → a mid tier; hard reasoning/design/debugging → the
+   top allowed tier (≤ yours).
+6. **Effort: MUST map `ticket.effort` onto the spawn.** Effort is set per agent **definition**, not
+   per invocation — sidequest bundles executor agents for exactly this:
+   spawn `subagent_type: sidequest-exec-<effort>` (low|medium|high|xhigh|max) **with**
+   `model: <resolved tier>`; the two compose. No effort tag → any agent type (it inherits your
+   session's effort). **Never pair an effort executor with haiku** — haiku has no effort support.
+7. **Claim by tier when working the board as a given tier:** `sidequest next --model X` /
+   `ready --model X` only hand out X-tagged or untagged tickets, so an executor never grabs work
+   reserved for another tier.
+
+**Decision procedure (walk it per ticket, in order):**
+1. `tier = ticket.model` (or complexity-based if unset, rule 5).
+2. Cap: `tier = min(tier, your own tier)` (rule 4).
+3. Allowlist: while `tier` is disabled in `sidequest models`, step down to the next allowed tier (rule 3).
+4. `effort = ticket.effort` → executor `sidequest-exec-<effort>`; unset → `general-purpose` (rule 6;
+   if `tier` is haiku, ignore effort and note it in the report).
+5. Spawn `subagent_type` from step 4 with `model: tier`; the executor claims → works → verifies → dones.
+
+*Worked example:* main session = opus; ticket `SQ-12 ⚙sonnet·low`; user has haiku disabled.
+sonnet ≤ opus ✓, sonnet allowed ✓, effort low → `Agent(subagent_type: "sidequest-exec-low",
+model: "sonnet", prompt: claim SQ-12 → fix → verify → done)`.
+
+A ticket's routing shows as a `⚙tier·effort` chip on its card and in `list`/`ready` output; the
+user picks which tiers are offered at all in the dashboard's settings (gear → Available models).
 
 ## Comments & questions
 

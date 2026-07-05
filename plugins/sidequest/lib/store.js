@@ -146,6 +146,20 @@ function coerceModel(v) {
   return VALID_MODELS.indexOf(s) !== -1 ? s : null;
 }
 
+// How hard the executor should think — the reasoning-effort levels Claude Code
+// supports in agent-definition frontmatter. Rides alongside `model` as the other
+// half of the cost dial (model = capability tier, effort = thinking depth).
+// null = unset (executor inherits the session default). Note: Haiku has no
+// effort support at all — routing guidance lives in the skill, not enforced here.
+const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+function coerceEffort(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  if (!s || s === 'any' || s === 'none' || s === 'null' || s === 'default') return null;
+  return VALID_EFFORTS.indexOf(s) !== -1 ? s : null;
+}
+
 // A user story groups several tickets. Its colour is what the board uses to tint
 // every member card, so the eight defaults are muted, distinct hues that read on
 // the cream paper (and against each other). New stories cycle through them; the
@@ -443,6 +457,7 @@ function createTicket(slug, fields) {
     labels: normalizeLabels(fields.labels),
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
     model: coerceModel(fields.model),             // the agent tier that should work it (null = any)
+    effort: coerceEffort(fields.effort),          // how hard that tier should think (null = session default)
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
@@ -522,6 +537,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
     if (patch.model !== undefined) t.model = coerceModel(patch.model);
+    if (patch.effort !== undefined) t.effort = coerceEffort(patch.effort);
     if (patch.assignee !== undefined) t.assignee = normalizeAssignee(patch.assignee);
     if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
     // Attach any newly supplied images (by path from the CLI, or base64 from the
@@ -1349,6 +1365,42 @@ function setNotifyPrefs(patch) {
   return out;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Model prefs (which agent tiers the user wants offered at all)
+ *
+ *  A per-user allowlist over VALID_MODELS, stored like notify-prefs. This is a
+ *  UI/routing preference, not a data rule: the dashboard hides disabled tiers
+ *  from its Model picker and the skill tells the orchestrator to treat a
+ *  disabled tier as unavailable when choosing an executor — but coerceModel
+ *  stays permissive, so a ticket already tagged with a disabled tier keeps its
+ *  tag (and still renders) rather than silently losing data.
+ * ------------------------------------------------------------------ */
+
+function modelPrefsFile() {
+  return path.join(projectsRoot(), 'model-prefs.json');
+}
+
+// Missing/corrupt file -> every tier enabled.
+function getModelPrefs() {
+  const saved = readJson(modelPrefsFile(), null);
+  const merged = saved && typeof saved === 'object' ? saved : {};
+  const out = {};
+  for (const m of VALID_MODELS) out[m] = merged[m] !== false;
+  return out;
+}
+
+// Persist a partial or full set. Unknown keys are dropped; refuses to disable
+// every tier at once (the last enabled tier stays on) so routing always has
+// somewhere to go.
+function setModelPrefs(patch) {
+  const next = Object.assign({}, getModelPrefs(), patch || {});
+  const out = {};
+  for (const m of VALID_MODELS) out[m] = next[m] !== false;
+  if (!VALID_MODELS.some((m) => out[m])) out[VALID_MODELS.indexOf('sonnet') !== -1 ? 'sonnet' : VALID_MODELS[0]] = true;
+  writeJson(modelPrefsFile(), out);
+  return out;
+}
+
 // Build the title/body for a background-event notification, mirroring the
 // dashboard's own maybeNotify() toast copy so a persisted inbox entry reads the
 // same as the desktop toast the user may also have seen for the same event.
@@ -1575,6 +1627,9 @@ module.exports = {
   VALID_STATUS,
   VALID_PRIORITY,
   VALID_MODELS,
+  VALID_EFFORTS,
+  getModelPrefs,
+  setModelPrefs,
   homeRoot,
   projectsRoot,
   serverFile,

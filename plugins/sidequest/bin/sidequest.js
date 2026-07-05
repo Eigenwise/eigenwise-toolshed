@@ -112,6 +112,13 @@ function resolveProject(opts) {
 
 const PRIORITY_MARK = { urgent: '!!', high: '!', normal: '', low: '·' };
 
+// Routing marker for a ticket: "⚙tier", "⚙tier·effort", or "⚙any·effort" when
+// only the thinking depth is pinned. Empty when neither is set.
+function modelMark(t) {
+  if (!t.model && !t.effort) return '';
+  return `  ⚙${t.model || 'any'}${t.effort ? '·' + t.effort : ''}`;
+}
+
 function cmdAdd(opts) {
   if (!opts.title) fail('add: --title is required (e.g. sidequest add -t "Contact form does not send")');
   const { slug, meta } = resolveProject(opts);
@@ -125,6 +132,7 @@ function cmdAdd(opts) {
     images: opts.image || [],
     storyId: opts.story,
     model: opts.model,
+    effort: opts.effort,
     source: opts.source || 'cli',
     onAssetError: (src) => warnings.push(`could not attach image: ${src}`),
   });
@@ -137,8 +145,7 @@ function cmdAdd(opts) {
   const imgs = ticket.assets.length ? ` (${ticket.assets.length} image${ticket.assets.length > 1 ? 's' : ''})` : '';
   const story = ticket.storyId ? store.getStory(slug, ticket.storyId) : null;
   const st = story ? `  ↳${story.ref}` : '';
-  const md = ticket.model ? `  ⚙${ticket.model}` : '';
-  console.log(`✓ ${ticket.ref}${pr}  "${ticket.title}"  [${ticket.status}/${ticket.priority}]${imgs}${st}${md}  — ${meta.name}`);
+  console.log(`✓ ${ticket.ref}${pr}  "${ticket.title}"  [${ticket.status}/${ticket.priority}]${imgs}${st}${modelMark(ticket)}  — ${meta.name}`);
   for (const w of warnings) console.log(`  ! ${w}`);
   const info = store.readServerInfo();
   if (info && info.url) console.log(`  board: ${info.url}`);
@@ -175,8 +182,7 @@ function cmdList(opts) {
       const lnk = t.links && t.links.length ? `  ⇄${t.links.length}` : '';
       const cmt = t.comments && t.comments.length ? `  \u{1F4AC}${t.comments.length}` : '';
       const ask = store.needsResponse(t) ? '  ❓ awaiting reply' : '';
-      const md = t.model ? `  ⚙${t.model}` : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${cmt}${lnk}${blk}${clm}${asn}${md}${ask}`);
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${ask}`);
     }
   }
 }
@@ -194,6 +200,7 @@ function cmdUpdate(opts, positional) {
   if (opts.image != null) patch.images = opts.image;
   if (opts.assignee != null) patch.assignee = opts.assignee;
   if (opts.model != null) patch.model = opts.model; // tier (opus|sonnet|…) or "any"/"none"/null to clear
+  if (opts.effort != null) patch.effort = opts.effort; // low|medium|high|xhigh|max, or "any"/"none" to clear
   if (opts.story != null) patch.storyId = opts.story; // link (US-n / raw id) or clear ("none"/null)
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
   const updated = store.updateTicket(slug, idOrRef, patch);
@@ -204,8 +211,7 @@ function cmdUpdate(opts, positional) {
   }
   const story = updated.storyId ? store.getStory(slug, updated.storyId) : null;
   const st = story ? `  ↳${story.ref}` : '';
-  const md = updated.model ? `  ⚙${updated.model}` : '';
-  console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]${st}${md}  "${updated.title}"`);
+  console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]${st}${modelMark(updated)}  "${updated.title}"`);
 }
 
 function cmdRm(opts, positional) {
@@ -559,7 +565,7 @@ function cmdReady(opts) {
   console.log(`${meta.name} — ${tickets.length} ready to work (unclaimed, unblocked):`);
   for (const t of tickets) {
     const pr = PRIORITY_MARK[t.priority] ? ` ${PRIORITY_MARK[t.priority]}` : '';
-    const md = t.model ? `  ⚙${t.model}` : '';
+    const md = modelMark(t);
     console.log(`    ${t.ref}${pr}  ${t.title}${md}`);
   }
   if (tickets.length > 1) {
@@ -610,6 +616,19 @@ function cmdUnarchive(opts, positional) {
     process.exitCode = 1;
     console.log(`✗ unarchive: no ticket "${idOrRef}" in ${meta.name}`);
   }
+}
+
+// The model tiers the user allows (dashboard settings), plus the valid effort
+// levels — the orchestrator reads this (--json) before choosing an executor.
+function cmdModels(opts) {
+  const prefs = store.getModelPrefs();
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS }, null, 2) + '\n');
+    return;
+  }
+  console.log('Model tiers (toggle in the dashboard settings):');
+  for (const m of store.VALID_MODELS) console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}`);
+  console.log(`Effort levels: ${store.VALID_EFFORTS.join(', ')}  (haiku has no effort support)`);
 }
 
 function cmdProjects(opts) {
@@ -884,13 +903,15 @@ Working the board safely (multi-agent):
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
   When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.
 
-Model tier (route planning vs. execution to different model tiers):
-  sidequest add ... --model <opus|sonnet|haiku|fable|any>   tag which tier should work this ticket
-  sidequest update <id|SQ-n> --model <tier|any>   set the tier, or "any"/"none" to clear the tag
+Model tier + effort (route work by capability AND thinking depth):
+  sidequest add ... --model <opus|sonnet|haiku|fable|any> [--effort <low|medium|high|xhigh|max|any>]
+  sidequest update <id|SQ-n> --model <tier|any> --effort <level|any>   set/clear either half of the dial
   sidequest ready --model <tier>  ·  sidequest next --model <tier>   only claim tickets tagged that tier or untagged
-  Tag planning/design work for the top tier and execution work a tier below; a --model X worker only picks up
-  X-tagged or untagged tickets (never a ticket reserved for another tier). Sidequest can't force a model — it
-  just records the tag; the orchestrator routes by reading it (shown as ⚙tier on list/ready).
+  sidequest models [--json]                        which tiers the user allows (dashboard setting) + effort levels
+  Tag planning/design work for the top tier and execution work a tier below (e.g. --model sonnet --effort low for
+  mechanical fixes, --model opus --effort xhigh for hard design). A --model X worker only picks up X-tagged or
+  untagged tickets. Sidequest can't force a model or effort — it records the tag (⚙tier·effort on list/ready) and
+  the orchestrator routes by reading it. Haiku has no effort support; never combine haiku with an effort level.
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
@@ -1029,6 +1050,9 @@ async function main() {
     case 'unarchive':
     case 'restore':
       cmdUnarchive(opts, positional);
+      break;
+    case 'models':
+      cmdModels(opts);
       break;
     case 'projects':
     case 'boards':

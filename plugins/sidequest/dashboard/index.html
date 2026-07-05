@@ -598,6 +598,8 @@
           <label class="pop-row"><input type="checkbox" data-notif="status" /><span>Status changes<em>Claude moved a ticket between columns</em></span></label>
           <div class="pop-head">Per-project<span id="projNotifyHint" style="margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text-faint)"></span></div>
           <div class="proj-notify-list" id="projNotifyList"></div>
+          <div class="pop-head">Available models</div>
+          <div class="model-pref-list" id="modelPrefList"></div>
           <div class="pop-foot">The kinds above apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
         </div>
       </div>
@@ -681,6 +683,10 @@
         <div class="field">
           <label>Model</label>
           <div class="seg model" id="mModel"></div>
+        </div>
+        <div class="field">
+          <label>Effort</label>
+          <div class="seg effort" id="mEffort"></div>
         </div>
         <div class="field">
           <label for="mLabels">Labels</label>
@@ -776,6 +782,12 @@
     { k: "haiku", label: "Haiku" }, { k: "fable", label: "Fable" }
   ];
   var MODEL_COLORS = { opus: "#404683", sonnet: "#3f8f8a", haiku: "#a8672e", fable: "#7a5ba8" };
+  // Reasoning-effort levels (mirrors store.VALID_EFFORTS). "Default" = unset —
+  // the executor inherits the session's effort. Rides with model as one dial.
+  var EFFORTS = [
+    { k: "any", label: "Default" }, { k: "low", label: "Low" }, { k: "medium", label: "Med" },
+    { k: "high", label: "High" }, { k: "xhigh", label: "XHigh" }, { k: "max", label: "Max" }
+  ];
   var POLL_MS = 2500;
   // Quick "Remind me" presets in the ticket editor -> a Date to fire at.
   var REMINDER_PRESETS = {
@@ -851,11 +863,19 @@
     api("/api/notify-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(notifyPrefs) }).catch(function () {});
   }
 
-  // Sort choice is board-wide and persisted across reloads.
-  try {
-    var savedSort = localStorage.getItem("sq_sort");
-    if (savedSort && SORTS.some(function (s) { return s.k === savedSort; })) state.sortMode = savedSort;
-  } catch (_) {}
+  // Which model tiers the user wants offered at all (server-side allowlist).
+  // Gates the editor's Model picker and what the orchestrator is told to use;
+  // an already-tagged ticket keeps showing its chip even if its tier is off.
+  var modelPrefs = { opus: true, sonnet: true, haiku: true, fable: true };
+  function modelEnabled(k) { return modelPrefs[k] !== false; }
+  function syncModelPrefsFromServer() {
+    return api("/api/model-prefs").then(function (d) {
+      if (d && d.prefs) { modelPrefs = d.prefs; renderModelPrefSettings(); buildModelSegment(); }
+    }).catch(function () { /* older server without this route — offer everything */ });
+  }
+  function pushModelPrefs() {
+    api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) }).catch(function () {});
+  }
 
   // Sort choice is board-wide and persisted across reloads.
   try {
@@ -1040,7 +1060,7 @@
   function signature() {
     // A compact fingerprint of what's on screen, so polling only re-renders on real change.
     var parts = state.projects.map(function (p) { return p.slug + ":" + p.counts.todo + "," + p.counts.doing + "," + p.counts.done; });
-    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || "") + (t.model || ""); });
+    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || "") + (t.model || "") + (t.effort || ""); });
     var ss = state.stories.map(function (s) { return s.id + s.color + s.title; });
     return state.current + "|" + parts.join(";") + "||" + ts.sort().join(";") + "||" + ss.sort().join(";");
   }
@@ -1322,6 +1342,31 @@
       box.appendChild(row);
     });
   }
+  // Which model tiers are offered in the ticket editor (and recommended to the
+  // orchestrator). Personal taste — e.g. turn haiku off — stored server-side so
+  // it holds across tabs/reloads. At least one tier always stays on.
+  function renderModelPrefSettings() {
+    var box = $("modelPrefList"); if (!box) return;
+    box.innerHTML = "";
+    MODELS.forEach(function (m) {
+      if (m.k === "any") return;
+      var on = modelEnabled(m.k);
+      var row = el("label", "proj-notify-row" + (on ? "" : " muted"));
+      row.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' /><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:' + (MODEL_COLORS[m.k] || "var(--line)") + '"></span><span class="pn-name">' + esc(m.label) + (m.k === "haiku" ? ' <em style="font-style:normal;font-size:10.5px;color:var(--text-faint)">(no effort support)</em>' : '') + '</span>';
+      var cb = row.querySelector("input");
+      cb.addEventListener("change", function () {
+        var next = {}; next[m.k] = cb.checked;
+        var enabledCount = MODELS.filter(function (x) { return x.k !== "any" && modelEnabled(x.k); }).length;
+        if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one model tier must stay enabled"); return; }
+        modelPrefs[m.k] = cb.checked;
+        renderModelPrefSettings(); buildModelSegment();
+        pushModelPrefs();
+        toast(cb.checked ? m.label + " enabled" : m.label + " hidden from the picker");
+      });
+      box.appendChild(row);
+    });
+  }
+
   function toggleProjectNotify(slug, on) {
     var p = state.projects.filter(function (x) { return x.slug === slug; })[0];
     if (p) p.notify = on;   // optimistic
@@ -1507,11 +1552,14 @@
       ? '<span class="storychip" title="' + esc((story.ref || "") + " · " + story.title) + '" style="color:' + esc(story.color) + ';background:' + tint(story.color, 0.1) + ';border-color:' + tint(story.color, 0.4) + '"><span class="sdot" style="background:' + esc(story.color) + '"></span>' + esc(story.title || story.ref) + '</span>'
       : "";
 
-    // Target-model tier chip (which agent tier should pick it up), tinted per tier.
-    var mc = t.model && MODEL_COLORS[t.model] ? MODEL_COLORS[t.model] : null;
-    var modelChip = mc
-      ? '<span class="modelchip" title="target model tier: ' + esc(t.model) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>' + esc(t.model) + '</span>'
-      : "";
+    // Routing chip: target model tier and/or reasoning effort ("sonnet·low",
+    // "opus·xhigh", or "any·high" when only effort is pinned), tinted per tier.
+    var modelChip = "";
+    if (t.model || t.effort) {
+      var mc = (t.model && MODEL_COLORS[t.model]) || "#52545f"; // neutral for effort-only
+      var routeLabel = (t.model || "any") + (t.effort ? "·" + t.effort : "");
+      modelChip = '<span class="modelchip" title="routing: ' + esc((t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "")) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>' + esc(routeLabel) + '</span>';
+    }
 
     c.innerHTML = storyTop +
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge + storyChip +
@@ -1589,15 +1637,34 @@
       b.addEventListener("click", function () { setSeg(ac, a.k); autosave({ assignee: a.k === "me" ? ME : null }); });
       ac.appendChild(b);
     });
-    // Target-model tier: "Any" (untagged) or a tier the orchestrator routes to.
-    var mm = $("mModel"); mm.innerHTML = "";
+    buildModelSegment();
+    // Reasoning effort: "Default" (inherit the session) or a pinned level.
+    var me = $("mEffort"); me.innerHTML = "";
+    EFFORTS.forEach(function (ef) {
+      var b = el("button", "", ef.label);
+      b.type = "button"; b.dataset.k = ef.k;
+      b.addEventListener("click", function () { setSeg(me, ef.k); autosave({ effort: ef.k === "any" ? null : ef.k }); });
+      me.appendChild(b);
+    });
+  }
+
+  // Target-model tier segment: "Any" (untagged) or a tier the orchestrator routes
+  // to. Rebuilt whenever the allowlist changes — a user-disabled tier isn't
+  // offered, except when the open ticket already carries it (so the tag stays
+  // visible/clearable rather than silently vanishing).
+  function buildModelSegment(keepTier) {
+    var mm = $("mModel");
+    var current = keepTier || segValue(mm);
+    mm.innerHTML = "";
     MODELS.forEach(function (m) {
+      if (m.k !== "any" && !modelEnabled(m.k) && m.k !== current) return; // hidden by the allowlist
       var sw = (m.k !== "any" && MODEL_COLORS[m.k]) ? '<span class="sw" style="background:' + MODEL_COLORS[m.k] + '"></span>' : "";
       var b = el("button", "", sw + m.label);
       b.type = "button"; b.dataset.k = m.k;
       b.addEventListener("click", function () { setSeg(mm, m.k); autosave({ model: m.k === "any" ? null : m.k }); });
       mm.appendChild(b);
     });
+    if (current) setSeg(mm, current);
   }
   function setSeg(container, k) { Array.prototype.forEach.call(container.children, function (b) { b.classList.toggle("on", b.dataset.k === k); }); }
   function segValue(container) { var on = container.querySelector(".on"); return on ? on.dataset.k : null; }
@@ -1618,7 +1685,9 @@
     setSeg($("mPriority"), isEdit ? ticket.priority : "normal");
     setSeg($("mStatus"), isEdit ? ticket.status : "todo");
     setSeg($("mAssignee"), isEdit && isMine(ticket) ? "me" : "unassigned");
+    buildModelSegment(isEdit && ticket.model ? ticket.model : "any"); // re-offer per allowlist, keeping this ticket's tier
     setSeg($("mModel"), isEdit && ticket.model ? ticket.model : "any");
+    setSeg($("mEffort"), isEdit && ticket.effort ? ticket.effort : "any");
     // Show any agent claim as a read-only hint (it's a separate axis from assignee).
     var hint = $("mClaimHint");
     if (isEdit && ticket.claim && ticket.claim.by) {
@@ -2021,6 +2090,7 @@
       labels: $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       storyId: ($("mStory").value && $("mStory").value !== "__new") ? $("mStory").value : null,
       model: segValue($("mModel")) === "any" ? null : segValue($("mModel")),
+      effort: segValue($("mEffort")) === "any" ? null : segValue($("mEffort")),
       imagesData: ed.attachments.map(function (a) { return { name: a.name, base64: a.base64 }; })
     };
 
@@ -2388,7 +2458,7 @@
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
-      if (opening) renderProjectNotifySettings();
+      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); }
     });
     document.addEventListener("click", function (e) {
       if (e.target.closest(".popwrap")) return;
@@ -2446,6 +2516,7 @@
   makeIcon();
   initNotifications();
   syncNotifyPrefsFromServer();
+  syncModelPrefsFromServer();
   refresh(true).then(function () {
     // Land on the busiest single board if there's exactly one, else keep "All".
     if (state.projects.length === 1) selectProject(state.projects[0].slug);

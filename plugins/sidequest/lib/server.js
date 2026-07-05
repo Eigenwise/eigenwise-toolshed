@@ -294,6 +294,7 @@ async function handle(req, res) {
       labels: body.labels,
       storyId: body.storyId,
       model: body.model,
+      effort: body.effort,
       assignee: body.assignee,
       imagesData: body.imagesData,
       source: 'dashboard',
@@ -533,6 +534,25 @@ async function handle(req, res) {
       return;
     }
     sendJson(res, 200, { prefs: store.setNotifyPrefs(body) });
+    return;
+  }
+
+  // --- Model prefs: which agent tiers the user wants offered (allowlist over
+  // opus/sonnet/haiku/fable). Read by the dashboard's Model picker and by the
+  // orchestrator (via the CLI) when choosing an executor tier. ---
+  if (req.method === 'GET' && pathname === '/api/model-prefs') {
+    sendJson(res, 200, { prefs: store.getModelPrefs() });
+    return;
+  }
+  if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/model-prefs') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    sendJson(res, 200, { prefs: store.setModelPrefs(body) });
     return;
   }
 
