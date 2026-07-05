@@ -20,6 +20,20 @@ const store = require('./store');
 
 const DASHBOARD_HTML = path.join(__dirname, '..', 'dashboard', 'index.html');
 
+// The installed plugin version, stamped into the health payload and the
+// server lockfile so a caller can tell "this running process is on-disk-code"
+// apart from "this running process predates the last plugin update" (see
+// SQ-92: a long-lived server keeps whatever routing logic was compiled in at
+// its own startup — require() never re-reads a changed file for a process
+// that's still alive). Missing/unreadable is fine; it just disables the
+// staleness check on the CLI side.
+let PLUGIN_VERSION = null;
+try {
+  PLUGIN_VERSION = require('../.claude-plugin/plugin.json').version || null;
+} catch (_) {
+  /* best effort */
+}
+
 const CONTENT_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -146,7 +160,7 @@ async function handle(req, res) {
 
   // --- Health / handshake ---
   if (req.method === 'GET' && pathname === '/api/health') {
-    sendJson(res, 200, { ok: true, name: 'sidequest', pid: process.pid, startedAt: START_TIME });
+    sendJson(res, 200, { ok: true, name: 'sidequest', pid: process.pid, startedAt: START_TIME, version: PLUGIN_VERSION });
     return;
   }
 
@@ -668,7 +682,7 @@ async function start(requestedPort) {
     });
   });
   const port = await listenOn(server, startPort, host, 40);
-  const info = { port, pid: process.pid, url: `http://${host}:${port}`, startedAt: START_TIME };
+  const info = { port, pid: process.pid, url: `http://${host}:${port}`, startedAt: START_TIME, version: PLUGIN_VERSION };
   store.writeServerInfo(info);
 
   const reminderTimer = startReminderScheduler();

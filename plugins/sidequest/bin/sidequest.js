@@ -911,6 +911,18 @@ function cmdStory(opts, positional) {
  *  Server lifecycle
  * ------------------------------------------------------------------ */
 
+// The installed plugin version. Compared against a running server's health
+// payload so an old, still-alive server (e.g. left up from before a plugin
+// update) gets recognized as stale-code and recycled instead of quietly
+// going on serving a routing ladder that predates the on-disk source — see
+// SQ-92. Missing/unreadable just disables the check (never a hard failure).
+let PLUGIN_VERSION = null;
+try {
+  PLUGIN_VERSION = require('../.claude-plugin/plugin.json').version || null;
+} catch (_) {
+  /* best effort */
+}
+
 function checkHealth(port, timeoutMs) {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/health', timeout: timeoutMs || 800 }, (res) => {
@@ -933,20 +945,89 @@ function checkHealth(port, timeoutMs) {
   });
 }
 
+// A few retries with a short backoff before declaring a recorded server dead.
+// A single slow/loaded poll timing out used to be read as "the old server is
+// gone" and would spawn a fresh one on top of a perfectly healthy instance —
+// the mintings-of-new-ports symptom in SQ-92. Cheap insurance: ~1s worst case.
+async function checkHealthPatient(port, attempts) {
+  for (let i = 0; i < (attempts || 3); i++) {
+    const health = await checkHealth(port);
+    if (health) return health;
+    if (i < (attempts || 3) - 1) await delay(200);
+  }
+  return null;
+}
+
 function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Whether a recorded pid still refers to a live process (not just "the health
+// endpoint didn't answer in time" — a hung-but-alive process needs killing
+// before we replace it, or it's left behind as a zombie).
+function isPidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e && e.code === 'EPERM'; // exists, just not ours to signal — still alive
+  }
+}
+
+// Reap a recorded server: kill its pid (best-effort — it may already be gone)
+// and clear the lockfile so nothing reuses/attaches to it again.
+function reapServer(info) {
+  if (info && info.pid) {
+    try {
+      process.kill(info.pid);
+    } catch (_) {
+      /* already gone */
+    }
+  }
+  store.clearServerInfo();
+}
+
+// Look at the recorded server (if any) and decide what to do with it:
+//   'reuse'  — healthy and on the current plugin version, use it as-is
+//   'reap'   — stale version, or unresponsive-but-alive, or dead-but-recorded;
+//              caller should spawn a replacement
+//   null     — nothing was recorded
+// Reaping happens here so both `dashboard` and `serve` clean up identically.
+async function resolveRunningServer() {
+  const existing = store.readServerInfo();
+  if (!existing || !existing.port) return null;
+  const health = await checkHealthPatient(existing.port);
+  if (health) {
+    // A missing/older version on the live health payload means the process
+    // was started before this plugin update — exactly the "stale ladder"
+    // scenario from SQ-92 — so it gets recycled rather than trusted.
+    if (PLUGIN_VERSION && health.version !== PLUGIN_VERSION) {
+      reapServer(existing);
+      return { action: 'reap', reason: `stale version ${health.version || 'unknown'} (installed: ${PLUGIN_VERSION})`, existing };
+    }
+    return { action: 'reuse', existing };
+  }
+  if (isPidAlive(existing.pid)) {
+    reapServer(existing);
+    return { action: 'reap', reason: 'unresponsive', existing };
+  }
+  store.clearServerInfo();
+  return { action: 'reap', reason: 'dead', existing };
+}
+
 // Return the URL of a running dashboard, starting a detached one if needed.
 async function ensureServer(requestedPort) {
-  const existing = store.readServerInfo();
-  if (existing && existing.port) {
-    const health = await checkHealth(existing.port);
-    if (health) return existing.url || `http://127.0.0.1:${existing.port}`;
+  const running = await resolveRunningServer();
+  if (running && running.action === 'reuse') {
+    return running.existing.url || `http://127.0.0.1:${running.existing.port}`;
   }
   // Spawn the server detached so it outlives this short-lived CLI process.
+  // Reusing the previous port when we just reaped a stale/dead instance keeps
+  // "--no-open" deterministic instead of creeping to the next free port.
+  const port = requestedPort || (running && running.existing && running.existing.port) || undefined;
   const args = [path.join(__dirname, 'sidequest.js'), 'serve'];
-  if (requestedPort) args.push('--port', String(requestedPort));
+  if (port) args.push('--port', String(port));
   const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
 
@@ -997,8 +1078,22 @@ async function cmdDashboard(opts) {
 }
 
 async function cmdServe(opts) {
+  // Single-instance per home dir: a subagent smoke-testing "does serve start"
+  // (or a human re-running it out of habit) used to spawn a second listener
+  // on the next free port every time, leaving the old one running forever —
+  // the zombie-process scare in SQ-92. Reuse a healthy, current-version
+  // instance instead of starting a duplicate; reap anything stale/dead first.
+  const running = await resolveRunningServer();
+  if (running && running.action === 'reuse') {
+    console.log(`sidequest dashboard already running at ${running.existing.url || 'http://127.0.0.1:' + running.existing.port} (pid ${running.existing.pid}) — reusing it.`);
+    console.log('Run "sidequest stop" first if you need to restart it in place.');
+    return;
+  }
+  if (running && running.action === 'reap') {
+    console.log(`Recycled a ${running.reason} sidequest server (pid ${running.existing.pid}).`);
+  }
   const server = require('../lib/server');
-  const { url } = await server.start(opts.port);
+  const { url } = await server.start(opts.port || (running && running.existing && running.existing.port));
   console.log(`sidequest dashboard running at ${url}`);
   // Do not exit: the HTTP server keeps the process alive.
 }
@@ -1036,6 +1131,9 @@ Usage:
   sidequest dashboard [--port N] [--no-open]     open the live board in the browser
   sidequest serve [--port N]                     run the board server in the foreground
   sidequest stop                                 stop the running board server
+
+  -d/-m accept full markdown (headings, lists, fenced code, blockquotes, links, **bold**/*italic*/
+    `code`) — use real newlines in the value (heredoc or $'...\n...'), never a literal backslash-n.
 
 Working the board safely (multi-agent):
   sidequest ready [--model tier] [--json]          the ready set (unclaimed, unblocked) — fan subagents over it

@@ -73,3 +73,6 @@ Your task prompt contains some or all of:
   several distinct problems.
 - **Don't fix, explore, or edit files.** You only run the `sidequest` CLI.
 - **Don't ask questions.** Make a reasonable call on title/priority/labels from what you were given.
+- **Never scan the filesystem from root** (`find /`, full-disk searches) to locate the CLI or an image
+  path. The CLI is `plugins/sidequest/bin/sidequest.js`, given to you as the command prefix; an image
+  path you were handed is already a concrete file path — use it as-is, don't go hunting for it.

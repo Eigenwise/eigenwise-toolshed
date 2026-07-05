@@ -69,6 +69,22 @@ commands below, `sidequest` is shorthand for that `node "…/bin/sidequest.js"` 
 The board a command acts on defaults to `$CLAUDE_PROJECT_DIR` (the current project), so you rarely pass
 a project. Add `--project "<path-or-slug>"` to target another board.
 
+## Where things live on disk (never scan from root to find them)
+
+- **The CLI**: `plugins/sidequest/bin/sidequest.js` under the sidequest plugin — invoke it as
+  `node "<path>/plugins/sidequest/bin/sidequest.js"` (see "Finding the CLI" above; the capture hook
+  already hands you the resolved path).
+- **Ticket data**: a central store outside any repo — root `~/.claude/sidequest` by default, overridable
+  with the `SIDEQUEST_HOME` env var. Under it: `projects/<slug>/tickets/<id>.json` (one file per
+  ticket) and `projects/<slug>/meta.json`.
+- **Attachment images**: `projects/<slug>/assets/<ticket-id>/<filename>` under that same root. To
+  resolve one from a ref like `SQ-12`, run `sidequest list --json` (or `--json` on any listing
+  command), find the ticket, and read its `project` slug plus the ticket's internal `id` and its
+  `assets` array — then join `<root>/projects/<slug>/assets/<id>/<filename>`. Don't guess the filename
+  or its location.
+- **Never run a full-disk scan** (`find /`, `find / -iname ...`, or similar) to locate the CLI, the
+  data dir, or an attachment. All three live at the fixed, known locations above — go straight there.
+
 ## Open the dashboard
 
 When the user asks to see the board/dashboard/kanban:
@@ -114,9 +130,30 @@ flip side of decompose-for-parallelism: a well-shrunk ticket *is* mostly its spe
 If you don't have enough of that detail, ask a quick clarifying question rather than filing a vague
 ticket — a thin ticket just costs the next reader (you, another agent, or the user) another round trip.
 
-**Descriptions and comments render a light markdown subset** in the dashboard — `**bold**`, `*italic*`,
-and `` `code` ``. Use it where it actually improves scanability (e.g. `` `functionName` `` or a file
-path in code font, **bold** for the one thing that matters most) — don't force it into every line.
+**Descriptions and comments render full markdown** in the dashboard — headings, ordered/unordered
+lists, fenced code blocks, blockquotes, `[links](url)`, and inline `**bold**`/`*italic*`/`` `code` ``.
+Structure the spec with it: a short lead line, then headings or a list for Where / Contract / Bounds /
+Verify, bullets for enumerations, fenced blocks for commands or expected output, backticks for file
+paths and identifiers. It should aid the reader, not be decoration — reach for structure because the
+spec needs it, not to fill every line.
+
+**CRITICAL — use real newlines, never a literal `\n`.** A multi-line `-d`/`-m` value needs actual line
+breaks: a shell heredoc, or `$'...\n...'` quoting. The two literal characters backslash-n render as
+text in the dashboard, not a line break — that exact bug is why this guidance exists. For example:
+
+```bash
+sidequest add -t "Contact form does not send" --complexity 4 --why "one handler + its endpoint" -d "$(cat <<'EOF'
+## Where
+`src/routes/contact.ts` — the `POST /contact` handler
+
+## Contract
+- Submit currently no-ops; it should call the mail service and return 200 on success, 4xx on validation failure.
+
+## Verify
+`curl -X POST localhost:3000/contact -d '...'` and confirm an email arrives.
+EOF
+)"
+```
 
 For a side issue the user tosses out **while you're mid-task** ("oh, and the footer link is broken"),
 don't stop your current work: spawn the **`ticket-filer`** subagent (ideally `run_in_background: true`)
@@ -367,9 +404,9 @@ sidequest comments SQ-3                                       # read the thread
   the user's own reply clears it.
 - Check `sidequest list` or `sidequest comments <ref>` for a "❓ awaiting reply" marker — that flags a
   question of yours still unanswered, including ones asked earlier in a different session.
-- Comment bodies render the same light markdown as descriptions (`**bold**`, `*italic*`, `` `code` ``) —
-  reach for it when it aids scanning (a ticket ref, a file path, a command), not as a rule to follow
-  everywhere.
+- Comment bodies render full markdown, same as descriptions — reach for it when it aids scanning (a
+  ticket ref, a file path, a command, a short code block), not as a rule to follow everywhere. Use
+  real newlines for anything multi-line, never a literal `\n`.
 
 ## Assign a ticket to the human
 
