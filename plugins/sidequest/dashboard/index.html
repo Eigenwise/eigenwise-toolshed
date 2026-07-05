@@ -1903,7 +1903,13 @@
     var ab = $("mArchive");
     ab.style.display = isEdit ? "" : "none";
     if (isEdit) ab.textContent = ticket.archived ? "Restore" : "Archive";
-    $("mMeta").textContent = isEdit ? ("created " + fullTime(ticket.createdAt)) : "";
+    var metaTxt = isEdit ? ("created " + fullTime(ticket.createdAt)) : "";
+    // Self-reported provenance: which tier/effort actually worked the ticket.
+    // Subtle, riding the same faint mono footer meta; nothing shown when absent.
+    if (isEdit && ticket.workedBy && ticket.workedBy.model) {
+      metaTxt += "  ·  worked by " + ticket.workedBy.model + (ticket.workedBy.effort ? "·" + ticket.workedBy.effort : "");
+    }
+    $("mMeta").textContent = metaTxt;
     // Edits autosave, so an existing ticket needs no Save/Cancel — just close it.
     // A new ticket has nothing to patch into yet, so it keeps an explicit Create.
     $("mSave").style.display = isEdit ? "none" : "";

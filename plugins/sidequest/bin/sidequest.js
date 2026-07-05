@@ -95,12 +95,26 @@ function parseArgs(argv) {
  *  Project resolution
  * ------------------------------------------------------------------ */
 
+// --project resolves ONLY against already-registered boards (exact slug, a
+// case-insensitive display NAME, or a registered path) — it never creates one
+// (see SQ-86: a bare name used to miss the slug check, fall into
+// ensureProject(), and get silently registered as a fresh path-relative-to-cwd
+// board). Only the no-flag default (below) still auto-registers, matching the
+// existing "first run inside a repo bootstraps its board" behavior.
 function resolveProject(opts) {
   const arg = opts.project;
   if (arg) {
-    // An exact slug of an existing board wins; otherwise treat it as a path.
-    if (store.readMeta(arg)) return { slug: arg, meta: store.readMeta(arg) };
-    return store.ensureProject(arg, opts.name);
+    const res = store.findProject(arg);
+    if (res.ok) return { slug: res.slug, meta: res.meta };
+    if (res.reason === 'ambiguous') {
+      const lines = res.matches.map((p) => `    "${p.name}" -> ${p.path}`).join('\n');
+      fail(`--project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the path to disambiguate:\n${lines}`);
+    }
+    const known = Array.from(new Set(res.known || []));
+    fail(
+      `--project "${arg}" does not match any registered board.` +
+      (known.length ? ` Known projects: ${known.join(', ')}` : ' No projects are registered yet.')
+    );
   }
   const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   return store.ensureProject(dir, opts.name);
@@ -328,7 +342,19 @@ function cmdDone(opts, positional) {
   if (!idOrRef) fail('done: pass a ticket id or ref, e.g. sidequest done SQ-3');
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
-  const res = store.completeTicket(slug, idOrRef, by, { force: !!opts.force, source: opts.source || 'cli' });
+  // Optional self-reported provenance: which tier/effort actually worked this
+  // ticket. Invalid values throw from the store; surface them as a clean error.
+  let res;
+  try {
+    res = store.completeTicket(slug, idOrRef, by, {
+      force: !!opts.force,
+      source: opts.source || 'cli',
+      model: opts.model,
+      effort: opts.effort,
+    });
+  } catch (e) {
+    fail(`done: ${(e && e.message) || e}`);
+  }
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -1015,7 +1041,7 @@ Working the board safely (multi-agent):
   sidequest ready [--model tier] [--json]          the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force]   atomically take a ticket (fails if gone/done/claimed)
   sidequest next [--by who] [-p priority] [--model tier]   claim the best available ticket (highest priority first)
-  sidequest done <id|SQ-n> [--by who]              mark it done and release the claim
+  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
   When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.

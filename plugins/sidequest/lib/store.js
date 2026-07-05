@@ -204,19 +204,35 @@ function coerceRoutingBias(v) {
   return Math.max(ROUTING_BIAS_MIN, Math.min(ROUTING_BIAS_MAX, n));
 }
 
-// Capability score for a rung: score = tierRank * LADDER_TIER_GAP + effortIndex,
-// where tierRank is a model's ABSOLUTE position in MODEL_CAPABILITY_ORDER (haiku 0
-// … fable 3 — NOT its position among the enabled subset, so capability distances
-// stay true when a middle tier is disabled) and effortIndex is the effort's
-// position in the non-max effort list (low 0 … xhigh 3). The gap (2) is
-// deliberately SMALLER than the full effort span (3, across low..xhigh) so
-// CAPABILITY-ADJACENT TIERS OVERLAP: a lower tier's top effort outranks the bottom
-// effort(s) of the very next tier (e.g. sonnet·xhigh > opus·low), because
-// capability is NOT tier-major — a cheaper model thinking hard can beat a pricier
-// one thinking little. Tiers two apart (gap 4 > span 3) never overlap. Bump the
-// gap toward the span to weaken the overlap (more tier-major); drop it toward 1 to
-// widen crossovers.
-const LADDER_TIER_GAP = 2;
+// Capability score for a rung: score = tierBase + effortIndex, where tierBase is
+// a PER-TIER BASE OFFSET (LADDER_TIER_BASE below — keyed by tier, not a single
+// uniform gap times tierRank) and effortIndex is the effort's position in the
+// non-max effort list (low 0 … xhigh 3, a span of 3). SQ-87 researched real
+// published benchmarks across the current model line (Sonnet 5 / Opus 4.8 /
+// Fable 5) and found the two tier boundaries are NOT the same size, so a single
+// constant gap applied at every boundary (the old LADDER_TIER_GAP=2) mis-modeled
+// one of them:
+//   - haiku(0) -> sonnet(2) -> opus(4): gap 2 at both boundaries, UNCHANGED.
+//     This gap is deliberately SMALLER than the effort span (3) so
+//     CAPABILITY-ADJACENT TIERS OVERLAP: a lower tier's top effort outranks the
+//     next tier's bottom effort(s) (e.g. sonnet·xhigh ties opus·medium, and the
+//     tie still resolves to opus — see tie-break below). SQ-87's benchmark
+//     survey found a genuinely mixed sonnet/opus picture (Opus keeps a real edge
+//     on SWE-bench Pro, but Sonnet wins Terminal-Bench and GDPval and ties HLE),
+//     plus an effort-qualified data point that sonnet·xhigh is comparable to
+//     opus·medium-to-high — so this crossover is evidence-supported and stays.
+//   - opus(4) -> fable(8): gap WIDENED to 4 — the full effort span (3) plus one,
+//     making this boundary fully tier-major (zero overlap). Every published
+//     benchmark SQ-87 found has Fable 5 leading Opus 4.8, by a margin that GROWS
+//     on harder tasks, with no observed crossover — a materially different, more
+//     one-sided picture than sonnet/opus, so it doesn't belong on the same
+//     constant. Under the old uniform gap, fable·low tied opus·high one tick
+//     early (nothing in the evidence supports that); the widened gap fixes it —
+//     fable·low now ranks strictly above opus·high, with opus·xhigh (Opus's own
+//     ceiling) as the rung directly below it instead of being skipped.
+// Bump a tier's offset further above its neighbor's to weaken/eliminate overlap
+// there (more tier-major); pull it closer to widen the crossover band.
+const LADDER_TIER_BASE = { haiku: 0, sonnet: 2, opus: 4, fable: 8 };
 // The effort axis the score indexes along (max held out — it's the sparing top
 // rung, ranked separately). Position in this list == a rung's effortIndex.
 const LADDER_EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh'];
@@ -224,7 +240,8 @@ const LADDER_EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh'];
 // Build the 10-rung ladder for the currently enabled prefs as ONE merged,
 // capability-ranked sequence of (model, effort) rungs — not tier bands. Every
 // enabled (tier × non-max effort) combo participates as a rung, scored by
-// capability (see LADDER_TIER_GAP) so tiers overlap and crossovers happen; haiku
+// capability (see LADDER_TIER_BASE) so tiers overlap/diverge per boundary and
+// crossovers happen where the evidence supports them; haiku
 // carries no effort and contributes a single null rung below every richer tier's
 // low rung. `max` is held out of that sequence and reserved for the very top of
 // the scale ("use sparingly for the hardest tasks"). routingBias then curves how
@@ -255,13 +272,13 @@ function routingLadder(prefs) {
     const model = enabled[t];
     const tierRank = MODEL_CAPABILITY_ORDER.indexOf(model); // absolute, not enabled-relative
     if (model === 'haiku') {
-      seq.push({ model: 'haiku', effort: null, tierRank, score: tierRank * LADDER_TIER_GAP });
+      seq.push({ model: 'haiku', effort: null, tierRank, score: LADDER_TIER_BASE.haiku });
     } else {
       for (const eff of seqEfforts) {
         // 'max' only appears here in the only-max-enabled fallback; rank it above
         // the normal effort scale so it stays the strongest rung of its tier.
         const idx = eff === 'max' ? LADDER_EFFORT_ORDER.length : LADDER_EFFORT_ORDER.indexOf(eff);
-        seq.push({ model, effort: eff, tierRank, score: tierRank * LADDER_TIER_GAP + idx });
+        seq.push({ model, effort: eff, tierRank, score: LADDER_TIER_BASE[model] + idx });
       }
     }
   }
@@ -490,6 +507,52 @@ function listProjects() {
   }
   out.sort((a, b) => String(b.lastActivity || '').localeCompare(String(a.lastActivity || '')));
   return out;
+}
+
+// Resolve a caller-supplied --project reference to the ONE already-registered
+// board it names — an exact slug, a case-insensitive display NAME, or a
+// filesystem path. NEVER creates or matches anything outside the registered
+// set (see SQ-86): a name is not a slug, so a bare display name used to miss
+// the slug lookup, fall into ensureProject(), and get treated as a raw path
+// resolved against cwd — silently minting a phantom empty board that happened
+// to share the real project's display name (or a real one's if two directories
+// share a basename, e.g. "BMR" run from both C:\dev\BMR and C:\dev\BMR\BMR).
+// Returns { ok:true, slug, meta } on a clean match, or { ok:false, reason,
+// ...} for the caller (the CLI) to turn into a hard error:
+//   - reason 'ambiguous' + matches: 2+ registered boards share that NAME —
+//     the caller must re-run with the disambiguating path.
+//   - reason 'not_found' + known: nothing matched — known is the list of
+//     registered display names to surface in the error.
+function findProject(ref) {
+  const arg = String(ref == null ? '' : ref).trim();
+  const all = listProjects();
+  if (!arg) return { ok: false, reason: 'not_found', known: all.map((p) => p.name) };
+
+  // 1. An exact slug of an existing board (the historical fast path — a few
+  // internal callers, like the dashboard, already pass a real slug).
+  const bySlugMeta = readMeta(arg);
+  if (bySlugMeta) return { ok: true, slug: arg, meta: bySlugMeta };
+
+  // 2. A case-insensitive exact match on the display NAME.
+  const wantedName = arg.toLowerCase();
+  const byName = all.filter((p) => String(p.name).trim().toLowerCase() === wantedName);
+  if (byName.length === 1) {
+    const meta = readMeta(byName[0].slug);
+    if (meta) return { ok: true, slug: byName[0].slug, meta };
+  } else if (byName.length > 1) {
+    return { ok: false, reason: 'ambiguous', matches: byName };
+  }
+
+  // 3. A filesystem path matching an ALREADY-REGISTERED project's path. Never
+  // registers a new one at this path — that would just reopen the SQ-86 hole.
+  const wantedPath = normalizeForHash(path.resolve(arg));
+  const byPath = all.find((p) => p.path && normalizeForHash(path.resolve(p.path)) === wantedPath);
+  if (byPath) {
+    const meta = readMeta(byPath.slug);
+    if (meta) return { ok: true, slug: byPath.slug, meta };
+  }
+
+  return { ok: false, reason: 'not_found', known: all.map((p) => p.name) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -773,6 +836,12 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
     if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
     if (patch.files !== undefined) t.files = normalizeFiles(patch.files);
+    // A provenance stamp may ride along a patch (e.g. the dashboard completing a
+    // ticket). Permissive like the routing fields above: a valid stamp is set, a
+    // bad one is ignored rather than thrown (the data layer never crashes a write).
+    if (patch.workedBy !== undefined) {
+      try { const w = makeWorkedBy(patch.workedBy); if (w) t.workedBy = w; } catch (_) { /* ignore an invalid stamp on a patch */ }
+    }
     if (patch.assignee !== undefined) t.assignee = normalizeAssignee(patch.assignee);
     if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
     // Attach any newly supplied images (by path from the CLI, or base64 from the
@@ -1063,6 +1132,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     }
     t.claim = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
+    if (opts.workedBy) t.workedBy = opts.workedBy; // self-reported provenance stamp (done transition only)
     t.lastEventType = 'status';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
@@ -1072,10 +1142,42 @@ function releaseTicket(slug, idOrRef, by, opts) {
   });
 }
 
-// Complete a ticket: mark it done and clear its claim.
+// Build the provenance stamp recorded when a ticket is completed — which model
+// tier and reasoning effort actually worked it, plus who and when. Returns null
+// when no model is supplied (a done with no --model carries no stamp). A supplied
+// model must be a VALID_MODELS tier and, if present, effort a VALID_EFFORTS level
+// (null/omitted is allowed — haiku has no effort); anything else throws a clear
+// error, mirroring how the entry points reject bad routing values instead of
+// silently recording garbage.
+function makeWorkedBy(input) {
+  if (!input) return null;
+  const rawModel = input.model;
+  if (rawModel == null || String(rawModel).trim() === '') return null; // no stamp when not provided
+  const model = String(rawModel).trim().toLowerCase();
+  if (VALID_MODELS.indexOf(model) === -1) {
+    throw new Error(`invalid model "${rawModel}" — expected one of: ${VALID_MODELS.join(', ')}`);
+  }
+  let effort = null;
+  const rawEffort = input.effort;
+  if (rawEffort != null && String(rawEffort).trim() !== '') {
+    const e = String(rawEffort).trim().toLowerCase();
+    if (VALID_EFFORTS.indexOf(e) === -1) {
+      throw new Error(`invalid effort "${rawEffort}" — expected one of: ${VALID_EFFORTS.join(', ')} (or omit for none)`);
+    }
+    effort = e;
+  }
+  const by = input.by != null && String(input.by).trim() ? String(input.by).trim() : null;
+  const at = input.at && Number.isFinite(Date.parse(input.at)) ? new Date(input.at).toISOString() : new Date().toISOString();
+  return { model, effort, by, at };
+}
+
+// Complete a ticket: mark it done and clear its claim. An optional { model,
+// effort } (from `done --model … --effort …`) is recorded as a workedBy
+// provenance stamp; invalid values throw before anything is written.
 function completeTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
-  return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, { status: 'done' }));
+  const workedBy = makeWorkedBy({ model: opts.model, effort: opts.effort, by });
+  return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, { status: 'done', workedBy }));
 }
 
 // True when a ticket may be handed to a worker running as tier `want`: either the
@@ -1895,6 +1997,7 @@ module.exports = {
   ensureProject,
   readMeta,
   listProjects,
+  findProject,
   setProjectNotify,
   copyAsset,
   saveAssetData,
@@ -1907,6 +2010,7 @@ module.exports = {
   claimTicket,
   releaseTicket,
   completeTicket,
+  makeWorkedBy,
   claimNext,
   assignTicket,
   readyTickets,

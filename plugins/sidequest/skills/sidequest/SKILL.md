@@ -184,7 +184,7 @@ still there and still free — don't skip it just because you filed the ticket y
 sidequest next --by <you>              # atomically claim the top-priority available ticket
 sidequest claim SQ-3 --by <you>        # or claim a specific one
 #   ... do the work (yourself, or spawn a subagent for it — see below) ...
-sidequest done SQ-3 --by <you>         # mark done + release the claim
+sidequest done SQ-3 --by <you> --model <tier> --effort <level>   # mark done + stamp who/what worked it
 sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --status todo)
 ```
 
@@ -247,7 +247,8 @@ applies: eyeball whether they'd edit the same files before parallelizing them.
 2. `sidequest ready --json` to see the fan-out-able set.
 3. Spawn **one subagent per ticket**, in a single batch (parallel), each told to:
    `sidequest claim <ref> --by <unique-id>` → if the claim succeeds, do the work, then
-   `sidequest done <ref> --by <same-id>`; if it fails, stop (someone else has it).
+   `sidequest done <ref> --by <same-id> --model <its tier> --effort <its effort>` (stamp who/what
+   worked it); if it fails, stop (someone else has it).
    Give each a **genuinely random, session-scoped `--by`** — not just the ticket ref or a fixed label,
    since a second independent session fanning out over the same board would derive the identical value
    and silently coexist as the same worker (see the note on identity collisions above).

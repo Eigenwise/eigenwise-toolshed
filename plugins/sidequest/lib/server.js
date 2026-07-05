@@ -335,7 +335,10 @@ async function handle(req, res) {
         return;
       }
       // Force the source: a change through the dashboard API is a user action,
-      // so it must never trigger a "Claude changed it" notification.
+      // so it must never trigger a "Claude changed it" notification. The body is
+      // passed through wholesale, so a completing client can ride a `workedBy`
+      // provenance stamp along the same patch; the store validates it permissively
+      // and the returned payload carries workedBy like every other ticket field.
       const updated = store.updateTicket(slug, idOrRef, Object.assign({}, body, { source: 'dashboard' }));
       if (!updated) {
         sendJson(res, 404, { error: 'ticket not found' });

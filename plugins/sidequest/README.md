@@ -155,7 +155,11 @@ sidequest doesn't *force* a model (nothing can make a running model swap itself 
 skill enforces the flow on Claude: derived routing is honored via bundled executor agents
 (`sidequest-exec-low` … `-max`) spawned with the derived tier — effort lives in the agent definition,
 model in the spawn, so the two compose. (Haiku has no effort support; haiku-derived work uses a plain
-agent.) The same *Available models* section has a master switch to turn routing off entirely — then
+agent.) Those five files are generated from one source, `agents/_exec-template.md`, since the Agent
+tool can only pin per-spawn reasoning effort via a definition's `effort:` frontmatter (unlike `model`,
+which is a spawn-time argument) — run `node plugins/sidequest/scripts/gen-exec-agents.js` to
+regenerate them after editing the template, rather than hand-editing the five copies. The same
+*Available models* section has a master switch to turn routing off entirely — then
 Claude may work any ticket itself and the chips become purely informational. Effort levels can be
 excluded in that same *Available models* section, exactly like tiers — an excluded effort never
 appears in the ladder. At least one tier and one effort always stay enabled.

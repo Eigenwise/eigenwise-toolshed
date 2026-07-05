@@ -20,8 +20,9 @@ Protocol, in order:
    separate issue, mention it in your report instead of fixing it.
 3. **Verify** your change the way the ticket (or the orchestrator's prompt) specifies — run the
    syntax check, test, or reproduction it names before declaring success.
-4. **Close**: `sidequest done <ref> --by <same-worker-id> --project <project>`. If you could not
-   finish, `sidequest release <ref> --by <same-worker-id> --status todo` and say why.
+4. **Close**: `sidequest done <ref> --by <same-worker-id> --model <your tier> --effort high --project <project>`
+   — stamp the tier you actually ran as. If you could not finish, `sidequest release <ref> --by
+   <same-worker-id> --status todo` and say why.
 
 Report concretely: claim result, what changed (files/lines), verification output, close confirmation.
 Your final message is returned to the orchestrator — data, not conversation.

@@ -7,6 +7,10 @@ desktop.ini
 .idea/
 .vscode/
 
+# Claude Code local settings + tool artifacts (never commit to this public repo)
+.claude/
+.playwright-mcp/
+
 # Node (only relevant if a plugin ever adds tooling)
 node_modules/
 npm-debug.log*
