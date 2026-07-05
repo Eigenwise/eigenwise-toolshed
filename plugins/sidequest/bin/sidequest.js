@@ -1132,8 +1132,8 @@ Usage:
   sidequest serve [--port N]                     run the board server in the foreground
   sidequest stop                                 stop the running board server
 
-  -d/-m accept full markdown (headings, lists, fenced code, blockquotes, links, **bold**/*italic*/
-    `code`) — use real newlines in the value (heredoc or $'...\n...'), never a literal backslash-n.
+  -d/-m accept full markdown (headings, lists, fenced code, blockquotes, links, **bold**/*italic*/inline
+    code) — use real newlines in the value (heredoc or $'...\\n...'), never a literal backslash-n.
 
 Working the board safely (multi-agent):
   sidequest ready [--model tier] [--json]          the ready set (unclaimed, unblocked) — fan subagents over it

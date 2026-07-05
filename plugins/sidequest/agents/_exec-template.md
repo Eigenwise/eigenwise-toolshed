@@ -30,7 +30,8 @@ Protocol, in order:
    syntax check, test, or reproduction it names before declaring success.
 4. **Close**: `sidequest done <ref> --by <same-worker-id> --model <your tier> --effort {{EFFORT}} --project <project>`
    — stamp the tier you actually ran as. If you could not finish, `sidequest release <ref> --by
-   <same-worker-id> --status todo` and say why.
+   <same-worker-id> --status todo` and say why. If you leave a ticket comment, write it as markdown
+   with real newlines — never a literal `\n`.
 
 Report concretely: claim result, what changed (files/lines), verification output, close confirmation.
 Your final message is returned to the orchestrator — data, not conversation.

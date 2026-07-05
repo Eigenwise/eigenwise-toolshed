@@ -243,11 +243,44 @@
   .cmt-head { display: flex; align-items: baseline; gap: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin-bottom: 6px; }
   .cmt-head .who { color: var(--text); font-weight: 600; }
   .cmt.question .cmt-head .tag { color: var(--gold-bright); }
-  .cmt-body { font-size: 13.5px; line-height: 1.55; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cmt-body { font-size: 13.5px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
   .cmt-body strong { font-weight: 700; }
   .cmt-body em { font-style: italic; }
   .cmt-body code { font-family: var(--mono); font-size: .92em; font-weight: 500; color: var(--gold-bright); background: var(--gold-soft); padding: .1em .35em; border-radius: var(--radius-sm); }
   .cmt-empty { font-size: 12.5px; color: var(--text-faint); line-height: 1.6; padding: 10px 2px; }
+
+  /* Rendered markdown blocks, shared by the details view (.desc-view) and the
+     comment thread (.cmt-body) — same vocabulary, same tokens, tightened
+     margins so a plain one-line body still sits flush with no leading gap. */
+  .desc-view > *, .cmt-body > * { margin: .6em 0; }
+  .desc-view > *:first-child, .cmt-body > *:first-child { margin-top: 0; }
+  .desc-view > *:last-child, .cmt-body > *:last-child { margin-bottom: 0; }
+  .desc-view h1, .desc-view h2, .desc-view h3,
+  .cmt-body h1, .cmt-body h2, .cmt-body h3 {
+    font-family: var(--serif); font-weight: 500; line-height: 1.3; color: var(--text);
+  }
+  .desc-view h1, .cmt-body h1 { font-size: 1.32em; letter-spacing: -.005em; }
+  .desc-view h2, .cmt-body h2 { font-size: 1.16em; letter-spacing: -.005em; }
+  .desc-view h3, .cmt-body h3 { font-size: 1.04em; }
+  .desc-view ul, .desc-view ol, .cmt-body ul, .cmt-body ol { padding-left: 1.35em; }
+  .desc-view li, .cmt-body li { margin: .22em 0; }
+  .desc-view li > ul, .desc-view li > ol, .cmt-body li > ul, .cmt-body li > ol { margin: .22em 0 .22em .1em; }
+  .desc-view ul ul, .cmt-body ul ul { list-style-type: circle; }
+  .desc-view blockquote, .cmt-body blockquote {
+    margin: .6em 0; padding: .15em 0 .15em 12px; border-left: 3px solid var(--gold-line); color: var(--text-dim);
+  }
+  .desc-view blockquote p, .cmt-body blockquote p { margin: 0; }
+  .desc-view pre, .cmt-body pre {
+    margin: .6em 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm); overflow-x: auto;
+  }
+  .desc-view pre code, .cmt-body pre code {
+    font-family: var(--mono); font-size: .88em; font-weight: 400; line-height: 1.5; color: var(--text);
+    background: none; padding: 0; border-radius: 0; white-space: pre;
+  }
+  .desc-view hr, .cmt-body hr { margin: 1em 0; border: none; border-top: 1px solid var(--line-soft); }
+  .desc-view a, .cmt-body a { color: var(--gold-bright); text-decoration: underline; text-decoration-color: var(--gold-line); text-underline-offset: 2px; }
+  .desc-view a:hover, .cmt-body a:hover { color: var(--gold); text-decoration-color: currentColor; }
   .addcmt { display: flex; gap: 8px; margin-top: 10px; align-items: flex-start; }
   .addcmt textarea { flex: 1; min-height: 40px; }
   .linklist { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -444,7 +477,7 @@
      like a short paragraph, not a cramped bug-report box. Shown rendered
      (like a comment) until clicked, then swaps to the plain textarea. */
   #mDesc { min-height: 160px; font-size: 14.5px; line-height: 1.65; }
-  .desc-view { min-height: 160px; padding: 10px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 14.5px; line-height: 1.65; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; transition: border-color .14s, background .14s; }
+  .desc-view { min-height: 160px; padding: 10px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 14.5px; line-height: 1.65; color: var(--text); overflow-wrap: anywhere; cursor: text; transition: border-color .14s, background .14s; }
   .desc-view:hover { background: var(--bg); border-color: var(--line-soft); }
   .desc-view.empty { color: var(--text-faint); font-style: italic; }
   .desc-view code { font-family: var(--mono); font-size: .92em; font-weight: 500; color: var(--gold-bright); background: var(--gold-soft); padding: .1em .35em; border-radius: var(--radius-sm); }
@@ -1674,7 +1707,7 @@
       thumbs = '<div class="thumbs">' + shown + more + '</div>';
     }
     var labels = (t.labels || []).slice(0, 4).map(function (l) { return '<span class="label">' + esc(l) + '</span>'; }).join("");
-    var desc = t.description ? '<div class="desc">' + esc(t.description) + '</div>' : "";
+    var desc = t.description ? '<div class="desc">' + esc(mdToPlainText(t.description)) + '</div>' : "";
     var claim = "";
     if (t.claim && t.claim.by) {
       var stale = claimStale(t.claim);
@@ -2066,14 +2099,161 @@
     assignStory(v);
   }
 
-  // A light, safe markdown subset for comment bodies: **bold**, *italic*, `code`.
-  // Input is HTML-escaped first, so the source text can never inject markup.
+  // A self-contained, escape-first markdown renderer for comment bodies and
+  // ticket descriptions. The ENTIRE input is HTML-escaped up front (esc()),
+  // then block/inline structure is found by matching markdown punctuation
+  // inside that already-escaped string and wrapping it in our own literal
+  // tags. Because we only ever slice/concatenate pieces of the pre-escaped
+  // text, source text can never introduce a real tag or attribute.
+  //
+  // href sanitizing: only http:/https:/mailto:/relative/anchor URLs are kept
+  // as real links; anything else (javascript:, data:, ...) is dropped and the
+  // link text is rendered as plain text instead.
+  function sanitizeHref(href) {
+    var h = String(href || "").trim();
+    var m = h.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+    if (!m) return h; // no scheme => relative path or #anchor, allowed
+    var scheme = m[1].toLowerCase();
+    return (scheme === "http" || scheme === "https" || scheme === "mailto") ? h : null;
+  }
+
+  // Inline spans within a single (already block-escaped) line: `code`,
+  // **bold**, *italic*/_italic_, [text](url). Code spans are pulled out
+  // first so bold/italic/link patterns never look inside them.
+  function renderInline(s) {
+    // A NUL sentinel protects code-span placeholders: it can never occur in
+    // ordinary text (unlike a plain space+digit marker, which would collide
+    // with text like "3 apples" or "in 2024"), so bold/italic/link parsing
+    // below can never mistake real content for a placeholder.
+    var NUL = String.fromCharCode(0);
+    var codes = [];
+    s = s.replace(/`([^`]+)`/g, function (_, code) {
+      codes.push(code);
+      return NUL + (codes.length - 1) + NUL;
+    });
+    s = s.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, function (whole, text, href) {
+      var safe = sanitizeHref(href);
+      if (!safe) return text;
+      var external = /^https?:/i.test(safe);
+      return '<a href="' + safe + '"' + (external ? ' target="_blank" rel="noopener noreferrer"' : "") + ">" + text + "</a>";
+    });
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[\s([])\*([^*\n]+)\*(?=[\s).,!?:;\]]|$)/g, "$1<em>$2</em>");
+    s = s.replace(/(^|[\s([])_([^_\n]+)_(?=[\s).,!?:;\]]|$)/g, "$1<em>$2</em>");
+    // Restore via a regex literal (\x00) rather than new RegExp(rawNulChar):
+    // a raw U+0000 in a constructed pattern isn't matched by every V8 build,
+    // whereas the \x00 escape matches the NUL placeholder in all engines.
+    s = s.replace(/\x00(\d+)\x00/g, function (_, idx) { return "<code>" + codes[idx] + "</code>"; });
+    return s;
+  }
+
+  // Nested list builder: items is a flat list of { indent, type, content }
+  // (indent = 2-space levels). Consumes a run of same indent+type siblings,
+  // recursing into a nested <ul>/<ol> whenever the next item is deeper.
+  function buildList(items, start) {
+    var type = items[start].type, indent = items[start].indent;
+    var html = "<" + type + ">", i = start;
+    while (i < items.length && items[i].indent === indent && items[i].type === type) {
+      var li = renderInline(items[i].content);
+      i++;
+      if (i < items.length && items[i].indent > indent) {
+        var nested = buildList(items, i);
+        li += nested.html;
+        i = nested.i;
+      }
+      html += "<li>" + li + "</li>";
+    }
+    html += "</" + type + ">";
+    return { html: html, i: i };
+  }
+
+  var RE_FENCE_OPEN = /^```(\S*)\s*$/, RE_FENCE_CLOSE = /^```\s*$/;
+  var RE_HEADING = /^(#{1,6})\s+(.*)$/;
+  var RE_HR = /^(-{3,}|\*{3,}|_{3,})\s*$/;
+  var RE_QUOTE = /^&gt;\s?/;
+  var RE_UL = /^(\s*)([-*+])\s+(.*)$/;
+  var RE_OL = /^(\s*)(\d+)\.\s+(.*)$/;
+  var RE_BLANK = /^\s*$/;
+
+  function isBlockBreak(line) {
+    return RE_BLANK.test(line) || RE_FENCE_OPEN.test(line) || RE_HEADING.test(line) ||
+      RE_QUOTE.test(line) || RE_UL.test(line) || RE_OL.test(line) || RE_HR.test(line.trim());
+  }
+
   function renderRich(s) {
-    var t = esc(s);
-    t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-    t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    t = t.replace(/(^|[\s([])\*([^*\n]+)\*(?=[\s).,!?:;\]]|$)/g, "$1<em>$2</em>");
-    return t;
+    var lines = esc(s).split(/\r\n|\r|\n/);
+    var out = "", i = 0, n = lines.length;
+    while (i < n) {
+      var line = lines[i];
+      if (RE_BLANK.test(line)) { i++; continue; }
+
+      var fence = line.match(RE_FENCE_OPEN);
+      if (fence) {
+        var lang = fence[1].replace(/[^a-zA-Z0-9_-]/g, "");
+        var code = [];
+        i++;
+        while (i < n && !RE_FENCE_CLOSE.test(lines[i])) { code.push(lines[i]); i++; }
+        if (i < n) i++;
+        out += "<pre><code" + (lang ? ' class="language-' + lang + '"' : "") + ">" + code.join("\n") + "</code></pre>";
+        continue;
+      }
+
+      var heading = line.match(RE_HEADING);
+      if (heading) {
+        var level = heading[1].length;
+        out += "<h" + level + ">" + renderInline(heading[2].trim()) + "</h" + level + ">";
+        i++;
+        continue;
+      }
+
+      if (RE_HR.test(line.trim())) { out += "<hr>"; i++; continue; }
+
+      if (RE_QUOTE.test(line)) {
+        var quote = [];
+        while (i < n && RE_QUOTE.test(lines[i])) { quote.push(lines[i].replace(RE_QUOTE, "")); i++; }
+        out += "<blockquote><p>" + quote.map(renderInline).join("<br>") + "</p></blockquote>";
+        continue;
+      }
+
+      if (RE_UL.test(line) || RE_OL.test(line)) {
+        var items = [];
+        while (i < n) {
+          var um = lines[i].match(RE_UL), om = !um && lines[i].match(RE_OL);
+          if (!um && !om) break;
+          var mm = um || om;
+          items.push({ indent: Math.floor(mm[1].length / 2), type: um ? "ul" : "ol", content: mm[3] });
+          i++;
+        }
+        // Emit every top-level run: buildList consumes one indent+type run at
+        // a time, so a block that switches type (e.g. bullets then a numbered
+        // list with no blank line between) yields multiple sibling lists
+        // rather than dropping the trailing items.
+        var li = 0;
+        while (li < items.length) { var run = buildList(items, li); out += run.html; li = run.i; }
+        continue;
+      }
+
+      var para = [];
+      while (i < n && !isBlockBreak(lines[i])) { para.push(lines[i]); i++; }
+      out += "<p>" + para.map(renderInline).join("<br>") + "</p>";
+    }
+    return out;
+  }
+
+  // Card preview (~2-line clamp) stays plain text: strip markdown syntax down
+  // to a single readable line instead of showing raw #/*/`/[]() noise.
+  function mdToPlainText(s) {
+    var t = String(s == null ? "" : s);
+    t = t.replace(/```[\s\S]*?```/g, " ");
+    t = t.replace(/^\s{0,3}#{1,6}\s+/gm, "");
+    t = t.replace(/^\s*>\s?/gm, "");
+    t = t.replace(/^\s*([-*+]|\d+\.)\s+/gm, "");
+    t = t.replace(/^\s*(-{3,}|\*{3,}|_{3,})\s*$/gm, " ");
+    t = t.replace(/`([^`]+)`/g, "$1");
+    t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    t = t.replace(/\*\*([^*]+)\*\*/g, "$1");
+    t = t.replace(/(^|[\s([])[*_]([^*_\n]+)[*_](?=[\s).,!?:;\]]|$)/g, "$1$2");
+    return t.replace(/\s+/g, " ").trim();
   }
 
   // Details field: rendered (like a comment) until clicked, then swaps to the

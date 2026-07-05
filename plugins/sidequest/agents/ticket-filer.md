@@ -37,7 +37,9 @@ Your task prompt contains some or all of:
      - **feature/task** → the requirements at a technical level — what "done" looks like, verifiable
      - **question/spike** → what's actually unknown
      Only omit it if the title already fully captures that detail. Never water detail down — the
-     ticket may be executed by a smaller model that needs every specific you have.
+     ticket may be executed by a smaller model that needs every specific you have. Write it as
+     markdown (headings/bullets/fenced code where it helps) with real newlines if it spans multiple
+     lines — never a literal `\n`.
    - **priority**: one of `low | normal | high | urgent`. Use `urgent` only for "broken in
      production / blocks work", `high` for clear bugs, `normal` by default, `low` for polish/nits.
    - **labels**: 0–3 short tags you can infer with confidence (e.g. `bug`, `frontend`, `payments`).
