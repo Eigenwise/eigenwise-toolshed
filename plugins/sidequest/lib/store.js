@@ -130,6 +130,35 @@ function newTicketId() {
 const VALID_STATUS = ['todo', 'doing', 'done'];
 const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 
+// A user story groups several tickets. Its colour is what the board uses to tint
+// every member card, so the eight defaults are muted, distinct hues that read on
+// the cream paper (and against each other). New stories cycle through them; the
+// user can override with any hex or one of the named aliases below.
+const STORY_PALETTE = ['#c2683f', '#3f8f8a', '#7a5ba8', '#7d8a3f', '#b45573', '#4a72a8', '#c19a3e', '#4f8f6a'];
+const STORY_COLOR_NAMES = {
+  terracotta: '#c2683f', teal: '#3f8f8a', violet: '#7a5ba8', olive: '#7d8a3f',
+  rose: '#b45573', steel: '#4a72a8', amber: '#c19a3e', green: '#4f8f6a',
+};
+
+// Normalize a requested story colour to a #rrggbb string, or null if it isn't a
+// hex (#rgb / #rrggbb) or a known name — callers fall back to autoStoryColor().
+function parseStoryColor(input) {
+  if (input == null) return null;
+  const s = String(input).trim().toLowerCase();
+  if (!s) return null;
+  if (STORY_COLOR_NAMES[s]) return STORY_COLOR_NAMES[s];
+  if (/^#?[0-9a-f]{6}$/.test(s)) return '#' + s.replace(/^#/, '');
+  if (/^#?[0-9a-f]{3}$/.test(s)) {
+    const h = s.replace(/^#/, '');
+    return '#' + h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  }
+  return null;
+}
+function autoStoryColor(index) {
+  const n = STORY_PALETTE.length;
+  return STORY_PALETTE[(((index || 0) % n) + n) % n];
+}
+
 function defaultProjectName(absPath) {
   return path.basename(path.resolve(absPath)) || 'project';
 }
@@ -145,7 +174,7 @@ function ensureProject(absPath, name) {
   const mf = metaFile(slug);
   let meta = readJson(mf, null);
   if (!meta || typeof meta !== 'object') {
-    meta = { path: resolved, name: name || defaultProjectName(resolved), createdAt: new Date().toISOString(), seq: 0 };
+    meta = { path: resolved, name: name || defaultProjectName(resolved), createdAt: new Date().toISOString(), seq: 0, storySeq: 0 };
     writeJson(mf, meta);
   } else {
     let dirty = false;
@@ -153,6 +182,7 @@ function ensureProject(absPath, name) {
     if (name && meta.name !== name) { meta.name = name; dirty = true; }
     if (!meta.name) { meta.name = defaultProjectName(resolved); dirty = true; }
     if (typeof meta.seq !== 'number') { meta.seq = 0; dirty = true; }
+    if (typeof meta.storySeq !== 'number') { meta.storySeq = 0; dirty = true; }
     if (dirty) writeJson(mf, meta);
   }
   return { slug, dir, meta };
@@ -180,6 +210,43 @@ function nextSeq(slug) {
     meta.seq = (typeof meta.seq === 'number' ? meta.seq : 0) + 1;
     writeJson(mf, meta);
     return meta.seq;
+  } finally {
+    if (locked) releaseLock(lock);
+  }
+}
+
+// The story counter is a second monotonic sequence on the same meta.json,
+// minting US-1, US-2, … independently of the SQ-N ticket refs. Shares the meta
+// lock with nextSeq so a concurrent ticket + story creation can't clobber each
+// other's write.
+function nextStorySeq(slug) {
+  const lock = metaLockPath(slug);
+  const locked = acquireLock(lock);
+  try {
+    const mf = metaFile(slug);
+    const meta = readJson(mf, null) || { storySeq: 0 };
+    meta.storySeq = (typeof meta.storySeq === 'number' ? meta.storySeq : 0) + 1;
+    writeJson(mf, meta);
+    return meta.storySeq;
+  } finally {
+    if (locked) releaseLock(lock);
+  }
+}
+
+// Turn a board's per-project notifications on or off. When off, the board is
+// muted: queueEventNotification below drops every background event for it, even
+// with a dashboard tab open. Stored on meta.json (absent == on), behind the meta
+// lock so it can't race a seq bump.
+function setProjectNotify(slug, on) {
+  const lock = metaLockPath(slug);
+  const locked = acquireLock(lock);
+  try {
+    const mf = metaFile(slug);
+    const meta = readJson(mf, null);
+    if (!meta) return { ok: false, reason: 'not_found' };
+    meta.notify = on !== false;
+    writeJson(mf, meta);
+    return { ok: true, notify: meta.notify };
   } finally {
     if (locked) releaseLock(lock);
   }
@@ -217,6 +284,8 @@ function listProjects() {
       archived,
       open: counts.todo + counts.doing,
       lastActivity,
+      notify: meta.notify !== false, // per-project notification switch (absent == on)
+      stories: listStories(slug).length,
     });
   }
   out.sort((a, b) => String(b.lastActivity || '').localeCompare(String(a.lastActivity || '')));
@@ -356,6 +425,7 @@ function createTicket(slug, fields) {
     status: coerceStatus(fields.status, 'todo'),
     priority: coercePriority(fields.priority, 'normal'),
     labels: normalizeLabels(fields.labels),
+    storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
@@ -433,6 +503,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.status != null) t.status = coerceStatus(patch.status, t.status);
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
+    if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
     if (patch.assignee !== undefined) t.assignee = normalizeAssignee(patch.assignee);
     if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
     // Attach any newly supplied images (by path from the CLI, or base64 from the
@@ -800,6 +871,128 @@ function assignTicket(slug, idOrRef, assignee, opts) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Stories (a user story groups tickets and tints their cards)
+ *
+ *  Stored one JSON file per story under projects/<slug>/stories/, minted US-1,
+ *  US-2, … from meta.storySeq — deliberately parallel to how tickets live under
+ *  tickets/ with SQ-N refs. A ticket points at its story by the story's stable
+ *  id (ticket.storyId), never its ref, so renumbering or ref lookups can't orphan
+ *  the link. Lower-contention than tickets (created/edited rarely, one human),
+ *  so these use a plain read-modify-write rather than the per-item lock tickets need.
+ * ------------------------------------------------------------------ */
+
+function storiesDir(slug) {
+  return path.join(projectDir(slug), 'stories');
+}
+function storyFile(slug, id) {
+  return path.join(storiesDir(slug), `${path.basename(String(id))}.json`);
+}
+function newStoryId() {
+  return 'st_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
+}
+
+// Every story in a project, oldest-first (US-1 before US-2) so a legend/filter
+// reads in creation order. Fail-soft to [] when the folder doesn't exist yet.
+function listStories(slug) {
+  let files = [];
+  try {
+    files = fs.readdirSync(storiesDir(slug)).filter((f) => f.endsWith('.json'));
+  } catch (_) {
+    return [];
+  }
+  const out = [];
+  for (const f of files) {
+    const s = readJson(path.join(storiesDir(slug), f), null);
+    if (s && s.id) out.push(s);
+  }
+  out.sort((a, b) => (a.order || 0) - (b.order || 0));
+  return out;
+}
+
+// Look up a story by its stable id or its human ref (US-4, case-insensitive).
+function getStory(slug, idOrRef) {
+  const direct = readJson(storyFile(slug, idOrRef), null);
+  if (direct && direct.id) return direct;
+  const wanted = String(idOrRef).toUpperCase();
+  for (const s of listStories(slug)) {
+    if (String(s.ref).toUpperCase() === wanted) return s;
+  }
+  return null;
+}
+
+// Resolve a caller-supplied story reference (a US-ref, a raw id, "none"/"null",
+// or null) to a valid story id in this project, or null if it clears / doesn't
+// resolve. This is the single guard both createTicket and updateTicket run
+// storyId through, so a ticket can never point at a story that isn't there.
+function coerceStoryId(slug, val) {
+  if (val == null) return null;
+  const s = String(val).trim();
+  if (!s || s.toLowerCase() === 'none' || s.toLowerCase() === 'null') return null;
+  const story = getStory(slug, s);
+  return story ? story.id : null;
+}
+
+function createStory(slug, fields) {
+  fields = fields || {};
+  const id = newStoryId();
+  const seq = nextStorySeq(slug);
+  const now = new Date().toISOString();
+  const story = {
+    id,
+    ref: `US-${seq}`,
+    title: String(fields.title || 'Untitled story').trim().slice(0, 200) || 'Untitled story',
+    description: String(fields.description || '').trim(),
+    // A requested colour wins if it parses; otherwise cycle the palette by the
+    // sequence number so successive stories stay visually distinct.
+    color: parseStoryColor(fields.color) || autoStoryColor(seq - 1),
+    createdAt: now,
+    updatedAt: now,
+    order: Date.now(),
+  };
+  writeJson(storyFile(slug, id), story);
+  return story;
+}
+
+// Apply a partial update to a story. An unparseable colour is ignored rather
+// than blanking the existing one.
+function updateStory(slug, idOrRef, patch) {
+  const s = getStory(slug, idOrRef);
+  if (!s) return null;
+  patch = patch || {};
+  if (patch.title != null) s.title = String(patch.title).trim().slice(0, 200) || s.title;
+  if (patch.description != null) s.description = String(patch.description).trim();
+  if (patch.color != null) {
+    const c = parseStoryColor(patch.color);
+    if (c) s.color = c;
+  }
+  if (patch.order != null && Number.isFinite(Number(patch.order))) s.order = Number(patch.order);
+  s.updatedAt = new Date().toISOString();
+  writeJson(storyFile(slug, s.id), s);
+  return s;
+}
+
+// Delete a story and detach it from its member tickets (clearing storyId, the
+// same way deleteTicket strips dangling links) so no card is left tinted by a
+// story that no longer exists.
+function deleteStory(slug, idOrRef) {
+  const s = getStory(slug, idOrRef);
+  if (!s) return false;
+  try {
+    fs.unlinkSync(storyFile(slug, s.id));
+  } catch (_) {
+    return false;
+  }
+  try {
+    for (const t of listTickets(slug)) {
+      if (t.storyId === s.id) updateTicket(slug, t.id, { storyId: null, source: 'cli' });
+    }
+  } catch (_) {
+    /* best effort — the story file is already gone */
+  }
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
  *  Comments
  *
  *  Each ticket carries a thread of comments. A comment of kind "question" is how
@@ -1150,7 +1343,9 @@ function eventNotificationCopy(ticket, kind, extra) {
 function queueEventNotification(slug, ticket, kind, source, extra) {
   if (!ticket || !source || String(source) === 'dashboard') return null; // your own action never notifies you
   if (NOTIFY_PREF_DEFAULTS[kind] == null) return null; // not an opt-in-able kind (e.g. 'edit'/'archived')
-  if (!getNotifyPrefs()[kind]) return null; // opted out in settings
+  if (!getNotifyPrefs()[kind]) return null; // opted out for this kind, globally
+  const pmeta = readMeta(slug);
+  if (pmeta && pmeta.notify === false) return null; // this whole board is muted
   const eventAt = ticket.updatedAt;
   const dup = readNotifications().some((n) => n.ticketId === ticket.id && n.kind === kind && n.ticketEventAt === eventAt);
   if (dup) return null;
@@ -1355,6 +1550,7 @@ module.exports = {
   ensureProject,
   readMeta,
   listProjects,
+  setProjectNotify,
   copyAsset,
   saveAssetData,
   assetPath,
@@ -1369,6 +1565,13 @@ module.exports = {
   claimNext,
   assignTicket,
   readyTickets,
+  STORY_PALETTE,
+  STORY_COLOR_NAMES,
+  listStories,
+  getStory,
+  createStory,
+  updateStory,
+  deleteStory,
   addComment,
   needsResponse,
   linkTickets,

@@ -74,8 +74,11 @@ nags you about your own edits. Notifications live in a small **persistent queue 
 just in the open tab, so they survive a reload and pile up even while no dashboard is open.
 
 - **The bell is an inbox.** Click it to open a readable list of what happened — questions, comments,
-  new tickets, status changes — newest first, each linking straight to its ticket. A gold badge on the
-  bell shows the unread count; click a notification (or **mark all read**) to clear it.
+  new tickets, status changes — newest first, each linking straight to its ticket. It's split into
+  **Needs you** (questions Claude is waiting on + your reminders) and **Activity** (new tickets, moves,
+  comments) so a question never gets buried in routine noise. A gold badge on the bell shows the unread
+  count — it turns **red** when any unread is a question waiting on your reply; click a notification (or
+  **mark all read**) to clear it.
 - **Sidebar unread badge.** Each project also shows a small gold badge counting the tickets Claude
   created or moved between columns since you last opened that board. Open the board and the badge
   clears. Changes *you* make in the dashboard (in any tab) never raise a badge or an inbox entry.
@@ -86,11 +89,35 @@ just in the open tab, so they survive a reload and pile up even while no dashboa
   **comments**, **new tickets**, **status changes** — each a toggle, honored server-side so an opted-out
   kind never queues even with no tab open. A question from Claude is the one you'll usually want on,
   since it means Claude is waiting on your answer.
+- **Mute a whole project.** The gear menu also has a per-project switch — turn a board off and it queues
+  **nothing**, of any kind, regardless of the toggles above; its row in the sidebar shows a muted-bell
+  mark. Handy for a chatty background project you don't want pinging you while you focus elsewhere.
 
 The distinction is by origin: a change made through the dashboard is *you*; a change made by the CLI or
 a subagent is *Claude*. Only the latter notifies, badges, or queues. (While a board's tab is fully
 backgrounded, the browser throttles its timers, so a desktop toast can lag a little; the inbox itself
 doesn't need the tab open at all.)
+
+## User stories
+
+Bigger than a single ticket? Group the pieces under a **user story**. Every ticket in a story is
+**color-coded** to it on the board, so a multi-part feature reads as one arc instead of scattered cards.
+Claude decides on its own whether an incoming request is a standalone ticket or a story-with-tickets
+(and files it accordingly) — you can also drive it by hand.
+
+```bash
+sidequest story add -t "Checkout revamp" --color teal    # prints its US-n ref
+sidequest add -t "Cart totals wrong" --story US-1        # file a ticket straight into the story
+sidequest update SQ-7 --story US-1                       # or move an existing ticket in (--story none clears)
+sidequest story list                                     # stories with their color + ticket count
+sidequest story show US-1                                # the story and every ticket in it
+```
+
+A distinct color is auto-assigned per story; override it with a hex (`#7a5ba8`) or a name
+(`terracotta, teal, violet, olive, rose, steel, amber, green`). On the dashboard each card wears its
+story's color as a top rail and a chip, a **Story** filter in the toolbar narrows the board to one
+story, and the ticket editor has a **Story** field to pick, clear, or create a story inline. Deleting a
+story keeps its tickets — they're just detached.
 
 ## Reminders
 
@@ -238,8 +265,10 @@ Every action is a thin wrapper over one script, usable directly too:
 ```bash
 node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui -i /path/to/shot.png
 node <plugin>/bin/sidequest.js list [--status todo|doing|done] [--json]
-node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -i
+node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -i  ·  --story US-1|none
 node <plugin>/bin/sidequest.js rm SQ-3
+node <plugin>/bin/sidequest.js story add -t "Epic" [--color teal]   # group tickets; file into it with --story US-n
+node <plugin>/bin/sidequest.js story list|show US-1|update US-1|rm US-1
 node <plugin>/bin/sidequest.js ready [--json]                 # the fan-out set (unclaimed, unblocked)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
 node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket
@@ -268,12 +297,13 @@ them:
   server.json                     # the running dashboard's port + pid
   projects/
     <folder>-<hash>/
-      meta.json                   # project path, name, ticket counter
+      meta.json                   # project path, name, ticket + story counters, notify switch
       tickets/<id>.json           # one file per ticket
+      stories/<id>.json           # one file per user story
       assets/<id>/<image>         # attached screenshots
 ```
 
-Each ticket gets a short human ref (`SQ-1`, `SQ-2`, …) per project.
+Each ticket gets a short human ref (`SQ-1`, `SQ-2`, …) and each story a `US-1`, `US-2`, … per project.
 
 ### Configuration
 

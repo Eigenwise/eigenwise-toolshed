@@ -165,8 +165,10 @@
   .iconbtn:hover { color: var(--text); border-color: var(--gold-line); }
   .iconbtn.on { color: var(--gold); border-color: var(--gold-line); }
   .iconbtn.off { color: var(--text-faint); }
-  /* Bell badge overlaps the top-right corner of the icon button. */
+  /* Bell badge overlaps the top-right corner of the icon button; it turns urgent
+     when any of the unread are questions Claude is waiting on. */
   .iconbtn .newbadge { position: absolute; top: -6px; right: -6px; }
+  .iconbtn .newbadge.has-q { background: var(--urgent); }
 
   /* Notification settings / inbox popovers */
   .popwrap { position: relative; }
@@ -196,6 +198,35 @@
   .inbox-row .itext { margin-top: 2px; font-size: 12px; line-height: 1.42; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .inbox-row .itime { flex: none; margin-top: 1px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
   .inbox-empty { padding: 26px 10px; text-align: center; font-size: 12.5px; line-height: 1.6; color: var(--text-faint); }
+
+  /* Inbox category tabs: split the crowded feed into "everything", the ones that
+     want a reply from you (questions + reminders), and routine activity. */
+  .inbox-tabs { display: flex; gap: 5px; padding: 2px 6px 8px; border-bottom: 1px solid var(--line-soft); margin-bottom: 4px; }
+  .inbox-tabs button {
+    cursor: pointer; font-family: var(--sans); font-size: 11.5px; font-weight: 550; color: var(--text-dim);
+    background: transparent; border: 1px solid transparent; padding: 4px 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; transition: all .12s;
+  }
+  .inbox-tabs button:hover { background: var(--panel); color: var(--text); }
+  .inbox-tabs button.on { background: var(--gold-soft); border-color: var(--gold-line); color: var(--gold-bright); }
+  .inbox-tabs button .tq { font-size: 11px; }
+  .inbox-tabs .tabcount { font-family: var(--mono); font-size: 10px; font-weight: 700; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--gold); color: var(--bg); display: none; align-items: center; justify-content: center; }
+  .inbox-tabs .tabcount.show { display: inline-flex; }
+  .inbox-tabs button[data-tab="needs"] .tabcount.show { background: var(--urgent); }
+  /* A question needs your reply — same gold language as a question comment. */
+  .inbox-row.q:not(.read) { background: var(--gold-soft); }
+  .inbox-row.q .idot { background: var(--gold-bright); }
+  .inbox-row.rem .idot { background: var(--high); }
+
+  /* Per-project mute list in the settings popover. */
+  .proj-notify-list { max-height: 176px; overflow-y: auto; }
+  .proj-notify-empty { font-size: 11.5px; color: var(--text-faint); padding: 6px 8px 8px; }
+  .proj-notify-row { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+  .proj-notify-row:hover { background: var(--panel); }
+  .proj-notify-row input { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
+  .proj-notify-row .pn-name { font-size: 13px; color: var(--text); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .proj-notify-row.muted .pn-name { color: var(--text-faint); }
+  /* Muted-bell mark on a project's rail row. */
+  .proj .muted-bell { flex: none; color: var(--text-faint); display: inline-flex; margin-left: 1px; }
 
   /* Blocked indicator */
   .blockchip { font-family: var(--mono); font-size: 10px; color: var(--urgent); background: rgba(178,59,59,.08); border: 1px solid rgba(178,59,59,.32); padding: 2px 7px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 4px; }
@@ -320,10 +351,29 @@
   .claim-hint { margin-top: 7px; font-family: var(--mono); font-size: 11px; color: var(--text-faint); display: flex; align-items: center; gap: 6px; }
   .claim-hint b { color: var(--mint); font-weight: 600; }
 
+  /* ---------- Story color-coding ----------
+     A user story tints its member cards: the story owns the card's top edge
+     (priority keeps the left stripe), plus a compact colored chip by the ref. */
+  .card .story-top { position: absolute; left: 0; right: 0; top: 0; height: 3px; }
+  .storychip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  /* Story field in the ticket editor: a swatch beside the select, and the
+     inline "new story" panel with a palette picker. */
+  .story-select-row { display: flex; align-items: center; gap: 9px; }
+  .story-select-row select { flex: 1 1 auto; min-width: 0; }
+  .story-swatch { width: 15px; height: 15px; border-radius: 3px; border: 1px solid var(--line); flex: none; background: var(--line-soft); }
+  .new-story { margin-top: 9px; padding: 11px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--panel); display: flex; flex-direction: column; gap: 9px; }
+  .new-story .swatches { display: flex; flex-wrap: wrap; gap: 7px; }
+  .new-story .swatches .sw { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; box-shadow: 0 0 0 1px var(--line-soft); transition: transform .1s; }
+  .new-story .swatches .sw:hover { transform: scale(1.12); }
+  .new-story .swatches .sw.on { border-color: var(--card); box-shadow: 0 0 0 2px var(--text); }
+  .new-story-actions { display: flex; gap: 8px; }
+  .new-story-actions .btn { padding: 7px 12px; font-size: 12.5px; }
+
   /* ---------- Modal ---------- */
   .overlay { position: fixed; inset: 0; background: rgba(28,30,43,.4); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 20px; z-index: 40; opacity: 0; pointer-events: none; transition: opacity .16s; overflow-y: auto; }
   .overlay.show { opacity: 1; pointer-events: auto; }
-  .modal { width: 100%; max-width: min(1040px, 95vw); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); transform: translateY(6px); transition: transform .18s; }
+  .modal { width: 100%; max-width: min(1280px, 92vw); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); transform: translateY(6px); transition: transform .18s; }
   .overlay.show .modal { transform: none; }
   .modal-head { display: flex; align-items: center; gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--line-soft); }
   .modal-head .ref { font-size: 12px; }
@@ -332,7 +382,7 @@
   /* Landscape layout: a wide main column (title, details, comments) beside a
      narrower metadata sidebar (priority, status, assignee, labels, images,
      reminder, links) — a ticket reads more like a document, less like a form. */
-  .modal-body { padding: 20px; display: grid; grid-template-columns: 1fr 248px; gap: 22px 26px; align-items: start; }
+  .modal-body { padding: 24px 26px; display: grid; grid-template-columns: 1fr 300px; gap: 24px 34px; align-items: start; }
   .modal-body > #projField { grid-column: 1 / -1; }
   .modal-main { grid-column: 1; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
   .modal-side { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
@@ -348,7 +398,20 @@
   }
   .field textarea { resize: vertical; min-height: 78px; line-height: 1.6; }
   .field input:focus, .field textarea:focus, .field select:focus { outline: none; border-color: var(--gold-line); }
-  .field .title-input { font-family: var(--serif); font-size: 17px; font-weight: 500; }
+  /* Title reads as the ticket's headline, not a form field: borderless and
+     transparent at rest, showing its edges only on hover/focus. */
+  .field-title label { display: none; }
+  .field .title-input {
+    font-family: var(--serif); font-size: 22px; font-weight: 500; line-height: 1.3;
+    padding: 7px 9px; margin: -3px -9px 0; width: calc(100% + 18px);
+    background: transparent; border-color: transparent;
+  }
+  .field .title-input::placeholder { font-style: italic; color: var(--text-faint); }
+  .field .title-input:hover { border-color: var(--line-soft); }
+  .field .title-input:focus { background: var(--bg); border-color: var(--gold-line); }
+  /* Hairline between the defining metadata (priority/status/assignee/labels)
+     and the occasional extras (images, reminder, links) below it. */
+  .side-sep { height: 1px; background: var(--line-soft); margin: 3px 0 1px; }
   /* Details: the longest-lived field in the modal — sized and spaced to read
      like a short paragraph, not a cramped bug-report box. Shown rendered
      (like a comment) until clicked, then swaps to the plain textarea. */
@@ -473,6 +536,14 @@
         <input id="search" type="text" placeholder="Search tickets" aria-label="Search tickets" />
       </div>
       <div class="filters" id="filters"></div>
+      <div class="popwrap" id="storyWrap" style="display:none">
+        <button class="sortbtn" id="storyBtn" title="Filter by story" aria-haspopup="menu" aria-expanded="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16l8-5 8 5V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2z"/></svg>
+          <span class="sortval" id="storyLabel">Stories</span>
+          <svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="popover sort" id="storyPop" role="menu" aria-label="Filter by story"></div>
+      </div>
       <div class="popwrap">
         <button class="sortbtn" id="assignBtn" title="Filter by assignee" aria-haspopup="menu" aria-expanded="false">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -496,6 +567,11 @@
         </button>
         <div class="popover" id="inboxPop" role="menu" aria-label="Notifications">
           <div class="pop-head"><span>Notifications</span><button class="mark-all" id="markAllReadBtn" type="button">Mark all read</button></div>
+          <div class="inbox-tabs" id="inboxTabs" role="tablist">
+            <button type="button" data-tab="all" class="on" role="tab">All</button>
+            <button type="button" data-tab="needs" role="tab"><span class="tq">❓</span> Needs you<span class="tabcount" id="tabCountNeeds"></span></button>
+            <button type="button" data-tab="activity" role="tab">Activity<span class="tabcount" id="tabCountActivity"></span></button>
+          </div>
           <div class="inbox-list" id="inboxList"></div>
           <div class="inbox-empty" id="inboxEmpty" style="display:none">Nothing queued yet. Claude will drop questions, comments and status changes here as they happen.</div>
         </div>
@@ -517,7 +593,9 @@
           <label class="pop-row"><input type="checkbox" data-notif="comment" /><span>Comments<em>notes Claude leaves on a ticket</em></span></label>
           <label class="pop-row"><input type="checkbox" data-notif="created" /><span>New tickets<em>filed by Claude in the background</em></span></label>
           <label class="pop-row"><input type="checkbox" data-notif="status" /><span>Status changes<em>Claude moved a ticket between columns</em></span></label>
-          <div class="pop-foot">Applies to desktop toasts and the sidebar badges. Your own dashboard edits never notify.</div>
+          <div class="pop-head">Per-project<span id="projNotifyHint" style="margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text-faint)"></span></div>
+          <div class="proj-notify-list" id="projNotifyList"></div>
+          <div class="pop-foot">The kinds above apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
         </div>
       </div>
       <button class="btn btn-primary" id="newBtn">
@@ -547,7 +625,7 @@
         <select id="mProject"></select>
       </div>
       <div class="modal-main">
-        <div class="field">
+        <div class="field field-title">
           <label for="mTitle">Title</label>
           <input class="title-input" id="mTitle" type="text" placeholder="What's the side quest?" />
         </div>
@@ -582,10 +660,26 @@
           <div class="seg assignee" id="mAssignee"></div>
           <div class="claim-hint" id="mClaimHint" style="display:none"></div>
         </div>
+        <div class="field" id="storyField">
+          <label for="mStory">Story</label>
+          <div class="story-select-row">
+            <span class="story-swatch" id="mStorySwatch"></span>
+            <select id="mStory" aria-label="User story"></select>
+          </div>
+          <div class="new-story" id="newStoryPanel" style="display:none">
+            <input type="text" id="newStoryTitle" placeholder="New story title" />
+            <div class="swatches" id="newStoryColors" aria-label="Story color"></div>
+            <div class="new-story-actions">
+              <button class="btn btn-primary" id="newStoryCreate" type="button">Create story</button>
+              <button class="btn btn-ghost" id="newStoryCancel" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>
         <div class="field">
           <label for="mLabels">Labels</label>
           <input id="mLabels" type="text" placeholder="bug, frontend  (comma-separated)" />
         </div>
+        <div class="side-sep"></div>
         <div class="field">
           <label>Images</label>
           <div class="dropzone" id="dropzone">Paste (Ctrl/Cmd&nbsp;V) or drop an image here</div>
@@ -665,6 +759,9 @@
     { k: "agents",     label: "Agents",     hint: "claimed by Claude" },
     { k: "unassigned", label: "Unassigned", hint: "nobody yet" }
   ];
+  // Mirrors store.STORY_PALETTE — the swatches offered when creating a story from
+  // the dashboard. The server still auto-assigns when none is picked.
+  var STORY_PALETTE = ["#c2683f", "#3f8f8a", "#7a5ba8", "#7d8a3f", "#b45573", "#4a72a8", "#c19a3e", "#4f8f6a"];
   var POLL_MS = 2500;
   // Quick "Remind me" presets in the ticket editor -> a Date to fire at.
   var REMINDER_PRESETS = {
@@ -687,6 +784,8 @@
     filterAssignee: "all",    // "all" | "mine" | "agents" | "unassigned" (session-only, like the priority filter)
     sortMode: "manual",       // how columns are ordered (persisted); see SORTS
     query: "",
+    stories: [],              // every project's stories (each carries .projectSlug/.ticketCount)
+    filterStory: "all",       // "all" | "none" | a story id (session-only, like the priority filter)
     seen: null,               // Set of ticket ids we've already rendered (for pickup anim)
     dragging: false,
     mutating: 0,              // count of in-flight mutations; pause poll-render while >0
@@ -696,7 +795,8 @@
     view: "board",            // "board" | "archive"
     archivedTickets: [],      // loaded on demand for the archive view
     notifications: [],        // queued notifications from /api/notifications (newest first)
-    unread: 0                 // unread count reported by the server
+    unread: 0,                // unread count reported by the server
+    inboxTab: "all"           // inbox category filter: "all" | "needs" | "activity"
   };
   var lastSig = "";
   var lastUnread = null;      // previous unread count, to know when the bell badge should "pop"
@@ -760,6 +860,24 @@
   }
   function slugOf(t) { return t._slug || t.project || (state.current !== "all" ? state.current : null); }
   function assetUrl(t, file) { return "/api/asset/" + encodeURIComponent(slugOf(t)) + "/" + encodeURIComponent(t.id) + "/" + encodeURIComponent(file); }
+
+  // Story lookup + color helpers. A story tints its member cards, so we need its
+  // colour at a few alphas (chip fill/border) derived from the stored hex.
+  function storyById(id) {
+    if (!id) return null;
+    for (var i = 0; i < state.stories.length; i++) { if (state.stories[i].id === id) return state.stories[i]; }
+    return null;
+  }
+  function storiesForProject(slug) { return state.stories.filter(function (s) { return s.projectSlug === slug; }); }
+  // Stories in the current scope (a single board, or every board on "All").
+  function storiesInScope() { return state.current === "all" ? state.stories : storiesForProject(state.current); }
+  function hexToRgb(hex) {
+    var h = String(hex || "").replace("#", "");
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h || "888888", 16); if (isNaN(n)) n = 0x888888;
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+  function tint(hex, a) { var c = hexToRgb(hex); return "rgba(" + c.r + "," + c.g + "," + c.b + "," + a + ")"; }
 
   // A change worth flagging: a ticket that Claude/the CLI (not the dashboard)
   // created or moved between columns. Edits and your own dashboard actions don't count.
@@ -879,6 +997,12 @@
       : state.allTickets.filter(function (t) { return t.project === state.current; });
   }
 
+  // Stories are loaded across every project (like tickets) so the "All boards"
+  // view and the sidebar are complete; the board filters by scope when rendering.
+  function loadStories() {
+    return api("/api/stories?project=all").then(function (d) { state.stories = d.stories || []; });
+  }
+
   // The inbox is global (spans every project), independent of the currently selected board.
   function loadNotifications() {
     return api("/api/notifications?project=all&limit=50").then(function (d) {
@@ -890,8 +1014,9 @@
   function signature() {
     // A compact fingerprint of what's on screen, so polling only re-renders on real change.
     var parts = state.projects.map(function (p) { return p.slug + ":" + p.counts.todo + "," + p.counts.doing + "," + p.counts.done; });
-    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(","); });
-    return state.current + "|" + parts.join(";") + "||" + ts.sort().join(";");
+    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || ""); });
+    var ss = state.stories.map(function (s) { return s.id + s.color + s.title; });
+    return state.current + "|" + parts.join(";") + "||" + ts.sort().join(";") + "||" + ss.sort().join(";");
   }
 
   // ---------------- rendering ----------------
@@ -930,8 +1055,11 @@
     var badge = unseen > 0
       ? '<span class="newbadge" title="' + unseen + ' changed by Claude since you last looked">' + (unseen > 99 ? "99+" : unseen) + '</span>'
       : "";
+    var mutedBell = (!isAll && p.notify === false)
+      ? '<span class="muted-bell" title="Notifications muted for this board"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>'
+      : "";
     b.innerHTML =
-      '<div class="row1"><span class="name">' + esc(p.name) + '</span>' + badge +
+      '<div class="row1"><span class="name">' + esc(p.name) + '</span>' + mutedBell + badge +
       '<span class="count">' + (p.open || 0) + '</span></div>' +
       '<div class="path">' + esc(p.path || "") + '</div>' + seg;
     b.addEventListener("click", function () { selectProject(p.slug); });
@@ -1028,29 +1156,110 @@
     renderBoard();
   }
 
+  // The story filter: "All stories" / "No story" / one row per story in scope,
+  // each with its colour dot and live ticket count. Hidden entirely when the
+  // current scope has no stories, so it never adds noise to a story-less board.
+  function renderStoryMenu() {
+    var wrap = $("storyWrap"), pop = $("storyPop");
+    if (!wrap || !pop) return;
+    var scope = storiesInScope();
+    // A filter that points at a story no longer in scope (switched boards, or it
+    // was deleted) falls back to "all" so the board never hides everything.
+    if (state.filterStory !== "all" && state.filterStory !== "none" && !scope.some(function (s) { return s.id === state.filterStory; })) {
+      state.filterStory = "all";
+    }
+    if (!scope.length) { wrap.style.display = "none"; return; }
+    wrap.style.display = "";
+    pop.innerHTML = "";
+    var opts = [
+      { k: "all", label: "All stories", hint: scope.length + " stor" + (scope.length === 1 ? "y" : "ies"), color: null },
+      { k: "none", label: "No story", hint: "unassigned tickets", color: null }
+    ];
+    scope.forEach(function (s) {
+      opts.push({ k: s.id, label: s.title, hint: (s.ref || "") + " · " + s.ticketCount + " ticket" + (s.ticketCount === 1 ? "" : "s"), color: s.color });
+    });
+    opts.forEach(function (o) {
+      var on = state.filterStory === o.k;
+      var row = el("div", "sort-opt" + (on ? " on" : ""));
+      row.dataset.k = o.k;
+      row.setAttribute("role", "menuitemradio");
+      row.setAttribute("aria-checked", on ? "true" : "false");
+      var mark = o.color
+        ? '<span class="si" style="display:inline-flex;align-items:center;justify-content:center"><span class="sdot" style="background:' + esc(o.color) + '"></span></span>'
+        : '<svg class="si" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16l8-5 8 5V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2z"/></svg>';
+      row.innerHTML = mark +
+        '<span><b>' + esc(o.label) + '</b><em>' + esc(o.hint) + '</em></span>' +
+        '<svg class="tick" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+      pop.appendChild(row);
+    });
+    var cur = state.filterStory;
+    var curStory = (cur !== "all" && cur !== "none") ? storyById(cur) : null;
+    $("storyLabel").textContent = cur === "all" ? "Stories" : (cur === "none" ? "No story" : (curStory ? curStory.title : "Story"));
+    $("storyBtn").classList.toggle("filtered", cur !== "all");
+  }
+  function setStoryFilter(k) {
+    state.filterStory = k;
+    renderStoryMenu();
+    renderBoard();
+  }
+
   // ---------------- notification inbox ----------------
+  // Which inbox category a notification belongs to. "Needs you" is the high-signal
+  // bucket — a question waiting on your reply, or a reminder you set — kept apart
+  // from routine activity (new tickets, moves, comments) so it never gets buried.
+  function notifBucket(n) { return (n.kind === "question" || n.kind === "reminder") ? "needs" : "activity"; }
+  function unreadQuestionCount() {
+    return state.notifications.filter(function (n) { return !n.readAt && n.kind === "question"; }).length;
+  }
+
   function renderBell() {
     var b = $("bellBadge"); if (!b) return;
     var n = state.unread || 0;
     if (n <= 0) {
-      b.style.display = "none"; b.textContent = "";
+      b.style.display = "none"; b.textContent = ""; b.classList.remove("has-q");
     } else {
       var grew = lastUnread !== null && n > lastUnread;
       b.style.display = "";
       b.textContent = n > 99 ? "99+" : String(n);
-      b.title = n + " unread notification" + (n === 1 ? "" : "s");
+      // Turn the badge urgent when any unread is a question — a stronger cue than
+      // the plain count that Claude is actually blocked on you.
+      var q = unreadQuestionCount();
+      b.classList.toggle("has-q", q > 0);
+      b.title = n + " unread notification" + (n === 1 ? "" : "s") + (q > 0 ? " · " + q + " awaiting your reply" : "");
       if (grew) { b.classList.remove("pop"); void b.offsetWidth; b.classList.add("pop"); }
     }
     lastUnread = n;
   }
 
+  function setInboxTab(tab) {
+    state.inboxTab = tab;
+    Array.prototype.forEach.call($("inboxTabs").children, function (btn) { btn.classList.toggle("on", btn.dataset.tab === tab); });
+    renderInbox();
+  }
+
   function renderInbox() {
     var list = $("inboxList"), empty = $("inboxEmpty");
-    var items = state.notifications;
+    // Live per-bucket unread counts on the tabs.
+    var needsUnread = state.notifications.filter(function (n) { return !n.readAt && notifBucket(n) === "needs"; }).length;
+    var actUnread = state.notifications.filter(function (n) { return !n.readAt && notifBucket(n) === "activity"; }).length;
+    setTabCount("tabCountNeeds", needsUnread);
+    setTabCount("tabCountActivity", actUnread);
+
+    var tab = state.inboxTab;
+    var items = state.notifications.filter(function (n) { return tab === "all" || notifBucket(n) === tab; });
     list.innerHTML = "";
-    empty.style.display = items.length ? "none" : "";
+    if (!items.length) {
+      empty.style.display = "";
+      empty.textContent = tab === "needs"
+        ? "Nothing needs you right now. Questions from Claude and your reminders land here."
+        : (tab === "activity" ? "No activity yet — new tickets, moves and comments show up here."
+          : "Nothing queued yet. Claude will drop questions, comments and status changes here as they happen.");
+    } else {
+      empty.style.display = "none";
+    }
     items.forEach(function (n) {
-      var row = el("div", "inbox-row" + (n.readAt ? " read" : ""));
+      var extra = n.kind === "question" ? " q" : (n.kind === "reminder" ? " rem" : "");
+      var row = el("div", "inbox-row" + (n.readAt ? " read" : "") + extra);
       row.dataset.id = n.id;
       var refPill = n.ticketRef ? '<span class="iref">' + esc(n.ticketRef) + '</span>' : "";
       row.innerHTML =
@@ -1063,6 +1272,39 @@
       row.addEventListener("click", function () { openNotification(n); });
       list.appendChild(row);
     });
+  }
+  function setTabCount(id, n) {
+    var el2 = $(id); if (!el2) return;
+    el2.textContent = n > 99 ? "99+" : String(n);
+    el2.classList.toggle("show", n > 0);
+  }
+
+  // Per-project mute toggles in the settings popover — one row per board, wired
+  // to /api/projects/:slug/notify. A muted board queues nothing, server-enforced.
+  function renderProjectNotifySettings() {
+    var box = $("projNotifyList"); if (!box) return;
+    box.innerHTML = "";
+    var projs = state.projects;
+    var hint = $("projNotifyHint");
+    var mutedN = projs.filter(function (p) { return p.notify === false; }).length;
+    if (hint) hint.textContent = mutedN ? mutedN + " muted" : "";
+    if (!projs.length) { box.innerHTML = '<div class="proj-notify-empty">No boards yet.</div>'; return; }
+    projs.forEach(function (p) {
+      var on = p.notify !== false;
+      var row = el("label", "proj-notify-row" + (on ? "" : " muted"));
+      row.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' /><span class="pn-name" title="' + esc(p.path || p.name) + '">' + esc(p.name) + '</span>';
+      var cb = row.querySelector("input");
+      cb.addEventListener("change", function () { toggleProjectNotify(p.slug, cb.checked); });
+      box.appendChild(row);
+    });
+  }
+  function toggleProjectNotify(slug, on) {
+    var p = state.projects.filter(function (x) { return x.slug === slug; })[0];
+    if (p) p.notify = on;   // optimistic
+    renderProjectNotifySettings(); renderRail();
+    mutate("POST", "/api/projects/" + encodeURIComponent(slug) + "/notify", { on: on })
+      .then(function () { toast(on ? "Notifications on for this board" : "Muted this board"); })
+      .catch(function (e) { toast("Failed: " + e.message); loadProjects().then(function () { renderProjectNotifySettings(); renderRail(); }); });
   }
 
   function openNotification(n) {
@@ -1113,6 +1355,9 @@
       if (fa === "mine" && !isMine(t)) return false;
       if (fa === "agents" && !agentHeld(t)) return false;
       if (fa === "unassigned" && !isUnassigned(t)) return false;
+      var fs = state.filterStory;
+      if (fs === "none" && t.storyId) return false;
+      if (fs !== "all" && fs !== "none" && t.storyId !== fs) return false;
       if (q) {
         var hay = (t.ref + " " + t.title + " " + t.description + " " + t.labels.join(" ")).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
@@ -1222,8 +1467,15 @@
       ? '<span class="blockchip" style="color:var(--gold-bright);background:var(--gold-soft);border-color:var(--gold-line)" title="Reminder ' + esc(futureRel(t.reminder.fireAt)) + '">\u{1F514} ' + esc(futureRel(t.reminder.fireAt)) + '</span>'
       : "";
 
-    c.innerHTML =
-      '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge +
+    // Story tint: a colored rail across the card's top edge + a chip by the ref.
+    var story = t.storyId ? storyById(t.storyId) : null;
+    var storyTop = story ? '<span class="story-top" style="background:' + esc(story.color) + '"></span>' : "";
+    var storyChip = story
+      ? '<span class="storychip" title="' + esc((story.ref || "") + " · " + story.title) + '" style="color:' + esc(story.color) + ';background:' + tint(story.color, 0.1) + ';border-color:' + tint(story.color, 0.4) + '"><span class="sdot" style="background:' + esc(story.color) + '"></span>' + esc(story.title || story.ref) + '</span>'
+      : "";
+
+    c.innerHTML = storyTop +
+      '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge + storyChip +
       '<span class="prio-tag" data-p="' + esc(t.priority) + '">' + esc(t.priority) + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
       '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
@@ -1279,14 +1531,14 @@
     PRIORITIES.forEach(function (p) {
       var b = el("button", "", '<span class="sw" style="background:' + p.c + '"></span>' + p.k);
       b.type = "button"; b.dataset.k = p.k;
-      b.addEventListener("click", function () { setSeg(pc, p.k); });
+      b.addEventListener("click", function () { setSeg(pc, p.k); autosave({ priority: p.k }); });
       pc.appendChild(b);
     });
     var sc = $("mStatus"); sc.innerHTML = "";
     STATUSES.forEach(function (s) {
       var b = el("button", "", s.label);
       b.type = "button"; b.dataset.k = s.k;
-      b.addEventListener("click", function () { setSeg(sc, s.k); });
+      b.addEventListener("click", function () { setSeg(sc, s.k); autosave({ status: s.k }); });
       sc.appendChild(b);
     });
     // Assignee: the human picks between "Me" and "Unassigned". (Agent claims are a
@@ -1295,7 +1547,7 @@
     [{ k: "unassigned", label: "Unassigned" }, { k: "me", label: "Me" }].forEach(function (a) {
       var b = el("button", "", a.label);
       b.type = "button"; b.dataset.k = a.k;
-      b.addEventListener("click", function () { setSeg(ac, a.k); });
+      b.addEventListener("click", function () { setSeg(ac, a.k); autosave({ assignee: a.k === "me" ? ME : null }); });
       ac.appendChild(b);
     });
   }
@@ -1307,7 +1559,10 @@
     var isEdit = !!ticket;
 
     $("modalRef").textContent = isEdit ? ticket.ref : "New quest";
-    $("modalTitle").textContent = isEdit ? "Edit ticket" : "Capture a side quest";
+    // Header subtitle: in edit mode it's the live save-state / updated-time (edits
+    // persist as you go); in new mode it frames the create action.
+    $("modalTitle").style.color = "";
+    $("modalTitle").textContent = isEdit ? ("updated " + relTime(ticket.updatedAt)) : "Capture a side quest";
     $("mTitle").value = isEdit ? ticket.title : "";
     $("mDesc").value = isEdit ? ticket.description : "";
     showDescView();
@@ -1330,7 +1585,12 @@
     var ab = $("mArchive");
     ab.style.display = isEdit ? "" : "none";
     if (isEdit) ab.textContent = ticket.archived ? "Restore" : "Archive";
-    $("mMeta").textContent = isEdit ? ("created " + fullTime(ticket.createdAt) + " · updated " + fullTime(ticket.updatedAt)) : "";
+    $("mMeta").textContent = isEdit ? ("created " + fullTime(ticket.createdAt)) : "";
+    // Edits autosave, so an existing ticket needs no Save/Cancel — just close it.
+    // A new ticket has nothing to patch into yet, so it keeps an explicit Create.
+    $("mSave").style.display = isEdit ? "none" : "";
+    $("mSave").textContent = "Create";
+    $("mCancel").style.display = isEdit ? "none" : "";
 
     // Board selector: shown only when creating from the "All boards" view.
     var pf = $("projField"), sel = $("mProject");
@@ -1341,6 +1601,9 @@
     } else {
       pf.style.display = "none";
     }
+
+    // Story field applies to both new and existing tickets.
+    populateStorySelect();
 
     // Reminders + links + comments only make sense for an existing ticket.
     $("reminderField").style.display = isEdit ? "" : "none";
@@ -1384,6 +1647,96 @@
     sel.innerHTML = here.length
       ? here.map(function (t) { return '<option value="' + esc(t.ref) + '">' + esc(t.ref + " · " + t.title.slice(0, 40)) + "</option>"; }).join("")
       : '<option value="">No other tickets to link</option>';
+  }
+
+  // ---------------- story (editor field) ----------------
+  // The board the editor is acting on: an existing ticket's board, or the target
+  // board picked for a new ticket in the "All boards" view.
+  function editorStoryProject() {
+    var ed = state.editor;
+    if (ed && ed.ticket) return slugOf(ed.ticket);
+    return state.current === "all" ? ($("mProject").value || null) : state.current;
+  }
+  // The story currently attached: the ticket's (edit mode) or the live select
+  // value (new mode). Read before populateStorySelect rebuilds the <select>.
+  function currentStoryId() {
+    var ed = state.editor;
+    if (ed && ed.ticket) return ed.ticket.storyId || "";
+    var sel = $("mStory");
+    return sel && sel.value && sel.value !== "__new" ? sel.value : "";
+  }
+  function populateStorySelect() {
+    var sel = $("mStory");
+    var slug = editorStoryProject();
+    var stories = slug ? storiesForProject(slug) : [];
+    var cur = currentStoryId();
+    var html = '<option value="">No story</option>';
+    stories.forEach(function (s) {
+      html += '<option value="' + esc(s.id) + '">' + esc((s.ref ? s.ref + " · " : "") + s.title) + '</option>';
+    });
+    html += '<option value="__new">＋ New story…</option>';
+    sel.innerHTML = html;
+    sel.value = stories.some(function (s) { return s.id === cur; }) ? cur : ""; // drop a story not on this board
+    renderStorySwatch();
+    hideNewStory();
+  }
+  function renderStorySwatch() {
+    var s = storyById($("mStory").value);
+    $("mStorySwatch").style.background = s ? s.color : "var(--line-soft)";
+  }
+  function showNewStory() {
+    $("newStoryPanel").style.display = "";
+    state.newStoryColor = null;
+    renderNewStoryColors();
+    $("newStoryTitle").value = "";
+    setTimeout(function () { $("newStoryTitle").focus(); }, 20);
+  }
+  function hideNewStory() { $("newStoryPanel").style.display = "none"; }
+  function renderNewStoryColors() {
+    var box = $("newStoryColors"); box.innerHTML = "";
+    STORY_PALETTE.forEach(function (c) {
+      var sw = el("span", "sw" + (state.newStoryColor === c ? " on" : ""));
+      sw.style.background = c; sw.title = c; sw.dataset.c = c;
+      sw.addEventListener("click", function () { state.newStoryColor = c; renderNewStoryColors(); });
+      box.appendChild(sw);
+    });
+  }
+  // Create a story on the editor's board immediately (works in both modes), then
+  // select it — and, in edit mode, attach it to the open ticket.
+  function createStoryInline() {
+    var slug = editorStoryProject();
+    if (!slug) { toast("Pick a board first"); return; }
+    var title = $("newStoryTitle").value.trim();
+    if (!title) { $("newStoryTitle").focus(); return; }
+    var payload = { project: slug, title: title };
+    if (state.newStoryColor) payload.color = state.newStoryColor;
+    mutate("POST", "/api/stories", payload).then(function (r) {
+      var s = r && r.story;
+      if (!s) { toast("Story create failed"); return; }
+      s.projectSlug = slug; s.ticketCount = 0;
+      state.stories.push(s);
+      hideNewStory();
+      assignStory(s.id);
+      renderStoryMenu();
+      toast(s.ref + " created");
+    }).catch(function (e) { toast("Story failed: " + e.message); });
+  }
+  // Point the editor (and, in edit mode, the ticket) at a story id ("" = none).
+  function assignStory(storyId) {
+    populateStorySelect();
+    $("mStory").value = storyId || "";
+    renderStorySwatch();
+    var ed = state.editor;
+    if (ed && ed.mode === "edit" && ed.ticket) {
+      ed.ticket.storyId = storyId || null;
+      autosave({ storyId: storyId || null });
+    }
+  }
+  function onStorySelectChange() {
+    var v = $("mStory").value;
+    if (v === "__new") { $("mStory").value = currentStoryId() || ""; showNewStory(); return; }
+    hideNewStory();
+    assignStory(v);
   }
 
   // A light, safe markdown subset for comment bodies: **bold**, *italic*, `code`.
@@ -1514,7 +1867,16 @@
         var a = el("div", "att");
         a.innerHTML = '<img src="' + assetUrl(ed.ticket, f) + '" alt="" /><button class="rm" title="Remove" type="button">×</button>';
         a.querySelector("img").addEventListener("click", function () { openLightbox(a.querySelector("img").src); });
-        a.querySelector(".rm").addEventListener("click", function () { ed.removed = ed.removed || []; ed.removed.push(f); renderAttachments(); });
+        a.querySelector(".rm").addEventListener("click", function () {
+          if (ed.mode === "edit" && ed.ticket) {
+            var t = ed.ticket, s = slugOf(t);
+            mutate("PATCH", "/api/tickets/" + t.id + "?project=" + encodeURIComponent(s), { removeAssets: [f] })
+              .then(function (r) { if (r && r.ticket) ed.ticket = r.ticket; renderAttachments(); flashSaved(); refresh(true); })
+              .catch(function (e) { toast("Remove failed: " + e.message); });
+          } else {
+            ed.removed = ed.removed || []; ed.removed.push(f); renderAttachments();
+          }
+        });
         grid.appendChild(a);
       });
     }
@@ -1533,13 +1895,66 @@
     var reader = new FileReader();
     reader.onload = function () {
       var url = reader.result;
-      state.editor.attachments.push({ name: file.name || "pasted.png", base64: url, url: url });
+      var att = { name: file.name || "pasted.png", base64: url, url: url };
+      state.editor.attachments.push(att);
       renderAttachments();
+      // In edit mode the image uploads immediately; new-ticket images ride along
+      // with "Create". Clear the pending item once it lives on the ticket.
+      var ed = state.editor;
+      if (ed && ed.mode === "edit" && ed.ticket) {
+        var t = ed.ticket, s = slugOf(t);
+        mutate("PATCH", "/api/tickets/" + t.id + "?project=" + encodeURIComponent(s), { imagesData: [{ name: att.name, base64: att.base64 }] })
+          .then(function (r) {
+            if (r && r.ticket) ed.ticket = r.ticket;
+            var i = ed.attachments.indexOf(att); if (i !== -1) ed.attachments.splice(i, 1);
+            renderAttachments(); flashSaved(); refresh(true);
+          })
+          .catch(function (e) { toast("Image upload failed: " + e.message); });
+      }
     };
     reader.readAsDataURL(file);
   }
 
-  function closeModal() { $("overlay").classList.remove("show"); state.editor = null; }
+  function closeModal() {
+    // Commit any focused-but-unblurred field (title/details/labels) before the
+    // editor is torn down, so closing never silently drops a pending edit.
+    var a = document.activeElement;
+    if (a && $("modal").contains(a) && typeof a.blur === "function") a.blur();
+    $("overlay").classList.remove("show"); state.editor = null;
+  }
+
+  // Persist a partial change to the open ticket the moment it's made — the model
+  // is live (like comments/links/reminders already are), so there's no "Save".
+  // No-ops while creating a new ticket (nothing to patch into yet; it persists
+  // on "Create") and swallows redundant writes. Success is shown quietly in the
+  // header rather than via a toast, so routine edits don't spam notifications.
+  function autosave(partial) {
+    var ed = state.editor;
+    if (!ed || ed.mode !== "edit" || !ed.ticket) return;
+    var t = ed.ticket, s = slugOf(t);
+    mutate("PATCH", "/api/tickets/" + t.id + "?project=" + encodeURIComponent(s), partial)
+      .then(function (r) {
+        if (r && r.ticket) ed.ticket = r.ticket;
+        else Object.assign(ed.ticket, partial);
+        flashSaved();
+        refresh(true);
+      })
+      .catch(function (e) { toast("Save failed: " + e.message); });
+  }
+  // Brief "saved" acknowledgement in the modal header; settles back to the
+  // ticket's updated-time so the header stays informative at rest.
+  var savedTimer = null;
+  function flashSaved() {
+    var el = $("modalTitle"); if (!el) return;
+    el.textContent = "saved ✓";
+    el.style.color = "var(--mint)";
+    if (savedTimer) clearTimeout(savedTimer);
+    savedTimer = setTimeout(function () {
+      el.style.color = "";
+      var ed = state.editor;
+      if (ed && ed.ticket) el.textContent = "updated " + relTime(ed.ticket.updatedAt);
+    }, 1400);
+  }
 
   function saveEditor() {
     var ed = state.editor; if (!ed) return;
@@ -1552,6 +1967,7 @@
       status: segValue($("mStatus")),
       assignee: segValue($("mAssignee")) === "me" ? ME : null,
       labels: $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
+      storyId: ($("mStory").value && $("mStory").value !== "__new") ? $("mStory").value : null,
       imagesData: ed.attachments.map(function (a) { return { name: a.name, base64: a.base64 }; })
     };
 
@@ -1610,6 +2026,7 @@
     markSeen(slug);            // opening a board clears its unread badge
     deriveVisible();
     renderRail();
+    renderStoryMenu();         // rescope the story filter to the new board
     loadTickets().then(function () { renderBoard(); lastSig = signature(); });
   }
 
@@ -1656,11 +2073,13 @@
 
   // ---------------- polling ----------------
   function refresh(force) {
-    return Promise.all([loadProjects(), loadTickets(), loadNotifications()]).then(function () {
+    return Promise.all([loadProjects(), loadTickets(), loadNotifications(), loadStories()]).then(function () {
       processEvents();         // fire desktop notifications for background changes
       renderRail();            // reflect unread badges (may change even when the board doesn't)
       renderBell();
+      renderStoryMenu();       // keep the story filter's legend + counts current
       if ($("inboxPop").classList.contains("show")) renderInbox();
+      if ($("settingsPop").classList.contains("show")) renderProjectNotifySettings();
       if (state.view === "archive") {
         return loadArchived().then(renderArchive);
       }
@@ -1781,11 +2200,31 @@
     renderFilters();
     renderSortMenu();
     renderAssignMenu();
+    renderStoryMenu();
 
     $("newBtn").addEventListener("click", function () { openEditor(null); });
     $("mDescView").addEventListener("click", showDescEdit);
     $("mDescView").addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showDescEdit(); } });
-    $("mDesc").addEventListener("blur", showDescView);
+    // Blur = commit: swap the details back to its rendered view and persist it.
+    $("mDesc").addEventListener("blur", function () {
+      showDescView();
+      var ed = state.editor;
+      if (ed && ed.ticket && $("mDesc").value.trim() !== (ed.ticket.description || "").trim()) {
+        autosave({ description: $("mDesc").value.trim() });
+      }
+    });
+    // Title is required, so an emptied field on blur reverts rather than wipes.
+    $("mTitle").addEventListener("blur", function () {
+      var ed = state.editor; if (!ed || !ed.ticket) return;
+      var v = $("mTitle").value.trim();
+      if (!v) { $("mTitle").value = ed.ticket.title; return; }
+      if (v !== ed.ticket.title) autosave({ title: v });
+    });
+    $("mLabels").addEventListener("blur", function () {
+      var ed = state.editor; if (!ed || !ed.ticket) return;
+      var labels = $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+      if (labels.join("") !== (ed.ticket.labels || []).join("")) autosave({ labels: labels });
+    });
     $("cmtBtn").addEventListener("click", function () { postComment("comment"); });
     $("askBtn").addEventListener("click", function () { postComment("question"); });
     $("addLinkBtn").addEventListener("click", addLink);
@@ -1824,15 +2263,17 @@
     var settingsPop = $("settingsPop");
     var sortPop = $("sortPop"), sortBtn = $("sortBtn");
     var assignPop = $("assignPop"), assignBtn = $("assignBtn");
+    var storyPop = $("storyPop"), storyBtn = $("storyBtn");
     var inboxPop = $("inboxPop");
     function closeSort() { sortPop.classList.remove("show"); sortBtn.classList.remove("on"); sortBtn.setAttribute("aria-expanded", "false"); }
     function closeAssign() { assignPop.classList.remove("show"); assignBtn.classList.remove("on"); assignBtn.setAttribute("aria-expanded", "false"); }
+    function closeStory() { storyPop.classList.remove("show"); storyBtn.classList.remove("on"); storyBtn.setAttribute("aria-expanded", "false"); }
     function closeSettings() { settingsPop.classList.remove("show"); $("settingsBtn").classList.remove("on"); }
     function closeInbox() { inboxPop.classList.remove("show"); $("notifyBtn").classList.remove("on"); }
 
     assignBtn.addEventListener("click", function (e) {
       e.stopPropagation();
-      closeSort(); closeSettings(); closeInbox();
+      closeSort(); closeStory(); closeSettings(); closeInbox();
       var open = assignPop.classList.toggle("show");
       assignBtn.classList.toggle("on", open);
       assignBtn.setAttribute("aria-expanded", open ? "true" : "false");
@@ -1843,9 +2284,22 @@
       closeAssign();
     });
 
+    storyBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      closeSort(); closeAssign(); closeSettings(); closeInbox();
+      var open = storyPop.classList.toggle("show");
+      storyBtn.classList.toggle("on", open);
+      storyBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    storyPop.addEventListener("click", function (e) {
+      var opt = e.target.closest(".sort-opt"); if (!opt) return;
+      setStoryFilter(opt.dataset.k);
+      closeStory();
+    });
+
     sortBtn.addEventListener("click", function (e) {
       e.stopPropagation();
-      closeAssign(); closeSettings(); closeInbox();
+      closeAssign(); closeStory(); closeSettings(); closeInbox();
       var open = sortPop.classList.toggle("show");
       sortBtn.classList.toggle("on", open);
       sortBtn.setAttribute("aria-expanded", open ? "true" : "false");
@@ -1860,25 +2314,35 @@
     // notifications instead of toggling desktop permission directly.
     $("notifyBtn").addEventListener("click", function (e) {
       e.stopPropagation();
-      closeSort(); closeAssign(); closeSettings();
+      closeSort(); closeAssign(); closeStory(); closeSettings();
       var opening = !inboxPop.classList.contains("show");
       inboxPop.classList.toggle("show", opening);
       $("notifyBtn").classList.toggle("on", opening);
       if (opening) loadNotifications().then(renderInbox);
     });
     $("markAllReadBtn").addEventListener("click", function (e) { e.stopPropagation(); markAllNotificationsRead(); });
+    $("inboxTabs").addEventListener("click", function (e) { var b = e.target.closest("button[data-tab]"); if (b) setInboxTab(b.dataset.tab); });
 
     $("settingsBtn").addEventListener("click", function (e) {
       e.stopPropagation();
-      closeSort(); closeAssign(); closeInbox();
+      closeSort(); closeAssign(); closeStory(); closeInbox();
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
+      if (opening) renderProjectNotifySettings();
     });
     document.addEventListener("click", function (e) {
       if (e.target.closest(".popwrap")) return;
-      closeSettings(); closeSort(); closeAssign(); closeInbox();
+      closeSettings(); closeSort(); closeAssign(); closeStory(); closeInbox();
     });
+
+    // Story field (ticket editor): pick/clear a story, or reveal the inline
+    // "new story" panel. The board select (new-ticket, All-boards view) reshapes
+    // the story options to that board.
+    $("mStory").addEventListener("change", onStorySelectChange);
+    $("newStoryCreate").addEventListener("click", createStoryInline);
+    $("newStoryCancel").addEventListener("click", function () { hideNewStory(); $("mStory").value = currentStoryId() || ""; renderStorySwatch(); });
+    $("mProject").addEventListener("change", populateStorySelect);
     $("desktopNotifRow").addEventListener("click", requestNotify);
     $("desktopNotifRow").addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); requestNotify(); } });
     settingsPop.querySelectorAll("input[data-notif]").forEach(function (box) {

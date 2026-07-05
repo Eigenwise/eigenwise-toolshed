@@ -123,6 +123,7 @@ function cmdAdd(opts) {
     status: opts.status,
     labels: opts.label,
     images: opts.image || [],
+    storyId: opts.story,
     source: opts.source || 'cli',
     onAssetError: (src) => warnings.push(`could not attach image: ${src}`),
   });
@@ -133,7 +134,9 @@ function cmdAdd(opts) {
   }
   const pr = PRIORITY_MARK[ticket.priority] ? ` ${PRIORITY_MARK[ticket.priority]}` : '';
   const imgs = ticket.assets.length ? ` (${ticket.assets.length} image${ticket.assets.length > 1 ? 's' : ''})` : '';
-  console.log(`✓ ${ticket.ref}${pr}  "${ticket.title}"  [${ticket.status}/${ticket.priority}]${imgs}  — ${meta.name}`);
+  const story = ticket.storyId ? store.getStory(slug, ticket.storyId) : null;
+  const st = story ? `  ↳${story.ref}` : '';
+  console.log(`✓ ${ticket.ref}${pr}  "${ticket.title}"  [${ticket.status}/${ticket.priority}]${imgs}${st}  — ${meta.name}`);
   for (const w of warnings) console.log(`  ! ${w}`);
   const info = store.readServerInfo();
   if (info && info.url) console.log(`  board: ${info.url}`);
@@ -187,6 +190,7 @@ function cmdUpdate(opts, positional) {
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
   if (opts.assignee != null) patch.assignee = opts.assignee;
+  if (opts.story != null) patch.storyId = opts.story; // link (US-n / raw id) or clear ("none"/null)
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
   const updated = store.updateTicket(slug, idOrRef, patch);
   if (!updated) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
@@ -194,7 +198,9 @@ function cmdUpdate(opts, positional) {
     process.stdout.write(JSON.stringify({ ok: true, ticket: updated }, null, 2) + '\n');
     return;
   }
-  console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]  "${updated.title}"`);
+  const story = updated.storyId ? store.getStory(slug, updated.storyId) : null;
+  const st = story ? `  ↳${story.ref}` : '';
+  console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]${st}  "${updated.title}"`);
 }
 
 function cmdRm(opts, positional) {
@@ -618,6 +624,122 @@ function cmdProjects(opts) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  User stories (a lightweight grouping tickets can belong to)
+ * ------------------------------------------------------------------ */
+
+// Count non-archived tickets that belong to a given story.
+function storyTicketCount(slug, storyId) {
+  return store.listTickets(slug).filter((t) => !t.archived && t.storyId === storyId).length;
+}
+
+function cmdStory(opts, positional) {
+  const action = (positional[0] || '').toLowerCase();
+  const idOrRef = positional[1];
+  const { slug, meta } = resolveProject(opts);
+
+  switch (action) {
+    case 'add':
+    case 'new':
+    case 'create': {
+      const title = opts.title;
+      if (!title) fail('story add: --title/-t is required, e.g. sidequest story add -t "Auth revamp" [--color teal]');
+      const story = store.createStory(slug, {
+        title,
+        description: opts.desc != null ? opts.desc : opts.description,
+        color: opts.color,
+      });
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, story }, null, 2) + '\n');
+        return;
+      }
+      console.log(`✓ ${story.ref}  "${story.title}"  [${story.color}]  — ${meta.name}`);
+      return;
+    }
+
+    case 'list':
+    case 'ls': {
+      const stories = store.listStories(slug);
+      if (opts.json) {
+        const withCounts = stories.map((s) => Object.assign({}, s, { ticketCount: storyTicketCount(slug, s.id) }));
+        process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, stories: withCounts }, null, 2) + '\n');
+        return;
+      }
+      if (!stories.length) {
+        console.log(`No user stories in ${meta.name}.`);
+        return;
+      }
+      console.log(`${meta.name} — ${stories.length} user story/stories`);
+      for (const s of stories) {
+        const n = storyTicketCount(slug, s.id);
+        console.log(`  ${s.ref}  [${s.color}]  ${s.title}  (${n} ticket${n === 1 ? '' : 's'})`);
+      }
+      return;
+    }
+
+    case 'show':
+    case 'view': {
+      if (!idOrRef) fail('story show: pass a story ref, e.g. sidequest story show US-1');
+      const story = store.getStory(slug, idOrRef);
+      if (!story) fail(`story show: no story "${idOrRef}" in ${meta.name}`);
+      const tickets = store.listTickets(slug).filter((t) => !t.archived && t.storyId === story.id);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, story, tickets }, null, 2) + '\n');
+        return;
+      }
+      console.log(`${story.ref}  [${story.color}]  "${story.title}"  — ${meta.name}`);
+      if (story.description) console.log(`  ${story.description}`);
+      if (!tickets.length) {
+        console.log('  (no tickets yet)');
+        return;
+      }
+      console.log(`  ${tickets.length} ticket(s):`);
+      for (const t of tickets) {
+        const pr = PRIORITY_MARK[t.priority] ? ` ${PRIORITY_MARK[t.priority]}` : '';
+        console.log(`    ${t.ref}${pr}  [${t.status}]  ${t.title}`);
+      }
+      return;
+    }
+
+    case 'update':
+    case 'edit':
+    case 'set': {
+      if (!idOrRef) fail('story update: pass a story ref, e.g. sidequest story update US-1 -t "New title"');
+      const patch = {};
+      if (opts.title != null) patch.title = opts.title;
+      if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
+      if (opts.color != null) patch.color = opts.color;
+      const story = store.updateStory(slug, idOrRef, patch);
+      if (!story) fail(`story update: no story "${idOrRef}" in ${meta.name}`);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ ok: true, project: slug, story }, null, 2) + '\n');
+        return;
+      }
+      console.log(`✓ ${story.ref} updated  [${story.color}]  "${story.title}"  — ${meta.name}`);
+      return;
+    }
+
+    case 'rm':
+    case 'remove':
+    case 'delete': {
+      if (!idOrRef) fail('story rm: pass a story ref, e.g. sidequest story rm US-1');
+      const existing = store.getStory(slug, idOrRef);
+      const ok = store.deleteStory(slug, idOrRef);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ ok, project: slug, story: existing || null }, null, 2) + '\n');
+        if (!ok) process.exitCode = 1;
+        return;
+      }
+      if (!ok) fail(`story rm: no story "${idOrRef}" in ${meta.name}`);
+      console.log(`✓ removed ${existing ? existing.ref : idOrRef} from ${meta.name} (member tickets detached)`);
+      return;
+    }
+
+    default:
+      fail(`story: unknown action "${positional[0] || ''}". Use add | list | show | update | rm. Run "sidequest help".`);
+  }
+}
+
+/* ------------------------------------------------------------------ *
  *  Server lifecycle
  * ------------------------------------------------------------------ */
 
@@ -733,6 +855,7 @@ function cmdStop() {
  * ------------------------------------------------------------------ */
 
 function help() {
+  const colorNames = Object.keys(store.STORY_COLOR_NAMES || {}).join(', ');
   console.log(
     `sidequest — a Trello-light quest log for Claude Code
 
@@ -779,6 +902,16 @@ Archive (put finished work out of the way, restorable):
   sidequest archive <id|SQ-n>                      archive one ticket    ·    --done archives ALL done
   sidequest unarchive <id|SQ-n>                    restore an archived ticket
   sidequest list --archived                        list archived tickets
+
+User stories (a lightweight grouping tickets can belong to):
+  sidequest story add -t "title" [-d desc] [--color <name|hex>]   create a story (prints its US-n ref)
+  sidequest story list                             list stories with their color and ticket count
+  sidequest story show US-n                         show a story and the tickets in it
+  sidequest story update US-n [-t] [-d] [--color]  edit a story
+  sidequest story rm US-n                           delete a story (member tickets are detached)
+  sidequest add ... --story <US-n>                 file a ticket straight into a story
+  sidequest update <id|SQ-n> --story <US-n|none>   move a ticket into a story, or "none" to clear
+  --color names: ${colorNames} (or any #rrggbb hex)
 
 Project selection:
   Defaults to $CLAUDE_PROJECT_DIR or the current directory.
@@ -897,6 +1030,9 @@ async function main() {
       break;
     case 'stop':
       cmdStop();
+      break;
+    case 'story':
+      cmdStory(opts, positional);
       break;
     default:
       fail(`unknown command "${cmd}". Run "sidequest help".`);

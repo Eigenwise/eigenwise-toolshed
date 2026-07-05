@@ -27,7 +27,17 @@ When the user gives you a task that is **more than a single small change** — a
 parts, a request with multiple deliverables, or an explicit "split this into tickets" / "make tickets
 for this" — do this **before writing any code**:
 
-1. **Decompose** it into one ticket per distinct piece of work (`sidequest add ...`).
+0. **First decide the shape: a user story, or a standalone ticket.** Judge the request:
+   - **Standalone ticket** — one cohesive change, a single bug, a small task. File one ticket
+     (`sidequest add ...`) and stop deciding; no story needed. Most requests are this.
+   - **User story** — a feature that naturally breaks into several tickets that share a goal (a "backend
+     + API + dashboard + docs" build, an epic, anything you'd otherwise decompose into many tickets).
+     Create a **story** first (`sidequest story add -t "..."`), then file each piece into it with
+     `sidequest add ... --story US-n`. The board color-codes every ticket by its story, so the whole
+     arc stays visually grouped. This is your call — the user shouldn't have to say "make a story";
+     infer it from the scope.
+1. **Decompose** the work into one ticket per distinct piece (`sidequest add ...`, adding `--story US-n`
+   when it belongs to a story from step 0).
 2. **Link dependencies** so the order is explicit: `sidequest link SQ-4 depends-on SQ-3`,
    `sidequest link SQ-2 blocks SQ-8`. (See "Link tickets" below.)
 3. **Work them one at a time**: `claim` a ticket, do it (yourself or via a subagent), `done`, repeat —
@@ -36,7 +46,7 @@ for this" — do this **before writing any code**:
 
 This is the point of having the board: the plan is visible, survives context loss, and other agents can
 pick up unblocked pieces. Don't skip it for anything non-trivial. For a genuinely trivial one-step
-change, just do it — no need to ticket everything.
+change, just do it — no need to ticket everything (and no story).
 
 sidequest is a Trello-light quest log. Tickets live in a central store under `~/.claude/sidequest`
 (keyed by project path), and a bundled dashboard shows them as a live Kanban board — every project at
@@ -99,6 +109,29 @@ For a side issue the user tosses out **while you're mid-task** ("oh, and the foo
 don't stop your current work: spawn the **`ticket-filer`** subagent (ideally `run_in_background: true`)
 with the issue text, any pasted image path, and the CLI command. It files the ticket while you keep
 going. The capture hook reminds you of this and hands you the image path.
+
+## User stories
+
+A **user story** groups several tickets that share a goal and color-codes them together on the board.
+Reach for one when a request breaks into multiple tickets (see "Plan substantial work" above); skip it
+for a lone ticket.
+
+```bash
+sidequest story add -t "Checkout revamp" [-d "..."] [--color teal]   # prints its US-n ref
+sidequest story list                                                  # stories + color + ticket count
+sidequest story show US-1                                             # the story and its tickets
+sidequest story update US-1 -t "New title" [--color "#7a5ba8"]        # rename / recolor
+sidequest story rm US-1                                               # delete (member tickets detached)
+```
+
+- **Attach a ticket to a story**, at creation or later:
+  `sidequest add -t "..." --story US-1` · `sidequest update SQ-3 --story US-1` ·
+  `sidequest update SQ-3 --story none` (to clear it).
+- **Color** is optional — a distinct one is auto-assigned per story. Override with a hex (`#7a5ba8`) or a
+  name: `terracotta, teal, violet, olive, rose, steel, amber, green`.
+- On the dashboard each card wears its story's color (a top rail + a chip), a **Story** filter in the
+  toolbar narrows the board to one story, and the ticket editor has a **Story** field (pick, clear, or
+  create one inline).
 
 ## List tickets
 
@@ -248,7 +281,13 @@ server-side queue:
 - **Background events** — Claude/CLI creating, moving, commenting on, or asking a question about a
   ticket enqueues a notification automatically (subject to per-kind opt-in/out in the settings
   popover). These show up in the bell inbox with an unread badge, even if the dashboard tab was closed
-  when the event happened. Nothing to do here — this is automatic.
+  when the event happened. Nothing to do here — this is automatic. The inbox splits them into
+  **Needs you** (questions + reminders) and **Activity** (new tickets, moves, comments) so a question
+  never gets buried; a question also turns the bell badge red.
+- **Per-project mute.** A whole board's notifications can be turned off from the dashboard's settings
+  popover (on by default). A muted board queues **nothing** — no questions, comments, or status —
+  regardless of the per-kind settings, and its rail row shows a muted-bell mark. Useful to silence a
+  noisy background project without losing notifications everywhere.
 - **Reminders** — a time-based nudge on a ticket that later fires into the same inbox. Set one with the
   CLI:
 

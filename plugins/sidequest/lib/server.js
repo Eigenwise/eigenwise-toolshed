@@ -92,6 +92,21 @@ function aggregateTickets(archivedOnly) {
   return out;
 }
 
+// Stories for one project, each annotated with how many (non-archived) tickets
+// belong to it and which board it lives on — the shape the dashboard's story
+// legend/filter and the "All boards" aggregate consume.
+function storiesWithCounts(slug) {
+  const counts = {};
+  for (const t of store.listTickets(slug)) {
+    if (t.archived || !t.storyId) continue;
+    counts[t.storyId] = (counts[t.storyId] || 0) + 1;
+  }
+  const meta = store.readMeta(slug);
+  return store.listStories(slug).map((s) =>
+    Object.assign({}, s, { projectSlug: slug, projectName: meta ? meta.name : slug, ticketCount: counts[s.id] || 0 })
+  );
+}
+
 // Stamp each ticket with its pending reminder (or null), computed from one
 // read of the notifications file rather than one per ticket. The reminder
 // itself lives in the notifications store, not the ticket file, so this is
@@ -141,6 +156,96 @@ async function handle(req, res) {
     return;
   }
 
+  // --- Per-project notification switch (/api/projects/:slug/notify) ---
+  const pn = /^\/api\/projects\/([^/]+)\/notify$/.exec(pathname);
+  if ((req.method === 'POST' || req.method === 'PUT') && pn) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    const result = store.setProjectNotify(pn[1], body.on);
+    sendJson(res, result.ok ? 200 : 404, result);
+    return;
+  }
+
+  // --- Stories: list (?project=slug|all) ---
+  if (req.method === 'GET' && pathname === '/api/stories') {
+    const project = q.project ? String(q.project) : 'all';
+    if (project === 'all' || project === '') {
+      const out = [];
+      for (const p of store.listProjects()) out.push(...storiesWithCounts(p.slug));
+      sendJson(res, 200, { project: 'all', stories: out });
+    } else {
+      if (!store.readMeta(project)) {
+        sendJson(res, 404, { error: 'unknown project' });
+        return;
+      }
+      sendJson(res, 200, { project, stories: storiesWithCounts(project) });
+    }
+    return;
+  }
+
+  // --- Stories: create ---
+  if (req.method === 'POST' && pathname === '/api/stories') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    let slug = body.project && String(body.project);
+    if ((!slug || slug === 'all') && body.projectPath) {
+      slug = store.ensureProject(body.projectPath, body.projectName).slug;
+    }
+    if (!slug || slug === 'all') {
+      sendJson(res, 400, { error: 'a project is required to create a story' });
+      return;
+    }
+    if (!store.readMeta(slug)) {
+      sendJson(res, 404, { error: 'unknown project' });
+      return;
+    }
+    const story = store.createStory(slug, { title: body.title, description: body.description, color: body.color });
+    sendJson(res, 201, { story });
+    return;
+  }
+
+  // --- Stories: update / delete (/api/stories/:id) ---
+  const sm = /^\/api\/stories\/([^/]+)$/.exec(pathname);
+  if (sm) {
+    const idOrRef = sm[1];
+    const slug = q.project ? String(q.project) : null;
+    if (!slug || slug === 'all') {
+      sendJson(res, 400, { error: 'project query param is required' });
+      return;
+    }
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        sendJson(res, 400, { error: 'bad JSON body' });
+        return;
+      }
+      const updated = store.updateStory(slug, idOrRef, body);
+      if (!updated) {
+        sendJson(res, 404, { error: 'story not found' });
+        return;
+      }
+      sendJson(res, 200, { story: updated });
+      return;
+    }
+    if (req.method === 'DELETE') {
+      const ok = store.deleteStory(slug, idOrRef);
+      sendJson(res, ok ? 200 : 404, { ok });
+      return;
+    }
+  }
+
   // --- Tickets: list ---
   if (req.method === 'GET' && pathname === '/api/tickets') {
     const project = q.project ? String(q.project) : 'all';
@@ -187,6 +292,7 @@ async function handle(req, res) {
       status: body.status,
       priority: body.priority,
       labels: body.labels,
+      storyId: body.storyId,
       assignee: body.assignee,
       imagesData: body.imagesData,
       source: 'dashboard',
