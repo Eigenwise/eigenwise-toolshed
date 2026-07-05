@@ -293,6 +293,7 @@ async function handle(req, res) {
       priority: body.priority,
       labels: body.labels,
       storyId: body.storyId,
+      model: body.model,
       assignee: body.assignee,
       imagesData: body.imagesData,
       source: 'dashboard',
@@ -467,8 +468,16 @@ async function handle(req, res) {
     if (q.includePending === '1' || q.includePending === 'true') opts.includePending = true;
     if (q.limit) opts.limit = Number(q.limit);
     const notifications = store.listNotifications(opts);
-    const unread = store.listNotifications(Object.assign({}, opts, { unreadOnly: true, limit: undefined })).length;
-    sendJson(res, 200, { notifications, unread });
+    // Unread counts are computed server-wide (kind-agnostic, no limit) so the bell
+    // badge, its "question" urgency cue, and the inbox category tabs stay correct
+    // even when the newest-N page the client holds doesn't include an older unread
+    // question — otherwise a blocking question aged past the page would read as
+    // routine. "Needs you" = questions + due reminders; the rest is activity.
+    const unreadList = store.listNotifications(Object.assign({}, opts, { unreadOnly: true, kind: undefined, limit: undefined }));
+    const unread = unreadList.length;
+    const unreadQuestions = unreadList.filter((n) => n.kind === 'question').length;
+    const unreadNeeds = unreadList.filter((n) => n.kind === 'question' || n.kind === 'reminder').length;
+    sendJson(res, 200, { notifications, unread, unreadQuestions, unreadNeeds });
     return;
   }
 

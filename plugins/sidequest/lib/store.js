@@ -130,6 +130,22 @@ function newTicketId() {
 const VALID_STATUS = ['todo', 'doing', 'done'];
 const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 
+// The agent tier a ticket wants working it — the same aliases Claude Code's Task
+// tool accepts, so the orchestrator can pass a ticket's tag straight through as a
+// subagent's model (plan with the top tier, execute a tier down). null = any.
+// sidequest can't *force* a model (only the orchestrator picks one at spawn
+// time); this tag drives that routing and the `next`/`ready` --model filter.
+const VALID_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
+
+// Normalize a requested model tier to one of VALID_MODELS, or null (any). Blank
+// / "any" / "none" / an unknown alias all clear it to null.
+function coerceModel(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  if (!s || s === 'any' || s === 'none' || s === 'null') return null;
+  return VALID_MODELS.indexOf(s) !== -1 ? s : null;
+}
+
 // A user story groups several tickets. Its colour is what the board uses to tint
 // every member card, so the eight defaults are muted, distinct hues that read on
 // the cream paper (and against each other). New stories cycle through them; the
@@ -426,6 +442,7 @@ function createTicket(slug, fields) {
     priority: coercePriority(fields.priority, 'normal'),
     labels: normalizeLabels(fields.labels),
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
+    model: coerceModel(fields.model),             // the agent tier that should work it (null = any)
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
@@ -504,6 +521,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
+    if (patch.model !== undefined) t.model = coerceModel(patch.model);
     if (patch.assignee !== undefined) t.assignee = normalizeAssignee(patch.assignee);
     if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
     // Attach any newly supplied images (by path from the CLI, or base64 from the
@@ -809,15 +827,27 @@ function completeTicket(slug, idOrRef, by, opts) {
   return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, { status: 'done' }));
 }
 
+// True when a ticket may be handed to a worker running as tier `want`: either the
+// worker didn't specify a tier, or the ticket is untagged (anyone can take it), or
+// the tags match. So a tier-X worker never grabs a ticket reserved for a different
+// tier, but untagged work stays available to everyone.
+function modelMatches(ticketModel, want) {
+  return !want || !ticketModel || ticketModel === want;
+}
+
 // The tickets that are ready to be worked right now: not done, not archived, not
 // actively claimed, and not blocked by an unfinished ticket. This is the set to
 // fan subagents out over (each still claims before working). Priority-ordered.
-function readyTickets(slug) {
+// opts.model restricts to that tier's work (tagged-for-it or untagged).
+function readyTickets(slug, opts) {
+  opts = opts || {};
+  const want = coerceModel(opts.model);
   return listTickets(slug)
     .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
     .filter((t) => !t.claim || isClaimStale(t.claim))
     .filter((t) => !isBlocked(slug, t))
+    .filter((t) => modelMatches(t.model, want))
     .sort((a, b) => {
       const pr = priorityRank(a.priority) - priorityRank(b.priority);
       if (pr !== 0) return pr;
@@ -831,11 +861,13 @@ function readyTickets(slug) {
 function claimNext(slug, by, opts) {
   opts = opts || {};
   by = String(by || 'agent');
+  const want = coerceModel(opts.model);
   const candidates = listTickets(slug)
     .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
     .filter((t) => !t.claim || isClaimStale(t.claim) || t.claim.by === by)
     .filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase())
+    .filter((t) => modelMatches(t.model, want)) // a tier-X worker only claims X-tagged or untagged work
     .filter((t) => opts.includeBlocked || !isBlocked(slug, t)) // never auto-hand-out blocked work
     .sort((a, b) => {
       const pr = priorityRank(a.priority) - priorityRank(b.priority);
@@ -1542,6 +1574,7 @@ function clearServerInfo() {
 module.exports = {
   VALID_STATUS,
   VALID_PRIORITY,
+  VALID_MODELS,
   homeRoot,
   projectsRoot,
   serverFile,

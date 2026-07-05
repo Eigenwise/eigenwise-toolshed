@@ -119,6 +119,24 @@ story's color as a top rail and a chip, a **Story** filter in the toolbar narrow
 story, and the ticket editor has a **Story** field to pick, clear, or create a story inline. Deleting a
 story keeps its tickets — they're just detached.
 
+## Target model tier
+
+Tag a ticket with the **agent tier** that should work it — plan with the strongest model, execute with a
+cheaper one — and Claude routes accordingly when working the board.
+
+```bash
+sidequest add -t "Design the migration" --model opus     # planning / hard reasoning → top tier
+sidequest add -t "Apply the codemod"    --model sonnet   # execution → a tier down
+sidequest update SQ-8 --model any                         # clear the tag
+```
+
+Tiers are `opus | sonnet | haiku | fable` (untagged = any). Each card shows a tier chip, and
+`sidequest next --model sonnet` / `ready --model sonnet` only hand out `sonnet`-tagged **or untagged**
+tickets — so an execution worker never picks up a plan-only ticket. sidequest doesn't *force* a model
+(nothing can make a running model swap itself mid-task); it records the tag, and Claude honors it by
+spawning each ticket's executor **subagent** at the tagged tier. The recipe: plan/decompose on the top
+tier, tag execution a tier down, then fan out.
+
 ## Reminders
 
 Set a time-based nudge on any ticket — it fires into the bell inbox later, even if you've closed the
@@ -269,6 +287,8 @@ node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -
 node <plugin>/bin/sidequest.js rm SQ-3
 node <plugin>/bin/sidequest.js story add -t "Epic" [--color teal]   # group tickets; file into it with --story US-n
 node <plugin>/bin/sidequest.js story list|show US-1|update US-1|rm US-1
+node <plugin>/bin/sidequest.js add -t "Task" --model sonnet         # target tier: opus|sonnet|haiku|fable (any clears)
+node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only sonnet-tagged or untagged work
 node <plugin>/bin/sidequest.js ready [--json]                 # the fan-out set (unclaimed, unblocked)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
 node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket

@@ -222,6 +222,31 @@ files** — parallel edits to one file collide. Link such tickets with `depends-
 naturally serialize them. For a large fan-out you may use a subagent workflow; otherwise a batch of
 background subagents is enough.
 
+## Route work by model tier
+
+A ticket can carry a **target model tier** — which agent tier should work it — so you plan with the
+strongest model and execute with a cheaper one. Tag it with `--model` (the aliases the Task tool
+accepts: `opus | sonnet | haiku | fable`; untagged = any):
+
+```bash
+sidequest add -t "Design the migration" --model opus     # planning / hard reasoning → top tier
+sidequest add -t "Apply the codemod"    --model sonnet   # execution → a tier down
+sidequest update SQ-8 --model haiku                       # set/adjust later ( --model any clears it )
+```
+
+**How to honor the tag when working the board:**
+- **You can't change your own model mid-run, and sidequest can't force one** — only the orchestrator
+  picks a model, and only for the **subagents it spawns**. So when a ticket is tagged, spawn its
+  executor subagent at that tier (the Task tool's `model` parameter) instead of doing the tier-down
+  work yourself. Reading the tag and routing is the whole mechanism.
+- **Claim by tier.** `sidequest next --model sonnet` / `sidequest ready --model sonnet` only hand out
+  tickets tagged `sonnet` **or untagged**, so a sonnet-tier worker never grabs an opus-only planning
+  ticket. Pass the tier the worker is running as.
+- **The pattern:** decompose on the top tier (tag planning/design tickets `opus`), tag the execution
+  tickets a tier down (`sonnet`/`haiku`), then fan out — each execution subagent spawned at its
+  ticket's tagged tier. It's advisory routing, not a hard gate: the point is that the right tier picks
+  up the right work. A ticket's tier shows as a chip on its card and in `list`/`ready` output.
+
 ## Comments & questions
 
 Every ticket has a comment thread. Post one with `sidequest comment` or `sidequest ask` — the two

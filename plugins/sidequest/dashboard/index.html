@@ -357,6 +357,9 @@
   .card .story-top { position: absolute; left: 0; right: 0; top: 0; height: 3px; }
   .storychip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  /* Target-model tier chip: which agent tier should work the ticket. */
+  .modelchip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; text-transform: lowercase; }
+  .modelchip svg { flex: none; opacity: .9; }
   /* Story field in the ticket editor: a swatch beside the select, and the
      inline "new story" panel with a palette picker. */
   .story-select-row { display: flex; align-items: center; gap: 9px; }
@@ -676,6 +679,10 @@
           </div>
         </div>
         <div class="field">
+          <label>Model</label>
+          <div class="seg model" id="mModel"></div>
+        </div>
+        <div class="field">
           <label for="mLabels">Labels</label>
           <input id="mLabels" type="text" placeholder="bug, frontend  (comma-separated)" />
         </div>
@@ -762,6 +769,13 @@
   // Mirrors store.STORY_PALETTE — the swatches offered when creating a story from
   // the dashboard. The server still auto-assigns when none is picked.
   var STORY_PALETTE = ["#c2683f", "#3f8f8a", "#7a5ba8", "#7d8a3f", "#b45573", "#4a72a8", "#c19a3e", "#4f8f6a"];
+  // Target-model tiers (mirrors store.VALID_MODELS). "Any" = untagged. Each tier
+  // gets a distinct on-brand accent so the card chip is glanceable.
+  var MODELS = [
+    { k: "any", label: "Any" }, { k: "opus", label: "Opus" }, { k: "sonnet", label: "Sonnet" },
+    { k: "haiku", label: "Haiku" }, { k: "fable", label: "Fable" }
+  ];
+  var MODEL_COLORS = { opus: "#404683", sonnet: "#3f8f8a", haiku: "#a8672e", fable: "#7a5ba8" };
   var POLL_MS = 2500;
   // Quick "Remind me" presets in the ticket editor -> a Date to fire at.
   var REMINDER_PRESETS = {
@@ -795,7 +809,9 @@
     view: "board",            // "board" | "archive"
     archivedTickets: [],      // loaded on demand for the archive view
     notifications: [],        // queued notifications from /api/notifications (newest first)
-    unread: 0,                // unread count reported by the server
+    unread: 0,                // unread count reported by the server (server-wide, not just the loaded page)
+    unreadNeeds: 0,           // server-wide unread in the "Needs you" bucket (questions + due reminders)
+    unreadQuestions: 0,       // server-wide unread questions (drives the red bell cue)
     inboxTab: "all"           // inbox category filter: "all" | "needs" | "activity"
   };
   var lastSig = "";
@@ -1000,21 +1016,31 @@
   // Stories are loaded across every project (like tickets) so the "All boards"
   // view and the sidebar are complete; the board filters by scope when rendering.
   function loadStories() {
-    return api("/api/stories?project=all").then(function (d) { state.stories = d.stories || []; });
+    // Tolerate an older/stale server that predates the /api/stories route: a 404
+    // here must never reject the refresh Promise.all and blank the whole board —
+    // just fall back to no stories until the server is restarted with new code.
+    return api("/api/stories?project=all")
+      .then(function (d) { state.stories = d.stories || []; })
+      .catch(function () { state.stories = []; });
   }
 
   // The inbox is global (spans every project), independent of the currently selected board.
   function loadNotifications() {
     return api("/api/notifications?project=all&limit=50").then(function (d) {
       state.notifications = (d.notifications || []).slice().sort(function (a, b) { return new Date(b.createdAt) - new Date(a.createdAt); });
+      // Prefer the server's kind-aware, server-wide unread counts (they cover
+      // notifications older than the loaded page); fall back to the loaded set for
+      // an older server that doesn't send them yet.
       state.unread = typeof d.unread === "number" ? d.unread : state.notifications.filter(function (n) { return !n.readAt; }).length;
+      state.unreadNeeds = typeof d.unreadNeeds === "number" ? d.unreadNeeds : state.notifications.filter(function (n) { return !n.readAt && notifBucket(n) === "needs"; }).length;
+      state.unreadQuestions = typeof d.unreadQuestions === "number" ? d.unreadQuestions : state.notifications.filter(function (n) { return !n.readAt && n.kind === "question"; }).length;
     });
   }
 
   function signature() {
     // A compact fingerprint of what's on screen, so polling only re-renders on real change.
     var parts = state.projects.map(function (p) { return p.slug + ":" + p.counts.todo + "," + p.counts.doing + "," + p.counts.done; });
-    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || ""); });
+    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || "") + (t.model || ""); });
     var ss = state.stories.map(function (s) { return s.id + s.color + s.title; });
     return state.current + "|" + parts.join(";") + "||" + ts.sort().join(";") + "||" + ss.sort().join(";");
   }
@@ -1208,9 +1234,6 @@
   // bucket — a question waiting on your reply, or a reminder you set — kept apart
   // from routine activity (new tickets, moves, comments) so it never gets buried.
   function notifBucket(n) { return (n.kind === "question" || n.kind === "reminder") ? "needs" : "activity"; }
-  function unreadQuestionCount() {
-    return state.notifications.filter(function (n) { return !n.readAt && n.kind === "question"; }).length;
-  }
 
   function renderBell() {
     var b = $("bellBadge"); if (!b) return;
@@ -1222,8 +1245,10 @@
       b.style.display = "";
       b.textContent = n > 99 ? "99+" : String(n);
       // Turn the badge urgent when any unread is a question — a stronger cue than
-      // the plain count that Claude is actually blocked on you.
-      var q = unreadQuestionCount();
+      // the plain count that Claude is actually blocked on you. Uses the server's
+      // server-wide question count, so a question older than the loaded page still
+      // reddens the bell.
+      var q = state.unreadQuestions || 0;
       b.classList.toggle("has-q", q > 0);
       b.title = n + " unread notification" + (n === 1 ? "" : "s") + (q > 0 ? " · " + q + " awaiting your reply" : "");
       if (grew) { b.classList.remove("pop"); void b.offsetWidth; b.classList.add("pop"); }
@@ -1239,11 +1264,10 @@
 
   function renderInbox() {
     var list = $("inboxList"), empty = $("inboxEmpty");
-    // Live per-bucket unread counts on the tabs.
-    var needsUnread = state.notifications.filter(function (n) { return !n.readAt && notifBucket(n) === "needs"; }).length;
-    var actUnread = state.notifications.filter(function (n) { return !n.readAt && notifBucket(n) === "activity"; }).length;
-    setTabCount("tabCountNeeds", needsUnread);
-    setTabCount("tabCountActivity", actUnread);
+    // Per-bucket unread counts on the tabs — server-wide (not just the loaded
+    // page), so an aged-out unread question still shows in the "Needs you" count.
+    setTabCount("tabCountNeeds", state.unreadNeeds || 0);
+    setTabCount("tabCountActivity", Math.max(0, (state.unread || 0) - (state.unreadNeeds || 0)));
 
     var tab = state.inboxTab;
     var items = state.notifications.filter(function (n) { return tab === "all" || notifBucket(n) === tab; });
@@ -1303,7 +1327,14 @@
     if (p) p.notify = on;   // optimistic
     renderProjectNotifySettings(); renderRail();
     mutate("POST", "/api/projects/" + encodeURIComponent(slug) + "/notify", { on: on })
-      .then(function () { toast(on ? "Notifications on for this board" : "Muted this board"); })
+      .then(function () {
+        // A poll in flight during the request may have reloaded state.projects and
+        // overwritten the optimistic value; reassert it now that the write landed.
+        var pp = state.projects.filter(function (x) { return x.slug === slug; })[0];
+        if (pp) pp.notify = on;
+        renderProjectNotifySettings(); renderRail();
+        toast(on ? "Notifications on for this board" : "Muted this board");
+      })
       .catch(function (e) { toast("Failed: " + e.message); loadProjects().then(function () { renderProjectNotifySettings(); renderRail(); }); });
   }
 
@@ -1331,6 +1362,8 @@
     if (!n || n.readAt) return;
     n.readAt = new Date().toISOString();          // optimistic
     state.unread = Math.max(0, state.unread - 1);
+    if (n.kind === "question") state.unreadQuestions = Math.max(0, state.unreadQuestions - 1);
+    if (notifBucket(n) === "needs") state.unreadNeeds = Math.max(0, state.unreadNeeds - 1);
     renderBell(); renderInbox();
     mutate("POST", "/api/notifications/read", { id: id })
       .catch(function () { loadNotifications().then(function () { renderBell(); renderInbox(); }); });
@@ -1340,7 +1373,7 @@
     if (!state.notifications.some(function (n) { return !n.readAt; })) return;
     var now = new Date().toISOString();
     state.notifications.forEach(function (n) { if (!n.readAt) n.readAt = now; }); // optimistic
-    state.unread = 0;
+    state.unread = 0; state.unreadNeeds = 0; state.unreadQuestions = 0;
     renderBell(); renderInbox();
     mutate("POST", "/api/notifications/read", { all: true })
       .then(function () { toast("All notifications marked read"); })
@@ -1474,11 +1507,17 @@
       ? '<span class="storychip" title="' + esc((story.ref || "") + " · " + story.title) + '" style="color:' + esc(story.color) + ';background:' + tint(story.color, 0.1) + ';border-color:' + tint(story.color, 0.4) + '"><span class="sdot" style="background:' + esc(story.color) + '"></span>' + esc(story.title || story.ref) + '</span>'
       : "";
 
+    // Target-model tier chip (which agent tier should pick it up), tinted per tier.
+    var mc = t.model && MODEL_COLORS[t.model] ? MODEL_COLORS[t.model] : null;
+    var modelChip = mc
+      ? '<span class="modelchip" title="target model tier: ' + esc(t.model) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>' + esc(t.model) + '</span>'
+      : "";
+
     c.innerHTML = storyTop +
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge + storyChip +
       '<span class="prio-tag" data-p="' + esc(t.priority) + '">' + esc(t.priority) + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
-      '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
+      '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + modelChip + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
 
     c.addEventListener("click", function (e) { if (e.target.tagName === "IMG") { openLightbox(e.target.src); return; } openEditor(t); });
     c.addEventListener("keydown", function (e) { if (e.key === "Enter") openEditor(t); });
@@ -1550,6 +1589,15 @@
       b.addEventListener("click", function () { setSeg(ac, a.k); autosave({ assignee: a.k === "me" ? ME : null }); });
       ac.appendChild(b);
     });
+    // Target-model tier: "Any" (untagged) or a tier the orchestrator routes to.
+    var mm = $("mModel"); mm.innerHTML = "";
+    MODELS.forEach(function (m) {
+      var sw = (m.k !== "any" && MODEL_COLORS[m.k]) ? '<span class="sw" style="background:' + MODEL_COLORS[m.k] + '"></span>' : "";
+      var b = el("button", "", sw + m.label);
+      b.type = "button"; b.dataset.k = m.k;
+      b.addEventListener("click", function () { setSeg(mm, m.k); autosave({ model: m.k === "any" ? null : m.k }); });
+      mm.appendChild(b);
+    });
   }
   function setSeg(container, k) { Array.prototype.forEach.call(container.children, function (b) { b.classList.toggle("on", b.dataset.k === k); }); }
   function segValue(container) { var on = container.querySelector(".on"); return on ? on.dataset.k : null; }
@@ -1570,6 +1618,7 @@
     setSeg($("mPriority"), isEdit ? ticket.priority : "normal");
     setSeg($("mStatus"), isEdit ? ticket.status : "todo");
     setSeg($("mAssignee"), isEdit && isMine(ticket) ? "me" : "unassigned");
+    setSeg($("mModel"), isEdit && ticket.model ? ticket.model : "any");
     // Show any agent claim as a read-only hint (it's a separate axis from assignee).
     var hint = $("mClaimHint");
     if (isEdit && ticket.claim && ticket.claim.by) {
@@ -1657,13 +1706,14 @@
     if (ed && ed.ticket) return slugOf(ed.ticket);
     return state.current === "all" ? ($("mProject").value || null) : state.current;
   }
-  // The story currently attached: the ticket's (edit mode) or the live select
-  // value (new mode). Read before populateStorySelect rebuilds the <select>.
+  // The story currently attached: the ticket's (edit mode) or the editor's pending
+  // choice (new mode). New mode tracks it on state.editor.storyId rather than the
+  // live <select> value, so opening "＋ New story…" (which transiently sets the
+  // select to "__new") and cancelling can restore the prior pick instead of losing it.
   function currentStoryId() {
     var ed = state.editor;
     if (ed && ed.ticket) return ed.ticket.storyId || "";
-    var sel = $("mStory");
-    return sel && sel.value && sel.value !== "__new" ? sel.value : "";
+    return (ed && ed.storyId) || "";
   }
   function populateStorySelect() {
     var sel = $("mStory");
@@ -1677,6 +1727,7 @@
     html += '<option value="__new">＋ New story…</option>';
     sel.innerHTML = html;
     sel.value = stories.some(function (s) { return s.id === cur; }) ? cur : ""; // drop a story not on this board
+    if (state.editor && !state.editor.ticket) state.editor.storyId = sel.value; // keep new-mode pending choice in sync
     renderStorySwatch();
     hideNewStory();
   }
@@ -1727,6 +1778,7 @@
     $("mStory").value = storyId || "";
     renderStorySwatch();
     var ed = state.editor;
+    if (ed) ed.storyId = storyId || "";   // new-mode source of truth; harmless in edit mode
     if (ed && ed.mode === "edit" && ed.ticket) {
       ed.ticket.storyId = storyId || null;
       autosave({ storyId: storyId || null });
@@ -1968,6 +2020,7 @@
       assignee: segValue($("mAssignee")) === "me" ? ME : null,
       labels: $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       storyId: ($("mStory").value && $("mStory").value !== "__new") ? $("mStory").value : null,
+      model: segValue($("mModel")) === "any" ? null : segValue($("mModel")),
       imagesData: ed.attachments.map(function (a) { return { name: a.name, base64: a.base64 }; })
     };
 
@@ -2075,11 +2128,17 @@
   function refresh(force) {
     return Promise.all([loadProjects(), loadTickets(), loadNotifications(), loadStories()]).then(function () {
       processEvents();         // fire desktop notifications for background changes
-      renderRail();            // reflect unread badges (may change even when the board doesn't)
       renderBell();
       renderStoryMenu();       // keep the story filter's legend + counts current
       if ($("inboxPop").classList.contains("show")) renderInbox();
-      if ($("settingsPop").classList.contains("show")) renderProjectNotifySettings();
+      // The rail (muted-bell) and per-project settings read state.projects[].notify,
+      // which an optimistic mute toggle mutates in place; a poll that lands
+      // mid-mutation reloads state.projects and would momentarily revert it. Guard
+      // these renders on state.mutating the same way renderBoard is guarded below.
+      if (force || state.mutating === 0) {
+        renderRail();          // reflect unread badges + mute marks
+        if ($("settingsPop").classList.contains("show")) renderProjectNotifySettings();
+      }
       if (state.view === "archive") {
         return loadArchived().then(renderArchive);
       }

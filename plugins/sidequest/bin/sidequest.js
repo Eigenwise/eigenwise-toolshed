@@ -124,6 +124,7 @@ function cmdAdd(opts) {
     labels: opts.label,
     images: opts.image || [],
     storyId: opts.story,
+    model: opts.model,
     source: opts.source || 'cli',
     onAssetError: (src) => warnings.push(`could not attach image: ${src}`),
   });
@@ -136,7 +137,8 @@ function cmdAdd(opts) {
   const imgs = ticket.assets.length ? ` (${ticket.assets.length} image${ticket.assets.length > 1 ? 's' : ''})` : '';
   const story = ticket.storyId ? store.getStory(slug, ticket.storyId) : null;
   const st = story ? `  ↳${story.ref}` : '';
-  console.log(`✓ ${ticket.ref}${pr}  "${ticket.title}"  [${ticket.status}/${ticket.priority}]${imgs}${st}  — ${meta.name}`);
+  const md = ticket.model ? `  ⚙${ticket.model}` : '';
+  console.log(`✓ ${ticket.ref}${pr}  "${ticket.title}"  [${ticket.status}/${ticket.priority}]${imgs}${st}${md}  — ${meta.name}`);
   for (const w of warnings) console.log(`  ! ${w}`);
   const info = store.readServerInfo();
   if (info && info.url) console.log(`  board: ${info.url}`);
@@ -173,7 +175,8 @@ function cmdList(opts) {
       const lnk = t.links && t.links.length ? `  ⇄${t.links.length}` : '';
       const cmt = t.comments && t.comments.length ? `  \u{1F4AC}${t.comments.length}` : '';
       const ask = store.needsResponse(t) ? '  ❓ awaiting reply' : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${cmt}${lnk}${blk}${clm}${asn}${ask}`);
+      const md = t.model ? `  ⚙${t.model}` : '';
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${cmt}${lnk}${blk}${clm}${asn}${md}${ask}`);
     }
   }
 }
@@ -190,6 +193,7 @@ function cmdUpdate(opts, positional) {
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
   if (opts.assignee != null) patch.assignee = opts.assignee;
+  if (opts.model != null) patch.model = opts.model; // tier (opus|sonnet|…) or "any"/"none"/null to clear
   if (opts.story != null) patch.storyId = opts.story; // link (US-n / raw id) or clear ("none"/null)
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
   const updated = store.updateTicket(slug, idOrRef, patch);
@@ -200,7 +204,8 @@ function cmdUpdate(opts, positional) {
   }
   const story = updated.storyId ? store.getStory(slug, updated.storyId) : null;
   const st = story ? `  ↳${story.ref}` : '';
-  console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]${st}  "${updated.title}"`);
+  const md = updated.model ? `  ⚙${updated.model}` : '';
+  console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]${st}${md}  "${updated.title}"`);
 }
 
 function cmdRm(opts, positional) {
@@ -291,7 +296,7 @@ function cmdDone(opts, positional) {
 function cmdNext(opts) {
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
-  const res = store.claimNext(slug, by, { priority: opts.priority, source: opts.source || 'cli' });
+  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, source: opts.source || 'cli' });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -542,7 +547,7 @@ function cmdUnlink(opts, positional) {
 // The set to fan subagents out over: unclaimed, unblocked, not-done, not-archived.
 function cmdReady(opts) {
   const { slug, meta } = resolveProject(opts);
-  const tickets = store.readyTickets(slug);
+  const tickets = store.readyTickets(slug, { model: opts.model });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, tickets }, null, 2) + '\n');
     return;
@@ -554,7 +559,8 @@ function cmdReady(opts) {
   console.log(`${meta.name} — ${tickets.length} ready to work (unclaimed, unblocked):`);
   for (const t of tickets) {
     const pr = PRIORITY_MARK[t.priority] ? ` ${PRIORITY_MARK[t.priority]}` : '';
-    console.log(`    ${t.ref}${pr}  ${t.title}`);
+    const md = t.model ? `  ⚙${t.model}` : '';
+    console.log(`    ${t.ref}${pr}  ${t.title}${md}`);
   }
   if (tickets.length > 1) {
     console.log('\nIf these are independent (no shared files), fan out: one subagent per ticket — each claim --by <id> → do → done.');
@@ -860,9 +866,9 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
+  sidequest add -t "title" [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done] [--model tier]
   sidequest list [--status todo|doing|done] [--json]
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]...
+  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--model tier|any]
   sidequest rm <id|SQ-n>
   sidequest projects [--json]
   sidequest dashboard [--port N] [--no-open]     open the live board in the browser
@@ -870,13 +876,21 @@ Usage:
   sidequest stop                                 stop the running board server
 
 Working the board safely (multi-agent):
-  sidequest ready [--json]                         the ready set (unclaimed, unblocked) — fan subagents over it
+  sidequest ready [--model tier] [--json]          the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force]   atomically take a ticket (fails if gone/done/claimed)
-  sidequest next [--by who] [-p priority]          claim the best available ticket (highest priority first)
+  sidequest next [--by who] [-p priority] [--model tier]   claim the best available ticket (highest priority first)
   sidequest done <id|SQ-n> [--by who]              mark it done and release the claim
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
   When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.
+
+Model tier (route planning vs. execution to different model tiers):
+  sidequest add ... --model <opus|sonnet|haiku|fable|any>   tag which tier should work this ticket
+  sidequest update <id|SQ-n> --model <tier|any>   set the tier, or "any"/"none" to clear the tag
+  sidequest ready --model <tier>  ·  sidequest next --model <tier>   only claim tickets tagged that tier or untagged
+  Tag planning/design work for the top tier and execution work a tier below; a --model X worker only picks up
+  X-tagged or untagged tickets (never a ticket reserved for another tier). Sidequest can't force a model — it
+  just records the tag; the orchestrator routes by reading it (shown as ⚙tier on list/ready).
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
