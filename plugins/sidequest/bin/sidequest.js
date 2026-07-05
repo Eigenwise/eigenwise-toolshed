@@ -622,10 +622,12 @@ function cmdUnarchive(opts, positional) {
 // levels — the orchestrator reads this (--json) before choosing an executor.
 function cmdModels(opts) {
   const prefs = store.getModelPrefs();
+  const routing = prefs.routing !== false;
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ routing, models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS }, null, 2) + '\n');
     return;
   }
+  console.log(`Routing: ${routing ? 'on' : 'off'}`);
   console.log('Model tiers (toggle in the dashboard settings):');
   for (const m of store.VALID_MODELS) console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}`);
   console.log(`Effort levels: ${store.VALID_EFFORTS.join(', ')}  (haiku has no effort support)`);

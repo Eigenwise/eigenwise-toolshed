@@ -1380,23 +1380,28 @@ function modelPrefsFile() {
   return path.join(projectsRoot(), 'model-prefs.json');
 }
 
-// Missing/corrupt file -> every tier enabled.
+// Missing/corrupt file -> every tier enabled and routing on. `routing` is the
+// master switch: when false the skill's model/effort enforcement stands down and
+// the main agent may work any ticket itself (tags become informational).
 function getModelPrefs() {
   const saved = readJson(modelPrefsFile(), null);
   const merged = saved && typeof saved === 'object' ? saved : {};
   const out = {};
   for (const m of VALID_MODELS) out[m] = merged[m] !== false;
+  out.routing = merged.routing !== false;
   return out;
 }
 
 // Persist a partial or full set. Unknown keys are dropped; refuses to disable
 // every tier at once (the last enabled tier stays on) so routing always has
-// somewhere to go.
+// somewhere to go. The `routing` master switch is carried through independently
+// of the tier guard (it can't satisfy or break the at-least-one-tier rule).
 function setModelPrefs(patch) {
   const next = Object.assign({}, getModelPrefs(), patch || {});
   const out = {};
   for (const m of VALID_MODELS) out[m] = next[m] !== false;
   if (!VALID_MODELS.some((m) => out[m])) out[VALID_MODELS.indexOf('sonnet') !== -1 ? 'sonnet' : VALID_MODELS[0]] = true;
+  out.routing = next.routing !== false;
   writeJson(modelPrefsFile(), out);
   return out;
 }

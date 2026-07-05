@@ -866,7 +866,7 @@
   // Which model tiers the user wants offered at all (server-side allowlist).
   // Gates the editor's Model picker and what the orchestrator is told to use;
   // an already-tagged ticket keeps showing its chip even if its tier is off.
-  var modelPrefs = { opus: true, sonnet: true, haiku: true, fable: true };
+  var modelPrefs = { opus: true, sonnet: true, haiku: true, fable: true, routing: true };
   function modelEnabled(k) { return modelPrefs[k] !== false; }
   function syncModelPrefsFromServer() {
     return api("/api/model-prefs").then(function (d) {
@@ -1348,6 +1348,16 @@
   function renderModelPrefSettings() {
     var box = $("modelPrefList"); if (!box) return;
     box.innerHTML = "";
+    var routingOn = modelPrefs.routing !== false;
+    var routeRow = el("label", "pop-row");
+    routeRow.innerHTML = '<input type="checkbox"' + (routingOn ? " checked" : "") + ' /><span>Route tickets to executor subagents<em>off = Claude may work any ticket itself; ⚙tags become informational</em></span>';
+    var routeCb = routeRow.querySelector("input");
+    routeCb.addEventListener("change", function () {
+      modelPrefs.routing = routeCb.checked;
+      pushModelPrefs();
+      toast(routeCb.checked ? "Routing on — tickets go to executor subagents" : "Routing off — Claude may work any ticket itself");
+    });
+    box.appendChild(routeRow);
     MODELS.forEach(function (m) {
       if (m.k === "any") return;
       var on = modelEnabled(m.k);

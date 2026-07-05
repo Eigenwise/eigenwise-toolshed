@@ -147,7 +147,8 @@ effort support and is never paired with one.)
 **You choose which tiers are offered at all**: gear menu → *Available models* — disable a tier (say,
 haiku) and it disappears from the ticket editor's picker, and Claude treats it as unavailable when
 routing (falling back to the nearest allowed lower tier). Stored server-side; at least one tier always
-stays enabled.
+stays enabled. The same *Available models* section has a master switch to turn routing off entirely —
+then Claude may work any ticket itself and the ⚙tags become purely informational.
 
 ## Reminders
 

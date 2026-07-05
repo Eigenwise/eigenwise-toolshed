@@ -238,6 +238,11 @@ sidequest models --json                                               # tiers th
 **These are rules you MUST follow when spawning a ticket's executor — the same register as
 "never work a ticket you haven't claimed", not suggestions:**
 
+0. **MUST check the routing master switch FIRST.** Run `sidequest models --json` before anything else;
+   if `routing` is `false`, the MUST rules below **stand down** — the user has turned routing off, so
+   you may work any ticket yourself regardless of its tags (⚙tier/effort stay purely informational).
+   Only when `routing` is `true` (the default, and the case for a `model-prefs.json` with no `routing`
+   key) do rules 1–7 apply.
 1. **MUST route, not self-execute a tagged ticket.** You cannot change your own model mid-run and
    sidequest cannot force one; the only control point is the model you pick when **spawning a
    subagent**. A ticket tagged below your tier gets an executor subagent at its tagged tier.
@@ -262,6 +267,7 @@ sidequest models --json                                               # tiers th
    reserved for another tier.
 
 **Decision procedure (walk it per ticket, in order):**
+0. Routing off (`sidequest models --json` → `routing: false`)? Stop here — work the ticket yourself, tags ignored (rule 0).
 1. `tier = ticket.model` (or complexity-based if unset, rule 5).
 2. Cap: `tier = min(tier, your own tier)` (rule 4).
 3. Allowlist: while `tier` is disabled in `sidequest models`, step down to the next allowed tier (rule 3).
