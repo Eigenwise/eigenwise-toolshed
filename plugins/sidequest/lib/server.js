@@ -295,6 +295,7 @@ async function handle(req, res) {
       storyId: body.storyId,
       model: body.model,
       effort: body.effort,
+      files: body.files,
       assignee: body.assignee,
       imagesData: body.imagesData,
       source: 'dashboard',

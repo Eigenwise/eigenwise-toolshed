@@ -37,7 +37,8 @@ for this" — do this **before writing any code**:
      arc stays visually grouped. This is your call — the user shouldn't have to say "make a story";
      infer it from the scope.
 1. **Decompose** the work into one ticket per distinct piece (`sidequest add ...`, adding `--story US-n`
-   when it belongs to a story from step 0).
+   when it belongs to a story from step 0). Cut along file boundaries, declare each piece's scope with
+   `--file`, and size pieces so a cheaper tier can execute them — see "Decompose for parallelism" below.
 2. **Link dependencies** so the order is explicit: `sidequest link SQ-4 depends-on SQ-3`,
    `sidequest link SQ-2 blocks SQ-8`. (See "Link tickets" below.)
 3. **Work them one at a time**: `claim` a ticket, do it (yourself or via a subagent), `done`, repeat —
@@ -194,6 +195,26 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
 - **Stale claims** (a worker that crashed or wandered off) are reclaimable after a timeout
   (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min); `--force` overrides a live claim only when you're sure.
 
+## Decompose for parallelism (lower the difficulty on purpose)
+
+When you plan a story (see "Plan substantial work"), don't just split by topic — split so the pieces
+are **small, file-disjoint, and cheap to execute**. The goal is twofold: pieces that can run **in
+parallel without touching each other**, and pieces simple enough that the required tier **drops** —
+one big scary ticket an opus must grind through becomes N precise tickets a sonnet (or lower) can
+knock out simultaneously. The thinking stays at the top; the labor gets cheap and wide.
+
+1. **Cut along file/module boundaries**, not conceptual ones. "CLI part", "dashboard part", "store
+   part" parallelize; "first half / second half of the feature" doesn't.
+2. **Declare each ticket's file scope** when filing: `sidequest add ... --file bin/cli.js --file lib/`
+   (repeatable; a directory prefix covers everything under it). This is what makes independence
+   *mechanical* instead of guesswork.
+3. **Shrink until the tier drops.** If a piece still needs the top tier, it's usually two pieces — a
+   small design/contract decision (top tier) and a mechanical application of it (lower tier at low
+   effort). Tag accordingly (`--model`, `--effort`).
+4. **Shape the story as: design → wave(s) → integrate.** A top-tier design/contract ticket blocks the
+   wave; the parallel executor tickets form the wave(s); an integration/verify ticket depends on all
+   of them. Encode that with `depends-on` links so `ready` naturally serializes the phases.
+
 ## Fan out over independent tickets (do this by default)
 
 When several tickets are **ready and independent**, **work them in parallel** — do not grind through
@@ -201,8 +222,11 @@ them one at a time. This is safe precisely because claiming is atomic: each suba
 ticket, and any race just sends the loser to the next one.
 
 A ticket is **ready** when it's not done, not archived, not already claimed, and **not blocked** by an
-unfinished ticket (`sidequest ready` lists exactly this set). Two ready tickets are **independent** when
-neither depends on the other **and** they don't edit the same files.
+unfinished ticket (`sidequest ready` lists exactly this set). `ready` also groups the set into
+**parallel-safe waves** by declared file scope — no two tickets in a wave overlap — so fan out **one
+wave at a time**: spawn one executor per ticket in wave 1, wait for the wave, re-run `ready`, repeat.
+Tickets with **no declared scope** never mechanically conflict, so for those the old rule still
+applies: eyeball whether they'd edit the same files before parallelizing them.
 
 **How to fan out:**
 

@@ -34,7 +34,7 @@ const store = require('../lib/store');
  * ------------------------------------------------------------------ */
 
 // Flags that may be repeated collect into arrays; everything else is a scalar.
-const ARRAY_FLAGS = new Set(['image', 'label']);
+const ARRAY_FLAGS = new Set(['image', 'label', 'file']);
 const ALIASES = {
   t: 'title',
   d: 'desc',
@@ -130,6 +130,7 @@ function cmdAdd(opts) {
     status: opts.status,
     labels: opts.label,
     images: opts.image || [],
+    files: opts.file,
     storyId: opts.story,
     model: opts.model,
     effort: opts.effort,
@@ -181,8 +182,9 @@ function cmdList(opts) {
       const blk = blockers.length ? `  ⛔ blocked-by ${blockers.join(',')}` : '';
       const lnk = t.links && t.links.length ? `  ⇄${t.links.length}` : '';
       const cmt = t.comments && t.comments.length ? `  \u{1F4AC}${t.comments.length}` : '';
+      const files = t.files && t.files.length ? `  \u{1F4C1}${t.files.length}` : '';
       const ask = store.needsResponse(t) ? '  ❓ awaiting reply' : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${ask}`);
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${ask}`);
     }
   }
 }
@@ -198,6 +200,7 @@ function cmdUpdate(opts, positional) {
   if (opts.priority != null) patch.priority = opts.priority;
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
+  if (opts.file != null) patch.files = (opts.file.length === 1 && String(opts.file[0]).toLowerCase() === 'none') ? [] : opts.file;
   if (opts.assignee != null) patch.assignee = opts.assignee;
   if (opts.model != null) patch.model = opts.model; // tier (opus|sonnet|…) or "any"/"none"/null to clear
   if (opts.effort != null) patch.effort = opts.effort; // low|medium|high|xhigh|max, or "any"/"none" to clear
@@ -554,8 +557,10 @@ function cmdUnlink(opts, positional) {
 function cmdReady(opts) {
   const { slug, meta } = resolveProject(opts);
   const tickets = store.readyTickets(slug, { model: opts.model });
+  const waves = store.readyWaves(slug, { model: opts.model });
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, tickets }, null, 2) + '\n');
+    const waveRefs = waves.map((wave) => wave.map((t) => t.ref));
+    process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, tickets, waves: waveRefs }, null, 2) + '\n');
     return;
   }
   if (!tickets.length) {
@@ -563,13 +568,26 @@ function cmdReady(opts) {
     return;
   }
   console.log(`${meta.name} — ${tickets.length} ready to work (unclaimed, unblocked):`);
-  for (const t of tickets) {
+  const printTicket = (t) => {
     const pr = PRIORITY_MARK[t.priority] ? ` ${PRIORITY_MARK[t.priority]}` : '';
     const md = modelMark(t);
-    console.log(`    ${t.ref}${pr}  ${t.title}${md}`);
+    const files = t.files && t.files.length ? `  \u{1F4C1}${t.files.length}` : '';
+    console.log(`    ${t.ref}${pr}  ${t.title}${files}${md}`);
+  };
+  if (waves.length > 1) {
+    waves.forEach((wave, i) => {
+      console.log(i === 0 ? '\n  Wave 1 — safe to run in parallel:' : `\n  Wave ${i + 1} — after wave ${i}:`);
+      for (const t of wave) printTicket(t);
+    });
+  } else {
+    for (const t of tickets) printTicket(t);
   }
   if (tickets.length > 1) {
-    console.log('\nIf these are independent (no shared files), fan out: one subagent per ticket — each claim --by <id> → do → done.');
+    if (waves.length > 1) {
+      console.log('\nFan out within a wave: one subagent per ticket — each claim --by <id> → do → done. Wait for a wave to clear before starting the next.');
+    } else {
+      console.log('\nIf these are independent (no shared files), fan out: one subagent per ticket — each claim --by <id> → do → done.');
+    }
   }
 }
 
@@ -904,6 +922,9 @@ Working the board safely (multi-agent):
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
   When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.
+  sidequest add/update ... --file path [--file path...]   declare the files a ticket will touch — repeat for
+    several; "none" clears (update only). 'ready' groups tickets into parallel-safe waves by declared file
+    scope: tickets in the same wave never touch overlapping files/directories; untagged tickets never conflict.
 
 Model tier + effort (route work by capability AND thinking depth):
   sidequest add ... --model <opus|sonnet|haiku|fable|any> [--effort <low|medium|high|xhigh|max|any>]

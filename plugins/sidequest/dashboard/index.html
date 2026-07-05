@@ -692,6 +692,10 @@
           <label for="mLabels">Labels</label>
           <input id="mLabels" type="text" placeholder="bug, frontend  (comma-separated)" />
         </div>
+        <div class="field">
+          <label for="mFiles">Files</label>
+          <input id="mFiles" type="text" placeholder="bin/cli.js, dashboard/  (comma-separated paths this ticket touches)" />
+        </div>
         <div class="side-sep"></div>
         <div class="field">
           <label>Images</label>
@@ -1060,7 +1064,7 @@
   function signature() {
     // A compact fingerprint of what's on screen, so polling only re-renders on real change.
     var parts = state.projects.map(function (p) { return p.slug + ":" + p.counts.todo + "," + p.counts.doing + "," + p.counts.done; });
-    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || "") + (t.model || "") + (t.effort || ""); });
+    var ts = state.tickets.map(function (t) { return t.id + t.status + t.priority + t.updatedAt + t.title.length + t.assets.length + t.labels.join(",") + (t.storyId || "") + (t.model || "") + (t.effort || "") + (t.files || []).length; });
     var ss = state.stories.map(function (s) { return s.id + s.color + s.title; });
     return state.current + "|" + parts.join(";") + "||" + ts.sort().join(";") + "||" + ss.sort().join(";");
   }
@@ -1551,6 +1555,9 @@
     var cmtCount = t.comments && t.comments.length
       ? '<span style="font-family:var(--mono);font-size:10px;color:var(--text-faint)" title="' + t.comments.length + ' comment(s)">\u{1F4AC} ' + t.comments.length + '</span>'
       : "";
+    var filesChip = t.files && t.files.length
+      ? '<span style="font-family:var(--mono);font-size:10px;color:var(--text-faint)" title="' + esc(t.files.join(", ")) + '">\u{1F4C1} ' + t.files.length + '</span>'
+      : "";
     var reminderChip = t.reminder
       ? '<span class="blockchip" style="color:var(--gold-bright);background:var(--gold-soft);border-color:var(--gold-line)" title="Reminder ' + esc(futureRel(t.reminder.fireAt)) + '">\u{1F514} ' + esc(futureRel(t.reminder.fireAt)) + '</span>'
       : "";
@@ -1575,7 +1582,7 @@
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge + storyChip +
       '<span class="prio-tag" data-p="' + esc(t.priority) + '">' + esc(t.priority) + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
-      '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + modelChip + labels + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
+      '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + modelChip + labels + filesChip + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
 
     c.addEventListener("click", function (e) { if (e.target.tagName === "IMG") { openLightbox(e.target.src); return; } openEditor(t); });
     c.addEventListener("keydown", function (e) { if (e.key === "Enter") openEditor(t); });
@@ -1692,6 +1699,7 @@
     $("mDesc").value = isEdit ? ticket.description : "";
     showDescView();
     $("mLabels").value = isEdit ? (ticket.labels || []).join(", ") : "";
+    $("mFiles").value = isEdit ? (ticket.files || []).join(", ") : "";
     setSeg($("mPriority"), isEdit ? ticket.priority : "normal");
     setSeg($("mStatus"), isEdit ? ticket.status : "todo");
     setSeg($("mAssignee"), isEdit && isMine(ticket) ? "me" : "unassigned");
@@ -2098,6 +2106,7 @@
       status: segValue($("mStatus")),
       assignee: segValue($("mAssignee")) === "me" ? ME : null,
       labels: $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
+      files: $("mFiles").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       storyId: ($("mStory").value && $("mStory").value !== "__new") ? $("mStory").value : null,
       model: segValue($("mModel")) === "any" ? null : segValue($("mModel")),
       effort: segValue($("mEffort")) === "any" ? null : segValue($("mEffort")),
@@ -2363,6 +2372,11 @@
       var ed = state.editor; if (!ed || !ed.ticket) return;
       var labels = $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
       if (labels.join("") !== (ed.ticket.labels || []).join("")) autosave({ labels: labels });
+    });
+    $("mFiles").addEventListener("blur", function () {
+      var ed = state.editor; if (!ed || !ed.ticket) return;
+      var files = $("mFiles").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+      if (files.join("") !== (ed.ticket.files || []).join("")) autosave({ files: files });
     });
     $("cmtBtn").addEventListener("click", function () { postComment("comment"); });
     $("askBtn").addEventListener("click", function () { postComment("question"); });

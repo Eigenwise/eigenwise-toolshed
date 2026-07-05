@@ -458,6 +458,7 @@ function createTicket(slug, fields) {
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
     model: coerceModel(fields.model),             // the agent tier that should work it (null = any)
     effort: coerceEffort(fields.effort),          // how hard that tier should think (null = session default)
+    files: normalizeFiles(fields.files),          // declared file scope, for parallel-wave planning
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
@@ -513,6 +514,62 @@ function normalizeLabels(labels) {
   return out.slice(0, 12);
 }
 
+// A ticket's declared file scope: the repo-relative paths (or directory
+// prefixes) it expects to touch. Purely declarative — nothing enforces it —
+// but it lets readyWaves() partition ready work into parallel-safe waves
+// mechanically instead of the orchestrator eyeballing "no shared files".
+function normalizeFiles(files) {
+  if (!files) return [];
+  const arr = Array.isArray(files) ? files : String(files).split(',');
+  const seen = new Set();
+  const out = [];
+  for (const f of arr) {
+    const v = String(f).trim().replace(/\\/g, '/').replace(/\/+$/, '').slice(0, 200);
+    if (v && !seen.has(v.toLowerCase())) {
+      seen.add(v.toLowerCase());
+      out.push(v);
+    }
+  }
+  return out.slice(0, 20);
+}
+
+// Do two declared scopes collide? A path conflicts with an equal path or with
+// one that is a directory-prefix of it (case-insensitive, "/"-normalized).
+// Empty scopes never conflict mechanically — "no declaration" means "no
+// information", and the skill tells the orchestrator how to treat that.
+function scopesOverlap(filesA, filesB) {
+  const a = normalizeFiles(filesA).map((f) => f.toLowerCase());
+  const b = normalizeFiles(filesB).map((f) => f.toLowerCase());
+  if (!a.length || !b.length) return false;
+  for (const x of a) {
+    for (const y of b) {
+      if (x === y || x.startsWith(y + '/') || y.startsWith(x + '/')) return true;
+    }
+  }
+  return false;
+}
+
+// Partition the ready set into waves an orchestrator can fan out one wave at a
+// time: within a wave no two tickets' declared scopes overlap. Greedy first-fit
+// in priority order, so wave 1 is "start these now", wave 2 "after wave 1",
+// etc. Tickets with no declared files never mechanically conflict (see above).
+function readyWaves(slug, opts) {
+  const ready = readyTickets(slug, opts);
+  const waves = [];
+  for (const t of ready) {
+    let placed = false;
+    for (const wave of waves) {
+      if (!wave.some((w) => scopesOverlap(w.files, t.files))) {
+        wave.push(t);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) waves.push([t]);
+  }
+  return waves;
+}
+
 // An assignee is a free-form name (the human "you", or an agent). Empty/blank
 // clears it back to null (unassigned).
 function normalizeAssignee(v) {
@@ -538,6 +595,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
     if (patch.model !== undefined) t.model = coerceModel(patch.model);
     if (patch.effort !== undefined) t.effort = coerceEffort(patch.effort);
+    if (patch.files !== undefined) t.files = normalizeFiles(patch.files);
     if (patch.assignee !== undefined) t.assignee = normalizeAssignee(patch.assignee);
     if (patch.order != null && Number.isFinite(Number(patch.order))) t.order = Number(patch.order);
     // Attach any newly supplied images (by path from the CLI, or base64 from the
@@ -1658,6 +1716,9 @@ module.exports = {
   claimNext,
   assignTicket,
   readyTickets,
+  readyWaves,
+  scopesOverlap,
+  normalizeFiles,
   STORY_PALETTE,
   STORY_COLOR_NAMES,
   listStories,

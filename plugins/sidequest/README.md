@@ -150,6 +150,27 @@ routing (falling back to the nearest allowed lower tier). Stored server-side; at
 stays enabled. The same *Available models* section has a master switch to turn routing off entirely —
 then Claude may work any ticket itself and the ⚙tags become purely informational.
 
+## File scopes & parallel waves
+
+Declare which files a ticket will touch and the board can tell you **what's safe to run in parallel** —
+mechanically, instead of hoping two agents don't collide.
+
+```bash
+sidequest add -t "CLI part" --file bin/cli.js --file README.md   # repeatable; dir prefixes cover subtrees
+sidequest update SQ-7 --file none                                # clear the scope
+sidequest ready                                                  # groups the ready set into waves
+```
+
+`ready` partitions unclaimed, unblocked tickets into **waves**: within a wave no two tickets' scopes
+overlap (a path conflicts with an equal path or a directory prefix of it), so Claude fans out one
+executor per ticket, one wave at a time. Tickets without a declared scope never mechanically conflict —
+Claude falls back to judgment for those. Cards show a small 📁 count, and the ticket editor has a
+comma-separated **Files** field.
+
+This pairs with model/effort routing into a planning doctrine the skill teaches: **cut work along file
+boundaries, shrink pieces until a cheaper tier can execute them, and shape stories as design → parallel
+wave(s) → integrate** — the thinking stays on the top model, the labor gets cheap and wide.
+
 ## Reminders
 
 Set a time-based nudge on any ticket — it fires into the bell inbox later, even if you've closed the
