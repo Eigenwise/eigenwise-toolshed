@@ -25,6 +25,7 @@
 
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
 const store = require('../lib/store');
@@ -95,12 +96,19 @@ function parseArgs(argv) {
  *  Project resolution
  * ------------------------------------------------------------------ */
 
-// --project resolves ONLY against already-registered boards (exact slug, a
-// case-insensitive display NAME, or a registered path) — it never creates one
-// (see SQ-86: a bare name used to miss the slug check, fall into
-// ensureProject(), and get silently registered as a fresh path-relative-to-cwd
-// board). Only the no-flag default (below) still auto-registers, matching the
-// existing "first run inside a repo bootstraps its board" behavior.
+// --project resolves against already-registered boards (exact slug, a
+// case-insensitive display NAME, or a registered path). A NAME or relative ref
+// that matches nothing is an error, never a create — that's the SQ-86 hole: a
+// bare name used to miss the slug check, fall into ensureProject(), and get
+// silently registered as a fresh path-relative-to-cwd board.
+//
+// The ONE thing that may create is an ABSOLUTE path to a real directory (SQ-102):
+// slugify() is a pure function of the normalized absolute path, so anchoring it
+// through nearestRepoRoot + ensureProject is idempotent — it can only ever hit
+// the canonical board for that repo, never mint a duplicate. This is what lets an
+// agent working in project A file a ticket into project B (whose board may not
+// exist yet) by passing B's absolute path. A name still can't create, because a
+// name is ambiguous and is exactly what resolved against cwd before.
 function resolveProject(opts) {
   const arg = opts.project;
   if (arg) {
@@ -109,6 +117,16 @@ function resolveProject(opts) {
     if (res.reason === 'ambiguous') {
       const lines = res.matches.map((p) => `    "${p.name}" -> ${p.path}`).join('\n');
       fail(`--project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the path to disambiguate:\n${lines}`);
+    }
+    // An absolute path to a real directory: create (or reuse) its board. The dir
+    // must exist so a typo'd path fails loudly here instead of minting junk;
+    // idempotent keying means this can never produce a duplicate of an existing
+    // board. Anything non-absolute (a name, a relative ref) falls through to the
+    // registered-only error below.
+    if (path.isAbsolute(arg)) {
+      let isDir = false;
+      try { isDir = fs.statSync(arg).isDirectory(); } catch (_) { /* missing/unreadable -> not a dir */ }
+      if (isDir) return store.ensureProject(store.nearestRepoRoot(path.resolve(arg)), opts.name);
     }
     const known = Array.from(new Set(res.known || []));
     fail(
@@ -1250,6 +1268,9 @@ Project selection:
   it from a subfolder uses the repo's one board instead of minting a duplicate.
   A folder with no repo is used as-is.
   --project <path-or-slug>   target another board  ·  --name <name>   set its display name
+    A slug or display name must already be registered. An absolute path to a real
+    directory is created on first use, so you can file into another repo's board
+    (even one that doesn't exist yet) from anywhere by passing its full path.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
     deletes the source). --dry-run prints the ref mapping without touching disk.

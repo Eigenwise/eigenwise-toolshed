@@ -228,6 +228,87 @@ test('CLI: a duplicate display name errors demanding the path form, and the path
   assert.notStrictEqual(byPathA.project, byPathB.project);
 });
 
+/* ------------------------------------------------------------------ *
+ *  SQ-102 — --project with an ABSOLUTE path to a real directory may
+ *  create (or reuse) that board, so an agent outside project B can file
+ *  into B by passing B's full path. Names / relative refs / non-existent
+ *  paths still never create (that was the SQ-86 hole).
+ * ------------------------------------------------------------------ */
+
+// Unlike FAKE_ROOT (whose paths need not exist), the create path guards on a
+// REAL directory, so these fixtures are actually made on disk.
+const REAL_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-project-create-'));
+function realDir(name) {
+  const p = path.join(REAL_ROOT, name);
+  fs.mkdirSync(p, { recursive: true });
+  return p;
+}
+// A cwd that is deliberately NOT the target, to prove filing goes to --project
+// and not to the working directory's own board.
+const ELSEWHERE = path.join(FAKE_ROOT, 'not-the-target-cwd');
+
+test('CLI: --project with an absolute path to a real dir creates that board, files into it, and reuses on repeat (never duplicates)', () => {
+  const target = realDir('cross-project-target');
+  const before = projectSlugsOnDisk();
+
+  const first = cliJson(
+    ['add', '-t', 'filed from outside', '--complexity', '1', '--why', 'prove an absolute --project path creates the target board and files into it', '--project', target],
+    { cwd: ELSEWHERE }
+  );
+  assert.ok(first.ok);
+  const afterFirst = projectSlugsOnDisk();
+  assert.strictEqual(afterFirst.length, before.length + 1, 'exactly one board should have been created');
+  assert.ok(afterFirst.includes(first.project), 'the created board must be the one the ticket landed in');
+
+  // A second file at the SAME absolute path must reuse the board, not mint a
+  // duplicate — the whole point of keying on the normalized path.
+  const second = cliJson(
+    ['add', '-t', 'filed from outside again', '--complexity', '1', '--why', 'prove a repeat absolute --project path reuses the same board', '--project', target],
+    { cwd: ELSEWHERE }
+  );
+  assert.strictEqual(second.project, first.project, 'a repeat absolute-path --project must resolve to the same board');
+  assert.deepStrictEqual(projectSlugsOnDisk(), afterFirst, 'a repeat absolute-path --project must not create a second board');
+
+  // Both tickets live on the target board, reachable by that same path.
+  const list = cliJson(['list', '--project', target]);
+  assert.strictEqual(list.project, first.project);
+  assert.strictEqual(list.tickets.length, 2, 'both tickets should be on the absolute-path target board');
+});
+
+test('CLI: --project with a --name creates the board with that display name so later name resolution works', () => {
+  const target = realDir('named-cross-project');
+  cliJson(
+    ['add', '-t', 'seed named board', '--complexity', '1', '--why', 'prove --name rides along when an absolute --project path creates a board', '--project', target, '--name', 'Named Cross Project'],
+    { cwd: ELSEWHERE }
+  );
+  // Now the display name resolves like any registered board.
+  const byName = cliJson(['list', '--project', 'Named Cross Project']);
+  assert.ok(byName.tickets.some((t) => t.title === 'seed named board'));
+});
+
+test('CLI: --project with a non-existent absolute path fails loudly and creates nothing', () => {
+  const before = projectSlugsOnDisk();
+  const missing = path.join(REAL_ROOT, 'this-dir-does-not-exist');
+  const res = runCli(
+    ['add', '-t', 'should not land', '--complexity', '1', '--why', 'a typo path must fail, not mint junk', '--project', missing],
+    { cwd: ELSEWHERE }
+  );
+  assert.notStrictEqual(res.status, 0, 'a non-existent absolute --project path must fail');
+  assert.match(res.stderr, /does not match any registered board/i);
+  assert.deepStrictEqual(projectSlugsOnDisk(), before, 'a non-existent absolute --project path must never create a board');
+});
+
+test('CLI: an unregistered NAME still never creates, even though absolute paths now can', () => {
+  const before = projectSlugsOnDisk();
+  const res = runCli(
+    ['add', '-t', 'should not land', '--complexity', '1', '--why', 'a bare name is ambiguous and must stay registered-only', '--project', 'some-unregistered-name'],
+    { cwd: ELSEWHERE }
+  );
+  assert.notStrictEqual(res.status, 0, 'an unregistered name must fail');
+  assert.match(res.stderr, /does not match any registered board/i);
+  assert.deepStrictEqual(projectSlugsOnDisk(), before, 'an unregistered name must never create a board');
+});
+
 test('CLI: plain list/ready with no --project still auto-registers the default (cwd) board, unaffected by the fix', () => {
   const projAbs = path.join(FAKE_ROOT, 'default-flow-project');
   const before = projectSlugsOnDisk();
