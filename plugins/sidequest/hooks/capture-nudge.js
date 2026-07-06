@@ -169,10 +169,13 @@ function main() {
         cli +
         ' link A depends-on B`), then work the tickets (claim → do → `done`) rather than implementing ' +
         'everything ad hoc.\n' +
-        '• FAN OUT: when 2+ ready tickets are INDEPENDENT (unblocked, and not editing the same files), ' +
-        'you MUST work them in parallel — spawn one background subagent per ticket, each CLAIMING first ' +
-        '(distinct `--by`); do not grind through independent tickets one at a time. Keep dependent or ' +
-        'same-file tickets sequential.\n' +
+        '• FAN OUT (more than once, sized to the task): lean parallel over serial wherever the work is ' +
+        'genuinely independent — and at more stages than just tickets. A quick parallel scout (a couple of ' +
+        'read-only explorers over the relevant code/docs) before a non-trivial investigation beats reading ' +
+        'files one-by-one yourself; independent ready tickets run as parallel executors (each CLAIMING first, ' +
+        'distinct `--by`); independent edits/checks can go concurrently too. Keep it proportional — don\'t ' +
+        'fan out trivial or dependent or same-file work; parallelism spends tokens, so use it where it saves ' +
+        'real wall-clock.\n' +
         'Board: `' +
         cli +
         ' dashboard`.'

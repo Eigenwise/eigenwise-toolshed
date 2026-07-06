@@ -27,6 +27,13 @@ When the user gives you a task that is **more than a single small change** — a
 parts, a request with multiple deliverables, or an explicit "split this into tickets" / "make tickets
 for this" — do this **before writing any code**:
 
+**Scout before you decompose — in parallel.** For anything non-trivial, build a quick map of the
+surface first, but fan a couple of read-only explorers out **at once** (one per subsystem or open
+question) instead of reading file-by-file yourself. That short parallel scout is exactly what lets you
+cut the work into pieces that are genuinely *independent* in the next step — guessing the boundaries
+without it produces tickets that collide. Keep it proportional: a small task needs no scout, a big one
+needs a few explorers, not twenty.
+
 0. **First decide the shape: a user story, or a standalone ticket.** Judge the request:
    - **Standalone ticket** — one cohesive change, a single bug, a small task. File one ticket
      (`sidequest add ...`) and stop deciding; no story needed. Most requests are this.
@@ -265,6 +272,15 @@ knock out simultaneously. The thinking stays at the top; the labor gets cheap an
    of them. Encode that with `depends-on` links so `ready` naturally serializes the phases.
 
 ## Fan out over independent tickets (do this by default)
+
+**Fan out at more than the ticket stage — but size it to the task.** Parallelism isn't a one-time move
+reserved for independent tickets. Wherever a stage has genuinely independent work, prefer concurrent
+subagents over a long serial grind: a couple of read-only explorers mapping different parts of a
+codebase, parallel reproductions of a bug across inputs, parallel verification of separate changes. The
+instinct to catch is "I'm about to do a dozen sequential reads/edits that don't depend on each other" —
+that's a fan-out. Stay proportional though: parallelism costs tokens and orchestration overhead, so
+don't spawn a subagent for trivial, dependent, or same-file work. A bit of parallel investigation and
+some parallel execution — not a swarm for everything.
 
 When several tickets are **ready and independent**, **work them in parallel** — do not grind through
 them one at a time. This is safe precisely because claiming is atomic: each subagent claims a different
