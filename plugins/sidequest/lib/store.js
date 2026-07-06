@@ -67,6 +67,30 @@ function slugify(absPath) {
   return `${base}-${hash}`;
 }
 
+// Walk up from startDir to the nearest ancestor that contains a `.git` entry
+// (a directory for a normal clone, or a *file* for a worktree/submodule) and
+// return that directory. This anchors a board to the REPO the agent is working
+// in, so cd'ing into a subfolder (C:\dev\contractify\bin\docai_refactored)
+// resolves to the same board as the repo root (C:\dev\contractify) instead of
+// silently minting a duplicate keyed on the subfolder path. Returns the
+// resolved startDir unchanged when it isn't inside a git repo (e.g. a plain
+// notes folder), so non-repo projects behave exactly as before. Fail-soft: any
+// fs error just stops the walk and falls back to startDir.
+function nearestRepoRoot(startDir) {
+  const start = path.resolve(startDir);
+  let dir = start;
+  for (;;) {
+    try {
+      if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    } catch (_) {
+      return start;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return start; // hit the filesystem root without a repo
+    dir = parent;
+  }
+}
+
 function projectDir(slug) {
   return path.join(projectsRoot(), slug);
 }
@@ -553,6 +577,85 @@ function findProject(ref) {
   }
 
   return { ok: false, reason: 'not_found', known: all.map((p) => p.name) };
+}
+
+// Fold one board (src) entirely into another (dest): move every ticket, story,
+// and attached asset over, then delete the source board. Used to collapse the
+// duplicate boards that older versions minted when the CLI ran from a subfolder
+// (see nearestRepoRoot / SQ-94). The renumbering rules that make this safe:
+//   - Ticket SQ-n / story US-n refs are re-minted ABOVE dest's live counters
+//     (via nextSeq/nextStorySeq), so they never collide with dest's own refs.
+//   - Stable ids (tk_… / st_…) are kept as-is. They're globally unique, so the
+//     ticket/story JSON drops into dest without a filename clash, the assets
+//     folder (keyed by ticket id) copies 1:1, and a ticket's storyId (which
+//     points at a story's stable id, never its ref) still resolves after the
+//     move — no membership is orphaned.
+//   - Intra-board links (links[].ref, which point by SQ-ref) are rewritten
+//     through the old->new ref map so dependencies survive the renumber.
+// dryRun computes and returns the same mapping without touching disk. Returns
+// { tickets, stories, mapping: [{ from, to, title }] }.
+function mergeProject(srcSlug, destSlug, opts) {
+  opts = opts || {};
+  const dryRun = !!opts.dryRun;
+  if (srcSlug === destSlug) throw new Error('source and destination are the same board');
+  if (!readMeta(srcSlug)) throw new Error(`source board "${srcSlug}" does not exist`);
+  if (!readMeta(destSlug)) throw new Error(`destination board "${destSlug}" does not exist`);
+
+  // Oldest-first so re-minted refs preserve the source's creation order.
+  const tickets = listTickets(srcSlug).slice().sort((a, b) => seqOfRef(a.ref) - seqOfRef(b.ref));
+  const stories = listStories(srcSlug); // listStories already returns oldest-first
+
+  // Plan the ref renumbering up front so link remapping can see every mapping.
+  const refMap = {}; // OLD-TICKET-REF (upper) -> NEW-TICKET-REF
+  const ticketPlan = [];
+  for (const t of tickets) {
+    const newRef = dryRun ? `SQ-?` : `SQ-${nextSeq(destSlug)}`;
+    if (t.ref) refMap[String(t.ref).toUpperCase()] = newRef;
+    ticketPlan.push({ ticket: t, newRef });
+  }
+  const storyPlan = [];
+  for (const s of stories) {
+    const newRef = dryRun ? `US-?` : `US-${nextStorySeq(destSlug)}`;
+    storyPlan.push({ story: s, newRef });
+  }
+
+  const mapping = ticketPlan.map(({ ticket, newRef }) => ({ from: ticket.ref, to: newRef, title: ticket.title }));
+  if (dryRun) return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
+
+  // Stories first, so a moved ticket's storyId still finds its story in dest.
+  for (const { story, newRef } of storyPlan) {
+    const moved = Object.assign({}, story, { ref: newRef });
+    writeJson(storyFile(destSlug, moved.id), moved);
+  }
+  for (const { ticket, newRef } of ticketPlan) {
+    const links = Array.isArray(ticket.links)
+      ? ticket.links.map((l) => Object.assign({}, l, { ref: refMap[String(l.ref).toUpperCase()] || l.ref }))
+      : [];
+    const moved = Object.assign({}, ticket, { ref: newRef, links });
+    writeJson(ticketFile(destSlug, moved.id), moved);
+    const srcAssets = assetsDir(srcSlug, ticket.id);
+    if (fs.existsSync(srcAssets)) {
+      try {
+        fs.cpSync(srcAssets, assetsDir(destSlug, ticket.id), { recursive: true });
+      } catch (_) {
+        /* an unreadable asset folder shouldn't abort the whole merge */
+      }
+    }
+  }
+
+  // Everything is copied into dest — retire the source board.
+  try {
+    fs.rmSync(projectDir(srcSlug), { recursive: true, force: true });
+  } catch (_) {
+    /* best effort; the tickets already live in dest */
+  }
+  return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
+}
+
+// Pull the numeric sequence out of an "SQ-12" ref for ordering; junk sorts last.
+function seqOfRef(ref) {
+  const m = /(\d+)\s*$/.exec(String(ref || ''));
+  return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1993,11 +2096,13 @@ module.exports = {
   projectsRoot,
   serverFile,
   slugify,
+  nearestRepoRoot,
   projectDir,
   ensureProject,
   readMeta,
   listProjects,
   findProject,
+  mergeProject,
   setProjectNotify,
   copyAsset,
   saveAssetData,

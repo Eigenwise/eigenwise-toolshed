@@ -70,7 +70,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'open', 'help', 'force', 'done', 'archived', 'all']);
+      const BOOL = new Set(['json', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -116,7 +116,15 @@ function resolveProject(opts) {
       (known.length ? ` Known projects: ${known.join(', ')}` : ' No projects are registered yet.')
     );
   }
-  const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // Anchor to the git repo the agent is working in, not the raw cwd. The Bash
+  // env here has no CLAUDE_PROJECT_DIR, so this used to fall straight to
+  // process.cwd() — meaning a `cd` into any subfolder (e.g. bin/docai_refactored)
+  // minted a brand-new board on that subfolder path, splitting one repo into
+  // several duplicate boards. nearestRepoRoot() collapses any subfolder back to
+  // its repo root; a non-repo folder is returned unchanged, so plain notes dirs
+  // behave as before. --project (above) still targets any board explicitly.
+  const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const dir = store.nearestRepoRoot(start);
   return store.ensureProject(dir, opts.name);
 }
 
@@ -791,6 +799,45 @@ function cmdProjects(opts) {
   }
 }
 
+// Turn a findProject failure into a one-line reason for the merge error text.
+function describeFindFailure(res, ref) {
+  if (res.reason === 'ambiguous') {
+    return `matches ${res.matches.length} boards named "${ref}" — pass the path to disambiguate`;
+  }
+  const known = Array.from(new Set(res.known || []));
+  return `does not match any registered board.` + (known.length ? ` Known: ${known.join(', ')}` : '');
+}
+
+// merge <src> <dst> [--dry-run]: fold one board into another. Both args resolve
+// through findProject (slug / display name / registered path), same as --project.
+function cmdMerge(opts, positional) {
+  const srcArg = positional[0];
+  const dstArg = positional[1];
+  if (!srcArg || !dstArg) {
+    fail('merge: pass a source and destination board, e.g. sidequest merge docai_refactored contractify [--dry-run]');
+  }
+  const src = store.findProject(srcArg);
+  if (!src.ok) fail(`merge: source "${srcArg}" ${describeFindFailure(src, srcArg)}`);
+  const dst = store.findProject(dstArg);
+  if (!dst.ok) fail(`merge: destination "${dstArg}" ${describeFindFailure(dst, dstArg)}`);
+  if (src.slug === dst.slug) fail('merge: source and destination are the same board');
+
+  const dryRun = !!opts['dry-run'];
+  let res;
+  try {
+    res = store.mergeProject(src.slug, dst.slug, { dryRun });
+  } catch (e) {
+    fail(`merge: ${(e && e.message) || e}`);
+  }
+  const verb = dryRun ? 'would move' : 'moved';
+  console.log(`✓ ${verb} ${res.tickets} ticket(s) and ${res.stories} story(ies) from ${src.meta.name} → ${dst.meta.name}`);
+  for (const m of res.mapping) {
+    console.log(`    ${m.from} → ${m.to}  ${m.title}`);
+  }
+  if (!dryRun) console.log(`  removed board "${src.meta.name}".`);
+  else console.log('  (dry run — nothing was changed)');
+}
+
 /* ------------------------------------------------------------------ *
  *  User stories (a lightweight grouping tickets can belong to)
  * ------------------------------------------------------------------ */
@@ -1198,8 +1245,14 @@ User stories (a lightweight grouping tickets can belong to):
   --color names: ${colorNames} (or any #rrggbb hex)
 
 Project selection:
-  Defaults to $CLAUDE_PROJECT_DIR or the current directory.
+  Boards are anchored to the git repo you're in: the CLI walks up from
+  $CLAUDE_PROJECT_DIR (or the current directory) to the nearest .git, so running
+  it from a subfolder uses the repo's one board instead of minting a duplicate.
+  A folder with no repo is used as-is.
   --project <path-or-slug>   target another board  ·  --name <name>   set its display name
+  sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
+    (renumbers refs above the destination's, remaps links, moves assets, then
+    deletes the source). --dry-run prints the ref mapping without touching disk.
 
 Tickets and their images are stored centrally (default ~/.claude/sidequest), so
 one dashboard shows every project's board at once.`
@@ -1315,6 +1368,9 @@ async function main() {
     case 'projects':
     case 'boards':
       cmdProjects(opts);
+      break;
+    case 'merge':
+      cmdMerge(opts, positional);
       break;
     case 'dashboard':
     case 'open':
