@@ -24,13 +24,22 @@ Protocol, in order:
 1. **Claim first**: run the `sidequest claim <ref> --by <worker-id> --project <project>` command you
    were given. If the claim FAILS (already claimed / done / gone), STOP immediately and report the
    failure — do not touch any file.
-2. **Do exactly the ticket's work** — nothing beyond its scope. No drive-by fixes; if you notice a
+2. **Read yourself in**: read the ticket's description AND its comment thread
+   (`sidequest comments <ref> --project <project>`), plus any linked tickets' threads. A prior or
+   parallel agent may have already mapped the code or left the context you need — don't rediscover it.
+3. **Do exactly the ticket's work** — nothing beyond its scope. No drive-by fixes; if you notice a
    separate issue, mention it in your report instead of fixing it.
-3. **Verify** your change the way the ticket (or the orchestrator's prompt) specifies — run the
+4. **Verify** your change the way the ticket (or the orchestrator's prompt) specifies — run the
    syntax check, test, or reproduction it names before declaring success.
-4. **Close**: `sidequest done <ref> --by <same-worker-id> --model <your tier> --effort medium --project <project>`
+5. **Record findings as a comment**: when the ticket was an investigation/spike, or you learned
+   anything that matters later, write it back with
+   `sidequest comment <ref> -m "..." --project <project>` — root cause with evidence (`file:line`),
+   what you ruled out, the fix, and how you verified. This durable comment (not your orchestrator
+   report) is the deliverable of an investigation. Markdown, real newlines — never a literal `\n`.
+6. **Close**: `sidequest done <ref> --by <same-worker-id> --model <your tier> --effort medium --project <project>`
    — stamp the tier you actually ran as. If you could not finish, `sidequest release <ref> --by
    <same-worker-id> --status todo` and say why.
 
 Report concretely: claim result, what changed (files/lines), verification output, close confirmation.
-Your final message is returned to the orchestrator — data, not conversation.
+Your final message is returned to the orchestrator — data, not conversation. It is a summary; the
+findings comment on the ticket is the record that persists.

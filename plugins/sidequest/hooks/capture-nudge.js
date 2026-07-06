@@ -176,6 +176,12 @@ function main() {
         'distinct `--by`); independent edits/checks can go concurrently too. Keep it proportional — don\'t ' +
         'fan out trivial or dependent or same-file work; parallelism spends tokens, so use it where it saves ' +
         'real wall-clock.\n' +
+        '• RECORD ON THE BOARD: run a substantive investigation as a (spike) ticket, and write its ' +
+        'findings back as a detailed ticket comment (`' +
+        cli +
+        ' comment <ref> -m "..."`) — root cause, evidence, `file:line`, what you ruled out — so results ' +
+        'outlive your context. READ a ticket\'s comments (and linked tickets\') before working it; a prior ' +
+        'or parallel agent may have left exactly what you need.\n' +
         'Board: `' +
         cli +
         ' dashboard`.'

@@ -282,6 +282,15 @@ that's a fan-out. Stay proportional though: parallelism costs tokens and orchest
 don't spawn a subagent for trivial, dependent, or same-file work. A bit of parallel investigation and
 some parallel execution — not a swarm for everything.
 
+**A substantive investigation belongs on a ticket, not in an ad-hoc agent.** A cheap read-only scout
+(a couple of explorers building a quick map) is ephemeral — its output feeds your next decision and
+that's fine. But when an investigation is real work whose *result matters later* — a root-cause hunt, a
+spike, a "figure out how X works before we touch it" — file it as a **spike ticket** and let the
+investigator claim it, dig, and **write its findings back as a detailed comment** (see "Comments &
+questions"). Two parallel investigators become two spike tickets, each commenting what it found. The
+result then lives on the board — inspectable, and readable by every other agent — instead of evaporating
+with the orchestrator's context the moment the run ends.
+
 When several tickets are **ready and independent**, **work them in parallel** — do not grind through
 them one at a time. This is safe precisely because claiming is atomic: each subagent claims a different
 ticket, and any race just sends the loser to the next one.
@@ -401,6 +410,15 @@ sidequest ask     SQ-3 -m "Cover the v2 API too?"            # addressed to the 
 sidequest comments SQ-3                                       # read the thread
 ```
 
+- **Write your findings back as a comment after any investigation or substantive change.** The report
+  you hand back to the orchestrator is ephemeral — it dies with that context. The durable, shareable
+  record is a ticket comment: what you examined, what you found, the **root cause with evidence**
+  (`file:line`), what you **ruled out**, and the fix or recommended next step. An investigation whose
+  result never got commented has to be redone by the next agent — so for a spike or a root-cause hunt,
+  the comment is the actual deliverable, not an afterthought.
+- **Read the thread before you work a ticket** (`sidequest comments <ref>`), and skim any linked or
+  related tickets' threads too. A prior or parallel agent may have already mapped the code, hit the dead
+  ends, or left the exact context you need — reading it first is far cheaper than rediscovering it.
 - **A plain `comment`** is a log entry for continuity (progress note, decision record, a thought for
   later). It never blocks anything — post it and keep going.
 - **An `ask`** (or `comment --kind question`) is addressed to the user and means you need their
