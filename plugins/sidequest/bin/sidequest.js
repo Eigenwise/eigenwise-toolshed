@@ -730,9 +730,17 @@ function cmdModels(opts) {
   const prefs = store.getModelPrefs();
   const routing = prefs.routing !== false;
   const ladder = store.routingLadder(prefs);
+  // Effort is a per-model matrix now (prefs.efforts[model] = {low..max}); haiku
+  // carries no row at all (no effort axis). Build the per-model enabled list
+  // straight from whichever tiers the store actually gave a row to, rather than
+  // hardcoding "not haiku" here.
+  const enabledEfforts = {};
+  for (const m of Object.keys(prefs.efforts)) {
+    enabledEfforts[m] = store.VALID_EFFORTS.filter((e) => prefs.efforts[m][e]);
+  }
   if (opts.json) {
     process.stdout.write(
-      JSON.stringify({ routing, bias: prefs.routingBias, models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS, enabledEfforts: store.VALID_EFFORTS.filter((e) => prefs[e]), ladder }, null, 2) + '\n'
+      JSON.stringify({ routing, bias: prefs.routingBias, models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS, enabledEfforts, ladder }, null, 2) + '\n'
     );
     return;
   }
@@ -740,9 +748,14 @@ function cmdModels(opts) {
   console.log(`Bias: ${prefs.routingBias}  (${biasLabel(prefs.routingBias)} — see "sidequest bias")`);
   console.log('Model tiers (toggle in the dashboard settings):');
   for (const m of store.VALID_MODELS) console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}`);
-  console.log('Effort levels (toggle in the dashboard settings):');
-  for (const e of store.VALID_EFFORTS) console.log(`  ${prefs[e] ? '✓' : '✗'} ${e}${prefs[e] ? '' : '  (disabled by user)'}`);
-  console.log('  (haiku has no effort support — its rungs carry no effort)');
+  console.log('Effort levels (toggle in the dashboard settings, per model):');
+  for (const m of store.VALID_MODELS) {
+    if (!prefs.efforts[m]) {
+      console.log(`  · ${m.padEnd(10)}(no effort axis — haiku ignores effort)`);
+      continue;
+    }
+    console.log(`  ✓ ${m.padEnd(10)}${enabledEfforts[m].join(', ')}`);
+  }
   printLadder(ladder);
 }
 

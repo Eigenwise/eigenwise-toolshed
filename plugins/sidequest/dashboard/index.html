@@ -393,6 +393,22 @@
   /* Target-model tier chip: which agent tier should work the ticket. */
   .modelchip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; text-transform: lowercase; }
   .modelchip svg { flex: none; opacity: .9; }
+  /* Per-model effort matrix in the settings popover (SQ-129/SQ-130): a compact
+     grid, not a bolted-on table — hairline rows, no cell borders, the model's
+     own accent dot carries the row identity the same way the tier list above
+     it does. A tier hidden from the picker dims (not hides) its row so the
+     saved picks are still visible/editable underneath. */
+  .effort-grid { display: flex; flex-direction: column; padding: 2px 4px 4px; }
+  .eg-row { display: grid; grid-template-columns: 62px repeat(5, 1fr); align-items: center; gap: 2px; border-radius: var(--radius-sm); }
+  .eg-row:not(.eg-headrow):hover { background: var(--panel); }
+  .eg-headrow { margin-bottom: 1px; }
+  .eg-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); padding: 4px 4px 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .eg-row.dim .eg-label { color: var(--text-faint); }
+  .eg-row.dim .eg-label .sw { opacity: .45; }
+  .eg-h { font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--text-faint); text-align: center; }
+  .eg-cell { display: flex; align-items: center; justify-content: center; padding: 5px 0; cursor: pointer; }
+  .eg-cell input { accent-color: var(--gold); width: 14px; height: 14px; cursor: pointer; }
+  .eg-row.dim .eg-cell input { opacity: .55; }
   /* Live routing ladder in the settings popover: one compact row per rung, so a
      tier toggle visibly reshapes the complexity -> model·effort mapping. */
   .ladder-view { display: flex; flex-direction: column; gap: 1px; padding: 2px 4px 4px; }
@@ -853,8 +869,8 @@
   // Reasoning-effort levels (mirrors store.VALID_EFFORTS). Toggleable exactly
   // like the tiers: a disabled effort never appears in the derived ladder.
   var EFFORTS = [
-    { k: "low", label: "low" }, { k: "medium", label: "medium" }, { k: "high", label: "high" },
-    { k: "xhigh", label: "xhigh" }, { k: "max", label: "max" }
+    { k: "low", label: "low", short: "Lo" }, { k: "medium", label: "medium", short: "Med" }, { k: "high", label: "high", short: "Hi" },
+    { k: "xhigh", label: "xhigh", short: "XHi" }, { k: "max", label: "max", short: "Max" }
   ];
   // Complexity is the single mandatory dial (1..10) the filer sets; the server
   // derives model·effort from it via the routing ladder. No default — the filer
@@ -951,8 +967,26 @@
   // Which model tiers the user wants offered at all (server-side allowlist).
   // Gates the editor's Model picker and what the orchestrator is told to use;
   // an already-tagged ticket keeps showing its chip even if its tier is off.
-  var modelPrefs = { opus: true, sonnet: true, haiku: true, fable: true, routing: true };
+  // `efforts` mirrors store.getModelPrefs's per-model matrix (SQ-129): one row
+  // per non-haiku tier, all effort levels on by default. Seeded up front so a
+  // toggle that fires before the first server sync lands still PUTs a well-formed
+  // nested object instead of an empty/partial one.
+  function defaultEffortsMatrix() {
+    var out = {};
+    MODELS.forEach(function (m) {
+      if (m.k === "haiku") return;
+      var row = {};
+      EFFORTS.forEach(function (ef) { row[ef.k] = true; });
+      out[m.k] = row;
+    });
+    return out;
+  }
+  var modelPrefs = { opus: true, sonnet: true, haiku: true, fable: true, routing: true, efforts: defaultEffortsMatrix() };
   function modelEnabled(k) { return modelPrefs[k] !== false; }
+  function effortEnabled(model, k) {
+    var row = modelPrefs.efforts && modelPrefs.efforts[model];
+    return row ? row[k] !== false : true;
+  }
   function syncModelPrefsFromServer() {
     return api("/api/model-prefs").then(function (d) {
       if (d && d.prefs) { modelPrefs = d.prefs; renderModelPrefSettings(); refreshLadder(); }
@@ -1514,28 +1548,53 @@
       });
       box.appendChild(row);
     });
-    // Effort levels, toggled the same way the tiers are: unchecking one drops
-    // it from the derived ladder; at least one effort always stays on.
+    // Effort levels are a per-model matrix now (SQ-129: store.getModelPrefs's
+    // `efforts` object), not one global row — opus·medium can be off while
+    // sonnet·medium stays on. Rows are the non-haiku tiers in MODELS order;
+    // haiku has no effort axis so it never gets a row. A tier hidden from the
+    // picker above dims its row here (its saved effort picks aren't lost,
+    // just deemphasized) rather than disappearing, so re-enabling the tier
+    // doesn't reset anything.
     var effHead = el("div", "pop-row");
     effHead.style.cssText = "font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;margin-top:6px";
     effHead.textContent = "Effort levels";
     box.appendChild(effHead);
+    var grid = el("div", "effort-grid");
+    var headRow = el("div", "eg-row eg-headrow");
+    headRow.appendChild(el("span", "eg-label"));
     EFFORTS.forEach(function (ef) {
-      var on = modelPrefs[ef.k] !== false;
-      var row = el("label", "proj-notify-row" + (on ? "" : " muted"));
-      row.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' /><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:var(--line)"></span><span class="pn-name">' + esc(ef.label) + (ef.k === "max" ? ' <em style="font-style:normal;font-size:10.5px;color:var(--text-faint)">(top rung, C10 only)</em>' : '') + '</span>';
-      var cb = row.querySelector("input");
-      cb.addEventListener("change", function () {
-        var enabledCount = EFFORTS.filter(function (x) { return modelPrefs[x.k] !== false; }).length;
-        if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one effort level must stay enabled"); return; }
-        modelPrefs[ef.k] = cb.checked;
-        renderModelPrefSettings();
-        pushModelPrefs();
-        refreshLadder();   // the ladder reshapes when the enabled efforts change — show it
-        toast(cb.checked ? ef.label + " effort enabled" : ef.label + " effort excluded from the ladder");
-      });
-      box.appendChild(row);
+      var h = el("span", "eg-h", esc(ef.short));
+      h.title = ef.label + (ef.k === "max" ? " (top rung, C10 only)" : "");
+      headRow.appendChild(h);
     });
+    grid.appendChild(headRow);
+    MODELS.filter(function (m) { return m.k !== "haiku"; }).forEach(function (m) {
+      var tierOn = modelEnabled(m.k);
+      var row = el("div", "eg-row" + (tierOn ? "" : " dim"));
+      var label = el("span", "eg-label");
+      label.innerHTML = '<span class="sw" style="display:inline-block;width:8px;height:8px;border-radius:50%;flex:none;background:' + (MODEL_COLORS[m.k] || "var(--line)") + '"></span>' + esc(m.label);
+      row.appendChild(label);
+      EFFORTS.forEach(function (ef) {
+        var cell = el("label", "eg-cell");
+        var on = effortEnabled(m.k, ef.k);
+        cell.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' aria-label="' + esc(m.label + " " + ef.label) + '" />';
+        cell.title = m.label + " · " + ef.label;
+        var cb = cell.querySelector("input");
+        cb.addEventListener("change", function () {
+          var enabledCount = EFFORTS.filter(function (x) { return effortEnabled(m.k, x.k); }).length;
+          if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one effort level must stay enabled for " + m.label); return; }
+          if (!modelPrefs.efforts) modelPrefs.efforts = {};
+          if (!modelPrefs.efforts[m.k]) modelPrefs.efforts[m.k] = {};
+          modelPrefs.efforts[m.k][ef.k] = cb.checked;
+          pushModelPrefs();
+          refreshLadder();   // the ladder reshapes when a model's enabled efforts change — show it
+          toast(m.label + " " + ef.label + (cb.checked ? " enabled" : " excluded from the ladder"));
+        });
+        row.appendChild(cell);
+      });
+      grid.appendChild(row);
+    });
+    box.appendChild(grid);
   }
   // The live routing ladder, one compact row per rung (C1 sonnet·low …), so a
   // tier toggle visibly reshapes the complexity -> model·effort mapping.

@@ -449,8 +449,9 @@ always spawn from the freshest read.
 
 A ticket shows `⚙C<score>→tier·effort` on its card and in `list`/`ready`; the user shapes the ladder
 in the dashboard settings (gear → Available models), where the live mapping is displayed.
-Effort levels can be excluded there too, exactly like tiers — an excluded effort never appears in
-the derived ladder.
+Effort exclusion is per model, not global — a model×effort grid, so opus·medium can be off while
+sonnet·medium stays on. An excluded model×effort pair never appears in the derived ladder for that
+model.
 
 ## Comments & questions
 

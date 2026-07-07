@@ -183,6 +183,11 @@ function coerceModel(v) {
 // skill, not enforced here.
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+// The tiers that carry an effort axis — every model except haiku (which has no
+// reasoning-effort support). model-prefs stores one effort row per tier here, so
+// a single (model, effort) combo like opus·medium can be excluded on its own.
+const EFFORT_MODELS = VALID_MODELS.filter((m) => m !== 'haiku');
+
 function coerceEffort(v) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
@@ -277,33 +282,50 @@ function routingLadder(prefs) {
   prefs = prefs || getModelPrefs();
   let enabled = MODEL_CAPABILITY_ORDER.filter((m) => prefs[m] !== false);
   if (!enabled.length) enabled = ['sonnet']; // unreachable via setModelPrefs, but never return an empty ladder
-  let enabledEfforts = VALID_EFFORTS.filter((e) => prefs[e] !== false);
-  if (!enabledEfforts.length) enabledEfforts = ['medium']; // unreachable via setModelPrefs, but never index an empty list
 
-  // `max` is excluded from the normal ranked sequence — it's the sparing top rung
-  // handled below. The one exception: if the user left ONLY max enabled it has to
-  // carry the sequence (maxInSequence), so there's no separate sparing rung.
-  const maxEnabled = enabledEfforts.indexOf('max') !== -1;
-  let seqEfforts = enabledEfforts.filter((e) => e !== 'max');
-  const maxInSequence = seqEfforts.length === 0;
-  if (maxInSequence) seqEfforts = enabledEfforts.slice();
+  // Resolve a tier's effort row from the per-model matrix, fail-soft to
+  // all-enabled when the row (or the whole efforts object) is missing/garbage —
+  // so an old flat-shape prefs object handed straight to routingLadder still
+  // yields a full ladder rather than an empty one.
+  const efforts = prefs.efforts && typeof prefs.efforts === 'object' ? prefs.efforts : {};
+  function rowOf(model) {
+    const r = efforts[model] && typeof efforts[model] === 'object' ? efforts[model] : null;
+    const row = {};
+    for (const e of VALID_EFFORTS) row[e] = r ? r[e] !== false : true;
+    return row;
+  }
+  // The enabled non-max efforts of a tier's own row (the rungs it contributes to
+  // the ranked sequence). `max` is held out — it's the sparing top rung.
+  function seqEffortsOf(model) {
+    return LADDER_EFFORT_ORDER.filter((e) => rowOf(model)[e] !== false);
+  }
 
   // ENUMERATE every enabled combo programmatically and score it by capability.
   // Haiku → a single effort-null rung; every other tier → one rung per enabled
-  // non-max effort (opus·xhigh included, etc.).
+  // non-max effort IN ITS OWN ROW (so opus·medium can be excluded while
+  // sonnet·medium stays). If a tier's row has ONLY max enabled, max carries that
+  // tier's sequence rungs (the per-model maxInSequence fallback).
   const seq = [];
   for (let t = 0; t < enabled.length; t++) {
     const model = enabled[t];
     const tierRank = MODEL_CAPABILITY_ORDER.indexOf(model); // absolute, not enabled-relative
     if (model === 'haiku') {
       seq.push({ model: 'haiku', effort: null, tierRank, score: LADDER_TIER_BASE.haiku });
-    } else {
-      for (const eff of seqEfforts) {
-        // 'max' only appears here in the only-max-enabled fallback; rank it above
-        // the normal effort scale so it stays the strongest rung of its tier.
-        const idx = eff === 'max' ? LADDER_EFFORT_ORDER.length : LADDER_EFFORT_ORDER.indexOf(eff);
-        seq.push({ model, effort: eff, tierRank, score: LADDER_TIER_BASE[model] + idx });
-      }
+      continue;
+    }
+    const row = rowOf(model);
+    let modelEfforts = seqEffortsOf(model);
+    if (!modelEfforts.length) {
+      // Nothing but max (or nothing) left on in this row: max carries the tier's
+      // sequence; a fully-empty row (unreachable via setModelPrefs's per-row
+      // guard) falls back to medium so the tier still contributes a rung.
+      modelEfforts = row.max !== false ? ['max'] : ['medium'];
+    }
+    for (const eff of modelEfforts) {
+      // 'max' only appears here in the only-max-enabled fallback; rank it above
+      // the normal effort scale so it stays the strongest rung of its tier.
+      const idx = eff === 'max' ? LADDER_EFFORT_ORDER.length : LADDER_EFFORT_ORDER.indexOf(eff);
+      seq.push({ model, effort: eff, tierRank, score: LADDER_TIER_BASE[model] + idx });
     }
   }
   // RANK ascending by capability; exact cross-tier score ties (e.g. sonnet·high ==
@@ -311,11 +333,13 @@ function routingLadder(prefs) {
   seq.sort((a, b) => (a.score - b.score) || (a.tierRank - b.tierRank));
 
   // MAX SPARINGLY: the strongest enabled tier's ·max rung sits ABOVE the whole
-  // sequence and is only reached at the very top of the complexity scale. Haiku
-  // has no ·max, so there's no max rung when it's the only tier; and if max is
-  // already carrying the sequence, the sequence's own top is the ceiling.
+  // sequence and is only reached at the very top of the complexity scale. It
+  // exists iff the top enabled tier's OWN row has max enabled AND max isn't
+  // already carrying that tier's sequence (only-max row). Haiku has no ·max, so
+  // there's no max rung when it's the only/top tier.
   const topTier = enabled[enabled.length - 1];
-  const hasMaxRung = maxEnabled && !maxInSequence && topTier !== 'haiku';
+  const hasMaxRung =
+    topTier !== 'haiku' && rowOf(topTier).max !== false && seqEffortsOf(topTier).length > 0;
   const full = hasMaxRung ? seq.concat([{ model: topTier, effort: 'max' }]) : seq;
 
   // BIAS curves complexity → sequence index via the SQ-76 gamma remap. Reserve the
@@ -1821,20 +1845,42 @@ function modelPrefsFile() {
   return path.join(projectsRoot(), 'model-prefs.json');
 }
 
-// Missing/corrupt file -> every tier and every effort enabled, routing on, and a
-// neutral (0) bias. `routing` is the master switch: when false the skill's
-// model/effort enforcement stands down and the main agent may work any ticket
-// itself (tags become informational). `routingBias` (-5..+5) warps the
-// complexity ladder routingLadder() derives from the enabled tiers (see
-// coerceRoutingBias). The per-effort booleans (low/medium/high/xhigh/max) are
-// carried through exactly like the tier booleans and gate which effort levels
-// routingLadder may assign.
+// Missing/corrupt file -> every tier enabled, every effort enabled in every
+// model row, routing on, and a neutral (0) bias. `routing` is the master switch:
+// when false the skill's model/effort enforcement stands down and the main agent
+// may work any ticket itself (tags become informational). `routingBias` (-5..+5)
+// warps the complexity ladder routingLadder() derives from the enabled tiers
+// (see coerceRoutingBias).
+//
+// Effort is a PER-MODEL MATRIX, not global booleans: `efforts` is one row per
+// non-haiku tier ({ sonnet:{low..max}, opus:{...}, fable:{...} }) so a single
+// (model, effort) combo like opus·medium can be excluded while sonnet·medium
+// stays. Haiku has no efforts row (no effort axis). The flat effort keys
+// (low/medium/high/xhigh/max) are NOT present on the returned object anymore.
+//
+// Migration on read: a legacy file that predates the matrix has no `efforts`
+// object but may carry the old flat effort keys — seed EVERY model row from
+// those flat values so an existing allowlist survives the upgrade unchanged.
 function getModelPrefs() {
   const saved = readJson(modelPrefsFile(), null);
   const merged = saved && typeof saved === 'object' ? saved : {};
   const out = {};
   for (const m of VALID_MODELS) out[m] = merged[m] !== false;
-  for (const e of VALID_EFFORTS) out[e] = merged[e] !== false;
+
+  const savedEfforts = merged.efforts && typeof merged.efforts === 'object' ? merged.efforts : null;
+  // Only fall back to legacy flat keys when there's no matrix at all.
+  const hasLegacyFlat = !savedEfforts && VALID_EFFORTS.some((e) => e in merged);
+  out.efforts = {};
+  for (const m of EFFORT_MODELS) {
+    const savedRow = savedEfforts && merged.efforts[m] && typeof merged.efforts[m] === 'object' ? merged.efforts[m] : null;
+    const row = {};
+    for (const e of VALID_EFFORTS) {
+      if (savedRow) row[e] = savedRow[e] !== false;
+      else if (hasLegacyFlat) row[e] = merged[e] !== false; // broadcast the old global flag into this row
+      else row[e] = true;
+    }
+    out.efforts[m] = row;
+  }
   out.routing = merged.routing !== false;
   out.routingBias = coerceRoutingBias(merged.routingBias);
   return out;
@@ -1842,19 +1888,40 @@ function getModelPrefs() {
 
 // Persist a partial or full set. Unknown keys are dropped; refuses to disable
 // every tier at once (the last enabled tier stays on) so routing always has
-// somewhere to go, and mirrors that guard for effort so at least one effort
-// level always stays enabled. The `routing` master switch and `routingBias` dial
-// are carried through independently of those guards (neither can satisfy or
-// break the at-least-one rules); routingBias is clamped to range on write.
+// somewhere to go.
+//
+// Accepts BOTH effort shapes in the patch: a nested `efforts` object (partial
+// rows allowed, merged per-key over the current matrix) AND legacy flat effort
+// keys (low/medium/…), which broadcast to EVERY model row — an old dashboard tab
+// PUTs the whole flat object, and this keeps it working. Only the nested matrix
+// is written to disk. Per-row guard mirrors the tier guard: each model row keeps
+// at least one effort enabled (fallback medium). The `routing` switch and
+// `routingBias` dial carry through independently; routingBias clamps on write.
 function setModelPrefs(patch) {
-  const next = Object.assign({}, getModelPrefs(), patch || {});
+  const cur = getModelPrefs();
+  patch = patch || {};
   const out = {};
-  for (const m of VALID_MODELS) out[m] = next[m] !== false;
+
+  // Tiers: carried from the current set unless the patch names them.
+  for (const m of VALID_MODELS) out[m] = (m in patch) ? patch[m] !== false : cur[m];
   if (!VALID_MODELS.some((m) => out[m])) out[VALID_MODELS.indexOf('sonnet') !== -1 ? 'sonnet' : VALID_MODELS[0]] = true;
-  for (const e of VALID_EFFORTS) out[e] = next[e] !== false;
-  if (!VALID_EFFORTS.some((e) => out[e])) out[VALID_EFFORTS.indexOf('medium') !== -1 ? 'medium' : VALID_EFFORTS[0]] = true;
-  out.routing = next.routing !== false;
-  out.routingBias = coerceRoutingBias(next.routingBias);
+
+  // Efforts: start from the current matrix, layer any legacy flat keys over every
+  // row, then layer a nested patch row per-key on top (nested wins over flat).
+  const patchEfforts = patch.efforts && typeof patch.efforts === 'object' ? patch.efforts : null;
+  const flatKeys = VALID_EFFORTS.filter((e) => e in patch);
+  out.efforts = {};
+  for (const m of EFFORT_MODELS) {
+    const row = Object.assign({}, cur.efforts[m]);
+    for (const e of flatKeys) row[e] = patch[e] !== false;
+    const pr = patchEfforts && patchEfforts[m] && typeof patchEfforts[m] === 'object' ? patchEfforts[m] : null;
+    if (pr) for (const e of VALID_EFFORTS) { if (e in pr) row[e] = pr[e] !== false; }
+    if (!VALID_EFFORTS.some((e) => row[e])) row.medium = true; // per-row guard: never leave a tier effortless
+    out.efforts[m] = row;
+  }
+
+  out.routing = (patch.routing !== undefined) ? patch.routing !== false : cur.routing;
+  out.routingBias = coerceRoutingBias(patch.routingBias !== undefined ? patch.routingBias : cur.routingBias);
   writeJson(modelPrefsFile(), out);
   return out;
 }

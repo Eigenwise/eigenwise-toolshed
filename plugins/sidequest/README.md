@@ -160,9 +160,10 @@ tool can only pin per-spawn reasoning effort via a definition's `effort:` frontm
 which is a spawn-time argument) — run `node plugins/sidequest/scripts/gen-exec-agents.js` to
 regenerate them after editing the template, rather than hand-editing the five copies. The same
 *Available models* section has a master switch to turn routing off entirely — then
-Claude may work any ticket itself and the chips become purely informational. Effort levels can be
-excluded in that same *Available models* section, exactly like tiers — an excluded effort never
-appears in the ladder. At least one tier and one effort always stay enabled.
+Claude may work any ticket itself and the chips become purely informational. Effort exclusion lives
+in that same section too, but it's per model, not global: a model×effort grid lets you turn off, say,
+opus·medium while sonnet·medium stays on, and that pair just drops out of opus's rungs. The guards:
+at least one tier always stays enabled, and each enabled tier's row always keeps at least one effort on.
 
 ## File scopes & parallel waves
 
@@ -343,7 +344,7 @@ node <plugin>/bin/sidequest.js story list|show US-1|update US-1|rm US-1
 node <plugin>/bin/sidequest.js add -t "Task" --complexity 5 --why "..."   # score 1-10 + motivation — BOTH required; routing derived
 node <plugin>/bin/sidequest.js models                               # the live complexity -> tier·effort ladder
 node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only work whose DERIVED tier is sonnet
-node <plugin>/bin/sidequest.js models [--json]                      # the tiers you allow (dashboard setting) + efforts
+node <plugin>/bin/sidequest.js models [--json]                      # the tiers you allow + each tier's enabled efforts
 node <plugin>/bin/sidequest.js ready [--json]                 # the fan-out set (unclaimed, unblocked)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
 node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket

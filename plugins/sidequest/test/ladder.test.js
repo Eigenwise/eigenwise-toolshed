@@ -16,6 +16,7 @@ const store = require('../lib/store.js');
 const { routingLadder, deriveRouting, coerceComplexity, setModelPrefs } = store;
 
 const TIER_ORDER = ['haiku', 'sonnet', 'opus', 'fable'];
+const EFFORT_MODELS = ['sonnet', 'opus', 'fable']; // tiers that carry an effort row (haiku has none)
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh']; // non-max scale
 const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Per-tier base offsets mirroring store.js's LADDER_TIER_BASE (SQ-93: the
@@ -40,10 +41,20 @@ const effortSubsets = {
 
 const BIASES = [-5, -3, 0, 3, 5];
 
+// `efforts` may be a flat array (applied uniformly to every model row — the
+// convenient mode the invariant sweep and oracles rely on) OR an object mapping
+// model -> array for per-model control (opus·medium excluded while sonnet keeps
+// it, etc.). Missing rows in the object form default to no efforts enabled.
 function mkPrefs(tiers, efforts, bias) {
   const p = { routingBias: bias };
   for (const t of TIER_ORDER) p[t] = tiers.includes(t);
-  for (const e of ALL_EFFORTS) p[e] = efforts.includes(e);
+  p.efforts = {};
+  for (const m of EFFORT_MODELS) {
+    const arr = Array.isArray(efforts) ? efforts : (efforts[m] || []);
+    const row = {};
+    for (const e of ALL_EFFORTS) row[e] = arr.includes(e);
+    p.efforts[m] = row;
+  }
   return p;
 }
 
@@ -281,19 +292,91 @@ test('empty prefs can never yield an empty ladder (defensive fallbacks)', () => 
   });
 });
 
-test('setModelPrefs guards: refusing to disable every tier / every effort', () => {
+test('setModelPrefs guards: refusing to disable every tier / every effort per row', () => {
   const allOff = {};
   for (const t of TIER_ORDER) allOff[t] = false;
-  for (const e of ALL_EFFORTS) allOff[e] = false;
+  for (const e of ALL_EFFORTS) allOff[e] = false; // flat keys broadcast "off" to every model row
   const saved = setModelPrefs(allOff);
   assert.ok(TIER_ORDER.some((t) => saved[t]), 'at least one tier stays enabled');
-  assert.ok(ALL_EFFORTS.some((e) => saved[e]), 'at least one effort stays enabled');
   assert.strictEqual(saved.sonnet, true);
-  assert.strictEqual(saved.medium, true);
+  // Per-row guard: every model row keeps at least one effort, falling back to medium.
+  for (const m of EFFORT_MODELS) {
+    assert.ok(ALL_EFFORTS.some((e) => saved.efforts[m][e]), `${m} keeps an effort enabled`);
+    assert.strictEqual(saved.efforts[m].medium, true, `${m} falls back to medium`);
+  }
+  // Disk shape is the nested matrix only — no flat effort keys leak to the top level.
+  for (const e of ALL_EFFORTS) assert.ok(!(e in saved), `no flat "${e}" key written to disk`);
   // routingBias clamps on write.
   assert.strictEqual(setModelPrefs({ routingBias: 99 }).routingBias, 5);
   assert.strictEqual(setModelPrefs({ routingBias: -99 }).routingBias, -5);
   assert.strictEqual(setModelPrefs({ routingBias: 'garbage' }).routingBias, 0);
+});
+
+test('per-model efforts: disabling opus.medium drops that rung but keeps sonnet.medium', () => {
+  const prefs = mkPrefs(['sonnet', 'opus'], {
+    sonnet: ['low', 'medium', 'high', 'xhigh'],
+    opus: ['low', 'high', 'xhigh'], // medium excluded on opus only
+  }, 0);
+  const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
+  assert.ok(got.includes('sonnet.medium'), 'sonnet.medium still routed');
+  assert.ok(!got.includes('opus.medium'), 'opus.medium never routed');
+  // opus's other rungs survive, so it's a targeted exclusion, not opus-wide.
+  assert.ok(got.includes('opus.low') && got.includes('opus.high'), 'opus keeps its other rungs');
+});
+
+test('per-model efforts: disabling fable.max (all tiers on) removes the sparing rung, c10 = top normal rung', () => {
+  const prefs = mkPrefs(TIER_ORDER, {
+    sonnet: ALL_EFFORTS,
+    opus: ALL_EFFORTS,
+    fable: ['low', 'medium', 'high', 'xhigh'], // top tier's row has max OFF
+  }, 0);
+  const ladder = routingLadder(prefs);
+  const got = ladder.map((r) => `${r.model}.${r.effort}`);
+  assert.ok(!got.some((s) => s.endsWith('.max')), 'no max rung anywhere (top tier max off)');
+  assert.strictEqual(got[9], 'fable.xhigh', 'c10 lands the top normal rung');
+});
+
+test('migration: a legacy flat-key file on disk broadcasts into every model row', () => {
+  const file = path.join(process.env.SIDEQUEST_HOME, 'projects', 'model-prefs.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // Old shape: no `efforts` object, just the flat effort booleans.
+  fs.writeFileSync(file, JSON.stringify({
+    haiku: true, sonnet: true, opus: true, fable: true,
+    low: true, medium: false, high: true, xhigh: true, max: false,
+    routing: true, routingBias: 0,
+  }));
+  const prefs = store.getModelPrefs();
+  assert.ok(!('medium' in prefs), 'flat effort keys are gone from the returned shape');
+  assert.ok(prefs.efforts && !prefs.efforts.haiku, 'haiku has no efforts row');
+  for (const m of EFFORT_MODELS) {
+    assert.deepStrictEqual(prefs.efforts[m], {
+      low: true, medium: false, high: true, xhigh: true, max: false,
+    }, `${m} row seeded from the legacy flat values`);
+  }
+});
+
+test('setModelPrefs: a flat-key patch broadcasts to every model row and writes nested only', () => {
+  const saved = setModelPrefs({ low: true, medium: false, high: true, xhigh: true, max: true });
+  for (const m of EFFORT_MODELS) {
+    assert.deepStrictEqual(saved.efforts[m], {
+      low: true, medium: false, high: true, xhigh: true, max: true,
+    }, `${m} row set from the flat patch`);
+  }
+  for (const e of ALL_EFFORTS) assert.ok(!(e in saved), `no flat "${e}" key on the written shape`);
+});
+
+test('setModelPrefs: per-row guard — disabling all of opus efforts leaves opus.medium on', () => {
+  // Start from a known-good baseline so sonnet/fable rows are unaffected by prior tests.
+  setModelPrefs({ efforts: { sonnet: ALL_EFFORTS.reduce((o, e) => ((o[e] = true), o), {}) } });
+  const saved = setModelPrefs({
+    efforts: { opus: { low: false, medium: false, high: false, xhigh: false, max: false } },
+  });
+  assert.strictEqual(saved.efforts.opus.medium, true, 'opus falls back to medium');
+  for (const e of ['low', 'high', 'xhigh', 'max']) {
+    assert.strictEqual(saved.efforts.opus[e], false, `opus.${e} stays off`);
+  }
+  // The nested patch touched only opus; sonnet keeps its full row.
+  assert.strictEqual(saved.efforts.sonnet.low, true, 'sonnet row untouched by the opus-only patch');
 });
 
 test('deriveRouting: shape and null on invalid complexity', () => {
