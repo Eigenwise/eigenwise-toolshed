@@ -359,13 +359,22 @@ function routingLadder(prefs) {
     if (hasMaxRung && c > normalCount) {
       rung = full[maxIdx];
     } else {
-      // p in [0,1]: normalized complexity within the non-max range. gamma bends it
-      // (bias>0 -> higher index sooner; ends invariant, so c=1 -> rung 0 and the top
-      // non-max complexity -> the sequence's top rung). Duplicates across adjacent
+      // BOTTOM-WEIGHTED FLOOR BUCKETING (SQ-134): p in [0,1) uses normalCount (not
+      // normalCount-1) as the divisor, so p never reaches 1 within this branch —
+      // floor()ing frac*(lastNormal+1) then splits the sequence into lastNormal+1
+      // equal-width buckets with the REMAINDER width falling on the cheapest
+      // (lowest-index) buckets, instead of round()'s interior-weighted split. Cost
+      // curves are convex, so neutral bias should be bottom-weighted. gamma still
+      // bends p (bias>0 -> higher index sooner). Duplicates across adjacent
       // complexities are fine; we never index outside the enabled sequence.
-      const p = normalCount > 1 ? (c - 1) / (normalCount - 1) : 0;
+      const p = (c - 1) / normalCount;
       const frac = Math.pow(p, gamma);
-      const idx = lastNormal <= 0 ? 0 : Math.round(frac * lastNormal);
+      let idx = Math.min(lastNormal, Math.floor(frac * (lastNormal + 1)));
+      // c=10 must always hit the strongest rung. With a max rung the branch above
+      // already handles c=10 (c > normalCount); without one, normalCount=10 so p
+      // never quite reaches 1 here (0.9 at gamma=1) and a frugal gamma>1 can shrink
+      // it further and undershoot the top rung — pin it explicitly.
+      if (!hasMaxRung && c === 10) idx = lastNormal;
       rung = seq[idx];
     }
     out.push({ complexity: c, model: rung.model, effort: rung.effort });

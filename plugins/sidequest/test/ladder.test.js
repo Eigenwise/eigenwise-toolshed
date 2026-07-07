@@ -37,9 +37,13 @@ const effortSubsets = {
   'low+medium': ['low', 'medium'],
   'high-only': ['high'],
   'max-only': ['max'],
+  // SQ-134 ticket shape: sonnet hi+xhi, opus hi+xhi+max — no low/medium.
+  'hi+xhi+max': ['high', 'xhigh', 'max'],
 };
 
-const BIASES = [-5, -3, 0, 3, 5];
+// SQ-134: invariants (C1 cheapest, C10 top/max, monotone non-decreasing) must
+// hold at EVERY integer bias -5..+5, not just a sample.
+const BIASES = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5];
 
 // `efforts` may be a flat array (applied uniformly to every model row — the
 // convenient mode the invariant sweep and oracles rely on) OR an object mapping
@@ -148,40 +152,45 @@ test('invariant sweep: 15 tier subsets x 5 effort subsets x 5 biases', () => {
   }
 });
 
-test('gamma index map: monotone, ends invariant, for N=1..16 at every integer bias', () => {
-  // Mirrors the store's remap: idx = round(p^gamma * (N-1)), p = (c-1)/(nc-1).
+test('gamma index map: monotone, ends invariant, for N=1..16 at every integer bias (SQ-134 floor bucketing)', () => {
+  // Mirrors the store's remap (SQ-134): idx = min(N-1, floor(p^gamma * N)),
+  // p = (c-1)/nc — nc (not nc-1) as the divisor, so p never reaches 1 within
+  // this branch; the no-max-rung c=nc pin forces the top complexity to N-1.
   for (let N = 1; N <= 16; N++) {
     for (let bias = -5; bias <= 5; bias++) {
       const gamma = Math.pow(3, -bias / 5);
       const nc = 10; // normal count without a max rung
       let prev = -1;
       for (let c = 1; c <= nc; c++) {
-        const p = nc > 1 ? (c - 1) / (nc - 1) : 0;
-        const idx = N - 1 <= 0 ? 0 : Math.round(Math.pow(p, gamma) * (N - 1));
+        const p = (c - 1) / nc;
+        let idx = Math.min(N - 1, Math.floor(Math.pow(p, gamma) * N));
+        if (c === nc) idx = N - 1; // pin: top complexity always hits the strongest rung
         assert.ok(idx >= prev, `N=${N} bias=${bias} non-monotonic at c${c}`);
         assert.ok(idx >= 0 && idx <= N - 1, `N=${N} bias=${bias} idx out of range`);
         prev = idx;
       }
       // Ends invariant: c1 -> 0, top -> N-1.
-      const first = N - 1 <= 0 ? 0 : Math.round(Math.pow(0, gamma) * (N - 1));
+      const first = Math.min(N - 1, Math.floor(Math.pow(0, gamma) * N));
       assert.strictEqual(first, 0, `N=${N} bias=${bias} start`);
-      assert.strictEqual(prev, N - 1 <= 0 ? 0 : N - 1, `N=${N} bias=${bias} end reaches top`);
+      assert.strictEqual(prev, N - 1, `N=${N} bias=${bias} end reaches top`);
     }
   }
 });
 
-test('exact ladder: all tiers, max off, bias 0 (crossovers + tie-break)', () => {
+test('exact ladder: all tiers, max off, bias 0 (crossovers + tie-break, SQ-134 floor bucketing)', () => {
   // seq (score, tie->higher tier later): h0, sL2, sM3, sH4, oL4, sX5, oM5, oH6,
-  // oX7, fL8, fM9, fH10, fX11 — N=13; idx = round((c-1)/9*12). Note the
-  // sonnet<->opus boundary still ties/overlaps (sH4~oL4, sX5~oM5, unchanged),
-  // but the opus<->fable boundary (SQ-93) no longer does: opus.xhigh(7) sits
-  // strictly below fable.low(8), so opus keeps its own ceiling (c6/c7 below)
-  // before the ladder ever reaches fable's cheapest rung.
+  // oX7, fL8, fM9, fH10, fX11 — N=13 bins; idx = min(12, floor((c-1)/10 * 13)),
+  // with c=10 pinned to 12 (no max rung). Floor bucketing skips some rungs
+  // entirely (opus.low, opus.xhigh, fable.high never surface here) rather than
+  // round()'s interior-weighted spread — that's the intended bottom-weighting.
+  // The sonnet<->opus boundary still ties/overlaps (sH4~oL4, sX5~oM5,
+  // unchanged), but the opus<->fable boundary (SQ-93) no longer does:
+  // opus.xhigh(7) sits strictly below fable.low(8).
   const prefs = mkPrefs(TIER_ORDER, ['low', 'medium', 'high', 'xhigh'], 0);
   const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
   assert.deepStrictEqual(got, [
-    'haiku.null', 'sonnet.low', 'sonnet.high', 'opus.low', 'sonnet.xhigh',
-    'opus.high', 'opus.xhigh', 'fable.low', 'fable.high', 'fable.xhigh',
+    'haiku.null', 'sonnet.low', 'sonnet.medium', 'sonnet.high', 'sonnet.xhigh',
+    'opus.medium', 'opus.high', 'fable.low', 'fable.medium', 'fable.xhigh',
   ]);
 });
 
@@ -235,11 +244,14 @@ test('SQ-93 oracle: sonnet.xhigh still ties-or-adjacent opus.medium (unchanged c
   );
 });
 
-test('skipped middle tier keeps absolute ranks: haiku+opus, low+medium, bias 0', () => {
+test('skipped middle tier keeps absolute ranks: haiku+opus, low+medium, bias 0 (SQ-134 floor bucketing)', () => {
+  // seq: h0, opus.low(4), opus.medium(5) — N=3 bins, no max rung (normalCount=10).
+  // idx = min(2, floor((c-1)/10 * 3)): bottom-weighted, so haiku (the cheapest
+  // bucket) now claims 4 complexities instead of round()'s 3.
   const prefs = mkPrefs(['haiku', 'opus'], ['low', 'medium'], 0);
   const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
   assert.deepStrictEqual(got, [
-    'haiku.null', 'haiku.null', 'haiku.null', 'opus.low', 'opus.low',
+    'haiku.null', 'haiku.null', 'haiku.null', 'haiku.null', 'opus.low',
     'opus.low', 'opus.low', 'opus.medium', 'opus.medium', 'opus.medium',
   ]);
 });
@@ -255,6 +267,71 @@ test('C9 max edge: haiku+opus all efforts, bias +5 gives max at 9 and 10 only', 
   const l3 = routingLadder(mkPrefs(['haiku', 'opus'], ALL_EFFORTS, 3));
   assert.notStrictEqual(l3[8].effort, 'max');
   assert.strictEqual(l3[9].effort, 'max');
+});
+
+// SQ-134 acceptance tables: bottom-weighted floor bucketing, spec prefs
+// {haiku:false, sonnet:true, opus:true, fable:false,
+//  efforts:{sonnet:{low:false,medium:false},opus:{low:false,medium:false}}}
+// i.e. sonnet hi+xhi, opus hi+xhi+max (low/medium off on both, max defaults on).
+const SQ134_TICKET_EFFORTS = { sonnet: ['high', 'xhigh', 'max'], opus: ['high', 'xhigh', 'max'] };
+
+test('SQ-134 acceptance: neutral bias 0 (sonnet hi+xhi, opus hi+xhi+max)', () => {
+  const prefs = mkPrefs(['sonnet', 'opus'], SQ134_TICKET_EFFORTS, 0);
+  const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
+  assert.deepStrictEqual(got, [
+    'sonnet.high', 'sonnet.high', 'sonnet.high',
+    'sonnet.xhigh', 'sonnet.xhigh',
+    'opus.high', 'opus.high',
+    'opus.xhigh', 'opus.xhigh',
+    'opus.max',
+  ]);
+});
+
+test('SQ-134 acceptance: frugal bias -5, gamma=3 (sonnet hi+xhi, opus hi+xhi+max) — opus.xhigh absent below max', () => {
+  const prefs = mkPrefs(['sonnet', 'opus'], SQ134_TICKET_EFFORTS, -5);
+  const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
+  assert.deepStrictEqual(got, [
+    'sonnet.high', 'sonnet.high', 'sonnet.high', 'sonnet.high', 'sonnet.high', 'sonnet.high',
+    'sonnet.xhigh', 'sonnet.xhigh',
+    'opus.high',
+    'opus.max',
+  ]);
+  assert.ok(!got.includes('opus.xhigh'), 'opus.xhigh must not appear below the max rung at frugal bias');
+});
+
+test('SQ-134 acceptance: full matrix, both tiers all four efforts + max, bias 0 — top normal rung at C9', () => {
+  const prefs = mkPrefs(['sonnet', 'opus'], ALL_EFFORTS, 0);
+  const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
+  assert.deepStrictEqual(got, [
+    'sonnet.low', 'sonnet.low', 'sonnet.medium', 'sonnet.high', 'opus.low',
+    'sonnet.xhigh', 'opus.medium', 'opus.high', 'opus.xhigh', 'opus.max',
+  ]);
+  assert.strictEqual(got[0], 'sonnet.low', 'C1-2 land the cheapest rung');
+  assert.strictEqual(got[1], 'sonnet.low', 'C1-2 land the cheapest rung');
+  assert.strictEqual(got[8], 'opus.xhigh', 'C9 reaches the top NORMAL rung');
+  assert.strictEqual(got[9], 'opus.max', 'C10 is the sparing max rung');
+});
+
+test('SQ-134 invariants: ticket prefs (sonnet hi+xhi, opus hi+xhi+max) hold at every bias -5..+5', () => {
+  for (let bias = -5; bias <= 5; bias++) {
+    const label = `bias ${bias}`;
+    const ladder = routingLadder(mkPrefs(['sonnet', 'opus'], SQ134_TICKET_EFFORTS, bias));
+    // C1 = cheapest enabled rung.
+    assert.strictEqual(ladder[0].model, 'sonnet', `${label} C1 cheapest tier`);
+    assert.strictEqual(ladder[0].effort, 'high', `${label} C1 cheapest effort`);
+    // C10 = max rung (hasMaxRung is true here: opus's row keeps max enabled).
+    assert.strictEqual(ladder[9].model, 'opus', `${label} C10 top tier`);
+    assert.strictEqual(ladder[9].effort, 'max', `${label} C10 hits the max rung`);
+    // Monotone non-decreasing capability across C1..C10.
+    const rank = (r) => {
+      if (r.effort === 'max') return Infinity;
+      const base = r.model === 'opus' ? 4 : 2;
+      return base + ['low', 'medium', 'high', 'xhigh'].indexOf(r.effort);
+    };
+    for (let i = 1; i < 10; i++) {
+      assert.ok(rank(ladder[i]) >= rank(ladder[i - 1]), `${label} monotone at c${i}->c${i + 1}`);
+    }
+  }
 });
 
 test('only max enabled: max carries the whole sequence, no extra sparing rung', () => {
