@@ -151,12 +151,9 @@ function emit(context) {
 // still leads, but the discipline is never fully suppressed.
 function coreDisciplineFooter() {
   return (
-    '\n\n— sidequest discipline (still applies): before substantial or multi-part work, plan it as tickets ' +
-    'FIRST (claim → do → done) rather than implementing ad hoc. And FAN OUT — concretely: if you are about ' +
-    'to read ~4+ files or grep across a subsystem to understand it, spawn a parallel read-only scout ' +
-    '(Explore / code-explorer subagent) FIRST instead of reading files one-by-one; run independent ready ' +
-    'tickets as parallel executors (each CLAIMING first, distinct `--by`). Keep dependent or same-file work ' +
-    'sequential — this is proportional, not mandatory.'
+    '\n\n— sidequest discipline still applies: plan multi-part work as tickets first, and fan out ' +
+    'independent work (a parallel Explore / code-explorer scout before you read ~4+ files; independent ' +
+    'ready tickets as parallel executors) rather than grinding serially.'
   );
 }
 
@@ -180,33 +177,17 @@ function main() {
     if (nudgeOff()) process.exit(0);
     emit(
       '=== sidequest (active) ===\n' +
-        'This project tracks work in sidequest — use the board, do not keep the plan only in your head.\n' +
-        '• CAPTURE: when the user raises — or you notice — a bug/task/idea SEPARATE from your current work, ' +
-        'file it as a ticket right away (background `ticket-filer` agent, or `' +
-        cli +
-        ' add ...`).\n' +
-        '• PLAN: before starting a substantial or multi-part task — several distinct deliverables, or the ' +
-        'user says "split into tickets" — create one ticket per piece on the board FIRST and link ' +
-        'dependencies (`' +
-        cli +
-        ' link A depends-on B`), then work the tickets (claim → do → `done`) rather than implementing ' +
-        'everything ad hoc.\n' +
-        '• FAN OUT (more than once, sized to the task) — concrete trigger: if you are about to read ~4+ ' +
-        'files or grep across a subsystem to understand it, spawn a parallel read-only scout (Explore / ' +
-        'code-explorer subagent) FIRST rather than reading files one-by-one yourself. That applies at more ' +
-        'stages than just tickets: independent ready tickets run as parallel executors (each CLAIMING first, ' +
-        'distinct `--by`); independent edits/checks can go concurrently too. Keep it proportional — don\'t ' +
-        'fan out trivial or dependent or same-file work; parallelism spends tokens, so use it where it saves ' +
-        'real wall-clock.\n' +
-        '• RECORD ON THE BOARD: run a substantive investigation as a (spike) ticket, and write its ' +
-        'findings back as a detailed ticket comment (`' +
-        cli +
-        ' comment <ref> -m "..."`) — root cause, evidence, `file:line`, what you ruled out — so results ' +
-        'outlive your context. READ a ticket\'s comments (and linked tickets\') before working it; a prior ' +
-        'or parallel agent may have left exactly what you need.\n' +
-        'Board: `' +
-        cli +
-        ' dashboard`.'
+        'Track work on the board; don\'t keep the plan only in your head.\n' +
+        '• CAPTURE a bug/task/idea SEPARATE from your current work as a ticket right away (bg `ticket-filer` ' +
+        'agent, or `' + cli + ' add`).\n' +
+        '• PLAN substantial/multi-part work as one ticket per piece FIRST, link deps, then work them ' +
+        '(claim → do → `done`) — not ad hoc.\n' +
+        '• FAN OUT: about to read ~4+ files or grep a subsystem to understand it? Spawn a parallel ' +
+        'Explore / code-explorer scout FIRST. Run independent ready tickets as parallel executors (claim ' +
+        'first, distinct `--by`). Keep dependent/same-file work serial.\n' +
+        '• RECORD an investigation as a ticket and write findings back as a comment (`' + cli +
+        ' comment <ref>`); READ a ticket\'s comments before working it.\n' +
+        'Board: `' + cli + ' dashboard`.'
     );
     process.exit(0);
   }

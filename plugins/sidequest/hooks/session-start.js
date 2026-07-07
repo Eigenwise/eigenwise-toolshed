@@ -63,11 +63,9 @@ function main() {
       'Unless this request is trivial, plan it as tickets on the board (complexity-scored per the sidequest ' +
       'skill) before implementing, then route execution through executor subagents (claim → do → done) ' +
       'rather than working ad hoc.\n' +
-      'FAN OUT — concrete trigger: if you are about to read ~4+ files or grep across a subsystem to ' +
-      'understand it, spawn a parallel read-only scout (Explore / code-explorer subagent) FIRST instead of ' +
-      'reading files one-by-one; run independent ready tickets as parallel executors (each CLAIMING first, ' +
-      'distinct `--by`). Keep dependent or same-file work sequential — parallelism spends tokens, so use it ' +
-      'where it saves real wall-clock.\n' +
+      'FAN OUT: about to read ~4+ files or grep a subsystem to understand it? Spawn a parallel ' +
+      'Explore / code-explorer scout FIRST. Run independent ready tickets as parallel executors (claim ' +
+      'first, distinct `--by`); keep dependent/same-file work serial.\n' +
       'Board: `' + cli + ' dashboard`.'
   );
   process.exit(0);
