@@ -49,8 +49,12 @@ const MARKERS = [
   // defect language
   "doesn't work", 'does not work', "isn't working", 'is not working', 'not working', 'broken',
   'is broken', 'still broken', 'bug', ' fails', 'failing', 'throws', 'error when', 'crash',
-  'regression', "doesn't send", 'does not send', "won't", 'should also', 'needs to', 'missing',
+  'regression', "doesn't send", 'does not send', 'should also',
   'flaky', 'typo', 'glitch',
+  // NOTE: 'needs to' / 'missing' / "won't" were removed — they trip on ordinary task
+  // descriptions ("the parser needs to handle X", "the config is missing a field"),
+  // not just side issues, so they over-fired capture. Keep this list to genuine
+  // side-issue / defect signals.
   // image cues
   'screenshot', 'this image', 'pasted', '[image', 'image-cache',
 ];
@@ -92,7 +96,7 @@ const STRONG_CAPTURE_MARKERS = [
   "don't forget", 'do not forget', 'note to self', 'remind me', 'remember to',
   "doesn't work", 'does not work', "isn't working", 'is not working', 'not working', 'broken',
   'is broken', 'still broken', 'bug', ' fails', 'failing', 'throws', 'error when', 'crash',
-  'regression', "doesn't send", 'does not send', "won't", 'should also', 'flaky', 'typo', 'glitch',
+  'regression', "doesn't send", 'does not send', 'should also', 'flaky', 'typo', 'glitch',
 ];
 
 function hasStrongCapture(text) {
@@ -138,6 +142,24 @@ function emit(context) {
   );
 }
 
+// A compact restatement of the plan + fan-out discipline. The full standing
+// reminder only fires on prompts with no capture/board-mgmt marker — but the
+// prompts that KICK OFF real multi-part work are the ones most likely to trip a
+// defect/interjection marker ("fix the broken X, also wire up Y"), which used to
+// swap in the capture or board-control block and drop the fan-out guidance
+// entirely. So we append this footer to those blocks too: the specific block
+// still leads, but the discipline is never fully suppressed.
+function coreDisciplineFooter() {
+  return (
+    '\n\n— sidequest discipline (still applies): before substantial or multi-part work, plan it as tickets ' +
+    'FIRST (claim → do → done) rather than implementing ad hoc. And FAN OUT — concretely: if you are about ' +
+    'to read ~4+ files or grep across a subsystem to understand it, spawn a parallel read-only scout ' +
+    '(Explore / code-explorer subagent) FIRST instead of reading files one-by-one; run independent ready ' +
+    'tickets as parallel executors (each CLAIMING first, distinct `--by`). Keep dependent or same-file work ' +
+    'sequential — this is proportional, not mandatory.'
+  );
+}
+
 function main() {
   const data = readStdin();
   const prompt = typeof data.prompt === 'string' ? data.prompt : '';
@@ -169,10 +191,10 @@ function main() {
         cli +
         ' link A depends-on B`), then work the tickets (claim → do → `done`) rather than implementing ' +
         'everything ad hoc.\n' +
-        '• FAN OUT (more than once, sized to the task): lean parallel over serial wherever the work is ' +
-        'genuinely independent — and at more stages than just tickets. A quick parallel scout (a couple of ' +
-        'read-only explorers over the relevant code/docs) before a non-trivial investigation beats reading ' +
-        'files one-by-one yourself; independent ready tickets run as parallel executors (each CLAIMING first, ' +
+        '• FAN OUT (more than once, sized to the task) — concrete trigger: if you are about to read ~4+ ' +
+        'files or grep across a subsystem to understand it, spawn a parallel read-only scout (Explore / ' +
+        'code-explorer subagent) FIRST rather than reading files one-by-one yourself. That applies at more ' +
+        'stages than just tickets: independent ready tickets run as parallel executors (each CLAIMING first, ' +
         'distinct `--by`); independent edits/checks can go concurrently too. Keep it proportional — don\'t ' +
         'fan out trivial or dependent or same-file work; parallelism spends tokens, so use it where it saves ' +
         'real wall-clock.\n' +
@@ -209,7 +231,8 @@ function main() {
         'For a small ticket you may spawn a subagent to do the work, but only AFTER the claim succeeds.\n' +
         'Tickets are stored centrally, so `dashboard` shows every project at once. To open the board, ' +
         'just run the dashboard command — it starts the local server if needed and opens the browser, ' +
-        'then report the URL it prints.'
+        'then report the URL it prints.' +
+        coreDisciplineFooter()
     );
     process.exit(0);
   }
@@ -244,7 +267,8 @@ function main() {
     '  (both required — score 1-10 by real task complexity and motivate it in one concrete sentence; routing is derived)\n' +
     imageHint +
     'Do NOT ask permission first and do NOT stop your current task to do this — capture, then continue. ' +
-    'Say one short line noting the ticket ref (e.g. "filed SQ-5") when done.';
+    'Say one short line noting the ticket ref (e.g. "filed SQ-5") when done.' +
+    coreDisciplineFooter();
 
   emit(context);
   process.exit(0);

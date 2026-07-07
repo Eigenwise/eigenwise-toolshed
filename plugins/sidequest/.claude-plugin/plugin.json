@@ -1,6 +1,6 @@
 {
   "name": "sidequest",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "description": "A Trello-light quest log for Claude Code. The side issues you mention mid-task (\"oh, and the contact form doesn't send\") get captured as tickets on the spot, with any pasted images attached, and managed on a live, self-hosted Kanban dashboard that spans every project you work in.",
   "author": {
     "name": "Eigenwise",
