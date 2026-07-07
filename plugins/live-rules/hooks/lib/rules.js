@@ -506,6 +506,18 @@ function selectForEdit(rules, relPath) {
   return sortSelected(out);
 }
 
+// SessionStart: always-on rules only, once per session. Used as a fallback
+// delivery path so these rules reach the model even if UserPromptSubmit's
+// wiring is stale (see hooks/session-start-rules.js for why that happens).
+function selectAlways(rules) {
+  const out = [];
+  for (const rule of rules) {
+    if (!rule.enabled || !isAlways(rule)) continue;
+    out.push({ rule, label: 'always' });
+  }
+  return sortSelected(out);
+}
+
 /* ------------------------------------------------------------------ *
  *  Includes: resolve each selected rule's `include:` files to live content
  * ------------------------------------------------------------------ */
@@ -615,6 +627,7 @@ module.exports = {
   loadRules,
   selectForPrompt,
   selectForEdit,
+  selectAlways,
   attachIncludes,
   renderRules,
   emit,

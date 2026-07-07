@@ -1,13 +1,24 @@
 {
   "description": "live-rules: inject developer-defined rules into context at runtime",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-rules.js\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-prompt-rules.js\"",
-            "timeout": 10
+            "timeout": 20
           }
         ]
       }
@@ -19,7 +30,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-edit-rules.js\"",
-            "timeout": 10
+            "timeout": 20
           }
         ]
       }

@@ -108,20 +108,39 @@ the hooks stay silent and never block anything.
 
 ## How it works
 
-The plugin ships two hooks (Node, standard library only, cross-platform, and fail-soft: any error or
+The plugin ships three hooks (Node, standard library only, cross-platform, and fail-soft: any error or
 a missing rules file produces no output and never blocks anything).
 
 | Hook | Fires | Injects |
 |------|-------|---------|
+| `SessionStart` | once, when a session starts (or resumes / clears / compacts) | **global** rules only, as a fallback so they reach you at least once even if `UserPromptSubmit` isn't wired that session (see below) |
 | `UserPromptSubmit` | every time you submit a prompt | **global** rules, **prompt-keyword** rules matching your text, and **directory** rules whose folder contains the session's working dir |
 | `PreToolUse` (Edit / Write / MultiEdit / NotebookEdit) | right before Claude edits a file | **path/glob** rules matching the file, and **directory** rules whose folder contains it |
 
 Why this split? `UserPromptSubmit` sees your prompt text and working directory, so it serves the
 rules that depend on those. `PreToolUse` is the only event that knows **which file** is about to be
-edited, so it serves the file-scoped rules, delivered exactly when they are relevant.
+edited, so it serves the file-scoped rules, delivered exactly when they are relevant. `SessionStart`
+doesn't add new scope, it's a safety net (see the restart gotcha right below).
 
 The `PreToolUse` hook only **adds context**; it never sends a permission decision, so your normal
 edit-approval flow is unchanged. It informs Claude, it does not auto-approve anything.
+
+## Restart after enabling or updating
+
+Claude Code snapshots a session's hook registrations at session start. If you install live-rules, or
+update it to a new version, in the middle of an existing session, that session keeps running with the
+old wiring: the new (or fixed) `UserPromptSubmit` hook does not fire until you restart. There's no
+error, nothing tells you, it just silently never injects for the rest of that session.
+
+**Run `/reload-plugins` or restart Claude Code after enabling or updating live-rules.** This is the
+same gotcha called out in Install above, worth repeating here because it's the main way injection goes
+silently missing.
+
+As a partial safety net, the `SessionStart` hook re-injects your global rules once at the very start of
+every session (including after `/clear` and after a context compaction), so they reach the model at
+least once even if `UserPromptSubmit`'s wiring is somehow stale. It also gives you a concrete way to
+tell if per-prompt injection is actually working: that same "=== LIVE RULES ===" block should reappear
+on your very next prompt. If it doesn't, `UserPromptSubmit` isn't wired, restart the session.
 
 ## The four trigger types
 
@@ -296,6 +315,18 @@ during a refactor and turn it back on later.
 - **Nothing happens at all.** The hooks are silent when the rules file does not exist. Confirm
   `.claude/live-rules.md` exists at the project root (or that `LIVE_RULES_PATH` points at a real
   file), that the plugin is enabled (`/plugin`), then reload plugins.
+- **Rules worked earlier this session, then stopped, or never showed up despite a real rules file.**
+  This is almost always the restart gotcha above: live-rules (or a version bump) got picked up
+  mid-session, so `UserPromptSubmit` is running on stale wiring. Check whether the "=== LIVE RULES
+  (live-rules, session start) ===" block showed up once at the top of the session. If it did but the
+  plain "=== LIVE RULES (live-rules) ===" block never reappears on later prompts, that confirms
+  `UserPromptSubmit` isn't wired: restart Claude Code (or `/reload-plugins`) and it will be. There is
+  no other way to check hook wiring from inside a session; the `SessionStart` injection is the signal.
+- **A hook occasionally seems to miss a beat under heavy load.** Each hook is a fresh `node` process,
+  and on Windows, spawning `node` under concurrent hook load (several plugins' hooks firing on the
+  same event) can occasionally be slow. The hooks themselves finish in milliseconds once running, so
+  the 20s timeout in `hooks.json` is there purely to give slow process spawns room to finish rather
+  than getting killed mid-injection; it doesn't slow down the normal case.
 - **Too much context.** If many rules match at once you will hit the size note; raise `priority` on
   the few that matter and trim or split the rest.
 - **It is safe by design.** Every hook exits cleanly on any error and never blocks a prompt or an
