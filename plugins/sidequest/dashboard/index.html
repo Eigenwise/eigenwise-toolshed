@@ -2767,10 +2767,40 @@
     }
   }
 
+  // ---------------- hot reload on server identity change ----------------
+  // The dashboard server can restart/upgrade under a live tab (plugin bump,
+  // manual restart). Watch /api/health and reload the tab once the running
+  // process's identity (version|pid|startedAt) no longer matches what we saw
+  // right after page load.
+  var healthBaseline = null;   // captured once on the first successful poll; never overwritten
+  var healthReloading = false; // guard against double-firing location.reload()
+  function checkHealth() {
+    if (healthReloading) return;
+    fetch("/api/health").then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (h) {
+      var identity = h.version + "|" + h.pid + "|" + h.startedAt;
+      if (healthBaseline === null) {
+        healthBaseline = identity;
+        return;
+      }
+      if (identity !== healthBaseline && !healthReloading) {
+        healthReloading = true;
+        try { toast("dashboard updated, reloading…"); } catch (_) {}
+        setTimeout(function () { location.reload(); }, 400);
+      }
+    }).catch(function () {
+      // Fetch failed — server is likely mid-handoff (briefly down between the
+      // old process exiting and the new one binding). Ignore and try again
+      // next tick; don't touch the baseline.
+    });
+  }
+
   function startPolling() {
     // Poll even while hidden so a backgrounded board can still fire notifications
     // (browsers throttle background timers, so it may lag a little when hidden).
-    setInterval(function () { refresh(false); }, POLL_MS);
+    setInterval(function () { refresh(false); checkHealth(); }, POLL_MS);
     // And refresh instantly the moment the tab is brought back into view.
     document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(false); });
   }

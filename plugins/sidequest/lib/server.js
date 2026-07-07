@@ -16,6 +16,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
+const { spawn } = require('child_process');
 const store = require('./store');
 
 const DASHBOARD_HTML = path.join(__dirname, '..', 'dashboard', 'index.html');
@@ -645,6 +646,135 @@ function startReminderScheduler() {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Hot reload: self-recycle to a newer installed plugin version
+ *
+ *  A long-lived dashboard server keeps whatever code was require()'d at its
+ *  own startup — a plugin update on disk never takes effect for a process
+ *  that's still alive (see SQ-92, PLUGIN_VERSION above). Rather than make
+ *  the user remember to restart it, the server polls for a strictly-newer
+ *  sibling install on a timer and hands its port off: spawn the newer
+ *  version's `serve`, then free our own port so the successor binds the
+ *  SAME port deterministically (no surprise URL for an open browser tab).
+ * ------------------------------------------------------------------ */
+
+const VERSION_WATCH_MS = 20 * 1000;
+const CLEAN_SEMVER_RE = /^\d+\.\d+\.\d+$/;
+
+// Runs the handoff at most once per process — a second tick firing mid-spawn
+// (or after a failed spawn already reset it) must not race a second child.
+let recycling = false;
+
+// Pure: pick the highest sibling install strictly newer than selfVersion,
+// with a runnable bin, that is a clean (non-prerelease) semver. Never
+// auto-hops to a prerelease, and returns null when the newest install is
+// already selfVersion or older — so a fully-updated fleet never loops.
+// Exported so ladder-style tests can hit it directly (see test/server.test.js).
+function pickNewerInstall(entries, selfVersion) {
+  if (!Array.isArray(entries) || typeof selfVersion !== 'string' || !CLEAN_SEMVER_RE.test(selfVersion)) return null;
+  const self = selfVersion.split('.').map(Number);
+  let best = null; // { name, parts }
+  for (const entry of entries) {
+    if (!entry || entry.hasBin !== true) continue;
+    const version = entry.version;
+    if (typeof version !== 'string' || !CLEAN_SEMVER_RE.test(version)) continue;
+    const parts = version.split('.').map(Number);
+    let cmp = 0;
+    for (let i = 0; i < 3 && cmp === 0; i++) cmp = parts[i] - self[i];
+    if (cmp <= 0) continue; // strictly greater than self only
+    if (!best) {
+      best = { name: entry.name, parts };
+      continue;
+    }
+    let cmpBest = 0;
+    for (let i = 0; i < 3 && cmpBest === 0; i++) cmpBest = parts[i] - best.parts[i];
+    if (cmpBest > 0) best = { name: entry.name, parts };
+  }
+  return best ? best.name : null;
+}
+
+// Best-effort FS wrapper: look at sibling install dirs next to this plugin's
+// own version dir and return the absolute path to a newer install's
+// bin/sidequest.js, or null if there is none (or recycling is disabled/unsafe
+// for this process). Wrapped so any readdir/fs surprise degrades to "no
+// newer install" rather than taking the server down.
+function findNewerInstall() {
+  try {
+    const selfRoot = path.resolve(__dirname, '..');
+    const parent = path.dirname(selfRoot);
+    const selfName = path.basename(selfRoot);
+    // Repo-source checkouts (basename e.g. "sidequest", not a version dir)
+    // must never self-recycle — there's no "sibling install" concept there.
+    if (!CLEAN_SEMVER_RE.test(selfName)) return null;
+    // Tests and the isolated verify-server opt out explicitly.
+    if (process.env.SIDEQUEST_NO_HOT_RECYCLE) return null;
+    const names = fs.readdirSync(parent);
+    const entries = names.map((name) => {
+      const dir = path.join(parent, name);
+      const hasBin =
+        fs.existsSync(path.join(dir, 'bin', 'sidequest.js')) &&
+        fs.existsSync(path.join(dir, '.claude-plugin', 'plugin.json'));
+      return { name, version: name, hasBin };
+    });
+    const target = pickNewerInstall(entries, selfName);
+    return target ? path.join(parent, target, 'bin', 'sidequest.js') : null;
+  } catch (_) {
+    return null; // best effort — an unreadable install list just disables the check
+  }
+}
+
+// Poll for a newer sibling install and hand the port off exactly once.
+// Returns the interval handle so start() can fold it into its cleanup
+// alongside the reminder timer.
+function startVersionWatch(server, ownPort, reminderTimer) {
+  const watchTimer = setInterval(() => {
+    try {
+      if (recycling) return;
+      const targetBin = findNewerInstall();
+      if (!targetBin) return;
+      recycling = true;
+      try {
+        process.stderr.write(`sidequest: newer install found (${targetBin}) — handing off port ${ownPort}\n`);
+      } catch (_) {
+        /* best effort */
+      }
+      let child;
+      try {
+        child = spawn(process.execPath, [targetBin, 'serve', '--port', String(ownPort)], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        child.unref();
+      } catch (_) {
+        // A broken/unspawnable newer install must not kill the working dashboard.
+        recycling = false;
+        return;
+      }
+      // Only after a successful spawn do we free the port for the successor:
+      // stop our own timers and listener, then drop the lockfile if it's ours.
+      clearInterval(reminderTimer);
+      clearInterval(watchTimer);
+      try {
+        server.close();
+      } catch (_) {
+        /* best effort */
+      }
+      try {
+        const cur = store.readServerInfo();
+        if (cur && cur.pid === process.pid) store.clearServerInfo();
+      } catch (_) {
+        /* best effort */
+      }
+      process.exit(0);
+    } catch (_) {
+      /* fail-soft: a watch hiccup must never take the server down */
+    }
+  }, VERSION_WATCH_MS);
+  watchTimer.unref();
+  return watchTimer;
+}
+
+/* ------------------------------------------------------------------ *
  *  Listen with automatic free-port selection
  * ------------------------------------------------------------------ */
 
@@ -686,9 +816,11 @@ async function start(requestedPort) {
   store.writeServerInfo(info);
 
   const reminderTimer = startReminderScheduler();
+  const watchTimer = startVersionWatch(server, port, reminderTimer);
 
   const cleanup = () => {
     clearInterval(reminderTimer);
+    clearInterval(watchTimer);
     const cur = store.readServerInfo();
     if (cur && cur.pid === process.pid) store.clearServerInfo();
   };
@@ -699,4 +831,4 @@ async function start(requestedPort) {
   return { server, port, url: info.url };
 }
 
-module.exports = { start };
+module.exports = { start, pickNewerInstall, findNewerInstall };
