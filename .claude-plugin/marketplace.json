@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "2.29.0",
+  "version": "2.30.0",
   "plugins": [
     {
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "A Trello-light quest log for Claude Code. Side issues you mention mid-task (\"oh, and the contact form doesn't send\") get captured as tickets on the spot, with any pasted images attached, and managed on a live, self-hosted Kanban dashboard that spans every project you work in.",
-      "version": "1.19.0",
+      "version": "1.20.0",
       "author": {
         "name": "Eigenwise"
       },
@@ -59,7 +59,7 @@
       "name": "live-rules",
       "source": "./plugins/live-rules",
       "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart. A SessionStart hook injects the always-on rules once as a fallback, and it's a way to tell whether per-prompt injection is actually wired.",
-      "version": "2.4.0",
+      "version": "2.5.0",
       "author": {
         "name": "Eigenwise"
       },

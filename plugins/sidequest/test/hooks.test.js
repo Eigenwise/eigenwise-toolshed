@@ -78,6 +78,19 @@ test('session-start: stresses routed-subagent execution + the model-routing why'
   assert.ok(ctx.includes('95%'), 'must state the ~95%-in-a-subagent bar');
 });
 
+test('session-start: source=compact gets the terse re-grounding block, not the full nudge', () => {
+  const ctx = runHook(SESSION, { session_id: 't', source: 'compact' });
+  assert.match(ctx, /sidequest \(active — context restored\)/);
+  assert.ok(ctx.includes('list --status doing'), 'must tell Claude to re-check in-flight claims');
+  assert.ok(ctx.includes('context'), 'must mention context being restored/compacted');
+  assert.ok(!ctx.includes('external tracker'), 'must NOT be the full block on compact');
+});
+
+test('session-start: source=startup still gets the full block', () => {
+  const ctx = runHook(SESSION, { session_id: 't', source: 'startup' });
+  assert.ok(ctx.includes('external tracker'), 'startup source must still carry the full nudge');
+});
+
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   const out = execFileSync(process.execPath, [SESSION], {
     input: JSON.stringify({ session_id: 'test' }),

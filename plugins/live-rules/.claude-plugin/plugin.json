@@ -1,6 +1,6 @@
 {
   "name": "live-rules",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart. A SessionStart hook injects the always-on rules once as a fallback, and it's a way to tell whether per-prompt injection is actually wired.",
   "author": {
     "name": "Eigenwise",

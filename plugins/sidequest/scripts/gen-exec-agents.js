@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Regenerates the five sidequest-exec-<effort>.md agent files from the single
-// source template plugins/sidequest/agents/_exec-template.md.
+// source template plugins/sidequest/scripts/_exec-template.md.
 //
 // Usage: node plugins/sidequest/scripts/gen-exec-agents.js
 //
@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
-const TEMPLATE_PATH = path.join(AGENTS_DIR, '_exec-template.md');
+const TEMPLATE_PATH = path.join(__dirname, '_exec-template.md');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const PLACEHOLDER = '{{EFFORT}}';
 

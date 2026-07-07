@@ -166,12 +166,6 @@ function parseYamlSubset(src) {
   return data;
 }
 
-function parseFrontmatter(text) {
-  const m = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?([\s\S]*)$/.exec(text);
-  if (!m) return { data: {}, body: text.replace(/^﻿/, '') };
-  return { data: parseYamlSubset(m[1]), body: m[2] };
-}
-
 /* ------------------------------------------------------------------ *
  *  Glob matching (pure Node, gitignore-style anchoring)
  * ------------------------------------------------------------------ */
@@ -612,7 +606,6 @@ module.exports = {
   CONTEXT_CAP,
   readStdin,
   getProjectDir,
-  parseFrontmatter,
   globToRegExp,
   ruleGlobMatches,
   pathInDir,

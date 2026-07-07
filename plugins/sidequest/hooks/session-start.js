@@ -57,6 +57,26 @@ function main() {
 
   const cli = `node "${path.join(pluginRoot(), 'bin', 'sidequest.js')}"`;
 
+  // This hook intentionally fires on EVERY SessionStart source (startup, resume,
+  // clear, compact) rather than filtering any of them out: standing context does
+  // not survive compaction, so it has to re-inject each time the session context
+  // gets rebuilt. compact/resume just get a terser re-grounding block below
+  // instead of the full nudge, since the fuller guidance already ran once this
+  // session and the per-prompt reminder will fire again on the very next prompt.
+  const source = typeof data.source === 'string' ? data.source : '';
+
+  if (source === 'compact' || source === 'resume') {
+    emit(
+      '=== sidequest (active — context restored) ===\n' +
+        'sidequest is still active for this project — context was just compacted/resumed, so ' +
+        'RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
+        'The discipline still applies: plan as tickets, execute via routed subagents (~95% of ' +
+        'real work), fan out independent work.\n' +
+        'The full per-prompt reminder returns on your next prompt.\n'
+    );
+    process.exit(0);
+  }
+
   emit(
     '=== sidequest (active) ===\n' +
       'This project tracks work in sidequest — use the board, do not keep the plan only in your head.\n' +

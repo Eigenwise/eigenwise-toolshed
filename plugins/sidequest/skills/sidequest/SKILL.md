@@ -1,22 +1,17 @@
 ---
 name: sidequest
 description: >-
-  Open the sidequest board (a live, self-hosted Kanban of tickets) in the browser, or manage tickets
-  from the CLI. Use when the user says "show me the dashboard", "open the board", "open the sidequest /
-  ticket board", "open the kanban", "show my tickets", "what's on my board", or wants to file, list,
-  update, move, close, prioritize, label, or delete tickets — e.g. "make a ticket for X", "add a bug
-  ticket", "close SQ-3", "move SQ-2 to done", "bump SQ-5 to urgent", "what tickets are open". Also use
-  when the user wants to WORK the board — "work on the tickets", "grab the next task", "pick up SQ-3",
-  "start on the backlog" — which requires atomically CLAIMING a ticket before working it so shared
-  boards stay safe across agents. Tickets are stored centrally, so one dashboard shows every project's
-  board at once. For capturing a side issue mentioned mid-task, prefer the ticket-filer agent (the
-  capture hook nudges you to it). ALSO use this when the user hands you a substantial or multi-part
-  task, a feature with several pieces, or says "split this into tickets" / "plan this out" — decompose
-  it into linked tickets on the board BEFORE implementing, then work them one at a time. ALSO use when
-  you need to leave a note or ask the user something on a ticket ("comment on SQ-3", "ask on the ticket
-  whether..."), or check for/wait on a reply to a question you asked — a question needs a pause-and-
-  wait via `sidequest await`, unlike a plain note-to-self comment. ALSO use for relating tickets
-  ("SQ-4 depends on SQ-3", "what's blocking this ticket").
+  Open the sidequest board (a live, self-hosted Kanban of tickets) or manage tickets from the CLI.
+  Use for "show me the dashboard", "open the board/kanban", "what's on my board", or to file, list,
+  update, move, close, prioritize, label, or delete tickets — e.g. "add a bug ticket", "close
+  SQ-3", "bump SQ-5 to urgent". Use when the user wants to WORK the board — "grab the next task",
+  "pick up SQ-3" — which requires atomically CLAIMING a ticket first so shared boards stay safe
+  across agents. Use when the user hands you substantial or multi-part work — decompose it into
+  linked tickets BEFORE implementing, then work them one at a time. Use to comment on a ticket, ask
+  the user something on it, or await a reply — a question means pause-and-wait, unlike a plain
+  note-to-self comment. Use to relate tickets (depends-on/blocks). Tickets carry a complexity score
+  that drives model/effort routing. For a mid-task side issue, prefer the ticket-filer agent
+  instead of derailing.
 ---
 
 # sidequest

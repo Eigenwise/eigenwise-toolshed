@@ -35,6 +35,9 @@ try {
 }
 
 function main() {
+  // Deliberately does not filter on data.source (startup | resume | clear |
+  // compact): always-on rules must re-inject after compaction too, or the
+  // README's promise that they survive compaction would silently break.
   const data = lib.readStdin();
   const projectDir = lib.getProjectDir(data);
 

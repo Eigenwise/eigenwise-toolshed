@@ -125,6 +125,16 @@ doesn't add new scope, it's a safety net (see the restart gotcha right below).
 The `PreToolUse` hook only **adds context**; it never sends a permission decision, so your normal
 edit-approval flow is unchanged. It informs Claude, it does not auto-approve anything.
 
+### The cost of staying salient
+
+Re-injection is not free, and it is worth knowing what you are paying for. On turn 1 of a session,
+global rules go in **twice**: once from `SessionStart`, once from the first `UserPromptSubmit`. That is
+by design, not a bug, and it doubles as the wiring canary described above (see Restart). From then on,
+every global and prompt-keyword rule is re-sent on **every single prompt** for the rest of the session,
+whether or not it is relevant to that turn. That is the deliberate trade: salience over token cost. Keep
+global rules short, since they are the ones you pay for on every turn; scoped rules (`globs` / `dirs`)
+only cost you when they actually fire.
+
 ## Restart after enabling or updating
 
 Claude Code snapshots a session's hook registrations at session start. If you install live-rules, or
@@ -322,6 +332,12 @@ during a refactor and turn it back on later.
   plain "=== LIVE RULES (live-rules) ===" block never reappears on later prompts, that confirms
   `UserPromptSubmit` isn't wired: restart Claude Code (or `/reload-plugins`) and it will be. There is
   no other way to check hook wiring from inside a session; the `SessionStart` injection is the signal.
+- **Glob/directory rules never fire, but always-on and prompt rules work fine.** Edit-scoped rules
+  (`globs` / `dirs`) are delivered through the `PreToolUse` hook's `hookSpecificOutput.additionalContext`
+  field. Older Claude Code versions silently ignore `additionalContext` on `PreToolUse`: the hook still
+  runs, still emits well-formed JSON, and the host just drops it, no error anywhere. If always-on and
+  prompt-keyword rules show up but a `globs`/`dirs` rule never does no matter what you edit, this is the
+  likely cause. Update Claude Code.
 - **A hook occasionally seems to miss a beat under heavy load.** Each hook is a fresh `node` process,
   and on Windows, spawning `node` under concurrent hook load (several plugins' hooks firing on the
   same event) can occasionally be slow. The hooks themselves finish in milliseconds once running, so
