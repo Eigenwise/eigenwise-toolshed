@@ -60,6 +60,37 @@ sidequest is a Trello-light quest log. Tickets live in a central store under `~/
 (keyed by project path), and a bundled dashboard shows them as a live Kanban board — every project at
 once. Everything is driven by one CLI: `bin/sidequest.js`.
 
+## Works alongside an external tracker (Jira / Linear / GitHub Issues)
+
+A repo already using Jira (or Linear, or GitHub Issues) does **not** make sidequest redundant — they
+track different things, so use both. Don't skip the board just because the work is "already tracked"
+somewhere; that reflex is exactly how the decompose-and-fan-out discipline gets dropped.
+
+- **The external tracker owns the deliverable.** It's the system-of-record humans read: the story, the
+  acceptance criteria, the status the team reports on. You don't replace it, and you usually don't file
+  there on the model's behalf.
+- **sidequest owns your local execution.** It's the agent's working ledger for *this* session: how you
+  cut the Jira item into parallel-safe pieces, fan subagents out over them, coordinate claims across
+  agents so nothing collides, and write spike findings back as comments that outlive your context.
+  None of that belongs in Jira, and none of it happens on its own.
+
+**How to run both, in practice:**
+
+1. Take the external item (e.g. `CTR-13316`) and, if it's more than a trivial change, **decompose it
+   into local sidequest tickets** — one per independent piece, `--file`-scoped, same as any other plan.
+   Mirror the external ref in the title so the link is obvious: `sidequest add -t "CTR-13316: guard
+   ILIKE against <3-char variants" ...`.
+2. **Scout in parallel, then fan out** over the independent pieces exactly as you would without Jira
+   (see "Decompose for parallelism" and "Fan out over independent tickets"). The presence of a Jira
+   ticket changes nothing about how you parallelize the work.
+3. **Record findings on the sidequest ticket**, not just in the PR — root cause, `file:line`, what you
+   ruled out — so a later agent (or you, post-compaction) can pick it up.
+4. When the work lands, update the **external** tracker/PR as the team expects; the sidequest tickets
+   were your scaffolding and can just be marked `done`.
+
+The short version: **Jira says *what* to build; sidequest is *how you execute it* here.** One doesn't
+substitute for the other.
+
 ## Finding the CLI
 
 You do **not** need to hard-code the path. When the user mentions the board or a ticket, the sidequest

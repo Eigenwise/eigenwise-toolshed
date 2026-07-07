@@ -65,6 +65,12 @@ test('session-start: carries the concrete, named-tool fan-out guidance', () => {
   assert.ok(ctx.includes(NAMED_SCOUT), 'fan-out line must name the scout subagent');
 });
 
+test('session-start: says sidequest coexists with an external tracker (Jira)', () => {
+  const ctx = runHook(SESSION, { session_id: 'test' });
+  assert.ok(ctx.includes('external tracker'), 'must address the external-tracker case');
+  assert.ok(ctx.includes('Jira'), 'must name Jira so the "already tracked" reflex is countered');
+});
+
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   const out = execFileSync(process.execPath, [SESSION], {
     input: JSON.stringify({ session_id: 'test' }),
@@ -83,6 +89,12 @@ test('standing reminder: plain task prompt gets the concrete fan-out trigger', (
   assert.match(ctx, /sidequest \(active\)/);
   assert.ok(ctx.includes(CONCRETE_TRIGGER), 'standing reminder must carry the concrete trigger');
   assert.ok(ctx.includes(NAMED_SCOUT), 'standing reminder must name the scout subagent');
+});
+
+test('standing reminder: says sidequest coexists with an external tracker (Jira)', () => {
+  const ctx = capture('add a new export format to the reporter');
+  assert.ok(ctx.includes('external tracker'), 'must address the external-tracker case');
+  assert.ok(ctx.includes('Jira'), 'must name Jira so the "already tracked" reflex is countered');
 });
 
 /* ------------------------------------------------------------------ *

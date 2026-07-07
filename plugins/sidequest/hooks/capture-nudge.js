@@ -178,6 +178,10 @@ function main() {
     emit(
       '=== sidequest (active) ===\n' +
         'Track work on the board; don\'t keep the plan only in your head.\n' +
+        'Even if this repo uses an external tracker (Jira/Linear/GitHub Issues), that tracks the ' +
+        'deliverable — sidequest is still your LOCAL execution layer here (decompose, fan out, run ' +
+        'subagents). Use it anyway; don\'t skip it because the work is "already tracked". See the sidequest ' +
+        'skill for why/how the two coexist.\n' +
         '• CAPTURE a bug/task/idea SEPARATE from your current work as a ticket right away (bg `ticket-filer` ' +
         'agent, or `' + cli + ' add`).\n' +
         '• PLAN substantial/multi-part work as one ticket per piece FIRST, link deps, then work them ' +

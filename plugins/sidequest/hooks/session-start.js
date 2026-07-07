@@ -60,6 +60,9 @@ function main() {
   emit(
     '=== sidequest (active) ===\n' +
       'This project tracks work in sidequest — use the board, do not keep the plan only in your head.\n' +
+      'Even if this repo uses an external tracker (Jira/Linear/GitHub Issues), that tracks the deliverable — ' +
+      'sidequest is still your LOCAL execution layer here (decompose, fan out, run subagents). Use it anyway; ' +
+      'don\'t skip it because the work is "already tracked". See the sidequest skill for why/how they coexist.\n' +
       'Unless this request is trivial, plan it as tickets on the board (complexity-scored per the sidequest ' +
       'skill) before implementing, then route execution through executor subagents (claim → do → done) ' +
       'rather than working ad hoc.\n' +
