@@ -301,8 +301,10 @@ knock out simultaneously. The thinking stays at the top; the labor gets cheap an
 
 ## Fan out over independent tickets (do this by default)
 
-**Fan out at more than the ticket stage — but size it to the task.** Parallelism isn't a one-time move
-reserved for independent tickets. Wherever a stage has genuinely independent work, prefer concurrent
+**Fan out at more than the ticket stage — but size it to the task.** This is the other half of running
+subagent workflows: independent tickets worked at once, as teams of sub-agents, instead of grinding
+through them one at a time. Parallelism isn't a one-time move reserved for independent tickets. Wherever
+a stage has genuinely independent work, prefer concurrent
 subagents over a long serial grind: a couple of read-only explorers mapping different parts of a
 codebase, parallel reproductions of a bug across inputs, parallel verification of separate changes. The
 instinct to catch is "I'm about to do a dozen sequential reads/edits that don't depend on each other" —
@@ -356,10 +358,12 @@ model×effort tier for that specific task** — so the moment you execute a tick
 throw that routing away: you run laborer work at orchestrator prices, or an underpowered model on
 something hard. Don't.
 
-**Default: the main thread orchestrates, a routed subagent executes.** Plan and score on the board, then
-for each ticket spawn its executor (`sidequest-exec-<effort>` at the ticket's derived model) to claim →
-do → verify → done. Keep ~95% of real execution in routed subagents; the main thread's job is decompose,
-score, spawn, and integrate.
+**Default: the main thread orchestrates, a routed subagent executes.** In practice, this is what running
+subagent workflows looks like: the main thread stays the orchestrator, and the tickets it spawns out
+become teams of sub-agents doing the actual labor. Plan and score on the board, then for each ticket
+spawn its executor (`sidequest-exec-<effort>` at the ticket's derived model) to claim → do → verify →
+done. Keep ~95% of real execution in routed subagents; the main thread's job is decompose, score, spawn,
+and integrate.
 
 **The ~5% you still do yourself:** genuinely trivial one-step changes (complexity 1–2) where spawning
 costs more than the work, plus the orchestration itself. "It's easier to just do it here" is exactly the

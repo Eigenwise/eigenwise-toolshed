@@ -76,6 +76,8 @@ test('session-start: stresses routed-subagent execution + the model-routing why'
   assert.ok(ctx.includes('routed subagent'), 'must push routed-subagent execution');
   assert.ok(ctx.includes('best model'), 'must give the model-routing reason');
   assert.ok(ctx.includes('95%'), 'must state the ~95%-in-a-subagent bar');
+  assert.ok(ctx.includes('subagent workflows'), 'must frame execution as subagent workflows');
+  assert.ok(ctx.includes('teams of sub-agents'), 'must frame execution as teams of sub-agents');
 });
 
 test('session-start: source=compact gets the terse re-grounding block, not the full nudge', () => {
@@ -122,6 +124,8 @@ test('standing reminder: stresses routed-subagent execution (~95%, not the main 
   assert.ok(ctx.includes('EXECUTE via a routed subagent'), 'must carry the EXECUTE bullet');
   assert.ok(ctx.includes('95%'), 'must state the ~95%-in-a-subagent bar');
   assert.ok(ctx.includes('sidequest-exec-'), 'must name the executor subagent to spawn');
+  assert.ok(ctx.includes('subagent workflows'), 'must frame execution as subagent workflows');
+  assert.ok(ctx.includes('teams of sub-agents'), 'must frame execution as teams of sub-agents');
 });
 
 /* ------------------------------------------------------------------ *

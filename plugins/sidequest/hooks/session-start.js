@@ -70,8 +70,8 @@ function main() {
       '=== sidequest (active — context restored) ===\n' +
         'sidequest is still active for this project — context was just compacted/resumed, so ' +
         'RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
-        'The discipline still applies: plan as tickets, execute via routed subagents (~95% of ' +
-        'real work), fan out independent work.\n' +
+        'The discipline still applies: plan as tickets, run tasks as subagent workflows (teams of ' +
+        'sub-agents) (~95% of real work), fan out independent work.\n' +
         'The full per-prompt reminder returns on your next prompt.\n'
     );
     process.exit(0);
@@ -84,10 +84,10 @@ function main() {
       'sidequest is still your LOCAL execution layer here (decompose, fan out, run subagents). Use it anyway; ' +
       'don\'t skip it because the work is "already tracked". See the sidequest skill for why/how they coexist.\n' +
       'Unless this request is trivial, plan it as tickets on the board (complexity-scored per the sidequest ' +
-      'skill) before implementing, then route execution through the ticket\'s executor subagent — each ' +
-      'ticket is scored and routed to the best model×effort, so running it in the main thread wastes that ' +
-      'routing. ~95% of real work should run in a routed subagent (claim → do → done); the main thread ' +
-      'orchestrates.\n' +
+      'skill) before implementing, then route execution as subagent workflows — teams of sub-agents, not ' +
+      'the main thread: each ticket is scored and routed to the best model×effort, so spawn a routed ' +
+      'subagent (claim → do → done) instead of running it inline. ~95% of real work should run in a routed ' +
+      'subagent; the main thread orchestrates the team.\n' +
       'FAN OUT: about to read ~4+ files or grep a subsystem to understand it? Spawn a parallel ' +
       'Explore / code-explorer scout FIRST. Run independent ready tickets as parallel executors (claim ' +
       'first, distinct `--by`); keep dependent/same-file work serial.\n' +
