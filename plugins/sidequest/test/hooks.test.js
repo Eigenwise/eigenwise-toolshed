@@ -71,6 +71,13 @@ test('session-start: says sidequest coexists with an external tracker (Jira)', (
   assert.ok(ctx.includes('Jira'), 'must name Jira so the "already tracked" reflex is countered');
 });
 
+test('session-start: stresses routed-subagent execution + the model-routing why', () => {
+  const ctx = runHook(SESSION, { session_id: 'test' });
+  assert.ok(ctx.includes('routed subagent'), 'must push routed-subagent execution');
+  assert.ok(ctx.includes('best model'), 'must give the model-routing reason');
+  assert.ok(ctx.includes('95%'), 'must state the ~95%-in-a-subagent bar');
+});
+
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   const out = execFileSync(process.execPath, [SESSION], {
     input: JSON.stringify({ session_id: 'test' }),
@@ -95,6 +102,13 @@ test('standing reminder: says sidequest coexists with an external tracker (Jira)
   const ctx = capture('add a new export format to the reporter');
   assert.ok(ctx.includes('external tracker'), 'must address the external-tracker case');
   assert.ok(ctx.includes('Jira'), 'must name Jira so the "already tracked" reflex is countered');
+});
+
+test('standing reminder: stresses routed-subagent execution (~95%, not the main thread)', () => {
+  const ctx = capture('add a new export format to the reporter');
+  assert.ok(ctx.includes('EXECUTE via a routed subagent'), 'must carry the EXECUTE bullet');
+  assert.ok(ctx.includes('95%'), 'must state the ~95%-in-a-subagent bar');
+  assert.ok(ctx.includes('sidequest-exec-'), 'must name the executor subagent to spawn');
 });
 
 /* ------------------------------------------------------------------ *

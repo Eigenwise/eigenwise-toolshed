@@ -48,9 +48,10 @@ needs a few explorers, not twenty.
    `--file`, and size pieces so a cheaper tier can execute them — see "Decompose for parallelism" below.
 2. **Link dependencies** so the order is explicit: `sidequest link SQ-4 depends-on SQ-3`,
    `sidequest link SQ-2 blocks SQ-8`. (See "Link tickets" below.)
-3. **Work them one at a time**: `claim` a ticket, do it (yourself or via a subagent), `done`, repeat —
-   letting the board be the source of truth for what's left, instead of holding the whole plan in your
-   head or an ad-hoc todo list.
+3. **Route each ticket to its executor subagent** — don't execute in the main thread. `claim`, spawn the
+   ticket's `sidequest-exec-<effort>` at its derived model, let it do the work and `done`, repeat — the
+   board stays the source of truth for what's left. See "Execute in a routed subagent by default" and
+   "Complexity-driven routing" below for why.
 
 This is the point of having the board: the plan is visible, survives context loss, and other agents can
 pick up unblocked pieces. Don't skip it for anything non-trivial. For a genuinely trivial one-step
@@ -258,7 +259,7 @@ still there and still free — don't skip it just because you filed the ticket y
 ```bash
 sidequest next --by <you>              # atomically claim the top-priority available ticket
 sidequest claim SQ-3 --by <you>        # or claim a specific one
-#   ... do the work (yourself, or spawn a subagent for it — see below) ...
+#   ... spawn the ticket's routed executor to do the work (default; see "Execute in a routed subagent") ...
 sidequest done SQ-3 --by <you> --model <tier> --effort <level>   # mark done + stamp who/what worked it
 sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --status todo)
 ```
@@ -277,8 +278,9 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
   Tickets already `doing` under a `--by` you don't recognize as your own subagents are a sign another
   session is already working the board — tell the user and confirm before also diving in, rather than
   silently duplicating their work.
-- **Small enough to delegate?** After you've claimed the ticket, you may spawn a subagent to actually do
-  the work while you orchestrate — just claim first, and mark it `done` once the subagent reports back.
+- **Delegate by default.** After claiming, spawn the ticket's routed executor to do the work while you
+  orchestrate; mark it `done` once it reports back. Doing it in the main thread instead is the exception
+  (trivial changes only) — see "Execute in a routed subagent by default".
 - **Stale claims** (a worker that crashed or wandered off) are reclaimable after a timeout
   (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min); `--force` overrides a live claim only when you're sure.
 
@@ -352,6 +354,25 @@ files** — parallel edits to one file collide. Link such tickets with `depends-
 naturally serialize them. For a large fan-out you may use a subagent workflow; otherwise a batch of
 background subagents is enough.
 
+## Execute in a routed subagent by default (~95% of the time)
+
+The main thread is a single fixed model. sidequest scores every ticket and routes it to the **best
+model×effort tier for that specific task** — so the moment you execute a ticket in the main thread, you
+throw that routing away: you run laborer work at orchestrator prices, or an underpowered model on
+something hard. Don't.
+
+**Default: the main thread orchestrates, a routed subagent executes.** Plan and score on the board, then
+for each ticket spawn its executor (`sidequest-exec-<effort>` at the ticket's derived model) to claim →
+do → verify → done. Keep ~95% of real execution in routed subagents; the main thread's job is decompose,
+score, spawn, and integrate.
+
+**The ~5% you still do yourself:** genuinely trivial one-step changes (complexity 1–2) where spawning
+costs more than the work, plus the orchestration itself. "It's easier to just do it here" is exactly the
+reflex this rule exists to catch.
+
+This is a **separate reason from parallelism**. Even a single, serial ticket belongs in a routed
+subagent — routing is about running each task on the *right* model, not only about running many at once.
+
 ## Complexity-driven routing (ENFORCED)
 
 You never pick a model or effort directly. **You score the task's COMPLEXITY (1–10) with a mandatory
@@ -402,10 +423,12 @@ sidequest models        # the live ladder: which score routes to which tier·eff
 
 0. **Routing master switch first.** `sidequest models --json` → if `routing` is `false` the rules
    below stand down: work any ticket yourself; derived tags are informational.
-1. **Route, don't self-execute.** A ticket whose DERIVED tier is below yours gets an executor
-   subagent at that tier — you cannot change your own model mid-run; the spawn is the only control
-   point. **Unless the user's request is trivial, route every task through the board this way** —
-   decompose, score, fan out; don't quietly do laborer work at orchestrator prices.
+1. **Route, don't self-execute — ~95% of the time.** Every non-trivial ticket runs in an executor
+   subagent, not the main thread: you cannot change your own model mid-run, so the spawn is the only way
+   each task lands on the model×effort scored for it. This holds even for a single serial ticket and even
+   when the derived tier equals yours (it still isolates context and composes the effort level). Only
+   genuinely trivial one-step changes stay in the main thread. Decompose, score, fan out; don't quietly
+   do laborer work at orchestrator prices.
 2. **The ticket's derived `model`/`effort` ARE the routing** — they come stamped on every read
    (`list`/`ready --json`), already shaped by the user's allowlist, so there is nothing to re-derive.
    Cap at your own tier if the ladder tops out above you (`fable > opus > sonnet > haiku`), and only

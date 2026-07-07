@@ -184,8 +184,12 @@ function main() {
         'skill for why/how the two coexist.\n' +
         '• CAPTURE a bug/task/idea SEPARATE from your current work as a ticket right away (bg `ticket-filer` ' +
         'agent, or `' + cli + ' add`).\n' +
-        '• PLAN substantial/multi-part work as one ticket per piece FIRST, link deps, then work them ' +
-        '(claim → do → `done`) — not ad hoc.\n' +
+        '• PLAN substantial/multi-part work as one ticket per piece FIRST, link deps, score each — not ad hoc.\n' +
+        '• EXECUTE via a routed subagent, NOT the main thread: each ticket is complexity-scored and routed ' +
+        'to the best model×effort for it, so spawn its executor (`sidequest-exec-<effort>` + the ticket\'s ' +
+        'model) to claim → do → `done`. Doing it in the main thread throws that routing away. ~95% of real ' +
+        'work should run in a routed subagent; the main thread orchestrates and only does genuinely trivial ' +
+        'changes itself.\n' +
         '• FAN OUT: about to read ~4+ files or grep a subsystem to understand it? Spawn a parallel ' +
         'Explore / code-explorer scout FIRST. Run independent ready tickets as parallel executors (claim ' +
         'first, distinct `--by`). Keep dependent/same-file work serial.\n' +

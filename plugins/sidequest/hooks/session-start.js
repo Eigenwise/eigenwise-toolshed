@@ -64,8 +64,10 @@ function main() {
       'sidequest is still your LOCAL execution layer here (decompose, fan out, run subagents). Use it anyway; ' +
       'don\'t skip it because the work is "already tracked". See the sidequest skill for why/how they coexist.\n' +
       'Unless this request is trivial, plan it as tickets on the board (complexity-scored per the sidequest ' +
-      'skill) before implementing, then route execution through executor subagents (claim → do → done) ' +
-      'rather than working ad hoc.\n' +
+      'skill) before implementing, then route execution through the ticket\'s executor subagent — each ' +
+      'ticket is scored and routed to the best model×effort, so running it in the main thread wastes that ' +
+      'routing. ~95% of real work should run in a routed subagent (claim → do → done); the main thread ' +
+      'orchestrates.\n' +
       'FAN OUT: about to read ~4+ files or grep a subsystem to understand it? Spawn a parallel ' +
       'Explore / code-explorer scout FIRST. Run independent ready tickets as parallel executors (claim ' +
       'first, distinct `--by`); keep dependent/same-file work serial.\n' +
