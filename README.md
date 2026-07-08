@@ -8,6 +8,7 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 
 | Plugin | What it does |
 |--------|--------------|
+| [**workspace-init**](./plugins/workspace-init) | Start here. Sets up a project's `.claude/` end to end: a short interview, then a populated `settings.json`, a tailored `live-rules.md`, a codebase map, and structure notes, wired around the plugin-reload boundary and verified firing. Orchestrates the other three plus the built-ins, and bakes in a self-improvement loop so the setup keeps sharpening itself. |
 | [**codebase-mapper**](./plugins/codebase-mapper) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
 | [**live-rules**](./plugins/live-rules) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
 | [**sidequest**](./plugins/sidequest) | A Trello-light quest log. The stray issues you mention mid-task ("oh, and the contact form doesn't send") get captured as tickets on the spot, with any pasted image attached, and land on a live, self-hosted Kanban dashboard that spans every project you work in. |
@@ -18,12 +19,37 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install workspace-init@eigenwise-toolshed
 /plugin install codebase-mapper@eigenwise-toolshed
 /plugin install live-rules@eigenwise-toolshed
 /plugin install sidequest@eigenwise-toolshed
 ```
 
 Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.
+
+Quickest start: install **workspace-init**, reload, then run `/init-workspace` in any project. It sets the other three up for you.
+
+## Why workspace-init?
+
+The other three plugins each set up one thing. workspace-init sets up the whole workspace, and wires
+them together for you. You install it, run `/init-workspace` in a project, and it:
+
+- **Interviews you** briefly about what the project is and what stack it's on (proposing defaults from
+  what it detects, so you mostly confirm).
+- **Writes `.claude/settings.json`** enabling the right plugins for that stack (the toolshed core plus
+  a language server, a frontend or docs plugin, and so on), then **pauses at the reload boundary** so
+  the plugins actually load.
+- **Writes a tailored `.claude/live-rules.md`** (craft baseline plus stack-specific rules) and short
+  structure notes, and delegates the codebase map to codebase-mapper and `CLAUDE.md` to the built-in
+  `/init`.
+- **Verifies it end to end** in the same session: it watches the live-rules and map hooks actually
+  fire and brings up the sidequest board, instead of trusting that the files came out right.
+
+It works on any stack and on new or existing projects, and it stays generic: the logic is
+stack-agnostic, the choices come from a small reference catalog it consults and extends. Every
+workspace it sets up also gets a **self-improvement loop** baked in, a live rule that nudges you to
+turn friction into a durable fix (a new rule, a map update, a fresh skill) so the setup keeps getting
+better the more you use it. The [plugin README](./plugins/workspace-init) has the full walkthrough.
 
 ## Why codebase-mapper?
 
