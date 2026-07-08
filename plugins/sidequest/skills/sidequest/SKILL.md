@@ -435,6 +435,10 @@ sidequest models        # the live ladder: which score routes to which tier·eff
 3. **Map effort via the bundled executors:** spawn `subagent_type: sidequest-exec-<derived effort>`
    **with** `model: <derived tier>` (effort lives in the agent definition, model in the spawn — they
    compose). A haiku-derived ticket has no effort: use a plain agent with `model: haiku`.
+   **`<derived effort>` is the ticket's stamped `effort` verbatim, never a level you judge fits better** —
+   picking a different one (a disabled rung, or just hotter/cooler than stamped) is drift, and the executor
+   now guards against it: it claims with `--effort <its baked level>`, and the board REFUSES the claim if
+   that doesn't match the derived effort, bouncing the ticket back for the correct-tier agent.
 4. **Claim by tier:** `next --model X` / `ready --model X` hand out only tickets whose derived tier
    is X — an executor never grabs work priced for another tier.
 

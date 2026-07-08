@@ -329,11 +329,53 @@ function reportClaimFailure(action, idOrRef, res, meta) {
   console.log(`✗ ${messages[res.reason] || action + ' failed: ' + res.reason}`);
 }
 
+// An executor is spawned as `sidequest-exec-<effort>`, its effort baked into the
+// agent file. When it claims, it passes that baked `--effort`, and it must equal
+// the ticket's currently-derived effort — otherwise the wrong-tier agent was
+// spawned (the real bug: `sidequest-exec-medium` claiming a `sonnet·high` ticket
+// because the orchestrator hand-picked an effort off the ladder, medium being
+// disabled). Capping never trips this: a cap lowers the MODEL and leaves effort
+// untouched (opus·max on a sonnet main loop still spawns exec-max), so a matching
+// effort is exactly the invariant a cap preserves. Returns a drift descriptor to
+// block the claim, or null when there's nothing to enforce: no `--effort` given,
+// routing off, no complexity (no derived tier), or a haiku ticket (no effort axis).
+function effortDriftReason(slug, idOrRef, claimedEffort) {
+  if (claimedEffort == null) return null;
+  const prefs = store.getModelPrefs();
+  if (prefs.routing === false) return null;
+  const t = store.getTicket(slug, idOrRef); // carries derived model/effort at read time
+  if (!t || !t.complexity) return null;
+  if (t.model === 'haiku' || !t.effort) return null;
+  const claimed = String(claimedEffort).toLowerCase();
+  if (claimed === t.effort) return null;
+  return {
+    ref: t.ref,
+    derivedModel: t.model,
+    derivedEffort: t.effort,
+    claimedEffort: claimed,
+    message:
+      `${t.ref} derives to ${t.model}·${t.effort}, but you claimed as ${claimed} effort — ` +
+      `the wrong executor was spawned. Spawn sidequest-exec-${t.effort} (model ${t.model}) instead. ` +
+      `Not claimed: the ticket stays free for the correct-tier executor.`,
+  };
+}
+
 function cmdClaim(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('claim: pass a ticket id or ref, e.g. sidequest claim SQ-3 --by me');
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
+  // Guard before claiming so a wrong-tier claim leaves the ticket untouched.
+  const drift = effortDriftReason(slug, idOrRef, opts.effort);
+  if (drift) {
+    process.exitCode = 1;
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ ok: false, reason: 'effort_mismatch', project: slug }, drift), null, 2) + '\n');
+    } else {
+      console.log(`✗ ${drift.message}`);
+    }
+    return;
+  }
   const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, source: opts.source || 'cli' });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
@@ -1215,7 +1257,7 @@ Usage:
 
 Working the board safely (multi-agent):
   sidequest ready [--model tier] [--json]          the ready set (unclaimed, unblocked) — fan subagents over it
-  sidequest claim <id|SQ-n> [--by who] [--force]   atomically take a ticket (fails if gone/done/claimed)
+  sidequest claim <id|SQ-n> [--by who] [--force] [--effort level]   atomically take a ticket (fails if gone/done/claimed; --effort must match the derived tier or the claim is refused as wrong-executor)
   sidequest next [--by who] [-p priority] [--model tier]   claim the best available ticket (highest priority first)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
