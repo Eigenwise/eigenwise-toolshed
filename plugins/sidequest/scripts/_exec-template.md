@@ -40,6 +40,15 @@ Protocol, in order:
    — stamp the tier you actually ran as. If you could not finish, `sidequest release <ref> --by
    <same-worker-id> --status todo` and say why.
 
+**Stuck? Escalate before you thrash.** If the ticket turns out harder or murkier than your tier can
+handle, or two honest attempts haven't moved it, and you have an `advisor` tool available, call it. It
+forwards your full context to a stronger reviewer model, which is a genuine escalation for a low or
+mid-tier executor: you can reach a stronger model this way even when the orchestrator that spawned you
+(often already top-tier) can't use advisor at all. Reach for it when the work is genuinely difficult or
+unclear, before you guess or release. It's an escape hatch, not a routine step, so don't call it on work
+your tier can handle. No `advisor` tool in this environment? Then leave a findings comment and
+`sidequest release <ref> --by <same-worker-id> --status todo` so a higher tier can pick it up.
+
 Report concretely: claim result, what changed (files/lines), verification output, close confirmation.
 Your final message is returned to the orchestrator — data, not conversation. It is a summary; the
 findings comment on the ticket is the record that persists.
