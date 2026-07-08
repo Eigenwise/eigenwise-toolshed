@@ -27,12 +27,12 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 
 Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.
 
-Quickest start: install **workspace-init**, reload, then run `/init-workspace` in any project. It sets the other three up for you.
+Quickest start: install **workspace-init**, reload, then in any project just ask *"set up a Claude workspace here"*. It sets the other three up for you.
 
 ## Why workspace-init?
 
 The other three plugins each set up one thing. workspace-init sets up the whole workspace, and wires
-them together for you. You install it, run `/init-workspace` in a project, and it:
+them together for you. You install it, ask it to set up a workspace in a project, and it:
 
 - **Interviews you** briefly about what the project is and what stack it's on (proposing defaults from
   what it detects, so you mostly confirm).

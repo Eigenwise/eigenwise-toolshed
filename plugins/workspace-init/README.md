@@ -73,15 +73,17 @@ workspace-init enables them in the project it sets up.
 
 ## Use
 
-In the project you want to set up:
+In the project you want to set up, invoke the `init-workspace` skill: just ask *"set up a Claude
+workspace here"*, *"init this project for Claude"*, *"bootstrap this repo for Claude"*, or run it as a
+slash command (`/workspace-init:init-workspace`). It runs the interview, writes the files, walks you
+through the reload, and verifies everything. Commit `.claude/` when it's done so your whole team shares
+the same setup.
 
-```text
-/init-workspace
-```
-
-or just ask: *"set up a Claude workspace here"*, *"init this project for Claude"*. The `init-workspace`
-skill runs the interview, writes the files, walks you through the reload, and verifies everything. Commit
-`.claude/` when it's done so your whole team shares the same setup.
+The entry point is the **skill**, not a separate command. In Claude Code, custom commands have been
+merged into skills: a `commands/x.md` and a `skills/x/SKILL.md` both map to the same `/x`, so a skill
+is already a slash command on its own. Shipping a thin command that just invokes a same-named skill is
+an anti-pattern: the two share a name, and in practice it left the skill's steps un-injected (the
+harness saw the name "already loaded" and skipped the body). So this plugin ships the skill only.
 
 ## License
 
