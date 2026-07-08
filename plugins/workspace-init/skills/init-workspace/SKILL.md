@@ -1,18 +1,14 @@
 ---
 name: init-workspace
 description: >-
-  Set up a complete Claude Code workspace for a project, new or existing: run a short interview, then
-  write a populated .claude/ (settings.json enabling the right plugins for the stack, a tailored
-  live-rules.md, a codebase map, structure notes), wire it around the plugin-reload boundary, and
-  verify each piece actually fires. Use for the WHOLE-workspace setup — when the user asks to "set up
-  a Claude workspace / .claude", "init/initialize this project for Claude", "bootstrap this repo for
-  Claude", "configure Claude Code for this project", "set up the toolshed here", or "get this project
-  ready for Claude Code". This is the holistic orchestrator: it sequences codebase-mapper
-  (map-codebase), live-rules, sidequest, skill-creator, and the built-in /init rather than replacing
-  them, and it is the right entry point even when the phrasing overlaps a single tool. Prefer this over
-  the narrower skills whenever the user wants the whole setup: for ONLY a codebase map use map-codebase;
-  for ONLY one rule use add-rule; for everything (settings, rules, map, structure, verification), use
-  this.
+  Set up a complete Claude Code workspace for a project, new or existing. Runs a short interview, then
+  writes .claude/ end to end: settings.json (enabling the right plugins for the stack), a tailored
+  live-rules.md, a codebase map, and structure notes, wired around the plugin-reload boundary and
+  verified firing. Use for WHOLE-workspace setup: "set up a Claude workspace", "init/bootstrap this
+  project for Claude", "configure Claude Code for this repo", "set up .claude / the toolshed here",
+  "get this project ready for Claude Code". Holistic orchestrator: it sequences codebase-mapper,
+  live-rules, sidequest, skill-creator, and the built-in /init. Prefer it whenever the user wants the
+  whole setup (for only a map use map-codebase; for only one rule use add-rule).
 ---
 
 # Init Workspace
