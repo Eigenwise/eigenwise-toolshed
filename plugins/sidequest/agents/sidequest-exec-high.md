@@ -6,7 +6,8 @@ description: >-
   model sonnet runs the ticket on sonnet at high effort. Pass the ticket ref, the sidequest CLI
   command, a unique --by worker id, and the concrete task. It claims the ticket first, does
   exactly that work, verifies, and marks it done. Never combine with model haiku (haiku has no
-  effort support).
+  effort support). Under agent teams, this is a valid teammate type — name it when spawning a teammate
+  so the worker is a real executor, never a generic background agent.
 effort: high
 ---
 

@@ -372,6 +372,35 @@ reflex this rule exists to catch.
 This is a **separate reason from parallelism**. Even a single, serial ticket belongs in a routed
 subagent — routing is about running each task on the *right* model, not only about running many at once.
 
+## Under agent teams, spawn OUR executor — never a generic teammate
+
+If this session has **agent teams** on (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` — a **per-user** flag,
+set in the user's `settings.json` `env` block or shell; not every collaborator has it), your parallel
+workers spawn as manageable **teammates / background agents** instead of plain subagents. The routing
+rules below do **not** change, and one thing is critical: a teammate is a sidequest executor **only if
+you name the agent type**. Spawn each worker as the ticket's **`sidequest-exec-<effort>` agent type with
+`model: <tier>`** — the exact same `subagent_type` + `model` you'd use for a subagent. A plugin agent
+definition is a valid teammate type: its body is appended as the teammate's instructions and its
+`tools`/`model` are honored.
+
+**The failure to avoid** (the bug this section exists for): letting the "spawn a team" reflex launch
+**default/generic teammates** with no agent type — they show up as bare "background agents" with just a
+task description. A generic teammate throws away the executor protocol *and* the tier routing: it won't
+`claim`, won't verify, won't `done`. Every ticket worker, subagent or teammate, is a named
+`sidequest-exec-<effort>` (haiku tickets: a plain agent with `model: haiku`).
+
+**Caveats specific to teams:**
+- A teammate may **inherit the lead's reasoning-effort** instead of the effort your
+  `sidequest-exec-<effort>` name implies. Spawn the correctly-named executor regardless: the claim's
+  `--effort` check still enforces that the right-tier worker took the ticket, and the executor body
+  still runs. If the effort might not carry and it matters, also state it in the spawn prompt.
+- **Model does not inherit the lead** — always pass `model: <tier>` explicitly (you already do).
+- The flag is **per-user**, so the identical `sidequest-exec-<effort>` + `model` spawn must also work as
+  a plain subagent when it's off. It does — never depend on teams being on.
+- Ticket execution is focused claim→do→verify→report work: the **subagent** sweet spot. Agent teams
+  shine for research/debate/review. If teams is on and you're spawning teammates anyway, they must still
+  be `sidequest-exec` executors — not generic ones.
+
 ## Complexity-driven routing (ENFORCED)
 
 You never pick a model or effort directly. **You score the task's COMPLEXITY (1–10) with a mandatory
