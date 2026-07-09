@@ -7,6 +7,10 @@ every project you work in.
 
 You stay on your main quest; the side quests get written down.
 
+![The sidequest dashboard showing one board across every project](docs/board.png)
+
+*One live board across every project you work in. It's completely local: the server binds to `127.0.0.1`, nothing phones home, and there's no hosted version. Free and MIT.*
+
 ## Install
 
 ```text
@@ -66,6 +70,10 @@ local server (idempotently — it reuses one that's already running) and opens y
   priority and search across everything.
 
 It's a self-contained page — no CDN, no fonts, no network calls beyond its own local API.
+
+![A ticket detail modal with priority, status, complexity score, files, and comments](docs/ticket.png)
+
+*Click any card to open the ticket: priority, status, assignee, story, a complexity score with its derived model tier, files, comments, reminders, and links.*
 
 ### Notifications and the bell inbox
 
@@ -135,6 +143,10 @@ sidequest add -t "Design the migration" --complexity 8 --why "reshapes the store
 sidequest update SQ-8 --complexity 5 --why "wider than scored: it also rewires the reader"   # rescoring needs a fresh why
 sidequest models   # the live ladder: which score routes where right now
 ```
+
+![The routing ladder mapping each complexity score to a model and effort rung](docs/routing-ladder.png)
+
+*The live ladder. Every complexity score maps to a model and a reasoning-effort rung; max is held back for only the very top of the scale.*
 
 Complexity 1..10 maps onto that rung sequence, so adjacent scores may share a rung. **Max effort is
 held out of the normal spread** — only complexity 10 on the top enabled tier gets `·max` (and 9 too,
@@ -272,6 +284,10 @@ sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status tod
 
 Because claiming is atomic, Claude doesn't have to work a backlog one ticket at a time — when several
 tickets are **ready and independent**, it works them **in parallel**, one subagent per ticket.
+
+![Claude filing tickets then launching three parallel executor agents by tier](docs/fan-out.png)
+
+*Claude scores a batch of tickets, notices two of them touch the same file so they can't run together, and fans the rest out as parallel executors, each on the model tier its complexity earned.*
 
 ```bash
 sidequest ready [--json]   # the fan-out set: unclaimed, unblocked, not done, not archived
