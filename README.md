@@ -9,7 +9,7 @@
 [![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 [![GitHub stars](https://img.shields.io/github/stars/Eigenwise/eigenwise-toolshed?style=social)](https://github.com/Eigenwise/eigenwise-toolshed/stargazers)
 
-A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins.
+A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins by [Eigenwise](https://eigenwise.io).
 
 > Sharp little tools for Claude Code, kept in one shed. 🛠️
 
