@@ -7,12 +7,6 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
 [![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
-<p align="center">
-  <a href="https://ko-fi.com/eigenwise"><img height="32" alt="Support me on Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg"></a>
-  &nbsp;
-  <a href="https://github.com/sponsors/Eigenwise"><img height="32" alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a>
-</p>
-
 One command to set up a Claude Code workspace for a project, new or existing. It runs a short
 interview, then writes a populated `.claude/`: a `settings.json` that enables the right plugins for
 your stack, a tailored `live-rules.md`, a codebase map, and a short note on how the project is meant to
