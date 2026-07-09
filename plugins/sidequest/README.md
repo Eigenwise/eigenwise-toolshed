@@ -177,6 +177,10 @@ in that same section too, but it's per model, not global: a model×effort grid l
 opus·medium while sonnet·medium stays on, and that pair just drops out of opus's rungs. The guards:
 at least one tier always stays enabled, and each enabled tier's row always keeps at least one effort on.
 
+![The gear menu: notification toggles and per-project mutes beside the model allowlist, per-model effort grid, bias slider, and live routing ladder](docs/settings.png)
+
+*The whole gear menu. Notification kinds and per-project mutes on the left; the model allowlist, per-model effort grid, bias slider, and the live routing ladder on the right. Toggle a tier and the ladder reshapes instantly.*
+
 This ladder engine also ships standalone as the **switchboard** plugin (same rungs, same bias math,
 no ticket board attached). It's shared by copy, not by dependency: each plugin keeps its own tests,
 and a change to the ladder answers to that plugin's own tests, not the other's.
