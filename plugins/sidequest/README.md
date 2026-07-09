@@ -287,7 +287,7 @@ tickets are **ready and independent**, it works them **in parallel**, one subage
 
 ![Claude filing tickets then launching three parallel executor agents by tier](docs/fan-out.png)
 
-*Claude scores a batch of tickets, notices two of them touch the same file so they can't run together, and fans the rest out as parallel executors, each on the model tier its complexity earned.*
+*Claude splits the ready tickets into waves by the files they touch, then launches a wave of executors in parallel, each on the model tier its complexity earned. A ticket that overlaps another waits for the next wave.*
 
 ```bash
 sidequest ready [--json]   # the fan-out set: unclaimed, unblocked, not done, not archived
