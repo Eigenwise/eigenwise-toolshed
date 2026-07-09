@@ -7,6 +7,8 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
 [![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
+*Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
+
 A self-maintaining **codebase map** for Claude Code: small Markdown docs under
 `.claude/.codebase-info/` that describe how your project is built, re-injected into context on every
 prompt so Claude starts each session already knowing the layout instead of grepping around blind.
