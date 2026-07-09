@@ -1,15 +1,10 @@
 ---
 name: sidequest-exec-max
 description: >-
-  Executes one sidequest ticket at max reasoning effort. Spawn it with an explicit model param
-  (the ticket's ⚙tier) so model and effort compose — e.g. subagent_type sidequest-exec-max +
-  name sidequest-exec-max-<ticket> + model sonnet runs the ticket on sonnet at max effort.
-  Pass the ticket ref, the sidequest CLI command, a unique --by worker id, and the concrete task. It
-  claims the ticket first, does exactly that work, verifies, and marks it done. Never combine with model
-  haiku (haiku has no effort support). Under agent teams this is a valid teammate type; ALWAYS give it a
-  unique name when you spawn it (lowercase-hyphens, e.g. sidequest-exec-max-<ticket>), never an
-  anonymous or generic background agent. A named executor is addressable: resumable via SendMessage,
-  trackable in fleet view, filterable by a:<name>.
+  Executes one sidequest ticket at max reasoning effort. Spawn with a unique lowercase-hyphen
+  name (e.g. sidequest-exec-max-<ticket>) and the ticket's model (never haiku); pass the ticket
+  ref, the sidequest CLI command, a unique --by id, and the concrete task. Claims first, does exactly
+  that work, verifies, marks it done. See the sidequest skill for routing and fan-out doctrine.
 effort: max
 ---
 
