@@ -151,11 +151,12 @@ function emit(context) {
 // still leads, but the discipline is never fully suppressed.
 function coreDisciplineFooter() {
   return (
-    '\n\n— sidequest discipline still applies: plan multi-part work as tickets first, ALWAYS fan out ' +
-    'with NAMED subagents (never anonymous/generic teammates) — a named scout before you read ~4+ files, ' +
-    'independent ready tickets as named parallel executors — and reach for a WORKFLOW ' +
-    '(agent()/parallel()/pipeline()) sized to complexity (small <5 / medium <15 / large <50) for ' +
-    'larger/repeatable orchestration, rather than grinding serially.'
+    '\n\n— sidequest discipline still applies: plan multi-part work as tickets first, and ALWAYS fan out ' +
+    'with NAMED subagents by default (never anonymous/generic teammates) — a named scout before you read ' +
+    '~4+ files, independent ready tickets as named parallel executors — rather than grinding serially. For ' +
+    'a larger/repeatable run a WORKFLOW (agent()/parallel()/pipeline(), sized small <5 / medium <15 / ' +
+    'large <50) fits, but it\'s opt-in: PROPOSE it via AskUserQuestion when you judge it helps, don\'t ' +
+    'launch one unprompted.'
   );
 }
 
@@ -187,23 +188,23 @@ function main() {
         '• CAPTURE a bug/task/idea SEPARATE from your current work as a ticket right away (bg `ticket-filer` ' +
         'agent, or `' + cli + ' add`).\n' +
         '• PLAN substantial/multi-part work as one ticket per piece FIRST, link deps, score each — not ad hoc.\n' +
-        '• EXECUTE off the main thread via two mechanisms — NAMED subagents (turn-by-turn, addressable/' +
-        'resumable) and WORKFLOWS (script-driven, for larger/repeatable runs): each ticket is ' +
-        'complexity-scored and routed to the best model×effort for it, so spawn its executor as a NAMED ' +
-        'subagent (`sidequest-exec-<effort>` + the ticket\'s model, unique lowercase-hyphen name) to ' +
-        'claim → do → `done` — the name makes it addressable/resumable via SendMessage. Doing it in the ' +
-        'main thread throws that routing away. For many independent tickets or a repeatable structured run, ' +
-        'drive them with a WORKFLOW sized by complexity instead of hand-spawning. ~95% of real work should ' +
-        'run off the main thread; the main thread orchestrates and only does genuinely trivial changes ' +
-        'itself.\n' +
+        '• EXECUTE off the main thread — by default as NAMED subagents (turn-by-turn, addressable/' +
+        'resumable): each ticket is complexity-scored and routed to the best model×effort for it, so spawn ' +
+        'its executor as a NAMED subagent (`sidequest-exec-<effort>` + the ticket\'s model, unique ' +
+        'lowercase-hyphen name) to claim → do → `done` — the name makes it addressable/resumable via ' +
+        'SendMessage. Doing it in the main thread throws that routing away. For many independent tickets or ' +
+        'a repeatable structured run, a WORKFLOW (script-driven, sized by complexity) fits — but it\'s ' +
+        'opt-in: PROPOSE it via AskUserQuestion (why + scale + token cost) when you judge it helps, rather ' +
+        'than launching one unprompted. ~95% of real work should run off the main thread; the main thread ' +
+        'orchestrates and only does genuinely trivial changes itself.\n' +
         '• FAN OUT: ALWAYS fan out using NAMED subagents — NAME every subagent you spawn (unique ' +
         'lowercase-hyphen name), never anonymous/generic teammates. About to read ~4+ files or grep a ' +
         'subsystem to understand it? Spawn one or more NAMED scouts concurrently in a single message FIRST ' +
         '(each isolated + resumable; built-in Explore/Plan are one-shot, so prefer a general-purpose or ' +
         'custom named agent like code-explorer for resumable work). Run independent ready tickets as NAMED ' +
-        'parallel executors (claim first, distinct `--by`); for larger/repeatable orchestration use a ' +
-        'WORKFLOW chosen by size — small (<5) / medium (<15) / large (<50). Keep dependent/same-file work ' +
-        'serial.\n' +
+        'parallel executors (claim first, distinct `--by`); for larger/repeatable orchestration PROPOSE a ' +
+        'WORKFLOW (opt-in, via AskUserQuestion) sized small (<5) / medium (<15) / large (<50). Keep ' +
+        'dependent/same-file work serial.\n' +
         '• RECORD an investigation as a ticket and write findings back as a comment (`' + cli +
         ' comment <ref>`); READ a ticket\'s comments before working it.\n' +
         'Board: `' + cli + ' dashboard`.'

@@ -71,9 +71,10 @@ function main() {
         'sidequest is still active for this project — context was just compacted/resumed, so ' +
         'RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
         'The discipline still applies: plan as tickets, ALWAYS fan out using NAMED subagents (every spawned ' +
-        'agent gets a unique name so it\'s addressable/resumable), and reach for script-driven WORKFLOWS ' +
-        '(small <5 / medium <15 / large <50 agents) when the task warrants it — ~95% of real work runs off ' +
-        'the main thread.\n' +
+        'agent gets a unique name so it\'s addressable/resumable) as the default parallelizer, and when a ' +
+        'larger/repeatable run would help, PROPOSE a script-driven WORKFLOW (opt-in — offer it via ' +
+        'AskUserQuestion) sized small <5 / medium <15 / large <50 — ~95% of real work runs off the main ' +
+        'thread.\n' +
         'The full per-prompt reminder returns on your next prompt.\n'
     );
     process.exit(0);
@@ -89,17 +90,19 @@ function main() {
       'Unless this request is trivial, plan it as tickets on the board (complexity-scored per the sidequest ' +
       'skill) before implementing, then route execution off the main thread — each ticket is scored and ' +
       'routed to the best model×effort, and that same complexity ALSO picks the orchestration shape: ' +
-      '(1) spawn a NAMED routed subagent per ticket (unique lowercase-hyphen name, never anonymous — ' +
-      'claim → do → done) so it\'s addressable, resumable via SendMessage, and trackable in the fleet view; ' +
-      '(2) for larger or repeatable structured orchestration, drive a WORKFLOW (agent()/parallel()/pipeline()) ' +
-      'sized to complexity — small <5, medium <15, large <50 agents. ~95% of real work should run off the ' +
-      'main thread; the main thread orchestrates the team.\n' +
+      '(1) by default spawn a NAMED routed subagent per ticket (unique lowercase-hyphen name, never anonymous ' +
+      '— claim → do → done) so it\'s addressable, resumable via SendMessage, and trackable in the fleet view; ' +
+      '(2) for a larger or repeatable structured run, a WORKFLOW (agent()/parallel()/pipeline(), sized small ' +
+      '<5 / medium <15 / large <50) fits — but it\'s opt-in, so PROPOSE it via AskUserQuestion (explain why, ' +
+      'the scale, the token cost) rather than launching one unprompted; you judge better than the user when ' +
+      'one helps, so don\'t stay silent. ~95% of real work should run off the main thread; the main thread ' +
+      'orchestrates the team.\n' +
       'FAN OUT BY DEFAULT: about to read ~4+ files or grep a subsystem to understand it? Spawn one or more ' +
       'NAMED scouts concurrently in a single message FIRST — each named, isolated, independently resumable ' +
       '(built-in Explore/Plan are one-shot, so use a general-purpose or custom named agent like code-explorer ' +
       'when the scout must be resumable). Run independent ready tickets as NAMED parallel executors (claim ' +
-      'first, distinct `--by`); for a large independent batch prefer a WORKFLOW over hand-spawning one at a ' +
-      'time; keep dependent/same-file work serial.\n' +
+      'first, distinct `--by`); for a large independent batch, PROPOSE a WORKFLOW (opt-in, via ' +
+      'AskUserQuestion) rather than hand-spawning one at a time; keep dependent/same-file work serial.\n' +
       'Board: `' + cli + ' dashboard`.'
   );
   process.exit(0);

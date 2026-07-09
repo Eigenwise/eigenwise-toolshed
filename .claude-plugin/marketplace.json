@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "2.41.0",
+  "version": "2.42.0",
   "plugins": [
     {
       "name": "workspace-init",
@@ -34,7 +34,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "A Trello-light quest log for Claude Code. Side issues you mention mid-task (\"oh, and the contact form doesn't send\") get captured as tickets on the spot, with any pasted images attached, and managed on a live, self-hosted Kanban dashboard that spans every project you work in.",
-      "version": "1.30.0",
+      "version": "1.31.0",
       "author": {
         "name": "Eigenwise"
       },

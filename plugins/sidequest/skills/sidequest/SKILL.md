@@ -360,13 +360,17 @@ applies: eyeball whether they'd edit the same files before parallelizing them.
 
 **Keep sequential** (don't parallelize) tickets that **depend on each other** or that **touch the same
 files** — parallel edits to one file collide. Link such tickets with `depends-on` so `ready`/`next`
-naturally serialize them. Both fan-out mechanisms are first-class, chosen by size/complexity, neither
-reserved only for "large": **name every subagent** when you fan out turn-by-turn with oversight (each
-addressable and resumable), AND additionally reach for a **WORKFLOW** (`parallel()`/`pipeline()`) when
-the fan-out is bigger or repeatable — sized small (<5) / medium (<15) / large (<50), within the runtime
-cap of 16 concurrent / 1000 total per run. The split: named subagents = turn-by-turn delegation you
-supervise and resume; workflows = larger deterministic orchestration where results stay in script vars
-and only the final output returns.
+naturally serialize them. The **default parallelizer is named-subagent fan-out**: name every subagent
+and spawn them in one message (each addressable and resumable) — the Agent tool, always available. A
+**WORKFLOW** (`parallel()`/`pipeline()`) is the heavier, opt-in tool for a bigger, repeatable, or
+deterministic fan-out, sized small (<5) / medium (<15) / large (<50) within the runtime cap of 16
+concurrent / 1000 total per run. You don't launch a workflow on your own — it's gated on the user
+opting into that scale (an "ultracode" prompt, or an explicit ask). But you usually judge better than
+the user when one would genuinely help, so **when it would, SUGGEST it**: use `AskUserQuestion` to offer
+it as an option, explain *why* it fits here, the rough scale and the token cost, and let them pick.
+Raising the option is how the opt-in happens; staying silent when a workflow would clearly help is the
+mistake. The split: named subagents = turn-by-turn delegation you supervise and resume; workflows =
+larger deterministic orchestration where results stay in script vars and only the final output returns.
 
 ## Execute in a routed subagent by default (~95% of the time)
 
@@ -438,11 +442,16 @@ open ticket. `sidequest models` prints the current ladder.
 **One score, three coupled outputs.** The same complexity score drives not only the **model** and the
 **effort** (the ladder above) but also the **orchestration shape** — how you run the work. It's one
 continuous ladder: a low, serial one-off → a single NAMED subagent; the moment there's independent work
-that can run at once → PARALLELIZE it as a **WORKFLOW** (`parallel()`/`pipeline()`) sized by complexity,
-small (<5) → medium (<15) → large (<50), within the runtime cap of 16 concurrent / 1000 total per run.
-The trigger for a workflow is *parallelizability*, not size alone: if the pieces are independent, run
-them concurrently in a workflow rather than one at a time. Named subagents are for genuinely serial,
-one-off work; workflows are the default way to parallelize.
+that can run at once → PARALLELIZE it, **by default as named-subagent fan-out** (spawn several named
+subagents in one message — always available). A **WORKFLOW** (`parallel()`/`pipeline()`) is the heavier
+tool for a larger, repeatable, or deterministic run, sized small (<5) → medium (<15) → large (<50)
+within the cap of 16 concurrent / 1000 total. **Workflows are gated — you don't launch one on your own;
+the user opts into that scale** (an "ultracode" prompt, or an explicit ask). But you usually judge
+better than the user when a workflow would genuinely help, so **when you think one would, SUGGEST it**:
+use `AskUserQuestion` to offer it with concrete options, explain *why* it fits here, the rough scale and
+the token cost, and let them pick. Proposing it is how the opt-in happens; staying silent when a
+workflow would clearly help is the mistake. Default to named-subagent fan-out; propose a workflow when
+the shape calls for it.
 
 **Bias is the user's dial, not yours.** You always score complexity honestly against the absolute
 anchored scale below — bias tunes only HOW eagerly those scores escalate to pricier rungs, never what
@@ -456,23 +465,26 @@ the actual work (files, moving parts, unknowns), not restate the number — writ
 you to look at the task properly. The scale is **absolute** — anchored to concrete reference points,
 not to "hard for me right now":
 
-Each band maps to an effort/model rung (via the ladder) AND an orchestration shape (after the `→`):
+Each band maps to an effort/model rung (via the ladder) AND an orchestration shape (after the `→`;
+named-subagent fan-out is the default, a workflow is the opt-in tool you *propose* at the larger sizes):
 
 - **1** — trivial: summarizing a README, a one-line lookup, skimming logs for a fact. → inline, or a
   single named subagent; nothing to parallelize.
 - **2–3** — routine: a single-file edit or script, a rename, a dedup, a config bump. → a single NAMED
   subagent (serial one-off).
 - **4–5** — everyday build: one area, a known pattern, a few edge cases; **~5 anchors to simple HTML
-  work** — a static page, a form, a plain component. → a single named subagent, or a **small workflow**
-  (<5) if it splits into independent pieces.
+  work** — a static page, a form, a plain component. → a single named subagent, or a small **named
+  fan-out** if it splits into independent pieces.
 - **6–7** — hard: a multi-file feature or cross-cutting refactor — several coordinated edits, a
-  contract multiple consumers must respect, real edge cases. → decompose and PARALLELIZE: a **small–
-  medium workflow** (<5–<15) of named executors over the independent pieces.
+  contract multiple consumers must respect, real edge cases. → decompose and fan out named executors
+  over the independent pieces; if that fan-out is sizable/repeatable, **propose a small–medium workflow**
+  (<5–<15).
 - **8** — gnarly: novel debugging with an unknown root cause, or designing an algorithm/architecture
-  under real constraints. → a **medium workflow** (<15), often design-ticket → parallel wave → integrate.
+  under real constraints. → design-ticket → parallel named-executor wave → integrate; **propose a
+  medium workflow** (<15) for the wave.
 - **9–10** — frontier: developing new AI models, RL training, research-grade problems with no
-  established solution. **10 is the extreme end**, not "a hard day." → a **medium–large workflow**
-  (<15–<50) in staged waves.
+  established solution. **10 is the extreme end**, not "a hard day." → staged waves of named executors;
+  **propose a medium–large workflow** (<15–<50).
 
 Normal day-to-day coding legitimately lands **1–7**. Scores of **9–10 firing rarely is intended** —
 the top rung (·max effort) is reserved for genuinely extreme work, same spirit as Anthropic's own
@@ -495,8 +507,9 @@ sidequest models        # the live ladder: which score routes to which tier·eff
    when the derived tier equals yours (it still isolates context and composes the effort level). Only
    genuinely trivial one-step changes stay in the main thread. Complexity already drives model×effort; it
    ALSO drives the orchestration shape, and routing COMPOSES with it: a single ticket → one named
-   executor; a ready wave → many named executors spawned in one message; a large or repeatable batch → a
-   WORKFLOW sized by complexity (small <5 / medium <15 / large <50). Decompose, score, fan out; don't
+   executor; a ready wave → many named executors spawned in one message (the default); a large or
+   repeatable batch → **propose a WORKFLOW** via `AskUserQuestion` (it's opt-in — you suggest, the user
+   approves) sized by complexity (small <5 / medium <15 / large <50). Decompose, score, fan out; don't
    quietly do laborer work at orchestrator prices.
 2. **The ticket's derived `model`/`effort` ARE the routing** — they come stamped on every read
    (`list`/`ready --json`), already shaped by the user's allowlist, so there is nothing to re-derive.
