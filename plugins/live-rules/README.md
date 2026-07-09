@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+[![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
 **Developer-friendly, live rules for Claude Code.** Keep your rules in one Markdown file
 (`.claude/live-rules.md` by default, or anywhere you like), and a pair of bundled hooks re-inject the
