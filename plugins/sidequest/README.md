@@ -144,9 +144,9 @@ sidequest update SQ-8 --complexity 5 --why "wider than scored: it also rewires t
 sidequest models   # the live ladder: which score routes where right now
 ```
 
-![The routing ladder mapping each complexity score to a model and effort rung](docs/routing-ladder.png)
+![The gear menu: notification toggles and per-project mutes beside the model allowlist, per-model effort grid, bias slider, and live routing ladder](docs/settings.png)
 
-*The live ladder. Every complexity score maps to a model and a reasoning-effort rung; max is held back for only the very top of the scale.*
+*The gear menu, with the live ladder at the bottom right: every complexity score maps to a model and a reasoning-effort rung. Beside it, the model allowlist, the per-model effort grid, and the bias slider; toggle any of them and the ladder reshapes instantly. Left column: notification kinds and per-project mutes.*
 
 Complexity 1..10 maps onto that rung sequence, so adjacent scores may share a rung. **Max effort is
 held out of the normal spread** — only complexity 10 on the top enabled tier gets `·max` (and 9 too,
@@ -176,10 +176,6 @@ Claude may work any ticket itself and the chips become purely informational. Eff
 in that same section too, but it's per model, not global: a model×effort grid lets you turn off, say,
 opus·medium while sonnet·medium stays on, and that pair just drops out of opus's rungs. The guards:
 at least one tier always stays enabled, and each enabled tier's row always keeps at least one effort on.
-
-![The gear menu: notification toggles and per-project mutes beside the model allowlist, per-model effort grid, bias slider, and live routing ladder](docs/settings.png)
-
-*The whole gear menu. Notification kinds and per-project mutes on the left; the model allowlist, per-model effort grid, bias slider, and the live routing ladder on the right. Toggle a tier and the ladder reshapes instantly.*
 
 This ladder engine also ships standalone as the **switchboard** plugin (same rungs, same bias math,
 no ticket board attached). It's shared by copy, not by dependency: each plugin keeps its own tests,
