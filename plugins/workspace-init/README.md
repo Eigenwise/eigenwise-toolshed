@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+[![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
 One command to set up a Claude Code workspace for a project, new or existing. It runs a short
 interview, then writes a populated `.claude/`: a `settings.json` that enables the right plugins for

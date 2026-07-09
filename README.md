@@ -6,6 +6,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/Eigenwise/eigenwise-toolshed)](https://github.com/Eigenwise/eigenwise-toolshed/commits/main)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+[![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 [![GitHub stars](https://img.shields.io/github/stars/Eigenwise/eigenwise-toolshed?style=social)](https://github.com/Eigenwise/eigenwise-toolshed/stargazers)
 
 A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins.
