@@ -119,6 +119,10 @@ Commit `.claude/.codebase-info/` so the whole team and every future session shar
 
 codebase-mapper is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
 
+| Ko-fi | GitHub Sponsors |
+|:-----:|:---------------:|
+| <a href="https://ko-fi.com/eigenwise"><img height="32" alt="Support me on Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg"></a> | <a href="https://github.com/sponsors/Eigenwise"><img height="32" alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a> |
+
 ## License
 
 MIT © Eigenwise
