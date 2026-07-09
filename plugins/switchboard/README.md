@@ -7,6 +7,8 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
 [![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
+*Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
+
 **Score the task, not the model.** Claude scores each piece of work for complexity (1 to 10),
 switchboard turns that score into a model tier and a reasoning effort, and the work runs in a
 named executor subagent at exactly that tier. Nobody hand-picks models anymore: the score is the

@@ -7,6 +7,8 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
 [![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
+*Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
+
 **A Trello-light quest log for Claude Code.** The stray issues you mention while Claude is busy with
 something else — *"oh, and the contact form doesn't send"* — get captured as **tickets** on the spot,
 with any image you pasted attached, and land on a **live, self-hosted Kanban dashboard** that spans

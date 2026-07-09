@@ -7,6 +7,8 @@
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
 [![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
+*Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
+
 **Developer-friendly, live rules for Claude Code.** Keep your rules in one Markdown file
 (`.claude/live-rules.md` by default, or anywhere you like), and a pair of bundled hooks re-inject the
 ones that apply, right when they apply: global rules and prompt-keyword rules on every prompt,
