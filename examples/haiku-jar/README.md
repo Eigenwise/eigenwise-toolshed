@@ -145,3 +145,7 @@ ruff check . && ruff format --check .
 
 The jar is written to `./haiku-jar.json` (override with `HAIKU_JAR_PATH`), and that
 file is git-ignored so running the tool never dirties the repo.
+
+---
+
+*Part of the [eigenwise-toolshed](../../README.md), free and MIT. If it helps you, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) keeps the shed stocked.*

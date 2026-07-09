@@ -1,5 +1,11 @@
 # live-rules
 
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Flive-rules%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+
 **Developer-friendly, live rules for Claude Code.** Keep your rules in one Markdown file
 (`.claude/live-rules.md` by default, or anywhere you like), and a pair of bundled hooks re-inject the
 ones that apply, right when they apply: global rules and prompt-keyword rules on every prompt,
@@ -352,6 +358,10 @@ during a refactor and turn it back on later.
 
 - Rules: delete `.claude/live-rules.md` (or individual sections inside it).
 - Plugin: `/plugin uninstall live-rules@eigenwise-toolshed`.
+
+## Support
+
+live-rules is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
 
 ## License
 

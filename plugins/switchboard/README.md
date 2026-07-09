@@ -1,5 +1,11 @@
 # switchboard
 
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Fswitchboard%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+
 **Score the task, not the model.** Claude scores each piece of work for complexity (1 to 10),
 switchboard turns that score into a model tier and a reasoning effort, and the work runs in a
 named executor subagent at exactly that tier. Nobody hand-picks models anymore: the score is the
@@ -146,6 +152,10 @@ change did.
 the routing alone, for anyone who wants the ladder without a board. The engine is shared **by
 copy**, not by dependency: each plugin carries its own `lib/ladder.js` and its own invariant
 tests, and each plugin's tests are the source of truth for changes to its copy.
+
+## Support
+
+switchboard is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
 
 ## License
 
