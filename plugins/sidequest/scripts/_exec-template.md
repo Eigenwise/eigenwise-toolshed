@@ -3,11 +3,13 @@ name: sidequest-exec-{{EFFORT}}
 description: >-
   Executes one sidequest ticket at {{EFFORT}} reasoning effort. Spawn it with an explicit model param
   (the ticket's ⚙tier) so model and effort compose — e.g. subagent_type sidequest-exec-{{EFFORT}} +
-  model sonnet runs the ticket on sonnet at {{EFFORT}} effort. Pass the ticket ref, the sidequest CLI
-  command, a unique --by worker id, and the concrete task. It claims the ticket first, does
-  exactly that work, verifies, and marks it done. Never combine with model haiku (haiku has no
-  effort support). Under agent teams, this is a valid teammate type — name it when spawning a teammate
-  so the worker is a real executor, never a generic background agent.
+  name sidequest-exec-{{EFFORT}}-<ticket> + model sonnet runs the ticket on sonnet at {{EFFORT}} effort.
+  Pass the ticket ref, the sidequest CLI command, a unique --by worker id, and the concrete task. It
+  claims the ticket first, does exactly that work, verifies, and marks it done. Never combine with model
+  haiku (haiku has no effort support). Under agent teams this is a valid teammate type; ALWAYS give it a
+  unique name when you spawn it (lowercase-hyphens, e.g. sidequest-exec-{{EFFORT}}-<ticket>), never an
+  anonymous or generic background agent. A named executor is addressable: resumable via SendMessage,
+  trackable in fleet view, filterable by a:<name>.
 effort: {{EFFORT}}
 ---
 

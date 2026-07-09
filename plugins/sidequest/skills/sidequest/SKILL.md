@@ -312,6 +312,15 @@ that's a fan-out. Stay proportional though: parallelism costs tokens and orchest
 don't spawn a subagent for trivial, dependent, or same-file work. A bit of parallel investigation and
 some parallel execution — not a swarm for everything.
 
+**Fan out with NAMED subagents, always.** Every worker you spawn concurrently gets a unique `name`
+(lowercase-hyphens, e.g. `explorer-cli`, `exec-sq12`), and you spawn them as multiple named subagents in
+a SINGLE message. Naming is what makes each one addressable: it runs in its own isolated context, shows
+up in the fleet view (filter with `a:<name>`), and is independently resumable via `SendMessage {to:
+name}` — which auto-resumes it in the background with its full history intact. Never spawn an anonymous
+or generic worker. Note the built-in **Explore/Plan** agents are one-shot and NOT resumable, so when a
+scout's work needs to be picked back up, use a general-purpose or custom named agent (e.g.
+`code-explorer`) instead.
+
 **A substantive investigation belongs on a ticket, not in an ad-hoc agent.** A cheap read-only scout
 (a couple of explorers building a quick map) is ephemeral — its output feeds your next decision and
 that's fine. But when an investigation is real work whose *result matters later* — a root-cause hunt, a
@@ -337,10 +346,13 @@ applies: eyeball whether they'd edit the same files before parallelizing them.
 1. `sidequest list --status doing` — if tickets are already `doing` under a `--by` you don't recognize,
    another session may be actively working this board; flag it to the user before proceeding.
 2. `sidequest ready --json` to see the fan-out-able set.
-3. Spawn **one subagent per ticket**, in a single batch (parallel), each told to:
+3. Spawn **one NAMED subagent per ticket**, all in a single message (true parallel), each with a unique
+   `name` (lowercase-hyphens, e.g. `exec-sq12`), each told to:
    `sidequest claim <ref> --by <unique-id>` → if the claim succeeds, do the work, then
    `sidequest done <ref> --by <same-id> --model <its tier> --effort <its effort>` (stamp who/what
    worked it); if it fails, stop (someone else has it).
+   Tie the agent's `name` to its `--by` id — both unique and session-scoped for the same worker — so the
+   named agent is addressable/resumable and its board activity is stamped by that same identity.
    Give each a **genuinely random, session-scoped `--by`** — not just the ticket ref or a fixed label,
    since a second independent session fanning out over the same board would derive the identical value
    and silently coexist as the same worker (see the note on identity collisions above).
@@ -348,8 +360,13 @@ applies: eyeball whether they'd edit the same files before parallelizing them.
 
 **Keep sequential** (don't parallelize) tickets that **depend on each other** or that **touch the same
 files** — parallel edits to one file collide. Link such tickets with `depends-on` so `ready`/`next`
-naturally serialize them. For a large fan-out you may use a subagent workflow; otherwise a batch of
-background subagents is enough.
+naturally serialize them. Both fan-out mechanisms are first-class, chosen by size/complexity, neither
+reserved only for "large": **name every subagent** when you fan out turn-by-turn with oversight (each
+addressable and resumable), AND additionally reach for a **WORKFLOW** (`parallel()`/`pipeline()`) when
+the fan-out is bigger or repeatable — sized small (<5) / medium (<15) / large (<50), within the runtime
+cap of 16 concurrent / 1000 total per run. The split: named subagents = turn-by-turn delegation you
+supervise and resume; workflows = larger deterministic orchestration where results stay in script vars
+and only the final output returns.
 
 ## Execute in a routed subagent by default (~95% of the time)
 
@@ -358,12 +375,13 @@ model×effort tier for that specific task** — so the moment you execute a tick
 throw that routing away: you run laborer work at orchestrator prices, or an underpowered model on
 something hard. Don't.
 
-**Default: the main thread orchestrates, a routed subagent executes.** In practice, this is what running
-subagent workflows looks like: the main thread stays the orchestrator, and the tickets it spawns out
-become teams of sub-agents doing the actual labor. Plan and score on the board, then for each ticket
-spawn its executor (`sidequest-exec-<effort>` at the ticket's derived model) to claim → do → verify →
-done. Keep ~95% of real execution in routed subagents; the main thread's job is decompose, score, spawn,
-and integrate.
+**Default: the main thread orchestrates, a routed subagent executes.** In practice, the main thread
+stays the orchestrator and the tickets it spawns out become the actual labor. Plan and score on the
+board, then for each ticket spawn its executor as a **NAMED** subagent (`sidequest-exec-<effort>` at the
+ticket's derived model, with a unique `name` per ticket, e.g. `exec-<ref>`) to claim → do → verify →
+done — the name keeps it addressable and resumable. For a whole wave or a large batch, drive those same
+named executors as a **workflow** sized to complexity rather than hand-spawning one at a time. Keep ~95%
+of real execution off the main thread; the main thread's job is decompose, score, spawn, and integrate.
 
 **The ~5% you still do yourself:** genuinely trivial one-step changes (complexity 1–2) where spawning
 costs more than the work, plus the orchestration itself. "It's easier to just do it here" is exactly the
@@ -377,17 +395,21 @@ subagent — routing is about running each task on the *right* model, not only a
 If this session has **agent teams** on (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` — a **per-user** flag,
 set in the user's `settings.json` `env` block or shell; not every collaborator has it), your parallel
 workers spawn as manageable **teammates / background agents** instead of plain subagents. The routing
-rules below do **not** change, and one thing is critical: a teammate is a sidequest executor **only if
-you name the agent type**. Spawn each worker as the ticket's **`sidequest-exec-<effort>` agent type with
-`model: <tier>`** — the exact same `subagent_type` + `model` you'd use for a subagent. A plugin agent
-definition is a valid teammate type: its body is appended as the teammate's instructions and its
-`tools`/`model` are honored.
+rules below do **not** change, and one thing is critical: a teammate is a real sidequest executor **only
+if it has BOTH the correct agent type AND a unique `name`**. Spawn each worker as the ticket's
+**`sidequest-exec-<effort>` agent type with `model: <tier>` and a unique `name`** (lowercase-hyphens,
+e.g. `exec-sq12`) — the same `subagent_type` + `model` you'd use for a subagent, plus the name that makes
+it addressable. A plugin agent definition is a valid teammate type: its body is appended as the
+teammate's instructions and its `tools`/`model` are honored; the `name` is what makes it trackable in
+the fleet view and resumable via `SendMessage`.
 
 **The failure to avoid** (the bug this section exists for): letting the "spawn a team" reflex launch
 **default/generic teammates** with no agent type — they show up as bare "background agents" with just a
-task description. A generic teammate throws away the executor protocol *and* the tier routing: it won't
-`claim`, won't verify, won't `done`. Every ticket worker, subagent or teammate, is a named
-`sidequest-exec-<effort>` (haiku tickets: a plain agent with `model: haiku`).
+task description. A generic OR unnamed teammate throws away the executor protocol *and* the tier routing
+*and* addressability: it won't `claim`, won't verify, won't `done`, and you can't track or resume it. No
+anonymous or unnamed workers, ever — every ticket worker, subagent or teammate, is a named
+`sidequest-exec-<effort>` with its own unique `name` (haiku tickets: a plain agent with `model: haiku`,
+still named).
 
 **Caveats specific to teams:**
 - A teammate may **inherit the lead's reasoning-effort** instead of the effort your
@@ -413,6 +435,15 @@ enabled tier gets `·max` (and 9 only at bias +5) — deliberately rare, per Ant
 sparingly for the hardest tasks." The derivation is live: toggling a tier instantly re-routes every
 open ticket. `sidequest models` prints the current ladder.
 
+**One score, three coupled outputs.** The same complexity score drives not only the **model** and the
+**effort** (the ladder above) but also the **orchestration shape** — how you run the work. It's one
+continuous ladder: a low, serial one-off → a single NAMED subagent; the moment there's independent work
+that can run at once → PARALLELIZE it as a **WORKFLOW** (`parallel()`/`pipeline()`) sized by complexity,
+small (<5) → medium (<15) → large (<50), within the runtime cap of 16 concurrent / 1000 total per run.
+The trigger for a workflow is *parallelizability*, not size alone: if the pieces are independent, run
+them concurrently in a workflow rather than one at a time. Named subagents are for genuinely serial,
+one-off work; workflows are the default way to parallelize.
+
 **Bias is the user's dial, not yours.** You always score complexity honestly against the absolute
 anchored scale below — bias tunes only HOW eagerly those scores escalate to pricier rungs, never what
 you score. The user sets it with `sidequest bias <n>` (or the dashboard slider): `-5` Frugal … `0`
@@ -425,16 +456,23 @@ the actual work (files, moving parts, unknowns), not restate the number — writ
 you to look at the task properly. The scale is **absolute** — anchored to concrete reference points,
 not to "hard for me right now":
 
-- **1** — trivial: summarizing a README, a one-line lookup, skimming logs for a fact.
-- **2–3** — routine: a single-file edit or script, a rename, a dedup, a config bump.
+Each band maps to an effort/model rung (via the ladder) AND an orchestration shape (after the `→`):
+
+- **1** — trivial: summarizing a README, a one-line lookup, skimming logs for a fact. → inline, or a
+  single named subagent; nothing to parallelize.
+- **2–3** — routine: a single-file edit or script, a rename, a dedup, a config bump. → a single NAMED
+  subagent (serial one-off).
 - **4–5** — everyday build: one area, a known pattern, a few edge cases; **~5 anchors to simple HTML
-  work** — a static page, a form, a plain component.
+  work** — a static page, a form, a plain component. → a single named subagent, or a **small workflow**
+  (<5) if it splits into independent pieces.
 - **6–7** — hard: a multi-file feature or cross-cutting refactor — several coordinated edits, a
-  contract multiple consumers must respect, real edge cases.
+  contract multiple consumers must respect, real edge cases. → decompose and PARALLELIZE: a **small–
+  medium workflow** (<5–<15) of named executors over the independent pieces.
 - **8** — gnarly: novel debugging with an unknown root cause, or designing an algorithm/architecture
-  under real constraints.
+  under real constraints. → a **medium workflow** (<15), often design-ticket → parallel wave → integrate.
 - **9–10** — frontier: developing new AI models, RL training, research-grade problems with no
-  established solution. **10 is the extreme end**, not "a hard day."
+  established solution. **10 is the extreme end**, not "a hard day." → a **medium–large workflow**
+  (<15–<50) in staged waves.
 
 Normal day-to-day coding legitimately lands **1–7**. Scores of **9–10 firing rarely is intended** —
 the top rung (·max effort) is reserved for genuinely extreme work, same spirit as Anthropic's own
@@ -451,34 +489,46 @@ sidequest models        # the live ladder: which score routes to which tier·eff
 
 0. **Routing master switch first.** `sidequest models --json` → if `routing` is `false` the rules
    below stand down: work any ticket yourself; derived tags are informational.
-1. **Route, don't self-execute — ~95% of the time.** Every non-trivial ticket runs in an executor
+1. **Route, don't self-execute — ~95% of the time.** Every non-trivial ticket runs in a NAMED executor
    subagent, not the main thread: you cannot change your own model mid-run, so the spawn is the only way
    each task lands on the model×effort scored for it. This holds even for a single serial ticket and even
    when the derived tier equals yours (it still isolates context and composes the effort level). Only
-   genuinely trivial one-step changes stay in the main thread. Decompose, score, fan out; don't quietly
-   do laborer work at orchestrator prices.
+   genuinely trivial one-step changes stay in the main thread. Complexity already drives model×effort; it
+   ALSO drives the orchestration shape, and routing COMPOSES with it: a single ticket → one named
+   executor; a ready wave → many named executors spawned in one message; a large or repeatable batch → a
+   WORKFLOW sized by complexity (small <5 / medium <15 / large <50). Decompose, score, fan out; don't
+   quietly do laborer work at orchestrator prices.
 2. **The ticket's derived `model`/`effort` ARE the routing** — they come stamped on every read
    (`list`/`ready --json`), already shaped by the user's allowlist, so there is nothing to re-derive.
    Cap at your own tier if the ladder tops out above you (`fable > opus > sonnet > haiku`), and only
    spawn models that actually exist in your environment.
 3. **Map effort via the bundled executors:** spawn `subagent_type: sidequest-exec-<derived effort>`
-   **with** `model: <derived tier>` (effort lives in the agent definition, model in the spawn — they
-   compose). A haiku-derived ticket has no effort: use a plain agent with `model: haiku`.
-   **`<derived effort>` is the ticket's stamped `effort` verbatim, never a level you judge fits better** —
-   picking a different one (a disabled rung, or just hotter/cooler than stamped) is drift, and the executor
-   now guards against it: it claims with `--effort <its baked level>`, and the board REFUSES the claim if
-   that doesn't match the derived effort, bouncing the ticket back for the correct-tier agent.
+   **with** `model: <derived tier>` **and a unique `name:` per ticket** (lowercase-hyphens, e.g.
+   `exec-sq12`) — effort lives in the agent definition, model and name in the spawn; they compose. A
+   haiku-derived ticket has no effort: use a plain agent with `model: haiku` (still named).
+   **`<derived effort>` is the ticket's stamped `effort` verbatim, read from the FRESHEST `ready`/`list
+   --json` right before you spawn — never a level you judge fits better, and never one you carry over
+   from another ticket in the same fan-out.** Picking a different one (a disabled rung, hotter/cooler than
+   stamped, or another ticket's effort) is drift, and the executor guards against it: it claims with
+   `--effort <its baked level>`, and the board REFUSES the claim if that doesn't match the derived effort,
+   bouncing the ticket back for the correct-tier agent. Re-reading the stamped effort per ref immediately
+   before each spawn is what stops those refused-claim round-trips — match `sidequest-exec-<effort>` to
+   the ref's stamped effort exactly, especially when fanning out several at once, where it's easy to pair
+   the wrong exec with a ref.
 4. **Claim by tier:** `next --model X` / `ready --model X` hand out only tickets whose derived tier
    is X — an executor never grabs work priced for another tier.
 
-**Decision procedure:** routing on? → read the ticket's derived `model`/`effort` → cap at your tier →
-spawn `sidequest-exec-<effort>` (or plain agent for haiku) with `model: <tier>` → executor claims →
-works → verifies → dones.
+**Decision procedure:** routing on? → read each ticket's derived `model`/`effort` from the freshest
+`ready`/`list --json` → cap at your tier → pick the orchestration shape by complexity (single named
+subagent / named fan-out in one message / small|medium|large workflow) → spawn `sidequest-exec-<that
+ref's exact effort>` (or plain agent for haiku) with `model: <tier>` and a unique `name` → executor
+claims → works → verifies → dones. Read the stamped effort per ref immediately before spawning, so the
+exec tier matches and the claim isn't refused.
 
 *Worked example:* main session = fable, haiku disabled; ticket `SQ-12 ⚙C3→sonnet·max`.
-`Agent(subagent_type: "sidequest-exec-max", model: "sonnet", prompt: claim SQ-12 → fix → verify →
-done)`. The user re-enables haiku later → the same open ticket re-reads as `C3→sonnet·low` or lower —
-always spawn from the freshest read.
+`Agent(subagent_type: "sidequest-exec-max", model: "sonnet", name: "exec-sq12", prompt: claim SQ-12 →
+fix → verify → done)`. The user re-enables haiku later → the same open ticket re-reads as `C3→sonnet·low`
+or lower — always spawn from the freshest read.
 
 A ticket shows `⚙C<score>→tier·effort` on its card and in `list`/`ready`; the user shapes the ladder
 in the dashboard settings (gear → Available models), where the live mapping is displayed.
