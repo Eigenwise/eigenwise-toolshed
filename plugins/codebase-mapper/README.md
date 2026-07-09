@@ -1,5 +1,11 @@
 # codebase-mapper
 
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Fcodebase-mapper%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+
 A self-maintaining **codebase map** for Claude Code: small Markdown docs under
 `.claude/.codebase-info/` that describe how your project is built, re-injected into context on every
 prompt so Claude starts each session already knowing the layout instead of grepping around blind.
@@ -107,6 +113,10 @@ Commit `.claude/.codebase-info/` so the whole team and every future session shar
 
 - Docs: delete `.claude/.codebase-info/`.
 - Plugin: `/plugin uninstall codebase-mapper@eigenwise-toolshed`.
+
+## Support
+
+codebase-mapper is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
 
 ## License
 

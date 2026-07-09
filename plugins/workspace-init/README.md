@@ -1,5 +1,11 @@
 # workspace-init
 
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Fworkspace-init%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+
 One command to set up a Claude Code workspace for a project, new or existing. It runs a short
 interview, then writes a populated `.claude/`: a `settings.json` that enables the right plugins for
 your stack, a tailored `live-rules.md`, a codebase map, and a short note on how the project is meant to
@@ -84,6 +90,10 @@ merged into skills: a `commands/x.md` and a `skills/x/SKILL.md` both map to the 
 is already a slash command on its own. Shipping a thin command that just invokes a same-named skill is
 an anti-pattern: the two share a name, and in practice it left the skill's steps un-injected (the
 harness saw the name "already loaded" and skipped the body). So this plugin ships the skill only.
+
+## Support
+
+workspace-init is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
 
 ## License
 

@@ -1,5 +1,13 @@
 # 🧰 eigenwise-toolshed
 
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin_marketplace-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](./LICENSE)
+[![No dependencies](https://img.shields.io/badge/dependencies-none,_Node_stdlib_only-brightgreen)](#install)
+[![Last commit](https://img.shields.io/github/last-commit/Eigenwise/eigenwise-toolshed)](https://github.com/Eigenwise/eigenwise-toolshed/commits/main)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+[![GitHub stars](https://img.shields.io/github/stars/Eigenwise/eigenwise-toolshed?style=social)](https://github.com/Eigenwise/eigenwise-toolshed/stargazers)
+
 A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins.
 
 > Sharp little tools for Claude Code, kept in one shed. 🛠️

@@ -1,5 +1,11 @@
 # sidequest
 
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Fsidequest%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
+
 **A Trello-light quest log for Claude Code.** The stray issues you mention while Claude is busy with
 something else — *"oh, and the contact form doesn't send"* — get captured as **tickets** on the spot,
 with any image you pasted attached, and land on a **live, self-hosted Kanban dashboard** that spans
@@ -431,6 +437,10 @@ Two optional environment variables (set them in `.claude/settings.json` under `e
 - Tickets for one project: delete its folder under `~/.claude/sidequest/projects/`.
 - Everything: delete `~/.claude/sidequest/` (stop the server first with `… stop`).
 - Plugin: `/plugin uninstall sidequest@eigenwise-toolshed`.
+
+## Support
+
+sidequest is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
 
 ## License
 
