@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "2.42.0",
+  "version": "2.43.0",
   "plugins": [
     {
       "name": "workspace-init",
@@ -99,6 +99,29 @@
         "standards",
         "runtime",
         "developer-experience"
+      ]
+    },
+    {
+      "name": "switchboard",
+      "source": "./plugins/switchboard",
+      "description": "Complexity-scored model and effort routing for Claude Code. Score any task 1-10 and switchboard derives which model tier should work it and at what reasoning effort, on a user-tunable capability ladder (bias dial, per-model effort allowlist), then runs it in a named executor subagent at exactly that tier.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Eigenwise"
+      },
+      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/switchboard",
+      "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+      "license": "MIT",
+      "category": "workflow",
+      "keywords": [
+        "routing",
+        "model",
+        "effort",
+        "complexity",
+        "ladder",
+        "delegation",
+        "subagents",
+        "orchestration"
       ]
     }
   ]

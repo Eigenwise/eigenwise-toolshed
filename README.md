@@ -12,6 +12,7 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 | [**codebase-mapper**](./plugins/codebase-mapper) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
 | [**live-rules**](./plugins/live-rules) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
 | [**sidequest**](./plugins/sidequest) | A Trello-light quest log. The stray issues you mention mid-task ("oh, and the contact form doesn't send") get captured as tickets on the spot, with any pasted image attached, and land on a live, self-hosted Kanban dashboard that spans every project you work in. |
+| [**switchboard**](./plugins/switchboard) | Complexity-scored model and effort routing. Score a task 1-10 and switchboard works out which model tier should run it and how hard it should think, then hands the work to a named executor subagent at exactly that tier. |
 
 *More tools will move into the shed over time.*
 
@@ -23,6 +24,7 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 /plugin install codebase-mapper@eigenwise-toolshed
 /plugin install live-rules@eigenwise-toolshed
 /plugin install sidequest@eigenwise-toolshed
+/plugin install switchboard@eigenwise-toolshed
 ```
 
 Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.
@@ -119,6 +121,29 @@ neither:
 
 Manage it all from chat ("make a ticket for X", "close SQ-3", "what's open") or the bundled CLI. The
 [plugin README](./plugins/sidequest) is the full userguide.
+
+## Why switchboard?
+
+Handing a task to a subagent usually means picking a model by feel, and that feel is inconsistent:
+the same task gets opus one day and sonnet the next, for no real reason. switchboard replaces the
+feel with a score:
+
+- You score the task's **complexity (1-10)**, honestly, against an absolute scale: a one-line lookup
+  is a 1, a novel multi-file refactor is a 6-7, frontier research is a 9-10. You never pick the model
+  directly.
+- switchboard **derives** the model tier and reasoning effort from that score on one merged,
+  capability-ranked ladder, not flat per-tier bands, so `sonnet·xhigh` can rank above `opus·medium`.
+- The work runs in a **named executor subagent** pinned to exactly that tier and effort, so the
+  routing actually lands instead of staying a suggestion.
+- A **bias dial** (`-5` frugal to `+5` generous) and a **per-model effort allowlist** let you tune how
+  eagerly scores escalate, without ever touching the anchors: complexity 1 and 10 always land the
+  same rungs.
+- `max` effort is held back on purpose, only the very top of the scale reaches it, same spirit as
+  using max sparingly for the genuinely hardest work.
+
+It's the same routing engine sidequest uses internally, shared by copy, packaged standalone for
+anyone who wants the ladder without a ticket board. The [plugin README](./plugins/switchboard) has
+the full CLI and the ladder mechanics.
 
 ## About
 

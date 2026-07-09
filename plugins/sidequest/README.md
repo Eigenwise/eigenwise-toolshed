@@ -177,6 +177,10 @@ in that same section too, but it's per model, not global: a model×effort grid l
 opus·medium while sonnet·medium stays on, and that pair just drops out of opus's rungs. The guards:
 at least one tier always stays enabled, and each enabled tier's row always keeps at least one effort on.
 
+This ladder engine also ships standalone as the **switchboard** plugin (same rungs, same bias math,
+no ticket board attached). It's shared by copy, not by dependency: each plugin keeps its own tests,
+and a change to the ladder answers to that plugin's own tests, not the other's.
+
 ## File scopes & parallel waves
 
 Declare which files a ticket will touch and the board can tell you **what's safe to run in parallel** —
