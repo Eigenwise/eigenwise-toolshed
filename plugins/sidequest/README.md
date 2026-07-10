@@ -287,8 +287,10 @@ sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status tod
   ago.
 - **`--by`** is your worker id (a session id or a short label); use a stable one so you can finish what
   you claimed. Concurrent workers must use distinct ids.
-- **Delegate small tickets.** Once you've claimed a ticket, you can spawn a subagent to do the actual
-  work while you orchestrate, then mark it `done` when it reports back.
+- **Expensive orchestrator, cheap executors.** Claude's main thread (usually the priciest model)
+  plans and integrates; the actual work routes down to each ticket's derived tier as **short, bounded
+  executor runs** that report back fast. Several small same-tier tickets batch into one executor,
+  independent tickets run as a parallel wave, and only trivial one-step changes happen inline.
 - **Crash-safe.** A claim left by a worker that crashed or wandered off becomes reclaimable after a
   timeout (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). On the dashboard, a claimed ticket shows a green
   "working" chip with the worker's id (muted once the claim goes stale).
@@ -308,7 +310,8 @@ tickets are **ready and independent**, it works them **in parallel**, one subage
 *Claude splits the ready tickets into waves by the files they touch, then launches a wave of executors in parallel, each on the model tier its complexity earned. A ticket that overlaps another waits for the next wave.*
 
 ```bash
-sidequest ready [--json]   # the fan-out set: unclaimed, unblocked, not done, not archived
+sidequest ready [--json] [--brief]   # the fan-out set: unclaimed, unblocked, not done, not archived
+                                     # --brief: compact tickets, no bodies (the cheap orchestration read; implies --json)
 ```
 
 Each subagent `claim`s a different ticket (distinct `--by`) → does the work → `done`; if a claim loses
@@ -400,7 +403,7 @@ Every action is a thin wrapper over one script, usable directly too:
 
 ```bash
 node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui -i /path/to/shot.png --complexity 4 --why "..."
-node <plugin>/bin/sidequest.js list [--status todo|doing|done] [--json]
+node <plugin>/bin/sidequest.js list [--status todo|doing|done] [--json] [--brief]
 node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -i  ·  --story US-1|none
 node <plugin>/bin/sidequest.js rm SQ-3
 node <plugin>/bin/sidequest.js story add -t "Epic" [--color teal]   # group tickets; file into it with --story US-n
@@ -409,7 +412,7 @@ node <plugin>/bin/sidequest.js add -t "Task" --complexity 5 --why "..."   # scor
 node <plugin>/bin/sidequest.js models                               # the live complexity -> tier·effort ladder
 node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only work whose DERIVED tier is sonnet
 node <plugin>/bin/sidequest.js models [--json]                      # the tiers you allow + each tier's enabled efforts
-node <plugin>/bin/sidequest.js ready [--json]                 # the fan-out set (unclaimed, unblocked)
+node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
 node <plugin>/bin/sidequest.js work [--dry-run] [--max N]     # drain the ready set with headless claude runs
 node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)

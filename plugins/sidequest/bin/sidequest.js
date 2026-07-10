@@ -71,7 +71,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -222,14 +222,16 @@ function cmdAdd(opts) {
 
 function cmdList(opts) {
   const { slug, meta } = resolveProject(opts);
+  // --brief is a JSON shape, so it implies --json rather than silently no-oping.
+  if (opts.json || opts.brief) {
+    const payload = store.listPayload(slug, { status: opts.status, archived: opts.archived, brief: opts.brief });
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + '\n');
+    return;
+  }
   let tickets = store.listTickets(slug);
   // Archived tickets are hidden from the board by default; `--archived` shows only them.
   tickets = opts.archived ? tickets.filter((t) => t.archived) : tickets.filter((t) => !t.archived);
   if (opts.status) tickets = tickets.filter((t) => t.status === String(opts.status).toLowerCase());
-  if (opts.json) {
-    process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, tickets }, null, 2) + '\n');
-    return;
-  }
   if (!tickets.length) {
     console.log(`No tickets in ${meta.name}.`);
     return;
@@ -775,13 +777,14 @@ function cmdUnlink(opts, positional) {
 // The set to fan subagents out over: unclaimed, unblocked, not-done, not-archived.
 function cmdReady(opts) {
   const { slug, meta } = resolveProject(opts);
-  const tickets = store.readyTickets(slug, { model: opts.model });
-  const waves = store.readyWaves(slug, { model: opts.model });
-  if (opts.json) {
-    const waveRefs = waves.map((wave) => wave.map((t) => t.ref));
-    process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, tickets, waves: waveRefs }, null, 2) + '\n');
+  // --brief is a JSON shape, so it implies --json rather than silently no-oping.
+  if (opts.json || opts.brief) {
+    const payload = store.readyPayload(slug, { model: opts.model, brief: opts.brief });
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + '\n');
     return;
   }
+  const tickets = store.readyTickets(slug, { model: opts.model });
+  const waves = store.readyWaves(slug, { model: opts.model });
   if (!tickets.length) {
     console.log(`Nothing ready to work in ${meta.name}.`);
     return;
@@ -1333,7 +1336,7 @@ function help() {
 
 Usage:
   sidequest add -t "title" --complexity 1-10 --why "<motivation>" [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
-  sidequest list [--status todo|doing|done] [--json]
+  sidequest list [--status todo|doing|done] [--json] [--brief]   (--brief: compact JSON, no bodies; implies --json)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--complexity 1-10 --why "<motivation>"]
   sidequest rm <id|SQ-n>
   sidequest projects [--json]
@@ -1345,7 +1348,7 @@ Usage:
     code) — use real newlines in the value (heredoc or $'...\\n...'), never a literal backslash-n.
 
 Working the board safely (multi-agent):
-  sidequest ready [--model tier] [--json]          the ready set (unclaimed, unblocked) — fan subagents over it
+  sidequest ready [--model tier] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force] [--effort level]   atomically take a ticket (fails if gone/done/claimed; --effort must match the derived tier or the claim is refused as wrong-executor)
   sidequest next [--by who] [-p priority] [--model tier]   claim the best available ticket (highest priority first)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level]   mark it done (stamp who/what worked it)

@@ -1,19 +1,25 @@
 'use strict';
 /**
- * Tests for the UserPromptSubmit / SessionStart hooks (SQ-105 / SQ-106 / SQ-109).
+ * Tests for the UserPromptSubmit / SessionStart hooks.
  *
- * These lock in three fixes that came out of the "agents ignore the fan-out
- * guidance" investigation (contractify session 634fecde):
- *   - SQ-105: the SessionStart nudge now carries fan-out guidance at all.
- *   - SQ-106: the plan+fan-out discipline is no longer SUPPRESSED when a prompt
- *     trips a capture or board-management marker — those blocks used to
- *     process.exit early, dropping the guidance exactly on the action prompts
- *     that kick off real work. Both blocks now carry the core-discipline footer.
- *     Over-broad capture markers ('needs to' / 'missing' / "won't") were pruned
- *     so ordinary task descriptions stop tripping capture.
- *   - SQ-109: the fan-out line is concrete and trigger-based ("read ~4+ files"
- *     -> spawn an Explore / code-explorer scout), not the abstract "lean
- *     parallel over serial" that got ignored mid-execution even when present.
+ * These lock in the 2026-07 token diet. Hook output is UNCACHED context on the
+ * turn it fires and then sits in the transcript for the rest of the session, so
+ * the per-prompt hook was the plugin's most expensive surface: it used to emit
+ * a ~600-token doctrine block on EVERY prompt ("~95% off the main thread",
+ * "scout before reading ~4+ files"), which is exactly the over-orchestration
+ * users then saw. The regime now:
+ *
+ *   - The no-marker standing reminder is ONE short line. The full doctrine
+ *     lives in SessionStart (which re-fires on compact/resume) and the skill.
+ *   - SessionStart carries the execution economy: expensive orchestrator,
+ *     cheap executors — route work DOWN to each ticket's stamped tier as
+ *     SHORT, bounded runs that bounce back fast; batch small same-tier tickets
+ *     into one executor; inline only trivial one-steps.
+ *   - Every block has a byte budget asserted here, so the blocks can't quietly
+ *     grow back.
+ *   - Earlier fixes stay locked: over-broad capture markers stay pruned
+ *     (SQ-106), and capture/mgmt blocks keep a (now one-line) discipline
+ *     footer so an action prompt doesn't lose it entirely.
  *
  * The hooks are Node scripts that read a JSON payload on stdin and print a
  * hookSpecificOutput envelope on stdout, so we exercise them as subprocesses
@@ -31,6 +37,17 @@ const HOOKS = path.join(__dirname, '..', 'hooks');
 const CAPTURE = path.join(HOOKS, 'capture-nudge.js');
 const SESSION = path.join(HOOKS, 'session-start.js');
 
+// Byte budgets (chars ≈ tokens × ~4). CLI paths inside the blocks vary by
+// machine, so these have headroom — the point is catching a doctrine block
+// growing back to its old ~2.5KB size, not byte-exact accounting.
+const BUDGET = {
+  standing: 400, // the every-prompt line — keep this one genuinely tiny
+  session: 1900, // once per session start
+  compact: 600, // once per compact/resume
+  capture: 1500, // marker-gated
+  mgmt: 1600, // marker-gated
+};
+
 // Run a hook with the given stdin payload and return the injected
 // additionalContext string (or '' when the hook stays silent).
 function runHook(script, payload) {
@@ -45,24 +62,31 @@ function runHook(script, payload) {
 
 const capture = (prompt) => runHook(CAPTURE, { prompt });
 
-// Markers of the concrete, trigger-based fan-out guidance (SQ-109). We assert
-// on the trigger phrasing and the NAMED tool, since the whole finding was that
-// abstract wording gets ignored — the test should fail if someone softens it
-// back to vibes.
-const CONCRETE_TRIGGER = 'read ~4+ files';
-const NAMED_SCOUT = 'Explore / code-explorer';
-const FOOTER_MARK = 'sidequest discipline';
+const FOOTER_MARK = '— sidequest:';
+
+// Phrases from the retired heavy doctrine that must NOT come back to any block.
+const RETIRED = ['95%', 'read ~4+ files', 'AskUserQuestion', 'coreDiscipline'];
+
+function assertNoRetiredDoctrine(ctx, where) {
+  for (const phrase of RETIRED) {
+    assert.ok(!ctx.includes(phrase), `${where} must not carry retired doctrine ("${phrase}")`);
+  }
+}
 
 /* ------------------------------------------------------------------ *
- *  SessionStart (SQ-105 + SQ-109)
+ *  SessionStart — the one full doctrine block
  * ------------------------------------------------------------------ */
 
-test('session-start: carries the concrete, named-tool fan-out guidance', () => {
+test('session-start: carries the route-down + tight-loop doctrine', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.match(ctx, /sidequest \(active\)/);
-  assert.ok(ctx.includes('FAN OUT'), 'SessionStart should mention FAN OUT');
-  assert.ok(ctx.includes(CONCRETE_TRIGGER), 'fan-out line must be trigger-based, not abstract');
-  assert.ok(ctx.includes(NAMED_SCOUT), 'fan-out line must name the scout subagent');
+  assert.ok(ctx.includes('ATOMIC'), 'must demand atomic tickets (stuck executors come from oversized scope)');
+  assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the stamped tier');
+  assert.ok(ctx.includes('sidequest-exec-'), 'must name the routed executor');
+  assert.ok(ctx.includes('SHORT'), 'must demand short, bounded executor runs');
+  assert.ok(ctx.includes('bounce back'), 'must tell executors to bounce back, not wander');
+  assert.ok(ctx.includes('ONE executor'), 'must carry the batch-small-tickets rule');
+  assert.ok(ctx.includes('trivial one-step'), 'inline is only for trivial one-steps');
 });
 
 test('session-start: says sidequest coexists with an external tracker (Jira)', () => {
@@ -71,21 +95,21 @@ test('session-start: says sidequest coexists with an external tracker (Jira)', (
   assert.ok(ctx.includes('Jira'), 'must name Jira so the "already tracked" reflex is countered');
 });
 
-test('session-start: stresses routed-subagent execution + the model-routing why', () => {
+test('session-start: stays inside its byte budget and off the retired doctrine', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.ok(ctx.includes('routed subagent'), 'must push routed-subagent execution');
-  assert.ok(ctx.includes('best model'), 'must give the model-routing reason');
-  assert.ok(ctx.includes('95%'), 'must state the ~95%-in-a-subagent bar');
-  assert.ok(ctx.includes('subagent workflows'), 'must frame execution as subagent workflows');
-  assert.ok(ctx.includes('teams of sub-agents'), 'must frame execution as teams of sub-agents');
+  assert.ok(
+    ctx.length <= BUDGET.session,
+    `session block is ${ctx.length} chars — budget is ${BUDGET.session}; trim it, don't raise the budget`
+  );
+  assertNoRetiredDoctrine(ctx, 'session-start');
 });
 
 test('session-start: source=compact gets the terse re-grounding block, not the full nudge', () => {
   const ctx = runHook(SESSION, { session_id: 't', source: 'compact' });
   assert.match(ctx, /sidequest \(active — context restored\)/);
   assert.ok(ctx.includes('list --status doing'), 'must tell Claude to re-check in-flight claims');
-  assert.ok(ctx.includes('context'), 'must mention context being restored/compacted');
   assert.ok(!ctx.includes('external tracker'), 'must NOT be the full block on compact');
+  assert.ok(ctx.length <= BUDGET.compact, `compact block is ${ctx.length} chars — budget is ${BUDGET.compact}`);
 });
 
 test('session-start: source=startup still gets the full block', () => {
@@ -103,47 +127,67 @@ test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
 });
 
 /* ------------------------------------------------------------------ *
- *  Standing reminder — the no-marker path (SQ-109)
+ *  Standing reminder — the no-marker path is ONE short line
  * ------------------------------------------------------------------ */
 
-test('standing reminder: plain task prompt gets the concrete fan-out trigger', () => {
+test('standing reminder: plain task prompt gets one short line, not a doctrine block', () => {
   const ctx = capture('add a new export format to the reporter');
   assert.match(ctx, /sidequest \(active\)/);
-  assert.ok(ctx.includes(CONCRETE_TRIGGER), 'standing reminder must carry the concrete trigger');
-  assert.ok(ctx.includes(NAMED_SCOUT), 'standing reminder must name the scout subagent');
+  assert.ok(ctx.includes('tickets'), 'must still point at the board');
+  assert.ok(
+    ctx.length <= BUDGET.standing,
+    `standing reminder is ${ctx.length} chars — budget is ${BUDGET.standing}; this fires EVERY prompt`
+  );
+  assertNoRetiredDoctrine(ctx, 'standing reminder');
 });
 
-test('standing reminder: says sidequest coexists with an external tracker (Jira)', () => {
-  const ctx = capture('add a new export format to the reporter');
-  assert.ok(ctx.includes('external tracker'), 'must address the external-tracker case');
-  assert.ok(ctx.includes('Jira'), 'must name Jira so the "already tracked" reflex is countered');
-});
-
-test('standing reminder: stresses routed-subagent execution (~95%, not the main thread)', () => {
-  const ctx = capture('add a new export format to the reporter');
-  assert.ok(ctx.includes('EXECUTE via a routed subagent'), 'must carry the EXECUTE bullet');
-  assert.ok(ctx.includes('95%'), 'must state the ~95%-in-a-subagent bar');
-  assert.ok(ctx.includes('sidequest-exec-'), 'must name the executor subagent to spawn');
-  assert.ok(ctx.includes('subagent workflows'), 'must frame execution as subagent workflows');
-  assert.ok(ctx.includes('teams of sub-agents'), 'must frame execution as teams of sub-agents');
+test('standing reminder: SIDEQUEST_NUDGE=off silences it (marker blocks still fire)', () => {
+  const env = { ...process.env, SIDEQUEST_NUDGE: 'off' };
+  const plain = execFileSync(process.execPath, [CAPTURE], {
+    input: JSON.stringify({ prompt: 'add a new export format' }),
+    encoding: 'utf8',
+    env,
+  });
+  assert.strictEqual(plain.trim(), '', 'no-marker path should emit nothing when nudge is off');
+  const defect = execFileSync(process.execPath, [CAPTURE], {
+    input: JSON.stringify({ prompt: 'the login form is broken' }),
+    encoding: 'utf8',
+    env,
+  });
+  assert.ok(defect.includes('capture the side quest'), 'capture block must still fire when nudge is off');
 });
 
 /* ------------------------------------------------------------------ *
- *  Discipline is not suppressed by capture / mgmt branches (SQ-106)
+ *  Capture block
  * ------------------------------------------------------------------ */
 
-test('capture block still carries the core-discipline footer', () => {
+test('capture block: fires on a defect prompt, carries the filing command + footer, inside budget', () => {
   const ctx = capture('the login form is broken');
   assert.ok(ctx.includes('capture the side quest'), 'a defect prompt should hit the capture block');
-  assert.ok(ctx.includes(FOOTER_MARK), 'capture block must still carry the plan+fan-out footer');
-  assert.ok(ctx.includes(CONCRETE_TRIGGER), 'footer must carry the concrete fan-out trigger');
+  assert.ok(ctx.includes('ticket-filer'), 'must prefer the background ticket-filer');
+  assert.ok(ctx.includes('--complexity'), 'must show the required complexity flag');
+  assert.ok(ctx.includes(FOOTER_MARK), 'must keep the one-line discipline footer');
+  assert.ok(ctx.length <= BUDGET.capture, `capture block is ${ctx.length} chars — budget is ${BUDGET.capture}`);
+  assertNoRetiredDoctrine(ctx, 'capture block');
 });
 
-test('board-management block still carries the core-discipline footer', () => {
+/* ------------------------------------------------------------------ *
+ *  Board-management block
+ * ------------------------------------------------------------------ */
+
+test('board-management block: fires on a dashboard prompt, carries claim discipline, inside budget', () => {
   const ctx = capture('show me the dashboard');
   assert.ok(ctx.includes('board control'), 'a dashboard prompt should hit the mgmt block');
-  assert.ok(ctx.includes(FOOTER_MARK), 'mgmt block must still carry the plan+fan-out footer');
-  assert.ok(ctx.includes(CONCRETE_TRIGGER), 'footer must carry the concrete fan-out trigger');
+  assert.ok(ctx.includes('claim'), 'must carry the claim-first rule');
+  assert.ok(ctx.includes('mcp__plugin_sidequest_board__'), 'must point at the MCP tools first');
+  assert.ok(ctx.includes(FOOTER_MARK), 'must keep the one-line discipline footer');
+  assert.ok(ctx.length <= BUDGET.mgmt, `mgmt block is ${ctx.length} chars — budget is ${BUDGET.mgmt}`);
+  assertNoRetiredDoctrine(ctx, 'mgmt block');
+});
+
+test('an SQ-ref prompt routes to the board-management block', () => {
+  const ctx = capture('close SQ-3');
+  assert.ok(ctx.includes('board control'), 'an SQ-\\d+ ref should hit the mgmt block');
 });
 
 /* ------------------------------------------------------------------ *
@@ -168,13 +212,4 @@ test('genuine defect words still trip capture', () => {
   // 'crash' is deliberately kept — a real "X crashed" report should still file.
   assert.ok(capture('the exporter crashes on empty input').includes('capture the side quest'));
   assert.ok(capture('oh and the contact form is broken').includes('capture the side quest'));
-});
-
-/* ------------------------------------------------------------------ *
- *  Board-management routing still works (regression guard)
- * ------------------------------------------------------------------ */
-
-test('an SQ-ref prompt routes to the board-management block', () => {
-  const ctx = capture('close SQ-3');
-  assert.ok(ctx.includes('board control'), 'an SQ-\\d+ ref should hit the mgmt block');
 });

@@ -1700,6 +1700,80 @@ function isBlocked(slug, ticket) {
   return openBlockers(slug, ticket).length > 0;
 }
 
+// Resolve a ticket's open blockers against an in-memory ref->ticket index
+// (uppercased refs), instead of openBlockers()'s per-link getTicket fallback:
+// links store "SQ-n" refs while ticket files are named by id, so the per-link
+// path degenerates into a full-board rescan per link.
+function openBlockersFromIndex(index, ticket) {
+  if (!ticket || !Array.isArray(ticket.links)) return [];
+  const out = [];
+  for (const l of ticket.links) {
+    if (l.type !== 'blocked-by') continue;
+    const blocker = index.get(String(l.ref).toUpperCase());
+    if (blocker && blocker.status !== 'done') out.push(blocker.ref);
+  }
+  return out;
+}
+
+// A compact projection of a ticket for orchestration reads (`--brief` on the
+// CLI, `brief: true` over MCP): everything an orchestrator needs to route,
+// batch, and spawn, none of the bodies. A full ticket carries its whole
+// description and comment thread, which an orchestrator scanning a board pays
+// for on every read without needing; the executor working the ticket reads the
+// full record instead. opts.blockedBy short-circuits the blocker lookup when
+// the caller already knows it (the ready set is unblocked by construction);
+// opts.index resolves blockers in memory. Bare briefTicket(slug, t) still
+// works but pays the per-link scan.
+function briefTicket(slug, t, opts) {
+  opts = opts || {};
+  let blockedBy;
+  if (Array.isArray(opts.blockedBy)) blockedBy = opts.blockedBy;
+  else if (opts.index) blockedBy = openBlockersFromIndex(opts.index, t);
+  else blockedBy = openBlockers(slug, t);
+  return {
+    ref: t.ref,
+    title: t.title,
+    status: t.status,
+    priority: t.priority,
+    complexity: t.complexity || null,
+    model: t.model || null,
+    effort: t.effort || null,
+    files: Array.isArray(t.files) ? t.files : [],
+    claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
+    blockedBy,
+    comments: Array.isArray(t.comments) ? t.comments.length : 0,
+    awaitingReply: needsResponse(t),
+  };
+}
+
+// The one board-read payload both transports (CLI --json and MCP) serve, so
+// their shapes cannot drift: filtering, the brief projection, and the blocker
+// index live here and nowhere else.
+function listPayload(slug, opts) {
+  opts = opts || {};
+  const all = listTickets(slug);
+  let tickets = opts.archived ? all.filter((t) => t.archived) : all.filter((t) => !t.archived);
+  if (opts.status) tickets = tickets.filter((t) => t.status === String(opts.status).toLowerCase());
+  if (opts.brief) {
+    // Blockers may live outside the filtered set, so index the whole board.
+    const index = new Map(all.map((t) => [String(t.ref).toUpperCase(), t]));
+    tickets = tickets.map((t) => briefTicket(slug, t, { index }));
+  }
+  return { tickets };
+}
+
+// Same for the ready read. Waves are ALWAYS arrays of refs (both transports,
+// brief or not) — full tickets ride only in `tickets`, so nothing is
+// serialized twice and the field has one shape. Ready tickets are unblocked by
+// construction, so brief projections skip the blocker lookup outright.
+function readyPayload(slug, opts) {
+  opts = opts || {};
+  let tickets = readyTickets(slug, { model: opts.model });
+  const waves = readyWaves(slug, { model: opts.model }).map((wave) => wave.map((t) => t.ref));
+  if (opts.brief) tickets = tickets.map((t) => briefTicket(slug, t, { blockedBy: [] }));
+  return { tickets, waves };
+}
+
 /* ------------------------------------------------------------------ *
  *  Notifications
  *
@@ -2390,6 +2464,9 @@ module.exports = {
   unlinkTickets,
   openBlockers,
   isBlocked,
+  briefTicket,
+  listPayload,
+  readyPayload,
   archiveTicket,
   unarchiveTicket,
   archiveAllDone,

@@ -121,35 +121,37 @@ const PROJECT_PROP = { type: 'string', description: 'Board to target (a register
 const TOOLS = [
   {
     name: 'list',
-    description: 'List tickets on a board, grouped data for the caller to read. Add status to filter one column; archived:true shows archived tickets.',
+    description: 'List tickets on a board. status filters one column; archived:true shows archived. brief:true returns the compact shape (no bodies or threads) — default to it for routine orchestration reads.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         status: { type: 'string', enum: ['todo', 'doing', 'done'] },
         archived: { type: 'boolean' },
+        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies.' },
       },
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      let tickets = store.listTickets(slug);
-      tickets = args.archived ? tickets.filter((t) => t.archived) : tickets.filter((t) => !t.archived);
-      if (args.status) tickets = tickets.filter((t) => t.status === String(args.status).toLowerCase());
-      return { project: slug, projectName: meta.name, tickets };
+      const payload = store.listPayload(slug, { status: args.status, archived: args.archived, brief: args.brief });
+      return Object.assign({ project: slug, projectName: meta.name }, payload);
     },
   },
   {
     name: 'ready',
-    description: 'The fan-out set: unclaimed, unblocked, not-done tickets, partitioned into parallel-safe waves by declared file scope. Spawn one executor per ticket in wave 1. model filters to one derived tier.',
+    description: 'The workable set: unclaimed, unblocked, not-done tickets, partitioned into parallel-safe waves by declared file scope. waves is always arrays of refs; full/compact tickets ride in tickets. model filters to one derived tier. brief:true returns compact tickets — default to it for orchestration reads.',
     inputSchema: {
       type: 'object',
-      properties: { project: PROJECT_PROP, model: { type: 'string', enum: store.VALID_MODELS } },
+      properties: {
+        project: PROJECT_PROP,
+        model: { type: 'string', enum: store.VALID_MODELS },
+        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies.' },
+      },
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const waves = store.readyWaves(slug, { model: args.model });
-      const tickets = store.readyTickets(slug, { model: args.model });
-      return { project: slug, projectName: meta.name, waves, tickets };
+      const payload = store.readyPayload(slug, { model: args.model, brief: args.brief });
+      return Object.assign({ project: slug, projectName: meta.name }, payload);
     },
   },
   {
