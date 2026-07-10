@@ -759,7 +759,7 @@
           </div>
         </div>
         <div class="field">
-          <label title="Absolute scale — 1 = summarize a README, ~5 = simple HTML work, 10 = frontier AI research. Normal coding lands ~1-7; hover a number for its anchor.">Complexity</label>
+          <label title="Task-shape scale — 1-2 subagent-shaped, 3-5 daily coding, 6-7 complex agentic, 8-10 larger-than-a-sitting. Normal coding lands ~1-7; hover a number for its anchor.">Complexity</label>
           <div class="seg complexity" id="mComplexity"></div>
           <div class="claim-hint" id="mDerived" style="display:none"></div>
         </div>
@@ -878,16 +878,16 @@
   // to concrete reference points (see SKILL.md) — hover a button for its anchor.
   var COMPLEXITY = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
   var COMPLEXITY_HINT = {
-    1: "1 — trivial: summarizing a README",
-    2: "2-3 — routine: single-file edit or script, a rename, a config bump",
-    3: "2-3 — routine: single-file edit or script, a rename, a config bump",
-    4: "4-5 — everyday build: one area, a few edge cases (~5 = simple HTML work)",
-    5: "4-5 — everyday build: one area, a few edge cases (~5 = simple HTML work)",
-    6: "6-7 — hard: multi-file feature or cross-cutting refactor",
-    7: "6-7 — hard: multi-file feature or cross-cutting refactor",
-    8: "8 — gnarly: novel debugging or algorithm/architecture design",
-    9: "9-10 — frontier: new AI models, RL training, research-grade problems (rare by design)",
-    10: "9-10 — frontier: new AI models, RL training, research-grade problems (rare by design)"
+    1: "1-2 — subagent-shaped: the spec says everything; a lookup, a mechanical edit, a config bump",
+    2: "1-2 — subagent-shaped: the spec says everything; a lookup, a mechanical edit, a config bump",
+    3: "3-5 — daily-coding-shaped: a function/endpoint/component on a known pattern, one area",
+    4: "3-5 — daily-coding-shaped: a function/endpoint/component on a known pattern, one area",
+    5: "3-5 — daily-coding-shaped: a function/endpoint/component on a known pattern, one area",
+    6: "6-7 — complex-agentic-shaped: multi-file feature, a contract several consumers must respect",
+    7: "6-7 — complex-agentic-shaped: multi-file feature, a contract several consumers must respect",
+    8: "8-10 — larger-than-a-sitting: unknown-root-cause debugging, architecture under constraints",
+    9: "8-10 — larger-than-a-sitting: research-grade work (rare by design)",
+    10: "8-10 — frontier end: new AI models, RL training (rare by design)"
   };
   var POLL_MS = 2500;
   // Quick "Remind me" presets in the ticket editor -> a Date to fire at.

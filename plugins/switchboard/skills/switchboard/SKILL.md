@@ -24,33 +24,41 @@ moving parts, unknowns), not restating the number — **in your visible reply**.
 `switchboard route <score>` and spawn what it says. Scoring silently, or picking the tier you
 wanted and backfilling a score to match, is exactly the failure mode this exists to prevent.
 
-## The absolute anchored scale
+## The task-shape scale
 
-The scale is **absolute** — anchored to concrete reference points, not to "hard for me right
-now." Each band maps to a rung on the ladder (below) and an orchestration shape:
+The scale is **absolute** because it's anchored to **task shapes** — Anthropic's own published
+descriptions of which work each tier is for — not to how hard the task feels in this repo.
+"Feels hard" varies by codebase; "a multi-file feature with a contract several consumers must
+respect" is the same shape anywhere. Score by matching the shape, and say the shape in your
+motivation. Full official grounding (quotes, per-model effort guidance, sources):
+[references/routing-guide.md](references/routing-guide.md).
 
-- **1** — trivial: summarizing a README, a one-line lookup, skimming logs for a fact. → inline,
-  or a single named subagent; nothing to parallelize.
-- **2-3** — routine: a single-file edit or script, a rename, a dedup, a config bump. → a single
-  NAMED subagent (serial one-off).
-- **4-5** — everyday build: one area, a known pattern, a few edge cases; **~5 anchors to simple
-  HTML work** — a static page, a form, a plain component. → a single named subagent, or a small
-  **named fan-out** if it splits into independent pieces.
-- **6-7** — hard: a multi-file feature or cross-cutting refactor — several coordinated edits, a
-  contract multiple consumers must respect, real edge cases. → decompose and fan out named
-  executors over the independent pieces; if that fan-out is sizable/repeatable, **propose a
-  small-medium workflow** (<5-<15) if your environment has one.
-- **8** — gnarly: novel debugging with an unknown root cause, or designing an algorithm/
-  architecture under real constraints. → design → parallel named-executor wave → integrate;
-  propose a medium workflow (<15) for the wave.
-- **9-10** — frontier: developing new AI models, RL training, research-grade problems with no
-  established solution. **10 is the extreme end**, not "a hard day." → staged waves of named
-  executors; propose a medium-large workflow (<15-<50).
+Each band maps to a rung on the ladder (below) and an orchestration shape. Bands are scoring
+anchors, not routing promises — crossovers mean a 6 can legitimately land `sonnet·xhigh`.
+
+- **1-2 — subagent-shaped** (haiku's official bucket: "sub-agent tasks, high-volume,
+  cost-sensitive"): the executor discovers nothing; the spec says everything. A fact lookup, a
+  summary, a mechanical edit with exact anchors, a rename with known sites, a config bump.
+  → inline (1) or a single named subagent.
+- **3-5 — daily-coding-shaped** (sonnet's bucket: "daily coding tasks"): the everyday unit of
+  work. A function / endpoint / component against a known pattern, a scoped bugfix with a
+  reproduction in hand, a single-area feature with a few edge cases. Judgment inside one area, no
+  cross-cutting contract. → a single named subagent, or a small **named fan-out** if it splits
+  into independent pieces.
+- **6-7 — complex-agentic-shaped** (opus's bucket: "complex agentic coding"): a multi-file
+  feature, a contract several consumers must respect, a cross-cutting refactor whose edits must
+  land together. → decompose and fan out named executors over the independent pieces; if the
+  fan-out is sizable/repeatable, **propose a small-medium workflow** (<5-<15) if your environment
+  has one.
+- **8-10 — larger-than-a-sitting-shaped** (fable's bucket): unknown-root-cause debugging across a
+  system, architecture design under real constraints, research-grade work with no established
+  solution. **10 is the frontier end** (developing new models, RL training), not "a hard day."
+  → design → parallel named-executor wave → integrate; propose a medium-large workflow (<15-<50).
 
 Normal day-to-day coding legitimately lands **1-7**. Scores of **9-10 firing rarely is intended**
-— the top rung (`·max` effort) is reserved for genuinely extreme work, same spirit as
-Anthropic's own guidance to use max effort sparingly for the hardest tasks. If you're unsure,
-score lower.
+— the top rung (`·max` effort) is reserved for genuinely extreme work, per Anthropic's own "reserve
+max for genuinely frontier problems." If a task straddles two bands, score lower and write the
+tighter spec — a well-specified task drops a band; a vague one climbs.
 
 ## One score, three coupled outputs
 

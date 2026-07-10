@@ -25,6 +25,8 @@ situation calls for it**:
   sizing), agent-teams caveats, spike tickets, unattended draining (`sidequest work`).
 - [references/routing-details.md](references/routing-details.md) — how the capability ladder is built,
   bias, the effort grid, a worked routing example.
+- [references/routing-guide.md](references/routing-guide.md) — the official Anthropic grounding for
+  the task-shape scale: model matrix, per-model effort guidance, quotes and sources.
 - [references/external-trackers.md](references/external-trackers.md) — running sidequest alongside
   Jira / Linear / GitHub Issues.
 - [references/board-features.md](references/board-features.md) — stories, notifications, reminders,
@@ -254,21 +256,25 @@ deliberately rare (complexity 10 only, per Anthropic's "use max sparingly"). The
 toggling a tier re-routes every open ticket. `sidequest models` prints the current ladder; mechanics
 and bias dial: [references/routing-details.md](references/routing-details.md).
 
-The scale is **absolute** — anchored, not "hard for me right now". The `--why` must reference the
-actual work (files, moving parts, unknowns), not restate the number:
+The scale is **absolute** because it anchors to **task shapes** — Anthropic's own descriptions of
+which work each tier is for — not to how hard the task feels in this repo. Score by matching the
+shape; the `--why` must name the actual work (files, moving parts, unknowns), not restate the number.
+Official grounding (quotes, per-model effort guidance, sources):
+[references/routing-guide.md](references/routing-guide.md).
 
-- **1** — trivial: a one-line lookup, skimming logs for a fact.
-- **2–3** — routine: a single-file edit, a rename, a config bump.
-- **4–5** — everyday build: one area, a known pattern, a few edge cases (~5 ≈ a static page or plain
-  component).
-- **6–7** — hard: a multi-file feature or cross-cutting refactor with a contract multiple consumers
-  must respect.
-- **8** — gnarly: novel debugging with an unknown root cause; algorithm/architecture design under
-  real constraints.
-- **9–10** — frontier: research-grade problems with no established solution. Firing rarely is
-  intended.
+- **1–2 — subagent-shaped** (haiku's bucket): the executor discovers nothing; the spec says
+  everything. A lookup, a summary, a mechanical edit with exact anchors, a config bump.
+- **3–5 — daily-coding-shaped** (sonnet's bucket): the everyday unit of work — a function / endpoint /
+  component against a known pattern, a scoped bugfix with a reproduction in hand. Judgment inside one
+  area, no cross-cutting contract.
+- **6–7 — complex-agentic-shaped** (opus's bucket): a multi-file feature, a contract several consumers
+  must respect, a cross-cutting refactor whose edits must land together.
+- **8–10 — larger-than-a-sitting-shaped** (fable's bucket): unknown-root-cause debugging across a
+  system, architecture design under real constraints, research-grade work. 10 is the frontier end,
+  not "a hard day"; firing rarely is intended.
 
-Normal day-to-day coding legitimately lands 1–7. If unsure, score lower.
+Normal day-to-day coding legitimately lands 1–7. A task straddling two bands: score lower and write
+the tighter spec — a well-specified ticket drops a band; a vague one climbs.
 
 **Rules for working the board:**
 

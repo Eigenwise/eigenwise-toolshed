@@ -2,7 +2,9 @@
 
 Read this when you need to explain or debug routing — which score lands on which rung, why a rung is
 missing, what the bias slider does. Day-to-day you don't: every `list`/`ready` read stamps each ticket
-with its derived `model`/`effort`, and those stamps are the routing.
+with its derived `model`/`effort`, and those stamps are the routing. For WHY the ladder is shaped
+this way — Anthropic's official model/effort guidance, with quotes and sources — see
+[routing-guide.md](routing-guide.md).
 
 ## The capability ladder
 
