@@ -17,6 +17,14 @@
  * is one quick step. The decision to file stays with Claude (the instruction is
  * conditional), so an ordinary prompt about the current task creates no ticket.
  *
+ * Token diet (2026-07): every block this hook emits lands as UNCACHED context on
+ * the turn it fires and then sits in the transcript for the rest of the session,
+ * so per-prompt output is the single most expensive surface the plugin has. The
+ * no-marker standing reminder is therefore one short line (the full doctrine
+ * lives in the SessionStart hook, which re-fires on compact/resume, and in the
+ * skill), and the marker-gated blocks are kept tight. Don't grow them back:
+ * hooks.test.js enforces byte budgets on each block.
+ *
  * Design constraints (shared with the rest of the toolshed):
  *   - Node stdlib only, cross-platform.
  *   - Fail-soft: any error -> exit 0 with no output. It must never break a prompt.
@@ -142,21 +150,15 @@ function emit(context) {
   );
 }
 
-// A compact restatement of the plan + fan-out discipline. The full standing
-// reminder only fires on prompts with no capture/board-mgmt marker — but the
-// prompts that KICK OFF real multi-part work are the ones most likely to trip a
-// defect/interjection marker ("fix the broken X, also wire up Y"), which used to
-// swap in the capture or board-control block and drop the fan-out guidance
-// entirely. So we append this footer to those blocks too: the specific block
-// still leads, but the discipline is never fully suppressed.
-function coreDisciplineFooter() {
+// One short line restating the execution discipline, appended to the
+// marker-gated blocks so an action prompt that trips capture/board-control
+// doesn't lose it entirely. Deliberately tiny — the full version lives in the
+// SessionStart hook and the skill.
+function disciplineFooter() {
   return (
-    '\n\n— sidequest discipline still applies: plan multi-part work as tickets first, and ALWAYS fan out ' +
-    'with NAMED subagents by default (never anonymous/generic teammates) — a named scout before you read ' +
-    '~4+ files, independent ready tickets as named parallel executors — rather than grinding serially. For ' +
-    'a larger/repeatable run a WORKFLOW (agent()/parallel()/pipeline(), sized small <5 / medium <15 / ' +
-    'large <50) fits, but it\'s opt-in: PROPOSE it via AskUserQuestion when you judge it helps, don\'t ' +
-    'launch one unprompted.'
+    '\n— sidequest: plan multi-part work as tickets first; route execution to each ticket\'s stamped ' +
+    '(cheap) tier as short, bounded executor runs — batch small same-tier tickets, parallelize ' +
+    'independent ones; inline only trivial one-steps.'
   );
 }
 
@@ -173,41 +175,16 @@ function main() {
 
   const cli = `node "${path.join(pluginRoot(), 'bin', 'sidequest.js')}"`;
 
-  // No capture/board signal in this message: keep a short standing reminder in
-  // front of Claude (unless opted out) so it actually uses sidequest rather than
-  // forgetting the system is here. The heavier blocks below fire on a match.
+  // No capture/board signal in this message: one short standing line (unless
+  // opted out) so the board isn't forgotten mid-session. The full doctrine is
+  // NOT repeated here — SessionStart injects it once per session (and again on
+  // compact/resume), and the sidequest skill carries the details.
   if (!isCapture && !isMgmt) {
     if (nudgeOff()) process.exit(0);
     emit(
-      '=== sidequest (active) ===\n' +
-        'Track work on the board; don\'t keep the plan only in your head.\n' +
-        'Even if this repo uses an external tracker (Jira/Linear/GitHub Issues), that tracks the ' +
-        'deliverable — sidequest is still your LOCAL execution layer here (decompose, fan out, run ' +
-        'subagents). Use it anyway; don\'t skip it because the work is "already tracked". See the sidequest ' +
-        'skill for why/how the two coexist.\n' +
-        '• CAPTURE a bug/task/idea SEPARATE from your current work as a ticket right away (bg `ticket-filer` ' +
-        'agent, or `' + cli + ' add`).\n' +
-        '• PLAN substantial/multi-part work as one ticket per piece FIRST, link deps, score each — not ad hoc.\n' +
-        '• EXECUTE off the main thread — by default as NAMED subagents (turn-by-turn, addressable/' +
-        'resumable): each ticket is complexity-scored and routed to the best model×effort for it, so spawn ' +
-        'its executor as a NAMED subagent (`sidequest-exec-<effort>` + the ticket\'s model, unique ' +
-        'lowercase-hyphen name) to claim → do → `done` — the name makes it addressable/resumable via ' +
-        'SendMessage. Doing it in the main thread throws that routing away. For many independent tickets or ' +
-        'a repeatable structured run, a WORKFLOW (script-driven, sized by complexity) fits — but it\'s ' +
-        'opt-in: PROPOSE it via AskUserQuestion (why + scale + token cost) when you judge it helps, rather ' +
-        'than launching one unprompted. ~95% of real work should run off the main thread; the main thread ' +
-        'orchestrates and only does genuinely trivial changes itself.\n' +
-        '• FAN OUT: ALWAYS fan out using NAMED subagents — NAME every subagent you spawn (unique ' +
-        'lowercase-hyphen name), never anonymous/generic teammates. About to read ~4+ files or grep a ' +
-        'subsystem to understand it? Spawn one or more NAMED scouts concurrently in a single message FIRST ' +
-        '(each isolated + resumable; built-in Explore/Plan are one-shot, so prefer a general-purpose or ' +
-        'custom named agent like code-explorer for resumable work). Run independent ready tickets as NAMED ' +
-        'parallel executors (claim first, distinct `--by`); for larger/repeatable orchestration PROPOSE a ' +
-        'WORKFLOW (opt-in, via AskUserQuestion) sized small (<5) / medium (<15) / large (<50). Keep ' +
-        'dependent/same-file work serial.\n' +
-        '• RECORD an investigation as a ticket and write findings back as a comment (`' + cli +
-        ' comment <ref>`); READ a ticket\'s comments before working it.\n' +
-        'Board: `' + cli + ' dashboard`.'
+      '=== sidequest (active) === Plan multi-part work as tickets on the board; capture side issues as ' +
+        'tickets (background `ticket-filer`). Route execution to each ticket\'s stamped cheap tier as ' +
+        'short, bounded executor runs. See the sidequest skill.'
     );
     process.exit(0);
   }
@@ -218,22 +195,15 @@ function main() {
   if (isMgmt && !strongCapture) {
     emit(
       '=== sidequest — board control ===\n' +
-        'Use the sidequest CLI to view or manage the board (absolute path resolved for you). ' +
-        'Run these with the Bash tool:\n' +
-        `  Open the live board in the browser:  ${cli} dashboard\n` +
-        `  List tickets on this project:        ${cli} list\n` +
-        `  Move / edit a ticket:                ${cli} update SQ-3 --status done   (status: todo|doing|done; also -p, -t, -d, -l)\n` +
-        `  Remove a ticket:                     ${cli} rm SQ-3\n` +
-        `  List every project's board:          ${cli} projects\n` +
-        '\nTo WORK a ticket safely (other agents may share this board): claim it FIRST, then work, then finish.\n' +
-        `  ${cli} claim SQ-3 --by <you>   (or ${cli} next --by <you> to grab the top-priority ticket)\n` +
-        `  ${cli} done SQ-3 --by <you>    when finished  ·  ${cli} release SQ-3 --by <you>  to drop it\n` +
-        'Claiming is atomic: if it fails (already claimed / done / gone) do NOT work the ticket — pick another. ' +
-        'For a small ticket you may spawn a subagent to do the work, but only AFTER the claim succeeds.\n' +
-        'Tickets are stored centrally, so `dashboard` shows every project at once. To open the board, ' +
-        'just run the dashboard command — it starts the local server if needed and opens the browser, ' +
-        'then report the URL it prints.' +
-        coreDisciplineFooter()
+        'Prefer the mcp__plugin_sidequest_board__* tools for board actions when available; otherwise the ' +
+        'CLI below (Bash tool, absolute path already resolved):\n' +
+        `  ${cli} dashboard    — open the live board; report the URL it prints\n` +
+        `  ${cli} list         — this project's tickets (--json to read; add --brief for a compact read)\n` +
+        `  ${cli} update SQ-3 --status done    — move/edit (also -p, -t, -d, -l) · rm SQ-3 — delete\n` +
+        'To WORK a ticket, claim it FIRST: `claim SQ-3 --by <you>` (or `next --by <you>`), then work, then ' +
+        '`done SQ-3 --by <you>` (`release` to drop it). Claiming is atomic — if it fails, do NOT work that ' +
+        'ticket; pick another.' +
+        disciplineFooter()
     );
     process.exit(0);
   }
@@ -253,23 +223,18 @@ function main() {
 
   const context =
     '=== sidequest — capture the side quest ===\n' +
-    'If this message raised an issue, bug, or task SEPARATE from what you are currently doing, ' +
-    'capture it as a ticket right now so it is not lost, then carry on with your current task ' +
-    'without derailing it. (If the message is only about the task you are already on, ignore this.)\n' +
-    '\n' +
-    'Preferred: spawn the `ticket-filer` subagent in the BACKGROUND (run_in_background: true) so your ' +
-    'current work is not interrupted. Give it a short title, a one-line description, a priority ' +
-    '(low|normal|high|urgent), any labels, and any pasted image path.\n' +
-    '\n' +
-    'Or file it directly in one command:\n' +
+    'If this message raised an issue/task SEPARATE from what you are currently doing, capture it as a ' +
+    'ticket right now, then carry on without derailing. (If it is only about the current task, ignore ' +
+    'this.)\n' +
+    'Preferred: spawn the `ticket-filer` subagent in the BACKGROUND (run_in_background: true) with a short ' +
+    'title, a one-line description, a priority, any labels, and any pasted image path. Or file directly:\n' +
     `  ${cli} add -t "Short title" -d "What is wrong" -p high -l bug --complexity <1-10> --why "<motivation>"` +
     (images.length ? ` -i "${images[0]}"` : '') +
     '\n' +
-    '  (both required — score 1-10 by real task complexity and motivate it in one concrete sentence; routing is derived)\n' +
     imageHint +
-    'Do NOT ask permission first and do NOT stop your current task to do this — capture, then continue. ' +
-    'Say one short line noting the ticket ref (e.g. "filed SQ-5") when done.' +
-    coreDisciplineFooter();
+    'Do NOT ask permission and do NOT stop your current task — capture, then continue; note the ref ' +
+    '(e.g. "filed SQ-5") in one short line.' +
+    disciplineFooter();
 
   emit(context);
   process.exit(0);

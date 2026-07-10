@@ -1247,6 +1247,9 @@ function claimTicket(slug, idOrRef, by, opts) {
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
     writeJson(ticketFile(slug, t.id), t);
+    // Tie this claim to the worker's session so a SessionEnd/SubagentStop hook can
+    // release it immediately instead of waiting out the TTL. No-op without a session id.
+    if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t };
   });
@@ -1262,6 +1265,15 @@ function releaseTicket(slug, idOrRef, by, opts) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: 'not_found' };
+    // A ticket that finished is done — never yanked back to another status by a
+    // release racing behind it. This closes a TOCTOU window: a caller (notably
+    // reconcileSession, which pre-checks status on an unlocked read taken before
+    // it could get this lock) can be scheduled between a completeTicket() clearing
+    // the claim and this fresh read; without this guard, the empty claim would
+    // vacuously pass the ownership check below and opts.status would stomp the
+    // ticket straight back to "todo", silently un-completing finished work.
+    // Mirrors claimTicket's own "done" refusal just above.
+    if (t.status === 'done' && !opts.force) return { ok: false, reason: 'done', ticket: t };
     const held = t.claim;
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
@@ -1273,6 +1285,10 @@ function releaseTicket(slug, idOrRef, by, opts) {
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
     writeJson(ticketFile(slug, t.id), t);
+    // Drop this claim from the session registry — it's no longer outstanding, so a
+    // later reconcile of the same session won't try to touch it (keyed on the
+    // ticket, so a blank `by` on the done doesn't matter). No-op without a session id.
+    if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t };
   });
@@ -1364,7 +1380,7 @@ function claimNext(slug, by, opts) {
       return String(a.createdAt).localeCompare(String(b.createdAt));
     });
   for (const cand of candidates) {
-    const res = claimTicket(slug, cand.id, by, { source: opts.source });
+    const res = claimTicket(slug, cand.id, by, { source: opts.source, sessionId: opts.sessionId });
     if (res.ok) return res;
     // Lost the race or it changed under us — try the next candidate.
   }
@@ -1682,6 +1698,80 @@ function openBlockers(slug, ticket) {
 
 function isBlocked(slug, ticket) {
   return openBlockers(slug, ticket).length > 0;
+}
+
+// Resolve a ticket's open blockers against an in-memory ref->ticket index
+// (uppercased refs), instead of openBlockers()'s per-link getTicket fallback:
+// links store "SQ-n" refs while ticket files are named by id, so the per-link
+// path degenerates into a full-board rescan per link.
+function openBlockersFromIndex(index, ticket) {
+  if (!ticket || !Array.isArray(ticket.links)) return [];
+  const out = [];
+  for (const l of ticket.links) {
+    if (l.type !== 'blocked-by') continue;
+    const blocker = index.get(String(l.ref).toUpperCase());
+    if (blocker && blocker.status !== 'done') out.push(blocker.ref);
+  }
+  return out;
+}
+
+// A compact projection of a ticket for orchestration reads (`--brief` on the
+// CLI, `brief: true` over MCP): everything an orchestrator needs to route,
+// batch, and spawn, none of the bodies. A full ticket carries its whole
+// description and comment thread, which an orchestrator scanning a board pays
+// for on every read without needing; the executor working the ticket reads the
+// full record instead. opts.blockedBy short-circuits the blocker lookup when
+// the caller already knows it (the ready set is unblocked by construction);
+// opts.index resolves blockers in memory. Bare briefTicket(slug, t) still
+// works but pays the per-link scan.
+function briefTicket(slug, t, opts) {
+  opts = opts || {};
+  let blockedBy;
+  if (Array.isArray(opts.blockedBy)) blockedBy = opts.blockedBy;
+  else if (opts.index) blockedBy = openBlockersFromIndex(opts.index, t);
+  else blockedBy = openBlockers(slug, t);
+  return {
+    ref: t.ref,
+    title: t.title,
+    status: t.status,
+    priority: t.priority,
+    complexity: t.complexity || null,
+    model: t.model || null,
+    effort: t.effort || null,
+    files: Array.isArray(t.files) ? t.files : [],
+    claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
+    blockedBy,
+    comments: Array.isArray(t.comments) ? t.comments.length : 0,
+    awaitingReply: needsResponse(t),
+  };
+}
+
+// The one board-read payload both transports (CLI --json and MCP) serve, so
+// their shapes cannot drift: filtering, the brief projection, and the blocker
+// index live here and nowhere else.
+function listPayload(slug, opts) {
+  opts = opts || {};
+  const all = listTickets(slug);
+  let tickets = opts.archived ? all.filter((t) => t.archived) : all.filter((t) => !t.archived);
+  if (opts.status) tickets = tickets.filter((t) => t.status === String(opts.status).toLowerCase());
+  if (opts.brief) {
+    // Blockers may live outside the filtered set, so index the whole board.
+    const index = new Map(all.map((t) => [String(t.ref).toUpperCase(), t]));
+    tickets = tickets.map((t) => briefTicket(slug, t, { index }));
+  }
+  return { tickets };
+}
+
+// Same for the ready read. Waves are ALWAYS arrays of refs (both transports,
+// brief or not) — full tickets ride only in `tickets`, so nothing is
+// serialized twice and the field has one shape. Ready tickets are unblocked by
+// construction, so brief projections skip the blocker lookup outright.
+function readyPayload(slug, opts) {
+  opts = opts || {};
+  let tickets = readyTickets(slug, { model: opts.model });
+  const waves = readyWaves(slug, { model: opts.model }).map((wave) => wave.map((t) => t.ref));
+  if (opts.brief) tickets = tickets.map((t) => briefTicket(slug, t, { blockedBy: [] }));
+  return { tickets, waves };
 }
 
 /* ------------------------------------------------------------------ *
@@ -2140,6 +2230,169 @@ function fireDueReminders() {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Worker registry (session -> the claims it holds)
+ *
+ *  The claim TTL (default 60 min) is the backstop that frees a crashed worker's
+ *  ticket. But when a *session* ends cleanly, we know its claims are dead right
+ *  then — no reason to make a dependent wait out the TTL. The SessionEnd hook
+ *  fires on that boundary; it has the session id but a claim is tagged
+ *  only with an opaque `--by`. This tiny registry is the missing link: it maps a
+ *  session id to the claims taken under it, so reconcileSession() can release
+ *  exactly those (and only those — never another live session's) on the spot.
+ *
+ *  One file, projects/workers.json, a sibling to notifications.json:
+ *    { sessions: { <sessionId>: { updatedAt, claims: [{ slug, ticketId, by, at }] } } }
+ *
+ *  Fail-soft throughout: a missing/garbage file degrades to an empty registry,
+ *  and any hiccup here must never break a claim (the TTL still covers us). The
+ *  registry is an OPTIMIZATION over the TTL, not a new source of truth — nothing
+ *  reads it to decide whether a claim is valid, only to speed up releasing it.
+ * ------------------------------------------------------------------ */
+
+// Sessions untouched for this long with no live claims are pruned on write, so
+// the file can't grow forever from sessions that ended without a reconcile hook.
+const WORKER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function workersFile() {
+  return path.join(projectsRoot(), 'workers.json');
+}
+function workersLockPath() {
+  return path.join(projectsRoot(), '.workers.lock');
+}
+function readWorkers() {
+  const d = readJson(workersFile(), null);
+  return d && typeof d === 'object' && d.sessions && typeof d.sessions === 'object' ? d : { sessions: {} };
+}
+function writeWorkers(obj) {
+  writeJson(workersFile(), obj);
+}
+function withWorkersLock(fn) {
+  const lock = workersLockPath();
+  const locked = acquireLock(lock);
+  try {
+    return fn();
+  } finally {
+    if (locked) releaseLock(lock);
+  }
+}
+
+// Drop sessions with no claims left, and any whose last activity is older than
+// the TTL (a session that ended without its reconcile hook ever firing). Mutates
+// and returns the registry object.
+function pruneWorkers(w) {
+  const cutoff = Date.now() - WORKER_SESSION_TTL_MS;
+  for (const sid of Object.keys(w.sessions)) {
+    const s = w.sessions[sid];
+    const claims = s && Array.isArray(s.claims) ? s.claims : [];
+    const ts = s && s.updatedAt ? Date.parse(s.updatedAt) : NaN;
+    if (!claims.length || (Number.isFinite(ts) && ts < cutoff)) delete w.sessions[sid];
+  }
+  return w;
+}
+
+// Record that `sessionId` now holds a claim on (slug, ticketId) under worker id
+// `by`. Idempotent per (slug, ticketId). No-op without a session id — the whole
+// feature is dormant (and the TTL covers everything) until an id starts flowing.
+function registerWorker(sessionId, slug, ticketId, by) {
+  if (!sessionId || !slug || !ticketId) return;
+  try {
+    withWorkersLock(() => {
+      const w = readWorkers();
+      const now = new Date().toISOString();
+      const s = w.sessions[sessionId] || (w.sessions[sessionId] = { updatedAt: now, claims: [] });
+      s.updatedAt = now;
+      if (!Array.isArray(s.claims)) s.claims = [];
+      if (!s.claims.some((c) => c.slug === slug && c.ticketId === ticketId)) {
+        s.claims.push({ slug, ticketId, by: by || null, at: now });
+      }
+      writeWorkers(pruneWorkers(w));
+    });
+  } catch (_) {
+    /* the TTL is the backstop — a registry write failure must never break a claim */
+  }
+}
+
+// Forget a claim (the worker finished or dropped it). No-op without a session id.
+function unregisterClaim(sessionId, slug, ticketId) {
+  if (!sessionId || !slug || !ticketId) return;
+  try {
+    withWorkersLock(() => {
+      const w = readWorkers();
+      const s = w.sessions[sessionId];
+      if (!s || !Array.isArray(s.claims)) return;
+      s.claims = s.claims.filter((c) => !(c.slug === slug && c.ticketId === ticketId));
+      s.updatedAt = new Date().toISOString();
+      writeWorkers(pruneWorkers(w));
+    });
+  } catch (_) {
+    /* best effort */
+  }
+}
+
+// Release every claim registered to `sessionId` that is still genuinely held by
+// that session's worker and not finished — moving each ticket back to `todo` and
+// leaving a note. This is what the SessionEnd hook calls. Safe by construction:
+// it only touches tickets the registry attributes to THIS session,
+// and skips any that were completed or re-claimed by someone else in the interim.
+// Idempotent — the session's registry entry is cleared as part of the pass, so a
+// second call finds nothing. Returns { ok, released: [ref...] }.
+function reconcileSession(sessionId, opts) {
+  opts = opts || {};
+  const reason = opts.reason ? String(opts.reason) : 'worker session ended';
+  const source = opts.source ? String(opts.source) : 'cli';
+  const released = [];
+  if (!sessionId) return { ok: true, released };
+
+  // Snapshot this session's claims and clear its registry entry in one locked
+  // step, so a concurrent reconcile of the same session can't double-release.
+  let claims = [];
+  try {
+    withWorkersLock(() => {
+      const w = readWorkers();
+      const s = w.sessions[sessionId];
+      claims = s && Array.isArray(s.claims) ? s.claims.slice() : [];
+      if (s) {
+        delete w.sessions[sessionId];
+        writeWorkers(w);
+      }
+    });
+  } catch (_) {
+    return { ok: true, released };
+  }
+
+  for (const c of claims) {
+    let t;
+    try {
+      t = getTicket(c.slug, c.ticketId);
+    } catch (_) {
+      continue;
+    }
+    if (!t || t.archived || t.status === 'done') continue; // finished work is left alone
+    if (!t.claim || !t.claim.by) continue; // already released
+    if (c.by && t.claim.by !== c.by) continue; // re-claimed by someone else since — not ours to touch
+    try {
+      const res = releaseTicket(c.slug, c.ticketId, t.claim.by, { status: 'todo', source });
+      if (res && res.ok) {
+        released.push(t.ref);
+        try {
+          addComment(c.slug, c.ticketId, {
+            by: 'sidequest',
+            kind: 'comment',
+            source,
+            body: `↩️ Auto-released to **todo**: ${reason} (was claimed by \`${t.claim.by}\`). It's back in the ready pool for another worker.`,
+          });
+        } catch (_) {
+          /* the release is what matters; the note is a courtesy */
+        }
+      }
+    } catch (_) {
+      /* one bad ticket must not abort the rest of the reconcile */
+    }
+  }
+  return { ok: true, released };
+}
+
+/* ------------------------------------------------------------------ *
  *  Server lockfile (used by CLI + server to find/reuse a running dashboard)
  * ------------------------------------------------------------------ */
 
@@ -2211,6 +2464,9 @@ module.exports = {
   unlinkTickets,
   openBlockers,
   isBlocked,
+  briefTicket,
+  listPayload,
+  readyPayload,
   archiveTicket,
   unarchiveTicket,
   archiveAllDone,
@@ -2235,4 +2491,7 @@ module.exports = {
   readServerInfo,
   writeServerInfo,
   clearServerInfo,
+  registerWorker,
+  unregisterClaim,
+  reconcileSession,
 };

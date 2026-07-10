@@ -7,8 +7,18 @@
  * code instead of planning as tickets. This hook fires once when a session
  * begins and drops a short standing reminder in front of Claude: unless the
  * request is trivial, plan it as sidequest tickets (complexity-scored per the
- * skill) and route execution through executor subagents, rather than working
- * ad hoc. It is a nudge, not a gate — Claude is free to ignore it for small asks.
+ * skill) and route execution proportionally. It is a nudge, not a gate — Claude
+ * is free to ignore it for small asks.
+ *
+ * Token diet (2026-07): this block is the ONE place the execution doctrine gets
+ * injected (the per-prompt hook only emits a one-liner), so it carries the
+ * delegation rules — but tightly. The economy is expensive-orchestrator /
+ * cheap-executors: real execution routes DOWN to each ticket's stamped tier
+ * (inline only a trivial one-step change), and the cost control is the SHAPE of
+ * the runs, not pulling work onto the pricey main thread — short bounded
+ * executor runs that bounce back fast, batching small same-tier tickets into
+ * one spawn, --brief board reads. hooks.test.js enforces a byte budget on this
+ * block — don't grow it back.
  *
  * Design constraints (shared with the rest of the toolshed):
  *   - Node stdlib only, cross-platform.
@@ -60,50 +70,43 @@ function main() {
   // This hook intentionally fires on EVERY SessionStart source (startup, resume,
   // clear, compact) rather than filtering any of them out: standing context does
   // not survive compaction, so it has to re-inject each time the session context
-  // gets rebuilt. compact/resume just get a terser re-grounding block below
-  // instead of the full nudge, since the fuller guidance already ran once this
-  // session and the per-prompt reminder will fire again on the very next prompt.
+  // gets rebuilt. compact/resume just get a terser re-grounding block below.
   const source = typeof data.source === 'string' ? data.source : '';
 
   if (source === 'compact' || source === 'resume') {
     emit(
       '=== sidequest (active — context restored) ===\n' +
-        'sidequest is still active for this project — context was just compacted/resumed, so ' +
-        'RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
-        'The discipline still applies: plan as tickets, ALWAYS fan out using NAMED subagents (every spawned ' +
-        'agent gets a unique name so it\'s addressable/resumable) as the default parallelizer, and when a ' +
-        'larger/repeatable run would help, PROPOSE a script-driven WORKFLOW (opt-in — offer it via ' +
-        'AskUserQuestion) sized small <5 / medium <15 / large <50 — ~95% of real work runs off the main ' +
-        'thread.\n' +
-        'The full per-prompt reminder returns on your next prompt.\n'
+        'Context was just compacted/resumed — RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
+        'Discipline: plan multi-part work as tickets; route execution to each ticket\'s stamped (cheap) ' +
+        'tier as short, bounded executor runs — batch small same-tier tickets; inline only trivial ' +
+        'one-steps.'
     );
     process.exit(0);
   }
 
   emit(
     '=== sidequest (active) ===\n' +
-      'This project tracks work in sidequest — use the board, do not keep the plan only in your head.\n' +
-      'Even if this repo uses an external tracker (Jira/Linear/GitHub Issues), that tracks the deliverable — ' +
-      'sidequest is still your LOCAL execution layer here (decompose, fan out into NAMED subagents, or drive ' +
-      'a workflow). Use it anyway; don\'t skip it because the work is "already tracked". See the sidequest ' +
-      'skill for why/how they coexist.\n' +
-      'Unless this request is trivial, plan it as tickets on the board (complexity-scored per the sidequest ' +
-      'skill) before implementing, then route execution off the main thread — each ticket is scored and ' +
-      'routed to the best model×effort, and that same complexity ALSO picks the orchestration shape: ' +
-      '(1) by default spawn a NAMED routed subagent per ticket (unique lowercase-hyphen name, never anonymous ' +
-      '— claim → do → done) so it\'s addressable, resumable via SendMessage, and trackable in the fleet view; ' +
-      '(2) for a larger or repeatable structured run, a WORKFLOW (agent()/parallel()/pipeline(), sized small ' +
-      '<5 / medium <15 / large <50) fits — but it\'s opt-in, so PROPOSE it via AskUserQuestion (explain why, ' +
-      'the scale, the token cost) rather than launching one unprompted; you judge better than the user when ' +
-      'one helps, so don\'t stay silent. ~95% of real work should run off the main thread; the main thread ' +
-      'orchestrates the team.\n' +
-      'FAN OUT BY DEFAULT: about to read ~4+ files or grep a subsystem to understand it? Spawn one or more ' +
-      'NAMED scouts concurrently in a single message FIRST — each named, isolated, independently resumable ' +
-      '(built-in Explore/Plan are one-shot, so use a general-purpose or custom named agent like code-explorer ' +
-      'when the scout must be resumable). Run independent ready tickets as NAMED parallel executors (claim ' +
-      'first, distinct `--by`); for a large independent batch, PROPOSE a WORKFLOW (opt-in, via ' +
-      'AskUserQuestion) rather than hand-spawning one at a time; keep dependent/same-file work serial.\n' +
-      'Board: `' + cli + ' dashboard`.'
+      'This project tracks work on the sidequest board — plan any multi-part request as small ATOMIC ' +
+      'tickets BEFORE implementing (each needs --complexity 1-10 + --why; model×effort routing is ' +
+      'derived from the score). Atomic = one concrete change the executor can finish without ' +
+      'discovering anything; the spec carries the context. Even if the repo uses an external tracker ' +
+      '(Jira/Linear/GitHub Issues), that owns the deliverable — sidequest is the local execution layer; ' +
+      'use both.\n' +
+      'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
+      '• Route real execution DOWN to each ticket\'s stamped tier: spawn `sidequest-exec-<effort>` + the ' +
+      'ticket\'s model + a unique lowercase-hyphen name. This thread (usually the priciest model) ' +
+      'orchestrates — decompose, score, spec, spawn, integrate. Inline only a trivial one-step change.\n' +
+      '• Keep executor runs SHORT and bounded — the ticket is the spec (exact anchors + verify command); ' +
+      'scope the spawn prompt; executors bounce back fast (release + report) instead of wandering. Many ' +
+      'short orchestrator↔executor round-trips beat one long autonomous run. Verify reports by artifact ' +
+      '(test output/diff), not by claim.\n' +
+      '• Batch several small SAME-tier tickets into ONE executor (sequential inside); independent tickets ' +
+      'big enough for a spawn each run as a PARALLEL wave (`ready --json --brief`, one executor per ' +
+      'ticket, one message).\n' +
+      'Capture side issues the user mentions as tickets (background `ticket-filer`) without derailing ' +
+      'the current task.\n' +
+      'Board: `' + cli + ' dashboard` — prefer the mcp__plugin_sidequest_board__* tools for board ' +
+      'actions when available.'
   );
   process.exit(0);
 }
