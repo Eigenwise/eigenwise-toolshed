@@ -71,7 +71,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run']);
+      const BOOL = new Set(['json', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -315,6 +315,22 @@ function workerId(opts) {
   );
 }
 
+// The session a claim is taken under, so a SessionEnd / SubagentStop hook can
+// release exactly that session's claims immediately instead of waiting out the
+// TTL (see store.reconcileSession). An explicit --session wins; otherwise fall
+// back to the CLAUDE_SESSION_ID the Claude Code runtime exports to tool/hook
+// subprocesses. Null when neither is present — the whole registry stays dormant
+// and the TTL remains the (unchanged) backstop, so nothing regresses.
+function sessionId(opts) {
+  const v =
+    (opts && opts.session) ||
+    process.env.CLAUDE_CODE_SESSION_ID || // the id the runtime actually exports to tool subprocesses
+    process.env.CLAUDE_SESSION_ID ||      // tolerated legacy/alt spelling
+    process.env.SIDEQUEST_SESSION ||
+    '';
+  return String(v).trim() || null;
+}
+
 function reportClaimFailure(action, idOrRef, res, meta) {
   process.exitCode = 1;
   const c = res.claim || {};
@@ -376,7 +392,7 @@ function cmdClaim(opts, positional) {
     }
     return;
   }
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, source: opts.source || 'cli' });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, source: opts.source || 'cli', sessionId: sessionId(opts) });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -395,7 +411,7 @@ function cmdRelease(opts, positional) {
   if (!idOrRef) fail('release: pass a ticket id or ref, e.g. sidequest release SQ-3');
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
-  const res = store.releaseTicket(slug, idOrRef, by, { force: !!opts.force, status: opts.status, source: opts.source || 'cli' });
+  const res = store.releaseTicket(slug, idOrRef, by, { force: !!opts.force, status: opts.status, source: opts.source || 'cli', sessionId: sessionId(opts) });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -419,6 +435,7 @@ function cmdDone(opts, positional) {
       source: opts.source || 'cli',
       model: opts.model,
       effort: opts.effort,
+      sessionId: sessionId(opts),
     });
   } catch (e) {
     fail(`done: ${(e && e.message) || e}`);
@@ -435,7 +452,7 @@ function cmdDone(opts, positional) {
 function cmdNext(opts) {
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
-  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, source: opts.source || 'cli' });
+  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, source: opts.source || 'cli', sessionId: sessionId(opts) });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -449,6 +466,78 @@ function cmdNext(opts) {
     process.exitCode = 1;
     console.log(`No available tickets to claim in ${meta.name}.`);
   }
+}
+
+// Drain the ready set with headless `claude -p` runs, one per ready ticket at
+// its derived tier (see lib/work.js). --dry-run prints the plan without spawning.
+async function cmdWork(opts) {
+  const { slug, meta } = resolveProject(opts);
+  const work = require('../lib/work');
+  const wopts = {
+    max: opts.max,
+    maxWaves: opts['max-waves'],
+    model: opts.model,
+    singleWave: !!opts.wave,
+    yolo: !!opts.yolo,
+    permissionMode: opts['permission-mode'],
+  };
+
+  if (opts['dry-run']) {
+    const { plan, waveCount, dropped } = work.planWork(slug, wopts);
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ project: slug, waveCount, dropped, plan }, null, 2) + '\n');
+      return;
+    }
+    if (!plan.length) {
+      console.log(`No ready tickets to work in ${meta.name}. Board is drained.`);
+      return;
+    }
+    console.log(`Would launch ${plan.length} headless run(s) for wave 1 of ${waveCount} in ${meta.name}${dropped ? ` (${dropped} more this wave over --max)` : ''}:`);
+    for (const p of plan) {
+      console.log(`  ${p.ref}  →  claude --model ${p.tier}${p.effort ? `  (derived effort ${p.effort}; headless runs at model default)` : ''}  --by ${p.by}`);
+    }
+    console.log(`\n(dry run — nothing was spawned. Drop --dry-run to launch; ${work.claudeAvailable() ? 'claude CLI found' : 'WARNING: claude CLI not on PATH'}.)`);
+    return;
+  }
+
+  const res = await work.runWork(slug, wopts, (line) => console.log(line));
+  if (!res.ok) {
+    fail(`work: ${res.message || res.reason}`);
+  }
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    return;
+  }
+  if (!res.wavesRun) {
+    console.log(`No ready tickets to work in ${meta.name}. Board is drained.`);
+    return;
+  }
+  const okc = res.results.filter((r) => r.ok).length;
+  console.log(`\nHeadless drain finished: ${res.wavesRun} wave(s), ${okc}/${res.results.length} run(s) exited clean.`);
+  for (const r of res.results) {
+    console.log(`  ${r.ref}: ${r.ok ? '✓ ok' : `✗ ${r.error || 'exit ' + r.code}`}`);
+  }
+}
+
+// Release every claim a session left behind (moving each ticket back to todo),
+// immediately instead of waiting out the claim TTL. Called by the SessionEnd
+// hook with the ending session's id; safe to run by hand too.
+// Session-scoped by construction (see store.reconcileSession) — it only touches
+// claims the registry attributes to THIS session. No session id -> a clean no-op.
+function cmdReconcile(opts) {
+  const sid = sessionId(opts);
+  const reason = opts.reason || 'worker session ended';
+  const res = store.reconcileSession(sid, { reason, source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ session: sid }, res), null, 2) + '\n');
+    return;
+  }
+  if (!sid) {
+    console.log('reconcile: no session id (pass --session or set CLAUDE_SESSION_ID) — nothing to do.');
+    return;
+  }
+  if (res.released.length) console.log(`✓ reconciled ${sid}: released ${res.released.join(', ')} back to todo.`);
+  else console.log(`✓ reconciled ${sid}: no outstanding claims to release.`);
 }
 
 // Assign a ticket to someone (defaults to the human "you"), or clear it with
@@ -1282,6 +1371,18 @@ Complexity → routing (score the task; model + effort are derived, never tagged
   Sidequest can't force a model or effort — it records the score and derives the tag (⚙C<n>→tier·effort on
   list/ready); the orchestrator routes by reading it. Haiku rungs have no effort.
 
+Headless / autonomous draining (work the board without an interactive session):
+  sidequest work [--dry-run] [--max N=3] [--max-waves N=5] [--model tier] [--wave] [--yolo] [--permission-mode M]
+    Spawns one headless \`claude -p\` run per ready ticket at its derived tier, wave by wave, until the
+    board is drained. --dry-run prints the plan (spawns nothing). --wave does a single wave. --yolo maps to
+    --dangerously-skip-permissions; otherwise runs at --permission-mode (default acceptEdits). Effort isn't
+    settable headless, so a run carries the ticket's MODEL and runs at that model's default effort. Safe
+    beside an interactive session — claiming stays atomic. Needs the \`claude\` CLI on PATH.
+  sidequest reconcile [--session <id>] [--reason "..."]   release a session's stale claims back to todo now
+    (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's
+    tickets recover immediately instead of waiting out the claim TTL; safe — it only touches that session's
+    claims). Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.
+
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
   sidequest unassign <id|SQ-n>                      clear the assignee
@@ -1386,6 +1487,13 @@ async function main() {
     case 'next':
     case 'grab':
       cmdNext(opts);
+      break;
+    case 'reconcile':
+      cmdReconcile(opts);
+      break;
+    case 'work':
+    case 'drain':
+      await cmdWork(opts);
       break;
     case 'done':
     case 'complete':

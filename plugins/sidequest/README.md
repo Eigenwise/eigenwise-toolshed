@@ -292,6 +292,11 @@ sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status tod
 - **Crash-safe.** A claim left by a worker that crashed or wandered off becomes reclaimable after a
   timeout (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). On the dashboard, a claimed ticket shows a green
   "working" chip with the worker's id (muted once the claim goes stale).
+- **Claims free themselves when a session ends.** A bundled `SessionEnd` hook releases every ticket a
+  session left mid-work (still in **Doing**) straight back to **To do** the moment that session ends — so a
+  dependent doesn't wait out the full 60-minute TTL just because you closed the terminal. It's
+  session-scoped and safe: it only touches that session's own claims, and the TTL stays the backstop for
+  anything the hook never saw. Nothing to configure.
 
 ## Fan out over independent tickets
 
@@ -310,6 +315,25 @@ Each subagent `claim`s a different ticket (distinct `--by`) → does the work �
 a race it just moves on, so two agents never collide. Only **independent** tickets are parallelized —
 anything that shares files or has a `depends-on` link stays sequential (blocked tickets aren't even in
 `ready`). The bundled hook and skill make this the default behavior, not an afterthought.
+
+## Drain the board without a live session
+
+The fan-out above runs inside your Claude session. When you'd rather the board work itself — *"drain the
+backlog while I'm out"* — `sidequest work` spawns one headless `claude -p` run per ready ticket at the
+tier its complexity earned, wave by wave, until the board clears. File tickets during the day, come back
+to a drained board.
+
+```bash
+sidequest work --dry-run     # print the plan (which tickets, which tier) — spawns nothing
+sidequest work               # drain it: one headless run per ready ticket, wave by wave
+sidequest work --max 2 --wave    # just the first wave, at most 2 at once
+```
+
+It's safe beside anything else, because claiming stays atomic — a headless run that loses a race just
+moves on. It needs the `claude` CLI on your PATH. One caveat: reasoning **effort** can only be set through
+an agent definition, which a headless run has no equivalent for, so each run carries the ticket's **model**
+tier and runs at that model's default effort. That's why headless draining is the unattended-overflow
+path, not a replacement for the effort-pinned interactive fan-out above.
 
 ## Comments & questions
 
@@ -359,6 +383,17 @@ On the dashboard, the **Done** column header has an **Archive all** button, each
 separate, list-style archive view (with **Restore** on every row) — deliberately plain and off to the
 side, so it never competes with the live board.
 
+## Two ways in: MCP tools and the CLI
+
+sidequest ships an **MCP server** alongside the CLI, so Claude works the board through typed tools
+(`mcp__plugin_sidequest_board__claim`, `…__ready`, `…__add`, `…__done`, …) instead of shelling out to the
+CLI on every action. Same store, same rules — but one tool approval covers the whole set instead of a Bash
+prompt per call, the data comes back as structured JSON, and a multi-line ticket description is just a
+string (no shell-quoting). It registers automatically when the plugin loads; you don't configure anything.
+
+The **CLI is still the human interface** and does everything the tools do plus `dashboard`/`serve` and the
+headless `work` drain. The two are interchangeable and act on the same boards.
+
 ## CLI
 
 Every action is a thin wrapper over one script, usable directly too:
@@ -375,6 +410,8 @@ node <plugin>/bin/sidequest.js models                               # the live c
 node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only work whose DERIVED tier is sonnet
 node <plugin>/bin/sidequest.js models [--json]                      # the tiers you allow + each tier's enabled efforts
 node <plugin>/bin/sidequest.js ready [--json]                 # the fan-out set (unclaimed, unblocked)
+node <plugin>/bin/sidequest.js work [--dry-run] [--max N]     # drain the ready set with headless claude runs
+node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
 node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket
 node <plugin>/bin/sidequest.js done SQ-3 --by <you>           # finish + release  (release = drop unfinished)

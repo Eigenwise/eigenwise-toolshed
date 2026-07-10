@@ -103,6 +103,23 @@ commands below, `sidequest` is shorthand for that `node "…/bin/sidequest.js"` 
 The board a command acts on defaults to `$CLAUDE_PROJECT_DIR` (the current project), so you rarely pass
 a project. Add `--project "<path-or-slug>"` to target another board.
 
+## Prefer the MCP tools when they're available
+
+sidequest also ships an **MCP server**, so when tools named **`mcp__plugin_sidequest_board__*`** are in
+your toolset (`…__list`, `…__ready`, `…__add`, `…__claim`, `…__next`, `…__done`, `…__release`,
+`…__comment`, `…__ask`, `…__comments`, `…__link`, `…__assign`, `…__models`, `…__projects`), **use them
+instead of the Bash CLI** for board actions. They act on the exact same store and enforce the same rules
+(complexity+why required on `add`, the effort-drift guard on `claim`, atomic claiming), but they're
+cheaper and cleaner: one tool approval instead of a Bash prompt per call, structured JSON in and out, and
+**no shell-quoting trap** — pass a multi-line markdown `description`/`body` as a plain string with real
+newlines, no heredoc. `add`/`update`/`claim`/`done` take the same fields as the CLI flags below (e.g.
+`{ title, complexity, why, files: [...] }`, `{ ref, by, effort }`). Everything the rest of this skill
+teaches — decompose, score, claim-before-work, fan out — is identical; only the transport changes.
+
+The **CLI is still fully supported** (it's what humans use and what the examples below show); reach for it
+when the MCP tools aren't present, for `dashboard`/`serve`, or for the headless `work` drain. If both are
+available, the MCP tools are the default for routine board actions.
+
 ## Where things live on disk (never scan from root to find them)
 
 - **The CLI**: `plugins/sidequest/bin/sidequest.js` under the sidequest plugin — invoke it as
@@ -278,6 +295,12 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
   (trivial changes only) — see "Execute in a routed subagent by default".
 - **Stale claims** (a worker that crashed or wandered off) are reclaimable after a timeout
   (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min); `--force` overrides a live claim only when you're sure.
+- **Claims auto-release when your session ends.** A bundled `SessionEnd` hook releases every ticket this
+  session still holds in `doing` back to `todo` the moment the session ends — so a dependent never waits
+  out the full TTL just because you closed the terminal mid-work. It's session-scoped and safe (it only
+  touches this session's own claims), so you don't manage it; the TTL stays the backstop for anything the
+  hook never saw. Registration is automatic (the CLI/MCP read `$CLAUDE_CODE_SESSION_ID`), so you don't
+  pass a session flag. `sidequest reconcile` runs the same release by hand if you ever need it.
 
 ## Decompose for parallelism (lower the difficulty on purpose)
 
@@ -357,6 +380,15 @@ applies: eyeball whether they'd edit the same files before parallelizing them.
    since a second independent session fanning out over the same board would derive the identical value
    and silently coexist as the same worker (see the note on identity collisions above).
 4. When a batch finishes, the dependents it unblocked become ready — fan out over the next wave.
+
+**Unattended draining (`sidequest work`).** Interactive fan-out through the `sidequest-exec-*` agents is
+the default — it keeps the effort axis and stays in your session. But when the user wants the board worked
+*without* a live session (e.g. "just drain the backlog"), `sidequest work` spawns one headless
+`claude -p` run per ready ticket at its derived tier, wave by wave, until the board clears. Suggest it for
+that "work it while I'm away" ask; use `sidequest work --dry-run` first to show the plan. Headless runs
+can't pin reasoning effort (that's agent-frontmatter only), so they carry the ticket's **model** and run
+at that model's default effort — which is why it's the overflow/unattended path, not a replacement for
+interactive effort-pinned execution. It's safe beside anything else (claiming stays atomic).
 
 **Keep sequential** (don't parallelize) tickets that **depend on each other** or that **touch the same
 files** — parallel edits to one file collide. Link such tickets with `depends-on` so `ready`/`next`
