@@ -87,6 +87,10 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.ok(ctx.includes('bounce back'), 'must tell executors to bounce back, not wander');
   assert.ok(ctx.includes('ONE executor'), 'must carry the batch-small-tickets rule');
   assert.ok(ctx.includes('trivial one-step'), 'inline is only for trivial one-steps');
+  assert.ok(
+    ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'),
+    'must push the MCP tools as the first-choice board interface (models default to the CLI out of habit)'
+  );
 });
 
 test('session-start: says sidequest coexists with an external tracker (Jira)', () => {
@@ -179,7 +183,10 @@ test('board-management block: fires on a dashboard prompt, carries claim discipl
   const ctx = capture('show me the dashboard');
   assert.ok(ctx.includes('board control'), 'a dashboard prompt should hit the mgmt block');
   assert.ok(ctx.includes('claim'), 'must carry the claim-first rule');
-  assert.ok(ctx.includes('mcp__plugin_sidequest_board__'), 'must point at the MCP tools first');
+  assert.ok(
+    ctx.indexOf('mcp__plugin_sidequest_board__') < ctx.indexOf('dashboard    —'),
+    'the MCP tools must LEAD the block, before any concrete CLI command (concrete beats abstract)'
+  );
   assert.ok(ctx.includes(FOOTER_MARK), 'must keep the one-line discipline footer');
   assert.ok(ctx.length <= BUDGET.mgmt, `mgmt block is ${ctx.length} chars — budget is ${BUDGET.mgmt}`);
   assertNoRetiredDoctrine(ctx, 'mgmt block');

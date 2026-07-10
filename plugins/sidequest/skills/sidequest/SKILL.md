@@ -65,18 +65,23 @@ If the repo already uses Jira/Linear/GitHub Issues, that tracker owns the delive
 still your local execution ledger — see
 [references/external-trackers.md](references/external-trackers.md).
 
-## Finding the CLI, and preferring the MCP tools
+## The MCP tools ARE the board interface; the CLI is the fallback
 
-The SessionStart hook injects the **resolved absolute command** (`node "<path>/bin/sidequest.js"`)
-into your context — use exactly that with the Bash tool. In this file, `sidequest` is shorthand for
-that prefix. Commands default to the current project (`$CLAUDE_PROJECT_DIR`); add
-`--project "<path-or-slug>"` for another board.
-
-When tools named **`mcp__plugin_sidequest_board__*`** are in your toolset, **prefer them over the
-Bash CLI** for board actions — same store, same rules (complexity+why on `add`, effort guard on
+When tools named **`mcp__plugin_sidequest_board__*`** are in your toolset (`list`, `ready`, `add`,
+`update`, `claim`, `next`, `done`, `release`, `comment`, `ask`, `comments`, `link`, `assign`,
+`models`, `projects`), **every board action goes through them — reaching for Bash out of habit when
+they're present is the wrong call.** Same store, same rules (complexity+why on `add`, effort guard on
 `claim`, atomic claiming), but structured JSON in/out, one tool approval instead of a Bash prompt per
-call, and no shell-quoting trap (multi-line markdown bodies are plain strings). The CLI remains for
-humans, `dashboard`/`serve`, and the headless `work` drain.
+call, and no shell-quoting trap (multi-line markdown bodies are plain strings with real newlines).
+They take the same fields as the CLI flags shown below — the examples in this file use CLI form for
+compactness, not as a recommendation.
+
+The **CLI** is for when the MCP tools aren't loaded, for humans, and for the things only it does:
+`dashboard`/`serve` and the headless `work` drain. The SessionStart hook injects the **resolved
+absolute command** (`node "<path>/bin/sidequest.js"`) into your context — use exactly that with the
+Bash tool; `sidequest` in this file is shorthand for it. Commands default to the current project
+(`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another
+board.
 
 **Where things live** (never scan the filesystem from root to find them): the CLI at
 `plugins/sidequest/bin/sidequest.js` under the installed plugin; ticket data under
