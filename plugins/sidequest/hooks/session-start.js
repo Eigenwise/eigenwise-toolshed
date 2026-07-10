@@ -105,8 +105,10 @@ function main() {
       'ticket, one message).\n' +
       'Capture side issues the user mentions as tickets (background `ticket-filer`) without derailing ' +
       'the current task.\n' +
-      'Board: `' + cli + ' dashboard` — prefer the mcp__plugin_sidequest_board__* tools for board ' +
-      'actions when available.'
+      'Board actions (add/list/ready/claim/done/comment/...) go through the ' +
+      'mcp__plugin_sidequest_board__* MCP tools whenever they are in your toolset — reach for them ' +
+      'FIRST; Bash+CLI is the fallback and the only route to dashboard/serve/work. Open the board: `' +
+      cli + ' dashboard`.'
   );
   process.exit(0);
 }

@@ -195,14 +195,16 @@ function main() {
   if (isMgmt && !strongCapture) {
     emit(
       '=== sidequest — board control ===\n' +
-        'Prefer the mcp__plugin_sidequest_board__* tools for board actions when available; otherwise the ' +
-        'CLI below (Bash tool, absolute path already resolved):\n' +
+        'Board actions go through the MCP tools when they are in your toolset: ' +
+        'mcp__plugin_sidequest_board__list / add / update / claim / next / done / release / comment / ' +
+        'ask / comments / link / models / projects (same fields as the CLI flags). Using Bash for a ' +
+        'board action when those tools are present is the wrong call — more prompts, shell-quoting ' +
+        'traps.\n' +
+        'The CLI (Bash, path already resolved) is the fallback, and the ONLY route to the dashboard:\n' +
         `  ${cli} dashboard    — open the live board; report the URL it prints\n` +
-        `  ${cli} list         — this project's tickets (--json to read; add --brief for a compact read)\n` +
-        `  ${cli} update SQ-3 --status done    — move/edit (also -p, -t, -d, -l) · rm SQ-3 — delete\n` +
-        'To WORK a ticket, claim it FIRST: `claim SQ-3 --by <you>` (or `next --by <you>`), then work, then ' +
-        '`done SQ-3 --by <you>` (`release` to drop it). Claiming is atomic — if it fails, do NOT work that ' +
-        'ticket; pick another.' +
+        `  ${cli} list --brief · update SQ-3 --status done · rm SQ-3\n` +
+        'To WORK a ticket, claim it FIRST (claim/next with a unique --by), then work, then done ' +
+        '(release to drop it). Claiming is atomic — if it fails, do NOT work that ticket; pick another.' +
         disciplineFooter()
     );
     process.exit(0);
@@ -227,7 +229,8 @@ function main() {
     'ticket right now, then carry on without derailing. (If it is only about the current task, ignore ' +
     'this.)\n' +
     'Preferred: spawn the `ticket-filer` subagent in the BACKGROUND (run_in_background: true) with a short ' +
-    'title, a one-line description, a priority, any labels, and any pasted image path. Or file directly:\n' +
+    'title, a one-line description, a priority, any labels, and any pasted image path. Or file directly: ' +
+    'mcp__plugin_sidequest_board__add when available, else\n' +
     `  ${cli} add -t "Short title" -d "What is wrong" -p high -l bug --complexity <1-10> --why "<motivation>"` +
     (images.length ? ` -i "${images[0]}"` : '') +
     '\n' +
