@@ -100,13 +100,17 @@ note for the routing side.
 ## The fine print
 
 - **1M context window**: the Codex GPT-5.x models carry a 1M-token window, same as `opus[1m]`
-  and `sonnet[1m]`. The advertised ids carry the `[1m]` suffix, which behind a custom base URL
-  is how Claude Code opts into the full window (it can't verify 1M support through a gateway
-  otherwise). The env block also sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` so long sessions
-  compact near the real ceiling rather than early. That threshold is global, so keep the session
-  on 1M models (the Codex tiers plus `opus[1m]`/`sonnet`); drop the key from your settings if you
-  routinely run a 200k Claude model through the shim. The shim strips the suffix and the
-  `claude-codex-` prefix before anything goes upstream.
+  and `sonnet[1m]`, and their advertised ids carry the `[1m]` suffix (behind a custom base URL
+  that's how Claude Code opts into the full window — it can't verify 1M support through a gateway
+  otherwise). The catch: a *plain* Claude alias picked in `/model` (`opus`, `sonnet`) has no `[1m]`,
+  so Claude Code budgets it at 200k and a long session force-compacts (the ">100% context" bar).
+  The env block fixes this by pinning the aliases to their 1M ids —
+  `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]` and
+  `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]` — and sets
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` so every model in the session compacts near the real
+  1M ceiling. (Sonnet's 1M window bills tokens above 200k at a premium; opus 4.8 is 1M at flat
+  pricing.) The shim strips the `[1m]` suffix and the `claude-codex-` prefix from Codex ids before
+  they go upstream; Claude ids pass through untouched.
 - **Model quality of life**: typed selection works too: `/model claude-codex-gpt-5.4`, any string
   passes through on a custom base URL. The advertised list itself is yours to edit:
   `~/.claude/codex-gateway/models.json`, one id per array entry (claude-code-proxy v0.1.10 has no

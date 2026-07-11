@@ -39,13 +39,20 @@ const ENV_BLOCK = {
   ANTHROPIC_BASE_URL: `http://127.0.0.1:${SHIM_PORT}`,
   CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
   CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+  // Behind an ANTHROPIC_BASE_URL gateway Claude Code can't verify a model's
+  // context window, so a plain Claude alias (opus / sonnet) selected in /model
+  // gets budgeted at 200k — a long session then shows a >100% context bar and
+  // force-compacts (the "333%" symptom). Pin the aliases to their [1m] ids so
+  // they carry the full 1M window. Safe through the shim: only claude-codex-*
+  // ids get rewritten (see serveShim), so these pass to api.anthropic.com
+  // untouched, and [1m] is Claude Code's local 1M compaction hint. Sonnet's 1M
+  // window bills tokens above 200k at a premium; opus 4.8 is 1M at flat pricing.
+  ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
+  ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
   // Codex GPT-5.x models carry a 1M context window, same as opus[1m]/sonnet[1m].
-  // The [1m] suffix on the advertised ids already selects the 1M window behind a
-  // gateway; this sets the auto-compact point explicitly rather than leaning on
-  // the gateway-can't-verify default, and leaves ~50k headroom below 1M for the
-  // response. It's a GLOBAL threshold, so it also governs Claude passthrough
-  // models in the session, which is correct as long as they're 1M too (opus[1m]
-  // /sonnet). Drop it if you routinely route a 200k model through the shim.
+  // With the aliases pinned above, every model in the session is 1M, so this
+  // GLOBAL auto-compact threshold (~50k headroom below 1M) is correct for both
+  // Codex and Claude passthrough. Drop it if you route a 200k model through the shim.
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
 };
 
