@@ -77,6 +77,16 @@ the proxy.
 | `env [--write-user\|--write-project\|--remove]` | Print or wire/unwire the Claude Code env block |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
 
+## Use with sidequest
+
+If you also run [sidequest](../sidequest) from this marketplace, the two connect on their own. codex-gateway
+publishes a catalog of its models (`catalog.json`, written on `setup`/`start`), and sidequest reads it,
+so your Codex models show up in the board's gear-menu settings as toggleable routing tiers with no manual
+entry. Switch one on and sidequest folds it into the same complexity→tier ladder as the built-in Claude
+models and generates a matching executor agent (restart Claude Code to load it). Nothing to wire: install
+both, open the board settings, flip on the Codex models you want. See the sidequest README's *Codex models*
+note for the routing side.
+
 ## The fine print
 
 - **1M context window**: the Codex GPT-5.x models carry a 1M-token window, same as `opus[1m]`

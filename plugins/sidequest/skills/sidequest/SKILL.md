@@ -289,6 +289,12 @@ the tighter spec — a well-specified ticket drops a band; a vague one climbs.
    The executor claims with `--effort <its baked level>` and the board **refuses the claim on a
    mismatch**, bouncing the ticket back — re-reading per wave is what avoids those wasted round-trips.
    A haiku-routed ticket has no effort: use a plain agent with `model: haiku` (still named).
+   **A ticket stamped to a discovered custom tier** (a `codex-*` slug from codex-gateway, not a
+   built-in) is different: spawn `sidequest-exec-<slug>-<effort>` (a dedicated agent sidequest
+   generated for that model) with **NO `model:` param**: the real model id is pinned in that agent's
+   frontmatter, and the Agent tool rejects arbitrary model-id strings anyway. Those custom exec agents
+   only exist for models you enabled in the dashboard; a claim-mismatch message names the exact one to
+   spawn. Custom tiers cap at their anchor's rank in the `fable > opus > sonnet > haiku` order.
 4. **Claim by tier**: `next --model X` / `ready --model X` hand out only tickets derived to X.
 
 ## Comments & questions

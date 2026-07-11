@@ -49,6 +49,28 @@ why you always spawn from a **fresh** `ready`/`list --json --brief` read for the
 one. The executor claims with `--effort <its baked level>` and the board refuses a mismatch, so a
 stale spawn just bounces (a wasted round-trip, not a wrong-tier execution).
 
+## Detected models (codex-gateway)
+
+If [codex-gateway](../../../codex-gateway) is installed alongside sidequest, its models join the same
+ladder with zero manual config. codex-gateway writes a catalog at `~/.claude/codex-gateway/catalog.json`;
+sidequest reads it (`lib/discovery.js`) and each entry becomes a toggleable tier. There's nothing to
+type: no model ids, no anchors. Every detected model is **off until you enable it** in the dashboard
+settings, so installing the gateway never silently reroutes your tickets to another subscription.
+
+Each catalog entry carries a recommended **anchor** (one of the four built-in tiers). An enabled model
+merges into the ladder at its anchor's capability score plus its effort index, and on an exact score
+tie the built-in anchor wins. So the scale doesn't change: you still score the **task** on the same
+absolute task-shape scale, and the anchor decides which rung a detected model lands on. Per-model
+tweaks (enabled, efforts, anchor/offset override, color) live in `customOverrides` in `model-prefs.json`;
+the catalog stays the source of the model definitions themselves.
+
+Enabling a model generates its executor agents: `sidequest-exec-<slug>-<effort>.md` under
+`~/.claude/agents/`, one per enabled effort, each pinning the real model id (e.g.
+`claude-codex-gpt-5.6-sol[1m]`) in frontmatter. **Restart Claude Code (or `/reload-plugins`) to load
+newly generated agents.** The headless `sidequest work` drainer resolves a custom slug to that same id
+and spawns `claude -p --model <id>` directly. Effort is advisory on gateway models: the frontmatter
+effort may not reach the upstream model, but it still drives which rung the tier occupies.
+
 ## Re-scoring
 
 ```bash

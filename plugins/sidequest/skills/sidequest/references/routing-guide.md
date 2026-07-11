@@ -117,6 +117,17 @@ routing promises — the ladder, bias, and allowlist decide the actual rung, and
 Normal day-to-day coding legitimately lands 1–7. If a task straddles two bands, score lower and write
 the tighter spec — a well-specified task drops a band; a vague one climbs.
 
+## Detected models (a second subscription as extra rungs)
+
+If you run [codex-gateway](../../../codex-gateway), its Codex (GPT-5.x) models show up in the dashboard
+settings to toggle on, and sidequest folds them into this same ladder at their recommended anchor. The
+reason to bother is billing headroom: a second subscription's models become extra rungs you can point
+whole complexity bands at, so heavy fan-out spends the other plan instead of your Anthropic usage.
+Nothing about scoring changes: you score the task the same way, and a detected model just occupies
+whatever rung its anchor puts it on (a Codex model anchored at sonnet is a sonnet-class rung). Keep the
+built-in tiers enabled too; detected models are additive, not a replacement. See
+[routing-details.md](routing-details.md#detected-models-codex-gateway) for the mechanics.
+
 ## Honest caveats (what's official vs. what we run ahead of)
 
 - Anthropic's newest multi-agent guidance says **start simple**: "multi-agent implementations
