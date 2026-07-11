@@ -2,7 +2,9 @@
 
 Read this when you need to explain or debug routing — which score lands on which rung, why a rung is
 missing, what the bias slider does. Day-to-day you don't: every `list`/`ready` read stamps each ticket
-with its derived `model`/`effort`, and those stamps are the routing.
+with its derived `model`/`effort`, and those stamps are the routing. For WHY the ladder is shaped
+this way — Anthropic's official model/effort guidance, with quotes and sources — see
+[routing-guide.md](routing-guide.md).
 
 ## The capability ladder
 
@@ -28,7 +30,7 @@ Tickets show `⚙C<score>→tier·effort` on their cards and in `list`/`ready`.
 
 `sidequest bias <n>` (or the dashboard slider): `-5` Frugal … `0` neutral … `+5` Generous. Bias
 gamma-curves the score→rung map — it tunes HOW eagerly scores escalate to pricier rungs, never what
-you score. You always score complexity honestly against the absolute anchored scale in the main
+you score. You always score complexity honestly against the task-shape scale in the main
 skill. Extremes stay invariant: complexity 1 always hits the cheapest rung and 10 the top rung at any
 bias.
 

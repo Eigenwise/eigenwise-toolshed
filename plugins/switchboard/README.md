@@ -35,10 +35,13 @@ prices, or a genuinely hard problem on an underpowered model. Both waste somethi
 
 Switchboard splits the decision in two:
 
-- **Claude scores complexity, out loud.** 1 to 10 against an absolute scale (1 is "summarize a
-  README", 5 is a plain form or static page, 9-10 is research-grade work), with a one-line
-  motivation naming the actual files and moving parts. Stating it visibly is the honesty
-  mechanism: no silent scoring, no picking a tier first and backfilling a number.
+- **Claude scores complexity, out loud.** 1 to 10 against a task-shape scale anchored to
+  Anthropic's own model positioning (1-2 is subagent-shaped work where the spec says everything,
+  3-5 is daily coding, 6-7 is complex agentic work with a shared contract, 8-10 is
+  larger-than-a-sitting or research-grade), with a one-line motivation naming the actual files
+  and moving parts. Shapes are project-portable where "feels hard" isn't — that's what makes the
+  scale absolute. Stating it visibly is the honesty mechanism: no silent scoring, no picking a
+  tier first and backfilling a number.
 - **The ladder picks the rung.** Your enabled tiers and efforts form one capability-ranked
   sequence of model×effort rungs, the score maps onto it, and the task runs in a
   `switchboard-exec-<effort>` subagent with the derived model. Change your prefs and the same

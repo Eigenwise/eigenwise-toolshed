@@ -176,7 +176,7 @@ const TOOLS = [
     handler(args) {
       if (!args.title || !String(args.title).trim()) throw new Error('add: title is required.');
       if (args.model != null || args.effort != null) throw new Error('add: model/effort are not set directly — score the task with complexity + why and routing is derived.');
-      if (store.coerceComplexity(args.complexity) == null) throw new Error('add: complexity is required — an integer 1-10 (absolute scale: 1 = summarize a README, ~5 = simple HTML, 10 = frontier AI research).');
+      if (store.coerceComplexity(args.complexity) == null) throw new Error('add: complexity is required — an integer 1-10 on the task-shape scale (1-2 subagent-shaped, 3-5 daily-coding-shaped, 6-7 complex-agentic-shaped, 8-10 larger-than-a-sitting/research-grade).');
       if (!args.why || String(args.why).trim().length < 20) throw new Error('add: why is required (min 20 chars) — motivate the complexity against the real task.');
       const { slug, meta } = resolveProject(args.project);
       const created = store.createTicket(slug, {

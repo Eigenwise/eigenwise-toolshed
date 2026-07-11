@@ -170,7 +170,7 @@ function failDirectRouting() {
   fail('--model/--effort are no longer set directly — score the task with --complexity (+ --why) and routing is derived from it (see sidequest models for the current ladder)');
 }
 function failComplexity() {
-  fail('--complexity is required on every ticket — an integer 1-10, absolute scale: 1 = summarize a README, ~5 = simple HTML work, 10 = frontier AI research (new models, RL training). Normal coding lands ~1-7; 9-10 should fire rarely. Routing (model+effort) is derived from it.');
+  fail('--complexity is required on every ticket — an integer 1-10 on the TASK-SHAPE scale: 1-2 subagent-shaped (spec says everything), 3-5 daily-coding-shaped (one area, known pattern), 6-7 complex-agentic-shaped (multi-file, shared contract), 8-10 larger-than-a-sitting (unknown root cause, architecture, research-grade). Normal coding lands ~1-7; 9-10 should fire rarely. Routing (model+effort) is derived from it.');
 }
 function failWhy() {
   fail('--why is required — motivate the complexity score against the actual task (min 20 chars). This is what makes the score honest.');
@@ -1361,8 +1361,9 @@ Working the board safely (multi-agent):
 
 Complexity → routing (score the task; model + effort are derived, never tagged directly):
   sidequest add ... --complexity <1-10> --why "<motivation>"
-    BOTH are REQUIRED on add. Score is ABSOLUTE: 1 = summarize a README, ~5 = simple HTML work, 6-8 =
-    hard multi-file work or novel debugging, 9-10 = frontier AI research (rare by design; normal
+    BOTH are REQUIRED on add. Score by TASK SHAPE: 1-2 = subagent-shaped (spec says everything),
+    3-5 = daily-coding-shaped (one area, known pattern), 6-7 = complex-agentic-shaped (multi-file,
+    shared contract), 8-10 = larger-than-a-sitting/research-grade (9-10 rare by design; normal
     coding lands ~1-7). --why motivates it (min 20 chars). Routing (model+effort) is derived from the
     score — see "sidequest models" for the current ladder.
   sidequest update <id|SQ-n> --complexity <1-10> --why "<motivation>"   re-score (a changed score needs a fresh --why)
