@@ -1,8 +1,11 @@
 'use strict';
 /**
- * Runtime exec agent sync for Codex-backed tiers (1.36.0). syncExecAgents
- * generates one agent file per (Codex-backed tier x that tier's enabled non-max
- * effort). Driven by prefs.tierBackend + the discovered catalog.
+ * Runtime exec agent sync for Codex-backed tiers. syncExecAgents generates one
+ * agent file per DISCOVERED Codex model x every non-max effort (low/medium/high/
+ * xhigh), independent of the tier mapping AND the effort allowlist: the files
+ * must exist on disk before a tier is pointed at a model, so Claude Code
+ * registers them at session start and a later mapping change needs no restart.
+ * The wanted set is therefore a pure function of the catalog.
  * Run: node --test "plugins/sidequest/test/**\/*.test.js"
  *
  * EVERY test passes an explicit `dir` (a temp directory) to syncExecAgents —
@@ -19,7 +22,6 @@ const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-nodis
 process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
 const agentsync = require('../lib/agentsync.js');
-const store = require('../lib/store.js');
 
 const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', suggestedTier: 'opus' };
 const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol', suggestedTier: 'fable' };
@@ -28,6 +30,9 @@ const LUNA = { slug: 'codex-gpt-5-6-luna', id: 'claude-codex-gpt-5.6-luna[1m]', 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function readDir(dir) { return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md')).sort(); }
 
+// Point discovery at a fresh catalog holding exactly `models`. Re-seeding swaps
+// the on-disk catalog (discovery is not cached across calls, so the next sync
+// sees the new state). clearCatalog() = codex-gateway not installed.
 function seedCatalog(models) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-'));
   fs.mkdirSync(path.join(dir, 'codex-gateway'), { recursive: true });
@@ -35,36 +40,24 @@ function seedCatalog(models) {
     JSON.stringify({ schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
 }
+function clearCatalog() { process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR; }
 
-// Build a prefs with a given tierBackend map + a per-tier effort matrix. Always
-// sends a FULL 4-tier map (unspecified tiers -> claude) so a mapping set by an
-// earlier test in this shared home can't leak in. `efforts` maps tier -> list of
-// enabled efforts.
-function prefsWith(tierBackend, efforts) {
-  const full = { haiku: 'claude', sonnet: 'claude', opus: 'claude', fable: 'claude' };
-  const p = store.setModelPrefs({ tierBackend: Object.assign(full, tierBackend) });
-  if (efforts) {
-    p.efforts = p.efforts || {};
-    for (const tier of Object.keys(efforts)) {
-      const row = {};
-      for (const e of ['low', 'medium', 'high', 'xhigh', 'max']) row[e] = efforts[tier].includes(e);
-      p.efforts[tier] = row;
-    }
-  }
-  return p;
+// The four non-max effort filenames a discovered model slug produces, sorted the
+// way readDir sorts (high, low, medium, xhigh).
+function fourFiles(slug) {
+  return ['high', 'low', 'medium', 'xhigh'].map((e) => `sidequest-exec-${slug}-${e}.md`).sort();
 }
 
 /* -------------------------------------------------------------- *
- *  Filenames + frontmatter for a Codex-backed tier
+ *  Filenames + frontmatter for a discovered model
  * -------------------------------------------------------------- */
 
-test('one file per Codex-backed tier x that tier\'s enabled non-max effort, correct frontmatter', () => {
+test('one file per discovered model x every non-max effort, correct frontmatter', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
-  const prefs = prefsWith({ opus: TERRA.slug }, { opus: ['high', 'xhigh'] });
-  const res = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(res.written, 2);
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md', 'sidequest-exec-codex-gpt-5-6-terra-xhigh.md']);
+  const res = agentsync.syncExecAgents({}, { dir });
+  assert.strictEqual(res.written, 4);
+  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-terra'));
 
   const src = fs.readFileSync(path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md'), 'utf8');
   const fmEnd = src.indexOf('\n---\n', 4);
@@ -77,77 +70,80 @@ test('one file per Codex-backed tier x that tier\'s enabled non-max effort, corr
   assert.match(body, /codex-gpt-5-6-terra/);
 });
 
-test('max effort is never generated even if the tier enables it', () => {
+test('max effort is never generated', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
-  const prefs = prefsWith({ opus: TERRA.slug }, { opus: ['high', 'max'] });
-  const res = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(res.written, 1);
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md']);
+  agentsync.syncExecAgents({}, { dir });
+  assert.ok(!readDir(dir).includes('sidequest-exec-codex-gpt-5-6-terra-max.md'));
+  assert.strictEqual(readDir(dir).length, 4);
 });
 
-test('a Codex-backed haiku tier gets a single fixed-effort file', () => {
-  seedCatalog([LUNA]);
+/* -------------------------------------------------------------- *
+ *  Mapping- and effort-independence (the headline behavior)
+ * -------------------------------------------------------------- */
+
+test('a discovered-but-unmapped model still generates its files (no tier mapping needed)', () => {
+  seedCatalog([SOL]);
   const dir = tmpDir();
-  const prefs = prefsWith({ haiku: LUNA.slug });
+  // Every tier on Claude — nothing points at SOL — yet its agents exist on disk,
+  // ready for the moment a tier IS pointed at it.
+  const prefs = { tierBackend: { haiku: 'claude', sonnet: 'claude', opus: 'claude', fable: 'claude' } };
   const res = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(res.written, 1);
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-luna-medium.md']);
+  assert.strictEqual(res.written, 4);
+  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-sol'));
 });
 
-test('no Codex-backed tier -> nothing generated', () => {
+test('the effort allowlist does not change the generated files', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
-  const prefs = prefsWith({}); // every tier claude
-  const res = agentsync.syncExecAgents(prefs, { dir });
+  const prefs = { efforts: { opus: { low: false, medium: false, high: true, xhigh: false, max: false } } };
+  agentsync.syncExecAgents(prefs, { dir });
+  // all four non-max efforts are present regardless of what the allowlist enables
+  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-terra'));
+});
+
+test('empty catalog (codex-gateway not installed) -> nothing generated', () => {
+  clearCatalog();
+  const dir = tmpDir();
+  const res = agentsync.syncExecAgents({}, { dir });
   assert.strictEqual(res.written, 0);
   assert.deepStrictEqual(readDir(dir), []);
 });
 
 /* -------------------------------------------------------------- *
- *  Idempotency + reassignment cleanup
+ *  Idempotency + catalog-change cleanup
  * -------------------------------------------------------------- */
 
-test('re-running with the same prefs writes nothing new (idempotent)', () => {
+test('re-running with the same catalog writes nothing new (idempotent)', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
-  const prefs = prefsWith({ opus: TERRA.slug }, { opus: ['low', 'high'] });
-  assert.strictEqual(agentsync.syncExecAgents(prefs, { dir }).written, 2);
-  const second = agentsync.syncExecAgents(prefs, { dir });
+  assert.strictEqual(agentsync.syncExecAgents({}, { dir }).written, 4);
+  const second = agentsync.syncExecAgents({}, { dir });
   assert.strictEqual(second.written, 0);
-  assert.strictEqual(second.unchanged, 2);
+  assert.strictEqual(second.unchanged, 4);
 });
 
-test('turning off one of a tier\'s efforts removes just that file', () => {
-  seedCatalog([TERRA]);
-  const dir = tmpDir();
-  agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['high', 'xhigh'] }), { dir });
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md', 'sidequest-exec-codex-gpt-5-6-terra-xhigh.md']);
-  const second = agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['high'] }), { dir });
-  assert.strictEqual(second.removed, 1);
-  assert.strictEqual(second.unchanged, 1);
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md']);
-});
-
-test('clearing a tier back to Claude removes all its generated files', () => {
-  seedCatalog([TERRA]);
-  const dir = tmpDir();
-  agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['low', 'high', 'xhigh'] }), { dir });
-  assert.strictEqual(readDir(dir).length, 3);
-  const second = agentsync.syncExecAgents(prefsWith({ opus: 'claude' }), { dir });
-  assert.strictEqual(second.removed, 3);
-  assert.deepStrictEqual(readDir(dir), []);
-});
-
-test('reassigning a tier to a different model swaps the files', () => {
+test('a model dropped from the catalog has its files removed', () => {
   seedCatalog([TERRA, SOL]);
   const dir = tmpDir();
-  agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['high'] }), { dir });
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md']);
-  const second = agentsync.syncExecAgents(prefsWith({ opus: SOL.slug }, { opus: ['high'] }), { dir });
-  assert.strictEqual(second.removed, 1);
-  assert.strictEqual(second.written, 1);
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-sol-high.md']);
+  agentsync.syncExecAgents({}, { dir });
+  assert.strictEqual(readDir(dir).length, 8);
+  seedCatalog([TERRA]); // SOL vanished from the catalog
+  const second = agentsync.syncExecAgents({}, { dir });
+  assert.strictEqual(second.removed, 4);
+  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-terra'));
+});
+
+test('swapping the catalog swaps the files', () => {
+  seedCatalog([TERRA]);
+  const dir = tmpDir();
+  agentsync.syncExecAgents({}, { dir });
+  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-terra'));
+  seedCatalog([SOL]);
+  const second = agentsync.syncExecAgents({}, { dir });
+  assert.strictEqual(second.removed, 4);
+  assert.strictEqual(second.written, 4);
+  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-sol'));
 });
 
 /* -------------------------------------------------------------- *
@@ -161,41 +157,37 @@ test('never overwrites a hand-authored file at a would-be-generated path', () =>
   const collidingPath = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
   const handAuthored = '---\nname: sidequest-exec-codex-gpt-5-6-terra-high\n---\nhand-authored, not ours.\n';
   fs.writeFileSync(collidingPath, handAuthored);
-  const res = agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['high'] }), { dir });
-  assert.strictEqual(res.written, 0);
+  const res = agentsync.syncExecAgents({}, { dir });
+  assert.strictEqual(res.written, 3); // the other three efforts; the collider is left alone
   assert.strictEqual(fs.readFileSync(collidingPath, 'utf8'), handAuthored);
 });
 
 test('never deletes a hand-authored file that is not in the wanted set', () => {
-  seedCatalog([TERRA]);
+  clearCatalog();
   const dir = tmpDir();
   fs.mkdirSync(dir, { recursive: true });
   const foreignPath = path.join(dir, 'sidequest-exec-totally-unrelated-high.md');
   const handAuthored = '---\nname: totally-unrelated\n---\nnot ours, no marker.\n';
   fs.writeFileSync(foreignPath, handAuthored);
-  const res = agentsync.syncExecAgents(prefsWith({}), { dir });
+  const res = agentsync.syncExecAgents({}, { dir });
   assert.strictEqual(res.removed, 0);
   assert.ok(fs.existsSync(foreignPath));
 });
 
 /* -------------------------------------------------------------- *
- *  Multiple Codex-backed tiers at once
+ *  Multiple discovered models at once
  * -------------------------------------------------------------- */
 
-test('multiple Codex-backed tiers each get their own files', () => {
+test('multiple discovered models each get their four files', () => {
   seedCatalog([TERRA, SOL, LUNA]);
   const dir = tmpDir();
-  const prefs = prefsWith(
-    { opus: TERRA.slug, fable: SOL.slug, haiku: LUNA.slug },
-    { opus: ['high'], fable: ['high'] },
-  );
-  const res = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(res.written, 3); // opus·high + fable·high + haiku(medium)
+  const res = agentsync.syncExecAgents({}, { dir });
+  assert.strictEqual(res.written, 12);
   assert.deepStrictEqual(readDir(dir), [
-    'sidequest-exec-codex-gpt-5-6-luna-medium.md',
-    'sidequest-exec-codex-gpt-5-6-sol-high.md',
-    'sidequest-exec-codex-gpt-5-6-terra-high.md',
-  ]);
+    ...fourFiles('codex-gpt-5-6-luna'),
+    ...fourFiles('codex-gpt-5-6-sol'),
+    ...fourFiles('codex-gpt-5-6-terra'),
+  ].sort());
 });
 
 /* -------------------------------------------------------------- *
@@ -208,7 +200,6 @@ test('defaultAgentsDir: SIDEQUEST_HOME redirects to <home>/agents, never the rea
   const savedExplicit = process.env.SIDEQUEST_AGENTS_DIR;
   try {
     delete process.env.SIDEQUEST_AGENTS_DIR;
-    // this whole suite sets SIDEQUEST_HOME at load; assert the redirect holds
     const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentdir-'));
     process.env.SIDEQUEST_HOME = testHome;
     assert.strictEqual(agentsync.defaultAgentsDir(), path.join(testHome, 'agents'));

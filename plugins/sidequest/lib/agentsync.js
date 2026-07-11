@@ -35,7 +35,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const store = require('./store.js');
+const discovery = require('./discovery.js');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md');
 
@@ -99,38 +99,32 @@ function renderBackendAgent(slug, id, effort) {
   });
 }
 
-// Regenerate the runtime exec agents for every ladder TIER the user has pointed
-// at a discovered Codex model (prefs.tierBackend), crossed with every enabled
-// non-max effort in that tier's own effort row, into `dir` (default
-// ~/.claude/agents; tests must always override this — never point it at a real
-// home directory).
+// Regenerate the runtime Codex exec agents. The wanted set is a pure function of
+// the DISCOVERED Codex catalog (discovery.js), NOT of the tier mapping or the
+// effort allowlist: an agent file is keyed by model slug + effort, and any
+// discovered model can be pointed at any tier at any enabled effort at runtime.
+// So we write one file per discovered model x every non-max effort — the files
+// exist on disk BEFORE the user maps anything, which is what lets Claude Code
+// register them at session start and lets a later mapping change spawn an
+// already-present agent with NO manual sync and NO restart. That's why the
+// SessionStart hook calls this on every session: the files are persistent
+// artifacts that outlive a session, so once a model has been discovered in any
+// prior session its agents are already registered.
 //
-// A tier mapped to a Codex model that isn't currently in the catalog resolves to
-// Claude (resolveTierBackends' fallback) and generates nothing. Idempotent:
-// re-running with the same prefs writes nothing new. Reassigning or clearing a
-// tier removes exactly the files it no longer covers. Returns { written,
-// removed, unchanged }.
+// Written into `dir` (default ~/.claude/agents; tests must always override this,
+// never point it at a real home directory). With no catalog (codex-gateway not
+// installed) the wanted set is empty: nothing is written and any stale marked
+// files are removed. Idempotent. `prefs` is accepted for call-site compatibility
+// but no longer affects the output. Returns { written, removed, unchanged }.
 function syncExecAgents(prefs, opts) {
   opts = opts || {};
-  prefs = prefs || store.getModelPrefs();
   const dir = opts.dir || defaultAgentsDir();
-  const backends = store.resolveTierBackends(prefs.tierBackend).byTier;
-
-  // A tier's enabled non-max efforts (its own row in the effort matrix). haiku
-  // has no effort row; a Codex-backed haiku tier uses a single fixed effort.
-  const HAIKU_EFF = 'medium';
-  function tierEfforts(tier) {
-    if (tier === 'haiku') return [HAIKU_EFF];
-    const row = prefs.efforts && prefs.efforts[tier];
-    return NON_MAX_EFFORTS.filter((e) => !row || row[e] !== false);
-  }
 
   const wanted = new Map(); // filename -> rendered content
-  for (const tier of ['haiku', 'sonnet', 'opus', 'fable']) {
-    const b = backends[tier];
-    if (!b || b.backend !== 'codex') continue;
-    for (const effort of tierEfforts(tier)) {
-      wanted.set(agentFileName(b.slug, effort), renderBackendAgent(b.slug, b.id, effort));
+  for (const m of discovery.discoverExternalModels()) {
+    if (!m || !m.slug || !m.id) continue;
+    for (const effort of NON_MAX_EFFORTS) {
+      wanted.set(agentFileName(m.slug, effort), renderBackendAgent(m.slug, m.id, effort));
     }
   }
 

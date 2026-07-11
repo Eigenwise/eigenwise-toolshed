@@ -48,6 +48,22 @@ function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
 }
 
+// Auto-provision the runtime Codex exec agents (sidequest-exec-<slug>-<effort>.md)
+// so a ladder tier pointed at a discovered Codex model spawns without any manual
+// `models sync-agents` step. syncExecAgents writes one file per discovered model x
+// non-max effort into the live ~/.claude/agents dir; because those files are
+// persistent, once a model has been discovered in any prior session its agents are
+// already registered and mapping a tier to it needs no restart. Fail-soft and
+// silent: any error (no catalog, unwritable dir, partial install) is swallowed so
+// a sync problem can NEVER break session start. Empty catalog -> no-op.
+function provisionExecAgents() {
+  try {
+    require(path.join(pluginRoot(), 'lib', 'agentsync.js')).syncExecAgents();
+  } catch (_) {
+    /* best effort — never break the session over agent provisioning */
+  }
+}
+
 // Turned off with SIDEQUEST_NUDGE=off for anyone who finds this too chatty.
 function nudgeOff() {
   const v = String(process.env.SIDEQUEST_NUDGE || '').trim().toLowerCase();
@@ -63,6 +79,11 @@ function emit(context) {
 function main() {
   const data = readStdin();
   if (!data) process.exit(0); // empty/malformed input - not a real invocation
+
+  // Keep the runtime Codex exec agents in sync on every real session start. This
+  // runs regardless of SIDEQUEST_NUDGE (it's provisioning, not a nudge).
+  provisionExecAgents();
+
   if (nudgeOff()) process.exit(0);
 
   const cli = `node "${path.join(pluginRoot(), 'bin', 'sidequest.js')}"`;

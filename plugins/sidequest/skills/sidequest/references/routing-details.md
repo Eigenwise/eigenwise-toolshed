@@ -65,13 +65,18 @@ tier from a dropdown. The mapping lives in `tierBackend` in `model-prefs.json` (
 each tier `"claude"` or a slug). A tier mapped to a model that isn't in the catalog anymore (gateway
 uninstalled) **falls back to its Claude model with a warning**, so routing can't break.
 
-Mapping a tier generates its executor agents: `sidequest-exec-<slug>-<effort>.md` under
-`~/.claude/agents/`, one per that tier's enabled effort, each pinning the real model id (e.g.
-`claude-codex-gpt-5.6-terra[1m]`) in frontmatter. **Restart Claude Code (or `/reload-plugins`) to load
-newly generated agents.** The headless `sidequest work` drainer resolves the tier to that id and spawns
-`claude -p --model <id>` directly. Effort **is** forwarded to Codex: the codex-gateway shim maps Claude
-Code's effort to the Codex backend's `reasoning.effort`, so a tier·effort rung means the same thing on
-a Codex model as on a Claude one.
+The executor agents are provisioned **automatically** — you never run a sync step. sidequest's
+SessionStart hook writes `sidequest-exec-<slug>-<effort>.md` under `~/.claude/agents/`, one per
+**discovered** model × non-max effort, each pinning the real model id (e.g.
+`claude-codex-gpt-5.6-terra[1m]`) in frontmatter. The set is keyed by model, not by mapping, and the
+files are persistent, so they already exist on disk before you point any tier at any model — mapping
+a tier is then instant, with no manual sync and no restart. (A model that appears in the catalog for
+the very first time registers on the next session start; after that it's always ready.) `sidequest
+models sync-agents` and a dashboard save run the same sync on demand if you want it immediately. The
+headless `sidequest work` drainer doesn't need the agent files at all — it resolves the tier to the
+id and spawns `claude -p --model <id>` directly. Effort **is** forwarded to Codex: the codex-gateway
+shim maps Claude Code's effort to the Codex backend's `reasoning.effort`, so a tier·effort rung means
+the same thing on a Codex model as on a Claude one.
 
 ## Re-scoring
 

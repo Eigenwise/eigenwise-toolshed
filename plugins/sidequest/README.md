@@ -193,10 +193,13 @@ dropdown: run that tier on its Claude model (the default) or on one of your Chat
 models. sidequest reads the catalog codex-gateway publishes and offers Sol/Terra/Luna as options, each
 marking its suggested tier. This is a swap, not an extra rung: the ladder keeps its shape and a ticket
 is still scored and stamped by tier (opus·high stays opus·high), you just choose which model *runs* the
-tier. Map the opus tier to Terra and opus-tier tickets spawn Terra, generating that tier's executor
-agents (restart Claude Code to load them) and working headless via `sidequest work` too. The point is
-billing headroom: put a tier on a second subscription and heavy fan-out at that tier spends the other
-plan. A card chip shows a small `gpt` mark when its tier is Codex-backed.
+tier. Map the opus tier to Terra and opus-tier tickets spawn Terra. The executor agents for every
+discovered Codex model are provisioned automatically at session start (persistent files under
+`~/.claude/agents`), so mapping a tier is instant — no manual sync, no restart, since the file already
+exists from a prior session (a model appearing for the very first time registers on the next restart).
+Codex tiers also work headless via `sidequest work`. The point is billing headroom: put a tier on a
+second subscription and heavy fan-out at that tier spends the other plan. A card chip shows a small
+`gpt` mark when its tier is Codex-backed.
 
 This ladder engine also ships standalone as the **switchboard** plugin (same rungs, same bias math,
 no ticket board attached). It's shared by copy, not by dependency: each plugin keeps its own tests,
