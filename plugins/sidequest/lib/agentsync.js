@@ -48,7 +48,17 @@ const MARKER = '<!-- generated-by: sidequest-agentsync -->';
 // agents, is never carried by an auto-generated exec agent.
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 
+// Where generated exec agents go. In production that's the user's live
+// ~/.claude/agents (Claude Code loads them from there). But a test or isolated
+// server sets SIDEQUEST_HOME to a throwaway dir, and it must NOT pollute the
+// real agents dir: when SIDEQUEST_HOME is set we target <home>/agents instead,
+// so an isolated server's PUT can never write into the developer's live agents.
+// SIDEQUEST_AGENTS_DIR is an explicit override that wins over both.
 function defaultAgentsDir() {
+  const explicit = process.env.SIDEQUEST_AGENTS_DIR;
+  if (explicit && String(explicit).trim()) return path.resolve(String(explicit).trim());
+  const home = process.env.SIDEQUEST_HOME;
+  if (home && String(home).trim()) return path.join(path.resolve(String(home).trim()), 'agents');
   return path.join(os.homedir(), '.claude', 'agents');
 }
 

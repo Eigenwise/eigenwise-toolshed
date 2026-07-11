@@ -197,3 +197,27 @@ test('multiple Codex-backed tiers each get their own files', () => {
     'sidequest-exec-codex-gpt-5-6-terra-high.md',
   ]);
 });
+
+/* -------------------------------------------------------------- *
+ *  defaultAgentsDir never targets the real ~/.claude/agents under a test home
+ * -------------------------------------------------------------- */
+
+test('defaultAgentsDir: SIDEQUEST_HOME redirects to <home>/agents, never the real dir (SQ-170)', () => {
+  const realDir = path.join(os.homedir(), '.claude', 'agents');
+  const savedHome = process.env.SIDEQUEST_HOME;
+  const savedExplicit = process.env.SIDEQUEST_AGENTS_DIR;
+  try {
+    delete process.env.SIDEQUEST_AGENTS_DIR;
+    // this whole suite sets SIDEQUEST_HOME at load; assert the redirect holds
+    const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentdir-'));
+    process.env.SIDEQUEST_HOME = testHome;
+    assert.strictEqual(agentsync.defaultAgentsDir(), path.join(testHome, 'agents'));
+    assert.notStrictEqual(agentsync.defaultAgentsDir(), realDir);
+    // explicit override wins over the home redirect
+    process.env.SIDEQUEST_AGENTS_DIR = path.join(testHome, 'explicit');
+    assert.strictEqual(agentsync.defaultAgentsDir(), path.join(testHome, 'explicit'));
+  } finally {
+    if (savedHome === undefined) delete process.env.SIDEQUEST_HOME; else process.env.SIDEQUEST_HOME = savedHome;
+    if (savedExplicit === undefined) delete process.env.SIDEQUEST_AGENTS_DIR; else process.env.SIDEQUEST_AGENTS_DIR = savedExplicit;
+  }
+});
