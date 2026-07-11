@@ -1363,8 +1363,8 @@ Complexity → routing (score the task; model + effort are derived, never tagged
   sidequest add ... --complexity <1-10> --why "<motivation>"
     BOTH are REQUIRED on add. Score by TASK SHAPE: 1-2 = subagent-shaped (spec says everything),
     3-5 = daily-coding-shaped (one area, known pattern), 6-7 = complex-agentic-shaped (multi-file,
-    shared contract), 9-10 = larger-than-a-sitting/research-grade (rare by design; normal coding
-    lands ~1-7). --why motivates it (min 20 chars). Routing (model+effort) is derived from the
+    shared contract), 8-10 = larger-than-a-sitting/research-grade (9-10 rare by design; normal
+    coding lands ~1-7). --why motivates it (min 20 chars). Routing (model+effort) is derived from the
     score — see "sidequest models" for the current ladder.
   sidequest update <id|SQ-n> --complexity <1-10> --why "<motivation>"   re-score (a changed score needs a fresh --why)
   --model / --effort are no longer accepted — routing comes from the complexity score.

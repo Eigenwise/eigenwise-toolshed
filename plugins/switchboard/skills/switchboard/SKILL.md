@@ -79,7 +79,7 @@ The same complexity score drives three things at once, not just a model name:
 
 ## Bias is the user's dial, not yours
 
-You always score complexity honestly against the absolute scale above — bias tunes only **how
+You always score complexity honestly against the task-shape scale above — bias tunes only **how
 eagerly** those scores escalate to pricier rungs, never what you score. The user sets it with
 `switchboard bias <n>` (`-5` frugal … `0` neutral … `+5` generous), gamma-curving the score→rung
 map. Extremes stay invariant: complexity 1 always hits the cheapest rung and 10 the top rung at

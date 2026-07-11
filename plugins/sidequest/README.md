@@ -166,7 +166,8 @@ fable and your C9s drop onto the next rung down, no migration. Cards show a `⚙
 `ready`/`next --model <tier>` filter by the *derived* tier, so an executor never grabs work priced for
 another tier. Direct `--model`/`--effort` tagging is rejected.
 
-**Bias slider.** Agents score complexity honestly against the absolute anchored scale; *you* tune how
+**Bias slider.** Agents score complexity honestly against the task-shape scale (anchored to
+Anthropic's own model positioning — see the bundled `references/routing-guide.md`); *you* tune how
 eagerly those scores climb the ladder with a bias dial (`sidequest bias <n>`, or the dashboard
 slider): `-5` Frugal … `0` neutral (default) … `+5` Generous. It gamma-curves the score→rung mapping —
 0 keeps the standard curve, higher biases escalate to pricier rungs sooner — but the extremes are

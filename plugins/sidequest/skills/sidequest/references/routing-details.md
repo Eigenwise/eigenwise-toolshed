@@ -30,7 +30,7 @@ Tickets show `⚙C<score>→tier·effort` on their cards and in `list`/`ready`.
 
 `sidequest bias <n>` (or the dashboard slider): `-5` Frugal … `0` neutral … `+5` Generous. Bias
 gamma-curves the score→rung map — it tunes HOW eagerly scores escalate to pricier rungs, never what
-you score. You always score complexity honestly against the absolute anchored scale in the main
+you score. You always score complexity honestly against the task-shape scale in the main
 skill. Extremes stay invariant: complexity 1 always hits the cheapest rung and 10 the top rung at any
 bias.
 

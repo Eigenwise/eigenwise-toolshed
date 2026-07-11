@@ -271,7 +271,7 @@ Official grounding (quotes, per-model effort guidance, sources):
   must respect, a cross-cutting refactor whose edits must land together.
 - **8–10 — larger-than-a-sitting-shaped** (fable's bucket): unknown-root-cause debugging across a
   system, architecture design under real constraints, research-grade work. 10 is the frontier end,
-  not "a hard day"; firing rarely is intended.
+  not "a hard day"; 9–10 firing rarely is intended.
 
 Normal day-to-day coding legitimately lands 1–7. A task straddling two bands: score lower and write
 the tighter spec — a well-specified ticket drops a band; a vague one climbs.

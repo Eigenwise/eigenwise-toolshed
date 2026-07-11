@@ -874,8 +874,8 @@
   ];
   // Complexity is the single mandatory dial (1..10) the filer sets; the server
   // derives model·effort from it via the routing ladder. No default — the filer
-  // must judge and score, with a written rationale. The scale is ABSOLUTE, anchored
-  // to concrete reference points (see SKILL.md) — hover a button for its anchor.
+  // must judge and score, with a written rationale. The scale is ABSOLUTE because it
+  // anchors to TASK SHAPES (see SKILL.md) — hover a button for its band.
   var COMPLEXITY = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
   var COMPLEXITY_HINT = {
     1: "1-2 — subagent-shaped: the spec says everything; a lookup, a mechanical edit, a config bump",
@@ -887,7 +887,7 @@
     7: "6-7 — complex-agentic-shaped: multi-file feature, a contract several consumers must respect",
     8: "8-10 — larger-than-a-sitting: unknown-root-cause debugging, architecture under constraints",
     9: "8-10 — larger-than-a-sitting: research-grade work (rare by design)",
-    10: "8-10 — frontier end: new AI models, RL training (rare by design)"
+    10: "8-10 — larger-than-a-sitting, frontier end: new AI models, RL training (rare by design)"
   };
   var POLL_MS = 2500;
   // Quick "Remind me" presets in the ticket editor -> a Date to fire at.
