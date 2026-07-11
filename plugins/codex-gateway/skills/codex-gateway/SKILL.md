@@ -77,3 +77,9 @@ agree).
   disables discovery), or the shim had no model cache yet; check `models`, restart the session.
 - **Thinking/reasoning**: the Codex backend doesn't return thinking blocks into Claude Code's
   UI; that's an upstream limitation, not a bug here.
+- **Permission mode flips to "accept edits on" during Codex sessions**: caused by GPT models
+  calling the plan-mode tools; an approved ExitPlanMode downgrades the mode instead of
+  restoring it (anthropics/claude-code#39973). The shim strips EnterPlanMode/ExitPlanMode from
+  Codex-bound requests since 0.2.1, so this shouldn't recur; if it does, make sure the shim was
+  restarted (`stop` + `start`). Shift+Tab restores the mode in an affected session. Escape
+  hatch to re-enable plan tools: `CODEX_GATEWAY_KEEP_PLAN_TOOLS=1`.

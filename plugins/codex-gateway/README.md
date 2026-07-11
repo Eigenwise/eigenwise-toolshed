@@ -85,6 +85,13 @@ the proxy.
   shim prefers it automatically).
 - **Reasoning display**: the Codex backend doesn't send thinking blocks back, so you get
   answers without the visible reasoning stream on Codex models. Upstream limitation.
+- **Plan-mode tools are hidden from Codex models.** GPT models call `EnterPlanMode` /
+  `ExitPlanMode` spuriously (they're not trained on Claude Code's tool ecosystem), and an
+  approved plan exit downgrades your permission mode to "accept edits on" instead of restoring
+  it ([anthropics/claude-code#39973](https://github.com/anthropics/claude-code/issues/39973)),
+  which in bypass mode means sudden permission prompts on everything. The shim strips those two
+  tools from Codex-bound requests; Claude models keep them. If you actually want plan mode with
+  a GPT model, set `CODEX_GATEWAY_KEEP_PLAN_TOOLS=1` for the shim process.
 - **Availability**: OpenAI has tightened client fingerprinting before (May 2026), which broke
   unofficial clients until they updated. When Codex models start dying mid-stream, re-run
   `setup` to pick up the latest proxy release. Claude models are never affected; worst case

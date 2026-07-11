@@ -324,6 +324,8 @@ function displayName(id) {
 // claude-code-proxy v0.1.10 has no /v1/models route, so the shim owns the
 // catalog: ~/.claude/codex-gateway/models.json if present, else the Codex ids
 // its README documents. A future proxy /v1/models takes precedence over both.
+const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
+
 const DEFAULT_MODELS = [
   'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
   'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini',
@@ -420,6 +422,14 @@ function runShim() {
             // [1m] is Claude Code's local compaction hint; proxy v0.1.10
             // rejects it here despite its README, so strip it ourselves
             parsed.model = parsed.model.slice(PREFIX.length).replace(/\[1m\]$/, '');
+            // Non-Claude models call the plan-mode tools spuriously, and an
+            // approved ExitPlanMode downgrades the session's permission mode
+            // to acceptEdits instead of restoring it (anthropics/claude-code
+            // #39973). Hide those tools from Codex models; Claude models are
+            // untouched. Escape hatch: CODEX_GATEWAY_KEEP_PLAN_TOOLS=1.
+            if (Array.isArray(parsed.tools) && process.env.CODEX_GATEWAY_KEEP_PLAN_TOOLS !== '1') {
+              parsed.tools = parsed.tools.filter((t) => !PLAN_TOOLS.includes(t && t.name));
+            }
             counters.codex++;
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
