@@ -22,8 +22,31 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const PROJ = path.join(os.tmpdir(), 'sq-mcp-fixtures', 'board');
 process.env.CLAUDE_PROJECT_DIR = PROJ;
+// Start with no discovery root at all — a real machine (e.g. this one, with
+// codex-gateway installed) can have a genuine ~/.claude/codex-gateway/catalog.json,
+// which would otherwise leak real discovered slugs into these tests. The
+// SQ-162 tests below point SIDEQUEST_DISCOVERY_DIRS at their own fake catalog.
+const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-nocatalog-'));
+process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
 const mcp = require('../lib/mcp.js');
+const store = require('../lib/store.js');
+
+// Write a fake codex-gateway catalog (mirrors test/discovery.test.js) so a
+// discovered+enabled custom slug can be exercised over the MCP surface.
+function writeCatalogRaw(dir, body) {
+  fs.mkdirSync(path.join(dir, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'codex-gateway', 'catalog.json'), body);
+}
+function seedCatalog(models) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-catalog-'));
+  writeCatalogRaw(dir, JSON.stringify({ schema: 1, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }));
+  process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
+  return dir;
+}
+function clearCatalog() {
+  process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
+}
 
 // Call a tool through the JSON-RPC surface and return the parsed result object
 // (the text content decoded back to JSON), asserting it wasn't an error.
@@ -145,4 +168,75 @@ test('the real stdio server frames newline-delimited JSON-RPC', () => {
   assert.ok(Array.isArray(parsed[1].result.tools));
   assert.strictEqual(parsed[2].id, 3);
   assert.ok(!parsed[2].result.isError, 'projects tool call succeeded');
+});
+
+/* ------------------------------------------------------------------ *
+ *  SQ-162: MCP surfaces are slug-aware — a discovered+enabled custom
+ *  model tier (SQ-157) behaves like a built-in across models/ready/
+ *  done/claim, and an unrecognized model value is refused rather than
+ *  silently treated as "no filter".
+ * ------------------------------------------------------------------ */
+
+test('models tool lists a discovered+enabled custom slug (discovered, enabled, and the ladder)', () => {
+  seedCatalog([{ slug: 'codex-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'Codex Sol', anchor: 'opus' }]);
+  try {
+    store.setModelPrefs({ customOverrides: { 'codex-sol': { enabled: true, offset: 10 } } });
+    const out = callTool('models', {});
+    assert.ok(Array.isArray(out.discovered) && out.discovered.some((d) => d.slug === 'codex-sol'), 'discovered surfaces the catalog entry');
+    assert.ok(out.enabled.includes('codex-sol'), 'enabled includes the custom slug alongside built-ins');
+    assert.ok(out.ladder.some((r) => r.model === 'codex-sol'), 'the enabled custom reaches the ladder');
+    const resolved = out.prefs.custom.find((c) => c.slug === 'codex-sol');
+    assert.ok(resolved && resolved.enabled === true, 'prefs.custom is the resolved (normalized) list');
+  } finally {
+    store.setModelPrefs({ customOverrides: { 'codex-sol': null } });
+    clearCatalog();
+  }
+});
+
+test('done stamps workedBy for a discovered+enabled custom slug (provenance, not just built-ins)', () => {
+  seedCatalog([{ slug: 'codex-sol', id: 'claude-codex-gpt-5.6-sol[1m]', anchor: 'opus' }]);
+  try {
+    store.setModelPrefs({ customOverrides: { 'codex-sol': { enabled: true } } });
+    const added = callTool('add', { title: 'custom slug provenance', complexity: 2, why: 'exercise done stamping workedBy with a discovered custom model slug over MCP' });
+    const ref = added.ticket.ref;
+    callTool('claim', { ref, by: 'mcp-w-custom' });
+    const done = callTool('done', { ref, by: 'mcp-w-custom', model: 'codex-sol', effort: 'high' });
+    assert.strictEqual(done.ok, true);
+    assert.ok(done.ticket.workedBy, 'a workedBy stamp was recorded');
+    assert.strictEqual(done.ticket.workedBy.model, 'codex-sol', 'the stamp names the custom slug, not a built-in');
+  } finally {
+    store.setModelPrefs({ customOverrides: { 'codex-sol': null } });
+    clearCatalog();
+  }
+});
+
+test('ready with an unrecognized model errors instead of silently meaning "no filter"', () => {
+  const res = callToolRaw('ready', { model: 'totally-bogus-tier' });
+  assert.ok(res.isError, 'an unrecognized model filter is refused, not silently ignored');
+  assert.match(res.content[0].text, /unknown model/i);
+  assert.match(res.content[0].text, /totally-bogus-tier/, 'names the offending value');
+});
+
+test('claim guard refusal names the slug-qualified executor for a custom-derived tier', () => {
+  seedCatalog([{ slug: 'codex-sol', id: 'claude-codex-gpt-5.6-sol[1m]', anchor: 'opus' }]);
+  try {
+    // offset is clamped to [-2,2] (coerceCustomOffset), so +2 anchored at opus
+    // (base 4) gives base 6 — above opus itself (a tie would lose to its own
+    // anchor, see custom-models.test.js) and above every other built-in EXCEPT
+    // fable (base 8). Disable fable so codex-sol is the unambiguous top tier.
+    store.setModelPrefs({ routing: true, fable: false, customOverrides: { 'codex-sol': { enabled: true, offset: 10 } } });
+    const added = callTool('add', { title: 'custom slug guard', complexity: 10, why: 'seed a ticket that derives to the discovered custom slug so the claim guard refusal message can be checked' });
+    const ref = added.ticket.ref;
+    assert.strictEqual(added.ticket.model, 'codex-sol', 'the dominant custom tier wins the top complexity rung');
+    const derivedEffort = added.ticket.effort;
+    assert.ok(derivedEffort, 'a derived effort to mismatch against');
+    const wrong = store.VALID_EFFORTS.find((e) => e !== derivedEffort);
+    const res = callTool('claim', { ref, by: 'mcp-w-guard', effort: wrong });
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.reason, 'effort_mismatch');
+    assert.match(res.message, new RegExp(`sidequest-exec-codex-sol-${derivedEffort}`), 'names the slug-qualified executor, not a built-in exec name');
+  } finally {
+    store.setModelPrefs({ fable: true, customOverrides: { 'codex-sol': null } });
+    clearCatalog();
+  }
 });

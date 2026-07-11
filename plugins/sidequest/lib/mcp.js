@@ -98,14 +98,49 @@ function effortDrift(slug, idOrRef, claimedEffort) {
   if (t.model === 'haiku' || !t.effort) return null;
   const claimed = String(claimedEffort).toLowerCase();
   if (claimed === t.effort) return null;
+  // A custom-derived tier (a discovered slug, not a built-in) has no
+  // sidequest-exec-<effort> agent baked to that model — the refusal names the
+  // slug-qualified executor sidequest-exec-<slug>-<effort> instead.
+  const execName = store.VALID_MODELS.indexOf(t.model) !== -1 ? `sidequest-exec-${t.effort}` : `sidequest-exec-${t.model}-${t.effort}`;
   return {
     reason: 'effort_mismatch',
     ref: t.ref,
     derivedModel: t.model,
     derivedEffort: t.effort,
     claimedEffort: claimed,
-    message: `${t.ref} derives to ${t.model}·${t.effort} — spawn sidequest-exec-${t.effort}, not an exec-${claimed}. Claim refused.`,
+    message: `${t.ref} derives to ${t.model}·${t.effort} — spawn ${execName}, not an exec-${claimed}. Claim refused.`,
   };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Model-argument validation (SQ-162)
+ *
+ *  ready.model/next.model/done.model dropped their hard VALID_MODELS enum so a
+ *  discovered custom slug (SQ-157) validates too — JSON Schema can't express
+ *  "any built-in OR whatever's in prefs.custom right now" as an enum. Validate
+ *  by hand instead, against the live vocabulary, and name the valid values on a
+ *  miss rather than letting the store silently no-op the filter.
+ * ------------------------------------------------------------------ */
+
+// ready/next: a --model FILTER. Blank/any/none mean "no filter" (see
+// classifyModelFilter) and are left alone; an unrecognized non-empty value is
+// refused instead of silently matching everything.
+function requireKnownModelFilter(action, value, prefs) {
+  if (value == null) return;
+  const cls = store.classifyModelFilter(value, prefs);
+  if (cls === 'unknown') {
+    throw new Error(`${action}: unknown model "${value}" — known: ${store.getModelVocab(prefs).models.join(', ')}`);
+  }
+}
+
+// done: a provenance STAMP, not a filter — blank means "no stamp" (the store
+// skips it), so only a non-empty, unrecognized value is refused.
+function requireKnownModel(action, value, prefs) {
+  if (value == null || !String(value).trim()) return;
+  const vocab = store.getModelVocab(prefs);
+  if (vocab.models.indexOf(String(value).trim().toLowerCase()) === -1) {
+    throw new Error(`${action}: unknown model "${value}" — known: ${vocab.models.join(', ')}`);
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -144,12 +179,14 @@ const TOOLS = [
       type: 'object',
       properties: {
         project: PROJECT_PROP,
-        model: { type: 'string', enum: store.VALID_MODELS },
+        model: { type: 'string', description: 'Filter to one derived tier — a built-in (opus/sonnet/haiku/fable) or any slug listed by the models tool. Omit for no filter; an unrecognized value errors.' },
         brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies.' },
       },
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      const prefs = store.getModelPrefs();
+      requireKnownModelFilter('ready', args.model, prefs);
       const payload = store.readyPayload(slug, { model: args.model, brief: args.brief });
       return Object.assign({ project: slug, projectName: meta.name }, payload);
     },
@@ -264,7 +301,7 @@ const TOOLS = [
       properties: {
         project: PROJECT_PROP,
         by: { type: 'string' },
-        model: { type: 'string', enum: store.VALID_MODELS },
+        model: { type: 'string', description: 'Filter to one derived tier — a built-in (opus/sonnet/haiku/fable) or any slug listed by the models tool. Omit for no filter; an unrecognized value errors.' },
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         session: { type: 'string' },
       },
@@ -273,6 +310,8 @@ const TOOLS = [
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'next');
+      const prefs = store.getModelPrefs();
+      requireKnownModelFilter('next', args.model, prefs);
       const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, source: 'mcp', sessionId: sessionOf(args) });
       return Object.assign({ project: slug }, res);
     },
@@ -286,7 +325,7 @@ const TOOLS = [
         ref: { type: 'string' },
         project: PROJECT_PROP,
         by: { type: 'string' },
-        model: { type: 'string', enum: store.VALID_MODELS },
+        model: { type: 'string', description: 'The model tier that actually worked this ticket (provenance) — a built-in (opus/sonnet/haiku/fable) or any slug listed by the models tool.' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         session: { type: 'string' },
       },
@@ -295,6 +334,8 @@ const TOOLS = [
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'done');
+      const prefs = store.getModelPrefs();
+      requireKnownModel('done', args.model, prefs);
       const res = store.completeTicket(slug, args.ref, by, { source: 'mcp', model: args.model, effort: args.effort, sessionId: sessionOf(args) });
       return Object.assign({ project: slug }, res);
     },
@@ -416,11 +457,17 @@ const TOOLS = [
   },
   {
     name: 'models',
-    description: 'The live routing ladder: which complexity score maps to which model·effort right now, plus the enabled tiers/efforts, the routing master switch, and the bias.',
+    description: 'The live routing ladder: which complexity score maps to which model·effort right now, plus the enabled tiers/efforts (built-in and custom), the detected-but-not-yet-enabled custom slugs, the routing master switch, and the bias.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
     handler() {
       const prefs = store.getModelPrefs();
-      return { prefs, ladder: store.routingLadder(prefs) };
+      const enabledCustoms = (prefs.custom || []).filter((c) => c.enabled).map((c) => c.slug);
+      return {
+        prefs,
+        ladder: store.routingLadder(prefs),
+        discovered: prefs.discovered,
+        enabled: store.VALID_MODELS.filter((m) => prefs[m]).concat(enabledCustoms),
+      };
     },
   },
   {

@@ -366,6 +366,10 @@ function effortDriftReason(slug, idOrRef, claimedEffort) {
   if (t.model === 'haiku' || !t.effort) return null;
   const claimed = String(claimedEffort).toLowerCase();
   if (claimed === t.effort) return null;
+  // A custom-derived tier (a discovered slug, not a built-in) has no
+  // sidequest-exec-<effort> agent baked to that model — the refusal names the
+  // slug-qualified executor sidequest-exec-<slug>-<effort> instead.
+  const execName = store.VALID_MODELS.indexOf(t.model) !== -1 ? `sidequest-exec-${t.effort}` : `sidequest-exec-${t.model}-${t.effort}`;
   return {
     ref: t.ref,
     derivedModel: t.model,
@@ -373,9 +377,31 @@ function effortDriftReason(slug, idOrRef, claimedEffort) {
     claimedEffort: claimed,
     message:
       `${t.ref} derives to ${t.model}·${t.effort}, but you claimed as ${claimed} effort — ` +
-      `the wrong executor was spawned. Spawn sidequest-exec-${t.effort} (model ${t.model}) instead. ` +
+      `the wrong executor was spawned. Spawn ${execName} (model ${t.model}) instead. ` +
       `Not claimed: the ticket stays free for the correct-tier executor.`,
   };
+}
+
+// `ready --model`/`next --model` used to coerce an unrecognized value straight
+// to "no filter" (coerceModel returns null for garbage the same as it does for
+// blank/any/none) — a silent footgun: a typo'd tier quietly returned the WHOLE
+// board instead of erroring. classifyModelFilter (SQ-156/157) can tell the two
+// apart; refuse the unrecognized case here instead of letting it fall through.
+// Returns false (and has already reported the error) when the caller should
+// bail without touching the store; true when opts.model is fine to pass on.
+function validateModelFilter(action, opts) {
+  if (opts.model == null) return true;
+  const prefs = store.getModelPrefs();
+  const cls = store.classifyModelFilter(opts.model, prefs);
+  if (cls !== 'unknown') return true;
+  const message = `unknown model "${opts.model}" — known: ${store.getModelVocab(prefs).models.join(', ')}`;
+  process.exitCode = 1;
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ ok: false, reason: 'unknown_model', message }, null, 2) + '\n');
+  } else {
+    console.log(`✗ ${action}: ${message}`);
+  }
+  return false;
 }
 
 function cmdClaim(opts, positional) {
@@ -453,6 +479,7 @@ function cmdDone(opts, positional) {
 
 function cmdNext(opts) {
   const { slug, meta } = resolveProject(opts);
+  if (!validateModelFilter('next', opts)) return;
   const by = workerId(opts);
   const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, source: opts.source || 'cli', sessionId: sessionId(opts) });
   if (opts.json) {
@@ -777,6 +804,7 @@ function cmdUnlink(opts, positional) {
 // The set to fan subagents out over: unclaimed, unblocked, not-done, not-archived.
 function cmdReady(opts) {
   const { slug, meta } = resolveProject(opts);
+  if (!validateModelFilter('ready', opts)) return;
   // --brief is a JSON shape, so it implies --json rather than silently no-oping.
   if (opts.json || opts.brief) {
     const payload = store.readyPayload(slug, { model: opts.model, brief: opts.brief });
@@ -872,9 +900,29 @@ function cmdModels(opts) {
   for (const m of Object.keys(prefs.efforts)) {
     enabledEfforts[m] = store.VALID_EFFORTS.filter((e) => prefs.efforts[m][e]);
   }
+  // SQ-162: custom tiers (SQ-157's discovered slugs) join `enabled` alongside
+  // the built-ins — an executor filtering ready/next by --model needs the full
+  // enabled vocabulary, not just the four hardcoded names.
+  const enabledCustoms = (prefs.custom || []).filter((c) => c.enabled).map((c) => c.slug);
+  // Discovered-but-not-enabled: detected via the sibling plugin's catalog, but
+  // the user hasn't opted in yet (see resolveCustomFromOverrides — a discovered
+  // model is off by default). Surfaced so the human table can point at it.
+  const discoveredOff = (prefs.discovered || []).filter((d) => {
+    const c = (prefs.custom || []).find((x) => x.slug === d.slug);
+    return !c || !c.enabled;
+  });
   if (opts.json) {
     process.stdout.write(
-      JSON.stringify({ routing, bias: prefs.routingBias, models: prefs, enabled: store.VALID_MODELS.filter((m) => prefs[m]), efforts: store.VALID_EFFORTS, enabledEfforts, ladder }, null, 2) + '\n'
+      JSON.stringify({
+        routing,
+        bias: prefs.routingBias,
+        models: prefs,
+        enabled: store.VALID_MODELS.filter((m) => prefs[m]).concat(enabledCustoms),
+        discovered: prefs.discovered,
+        efforts: store.VALID_EFFORTS,
+        enabledEfforts,
+        ladder,
+      }, null, 2) + '\n'
     );
     return;
   }
@@ -882,6 +930,13 @@ function cmdModels(opts) {
   console.log(`Bias: ${prefs.routingBias}  (${biasLabel(prefs.routingBias)} — see "sidequest bias")`);
   console.log('Model tiers (toggle in the dashboard settings):');
   for (const m of store.VALID_MODELS) console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}`);
+  // Enabled customs already show up inline in the ladder below (routingLadder
+  // merges them in by slug); the only thing missing from the picture is a
+  // detected model the user hasn't turned on — nothing in the ladder hints
+  // that it even exists, so name it here with its anchor tier.
+  if (discoveredOff.length) {
+    console.log(`  Detected (disabled): ${discoveredOff.map((d) => `${d.slug} (~${d.anchor})`).join(', ')}`);
+  }
   console.log('Effort levels (toggle in the dashboard settings, per model):');
   for (const m of store.VALID_MODELS) {
     if (!prefs.efforts[m]) {
