@@ -49,27 +49,29 @@ why you always spawn from a **fresh** `ready`/`list --json --brief` read for the
 one. The executor claims with `--effort <its baked level>` and the board refuses a mismatch, so a
 stale spawn just bounces (a wasted round-trip, not a wrong-tier execution).
 
-## Detected models (codex-gateway)
+## Per-tier model backend (codex-gateway)
 
-If [codex-gateway](../../../codex-gateway) is installed alongside sidequest, its models join the same
-ladder with zero manual config. codex-gateway writes a catalog at `~/.claude/codex-gateway/catalog.json`;
-sidequest reads it (`lib/discovery.js`) and each entry becomes a toggleable tier. There's nothing to
-type: no model ids, no anchors. Every detected model is **off until you enable it** in the dashboard
-settings, so installing the gateway never silently reroutes your tickets to another subscription.
+If [codex-gateway](../../../codex-gateway) is installed alongside sidequest, you can point any ladder
+tier at one of its GPT-5.x models. This doesn't add rungs or change the ladder's shape: the ladder
+still ranks the four built-in tiers, you still score the **task** on the same absolute task-shape
+scale, and a ticket is still scored and stamped by tier. What changes is which model actually *runs*
+that tier. Map the opus tier to Terra and an "opus·high" ticket runs Terra at high effort; the ladder
+row still reads `opus`.
 
-Each catalog entry carries a recommended **anchor** (one of the four built-in tiers). An enabled model
-merges into the ladder at its anchor's capability score plus its effort index, and on an exact score
-tie the built-in anchor wins. So the scale doesn't change: you still score the **task** on the same
-absolute task-shape scale, and the anchor decides which rung a detected model lands on. Per-model
-tweaks (enabled, efforts, anchor/offset override, color) live in `customOverrides` in `model-prefs.json`;
-the catalog stays the source of the model definitions themselves.
+codex-gateway writes a catalog at `~/.claude/codex-gateway/catalog.json` (the GPT-5.6 family: Sol,
+Terra, Luna); sidequest reads it (`lib/discovery.js`) and offers each as a backend option in the
+dashboard's model settings. Each tier defaults to its own Claude model; you pick a Codex backend per
+tier from a dropdown. The mapping lives in `tierBackend` in `model-prefs.json` (`{ opus: "codex-...", ... }`,
+each tier `"claude"` or a slug). A tier mapped to a model that isn't in the catalog anymore (gateway
+uninstalled) **falls back to its Claude model with a warning**, so routing can't break.
 
-Enabling a model generates its executor agents: `sidequest-exec-<slug>-<effort>.md` under
-`~/.claude/agents/`, one per enabled effort, each pinning the real model id (e.g.
-`claude-codex-gpt-5.6-sol[1m]`) in frontmatter. **Restart Claude Code (or `/reload-plugins`) to load
-newly generated agents.** The headless `sidequest work` drainer resolves a custom slug to that same id
-and spawns `claude -p --model <id>` directly. Effort is advisory on gateway models: the frontmatter
-effort may not reach the upstream model, but it still drives which rung the tier occupies.
+Mapping a tier generates its executor agents: `sidequest-exec-<slug>-<effort>.md` under
+`~/.claude/agents/`, one per that tier's enabled effort, each pinning the real model id (e.g.
+`claude-codex-gpt-5.6-terra[1m]`) in frontmatter. **Restart Claude Code (or `/reload-plugins`) to load
+newly generated agents.** The headless `sidequest work` drainer resolves the tier to that id and spawns
+`claude -p --model <id>` directly. Effort **is** forwarded to Codex: the codex-gateway shim maps Claude
+Code's effort to the Codex backend's `reasoning.effort`, so a tier·effort rung means the same thing on
+a Codex model as on a Claude one.
 
 ## Re-scoring
 

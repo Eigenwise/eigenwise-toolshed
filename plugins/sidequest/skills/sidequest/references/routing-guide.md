@@ -117,16 +117,15 @@ routing promises — the ladder, bias, and allowlist decide the actual rung, and
 Normal day-to-day coding legitimately lands 1–7. If a task straddles two bands, score lower and write
 the tighter spec — a well-specified task drops a band; a vague one climbs.
 
-## Detected models (a second subscription as extra rungs)
+## A second subscription behind a tier (codex-gateway)
 
-If you run [codex-gateway](../../../codex-gateway), its Codex (GPT-5.x) models show up in the dashboard
-settings to toggle on, and sidequest folds them into this same ladder at their recommended anchor. The
-reason to bother is billing headroom: a second subscription's models become extra rungs you can point
-whole complexity bands at, so heavy fan-out spends the other plan instead of your Anthropic usage.
-Nothing about scoring changes: you score the task the same way, and a detected model just occupies
-whatever rung its anchor puts it on (a Codex model anchored at sonnet is a sonnet-class rung). Keep the
-built-in tiers enabled too; detected models are additive, not a replacement. See
-[routing-details.md](routing-details.md#detected-models-codex-gateway) for the mechanics.
+If you run [codex-gateway](../../../codex-gateway), you can point any ladder tier at a Codex (GPT-5.x)
+model in the dashboard, so that tier's tickets run on your ChatGPT subscription instead of Claude. The
+reason to bother is billing headroom: put the opus tier on Terra and the fable tier on Sol, and heavy
+fan-out at those tiers spends the other plan. Nothing about scoring changes: you score the task the
+same way, the ladder keeps its shape, and the tier just runs a different model. It's a swap, not an
+extra rung: you'd never run opus *and* Terra at once, you choose which backs the opus tier. See
+[routing-details.md](routing-details.md#per-tier-model-backend-codex-gateway) for the mechanics.
 
 ## Honest caveats (what's official vs. what we run ahead of)
 

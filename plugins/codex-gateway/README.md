@@ -89,11 +89,12 @@ the proxy.
 ## Use with sidequest
 
 If you also run [sidequest](../sidequest) from this marketplace, the two connect on their own. codex-gateway
-publishes a catalog of its models (`catalog.json`, written on `setup`/`start`), and sidequest reads it,
-so your Codex models show up in the board's gear-menu settings as toggleable routing tiers with no manual
-entry. Switch one on and sidequest folds it into the same complexity→tier ladder as the built-in Claude
-models and generates a matching executor agent (restart Claude Code to load it). Nothing to wire: install
-both, open the board settings, flip on the Codex models you want. See the sidequest README's *Codex models*
+publishes a catalog of its GPT-5.6 models (`catalog.json`, written on `setup`/`start`), and sidequest reads
+it, so each model tier in the board's gear-menu settings gets a backend dropdown: run that tier on its
+Claude model, or on one of your Codex models. Pick Terra behind the opus tier and opus-tier tickets run
+Terra; sidequest generates a matching executor agent (restart Claude Code to load it). The ladder keeps
+its shape, you're just choosing which model backs each tier. Nothing to wire: install both at user scope,
+open the board settings, set the backends you want. See the sidequest README's *Per-tier Codex backend*
 note for the routing side.
 
 ## The fine print

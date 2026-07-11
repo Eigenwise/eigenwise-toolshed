@@ -187,16 +187,16 @@ in that same section too, but it's per model, not global: a model×effort grid l
 opus·medium while sonnet·medium stays on, and that pair just drops out of opus's rungs. The guards:
 at least one tier always stays enabled, and each enabled tier's row always keeps at least one effort on.
 
-**Codex models (auto-detected via codex-gateway).** If you also install
-[codex-gateway](../codex-gateway) from this same marketplace, your ChatGPT/Codex subscription models
-appear in the gear menu's *Codex models* group with nothing to configure by hand: sidequest reads the
-catalog codex-gateway publishes and offers each model as one more toggleable tier. They're off until
-you switch them on (so installing the gateway never silently reroutes your tickets to another
-subscription), and each carries a `~anchor` badge showing where it sits on the ladder. Enable one and
-it joins the same complexity→tier mapping as Opus/Sonnet/Haiku/Fable, generates its own executor agents
-(restart Claude Code to load them), and works headless via `sidequest work` too. The point is billing
-headroom: point a whole complexity band at a second subscription's models and heavy fan-out spends that
-plan instead of your Anthropic usage.
+**Per-tier Codex backend (via codex-gateway).** If you also install
+[codex-gateway](../codex-gateway) at user scope, each model tier in the gear menu gets a backend
+dropdown: run that tier on its Claude model (the default) or on one of your ChatGPT/Codex subscription
+models. sidequest reads the catalog codex-gateway publishes and offers Sol/Terra/Luna as options, each
+marking its suggested tier. This is a swap, not an extra rung: the ladder keeps its shape and a ticket
+is still scored and stamped by tier (opus·high stays opus·high), you just choose which model *runs* the
+tier. Map the opus tier to Terra and opus-tier tickets spawn Terra, generating that tier's executor
+agents (restart Claude Code to load them) and working headless via `sidequest work` too. The point is
+billing headroom: put a tier on a second subscription and heavy fan-out at that tier spends the other
+plan. A card chip shows a small `gpt` mark when its tier is Codex-backed.
 
 This ladder engine also ships standalone as the **switchboard** plugin (same rungs, same bias math,
 no ticket board attached). It's shared by copy, not by dependency: each plugin keeps its own tests,

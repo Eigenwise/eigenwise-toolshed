@@ -283,18 +283,20 @@ the tighter spec — a well-specified ticket drops a band; a vague one climbs.
 2. **The stamped `model`/`effort` on every read ARE the routing** — nothing to re-derive. Cap at your
    own tier if the ladder tops out above you (`fable > opus > sonnet > haiku`); only spawn models that
    exist in your environment.
-3. **Spawn `sidequest-exec-<stamped effort>` with `model: <stamped tier>` and a unique `name`.**
-   `<stamped effort>` is the ticket's `effort` **verbatim from a fresh `ready`/`list --json --brief`
-   read for that wave** — never a level you judge fits better, never carried over from another ticket.
-   The executor claims with `--effort <its baked level>` and the board **refuses the claim on a
-   mismatch**, bouncing the ticket back — re-reading per wave is what avoids those wasted round-trips.
-   A haiku-routed ticket has no effort: use a plain agent with `model: haiku` (still named).
-   **A ticket stamped to a discovered custom tier** (a `codex-*` slug from codex-gateway, not a
-   built-in) is different: spawn `sidequest-exec-<slug>-<effort>` (a dedicated agent sidequest
-   generated for that model) with **NO `model:` param**: the real model id is pinned in that agent's
-   frontmatter, and the Agent tool rejects arbitrary model-id strings anyway. Those custom exec agents
-   only exist for models you enabled in the dashboard; a claim-mismatch message names the exact one to
-   spawn. Custom tiers cap at their anchor's rank in the `fable > opus > sonnet > haiku` order.
+3. **The ticket read tells you exactly what to spawn.** Each ticket carries a resolved
+   `exec: { agent, model }` from a fresh `ready`/`list --json --brief` read for that wave. Spawn
+   `exec.agent` with `model: exec.model` (and a unique `name`). Two cases fall out of that one field:
+   a normal tier gives `{ agent: "sidequest-exec-<effort>", model: "<tier>" }`; a tier the user has
+   pointed at a Codex model (see below) gives `{ agent: "sidequest-exec-<slug>-<effort>", model: null }`,
+   where that agent has the real model id pinned in its frontmatter (the Agent tool rejects arbitrary
+   model strings), so you pass no `model:`. `<effort>` is the ticket's `effort` **verbatim from that
+   read**, never a level you judge fits better. The executor claims with `--effort <baked level>` and
+   the board **refuses the claim on a mismatch**, bouncing the ticket back. A haiku ticket has no
+   effort: `exec.agent` is null, spawn a plain agent with `model: haiku` (still named).
+   **Per-tier Codex backend:** with [codex-gateway](../../../codex-gateway) installed, the user can map
+   any tier to a GPT-5.x model in the dashboard, so an "opus·high" ticket may actually run Terra. You
+   don't decide that; `exec` already resolved it. The generated `sidequest-exec-<slug>-<effort>` agents
+   exist only for tiers currently mapped to a Codex model; a claim-mismatch message names the exact one.
 4. **Claim by tier**: `next --model X` / `ready --model X` hand out only tickets derived to X.
 
 ## Comments & questions
