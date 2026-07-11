@@ -1,0 +1,16 @@
+{
+  "description": "codex-gateway: keep the local Codex gateway (proxy + shim) alive so sessions routed through it never start against a dead port",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js\" ensure --quiet",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
