@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "2.47.0",
+  "version": "2.48.0",
   "plugins": [
     {
       "name": "codex-gateway",
       "source": "./plugins/codex-gateway",
       "description": "Your ChatGPT/Codex subscription models in Claude Code's /model picker. A local gateway routes claude-codex-* models to OpenAI's Codex backend (via claude-code-proxy) and everything else to api.anthropic.com, so you switch between Claude and GPT-5.x mid-session like any other model. No OpenAI API key.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": {
         "name": "Eigenwise"
       },
@@ -57,7 +57,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "A Trello-light quest log for Claude Code. Side issues you mention mid-task (\"oh, and the contact form doesn't send\") get captured as tickets on the spot, with any pasted images attached, and managed on a live, self-hosted Kanban dashboard that spans every project you work in.",
-      "version": "1.35.0",
+      "version": "1.36.0",
       "author": {
         "name": "Eigenwise"
       },
