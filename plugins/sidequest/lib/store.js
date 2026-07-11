@@ -30,6 +30,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { discoverExternalModels } = require('./discovery.js');
 
 /* ------------------------------------------------------------------ *
  *  Roots and path helpers
@@ -2133,6 +2134,46 @@ function modelPrefsFile() {
   return path.join(projectsRoot(), 'model-prefs.json');
 }
 
+// SQ-157: prefs.custom is no longer hand-authored. Its SOURCE is now the
+// auto-discovered catalog (discoverExternalModels(), e.g. codex-gateway)
+// merged with per-slug `customOverrides` the user has dialed in (enabled,
+// efforts, anchor, offset, color). The merged/normalized result flows
+// through the exact same normalizeCustomList() pipeline a hand-authored
+// list did, so routingLadder/getModelVocab/resolveModelId (all SQ-156, all
+// consumers of prefs.custom) need zero changes.
+//
+// A discovered model is DISABLED by default (enabled:false unless the
+// override says enabled:true) — detecting a sibling plugin must never
+// silently reroute a user's tickets to a different subscription/model until
+// they opt in. Efforts default to a conservative "high only" row when the
+// user hasn't picked their own effort row yet.
+//
+// No catalog present -> discoverExternalModels() returns [] -> prefs.custom
+// is [] regardless of customOverrides content, same as today with no custom
+// config at all.
+const CUSTOM_DEFAULT_EFFORTS = { low: false, medium: false, high: true, xhigh: false, max: false };
+
+function resolveCustomFromOverrides(customOverrides) {
+  const discovered = discoverExternalModels();
+  const overrides = customOverrides && typeof customOverrides === 'object' ? customOverrides : {};
+  const rawCandidates = discovered.map((d) => {
+    const ov = overrides[d.slug] && typeof overrides[d.slug] === 'object' ? overrides[d.slug] : null;
+    const efforts = Object.assign({}, CUSTOM_DEFAULT_EFFORTS, ov && ov.efforts && typeof ov.efforts === 'object' ? ov.efforts : null);
+    return {
+      slug: d.slug,
+      id: d.id,
+      label: d.label,
+      anchor: (ov && VALID_MODELS.indexOf(ov.anchor) !== -1) ? ov.anchor : d.anchor,
+      offset: ov && ov.offset !== undefined ? ov.offset : 0,
+      enabled: !!(ov && ov.enabled === true), // opt-in only, see note above
+      efforts,
+      color: ov && ov.color !== undefined ? ov.color : undefined,
+    };
+  });
+  const { customs } = normalizeCustomList(rawCandidates);
+  return { discovered, custom: customs };
+}
+
 // Missing/corrupt file -> every tier enabled, every effort enabled in every
 // model row, routing on, and a neutral (0) bias. `routing` is the master switch:
 // when false the skill's model/effort enforcement stands down and the main agent
@@ -2171,8 +2212,44 @@ function getModelPrefs() {
   }
   out.routing = merged.routing !== false;
   out.routingBias = coerceRoutingBias(merged.routingBias);
-  // Custom model tiers: normalized on read, `[]` when absent or garbage.
-  out.custom = normalizeCustomList(merged.custom).customs;
+
+  // Custom model tiers (SQ-157): the source is discovery + customOverrides,
+  // not a hand-authored list. `customOverrides` is the only thing persisted;
+  // `custom` (and `discovered`) are resolved fresh on every read.
+  //
+  // Migration: a pre-SQ-157 file may still carry a hand-authored `custom`
+  // array and no `customOverrides` at all. One-time, best-effort: fold each
+  // legacy entry's enabled/efforts/anchor/offset/color into a customOverrides
+  // row keyed by its slug (only entries that also show up in the discovered
+  // catalog will actually take effect — an entry for a plugin that isn't
+  // installed just sits there inert), persist the migrated shape, and drop
+  // the legacy key so this only runs once.
+  let customOverrides = merged.customOverrides && typeof merged.customOverrides === 'object' ? merged.customOverrides : null;
+  if (!customOverrides && Array.isArray(merged.custom) && merged.custom.length) {
+    const migrated = {};
+    for (const raw of merged.custom) {
+      if (!raw || typeof raw !== 'object' || typeof raw.slug !== 'string') continue;
+      const slug = raw.slug.trim().toLowerCase();
+      if (!slug) continue;
+      const row = {};
+      if (raw.enabled !== undefined) row.enabled = raw.enabled !== false;
+      if (raw.efforts && typeof raw.efforts === 'object') row.efforts = raw.efforts;
+      if (raw.anchor !== undefined) row.anchor = raw.anchor;
+      if (raw.offset !== undefined) row.offset = raw.offset;
+      if (raw.color !== undefined) row.color = raw.color;
+      migrated[slug] = row;
+    }
+    customOverrides = migrated;
+    const persisted = Object.assign({}, merged);
+    delete persisted.custom;
+    persisted.customOverrides = customOverrides;
+    writeJson(modelPrefsFile(), persisted);
+  }
+  customOverrides = customOverrides || {};
+  const resolved = resolveCustomFromOverrides(customOverrides);
+  out.customOverrides = customOverrides;
+  out.discovered = resolved.discovered;
+  out.custom = resolved.custom;
   return out;
 }
 
@@ -2213,21 +2290,52 @@ function setModelPrefs(patch) {
   out.routing = (patch.routing !== undefined) ? patch.routing !== false : cur.routing;
   out.routingBias = coerceRoutingBias(patch.routingBias !== undefined ? patch.routingBias : cur.routingBias);
 
-  // Custom models: a patch that names `custom` replaces the list (an explicit []
-  // clears it); one that omits it keeps the current, already-normalized list.
-  // Invalid entries are dropped rather than failing the whole write — their
-  // reasons ride back on `customWarnings` (never persisted to disk).
-  let customWarnings = [];
-  if (patch.custom !== undefined) {
-    const res = normalizeCustomList(patch.custom);
-    out.custom = res.customs;
-    customWarnings = res.warnings;
-  } else {
-    out.custom = cur.custom;
+  // Custom model tiers (SQ-157): `patch.custom` (a full hand-authored list) is
+  // no longer a thing this function reads — it's silently ignored, same as
+  // any other unknown key, per the ticket's "reject/ignore attempts to write
+  // full custom defs" contract. The only writable surface is
+  // `patch.customOverrides`, a per-slug PATCH keyed by discovered slug:
+  //   - customOverrides[slug] === null           -> remove that slug's override
+  //   - customOverrides[slug] === {...fields}    -> shallow-merge those known
+  //     fields (enabled/efforts/anchor/offset/color) onto the existing override
+  //     for that slug, sanitizing each one (garbage fields/values are dropped,
+  //     not stored)
+  // Omitting `patch.customOverrides` entirely preserves the current overrides.
+  // `custom`/`discovered` are never persisted — they're re-resolved from
+  // discovery + customOverrides on every read (see resolveCustomFromOverrides).
+  out.customOverrides = Object.assign({}, cur.customOverrides);
+  if (patch.customOverrides && typeof patch.customOverrides === 'object') {
+    for (const slug of Object.keys(patch.customOverrides)) {
+      const rawSlug = String(slug).trim().toLowerCase();
+      if (!rawSlug) continue;
+      const val = patch.customOverrides[slug];
+      if (val === null) {
+        delete out.customOverrides[rawSlug];
+        continue;
+      }
+      if (!val || typeof val !== 'object') continue;
+      const existing = out.customOverrides[rawSlug] && typeof out.customOverrides[rawSlug] === 'object' ? out.customOverrides[rawSlug] : {};
+      const row = Object.assign({}, existing);
+      if (val.enabled !== undefined) row.enabled = val.enabled === true;
+      if (val.efforts !== undefined && val.efforts && typeof val.efforts === 'object') {
+        const effortsRow = {};
+        for (const e of VALID_EFFORTS) if (e in val.efforts) effortsRow[e] = val.efforts[e] !== false;
+        row.efforts = Object.assign({}, existing.efforts, effortsRow);
+      }
+      if (val.anchor !== undefined) { if (VALID_MODELS.indexOf(val.anchor) !== -1) row.anchor = val.anchor; else delete row.anchor; }
+      if (val.offset !== undefined) row.offset = coerceCustomOffset(val.offset);
+      if (val.color !== undefined) { const c = coerceCustomColor(val.color); if (c) row.color = c; else delete row.color; }
+      out.customOverrides[rawSlug] = row;
+    }
   }
 
   writeJson(modelPrefsFile(), out);
-  if (customWarnings.length) out.customWarnings = customWarnings; // return-only signal, after the disk write
+
+  // Resolved after the write so the persisted file never carries the derived
+  // `custom`/`discovered` lists — only the returned object does.
+  const resolved = resolveCustomFromOverrides(out.customOverrides);
+  out.discovered = resolved.discovered;
+  out.custom = resolved.custom;
   return out;
 }
 

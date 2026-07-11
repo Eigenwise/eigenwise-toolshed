@@ -11,6 +11,15 @@ const fs = require('fs');
 
 // Throwaway home so pref reads/writes never touch the real one.
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-custom-test-'));
+// Throwaway discovery root (SQ-157): getModelPrefs/setModelPrefs now source
+// prefs.custom from discoverExternalModels(), whose default root is
+// ~/.claude — NOT SIDEQUEST_HOME. Without this, a dev box that happens to
+// have a real ~/.claude/codex-gateway/catalog.json (e.g. from running
+// codex-gateway) would leak real discovered models into these tests. Default
+// to an empty dir (no catalog); individual tests below override this to a
+// dir holding a fake catalog.json when they need one, then restore it.
+const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-custom-nodiscovery-'));
+process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
 const store = require('../lib/store.js');
 const {
@@ -43,6 +52,27 @@ function mkCustom(slug, anchor, offset, efforts, extra) {
   const row = {};
   for (const e of ALL_EFFORTS) row[e] = efforts.includes(e);
   return Object.assign({ slug, id: `id-${slug}`, anchor, offset, efforts: row }, extra || {});
+}
+
+// Write a fake codex-gateway catalog into a fresh temp dir and point
+// SIDEQUEST_DISCOVERY_DIRS at it (discovery.js re-reads on every call, so
+// this takes effect immediately, no re-require needed). `models` is the raw
+// [{slug,id,label,anchor}, ...] list, written as-is (a test can hand in
+// deliberately malformed entries).
+function seedCatalog(models) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-custom-catalog-'));
+  fs.mkdirSync(path.join(dir, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'codex-gateway', 'catalog.json'),
+    JSON.stringify({ schema: 1, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }),
+  );
+  process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
+  return dir;
+}
+
+// Restore discovery to "nothing installed" so later tests aren't affected.
+function clearCatalog() {
+  process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 }
 
 // Collapse a ladder to its distinct rung sequence (consecutive dupes removed).
@@ -206,72 +236,91 @@ test('max rung: a custom with the highest base becomes the top tier and owns .ma
  *  setModelPrefs: validation, warnings, persistence, guards
  * -------------------------------------------------------------- */
 
-test('setModelPrefs: a valid custom is normalized, persisted, and returned', () => {
+// SQ-157: prefs.custom's SOURCE changed from a hand-authored `patch.custom`
+// list to auto-discovery (a catalog file, e.g. codex-gateway's) merged with
+// per-slug `patch.customOverrides` tweaks. The five tests below replace the
+// old hand-authored-list tests; they seed a fake catalog via
+// SIDEQUEST_DISCOVERY_DIRS instead of handing full custom defs to
+// setModelPrefs (which now silently ignores `patch.custom` entirely).
+
+test('setModelPrefs: customOverrides enables a discovered model, normalized and persisted, round-trips', () => {
+  seedCatalog([{ slug: 'codex-sol', id: 'claude-codex-gpt-5.6-sol[1m]', anchor: 'opus', label: 'Codex Sol' }]);
   const saved = setModelPrefs({
-    custom: [{
-      slug: 'codex-sol', id: 'claude-codex-gpt-5.6-sol[1m]', anchor: 'opus', offset: 1,
-      enabled: true, label: 'Codex Sol', color: '#3366cc',
-      efforts: { low: false, medium: false, high: true, xhigh: true, max: true },
-    }],
+    customOverrides: {
+      'codex-sol': { enabled: true, offset: 1, color: '#3366cc', efforts: { low: false, medium: false, high: true, xhigh: true, max: true } },
+    },
   });
   assert.strictEqual(saved.custom.length, 1);
   const c = saved.custom[0];
   assert.strictEqual(c.slug, 'codex-sol');
-  assert.strictEqual(c.id, 'claude-codex-gpt-5.6-sol[1m]');
+  assert.strictEqual(c.id, 'claude-codex-gpt-5.6-sol[1m]', 'id comes from the catalog, not the override');
+  assert.strictEqual(c.label, 'Codex Sol', 'label comes from the catalog, not the override');
   assert.strictEqual(c.anchor, 'opus');
   assert.strictEqual(c.offset, 1);
   assert.strictEqual(c.enabled, true);
-  assert.strictEqual(c.label, 'Codex Sol');
   assert.strictEqual(c.color, '#3366cc');
   assert.deepStrictEqual(c.efforts, { low: false, medium: false, high: true, xhigh: true, max: true });
-  assert.ok(!('customWarnings' in saved), 'no warnings on a clean write');
+  // Only the override tweak is persisted, not the resolved catalog fields.
+  assert.deepStrictEqual(saved.customOverrides['codex-sol'].enabled, true);
+  assert.ok(!('id' in saved.customOverrides['codex-sol']), 'id is not part of an override, it comes from the catalog');
   // Round-trips through disk.
   assert.deepStrictEqual(getModelPrefs().custom, saved.custom);
+  assert.deepStrictEqual(getModelPrefs().customOverrides, saved.customOverrides);
+  clearCatalog();
 });
 
-test('setModelPrefs: invalid entries are dropped with customWarnings, not thrown', () => {
-  const saved = setModelPrefs({
-    custom: [
-      { slug: 'opus', id: 'x', anchor: 'opus' },        // collides with a built-in
-      { slug: 'BAD SLUG', id: 'y', anchor: 'opus' },    // invalid slug
-      { slug: 'ok1', id: '', anchor: 'opus' },          // empty id
-      { slug: 'ok2', id: 'z', anchor: 'nope' },         // bad anchor
-      { slug: 'good', id: 'g', anchor: 'sonnet' },      // the only keeper
-    ],
-  });
-  assert.strictEqual(saved.custom.length, 1, 'only the valid entry survives');
+test('setModelPrefs: a catalog entry colliding with a built-in tier name is dropped, never surfaces, never throws', () => {
+  // 'opus' passes discovery.js's own slug/id/anchor validation (it's a fine
+  // slug shape) but store.js's normalizeCustomEntry rejects it for colliding
+  // with a built-in tier — that drop must not take the whole write down.
+  seedCatalog([
+    { slug: 'opus', id: 'x', anchor: 'opus' },
+    { slug: 'good', id: 'g', anchor: 'sonnet' },
+  ]);
+  const saved = setModelPrefs({ customOverrides: { opus: { enabled: true }, good: { enabled: true } } });
+  assert.strictEqual(saved.custom.length, 1, 'only the non-colliding entry survives');
   assert.strictEqual(saved.custom[0].slug, 'good');
-  assert.strictEqual(saved.customWarnings.length, 4, 'four drops reported');
   // The write still happened (guards intact) and coerceModel('opus') is still built-in.
   assert.strictEqual(coerceModel('opus', saved), 'opus');
+  clearCatalog();
 });
 
-test('setModelPrefs: duplicate slugs keep the first, drop the rest', () => {
+test('setModelPrefs: an override for a slug that is not discovered is inert (no custom entry fabricated)', () => {
+  seedCatalog([{ slug: 'present', id: 'p', anchor: 'opus' }]);
   const saved = setModelPrefs({
-    custom: [
-      { slug: 'dup', id: 'a', anchor: 'opus' },
-      { slug: 'dup', id: 'b', anchor: 'opus' },
-    ],
+    customOverrides: { present: { enabled: true }, 'not-installed': { enabled: true } },
   });
-  assert.strictEqual(saved.custom.length, 1);
-  assert.strictEqual(saved.custom[0].id, 'a', 'first wins');
-  assert.strictEqual(saved.customWarnings.length, 1);
+  assert.strictEqual(saved.custom.length, 1, 'only the discovered slug produces a custom entry');
+  assert.strictEqual(saved.custom[0].slug, 'present');
+  // The dead override is still stored (so it takes effect later if that
+  // plugin ever gets installed) but doesn't fabricate a phantom tier now.
+  assert.ok('not-installed' in saved.customOverrides);
+  clearCatalog();
 });
 
 test('setModelPrefs: custom efforts get the per-row guard (never all-off)', () => {
+  seedCatalog([{ slug: 'guarded', id: 'g', anchor: 'opus' }]);
   const saved = setModelPrefs({
-    custom: [{ slug: 'guarded', id: 'g', anchor: 'opus', efforts: { low: false, medium: false, high: false, xhigh: false, max: false } }],
+    customOverrides: { guarded: { enabled: true, efforts: { low: false, medium: false, high: false, xhigh: false, max: false } } },
   });
   assert.strictEqual(saved.custom[0].efforts.medium, true, 'falls back to medium');
+  clearCatalog();
 });
 
-test('setModelPrefs: omitting custom preserves the current list; [] clears it; tier guard intact', () => {
-  setModelPrefs({ custom: [{ slug: 'keep', id: 'k', anchor: 'opus' }] });
-  const afterToggle = setModelPrefs({ opus: false }); // patch omits custom
-  assert.strictEqual(afterToggle.custom.length, 1, 'custom preserved when patch omits it');
+test('setModelPrefs: omitting customOverrides preserves it; a null entry removes a slug; tier guard intact', () => {
+  seedCatalog([{ slug: 'keep', id: 'k', anchor: 'opus' }]);
+  setModelPrefs({ customOverrides: { keep: { enabled: true } } });
+  const afterToggle = setModelPrefs({ opus: false }); // patch omits customOverrides
+  assert.strictEqual(afterToggle.custom.length, 1, 'custom preserved when patch omits customOverrides');
   assert.ok(TIER_ORDER.some((t) => afterToggle[t]), 'tier guard still keeps a built-in on');
-  const cleared = setModelPrefs({ custom: [] });
-  assert.deepStrictEqual(cleared.custom, [], 'explicit [] clears');
+  const cleared = setModelPrefs({ customOverrides: { keep: null } });
+  // The catalog entry is still discovered (seedCatalog wasn't cleared), so it
+  // still resolves into `custom` — just back to disabled-by-default, since the
+  // override that turned it on is gone.
+  assert.strictEqual(cleared.custom.length, 1, 'still discovered, just no longer overridden');
+  assert.strictEqual(cleared.custom[0].enabled, false, 'null removes the override, back to disabled-by-default');
+  assert.ok(!('keep' in cleared.customOverrides), 'the override key itself is gone');
+  clearCatalog();
 });
 
 /* -------------------------------------------------------------- *
