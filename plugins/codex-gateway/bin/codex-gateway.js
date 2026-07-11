@@ -153,6 +153,25 @@ function isWired() {
   return false;
 }
 
+// codex-gateway is inherently a USER-SCOPE tool: it wires a GLOBAL env var
+// (ANTHROPIC_BASE_URL, every session routes through the shim) and its keepalive
+// hook must run in every project. A project/local-only install leaves other
+// projects pointing at a shim that isn't kept alive there. Claude Code has no
+// manifest field to force scope, so we detect a project-only install and warn.
+//
+// Returns one of: 'user' (correctly user-scoped), 'project-only' (installed but
+// no user-scope entry), or 'unknown' (not found in installed_plugins.json, e.g.
+// a --plugin-dir dev checkout — stay quiet).
+function installScope() {
+  try {
+    const file = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const entries = (data.plugins && data.plugins['codex-gateway@eigenwise-toolshed']) || [];
+    if (!entries.length) return 'unknown';
+    return entries.some((e) => e.scope === 'user') ? 'user' : 'project-only';
+  } catch { return 'unknown'; }
+}
+
 function isAuthed() {
   const r = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000 });
   return r.status === 0 && /account/i.test((r.stdout || '') + (r.stderr || ''));
@@ -325,6 +344,14 @@ async function doctor() {
       const wired = s.env && s.env.ANTHROPIC_BASE_URL === ENV_BLOCK.ANTHROPIC_BASE_URL;
       log(`${scope} settings: ${wired ? 'wired' : 'not wired'} (${settingsPath(scope)})`);
     } catch { log(`${scope} settings: not wired`); }
+  }
+  const scope = installScope();
+  if (scope === 'project-only') {
+    log('install scope: PROJECT-ONLY — codex-gateway wires a global env var and needs its');
+    log('  keepalive hook in every session; reinstall at user scope:');
+    log('  claude plugin install codex-gateway@eigenwise-toolshed --scope user');
+  } else if (scope === 'user') {
+    log('install scope: user (correct)');
   }
   if (!ok) process.exitCode = 1;
 }
@@ -626,6 +653,10 @@ function runShim() {
         log(isAuthed()
           ? 'codex-gateway is running but Claude Code is not wired to it. Offer to run its env --write-user (see the codex-gateway skill), then restart.'
           : 'codex-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the codex-gateway skill.');
+      } else if (installScope() === 'project-only') {
+        // wired (global env) but the keepalive hook only runs in the project it's
+        // installed in — every other project points at a shim nothing restarts.
+        log('codex-gateway is installed PROJECT-ONLY but wires a global env var, so other projects route through a shim its hook won\'t keep alive. Offer to reinstall it at user scope: claude plugin install codex-gateway@eigenwise-toolshed --scope user');
       }
       if (!quiet) await statusReport();
       break;

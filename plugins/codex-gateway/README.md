@@ -49,6 +49,13 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
 /plugin install codex-gateway@eigenwise-toolshed
 ```
 
+**Install it at user scope** (that's the default for `/plugin install`). codex-gateway wires a
+global env var (`ANTHROPIC_BASE_URL`, so every session everywhere routes through the shim) and its
+keepalive hook has to run in every project. A project-only or local install leaves your other
+projects pointing at a shim that nothing keeps alive there, so requests in those projects fail.
+`doctor` warns you if it finds a project-only install; reinstall with
+`claude plugin install codex-gateway@eigenwise-toolshed --scope user`.
+
 On your next session, Claude notices the plugin isn't set up yet (a one-line SessionStart nudge)
 and offers to finish the job. Say yes. `setup` is one command: it downloads claude-code-proxy
 (sha256-verified), starts the gateway, and wires your settings; the only thing it can't do for

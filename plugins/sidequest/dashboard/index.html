@@ -224,6 +224,9 @@
   /* Stale-mapping fallback warnings under the tier list. */
   .backend-warn { padding: 0 8px; }
   .backend-warn-row { font-size: 10.5px; line-height: 1.4; color: var(--high); padding: 3px 0; }
+  /* Subtle hint shown when no Codex catalog is detected. */
+  .backend-hint { font-size: 10.5px; line-height: 1.45; color: var(--text-faint); padding: 4px 8px 2px; }
+  .backend-hint b { font-weight: 600; color: var(--text-dim); }
 
   /* Notification inbox */
   #inboxPop { width: 328px; }
@@ -1630,6 +1633,14 @@
       if (det.length) row.appendChild(backendSelect(m.k, det));
       box.appendChild(row);
     });
+    // When no Codex catalog is detected, a subtle hint that the per-tier backend
+    // picker exists once codex-gateway is installed (at user scope). Absent
+    // entirely if the user has no interest — just one dim line, no error styling.
+    if (!(modelPrefs.discovered || []).length) {
+      var hint = el("div", "backend-hint");
+      hint.innerHTML = 'Install <b>codex-gateway</b> (at user scope) to run any tier on a Codex model.';
+      box.appendChild(hint);
+    }
     // Effort levels are a per-model matrix now (SQ-129: store.getModelPrefs's
     // `efforts` object), not one global row — opus·medium can be off while
     // sonnet·medium stays on. Rows are the non-haiku tiers in MODELS order;
