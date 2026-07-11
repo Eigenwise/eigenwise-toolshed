@@ -284,19 +284,26 @@ the tighter spec — a well-specified ticket drops a band; a vague one climbs.
    own tier if the ladder tops out above you (`fable > opus > sonnet > haiku`); only spawn models that
    exist in your environment.
 3. **The ticket read tells you exactly what to spawn.** Each ticket carries a resolved
-   `exec: { agent, model }` from a fresh `ready`/`list --json --brief` read for that wave. Spawn
-   `exec.agent` with `model: exec.model` (and a unique `name`). Two cases fall out of that one field:
-   a normal tier gives `{ agent: "sidequest-exec-<effort>", model: "<tier>" }`; a tier the user has
-   pointed at a Codex model (see below) gives `{ agent: "sidequest-exec-<slug>-<effort>", model: null }`,
-   where that agent has the real model id pinned in its frontmatter (the Agent tool rejects arbitrary
-   model strings), so you pass no `model:`. `<effort>` is the ticket's `effort` **verbatim from that
-   read**, never a level you judge fits better. The executor claims with `--effort <baked level>` and
-   the board **refuses the claim on a mismatch**, bouncing the ticket back. A haiku ticket has no
-   effort: `exec.agent` is null, spawn a plain agent with `model: haiku` (still named).
+   `exec: { agent, model, spawnId, backend }` from a fresh `ready`/`list --json --brief` read for that
+   wave. Two paths:
+   - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with
+     `model: exec.model` and a unique `name`.
+   - **Codex (`exec.model` null):** DO NOT use the Agent tool. Its `model` field is required and only
+     accepts `fable|opus|sonnet|haiku`; any value overrides the generated agent's pinned frontmatter
+     and silently runs Anthropic instead. Launch a short background `claude -p --model
+     "<exec.spawnId>" --dangerously-skip-permissions "<bounded ticket prompt>"` process (or use
+     `sidequest work`, which resolves the same spawnId itself). The prompt carries the ref, board
+     project/path, exact claim identity, files, verify command, and the same claim→work→verify→done
+     protocol as the exec agent template.
+   `<effort>` is the ticket's `effort` **verbatim from that read**, never a level you judge fits
+   better. The executor claims with `--effort <baked level>` and the board **refuses the claim on a
+   mismatch**, bouncing the ticket back. A haiku ticket has no effort: `exec.agent` is null, spawn a
+   plain Agent with `model: haiku` (still named).
    **Per-tier Codex backend:** with [codex-gateway](../../../codex-gateway) installed, the user can map
    any tier to a GPT-5.x model in the dashboard, so an "opus·high" ticket may actually run Terra. You
-   don't decide that; `exec` already resolved it. The generated `sidequest-exec-<slug>-<effort>` agents
-   exist only for tiers currently mapped to a Codex model; a claim-mismatch message names the exact one.
+   don't decide that; `exec` already resolved it. The generated agent definitions remain useful for
+   display/provenance, but this Claude Code build can't invoke their arbitrary pinned model through
+   the Agent tool; the `claude -p`/`sidequest work` path is authoritative.
    **When `exec.backend` is `"codex"`, say so out loud before you spawn** — one visible line naming the
    tier AND the model actually running it, e.g. *"SQ-42 is opus·high, and the opus tier is mapped to
    `exec.runsLabel` (Codex), so it runs there."* Claude Code's own spawn line shows the tier ("Opus"),

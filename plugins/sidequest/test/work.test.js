@@ -107,6 +107,64 @@ test('the CLI `work --dry-run` prints a plan and spawns no process', () => {
   assert.ok(out.plan.every((p) => Array.isArray(p.argv)), 'each plan entry has an argv');
 });
 
+test('targeted plan keeps authoritative Codex model, fable provenance, and always bypasses permissions', () => {
+  fs.mkdirSync(path.join(DISCOVERY_DIR, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(
+    path.join(DISCOVERY_DIR, 'codex-gateway', 'catalog.json'),
+    JSON.stringify({
+      schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(),
+      models: [{ slug: 'codex-target-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'Target Sol', suggestedTier: 'fable' }],
+    }),
+  );
+  const prefs = store.setModelPrefs({
+    routing: true, opus: false, sonnet: false, haiku: false, fable: true,
+    tierBackend: { fable: 'codex-target-sol' },
+  });
+  const rung = store.routingLadder(prefs).find((r) => r.model === 'fable' && r.effort !== 'max');
+  assert.ok(rung);
+  const created = store.createTicket(slug, {
+    title: 'targeted Sol ticket', complexity: rung.complexity,
+    complexityWhy: 'seed a targeted fable ticket that must preserve Sol routing and fable provenance',
+    files: ['src/targeted-sol.js'], source: 'cli',
+  });
+  const planned = work.planTicket(slug, created.ref, { yolo: true });
+  assert.strictEqual(planned.ok, true);
+  assert.strictEqual(planned.item.backend, 'codex');
+  assert.strictEqual(planned.item.tier, 'fable', 'Codex-backed fable stays fable for done provenance');
+  assert.strictEqual(planned.item.spawnModel, 'claude-codex-gpt-5.6-sol[1m]');
+  assert.ok(planned.item.argv.includes('--dangerously-skip-permissions'));
+  assert.ok(!planned.item.argv.includes('--permission-mode'));
+  assert.match(planned.item.prompt, /--model fable/, 'executor closes with fable provenance');
+
+  store.setModelPrefs({
+    routing: true, opus: true, sonnet: true, haiku: true, fable: true,
+    tierBackend: { fable: 'claude' },
+  });
+  fs.rmSync(path.join(DISCOVERY_DIR, 'codex-gateway'), { recursive: true, force: true });
+});
+
+test('targeted plan refuses claimed and done tickets before launch', () => {
+  const t = add('target refusal', 3, ['src/target-refusal.js']);
+  assert.strictEqual(work.planTicket(slug, t.ref, { yolo: true }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'other-worker').ok, true);
+  const claimed = work.planTicket(slug, t.ref, { yolo: true });
+  assert.strictEqual(claimed.reason, 'not_todo');
+  assert.strictEqual(store.completeTicket(slug, t.ref, 'other-worker').ok, true);
+  const done = work.planTicket(slug, t.ref, { yolo: true });
+  assert.strictEqual(done.reason, 'done');
+});
+
+test('the CLI `work --ref --dry-run` prints one targeted bypass plan and spawns nothing', () => {
+  const t = add('target cli dry run', 3, ['src/target-cli.js']);
+  const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
+  const res = spawnSync(process.execPath, [BIN, 'work', '--ref', t.ref, '--dry-run', '--json'], { encoding: 'utf8', env });
+  assert.strictEqual(res.status, 0, res.stderr);
+  const out = JSON.parse(res.stdout);
+  assert.strictEqual(out.item.ref, t.ref);
+  assert.ok(out.item.argv.includes('--dangerously-skip-permissions'));
+});
+
 test('an empty board plans nothing', () => {
   const empty = store.ensureProject(path.join(os.tmpdir(), 'sq-work-empty', 'board'));
   const { plan } = work.planWork(empty.slug, {});

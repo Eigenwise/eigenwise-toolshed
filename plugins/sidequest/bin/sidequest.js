@@ -512,6 +512,26 @@ async function cmdWork(opts) {
     permissionMode: opts['permission-mode'],
   };
 
+  // Targeted dispatch: one ref, authoritative resolved backend, always bypass.
+  // This is the CLI twin of MCP dispatch and the fallback for clients whose MCP
+  // tool list has not reloaded yet.
+  if (opts.ref) {
+    if (opts['dry-run']) {
+      const planned = work.planTicket(slug, opts.ref, { yolo: true });
+      if (!planned.ok) fail(`work --ref: ${planned.message || planned.reason}`);
+      const out = Object.assign({ project: slug, projectName: meta.name }, planned);
+      if (opts.json) process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+      else console.log(`Would dispatch ${planned.item.ref} → ${planned.item.runsLabel} (${planned.item.spawnModel}) with bypass permissions.`);
+      return;
+    }
+    const res = work.dispatchTicket(slug, opts.ref);
+    if (!res.ok) fail(`work --ref: ${res.message || res.reason}`);
+    const out = Object.assign({ project: slug, projectName: meta.name }, res);
+    if (opts.json) process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+    else console.log(`✓ dispatched ${res.ref} → ${res.runsLabel} (${res.backend})  pid ${res.pid}\n  log: ${res.log}`);
+    return;
+  }
+
   if (opts['dry-run']) {
     const { plan, waveCount, dropped } = work.planWork(slug, wopts);
     if (opts.json) {

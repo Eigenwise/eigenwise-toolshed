@@ -77,12 +77,28 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'claim', 'next', 'done', 'release', 'comment', 'ask', 'link', 'models']) {
+  for (const expected of ['list', 'ready', 'add', 'claim', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const t of resp.result.tools) {
     assert.strictEqual(t.inputSchema.type, 'object', `${t.name} has an object input schema`);
   }
+});
+
+test('dispatch schema is narrowly scoped and has no caller model/prompt/permission override', () => {
+  const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
+  assert.ok(d);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref']);
+  assert.deepStrictEqual(d.inputSchema.required, ['ref']);
+  assert.match(d.description, /bypass permissions/i);
+});
+
+test('dispatch refuses a claimed ticket before launching', () => {
+  const added = callTool('add', { title: 'dispatch refusal', complexity: 2, why: 'confirm MCP dispatch refuses a ticket already owned by another worker' });
+  callTool('claim', { ref: added.ticket.ref, by: 'dispatch-other' });
+  const res = callToolRaw('dispatch', { ref: added.ticket.ref });
+  assert.ok(res.isError);
+  assert.match(res.content[0].text, /doing|release.*todo/i);
 });
 
 test('an unknown method is a JSON-RPC method-not-found error', () => {

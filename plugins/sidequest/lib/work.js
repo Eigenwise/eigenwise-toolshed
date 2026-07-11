@@ -20,6 +20,7 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const store = require('./store');
@@ -87,6 +88,91 @@ function executorPrompt(ref, by, tier, effort, projectPath) {
   ].join('\n');
 }
 
+function planItem(t, prefs, projectPath, opts) {
+  opts = opts || {};
+  // A Codex-backed tier keeps its stamped tier for provenance (`fable` may map
+  // to Sol and must close as fable). Only Claude-backed fable is capped to opus
+  // because the headless CLI has no built-in `fable` alias.
+  const backend = (t.exec && t.exec.backend) || 'claude';
+  const tier = backend === 'codex' ? t.model : capTier(t.model);
+  const spawnModel = resolveSpawnModel(t.model, t.effort, prefs);
+  const by = worker(t.ref);
+  const prompt = executorPrompt(t.ref, by, tier, t.effort, projectPath);
+  const argv = ['-p', '--model', spawnModel, '--output-format', 'json'].concat(permissionArgs(opts));
+  return {
+    ref: t.ref, tier, effort: t.effort || null, by, prompt, argv, cwd: projectPath,
+    spawnModel,
+    backend,
+    runsLabel: (t.exec && t.exec.runsLabel) || tier,
+  };
+}
+
+// Plan exactly one ticket. This is the authoritative targeted dispatch path used
+// by MCP `dispatch` and CLI `work --ref`: callers supply only a ref, never a model
+// or prompt, so Sidequest owns the resolved backend and the executor protocol.
+function planTicket(slug, idOrRef, opts) {
+  opts = opts || {};
+  const meta = store.readMeta(slug) || {};
+  const projectPath = meta.path || process.cwd();
+  const t = store.getTicket(slug, idOrRef);
+  if (!t) return { ok: false, reason: 'missing', message: `no ticket "${idOrRef}".` };
+  if (t.status === 'done') return { ok: false, reason: 'done', message: `${t.ref} is already done.` };
+  if (t.status !== 'todo') return { ok: false, reason: 'not_todo', message: `${t.ref} is ${t.status}; release it to todo before dispatch.` };
+  if (t.claim) return { ok: false, reason: 'claimed', message: `${t.ref} is already claimed by ${t.claim.by}.` };
+  if (Array.isArray(t.blockedBy) && t.blockedBy.length) {
+    return { ok: false, reason: 'blocked', message: `${t.ref} is blocked by ${t.blockedBy.join(', ')}.` };
+  }
+  const item = planItem(t, store.getModelPrefs(), projectPath, opts);
+  return { ok: true, item };
+}
+
+// Launch one targeted executor and detach immediately. Output is written to a
+// bounded-per-run log file under SIDEQUEST_HOME/dispatch; the returned pid/log
+// let the caller inspect it without keeping the MCP request open. The child still
+// claims atomically as step 1 of its stdin prompt.
+function dispatchTicket(slug, idOrRef) {
+  // Targeted dispatch is the Agent-tool replacement for gateway-backed models.
+  // It always runs unattended, matching normal subagents under bypass. The MCP
+  // surface deliberately exposes no permission/model/prompt override.
+  const planned = planTicket(slug, idOrRef, { yolo: true });
+  if (!planned.ok) return planned;
+  if (!claudeAvailable()) return { ok: false, reason: 'no_claude', message: 'the `claude` CLI is not on PATH.' };
+  const item = planned.item;
+  const dir = path.join(store.homeRoot(), 'dispatch');
+  fs.mkdirSync(dir, { recursive: true });
+  const logPath = path.join(dir, `${item.ref.toLowerCase()}-${Date.now()}.log`);
+  const fd = fs.openSync(logPath, 'a');
+  let child;
+  try {
+    child = spawn('claude', item.argv, {
+      cwd: item.cwd,
+      shell: true,
+      detached: true,
+      stdio: ['pipe', fd, fd],
+      windowsHide: true,
+    });
+    if (child.stdin) {
+      child.stdin.write(item.prompt);
+      child.stdin.end();
+    }
+    child.unref();
+  } catch (e) {
+    try { fs.closeSync(fd); } catch (_) { /* best effort */ }
+    return { ok: false, reason: 'spawn_failed', message: (e && e.message) || String(e) };
+  }
+  fs.closeSync(fd);
+  return {
+    ok: true,
+    ref: item.ref,
+    by: item.by,
+    pid: child.pid,
+    log: logPath,
+    backend: item.backend,
+    runsLabel: item.runsLabel,
+    spawnModel: item.spawnModel,
+  };
+}
+
 // Build the spawn plan for the next batch of ready work WITHOUT launching
 // anything. Returns { waves, plan: [{ ref, tier, effort, by, argv, cwd }] } for
 // the first wave (capped at max). Pure — the --dry-run path and the tests use it.
@@ -99,23 +185,7 @@ function planWork(slug, opts) {
   const waves = store.readyWaves(slug, { model: opts.model });
   const wave = waves[0] || [];
   const batch = wave.slice(0, max);
-  const permFlags = permissionArgs(opts);
-  const plan = batch.map((t) => {
-    // The ticket stamps a built-in tier; provenance/`done` records that tier
-    // (headless-capped for fable). `spawnModel` is the real string the CLI
-    // launches — the tier's Codex backend id when it's mapped to one, else the
-    // capped tier. For a Claude tier those two are the same.
-    const tier = capTier(t.model);
-    const spawnModel = resolveSpawnModel(t.model, t.effort, prefs);
-    const by = worker(t.ref);
-    // The executor brief goes over STDIN, not argv — it's a large multi-line
-    // string, and keeping it out of the command line is what makes the spawn
-    // survive `shell: true` on Windows (needed to find claude.cmd) without any
-    // quote/newline escaping. So argv is just the small, safe flag set.
-    const prompt = executorPrompt(t.ref, by, tier, t.effort, projectPath);
-    const argv = ['-p', '--model', spawnModel, '--output-format', 'json'].concat(permFlags);
-    return { ref: t.ref, tier, effort: t.effort || null, by, prompt, argv, cwd: projectPath };
-  });
+  const plan = batch.map((t) => planItem(t, prefs, projectPath, opts));
   return { waves, waveCount: waves.length, plan, dropped: Math.max(0, wave.length - batch.length) };
 }
 
@@ -186,4 +256,7 @@ async function runWork(slug, opts, log) {
   return { ok: true, wavesRun, results };
 }
 
-module.exports = { planWork, runWork, capTier, resolveSpawnModel, claudeAvailable, executorPrompt, CLI_PATH };
+module.exports = {
+  planWork, runWork, planTicket, dispatchTicket, capTier, resolveSpawnModel,
+  claudeAvailable, executorPrompt, CLI_PATH,
+};

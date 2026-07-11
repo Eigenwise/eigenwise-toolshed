@@ -25,6 +25,7 @@
 const path = require('path');
 const fs = require('fs');
 const store = require('./store');
+const work = require('./work');
 
 const SERVER_NAME = 'sidequest';
 // The latest MCP protocol revision we implement. In `initialize` we echo the
@@ -454,6 +455,24 @@ const TOOLS = [
       const res = store.assignTicket(slug, args.ref, who, { source: 'mcp' });
       if (!res.ok) throw new Error(`assign: no ticket "${args.ref}".`);
       return Object.assign({ project: slug }, res);
+    },
+  },
+  {
+    name: 'dispatch',
+    description: 'Launch exactly one ready ticket on its authoritative resolved backend and return immediately. Use this for Codex-backed tickets instead of the Agent tool: Sidequest owns the model id and headless executor prompt, so a fable tier mapped to Sol actually runs Sol. Launches unattended with bypass permissions for subagent parity. The ticket must be todo, unclaimed, and unblocked.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+      },
+      required: ['ref'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const res = work.dispatchTicket(slug, args.ref);
+      if (!res.ok) throw new Error(`dispatch: ${res.message || res.reason}`);
+      return Object.assign({ project: slug, projectName: meta.name }, res);
     },
   },
   {
