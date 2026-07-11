@@ -184,6 +184,46 @@
   .pop-row em { font-style: normal; font-size: 11px; color: var(--text-faint); }
   .pop-foot { font-size: 10.5px; color: var(--text-faint); padding: 8px; line-height: 1.45; border-top: 1px solid var(--line-soft); margin-top: 4px; }
 
+  /* Settings is a wide, white, multi-column sheet (not the thin strip the
+     other popovers use): notifications | routing & models | the live ladder,
+     three hairline-divided columns on one card. Anchored top-right like its
+     siblings; collapses to a single column when the window is narrow. */
+  .popover.settings-panel { width: min(920px, 95vw); padding: 0; background: var(--card); }
+  .settings-panel .sp-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px 12px; border-bottom: 1px solid var(--line-soft); }
+  .settings-panel .sp-title { font-family: var(--sans); font-weight: 700; font-size: 14.5px; letter-spacing: .01em; color: var(--text); }
+  .settings-panel .sp-title-sub { font-size: 11.5px; font-weight: 400; color: var(--text-faint); }
+  .settings-panel .sp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: min(74vh, 660px); overflow-y: auto; }
+  .settings-panel .sp-col { padding: 8px 15px 18px; border-right: 1px solid var(--line-soft); min-width: 0; }
+  .settings-panel .sp-col + .sp-col { border-left: 0; }
+  .settings-panel .sp-col:last-child { border-right: 0; }
+  .settings-panel .sp-col .pop-head:first-child { padding-top: 10px; }
+  @media (max-width: 880px) {
+    .settings-panel .sp-grid { grid-template-columns: 1fr; }
+    .settings-panel .sp-col { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+    .settings-panel .sp-col:last-child { border-bottom: 0; }
+  }
+  /* Detected-model group header carries a small source tag. */
+  .sp-src { margin-left: auto; font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
+  /* A detected (auto-discovered) model: an enable row that reveals its own
+     effort strip when on. Reuses the tier + effort-grid language so it reads as
+     one more tier, not a bolted-on panel. */
+  .det-model { border-radius: var(--radius-sm); }
+  .det-model + .det-model { margin-top: 1px; }
+  .det-head { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+  .det-head:hover { background: var(--panel); }
+  .det-head input { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
+  .det-head .dm-name { font-size: 13px; color: var(--text); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .det-model.off .det-head .dm-name { color: var(--text-faint); }
+  .det-head .dm-anchor { flex: none; font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 999px; padding: 1px 7px; }
+  /* Effort strip under an enabled detected model: same checkbox row as the
+     built-in matrix, indented under the model it belongs to. */
+  .det-efforts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; padding: 3px 8px 6px 30px; }
+  .det-eff { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 3px 0; border-radius: var(--radius-sm); cursor: pointer; }
+  .det-eff:hover { background: var(--panel); }
+  .det-eff span { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--text-faint); }
+  .det-eff input { accent-color: var(--gold); width: 13px; height: 13px; cursor: pointer; }
+  .det-note { font-size: 10.5px; color: var(--text-faint); line-height: 1.45; padding: 2px 8px 4px; }
+
   /* Notification inbox */
   #inboxPop { width: 328px; }
   .inbox-list { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
@@ -657,28 +697,42 @@
         <button class="iconbtn" id="settingsBtn" title="Notification settings" aria-label="Notification settings">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
-        <div class="popover" id="settingsPop" role="menu" aria-label="Notification settings">
-          <div class="pop-head">Desktop notifications</div>
-          <div class="pop-row" id="desktopNotifRow" role="button" tabindex="0">
-            <span id="desktopNotifIcon" style="width:15px;height:15px;margin-top:2px;flex:none;color:var(--text-faint);display:inline-flex">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
-            </span>
-            <span><b>Desktop toasts</b><em id="desktopNotifSub">Off — click to allow this site to notify you</em></span>
+        <div class="popover settings-panel" id="settingsPop" role="menu" aria-label="Settings">
+          <div class="sp-head">
+            <span class="sp-title">Settings</span>
+            <span class="sp-title-sub">notifications, routing &amp; models</span>
           </div>
-          <div class="pop-head">Notify me about</div>
-          <label class="pop-row"><input type="checkbox" data-notif="question" /><span><b>Questions</b> from Claude<em>a comment that needs your reply</em></span></label>
-          <label class="pop-row"><input type="checkbox" data-notif="comment" /><span>Comments<em>notes Claude leaves on a ticket</em></span></label>
-          <label class="pop-row"><input type="checkbox" data-notif="created" /><span>New tickets<em>filed by Claude in the background</em></span></label>
-          <label class="pop-row"><input type="checkbox" data-notif="status" /><span>Status changes<em>Claude moved a ticket between columns</em></span></label>
-          <div class="pop-head">Per-project<span id="projNotifyHint" style="margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text-faint)"></span></div>
-          <div class="proj-notify-list" id="projNotifyList"></div>
-          <div class="pop-head">Available models</div>
-          <div class="model-pref-list" id="modelPrefList"></div>
-          <div class="pop-head">Routing bias</div>
-          <div class="bias-view" id="biasView"></div>
-          <div class="pop-head">Routing ladder</div>
-          <div class="ladder-view" id="ladderView"></div>
-          <div class="pop-foot">The kinds above apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
+          <div class="sp-grid">
+            <div class="sp-col">
+              <div class="pop-head">Desktop notifications</div>
+              <div class="pop-row" id="desktopNotifRow" role="button" tabindex="0">
+                <span id="desktopNotifIcon" style="width:15px;height:15px;margin-top:2px;flex:none;color:var(--text-faint);display:inline-flex">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+                </span>
+                <span><b>Desktop toasts</b><em id="desktopNotifSub">Off — click to allow this site to notify you</em></span>
+              </div>
+              <div class="pop-head">Notify me about</div>
+              <label class="pop-row"><input type="checkbox" data-notif="question" /><span><b>Questions</b> from Claude<em>a comment that needs your reply</em></span></label>
+              <label class="pop-row"><input type="checkbox" data-notif="comment" /><span>Comments<em>notes Claude leaves on a ticket</em></span></label>
+              <label class="pop-row"><input type="checkbox" data-notif="created" /><span>New tickets<em>filed by Claude in the background</em></span></label>
+              <label class="pop-row"><input type="checkbox" data-notif="status" /><span>Status changes<em>Claude moved a ticket between columns</em></span></label>
+              <div class="pop-head">Per-project<span id="projNotifyHint" style="margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text-faint)"></span></div>
+              <div class="proj-notify-list" id="projNotifyList"></div>
+            </div>
+            <div class="sp-col">
+              <div class="pop-head">Available models</div>
+              <div class="model-pref-list" id="modelPrefList"></div>
+              <div class="pop-head" id="detectedHead" style="display:none">Codex models<span class="sp-src">via codex-gateway</span></div>
+              <div class="detected-list" id="detectedModelList"></div>
+            </div>
+            <div class="sp-col">
+              <div class="pop-head">Routing bias</div>
+              <div class="bias-view" id="biasView"></div>
+              <div class="pop-head">Routing ladder</div>
+              <div class="ladder-view" id="ladderView"></div>
+            </div>
+          </div>
+          <div class="pop-foot">Notification kinds apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
         </div>
       </div>
       <button class="btn btn-primary" id="newBtn">
@@ -866,6 +920,21 @@
     { k: "haiku", label: "Haiku" }, { k: "fable", label: "Fable" }
   ];
   var MODEL_COLORS = { opus: "#404683", sonnet: "#3f8f8a", haiku: "#a8672e", fable: "#7a5ba8" };
+  // A detected (codex-gateway) model can carry its own color; otherwise give it
+  // a stable on-brand hue derived from the slug so its ladder rung and card chip
+  // read the same every time. modelColor() is the single lookup everything uses.
+  var CUSTOM_COLORS = {};   // slug -> "#rrggbb", filled from prefs.custom
+  var CUSTOM_PALETTE = ["#7a5ba8", "#4c8b6e", "#a8672e", "#3f8f8a", "#8a5a7a", "#5a6a9a", "#9a7a3a"];
+  function slugHue(slug) {
+    var h = 0; for (var i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0;
+    return CUSTOM_PALETTE[h % CUSTOM_PALETTE.length];
+  }
+  function modelColor(k) {
+    if (MODEL_COLORS[k]) return MODEL_COLORS[k];
+    if (CUSTOM_COLORS[k]) return CUSTOM_COLORS[k];
+    if (k) return slugHue(k);
+    return "var(--text-faint)";
+  }
   // Reasoning-effort levels (mirrors store.VALID_EFFORTS). Toggleable exactly
   // like the tiers: a disabled effort never appears in the derived ladder.
   var EFFORTS = [
@@ -989,8 +1058,14 @@
   }
   function syncModelPrefsFromServer() {
     return api("/api/model-prefs").then(function (d) {
-      if (d && d.prefs) { modelPrefs = d.prefs; renderModelPrefSettings(); refreshLadder(); }
+      if (d && d.prefs) { modelPrefs = d.prefs; adoptCustomColors(); renderModelPrefSettings(); renderDetectedModels(); refreshLadder(); }
     }).catch(function () { /* older server without this route — offer everything */ });
+  }
+  // Learn each detected model's color (explicit override or none) so ladder rungs
+  // and card chips outside the settings panel tint consistently.
+  function adoptCustomColors() {
+    CUSTOM_COLORS = {};
+    (modelPrefs.custom || []).forEach(function (c) { if (c && c.slug && c.color) CUSTOM_COLORS[c.slug] = c.color; });
   }
   function pushModelPrefs() {
     return api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) }).catch(function () {});
@@ -1596,6 +1671,85 @@
     });
     box.appendChild(grid);
   }
+  // Detected models (SQ-159): codex-gateway (same marketplace) publishes a
+  // catalog sidequest auto-discovers; each becomes a toggleable ladder tier here.
+  // No id field / no anchor picker / no add button — these are discovered, not
+  // authored. Off by default; enabling one writes customOverrides[slug] and PUTs,
+  // which also regenerates its executor agents server-side. The whole group is
+  // hidden when nothing is detected, so a user without codex-gateway sees the
+  // panel exactly as before.
+  var DET_EFFORTS = [
+    { k: "low", short: "Lo" }, { k: "medium", short: "Med" }, { k: "high", short: "Hi" }, { k: "xhigh", short: "XHi" }
+  ];
+  function customEntry(slug) { return (modelPrefs.custom || []).filter(function (c) { return c.slug === slug; })[0]; }
+  function writeOverride(slug, patch) {
+    if (!modelPrefs.customOverrides) modelPrefs.customOverrides = {};
+    modelPrefs.customOverrides[slug] = Object.assign({}, modelPrefs.customOverrides[slug], patch);
+  }
+  // The server resolves modelPrefs.custom from catalog + customOverrides, but only
+  // on its next read. So the panel renders from an OPTIMISTIC merge: the resolved
+  // entry (or the raw catalog default) with this session's unsaved overrides laid
+  // on top, so a toggle reflects immediately instead of waiting for a round trip.
+  function effectiveDetected(dm) {
+    var base = customEntry(dm.slug) || { slug: dm.slug, label: dm.label, anchor: dm.anchor, enabled: false, efforts: { high: true } };
+    var ov = (modelPrefs.customOverrides || {})[dm.slug] || {};
+    var eff = Object.assign({}, base);
+    if ("enabled" in ov) eff.enabled = ov.enabled;
+    if (ov.efforts) eff.efforts = Object.assign({}, base.efforts, ov.efforts);
+    return eff;
+  }
+  function renderDetectedModels() {
+    var box = $("detectedModelList"); var head = $("detectedHead");
+    if (!box || !head) return;
+    var det = modelPrefs.discovered || [];
+    head.style.display = det.length ? "" : "none";
+    box.innerHTML = "";
+    if (!det.length) return;
+    det.forEach(function (dm) {
+      var c = effectiveDetected(dm);
+      var on = !!c.enabled;
+      var wrap = el("div", "det-model" + (on ? "" : " off"));
+      var head2 = el("label", "det-head");
+      head2.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' />' +
+        '<span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:' + modelColor(dm.slug) + '"></span>' +
+        '<span class="dm-name">' + esc(dm.label) + '</span>' +
+        '<span class="dm-anchor" title="sits at the ' + esc(dm.anchor) + ' rung on the ladder">~' + esc(dm.anchor) + '</span>';
+      var cb = head2.querySelector("input");
+      cb.addEventListener("change", function () {
+        writeOverride(dm.slug, { enabled: cb.checked });
+        renderDetectedModels();
+        pushModelPrefs().then(function () { refreshLadder(); });
+        toast(dm.label + (cb.checked ? " enabled — regenerating its executor agents" : " disabled"));
+      });
+      wrap.appendChild(head2);
+      if (on) {
+        var effRow = el("div", "det-efforts");
+        DET_EFFORTS.forEach(function (ef) {
+          var eon = c.efforts && c.efforts[ef.k];
+          var cell = el("label", "det-eff");
+          cell.innerHTML = '<span>' + ef.short + '</span><input type="checkbox"' + (eon ? " checked" : "") + ' aria-label="' + esc(dm.label + " " + ef.k) + '" />';
+          var ecb = cell.querySelector("input");
+          ecb.addEventListener("change", function () {
+            var cur = effectiveDetected(dm);
+            var count = DET_EFFORTS.filter(function (x) { return cur.efforts && cur.efforts[x.k]; }).length;
+            if (!ecb.checked && count <= 1) { ecb.checked = true; toast("Keep at least one effort on for " + dm.label); return; }
+            var effPatch = Object.assign({}, cur.efforts);
+            effPatch[ef.k] = ecb.checked;
+            writeOverride(dm.slug, { efforts: effPatch });
+            renderDetectedModels();
+            pushModelPrefs().then(function () { refreshLadder(); });
+            toast(dm.label + " " + ef.k + (ecb.checked ? " enabled" : " excluded"));
+          });
+          effRow.appendChild(cell);
+        });
+        wrap.appendChild(effRow);
+      }
+      box.appendChild(wrap);
+    });
+    var note = el("div", "det-note");
+    note.innerHTML = "Detected from codex-gateway. Enabling one adds it to the ladder and generates its executor agents (restart Claude Code to load them). Effort is advisory on gateway models.";
+    box.appendChild(note);
+  }
   // The live routing ladder, one compact row per rung (C1 sonnet·low …), so a
   // tier toggle visibly reshapes the complexity -> model·effort mapping.
   function renderLadderView() {
@@ -1607,7 +1761,7 @@
     }
     box.innerHTML = "";
     routingLadderCache.forEach(function (r) {
-      var mc = MODEL_COLORS[r.model] || "var(--text-faint)";
+      var mc = modelColor(r.model);
       var row = el("div", "ladder-row");
       row.innerHTML = '<span class="lc">C' + r.complexity + '</span>' +
         '<span class="ldot" style="background:' + mc + '"></span>' +
@@ -1810,13 +1964,13 @@
     var chipSvg = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>';
     var modelChip = "";
     if (t.complexity) {
-      var mc = (t.model && MODEL_COLORS[t.model]) || "#52545f";
+      var mc = t.model ? modelColor(t.model) : "#52545f";
       var routeLabel = "C" + t.complexity + (t.model ? "·" + t.model : "") + (t.effort ? "·" + t.effort : "");
       var whySnip = t.complexityWhy ? String(t.complexityWhy).slice(0, 80) : "";
       var cTitle = "complexity " + t.complexity + " → " + (t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "") + (whySnip ? " — " + whySnip : "");
       modelChip = '<span class="modelchip" title="' + esc(cTitle) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '">' + chipSvg + esc(routeLabel) + '</span>';
     } else if (t.model || t.effort) {
-      var mcL = (t.model && MODEL_COLORS[t.model]) || "#52545f"; // neutral for effort-only
+      var mcL = t.model ? modelColor(t.model) : "#52545f"; // neutral for effort-only
       var routeLabelL = (t.model || "any") + (t.effort ? "·" + t.effort : "");
       modelChip = '<span class="modelchip" title="routing: ' + esc((t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "")) + '" style="color:' + mcL + ';background:' + tint(mcL, 0.1) + ';border-color:' + tint(mcL, 0.4) + '">' + chipSvg + esc(routeLabelL) + '</span>';
     }
@@ -2952,7 +3106,7 @@
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
-      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderBiasControl(); renderLadderView(); }
+      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderDetectedModels(); renderBiasControl(); renderLadderView(); }
     });
     document.addEventListener("click", function (e) {
       if (e.target.closest(".popwrap")) return;
