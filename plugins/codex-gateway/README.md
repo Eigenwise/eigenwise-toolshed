@@ -45,18 +45,22 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
 /plugin install codex-gateway@eigenwise-toolshed
 ```
 
-Then, inside Claude Code, ask Claude to set it up ("set up the codex gateway"), or run it
-yourself (the plugin root is shown by `/plugin`):
+On your next session, Claude notices the plugin isn't set up yet (a one-line SessionStart nudge)
+and offers to finish the job. Say yes. `setup` is one command: it downloads claude-code-proxy
+(sha256-verified), starts the gateway, and wires your settings; the only thing it can't do for
+you is the ChatGPT browser sign-in, which it asks for when needed. Then restart Claude Code and
+open `/model`: the Codex rows are there, labeled "From gateway".
+
+Prefer doing it by hand? Same thing:
 
 ```bash
-node <plugin>/bin/codex-gateway.js setup             # download claude-code-proxy (sha256-verified)
-node <plugin>/bin/codex-gateway.js login             # ChatGPT sign-in in your browser
-node <plugin>/bin/codex-gateway.js start
-node <plugin>/bin/codex-gateway.js env --write-user  # wire Claude Code (or --write-project)
+node <plugin>/bin/codex-gateway.js setup   # download + start + wire; prompts for login if needed
+node <plugin>/bin/codex-gateway.js login   # ChatGPT sign-in in your browser (if asked)
+node <plugin>/bin/codex-gateway.js setup   # finishes the wiring after sign-in
 ```
 
-Restart Claude Code. `/model` now has the Codex rows, labeled "From gateway". Model discovery
-needs Claude Code v2.1.129+.
+Model discovery needs Claude Code v2.1.129+. Re-running `setup` later is also how you upgrade
+the proxy.
 
 ## Commands
 

@@ -19,18 +19,23 @@ that don't start with `claude`/`anthropic`.
 
 All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" <command>`
 
-## First-time setup (in order)
+## First-time setup
+
+The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
+state; act on it. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
+(sha256-verified), starts everything, and wires `env --write-user` automatically when ChatGPT
+auth is already valid. Re-running it later is also the upgrade path.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" setup    # downloads claude-code-proxy binary
-node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" login    # ChatGPT browser OAuth; --device for headless
-node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" start
-node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" env --write-user   # or --write-project
+node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" setup
+# only if setup says sign-in is needed:
+node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" login    # browser OAuth; --device for headless
+node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" setup    # finishes the wiring
 ```
 
-`login` opens the user's browser; they must complete it themselves (suggest `! node ... login`
-if it needs to run interactively). Run `doctor` first: if it already shows a codex account
-(claude-code-proxy can pick up existing credentials), skip login. After `env --write-user`, the user restarts Claude Code and
+`login` opens the user's browser; they complete it themselves (suggest `! node ... login` if it
+needs a real TTY). Prefer `env --write-project` over the default user-wide wiring only if the
+user wants Codex models in this repo alone. After `env --write-user`, the user restarts Claude Code and
 the Codex rows appear in `/model` labeled "From gateway". Discovery needs Claude Code v2.1.129+
 and fails silently if the shim answers slowly; `models` shows exactly what's advertised.
 

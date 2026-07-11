@@ -100,6 +100,11 @@ async function shimHealthy() {
 }
 
 function pidFile(name) { return path.join(STATE, name + '.pid'); }
+function stopAll() {
+  killPid(readPid('shim'));
+  killPid(readPid('proxy'));
+  for (const n of ['shim', 'proxy']) { try { fs.rmSync(pidFile(n)); } catch { /* absent */ } }
+}
 function readPid(name) {
   try { return Number(fs.readFileSync(pidFile(name), 'utf8').trim()) || null; } catch { return null; }
 }
@@ -126,6 +131,22 @@ function settingsPath(scope) {
   return scope === 'project'
     ? path.join(process.cwd(), '.claude', 'settings.json')
     : path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+function isWired() {
+  if (process.env.ANTHROPIC_BASE_URL === ENV_BLOCK.ANTHROPIC_BASE_URL) return true;
+  for (const scope of ['user', 'project']) {
+    try {
+      const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
+      if (s.env && s.env.ANTHROPIC_BASE_URL === ENV_BLOCK.ANTHROPIC_BASE_URL) return true;
+    } catch { /* absent or unparsable */ }
+  }
+  return false;
+}
+
+function isAuthed() {
+  const r = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000 });
+  return r.status === 0 && /account/i.test((r.stdout || '') + (r.stderr || ''));
 }
 
 // ------------------------------------------------------------------- setup
@@ -157,6 +178,10 @@ async function setup() {
     log('sha256 verified');
   }
 
+  // Windows can't overwrite a running exe; setup doubles as the upgrade
+  // path, so stop the gateway before extracting (restarted below)
+  stopAll();
+  await new Promise((r) => setTimeout(r, 700)); // let the file lock release
   const tmp = path.join(BIN_DIR, assetName);
   fs.writeFileSync(tmp, archive.body);
   // Windows: force the System32 bsdtar (reads zip); PATH may find Git's GNU
@@ -179,7 +204,17 @@ async function setup() {
 
   const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8' });
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
-  log(`next: node "${__filename}" login   (ChatGPT browser sign-in)`);
+
+  // one-shot: start everything, and finish the wiring when auth already works
+  const r = await startAll();
+  if (!r.ok) die(r.reason);
+  if (!isAuthed()) {
+    log(`next: node "${__filename}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
+    return;
+  }
+  log('ChatGPT auth: valid');
+  if (isWired()) { log('already wired; restart Claude Code and open /model'); return; }
+  writeEnv('user', false);
 }
 
 // ------------------------------------------------------- process management
@@ -234,6 +269,10 @@ function envCommand() {
     log('\nor run: env --write-user   (global) / --write-project (this repo)');
     return;
   }
+  writeEnv(scope, remove);
+}
+
+function writeEnv(scope, remove) {
   const file = settingsPath(scope);
   let settings = {};
   try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* new file */ }
@@ -409,6 +448,7 @@ function runShim() {
       if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
       const mode = flag('--device') ? 'device' : 'login';
       const r = spawnSync(PROXY_BIN, ['codex', 'auth', mode], { stdio: 'inherit' });
+      if (r.status === 0) log(`signed in; run setup once more to finish wiring Claude Code`);
       process.exitCode = r.status == null ? 1 : r.status;
       break;
     }
@@ -419,26 +459,29 @@ function runShim() {
       break;
     }
     case 'stop':
-      killPid(readPid('shim'));
-      killPid(readPid('proxy'));
-      for (const n of ['shim', 'proxy']) { try { fs.rmSync(pidFile(n)); } catch { /* absent */ } }
+      stopAll();
       log('stopped');
       break;
     case 'ensure': {
+      // SessionStart hook path: stdout lands in Claude's context, so stay
+      // silent when healthy and emit exactly one actionable line otherwise
       const quiet = flag('--quiet');
+      const wired = isWired();
       if (!fs.existsSync(PROXY_BIN)) {
-        // only nag if Claude Code is actually wired to route through us
-        try {
-          const s = JSON.parse(fs.readFileSync(settingsPath('user'), 'utf8'));
-          if (s.env && s.env.ANTHROPIC_BASE_URL === ENV_BLOCK.ANTHROPIC_BASE_URL) {
-            console.error('codex-gateway: ANTHROPIC_BASE_URL is wired but the proxy binary is missing; run codex-gateway setup or env --remove');
-            process.exit(1);
-          }
-        } catch { /* not wired */ }
+        if (wired) {
+          console.error('codex-gateway: ANTHROPIC_BASE_URL is wired but the proxy binary is missing; run the codex-gateway skill setup, or env --remove to unwire');
+          process.exit(1);
+        }
+        log('codex-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the codex-gateway skill.');
         process.exit(0);
       }
       const r = await startAll({ quiet });
       if (!r.ok) { console.error('codex-gateway: ' + r.reason); process.exit(1); }
+      if (!wired) {
+        log(isAuthed()
+          ? 'codex-gateway is running but Claude Code is not wired to it. Offer to run its env --write-user (see the codex-gateway skill), then restart.'
+          : 'codex-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the codex-gateway skill.');
+      }
       if (!quiet) await statusReport();
       break;
     }
