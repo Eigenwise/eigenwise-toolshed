@@ -41,18 +41,16 @@ const ENV_BLOCK = {
   CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
   // Behind an ANTHROPIC_BASE_URL gateway Claude Code can't verify a model's
   // context window, so a plain Claude alias (opus / sonnet) selected in /model
-  // gets budgeted at 200k — a long session then shows a >100% context bar and
-  // force-compacts (the "333%" symptom). Pin the aliases to their [1m] ids so
-  // they carry the full 1M window. Safe through the shim: only claude-codex-*
-  // ids get rewritten (see serveShim), so these pass to api.anthropic.com
-  // untouched, and [1m] is Claude Code's local 1M compaction hint. Sonnet's 1M
-  // window bills tokens above 200k at a premium; opus 4.8 is 1M at flat pricing.
+  // gets budgeted at 200k. Pin only the real Claude 1M models to their [1m]
+  // ids. Codex models stay unsuffixed so Claude Code uses its conservative
+  // gateway budget and compacts before their 372k backend limit.
   ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
   ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
-  // Codex GPT-5.x models carry a 1M context window, same as opus[1m]/sonnet[1m].
-  // With the aliases pinned above, every model in the session is 1M, so this
-  // GLOBAL auto-compact threshold (~50k headroom below 1M) is correct for both
-  // Codex and Claude passthrough. Drop it if you route a 200k model through the shim.
+};
+
+// Versions through 0.4.1 wrote this unsafe global override. Remove it during
+// the next env write/remove, but leave a user-supplied different value alone.
+const LEGACY_ENV_BLOCK = {
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
 };
 
@@ -147,6 +145,25 @@ function settingsPath(scope) {
   return scope === 'project'
     ? path.join(process.cwd(), '.claude', 'settings.json')
     : path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+function cleanLegacyEnvSettings() {
+  for (const scope of ['user', 'project']) {
+    const file = settingsPath(scope);
+    let settings;
+    try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
+    if (!settings.env) continue;
+    let changed = false;
+    for (const [k, v] of Object.entries(LEGACY_ENV_BLOCK)) {
+      if (String(settings.env[k]) === String(v)) {
+        delete settings.env[k];
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+    if (!Object.keys(settings.env).length) delete settings.env;
+    fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  }
 }
 
 function isWired() {
@@ -314,12 +331,15 @@ function writeEnv(scope, remove) {
   try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* new file */ }
   settings.env = settings.env || {};
   if (remove) {
-    for (const k of Object.keys(ENV_BLOCK)) {
-      if (String(settings.env[k]) === String(ENV_BLOCK[k])) delete settings.env[k];
+    for (const [k, v] of Object.entries({ ...ENV_BLOCK, ...LEGACY_ENV_BLOCK })) {
+      if (String(settings.env[k]) === String(v)) delete settings.env[k];
     }
     if (!Object.keys(settings.env).length) delete settings.env;
   } else {
     Object.assign(settings.env, ENV_BLOCK);
+    for (const [k, v] of Object.entries(LEGACY_ENV_BLOCK)) {
+      if (String(settings.env[k]) === String(v)) delete settings.env[k];
+    }
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
@@ -521,7 +541,7 @@ function runShim() {
     modelCache = {
       at: Date.now(),
       data: ids.map((id) => ({
-        id: `${PREFIX}${id}[1m]`,
+        id: `${PREFIX}${id}`,
         display_name: displayName(id),
         type: 'model',
       })),
@@ -588,8 +608,8 @@ function runShim() {
         try {
           const parsed = JSON.parse(raw.toString());
           if (typeof parsed.model === 'string' && parsed.model.startsWith(PREFIX)) {
-            // [1m] is Claude Code's local compaction hint; proxy v0.1.10
-            // rejects it here despite its README, so strip it ourselves
+            // Accept legacy typed ids from pre-0.4.2 sessions even though new
+            // discovery rows are unsuffixed.
             parsed.model = parsed.model.slice(PREFIX.length).replace(/\[1m\]$/, '');
             // Non-Claude models call the plan-mode tools spuriously, and an
             // approved ExitPlanMode downgrades the session's permission mode
@@ -642,6 +662,9 @@ function runShim() {
       log('stopped');
       break;
     case 'ensure': {
+      // Clean the unsafe value written by versions through 0.4.1 on the first
+      // session after the plugin cache updates. Exact-match only.
+      cleanLegacyEnvSettings();
       // SessionStart hook path: stdout lands in Claude's context, so stay
       // silent when healthy and emit exactly one actionable line otherwise
       const quiet = flag('--quiet');
