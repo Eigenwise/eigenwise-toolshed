@@ -37,6 +37,8 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
   and beta headers are untouched).
 - A **SessionStart hook** keeps both processes alive so a wired session never starts against a
   dead port.
+- codex-gateway also publishes a small model catalog (`catalog.json`, next to its state) that
+  [sidequest](../sidequest) reads to offer these Codex models in its own routing ladder.
 
 ## Install
 
@@ -71,6 +73,7 @@ the proxy.
 | `start` / `stop` / `status` | Manage the proxy + shim (detached; logs in `~/.claude/codex-gateway/logs/`) |
 | `ensure [--quiet]` | Start whatever's down; the SessionStart hook runs this |
 | `models` | Show exactly what the shim advertises to the picker |
+| `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
 | `env [--write-user\|--write-project\|--remove]` | Print or wire/unwire the Claude Code env block |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
 

@@ -162,16 +162,24 @@ const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 // time); this tag drives that routing and the `next`/`ready` --model filter.
 const VALID_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
 
-// Normalize a requested model tier to one of VALID_MODELS, or null. Blank
-// / "any" / "none" / an unknown alias all coerce to null — which is exactly
-// what the entry points (CLI add, dashboard POST) reject: every ticket must
-// be filed with a real tier, and sidequest never picks one for you. The data
-// layer itself stays permissive/fail-soft (the capture hook must never crash).
-function coerceModel(v) {
+// Normalize a requested model tier to one of VALID_MODELS (or, when `prefs` is
+// supplied, a configured custom model slug), or null. Blank / "any" / "none" /
+// an unknown alias all coerce to null — which is exactly what the entry points
+// (CLI add, dashboard POST) reject: every ticket must be filed with a real tier,
+// and sidequest never picks one for you. The data layer itself stays
+// permissive/fail-soft (the capture hook must never crash). The one-arg form is
+// unchanged (built-ins only); pass prefs to also accept custom slugs — a custom
+// slug IS the model name everywhere tickets/provenance/filters are concerned.
+function coerceModel(v, prefs) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
   if (!s || s === 'any' || s === 'none' || s === 'null') return null;
-  return VALID_MODELS.indexOf(s) !== -1 ? s : null;
+  if (VALID_MODELS.indexOf(s) !== -1) return s;
+  if (prefs) {
+    const vocab = getModelVocab(prefs);
+    if (vocab.bySlug[s]) return s;
+  }
+  return null;
 }
 
 // How hard the executor should think — the reasoning-effort levels Claude Code
@@ -193,6 +201,145 @@ function coerceEffort(v) {
   const s = String(v).trim().toLowerCase();
   if (!s || s === 'any' || s === 'none' || s === 'null' || s === 'default') return null;
   return VALID_EFFORTS.indexOf(s) !== -1 ? s : null;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Custom model tiers
+ *
+ *  Users can register extra models (e.g. OpenAI Codex models proxied through a
+ *  gateway plugin) that join the capability ladder alongside the built-ins. Each
+ *  custom entry carries a `slug` (the model NAME sidequest uses everywhere a
+ *  ticket/provenance/filter names a model) and an `id` (the real string handed to
+ *  Claude Code at spawn time). A custom anchors onto a built-in tier's base score
+ *  plus an offset, so routingLadder can rank it in the same merged order. Absent
+ *  config → empty list → byte-identical built-in behavior.
+ * ------------------------------------------------------------------ */
+
+// A slug is 2..32 chars, lowercase alnum + dashes, starting alnum. It's the
+// public model name, so it must not collide with a built-in tier or another slug.
+const CUSTOM_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+
+// A custom's rung base = LADDER_TIER_BASE[anchor] + offset; offset is a small
+// integer nudge (-2..2) so a custom can sit just under/over its anchor tier.
+function coerceCustomOffset(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-2, Math.min(2, n));
+}
+
+// A dashboard tint for the custom's chip: #rrggbb (or #rgb, expanded), else null.
+function coerceCustomColor(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  if (/^#?[0-9a-f]{6}$/.test(s)) return '#' + s.replace(/^#/, '');
+  if (/^#?[0-9a-f]{3}$/.test(s)) {
+    const h = s.replace(/^#/, '');
+    return '#' + h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  }
+  return null;
+}
+
+// Validate + normalize ONE raw custom entry against the slugs already accepted in
+// this pass. Returns { ok:true, entry } or { ok:false, reason } — the caller
+// (getModelPrefs on read, setModelPrefs on write) drops rejects rather than
+// throwing the whole prefs write away.
+function normalizeCustomEntry(raw, takenSlugs) {
+  if (!raw || typeof raw !== 'object') return { ok: false, reason: 'not an object' };
+  const slug = String(raw.slug == null ? '' : raw.slug).trim().toLowerCase();
+  if (!CUSTOM_SLUG_RE.test(slug)) return { ok: false, reason: `invalid slug "${raw.slug}"` };
+  if (VALID_MODELS.indexOf(slug) !== -1) return { ok: false, reason: `slug "${slug}" collides with a built-in tier` };
+  if (takenSlugs && takenSlugs.indexOf(slug) !== -1) return { ok: false, reason: `duplicate slug "${slug}"` };
+  const id = String(raw.id == null ? '' : raw.id).trim();
+  if (!id) return { ok: false, reason: `custom "${slug}" has an empty id` };
+  const anchor = String(raw.anchor == null ? '' : raw.anchor).trim().toLowerCase();
+  if (VALID_MODELS.indexOf(anchor) === -1) return { ok: false, reason: `custom "${slug}" has invalid anchor "${raw.anchor}"` };
+
+  // Effort matrix: same {low..max} row shape as a built-in tier, defaulting a
+  // missing/garbage row to all-on, with the same per-row guard (never all-off →
+  // fall back to medium) the built-in rows carry.
+  const rawEfforts = raw.efforts && typeof raw.efforts === 'object' ? raw.efforts : null;
+  const efforts = {};
+  for (const e of VALID_EFFORTS) efforts[e] = rawEfforts ? rawEfforts[e] !== false : true;
+  if (!VALID_EFFORTS.some((e) => efforts[e])) efforts.medium = true;
+
+  const entry = {
+    slug,
+    id,
+    label: String(raw.label == null ? '' : raw.label).trim() || slug,
+    anchor,
+    offset: coerceCustomOffset(raw.offset),
+    enabled: raw.enabled !== false, // default on, like a built-in tier
+    efforts,
+    color: coerceCustomColor(raw.color),
+  };
+  return { ok: true, entry };
+}
+
+// Normalize a raw `custom` list (anything or nothing) into a clean array, plus
+// the human-readable reasons for any entries that were dropped. Fail-soft: a
+// non-array yields []. Slugs are deduped against earlier ACCEPTED entries.
+function normalizeCustomList(rawList) {
+  if (!Array.isArray(rawList)) return { customs: [], warnings: [] };
+  const customs = [];
+  const warnings = [];
+  const taken = [];
+  rawList.forEach((raw, i) => {
+    const res = normalizeCustomEntry(raw, taken);
+    if (res.ok) {
+      customs.push(res.entry);
+      taken.push(res.entry.slug);
+    } else {
+      warnings.push(`custom[${i}] dropped: ${res.reason}`);
+    }
+  });
+  return { customs, warnings };
+}
+
+// The resolved routing vocabulary under a set of prefs: the full set of model
+// NAMES sidequest recognizes (built-ins + every configured custom slug, enabled
+// or not — disabling only removes a custom from routing, it stays a valid name),
+// the effort levels, the normalized custom entries, and two lookups: bySlug
+// (slug → custom entry) and byId (model name → the real spawn id; built-ins map
+// to themselves). getModelVocab re-normalizes prefs.custom so it's safe to hand a
+// raw/hand-built prefs object straight in.
+function getModelVocab(prefs) {
+  prefs = prefs || getModelPrefs();
+  const customs = normalizeCustomList(prefs.custom).customs;
+  const models = VALID_MODELS.concat(customs.map((c) => c.slug));
+  const bySlug = {};
+  const byId = {};
+  for (const m of VALID_MODELS) byId[m] = m;
+  for (const c of customs) {
+    bySlug[c.slug] = c;
+    byId[c.slug] = c.id;
+  }
+  return { models, efforts: VALID_EFFORTS.slice(), customs, bySlug, byId };
+}
+
+// Resolve a model NAME (built-in tier or custom slug) to the real string handed
+// to Claude Code at spawn time: built-ins map to themselves, custom slugs map to
+// their `id`. Returns null for an unrecognized name. This is the seam a spawner
+// (mcp/work/dashboard, separate tickets) goes through to launch a custom model.
+function resolveModelId(slugOrName, prefs) {
+  if (slugOrName == null) return null;
+  const s = String(slugOrName).trim().toLowerCase();
+  if (!s) return null;
+  const vocab = getModelVocab(prefs);
+  return Object.prototype.hasOwnProperty.call(vocab.byId, s) ? vocab.byId[s] : null;
+}
+
+// Classify a --model filter value so a caller CAN distinguish "no filter" from a
+// value that names no known model — the two coerceModel folds into null today.
+// Returns 'any' (blank/any/none/null → don't filter), 'unknown' (a non-empty
+// value matching no built-in or custom → a caller may choose to error), or the
+// resolved model name. coerceModel keeps returning null for both 'any' and
+// 'unknown', so ready/next behavior is unchanged until a caller opts into this.
+function classifyModelFilter(v, prefs) {
+  if (v == null) return 'any';
+  const s = String(v).trim().toLowerCase();
+  if (!s || s === 'any' || s === 'none' || s === 'null') return 'any';
+  const m = coerceModel(s, prefs || getModelPrefs());
+  return m || 'unknown';
 }
 
 /* ------------------------------------------------------------------ *
@@ -280,67 +427,106 @@ const LADDER_EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh'];
 // already expects.
 function routingLadder(prefs) {
   prefs = prefs || getModelPrefs();
-  let enabled = MODEL_CAPABILITY_ORDER.filter((m) => prefs[m] !== false);
-  if (!enabled.length) enabled = ['sonnet']; // unreachable via setModelPrefs, but never return an empty ladder
 
   // Resolve a tier's effort row from the per-model matrix, fail-soft to
   // all-enabled when the row (or the whole efforts object) is missing/garbage —
   // so an old flat-shape prefs object handed straight to routingLadder still
   // yields a full ladder rather than an empty one.
   const efforts = prefs.efforts && typeof prefs.efforts === 'object' ? prefs.efforts : {};
-  function rowOf(model) {
+  function builtinRow(model) {
     const r = efforts[model] && typeof efforts[model] === 'object' ? efforts[model] : null;
     const row = {};
     for (const e of VALID_EFFORTS) row[e] = r ? r[e] !== false : true;
     return row;
   }
-  // The enabled non-max efforts of a tier's own row (the rungs it contributes to
-  // the ranked sequence). `max` is held out — it's the sparing top rung.
-  function seqEffortsOf(model) {
-    return LADDER_EFFORT_ORDER.filter((e) => rowOf(model)[e] !== false);
+  // The enabled non-max efforts of a row (the rungs it contributes to the ranked
+  // sequence). `max` is held out — it's the sparing top rung.
+  function seqEffortsOf(row) {
+    return LADDER_EFFORT_ORDER.filter((e) => row[e] !== false);
+  }
+
+  // ASSEMBLE the participating tiers: every enabled built-in in capability order,
+  // then every enabled custom model anchored into the same score space. A custom
+  // ranks like a non-haiku built-in: base = LADDER_TIER_BASE[anchor] + offset, and
+  // a fractional tierRank a quarter-step below its anchor so the anchor tier wins
+  // any exact score tie against its own customs (same-anchor customs then break by
+  // slug for determinism — see the sort below).
+  const tiers = [];
+  for (const m of MODEL_CAPABILITY_ORDER) {
+    if (prefs[m] === false) continue;
+    tiers.push({
+      model: m,
+      base: LADDER_TIER_BASE[m],
+      tierRank: MODEL_CAPABILITY_ORDER.indexOf(m),
+      row: m === 'haiku' ? null : builtinRow(m),
+      haiku: m === 'haiku',
+    });
+  }
+  for (const c of getModelVocab(prefs).customs) {
+    if (!c.enabled) continue;
+    tiers.push({
+      model: c.slug,
+      base: LADDER_TIER_BASE[c.anchor] + c.offset,
+      tierRank: MODEL_CAPABILITY_ORDER.indexOf(c.anchor) - 0.25,
+      row: c.efforts,
+      haiku: false,
+    });
+  }
+  // Never return an empty ladder: fall back to a single sonnet tier, seeded from
+  // its own row so an all-false efforts object still yields the medium fallback
+  // below. Unreachable via setModelPrefs (the tier guard keeps a built-in on).
+  if (!tiers.length) {
+    tiers.push({ model: 'sonnet', base: LADDER_TIER_BASE.sonnet, tierRank: MODEL_CAPABILITY_ORDER.indexOf('sonnet'), row: builtinRow('sonnet'), haiku: false });
   }
 
   // ENUMERATE every enabled combo programmatically and score it by capability.
-  // Haiku → a single effort-null rung; every other tier → one rung per enabled
-  // non-max effort IN ITS OWN ROW (so opus·medium can be excluded while
-  // sonnet·medium stays). If a tier's row has ONLY max enabled, max carries that
-  // tier's sequence rungs (the per-model maxInSequence fallback).
+  // Haiku → a single effort-null rung; every other tier (built-in or custom) →
+  // one rung per enabled non-max effort IN ITS OWN ROW (so opus·medium can be
+  // excluded while sonnet·medium stays). A row with ONLY max enabled has max carry
+  // that tier's sequence rungs (the per-tier maxInSequence fallback).
   const seq = [];
-  for (let t = 0; t < enabled.length; t++) {
-    const model = enabled[t];
-    const tierRank = MODEL_CAPABILITY_ORDER.indexOf(model); // absolute, not enabled-relative
-    if (model === 'haiku') {
-      seq.push({ model: 'haiku', effort: null, tierRank, score: LADDER_TIER_BASE.haiku });
+  for (const tier of tiers) {
+    if (tier.haiku) {
+      seq.push({ model: 'haiku', effort: null, tierRank: tier.tierRank, score: tier.base });
       continue;
     }
-    const row = rowOf(model);
-    let modelEfforts = seqEffortsOf(model);
-    if (!modelEfforts.length) {
+    let tierEfforts = seqEffortsOf(tier.row);
+    if (!tierEfforts.length) {
       // Nothing but max (or nothing) left on in this row: max carries the tier's
-      // sequence; a fully-empty row (unreachable via setModelPrefs's per-row
-      // guard) falls back to medium so the tier still contributes a rung.
-      modelEfforts = row.max !== false ? ['max'] : ['medium'];
+      // sequence; a fully-empty row falls back to medium so the tier still
+      // contributes a rung.
+      tierEfforts = tier.row.max !== false ? ['max'] : ['medium'];
     }
-    for (const eff of modelEfforts) {
+    for (const eff of tierEfforts) {
       // 'max' only appears here in the only-max-enabled fallback; rank it above
       // the normal effort scale so it stays the strongest rung of its tier.
       const idx = eff === 'max' ? LADDER_EFFORT_ORDER.length : LADDER_EFFORT_ORDER.indexOf(eff);
-      seq.push({ model, effort: eff, tierRank, score: LADDER_TIER_BASE[model] + idx });
+      seq.push({ model: tier.model, effort: eff, tierRank: tier.tierRank, score: tier.base + idx });
     }
   }
   // RANK ascending by capability; exact cross-tier score ties (e.g. sonnet·high ==
-  // opus·low) break by higher tier ranking above — one merged total order.
-  seq.sort((a, b) => (a.score - b.score) || (a.tierRank - b.tierRank));
+  // opus·low, or a custom vs its anchor) break by higher tier ranking above, then
+  // by model name so same-anchor customs land in a deterministic order — one
+  // merged total order.
+  seq.sort((a, b) => (a.score - b.score) || (a.tierRank - b.tierRank) || String(a.model).localeCompare(String(b.model)));
 
-  // MAX SPARINGLY: the strongest enabled tier's ·max rung sits ABOVE the whole
-  // sequence and is only reached at the very top of the complexity scale. It
-  // exists iff the top enabled tier's OWN row has max enabled AND max isn't
-  // already carrying that tier's sequence (only-max row). Haiku has no ·max, so
-  // there's no max rung when it's the only/top tier.
-  const topTier = enabled[enabled.length - 1];
+  // MAX SPARINGLY: the tier with the highest base score (built-in OR custom) owns
+  // the sole ·max rung that sits ABOVE the whole sequence, reached only at the very
+  // top of the complexity scale. Base ties resolve to the higher tier rank, then
+  // slug — a single deterministic top tier. It exists iff that tier's OWN row has
+  // max enabled AND max isn't already carrying its sequence (only-max row); haiku
+  // has no ·max, so there's none when it's the only/top tier.
+  let top = tiers[0];
+  for (const tier of tiers) {
+    if (tier.base > top.base
+      || (tier.base === top.base && tier.tierRank > top.tierRank)
+      || (tier.base === top.base && tier.tierRank === top.tierRank && String(tier.model) < String(top.model))) {
+      top = tier;
+    }
+  }
   const hasMaxRung =
-    topTier !== 'haiku' && rowOf(topTier).max !== false && seqEffortsOf(topTier).length > 0;
-  const full = hasMaxRung ? seq.concat([{ model: topTier, effort: 'max' }]) : seq;
+    !top.haiku && top.row.max !== false && seqEffortsOf(top.row).length > 0;
+  const full = hasMaxRung ? seq.concat([{ model: top.model, effort: 'max' }]) : seq;
 
   // BIAS curves complexity → sequence index via the SQ-76 gamma remap. Reserve the
   // top complexities for the max rung: complexity 10 always, and 9 too only at the
@@ -828,7 +1014,7 @@ function createTicket(slug, fields) {
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
     complexityWhy: String(fields.complexityWhy || '').trim().slice(0, 1000), // the mandatory motivation for the score
-    model: coerceModel(fields.model),             // legacy direct tag; overridden at read time when complexity is set
+    model: coerceModel(fields.model, getModelPrefs()), // legacy direct tag (built-in or custom slug); overridden at read time when complexity is set
     effort: coerceEffort(fields.effort),          // legacy direct tag; overridden at read time when complexity is set
     files: normalizeFiles(fields.files),          // declared file scope, for parallel-wave planning
     assets,
@@ -965,7 +1151,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
-    if (patch.model !== undefined) { const m = coerceModel(patch.model); if (m) t.model = m; }     // never clears the tier: an invalid/'any'/'none' patch leaves it unchanged
+    if (patch.model !== undefined) { const m = coerceModel(patch.model, getModelPrefs()); if (m) t.model = m; }     // never clears the tier: an invalid/'any'/'none' patch leaves it unchanged (built-in or custom slug)
     if (patch.effort !== undefined) { const e = coerceEffort(patch.effort); if (e) t.effort = e; } // same for effort: once set it can only change to another valid level
     // Complexity can move to another valid score, never clear; a fresh motivation
     // rides along whenever one is provided (the CLI demands one on change).
@@ -1301,13 +1487,16 @@ function releaseTicket(slug, idOrRef, by, opts) {
 // (null/omitted is allowed — haiku has no effort); anything else throws a clear
 // error, mirroring how the entry points reject bad routing values instead of
 // silently recording garbage.
-function makeWorkedBy(input) {
+function makeWorkedBy(input, prefs) {
   if (!input) return null;
   const rawModel = input.model;
   if (rawModel == null || String(rawModel).trim() === '') return null; // no stamp when not provided
   const model = String(rawModel).trim().toLowerCase();
-  if (VALID_MODELS.indexOf(model) === -1) {
-    throw new Error(`invalid model "${rawModel}" — expected one of: ${VALID_MODELS.join(', ')}`);
+  // A stamp may name a built-in tier OR a configured custom slug — both are real
+  // model names; only genuine garbage throws.
+  const vocab = getModelVocab(prefs || getModelPrefs());
+  if (vocab.models.indexOf(model) === -1) {
+    throw new Error(`invalid model "${rawModel}" — expected one of: ${VALID_MODELS.join(', ')} (or a configured custom model)`);
   }
   let effort = null;
   const rawEffort = input.effort;
@@ -1346,7 +1535,7 @@ function modelMatches(ticketModel, want) {
 // opts.model restricts to that tier's work (exact-tier matches only).
 function readyTickets(slug, opts) {
   opts = opts || {};
-  const want = coerceModel(opts.model);
+  const want = coerceModel(opts.model, getModelPrefs()); // resolves a custom slug too; unknown/blank → null (no filter)
   return listTickets(slug)
     .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
@@ -1366,7 +1555,7 @@ function readyTickets(slug, opts) {
 function claimNext(slug, by, opts) {
   opts = opts || {};
   by = String(by || 'agent');
-  const want = coerceModel(opts.model);
+  const want = coerceModel(opts.model, getModelPrefs()); // resolves a custom slug too; unknown/blank → null (no filter)
   const candidates = listTickets(slug)
     .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
@@ -1982,6 +2171,8 @@ function getModelPrefs() {
   }
   out.routing = merged.routing !== false;
   out.routingBias = coerceRoutingBias(merged.routingBias);
+  // Custom model tiers: normalized on read, `[]` when absent or garbage.
+  out.custom = normalizeCustomList(merged.custom).customs;
   return out;
 }
 
@@ -2021,7 +2212,22 @@ function setModelPrefs(patch) {
 
   out.routing = (patch.routing !== undefined) ? patch.routing !== false : cur.routing;
   out.routingBias = coerceRoutingBias(patch.routingBias !== undefined ? patch.routingBias : cur.routingBias);
+
+  // Custom models: a patch that names `custom` replaces the list (an explicit []
+  // clears it); one that omits it keeps the current, already-normalized list.
+  // Invalid entries are dropped rather than failing the whole write — their
+  // reasons ride back on `customWarnings` (never persisted to disk).
+  let customWarnings = [];
+  if (patch.custom !== undefined) {
+    const res = normalizeCustomList(patch.custom);
+    out.custom = res.customs;
+    customWarnings = res.warnings;
+  } else {
+    out.custom = cur.custom;
+  }
+
   writeJson(modelPrefsFile(), out);
+  if (customWarnings.length) out.customWarnings = customWarnings; // return-only signal, after the disk write
   return out;
 }
 
@@ -2417,8 +2623,12 @@ module.exports = {
   VALID_EFFORTS,
   MODEL_CAPABILITY_ORDER,
   coerceComplexity,
+  coerceModel,
   routingLadder,
   deriveRouting,
+  getModelVocab,
+  resolveModelId,
+  classifyModelFilter,
   getModelPrefs,
   setModelPrefs,
   homeRoot,

@@ -49,6 +49,7 @@ const USAGE = `usage: codex-gateway.js <command>
   ensure [--quiet] start whatever isn't running; used by the SessionStart hook
   status           show what's running
   models           show the model list the shim advertises to Claude Code
+  catalog [--json] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
   env [--write-user | --write-project | --remove]
                    print the Claude Code env block, or merge/remove it in settings.json
   doctor           full health check
@@ -236,6 +237,7 @@ async function startAll({ quiet = false } = {}) {
   while (Date.now() < deadline) {
     if ((await portListening(PROXY_PORT)) && (await shimHealthy())) {
       if (!quiet && started.length) log(`started: ${started.join(', ')}`);
+      await writeCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
       return { ok: true, started };
     }
     await new Promise((r) => setTimeout(r, 300));
@@ -305,6 +307,10 @@ async function doctor() {
     log(`codex auth: ${((a.stdout || '') + (a.stderr || '')).trim().split('\n')[0] || '(no output)'}`);
   }
   const ok = await statusReport();
+  const catalog = readCatalog();
+  log(catalog && Array.isArray(catalog.models)
+    ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH}`
+    : 'catalog: not written yet');
   for (const scope of ['user', 'project']) {
     try {
       const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
@@ -331,6 +337,125 @@ const DEFAULT_MODELS = [
   'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini',
   'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
+
+// ------------------------------------------------------------ model catalog
+//
+// sidequest (same marketplace) auto-discovers Codex models by reading this
+// file: ~/.claude/codex-gateway/catalog.json. Shape is a frozen contract
+// (see plugins/sidequest/lib/discovery.js) — don't change it casually.
+
+const CATALOG_PATH = path.join(STATE, 'catalog.json');
+const CATALOG_STALE_MS = 5 * 60 * 1000;
+const ANCHORS = new Set(['haiku', 'sonnet', 'opus', 'fable']);
+const ANCHOR_DEFAULT = 'sonnet';
+
+// codex-gateway's recommended ladder position per known base id; anything
+// not listed here (future/unknown models) falls back to ANCHOR_DEFAULT.
+const ANCHOR_TABLE = {
+  'gpt-5.6-sol': 'opus',
+  'gpt-5.6-terra': 'opus',
+  'gpt-5.5': 'opus',
+  'gpt-5.4': 'sonnet',
+  'gpt-5.3-codex': 'sonnet',
+  'gpt-5.6-luna': 'haiku',
+  'gpt-5.4-mini': 'haiku',
+  'gpt-5.3-codex-spark': 'haiku',
+  'gpt-5.2': 'haiku',
+};
+
+function anchorFor(base) {
+  const a = ANCHOR_TABLE[base];
+  return ANCHORS.has(a) ? a : ANCHOR_DEFAULT;
+}
+
+function baseFromId(id) {
+  return id.slice(PREFIX.length).replace(/\[1m\]$/, '');
+}
+
+// "codex-" + base, dots→dashes, kept inside ^[a-z0-9][a-z0-9-]{1,31}$; on
+// collision (or an over-length base) fall back to a short deterministic hash
+// so the slug stays unique without depending on iteration order.
+function slugFor(base, used) {
+  let s = ('codex-' + base).toLowerCase()
+    .replace(/\[1m\]$/, '')
+    .replace(/\./g, '-')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!/^[a-z0-9]/.test(s)) s = 'x' + s;
+  if (s.length > 32) {
+    const hash = crypto.createHash('sha1').update(s).digest('hex').slice(0, 6);
+    s = s.slice(0, 32 - 1 - hash.length) + '-' + hash;
+  }
+  let unique = s;
+  let n = 2;
+  while (used.has(unique)) {
+    const suffix = '-' + n;
+    unique = s.slice(0, Math.max(1, 32 - suffix.length)) + suffix;
+    n++;
+  }
+  used.add(unique);
+  return unique;
+}
+
+// "gpt-5.6-sol" -> "GPT-5.6 Sol", "gpt-5.3-codex-spark" -> "GPT-5.3 Codex Spark"
+function labelFor(base) {
+  const rest = base.replace(/^gpt-/, '');
+  const m = rest.match(/^(\d+(?:\.\d+)?)(?:-(.+))?$/);
+  if (!m) return 'GPT-' + rest.replace(/-/g, ' ');
+  const [, ver, suffix] = m;
+  const suffixLabel = suffix
+    ? ' ' + suffix.split('-').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
+    : '';
+  return `GPT-${ver}${suffixLabel}`;
+}
+
+function buildCatalog(ids) {
+  const used = new Set();
+  const models = ids.map((id) => {
+    const base = baseFromId(id);
+    return { slug: slugFor(base, used), id, label: labelFor(base), anchor: anchorFor(base) };
+  });
+  return { schema: 1, source: 'codex-gateway', updatedAt: new Date().toISOString(), models };
+}
+
+async function fetchShimModelIds() {
+  // the shim's own refreshModels() can still be mid-flight right after
+  // /healthz starts answering; retry once, short, before giving up
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
+    if (r.status !== 200) throw new Error(`shim /v1/models returned ${r.status}`);
+    const ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => id.startsWith(PREFIX));
+    if (ids.length || attempt === 1) return ids;
+    await new Promise((res) => setTimeout(res, 300));
+  }
+  return [];
+}
+
+async function writeCatalog() {
+  const ids = await fetchShimModelIds();
+  if (!ids.length) return null;
+  const catalog = buildCatalog(ids);
+  mkdirs();
+  fs.writeFileSync(CATALOG_PATH, JSON.stringify(catalog, null, 2) + '\n');
+  return catalog;
+}
+
+function readCatalog() {
+  try { return JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8')); } catch { return null; }
+}
+
+async function catalogCommand() {
+  const jsonOut = flag('--json');
+  let catalog = readCatalog();
+  const stale = !catalog || (Date.now() - Date.parse(catalog.updatedAt || 0) > CATALOG_STALE_MS);
+  if (stale && (await shimHealthy())) {
+    catalog = (await writeCatalog().catch(() => null)) || catalog;
+  }
+  if (!catalog) die('no catalog available yet (run setup or start first)');
+  if (jsonOut) process.stdout.write(JSON.stringify(catalog) + '\n');
+  else log(JSON.stringify(catalog, null, 2));
+}
 
 function runShim() {
   let modelCache = { at: 0, data: [] };
@@ -502,6 +627,7 @@ function runShim() {
       log(JSON.stringify(JSON.parse(r.body.toString()), null, 2));
       break;
     }
+    case 'catalog': await catalogCommand(); break;
     case 'env': envCommand(); break;
     case 'doctor': await doctor(); break;
     case 'serve-shim': runShim(); break;
