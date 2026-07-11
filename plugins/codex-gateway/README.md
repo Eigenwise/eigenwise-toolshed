@@ -79,13 +79,18 @@ the proxy.
 
 ## The fine print
 
-- **Model quality of life**: the advertised ids carry the `[1m]` suffix, Claude Code's local
-  hint to compact later (Codex GPT-5.6 models have a 372k window; the shim strips the suffix
-  and the `claude-codex-` prefix before anything goes upstream). Typed selection works too:
-  `/model claude-codex-gpt-5.4`, any string passes through on a custom base URL. The advertised
-  list itself is yours to edit: `~/.claude/codex-gateway/models.json`, one id per array entry
-  (claude-code-proxy v0.1.10 has no `/v1/models` of its own; if a later version grows one, the
-  shim prefers it automatically).
+- **1M context window**: the Codex GPT-5.x models carry a 1M-token window, same as `opus[1m]`
+  and `sonnet[1m]`. The advertised ids carry the `[1m]` suffix, which behind a custom base URL
+  is how Claude Code opts into the full window (it can't verify 1M support through a gateway
+  otherwise). The env block also sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` so long sessions
+  compact near the real ceiling rather than early. That threshold is global, so keep the session
+  on 1M models (the Codex tiers plus `opus[1m]`/`sonnet`); drop the key from your settings if you
+  routinely run a 200k Claude model through the shim. The shim strips the suffix and the
+  `claude-codex-` prefix before anything goes upstream.
+- **Model quality of life**: typed selection works too: `/model claude-codex-gpt-5.4`, any string
+  passes through on a custom base URL. The advertised list itself is yours to edit:
+  `~/.claude/codex-gateway/models.json`, one id per array entry (claude-code-proxy v0.1.10 has no
+  `/v1/models` of its own; if a later version grows one, the shim prefers it automatically).
 - **Reasoning display**: the Codex backend doesn't send thinking blocks back, so you get
   answers without the visible reasoning stream on Codex models. Upstream limitation.
 - **Plan-mode tools are hidden from Codex models.** GPT models call `EnterPlanMode` /

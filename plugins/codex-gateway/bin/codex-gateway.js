@@ -39,6 +39,14 @@ const ENV_BLOCK = {
   ANTHROPIC_BASE_URL: `http://127.0.0.1:${SHIM_PORT}`,
   CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
   CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+  // Codex GPT-5.x models carry a 1M context window, same as opus[1m]/sonnet[1m].
+  // The [1m] suffix on the advertised ids already selects the 1M window behind a
+  // gateway; this sets the auto-compact point explicitly rather than leaning on
+  // the gateway-can't-verify default, and leaves ~50k headroom below 1M for the
+  // response. It's a GLOBAL threshold, so it also governs Claude passthrough
+  // models in the session, which is correct as long as they're 1M too (opus[1m]
+  // /sonnet). Drop it if you routinely route a 200k model through the shim.
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
 };
 
 const USAGE = `usage: codex-gateway.js <command>
