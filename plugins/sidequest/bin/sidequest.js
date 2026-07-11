@@ -29,6 +29,7 @@ const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
 const store = require('../lib/store');
+const agentsync = require('../lib/agentsync');
 
 /* ------------------------------------------------------------------ *
  *  Arg parsing
@@ -886,9 +887,32 @@ function cmdUnarchive(opts, positional) {
   }
 }
 
+// `sidequest models sync-agents` — regenerate the runtime
+// sidequest-exec-<slug>-<effort>.md agent files (SQ-158) for every enabled
+// custom/discovered model tier x enabled non-max effort, without needing to
+// touch the dashboard (which triggers the same sync on save). Useful right
+// after enabling a model in prefs some other way, or to clean up stale files
+// after disabling one.
+function cmdModelsSyncAgents(opts) {
+  const prefs = store.getModelPrefs();
+  const res = agentsync.syncExecAgents(prefs, opts.dir ? { dir: opts.dir } : undefined);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    return;
+  }
+  console.log(`✓ exec agents synced: ${res.written} written, ${res.removed} removed, ${res.unchanged} unchanged`);
+  if (res.written > 0 || res.removed > 0) {
+    console.log('  restart your session or run /reload-plugins to pick up new/removed agents.');
+  }
+}
+
 // The model tiers the user allows (dashboard settings), plus the valid effort
 // levels — the orchestrator reads this (--json) before choosing an executor.
-function cmdModels(opts) {
+function cmdModels(opts, positional) {
+  if (positional && positional[0] === 'sync-agents') {
+    cmdModelsSyncAgents(opts);
+    return;
+  }
   const prefs = store.getModelPrefs();
   const routing = prefs.routing !== false;
   const ladder = store.routingLadder(prefs);
@@ -1606,7 +1630,7 @@ async function main() {
       cmdUnarchive(opts, positional);
       break;
     case 'models':
-      cmdModels(opts);
+      cmdModels(opts, positional);
       break;
     case 'projects':
     case 'boards':

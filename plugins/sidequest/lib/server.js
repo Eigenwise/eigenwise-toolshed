@@ -18,6 +18,7 @@ const path = require('path');
 const url = require('url');
 const { spawn } = require('child_process');
 const store = require('./store');
+const agentsync = require('./agentsync');
 
 const DASHBOARD_HTML = path.join(__dirname, '..', 'dashboard', 'index.html');
 
@@ -592,7 +593,22 @@ async function handle(req, res) {
       sendJson(res, 400, { error: 'bad JSON body' });
       return;
     }
-    sendJson(res, 200, { prefs: store.setModelPrefs(body) });
+    const prefs = store.setModelPrefs(body);
+    // Keep the runtime sidequest-exec-<slug>-<effort>.md agent files (SQ-158)
+    // in sync with whatever custom models are now enabled. Fail-soft: a sync
+    // problem (e.g. an unwritable agents dir) must never block saving prefs.
+    let agentSync = null;
+    let message;
+    try {
+      agentSync = agentsync.syncExecAgents(prefs);
+      const changed = agentSync.written + agentSync.removed;
+      if (changed > 0) {
+        message = `${changed} exec agent file(s) changed (${agentSync.written} written, ${agentSync.removed} removed) — restart your session or run /reload-plugins to pick up new/removed agents.`;
+      }
+    } catch (e) {
+      agentSync = { error: (e && e.message) || String(e) };
+    }
+    sendJson(res, 200, Object.assign({ prefs, agentSync }, message ? { message } : {}));
     return;
   }
 

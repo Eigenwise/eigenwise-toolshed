@@ -30,11 +30,32 @@ const DEFAULT_MAX_WAVES = 5; // safety cap on how many waves one drain will chew
 
 // Cap a ticket's derived tier to the tiers that actually exist to spawn. `fable`
 // isn't a spawnable CLI model alias, so treat opus as the ceiling for headless.
+//
+// An ENABLED custom/discovered model slug (SQ-156/157) is a real spawnable
+// target too — `claude -p --model <its resolved id>` runs it directly through
+// whatever gateway plugin owns that id — so it passes through uncapped. An
+// unrecognized or disabled slug isn't spawnable at all; that falls back to the
+// same default as any other unknown value.
 const SPAWNABLE = new Set(['opus', 'sonnet', 'haiku']);
-function capTier(model) {
+function capTier(model, prefs) {
   if (SPAWNABLE.has(model)) return model;
   if (model === 'fable') return 'opus'; // fable derivations run headless as opus
+  if (prefs) {
+    const vocab = store.getModelVocab(prefs);
+    const custom = vocab.bySlug[model];
+    if (custom && custom.enabled) return model; // pass the slug through uncapped
+  }
   return 'sonnet';
+}
+
+// The real id to hand `claude -p --model`. For a built-in tier this is the
+// tier itself; for an enabled custom slug it's the resolved gateway id
+// (store.resolveModelId) — the slug is what provenance/`done` stamps, the
+// resolved id is what actually gets spawned. Falls back to `tier` unchanged
+// if it doesn't resolve (keeps existing built-in behavior exact).
+function resolveSpawnModel(tier, prefs) {
+  const resolved = store.resolveModelId(tier, prefs);
+  return resolved || tier;
 }
 
 // Is the `claude` CLI present to spawn? A headless drain is pointless without it,
@@ -82,19 +103,24 @@ function planWork(slug, opts) {
   const meta = store.readMeta(slug) || {};
   const projectPath = meta.path || process.cwd();
   const max = Number.isFinite(Number(opts.max)) && Number(opts.max) > 0 ? Number(opts.max) : DEFAULT_MAX;
+  const prefs = store.getModelPrefs();
   const waves = store.readyWaves(slug, { model: opts.model });
   const wave = waves[0] || [];
   const batch = wave.slice(0, max);
   const permFlags = permissionArgs(opts);
   const plan = batch.map((t) => {
-    const tier = capTier(t.model);
+    const tier = capTier(t.model, prefs);
+    // `tier` is what provenance stamps (a built-in tier name, OR an enabled
+    // custom slug); `spawnModel` is the real id the CLI actually launches —
+    // for a custom slug those differ, for a built-in tier they're the same.
+    const spawnModel = resolveSpawnModel(tier, prefs);
     const by = worker(t.ref);
     // The executor brief goes over STDIN, not argv — it's a large multi-line
     // string, and keeping it out of the command line is what makes the spawn
     // survive `shell: true` on Windows (needed to find claude.cmd) without any
     // quote/newline escaping. So argv is just the small, safe flag set.
     const prompt = executorPrompt(t.ref, by, tier, t.effort, projectPath);
-    const argv = ['-p', '--model', tier, '--output-format', 'json'].concat(permFlags);
+    const argv = ['-p', '--model', spawnModel, '--output-format', 'json'].concat(permFlags);
     return { ref: t.ref, tier, effort: t.effort || null, by, prompt, argv, cwd: projectPath };
   });
   return { waves, waveCount: waves.length, plan, dropped: Math.max(0, wave.length - batch.length) };
@@ -167,4 +193,4 @@ async function runWork(slug, opts, log) {
   return { ok: true, wavesRun, results };
 }
 
-module.exports = { planWork, runWork, capTier, claudeAvailable, executorPrompt, CLI_PATH };
+module.exports = { planWork, runWork, capTier, resolveSpawnModel, claudeAvailable, executorPrompt, CLI_PATH };
