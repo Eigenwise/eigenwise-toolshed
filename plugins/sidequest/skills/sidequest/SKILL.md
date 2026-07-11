@@ -297,6 +297,11 @@ the tighter spec — a well-specified ticket drops a band; a vague one climbs.
    any tier to a GPT-5.x model in the dashboard, so an "opus·high" ticket may actually run Terra. You
    don't decide that; `exec` already resolved it. The generated `sidequest-exec-<slug>-<effort>` agents
    exist only for tiers currently mapped to a Codex model; a claim-mismatch message names the exact one.
+   **When `exec.backend` is `"codex"`, say so out loud before you spawn** — one visible line naming the
+   tier AND the model actually running it, e.g. *"SQ-42 is opus·high, and the opus tier is mapped to
+   `exec.runsLabel` (Codex), so it runs there."* Claude Code's own spawn line shows the tier ("Opus"),
+   not the backend, so this announcement is the only in-chat signal that the ticket is running on the
+   user's ChatGPT subscription instead of Anthropic. Don't skip it on a Codex-backed spawn.
 4. **Claim by tier**: `next --model X` / `ready --model X` hand out only tickets derived to X.
 
 ## Comments & questions

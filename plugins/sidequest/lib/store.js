@@ -295,13 +295,15 @@ function resolveExec(tier, effort, prefs) {
   const b = byTier[tier] || { backend: 'claude', slug: null, id: null };
   if (b.backend === 'codex') {
     const eff = effort || HAIKU_BACKEND_EFFORT;
-    return { agent: `sidequest-exec-${b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', slug: b.slug };
+    // runsLabel is the human name of what actually runs, for a visible spawn
+    // announcement (e.g. "GPT-5.6 Terra"); runsModel is its slug.
+    return { agent: `sidequest-exec-${b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', slug: b.slug, runsModel: b.slug, runsLabel: b.label || b.slug };
   }
   // Claude-backed. haiku has no effort agent (plain agent, model: haiku).
   if (tier === 'haiku' || !effort) {
-    return { agent: null, model: tier, spawnId: tier, backend: 'claude', slug: null };
+    return { agent: null, model: tier, spawnId: tier, backend: 'claude', slug: null, runsModel: tier, runsLabel: tier };
   }
-  return { agent: `sidequest-exec-${effort}`, model: tier, spawnId: tier, backend: 'claude', slug: null };
+  return { agent: `sidequest-exec-${effort}`, model: tier, spawnId: tier, backend: 'claude', slug: null, runsModel: tier, runsLabel: tier };
 }
 
 // Resolve a stamped model name to the real string handed to Claude Code at spawn
@@ -566,8 +568,9 @@ function applyDerivedRouting(t, prefs) {
     t.model = r.model;
     t.effort = r.effort;
     const ex = resolveExec(r.model, r.effort, prefs);
-    // exec: what to spawn. backend "codex" also flags the card chip's Codex mark.
-    t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.slug || r.model };
+    // exec: what to spawn. backend "codex" flags the card chip's Codex mark and
+    // tells the orchestrator to announce which model actually runs (runsLabel).
+    t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel };
   }
   return t;
 }

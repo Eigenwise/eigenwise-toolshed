@@ -437,8 +437,11 @@
   /* Target-model tier chip: which agent tier should work the ticket. */
   .modelchip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; text-transform: lowercase; }
   .modelchip svg { flex: none; opacity: .9; }
-  /* Codex-backed tier mark on a card chip: tiny mono tag, the tier name stays primary. */
-  .codex-mark { font-family: var(--mono); font-size: 8px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; margin-left: 1px; padding: 0 3px; border-radius: 2px; background: currentColor; color: var(--card); opacity: .85; }
+  /* Codex-backed tier mark on a card chip: the model name in a filled pill, so a
+     Codex-run ticket is obvious at a glance while the tier name stays primary. */
+  .codex-mark { font-family: var(--mono); font-size: 8.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; margin-left: 3px; padding: 0 4px; border-radius: 2px; background: currentColor; color: var(--card); }
+  /* Ladder-view: the model a Codex-backed rung actually runs on. */
+  .ladder-row .lruns { color: var(--indigo); font-weight: 600; }
   /* Per-model effort matrix in the settings popover (SQ-129/SQ-130): a compact
      grid, not a bolted-on table — hairline rows, no cell borders, the model's
      own accent dot carries the row identity the same way the tier list above
@@ -1749,12 +1752,18 @@
       return;
     }
     box.innerHTML = "";
+    var resolved = modelPrefs.tierBackendResolved || {};
     routingLadderCache.forEach(function (r) {
       var mc = modelColor(r.model);
+      var b = resolved[r.model];
+      // a Codex-backed rung names the model that actually runs it
+      var runs = (b && b.backend === "codex")
+        ? ' <span class="lruns" title="the ' + esc(r.model) + ' tier runs on ' + esc(b.label || b.slug) + ' via codex-gateway">▸ ' + esc(b.label || b.slug) + '</span>'
+        : "";
       var row = el("div", "ladder-row");
       row.innerHTML = '<span class="lc">C' + r.complexity + '</span>' +
         '<span class="ldot" style="background:' + mc + '"></span>' +
-        '<span class="lr">' + esc(r.model + (r.effort ? "·" + r.effort : "")) + '</span>';
+        '<span class="lr">' + esc(r.model + (r.effort ? "·" + r.effort : "")) + runs + '</span>';
       box.appendChild(row);
     });
   }
@@ -1951,10 +1960,10 @@
     // ("C7·opus·max"). Legacy tickets with a stored tag but no score keep the
     // old model·effort chip. Tinted per (derived) model tier.
     var chipSvg = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>';
-    // A Codex-backed tier (t.exec.backend from the resolved read) gets a small
-    // "gpt" mark; the tier name + color stay primary. Tooltip names the model.
+    // A Codex-backed tier (t.exec.backend from the resolved read) gets a filled
+    // pill naming the model that runs it; the tier name + color stay primary.
     var codexMark = (t.exec && t.exec.backend === "codex")
-      ? '<span class="codex-mark" title="runs on ' + esc(t.exec.runsModel || "a Codex model") + ' via codex-gateway">gpt</span>' : "";
+      ? '<span class="codex-mark" title="the ' + esc(t.model || "") + ' tier runs on ' + esc(t.exec.runsLabel || t.exec.runsModel || "a Codex model") + ' via codex-gateway">' + esc((t.exec.runsLabel || t.exec.runsModel || "codex").replace(/^GPT-/i, "")) + '</span>' : "";
     var modelChip = "";
     if (t.complexity) {
       var mc = t.model ? modelColor(t.model) : "#52545f";

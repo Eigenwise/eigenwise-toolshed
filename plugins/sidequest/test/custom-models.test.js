@@ -97,6 +97,7 @@ test('resolveExec: a Claude-backed tier spawns the effort agent with model:<tier
   const prefs = getModelPrefs();
   assert.deepStrictEqual(resolveExec('opus', 'high', prefs), {
     agent: 'sidequest-exec-high', model: 'opus', spawnId: 'opus', backend: 'claude', slug: null,
+    runsModel: 'opus', runsLabel: 'opus',
   });
 });
 
