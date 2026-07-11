@@ -202,27 +202,28 @@
     .settings-panel .sp-col { border-right: 0; border-bottom: 1px solid var(--line-soft); }
     .settings-panel .sp-col:last-child { border-bottom: 0; }
   }
-  /* Detected-model group header carries a small source tag. */
   .sp-src { margin-left: auto; font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
-  /* A detected (auto-discovered) model: an enable row that reveals its own
-     effort strip when on. Reuses the tier + effort-grid language so it reads as
-     one more tier, not a bolted-on panel. */
-  .det-model { border-radius: var(--radius-sm); }
-  .det-model + .det-model { margin-top: 1px; }
-  .det-head { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: var(--radius-sm); cursor: pointer; }
-  .det-head:hover { background: var(--panel); }
-  .det-head input { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
-  .det-head .dm-name { font-size: 13px; color: var(--text); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .det-model.off .det-head .dm-name { color: var(--text-faint); }
-  .det-head .dm-anchor { flex: none; font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 999px; padding: 1px 7px; }
-  /* Effort strip under an enabled detected model: same checkbox row as the
-     built-in matrix, indented under the model it belongs to. */
-  .det-efforts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; padding: 3px 8px 6px 30px; }
-  .det-eff { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 3px 0; border-radius: var(--radius-sm); cursor: pointer; }
-  .det-eff:hover { background: var(--panel); }
-  .det-eff span { font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--text-faint); }
-  .det-eff input { accent-color: var(--gold); width: 13px; height: 13px; cursor: pointer; }
-  .det-note { font-size: 10.5px; color: var(--text-faint); line-height: 1.45; padding: 2px 8px 4px; }
+  /* A model tier row: the enable toggle + name on the left, and (when a Codex
+     catalog is detected) a backend dropdown on the right choosing which model
+     actually runs that tier. */
+  .tier-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius-sm); }
+  .tier-row.muted .pn-name { color: var(--text-faint); }
+  .tier-toggle { display: flex; align-items: center; gap: 9px; flex: 1 1 auto; min-width: 0; cursor: pointer; }
+  .tier-toggle input { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
+  .tier-toggle .pn-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Backend dropdown: hairline, flat, matches the panel. A Codex-backed tier
+     (.on) tints its border so the row reads as "not plain Claude" at a glance. */
+  .tier-backend { flex: none; }
+  .tier-backend select {
+    font-family: var(--sans); font-size: 11.5px; color: var(--text-dim);
+    background: var(--card); border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
+    padding: 3px 6px; max-width: 150px; cursor: pointer; transition: border-color .12s, color .12s;
+  }
+  .tier-backend select:hover { border-color: var(--gold-line); }
+  .tier-backend.on select { color: var(--gold-bright); border-color: var(--gold-line); background: var(--gold-soft); }
+  /* Stale-mapping fallback warnings under the tier list. */
+  .backend-warn { padding: 0 8px; }
+  .backend-warn-row { font-size: 10.5px; line-height: 1.4; color: var(--high); padding: 3px 0; }
 
   /* Notification inbox */
   #inboxPop { width: 328px; }
@@ -433,6 +434,8 @@
   /* Target-model tier chip: which agent tier should work the ticket. */
   .modelchip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; text-transform: lowercase; }
   .modelchip svg { flex: none; opacity: .9; }
+  /* Codex-backed tier mark on a card chip: tiny mono tag, the tier name stays primary. */
+  .codex-mark { font-family: var(--mono); font-size: 8px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; margin-left: 1px; padding: 0 3px; border-radius: 2px; background: currentColor; color: var(--card); opacity: .85; }
   /* Per-model effort matrix in the settings popover (SQ-129/SQ-130): a compact
      grid, not a bolted-on table — hairline rows, no cell borders, the model's
      own accent dot carries the row identity the same way the tier list above
@@ -722,8 +725,7 @@
             <div class="sp-col">
               <div class="pop-head">Available models</div>
               <div class="model-pref-list" id="modelPrefList"></div>
-              <div class="pop-head" id="detectedHead" style="display:none">Codex models<span class="sp-src">via codex-gateway</span></div>
-              <div class="detected-list" id="detectedModelList"></div>
+              <div class="backend-warn" id="tierBackendWarn"></div>
             </div>
             <div class="sp-col">
               <div class="pop-head">Routing bias</div>
@@ -1058,15 +1060,13 @@
   }
   function syncModelPrefsFromServer() {
     return api("/api/model-prefs").then(function (d) {
-      if (d && d.prefs) { modelPrefs = d.prefs; adoptCustomColors(); renderModelPrefSettings(); renderDetectedModels(); refreshLadder(); }
+      if (d && d.prefs) { modelPrefs = d.prefs; adoptBackendColors(); renderModelPrefSettings(); refreshLadder(); }
     }).catch(function () { /* older server without this route — offer everything */ });
   }
-  // Learn each detected model's color (explicit override or none) so ladder rungs
-  // and card chips outside the settings panel tint consistently.
-  function adoptCustomColors() {
-    CUSTOM_COLORS = {};
-    (modelPrefs.custom || []).forEach(function (c) { if (c && c.slug && c.color) CUSTOM_COLORS[c.slug] = c.color; });
-  }
+  // A Codex-backed tier keeps its TIER color on the ladder/chips (the ladder is
+  // tier-named), so there's no per-slug color to adopt — kept as a no-op hook in
+  // case a future catalog carries colors.
+  function adoptBackendColors() { CUSTOM_COLORS = {}; }
   function pushModelPrefs() {
     return api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) }).catch(function () {});
   }
@@ -1608,19 +1608,26 @@
     box.appendChild(routeRow);
     MODELS.forEach(function (m) {
       var on = modelEnabled(m.k);
-      var row = el("label", "proj-notify-row" + (on ? "" : " muted"));
-      row.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' /><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:' + (MODEL_COLORS[m.k] || "var(--line)") + '"></span><span class="pn-name">' + esc(m.label) + (m.k === "haiku" ? ' <em style="font-style:normal;font-size:10.5px;color:var(--text-faint)">(no effort support)</em>' : '') + '</span>';
-      var cb = row.querySelector("input");
+      var row = el("div", "tier-row" + (on ? "" : " muted"));
+      // enable checkbox + tier name (label wraps just those, so the dropdown
+      // beside it doesn't toggle the tier)
+      var lab = el("label", "tier-toggle");
+      lab.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' /><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:' + modelColor(m.k) + '"></span><span class="pn-name">' + esc(m.label) + '</span>';
+      var cb = lab.querySelector("input");
       cb.addEventListener("change", function () {
-        var next = {}; next[m.k] = cb.checked;
         var enabledCount = MODELS.filter(function (x) { return modelEnabled(x.k); }).length;
         if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one model tier must stay enabled"); return; }
         modelPrefs[m.k] = cb.checked;
         renderModelPrefSettings();
         pushModelPrefs();
-        refreshLadder();   // the ladder reshapes when the enabled tiers change — show it
+        refreshLadder();
         toast(cb.checked ? m.label + " enabled" : m.label + " hidden from the picker");
       });
+      row.appendChild(lab);
+      // per-tier backend dropdown: Claude (default) or a discovered Codex model.
+      // Only rendered when codex-gateway has published a catalog.
+      var det = modelPrefs.discovered || [];
+      if (det.length) row.appendChild(backendSelect(m.k, det));
       box.appendChild(row);
     });
     // Effort levels are a per-model matrix now (SQ-129: store.getModelPrefs's
@@ -1670,85 +1677,56 @@
       grid.appendChild(row);
     });
     box.appendChild(grid);
-  }
-  // Detected models (SQ-159): codex-gateway (same marketplace) publishes a
-  // catalog sidequest auto-discovers; each becomes a toggleable ladder tier here.
-  // No id field / no anchor picker / no add button — these are discovered, not
-  // authored. Off by default; enabling one writes customOverrides[slug] and PUTs,
-  // which also regenerates its executor agents server-side. The whole group is
-  // hidden when nothing is detected, so a user without codex-gateway sees the
-  // panel exactly as before.
-  var DET_EFFORTS = [
-    { k: "low", short: "Lo" }, { k: "medium", short: "Med" }, { k: "high", short: "Hi" }, { k: "xhigh", short: "XHi" }
-  ];
-  function customEntry(slug) { return (modelPrefs.custom || []).filter(function (c) { return c.slug === slug; })[0]; }
-  function writeOverride(slug, patch) {
-    if (!modelPrefs.customOverrides) modelPrefs.customOverrides = {};
-    modelPrefs.customOverrides[slug] = Object.assign({}, modelPrefs.customOverrides[slug], patch);
-  }
-  // The server resolves modelPrefs.custom from catalog + customOverrides, but only
-  // on its next read. So the panel renders from an OPTIMISTIC merge: the resolved
-  // entry (or the raw catalog default) with this session's unsaved overrides laid
-  // on top, so a toggle reflects immediately instead of waiting for a round trip.
-  function effectiveDetected(dm) {
-    var base = customEntry(dm.slug) || { slug: dm.slug, label: dm.label, anchor: dm.anchor, enabled: false, efforts: { high: true } };
-    var ov = (modelPrefs.customOverrides || {})[dm.slug] || {};
-    var eff = Object.assign({}, base);
-    if ("enabled" in ov) eff.enabled = ov.enabled;
-    if (ov.efforts) eff.efforts = Object.assign({}, base.efforts, ov.efforts);
-    return eff;
-  }
-  function renderDetectedModels() {
-    var box = $("detectedModelList"); var head = $("detectedHead");
-    if (!box || !head) return;
-    var det = modelPrefs.discovered || [];
-    head.style.display = det.length ? "" : "none";
-    box.innerHTML = "";
-    if (!det.length) return;
-    det.forEach(function (dm) {
-      var c = effectiveDetected(dm);
-      var on = !!c.enabled;
-      var wrap = el("div", "det-model" + (on ? "" : " off"));
-      var head2 = el("label", "det-head");
-      head2.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' />' +
-        '<span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:' + modelColor(dm.slug) + '"></span>' +
-        '<span class="dm-name">' + esc(dm.label) + '</span>' +
-        '<span class="dm-anchor" title="sits at the ' + esc(dm.anchor) + ' rung on the ladder">~' + esc(dm.anchor) + '</span>';
-      var cb = head2.querySelector("input");
-      cb.addEventListener("change", function () {
-        writeOverride(dm.slug, { enabled: cb.checked });
-        renderDetectedModels();
-        pushModelPrefs().then(function () { refreshLadder(); });
-        toast(dm.label + (cb.checked ? " enabled — regenerating its executor agents" : " disabled"));
+
+    // A tier mapped to a Codex model that isn't available now falls back to
+    // Claude; surface the store's warning so the fallback isn't silent.
+    var warnBox = $("tierBackendWarn");
+    if (warnBox) {
+      var warns = modelPrefs.tierBackendWarnings || [];
+      warnBox.innerHTML = "";
+      warns.forEach(function (w) {
+        var d = el("div", "backend-warn-row");
+        d.textContent = w;
+        warnBox.appendChild(d);
       });
-      wrap.appendChild(head2);
-      if (on) {
-        var effRow = el("div", "det-efforts");
-        DET_EFFORTS.forEach(function (ef) {
-          var eon = c.efforts && c.efforts[ef.k];
-          var cell = el("label", "det-eff");
-          cell.innerHTML = '<span>' + ef.short + '</span><input type="checkbox"' + (eon ? " checked" : "") + ' aria-label="' + esc(dm.label + " " + ef.k) + '" />';
-          var ecb = cell.querySelector("input");
-          ecb.addEventListener("change", function () {
-            var cur = effectiveDetected(dm);
-            var count = DET_EFFORTS.filter(function (x) { return cur.efforts && cur.efforts[x.k]; }).length;
-            if (!ecb.checked && count <= 1) { ecb.checked = true; toast("Keep at least one effort on for " + dm.label); return; }
-            var effPatch = Object.assign({}, cur.efforts);
-            effPatch[ef.k] = ecb.checked;
-            writeOverride(dm.slug, { efforts: effPatch });
-            renderDetectedModels();
-            pushModelPrefs().then(function () { refreshLadder(); });
-            toast(dm.label + " " + ef.k + (ecb.checked ? " enabled" : " excluded"));
-          });
-          effRow.appendChild(cell);
-        });
-        wrap.appendChild(effRow);
-      }
-      box.appendChild(wrap);
+    }
+  }
+  // Per-tier backend (1.36.0): each tier runs on its Claude model by default, or
+  // a discovered Codex model the user picks. This <select> is the picker; it
+  // writes modelPrefs.tierBackend[tier] and PUTs, which regenerates that tier's
+  // executor agents server-side and reshapes nothing on the ladder (the ladder
+  // stays tier-named; only what RUNS each tier changes). Only rendered when
+  // codex-gateway has published a catalog, so a user without it sees the
+  // original tier list.
+  function currentBackend(tier) {
+    var tb = modelPrefs.tierBackend || {};
+    return typeof tb[tier] === "string" && tb[tier] !== "claude" ? tb[tier] : "claude";
+  }
+  function backendSelect(tier, det) {
+    var wrap = el("span", "tier-backend");
+    var sel = document.createElement("select");
+    sel.setAttribute("aria-label", tier + " backend model");
+    var cur = currentBackend(tier);
+    var opts = ['<option value="claude"' + (cur === "claude" ? " selected" : "") + ">Claude " + esc(tier[0].toUpperCase() + tier.slice(1)) + "</option>"];
+    det.forEach(function (dm) {
+      var suggested = dm.suggestedTier === tier ? " (suggested)" : "";
+      opts.push('<option value="' + esc(dm.slug) + '"' + (cur === dm.slug ? " selected" : "") + ">" + esc(dm.label) + suggested + "</option>");
     });
-    var note = el("div", "det-note");
-    note.innerHTML = "Detected from codex-gateway. Enabling one adds it to the ladder and generates its executor agents (restart Claude Code to load them). Effort is advisory on gateway models.";
-    box.appendChild(note);
+    sel.innerHTML = opts.join("");
+    // a Codex-backed tier gets a small mark so the row reads as "not plain Claude"
+    if (cur !== "claude") wrap.classList.add("on");
+    sel.addEventListener("change", function () {
+      if (!modelPrefs.tierBackend) modelPrefs.tierBackend = {};
+      modelPrefs.tierBackend[tier] = sel.value;
+      renderModelPrefSettings();
+      pushModelPrefs().then(function () { refreshLadder(); });
+      var dm = det.filter(function (x) { return x.slug === sel.value; })[0];
+      toast(sel.value === "claude"
+        ? tier + " tier runs on Claude"
+        : tier + " tier now runs on " + (dm ? dm.label : sel.value) + " — regenerating its executor agents");
+    });
+    wrap.appendChild(sel);
+    return wrap;
   }
   // The live routing ladder, one compact row per rung (C1 sonnet·low …), so a
   // tier toggle visibly reshapes the complexity -> model·effort mapping.
@@ -1962,13 +1940,17 @@
     // ("C7·opus·max"). Legacy tickets with a stored tag but no score keep the
     // old model·effort chip. Tinted per (derived) model tier.
     var chipSvg = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>';
+    // A Codex-backed tier (t.exec.backend from the resolved read) gets a small
+    // "gpt" mark; the tier name + color stay primary. Tooltip names the model.
+    var codexMark = (t.exec && t.exec.backend === "codex")
+      ? '<span class="codex-mark" title="runs on ' + esc(t.exec.runsModel || "a Codex model") + ' via codex-gateway">gpt</span>' : "";
     var modelChip = "";
     if (t.complexity) {
       var mc = t.model ? modelColor(t.model) : "#52545f";
       var routeLabel = "C" + t.complexity + (t.model ? "·" + t.model : "") + (t.effort ? "·" + t.effort : "");
       var whySnip = t.complexityWhy ? String(t.complexityWhy).slice(0, 80) : "";
-      var cTitle = "complexity " + t.complexity + " → " + (t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "") + (whySnip ? " — " + whySnip : "");
-      modelChip = '<span class="modelchip" title="' + esc(cTitle) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '">' + chipSvg + esc(routeLabel) + '</span>';
+      var cTitle = "complexity " + t.complexity + " → " + (t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "") + (t.exec && t.exec.backend === "codex" ? " (runs on " + (t.exec.runsModel || "Codex") + ")" : "") + (whySnip ? " — " + whySnip : "");
+      modelChip = '<span class="modelchip" title="' + esc(cTitle) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '">' + chipSvg + esc(routeLabel) + codexMark + '</span>';
     } else if (t.model || t.effort) {
       var mcL = t.model ? modelColor(t.model) : "#52545f"; // neutral for effort-only
       var routeLabelL = (t.model || "any") + (t.effort ? "·" + t.effort : "");
@@ -3106,7 +3088,7 @@
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
-      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderDetectedModels(); renderBiasControl(); renderLadderView(); }
+      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderBiasControl(); renderLadderView(); }
     });
     document.addEventListener("click", function (e) {
       if (e.target.closest(".popwrap")) return;
