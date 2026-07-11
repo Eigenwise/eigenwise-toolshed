@@ -37,8 +37,10 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
   and beta headers are untouched).
 - A **SessionStart hook** keeps both processes alive so a wired session never starts against a
   dead port.
-- codex-gateway also publishes a small model catalog (`catalog.json`, next to its state) that
-  [sidequest](../sidequest) reads to offer these Codex models in its own routing ladder.
+- codex-gateway also publishes a small model catalog (`catalog.json`, next to its state) carrying the
+  GPT-5.6 family (Sol, Terra, Luna) that [sidequest](../sidequest) reads to offer as routing-tier
+  backends. The `/model` picker above still sees every model; the catalog is a separate, narrower
+  surface just for sidequest's tier mapping.
 
 ## Install
 

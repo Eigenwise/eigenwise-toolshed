@@ -354,26 +354,26 @@ const DEFAULT_MODELS = [
 
 const CATALOG_PATH = path.join(STATE, 'catalog.json');
 const CATALOG_STALE_MS = 5 * 60 * 1000;
-const ANCHORS = new Set(['haiku', 'sonnet', 'opus', 'fable']);
-const ANCHOR_DEFAULT = 'sonnet';
+const TIERS = new Set(['haiku', 'sonnet', 'opus', 'fable']);
 
-// codex-gateway's recommended ladder position per known base id; anything
-// not listed here (future/unknown models) falls back to ANCHOR_DEFAULT.
-const ANCHOR_TABLE = {
-  'gpt-5.6-sol': 'opus',
+// The catalog is what sidequest reads to offer Codex models as ladder-tier
+// backends. It carries the GPT-5.6 family only — the three flagship models a
+// user actually maps onto a tier. The /model picker (fed by the shim's
+// /v1/models) still sees all of DEFAULT_MODELS; this narrowing is catalog-only.
+const CATALOG_FAMILY = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+
+// A suggested tier per catalog model: the dashboard shows it as the dropdown's
+// default hint. It is NOT applied — the user assigns each tier's backend. Terra
+// reads closest to opus, Sol sits above opus toward fable, Luna is haiku-class.
+const SUGGESTED_TIER = {
   'gpt-5.6-terra': 'opus',
-  'gpt-5.5': 'opus',
-  'gpt-5.4': 'sonnet',
-  'gpt-5.3-codex': 'sonnet',
+  'gpt-5.6-sol': 'fable',
   'gpt-5.6-luna': 'haiku',
-  'gpt-5.4-mini': 'haiku',
-  'gpt-5.3-codex-spark': 'haiku',
-  'gpt-5.2': 'haiku',
 };
 
-function anchorFor(base) {
-  const a = ANCHOR_TABLE[base];
-  return ANCHORS.has(a) ? a : ANCHOR_DEFAULT;
+function suggestedTierFor(base) {
+  const t = SUGGESTED_TIER[base];
+  return TIERS.has(t) ? t : null;
 }
 
 function baseFromId(id) {
@@ -420,11 +420,13 @@ function labelFor(base) {
 
 function buildCatalog(ids) {
   const used = new Set();
-  const models = ids.map((id) => {
-    const base = baseFromId(id);
-    return { slug: slugFor(base, used), id, label: labelFor(base), anchor: anchorFor(base) };
-  });
-  return { schema: 1, source: 'codex-gateway', updatedAt: new Date().toISOString(), models };
+  const models = ids
+    .filter((id) => CATALOG_FAMILY.has(baseFromId(id)))
+    .map((id) => {
+      const base = baseFromId(id);
+      return { slug: slugFor(base, used), id, label: labelFor(base), suggestedTier: suggestedTierFor(base) };
+    });
+  return { schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(), models };
 }
 
 async function fetchShimModelIds() {
