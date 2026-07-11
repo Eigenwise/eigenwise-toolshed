@@ -98,10 +98,10 @@ function effortDrift(slug, idOrRef, claimedEffort) {
   if (t.model === 'haiku' || !t.effort) return null;
   const claimed = String(claimedEffort).toLowerCase();
   if (claimed === t.effort) return null;
-  // A custom-derived tier (a discovered slug, not a built-in) has no
-  // sidequest-exec-<effort> agent baked to that model — the refusal names the
-  // slug-qualified executor sidequest-exec-<slug>-<effort> instead.
-  const execName = store.VALID_MODELS.indexOf(t.model) !== -1 ? `sidequest-exec-${t.effort}` : `sidequest-exec-${t.model}-${t.effort}`;
+  // The ticket read already resolved which agent to spawn (t.exec.agent): a
+  // Claude tier -> sidequest-exec-<effort>, a Codex-backed tier ->
+  // sidequest-exec-<slug>-<effort>. Name that in the refusal.
+  const execName = (t.exec && t.exec.agent) || `sidequest-exec-${t.effort}`;
   return {
     reason: 'effort_mismatch',
     ref: t.ref,
@@ -113,18 +113,15 @@ function effortDrift(slug, idOrRef, claimedEffort) {
 }
 
 /* ------------------------------------------------------------------ *
- *  Model-argument validation (SQ-162)
+ *  Model-argument validation
  *
- *  ready.model/next.model/done.model dropped their hard VALID_MODELS enum so a
- *  discovered custom slug (SQ-157) validates too — JSON Schema can't express
- *  "any built-in OR whatever's in prefs.custom right now" as an enum. Validate
- *  by hand instead, against the live vocabulary, and name the valid values on a
- *  miss rather than letting the store silently no-op the filter.
+ *  ready.model/next.model FILTER on the derived TIER (the four built-ins). A
+ *  done STAMP records provenance, which may be a tier OR the Codex model that
+ *  actually backed it. Validate by hand and name valid values on a miss.
  * ------------------------------------------------------------------ */
 
-// ready/next: a --model FILTER. Blank/any/none mean "no filter" (see
-// classifyModelFilter) and are left alone; an unrecognized non-empty value is
-// refused instead of silently matching everything.
+// ready/next: a --model FILTER on a tier. Blank/any/none mean "no filter"; an
+// unrecognized non-empty value is refused instead of silently matching all.
 function requireKnownModelFilter(action, value, prefs) {
   if (value == null) return;
   const cls = store.classifyModelFilter(value, prefs);
@@ -133,13 +130,17 @@ function requireKnownModelFilter(action, value, prefs) {
   }
 }
 
-// done: a provenance STAMP, not a filter — blank means "no stamp" (the store
-// skips it), so only a non-empty, unrecognized value is refused.
+// done: a provenance STAMP — blank means "no stamp". A built-in tier OR a
+// discovered Codex slug (what actually ran) is valid; only genuine garbage is
+// refused. makeWorkedBy re-validates on write, so this just gives a nice error.
 function requireKnownModel(action, value, prefs) {
   if (value == null || !String(value).trim()) return;
-  const vocab = store.getModelVocab(prefs);
-  if (vocab.models.indexOf(String(value).trim().toLowerCase()) === -1) {
-    throw new Error(`${action}: unknown model "${value}" — known: ${vocab.models.join(', ')}`);
+  const s = String(value).trim().toLowerCase();
+  const known = store.VALID_MODELS.indexOf(s) !== -1
+    || (prefs.discovered || []).some((d) => d.slug === s);
+  if (!known) {
+    const slugs = (prefs.discovered || []).map((d) => d.slug);
+    throw new Error(`${action}: unknown model "${value}" — known: ${store.VALID_MODELS.concat(slugs).join(', ')}`);
   }
 }
 
@@ -457,16 +458,18 @@ const TOOLS = [
   },
   {
     name: 'models',
-    description: 'The live routing ladder: which complexity score maps to which model·effort right now, plus the enabled tiers/efforts (built-in and custom), the detected-but-not-yet-enabled custom slugs, the routing master switch, and the bias.',
+    description: 'The live routing ladder (which complexity maps to which tier·effort), the enabled tiers/efforts, the per-tier backend map (which tiers run on a Codex model vs Claude), the detected Codex models available to map, any stale-mapping warnings, the routing master switch, and the bias.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
     handler() {
       const prefs = store.getModelPrefs();
-      const enabledCustoms = (prefs.custom || []).filter((c) => c.enabled).map((c) => c.slug);
       return {
         prefs,
         ladder: store.routingLadder(prefs),
         discovered: prefs.discovered,
-        enabled: store.VALID_MODELS.filter((m) => prefs[m]).concat(enabledCustoms),
+        tierBackend: prefs.tierBackend,
+        tierBackendResolved: prefs.tierBackendResolved,
+        tierBackendWarnings: prefs.tierBackendWarnings,
+        enabled: store.VALID_MODELS.filter((m) => prefs[m]),
       };
     },
   },

@@ -113,56 +113,50 @@ test('an empty board plans nothing', () => {
   assert.deepStrictEqual(plan, []);
 });
 
-test('an enabled custom slug spawns uncapped: argv --model is the resolved real id, plan tier stays the slug (SQ-158)', () => {
-  // Seed a fake codex-gateway catalog and enable the model it declares — same
-  // discovery mechanism SQ-156/157 wire real gateway plugins through.
+test('a Codex-backed tier spawns the resolved id; the plan tier stays the built-in tier (1.36.0)', () => {
+  // Seed a fake codex-gateway catalog and point the opus tier at it — the
+  // per-tier backend model: a ticket still derives to the opus TIER, but the
+  // drainer spawns the tier's mapped Codex model.
   fs.mkdirSync(path.join(DISCOVERY_DIR, 'codex-gateway'), { recursive: true });
   fs.writeFileSync(
     path.join(DISCOVERY_DIR, 'codex-gateway', 'catalog.json'),
     JSON.stringify({
-      schema: 1,
+      schema: 2,
       source: 'codex-gateway',
       updatedAt: new Date().toISOString(),
-      models: [{ slug: 'codex-work-test', id: 'claude-codex-gpt-5.4[1m]', label: 'Codex Test', anchor: 'opus' }],
+      models: [{ slug: 'codex-work-test', id: 'claude-codex-gpt-5.4[1m]', label: 'Codex Test', suggestedTier: 'opus' }],
     }),
   );
-  // Anchor it above opus so it dominates a stretch of the ladder — a ticket's
-  // model is DERIVED from complexity + the ladder on every read
-  // (applyDerivedRouting), so hand-patching t.model directly doesn't stick;
-  // the ticket has to actually be complex enough to route here.
   const prefs = store.setModelPrefs({
     routing: true, opus: true, sonnet: true, haiku: true, fable: true,
-    customOverrides: {
-      'codex-work-test': { enabled: true, offset: 2, efforts: { low: true, medium: true, high: true, xhigh: true, max: true } },
-    },
+    tierBackend: { opus: 'codex-work-test' },
   });
+  // Find a complexity that derives to the opus tier.
   const ladder = store.routingLadder(prefs);
-  const rung = ladder.find((r) => r.model === 'codex-work-test' && r.effort !== 'max');
-  assert.ok(rung, 'sanity: the ladder gives the custom a non-max rung at some complexity');
+  const rung = ladder.find((r) => r.model === 'opus' && r.effort !== 'max');
+  assert.ok(rung, 'sanity: some complexity derives to opus');
 
   const created = store.createTicket(slug, {
-    title: 'custom-slug ticket', complexity: rung.complexity,
-    complexityWhy: 'seed a ticket that derives onto the custom slug for the spawn-resolution test',
-    files: ['src/custom-slug-only.js'], source: 'cli',
+    title: 'opus-tier ticket', complexity: rung.complexity,
+    complexityWhy: 'seed a ticket that derives onto the opus tier for the backend spawn-resolution test',
+    files: ['src/opus-tier-only.js'], source: 'cli',
   });
-  // createTicket's own return value is the raw write (model derivation happens
-  // at READ time, applyDerivedRouting) — re-fetch to see the derived tier.
   const t = store.getTicket(slug, created.ref);
-  assert.strictEqual(t.model, 'codex-work-test', 'the ticket derived onto the custom slug');
-  assert.strictEqual(store.resolveModelId('codex-work-test', prefs), 'claude-codex-gpt-5.4[1m]', 'sanity: the slug resolves to the gateway id');
+  assert.strictEqual(t.model, 'opus', 'the ticket derived onto the opus tier');
+  assert.strictEqual(t.exec.backend, 'codex', 'and its resolved exec is Codex-backed');
 
-  const { plan } = work.planWork(slug, { max: 10, model: 'codex-work-test' });
+  const { plan } = work.planWork(slug, { max: 10, model: 'opus' });
   const entry = plan.find((p) => p.ref === t.ref);
-  assert.ok(entry, 'the custom-slug ticket is in the plan');
-  assert.strictEqual(entry.tier, 'codex-work-test', 'provenance/done stamping keeps the slug, not the resolved id');
+  assert.ok(entry, 'the ticket is in the plan');
+  assert.strictEqual(entry.tier, 'opus', 'provenance/done stamping keeps the built-in tier');
   assert.strictEqual(
     entry.argv[entry.argv.indexOf('--model') + 1],
     'claude-codex-gpt-5.4[1m]',
-    'the spawned argv --model is the RESOLVED real id, not the slug',
+    'the spawned argv --model is the tier\'s resolved Codex id',
   );
-  assert.match(entry.prompt, /--model codex-work-test/, 'the done-command in the prompt still stamps the slug for provenance');
+  assert.match(entry.prompt, /--model opus/, 'the done-command in the prompt stamps the tier for provenance');
 
   // Clean up so this doesn't leak into later tests in this file.
-  store.setModelPrefs({ customOverrides: { 'codex-work-test': null } });
+  store.setModelPrefs({ tierBackend: { opus: 'claude' } });
   fs.rmSync(path.join(DISCOVERY_DIR, 'codex-gateway'), { recursive: true, force: true });
 });

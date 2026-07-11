@@ -367,10 +367,10 @@ function effortDriftReason(slug, idOrRef, claimedEffort) {
   if (t.model === 'haiku' || !t.effort) return null;
   const claimed = String(claimedEffort).toLowerCase();
   if (claimed === t.effort) return null;
-  // A custom-derived tier (a discovered slug, not a built-in) has no
-  // sidequest-exec-<effort> agent baked to that model — the refusal names the
-  // slug-qualified executor sidequest-exec-<slug>-<effort> instead.
-  const execName = store.VALID_MODELS.indexOf(t.model) !== -1 ? `sidequest-exec-${t.effort}` : `sidequest-exec-${t.model}-${t.effort}`;
+  // The read already resolved which agent to spawn (t.exec.agent): a Claude tier
+  // -> sidequest-exec-<effort>, a Codex-backed tier -> sidequest-exec-<slug>-<effort>.
+  const execName = (t.exec && t.exec.agent) || `sidequest-exec-${t.effort}`;
+  const modelHint = t.exec && t.exec.model ? ` (model ${t.exec.model})` : '';
   return {
     ref: t.ref,
     derivedModel: t.model,
@@ -378,7 +378,7 @@ function effortDriftReason(slug, idOrRef, claimedEffort) {
     claimedEffort: claimed,
     message:
       `${t.ref} derives to ${t.model}·${t.effort}, but you claimed as ${claimed} effort — ` +
-      `the wrong executor was spawned. Spawn ${execName} (model ${t.model}) instead. ` +
+      `the wrong executor was spawned. Spawn ${execName}${modelHint} instead. ` +
       `Not claimed: the ticket stays free for the correct-tier executor.`,
   };
 }
@@ -888,11 +888,10 @@ function cmdUnarchive(opts, positional) {
 }
 
 // `sidequest models sync-agents` — regenerate the runtime
-// sidequest-exec-<slug>-<effort>.md agent files (SQ-158) for every enabled
-// custom/discovered model tier x enabled non-max effort, without needing to
-// touch the dashboard (which triggers the same sync on save). Useful right
-// after enabling a model in prefs some other way, or to clean up stale files
-// after disabling one.
+// sidequest-exec-<slug>-<effort>.md agent files for every tier pointed at a
+// Codex model (prefs.tierBackend) x that tier's enabled non-max effort, without
+// touching the dashboard (which triggers the same sync on save). Useful after
+// changing a tier's backend some other way, or to clean up stale files.
 function cmdModelsSyncAgents(opts) {
   const prefs = store.getModelPrefs();
   const res = agentsync.syncExecAgents(prefs, opts.dir ? { dir: opts.dir } : undefined);
@@ -924,24 +923,20 @@ function cmdModels(opts, positional) {
   for (const m of Object.keys(prefs.efforts)) {
     enabledEfforts[m] = store.VALID_EFFORTS.filter((e) => prefs.efforts[m][e]);
   }
-  // SQ-162: custom tiers (SQ-157's discovered slugs) join `enabled` alongside
-  // the built-ins — an executor filtering ready/next by --model needs the full
-  // enabled vocabulary, not just the four hardcoded names.
-  const enabledCustoms = (prefs.custom || []).filter((c) => c.enabled).map((c) => c.slug);
-  // Discovered-but-not-enabled: detected via the sibling plugin's catalog, but
-  // the user hasn't opted in yet (see resolveCustomFromOverrides — a discovered
-  // model is off by default). Surfaced so the human table can point at it.
-  const discoveredOff = (prefs.discovered || []).filter((d) => {
-    const c = (prefs.custom || []).find((x) => x.slug === d.slug);
-    return !c || !c.enabled;
-  });
+  // Per-tier backend: which tiers run on a Codex model vs their Claude default,
+  // plus any stale-mapping warnings (a tier pointed at a now-absent model).
+  const backend = prefs.tierBackendResolved || {};
+  const codexTiers = store.VALID_MODELS.filter((m) => backend[m] && backend[m].backend === 'codex');
   if (opts.json) {
     process.stdout.write(
       JSON.stringify({
         routing,
         bias: prefs.routingBias,
         models: prefs,
-        enabled: store.VALID_MODELS.filter((m) => prefs[m]).concat(enabledCustoms),
+        enabled: store.VALID_MODELS.filter((m) => prefs[m]),
+        tierBackend: prefs.tierBackend,
+        tierBackendResolved: prefs.tierBackendResolved,
+        tierBackendWarnings: prefs.tierBackendWarnings,
         discovered: prefs.discovered,
         efforts: store.VALID_EFFORTS,
         enabledEfforts,
@@ -953,14 +948,19 @@ function cmdModels(opts, positional) {
   console.log(`Routing: ${routing ? 'on' : 'off'}`);
   console.log(`Bias: ${prefs.routingBias}  (${biasLabel(prefs.routingBias)} — see "sidequest bias")`);
   console.log('Model tiers (toggle in the dashboard settings):');
-  for (const m of store.VALID_MODELS) console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}`);
-  // Enabled customs already show up inline in the ladder below (routingLadder
-  // merges them in by slug); the only thing missing from the picture is a
-  // detected model the user hasn't turned on — nothing in the ladder hints
-  // that it even exists, so name it here with its anchor tier.
-  if (discoveredOff.length) {
-    console.log(`  Detected (disabled): ${discoveredOff.map((d) => `${d.slug} (~${d.anchor})`).join(', ')}`);
+  for (const m of store.VALID_MODELS) {
+    const b = backend[m];
+    const backendLabel = b && b.backend === 'codex' ? `  → ${b.label || b.slug} (codex)` : '';
+    console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}${backendLabel}`);
   }
+  if ((prefs.discovered || []).length) {
+    const mapped = new Set(codexTiers.map((m) => backend[m].slug));
+    const unmapped = prefs.discovered.filter((d) => !mapped.has(d.slug));
+    if (unmapped.length) {
+      console.log(`  Detected Codex models (map a tier to one in the dashboard): ${unmapped.map((d) => `${d.label || d.slug}${d.suggestedTier ? ` (~${d.suggestedTier})` : ''}`).join(', ')}`);
+    }
+  }
+  for (const w of (prefs.tierBackendWarnings || [])) console.log(`  ! ${w}`);
   console.log('Effort levels (toggle in the dashboard settings, per model):');
   for (const m of store.VALID_MODELS) {
     if (!prefs.efforts[m]) {

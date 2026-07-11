@@ -163,24 +163,21 @@ const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 // time); this tag drives that routing and the `next`/`ready` --model filter.
 const VALID_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
 
-// Normalize a requested model tier to one of VALID_MODELS (or, when `prefs` is
-// supplied, a configured custom model slug), or null. Blank / "any" / "none" /
-// an unknown alias all coerce to null — which is exactly what the entry points
-// (CLI add, dashboard POST) reject: every ticket must be filed with a real tier,
-// and sidequest never picks one for you. The data layer itself stays
-// permissive/fail-soft (the capture hook must never crash). The one-arg form is
-// unchanged (built-ins only); pass prefs to also accept custom slugs — a custom
-// slug IS the model name everywhere tickets/provenance/filters are concerned.
-function coerceModel(v, prefs) {
+// Normalize a requested model tier to one of VALID_MODELS, or null. Blank /
+// "any" / "none" / an unknown alias all coerce to null — which is exactly what
+// the entry points (CLI add, dashboard POST) reject: every ticket must be filed
+// with a real tier, and sidequest never picks one for you. The data layer itself
+// stays permissive/fail-soft (the capture hook must never crash).
+//
+// Tiers are ALWAYS the four built-ins — a Codex model is a per-tier BACKEND
+// (which real model actually runs an opus-tier ticket), not a ladder tier of its
+// own, so it never appears here. `prefs` is accepted for signature stability but
+// no longer widens the vocabulary.
+function coerceModel(v, _prefs) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
   if (!s || s === 'any' || s === 'none' || s === 'null') return null;
-  if (VALID_MODELS.indexOf(s) !== -1) return s;
-  if (prefs) {
-    const vocab = getModelVocab(prefs);
-    if (vocab.bySlug[s]) return s;
-  }
-  return null;
+  return VALID_MODELS.indexOf(s) !== -1 ? s : null;
 }
 
 // How hard the executor should think — the reasoning-effort levels Claude Code
@@ -205,142 +202,132 @@ function coerceEffort(v) {
 }
 
 /* ------------------------------------------------------------------ *
- *  Custom model tiers
+ *  Per-tier model backend
  *
- *  Users can register extra models (e.g. OpenAI Codex models proxied through a
- *  gateway plugin) that join the capability ladder alongside the built-ins. Each
- *  custom entry carries a `slug` (the model NAME sidequest uses everywhere a
- *  ticket/provenance/filter names a model) and an `id` (the real string handed to
- *  Claude Code at spawn time). A custom anchors onto a built-in tier's base score
- *  plus an offset, so routingLadder can rank it in the same merged order. Absent
- *  config → empty list → byte-identical built-in behavior.
+ *  The ladder always ranks the four built-in TIERS (haiku<sonnet<opus<fable).
+ *  A user can point any tier at a discovered Codex model (codex-gateway) so that
+ *  tier's tickets actually RUN on that model — e.g. map the opus tier to Terra.
+ *  This is orthogonal to scoring: a ticket is still scored + stamped by tier;
+ *  the tier's backend is resolved AT SPAWN. Absent config → every tier is its
+ *  own Claude model → byte-identical built-in behavior.
+ *
+ *  Stored as prefs.tierBackend: { haiku, sonnet, opus, fable }, each value
+ *  "claude" (default) or a discovered catalog slug. A mapped slug that isn't in
+ *  the current catalog (gateway uninstalled / model gone) falls back to Claude
+ *  with a warning, so routing can never break.
  * ------------------------------------------------------------------ */
 
-// A slug is 2..32 chars, lowercase alnum + dashes, starting alnum. It's the
-// public model name, so it must not collide with a built-in tier or another slug.
-const CUSTOM_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+// A discovered catalog slug: 2..32 chars, lowercase alnum + dashes, alnum-start.
+const BACKEND_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
-// A custom's rung base = LADDER_TIER_BASE[anchor] + offset; offset is a small
-// integer nudge (-2..2) so a custom can sit just under/over its anchor tier.
-function coerceCustomOffset(v) {
-  const n = Math.round(Number(v));
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(-2, Math.min(2, n));
+// haiku has no effort axis on the ladder (its rung is effort-null), but a Codex
+// model mapped to the haiku slot still needs an effort for its generated agent
+// and its `claude -p` spawn. Give that one case a sane fixed effort.
+const HAIKU_BACKEND_EFFORT = 'medium';
+
+// The discovered catalog as a slug -> entry map ({slug,id,label,suggestedTier,
+// source}). This is the set of models a tier may be pointed at right now.
+function discoveredBySlug() {
+  const out = {};
+  for (const d of discoverExternalModels()) out[d.slug] = d;
+  return out;
 }
 
-// A dashboard tint for the custom's chip: #rrggbb (or #rgb, expanded), else null.
-function coerceCustomColor(v) {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  if (/^#?[0-9a-f]{6}$/.test(s)) return '#' + s.replace(/^#/, '');
-  if (/^#?[0-9a-f]{3}$/.test(s)) {
-    const h = s.replace(/^#/, '');
-    return '#' + h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-  }
-  return null;
-}
-
-// Validate + normalize ONE raw custom entry against the slugs already accepted in
-// this pass. Returns { ok:true, entry } or { ok:false, reason } — the caller
-// (getModelPrefs on read, setModelPrefs on write) drops rejects rather than
-// throwing the whole prefs write away.
-function normalizeCustomEntry(raw, takenSlugs) {
-  if (!raw || typeof raw !== 'object') return { ok: false, reason: 'not an object' };
-  const slug = String(raw.slug == null ? '' : raw.slug).trim().toLowerCase();
-  if (!CUSTOM_SLUG_RE.test(slug)) return { ok: false, reason: `invalid slug "${raw.slug}"` };
-  if (VALID_MODELS.indexOf(slug) !== -1) return { ok: false, reason: `slug "${slug}" collides with a built-in tier` };
-  if (takenSlugs && takenSlugs.indexOf(slug) !== -1) return { ok: false, reason: `duplicate slug "${slug}"` };
-  const id = String(raw.id == null ? '' : raw.id).trim();
-  if (!id) return { ok: false, reason: `custom "${slug}" has an empty id` };
-  const anchor = String(raw.anchor == null ? '' : raw.anchor).trim().toLowerCase();
-  if (VALID_MODELS.indexOf(anchor) === -1) return { ok: false, reason: `custom "${slug}" has invalid anchor "${raw.anchor}"` };
-
-  // Effort matrix: same {low..max} row shape as a built-in tier, defaulting a
-  // missing/garbage row to all-on, with the same per-row guard (never all-off →
-  // fall back to medium) the built-in rows carry.
-  const rawEfforts = raw.efforts && typeof raw.efforts === 'object' ? raw.efforts : null;
-  const efforts = {};
-  for (const e of VALID_EFFORTS) efforts[e] = rawEfforts ? rawEfforts[e] !== false : true;
-  if (!VALID_EFFORTS.some((e) => efforts[e])) efforts.medium = true;
-
-  const entry = {
-    slug,
-    id,
-    label: String(raw.label == null ? '' : raw.label).trim() || slug,
-    anchor,
-    offset: coerceCustomOffset(raw.offset),
-    enabled: raw.enabled !== false, // default on, like a built-in tier
-    efforts,
-    color: coerceCustomColor(raw.color),
-  };
-  return { ok: true, entry };
-}
-
-// Normalize a raw `custom` list (anything or nothing) into a clean array, plus
-// the human-readable reasons for any entries that were dropped. Fail-soft: a
-// non-array yields []. Slugs are deduped against earlier ACCEPTED entries.
-function normalizeCustomList(rawList) {
-  if (!Array.isArray(rawList)) return { customs: [], warnings: [] };
-  const customs = [];
-  const warnings = [];
-  const taken = [];
-  rawList.forEach((raw, i) => {
-    const res = normalizeCustomEntry(raw, taken);
-    if (res.ok) {
-      customs.push(res.entry);
-      taken.push(res.entry.slug);
+// Normalize a raw tierBackend patch/stored value into { tier: "claude"|slug }.
+// Each tier defaults to "claude"; a value is kept only if it's "claude" or a
+// syntactically valid slug (existence in the catalog is checked at resolve time,
+// not here — a mapping for a temporarily-absent gateway is preserved, not lost).
+function normalizeTierBackend(raw) {
+  const out = {};
+  const src = raw && typeof raw === 'object' ? raw : {};
+  for (const tier of VALID_MODELS) {
+    const v = src[tier];
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase();
+      if (s === 'claude' || s === '' || s === tier) out[tier] = 'claude';
+      else if (BACKEND_SLUG_RE.test(s)) out[tier] = s;
+      else out[tier] = 'claude';
     } else {
-      warnings.push(`custom[${i}] dropped: ${res.reason}`);
+      out[tier] = 'claude';
     }
-  });
-  return { customs, warnings };
-}
-
-// The resolved routing vocabulary under a set of prefs: the full set of model
-// NAMES sidequest recognizes (built-ins + every configured custom slug, enabled
-// or not — disabling only removes a custom from routing, it stays a valid name),
-// the effort levels, the normalized custom entries, and two lookups: bySlug
-// (slug → custom entry) and byId (model name → the real spawn id; built-ins map
-// to themselves). getModelVocab re-normalizes prefs.custom so it's safe to hand a
-// raw/hand-built prefs object straight in.
-function getModelVocab(prefs) {
-  prefs = prefs || getModelPrefs();
-  const customs = normalizeCustomList(prefs.custom).customs;
-  const models = VALID_MODELS.concat(customs.map((c) => c.slug));
-  const bySlug = {};
-  const byId = {};
-  for (const m of VALID_MODELS) byId[m] = m;
-  for (const c of customs) {
-    bySlug[c.slug] = c;
-    byId[c.slug] = c.id;
   }
-  return { models, efforts: VALID_EFFORTS.slice(), customs, bySlug, byId };
+  return out;
 }
 
-// Resolve a model NAME (built-in tier or custom slug) to the real string handed
-// to Claude Code at spawn time: built-ins map to themselves, custom slugs map to
-// their `id`. Returns null for an unrecognized name. This is the seam a spawner
-// (mcp/work/dashboard, separate tickets) goes through to launch a custom model.
-function resolveModelId(slugOrName, prefs) {
-  if (slugOrName == null) return null;
-  const s = String(slugOrName).trim().toLowerCase();
-  if (!s) return null;
-  const vocab = getModelVocab(prefs);
-  return Object.prototype.hasOwnProperty.call(vocab.byId, s) ? vocab.byId[s] : null;
+// Resolve, for the current prefs, what actually runs each tier: the mapped Codex
+// model when the tier points at one that's still in the catalog, else the tier's
+// own Claude model. Returns { byTier: {tier: {backend, slug, id, label}}, warnings }
+// where backend is "claude" or "codex". A mapping to a now-absent slug degrades
+// to claude and adds a warning (surfaced in getModelPrefs.tierBackendWarnings).
+function resolveTierBackends(tierBackend) {
+  const map = normalizeTierBackend(tierBackend);
+  const catalog = discoveredBySlug();
+  const byTier = {};
+  const warnings = [];
+  for (const tier of VALID_MODELS) {
+    const v = map[tier];
+    if (v !== 'claude' && catalog[v]) {
+      const d = catalog[v];
+      byTier[tier] = { backend: 'codex', slug: d.slug, id: d.id, label: d.label };
+    } else {
+      if (v !== 'claude' && !catalog[v]) {
+        warnings.push(`${tier} tier is mapped to "${v}", which isn't currently available — falling back to Claude ${tier}`);
+      }
+      byTier[tier] = { backend: 'claude', slug: null, id: null, label: null };
+    }
+  }
+  return { byTier, warnings };
 }
 
-// Classify a --model filter value so a caller CAN distinguish "no filter" from a
-// value that names no known model — the two coerceModel folds into null today.
-// Returns 'any' (blank/any/none/null → don't filter), 'unknown' (a non-empty
-// value matching no built-in or custom → a caller may choose to error), or the
-// resolved model name. coerceModel keeps returning null for both 'any' and
-// 'unknown', so ready/next behavior is unchanged until a caller opts into this.
-function classifyModelFilter(v, prefs) {
+// The single spawn seam: given a stamped (tier, effort), return exactly how to
+// launch it — { agent, model, spawnId }.
+//   - Claude-backed tier: { agent: "sidequest-exec-<effort>", model: <tier>, spawnId: <tier> }
+//     (haiku has no effort → agent null, caller spawns a plain agent with model haiku)
+//   - Codex-backed tier:  { agent: "sidequest-exec-<slug>-<effort>", model: null, spawnId: <real id> }
+// The agent name is what the orchestrator spawns; `model` is the Agent-tool
+// model param (null for Codex — the id is pinned in the generated agent's
+// frontmatter); spawnId is the raw model string for the headless `claude -p`
+// path. effort is the ticket's stamped effort (null only for a Claude haiku tier;
+// a Codex-backed haiku uses HAIKU_BACKEND_EFFORT for its agent).
+function resolveExec(tier, effort, prefs) {
+  prefs = prefs || getModelPrefs();
+  const { byTier } = resolveTierBackends(prefs.tierBackend);
+  const b = byTier[tier] || { backend: 'claude', slug: null, id: null };
+  if (b.backend === 'codex') {
+    const eff = effort || HAIKU_BACKEND_EFFORT;
+    return { agent: `sidequest-exec-${b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', slug: b.slug };
+  }
+  // Claude-backed. haiku has no effort agent (plain agent, model: haiku).
+  if (tier === 'haiku' || !effort) {
+    return { agent: null, model: tier, spawnId: tier, backend: 'claude', slug: null };
+  }
+  return { agent: `sidequest-exec-${effort}`, model: tier, spawnId: tier, backend: 'claude', slug: null };
+}
+
+// Resolve a stamped model name to the real string handed to Claude Code at spawn
+// time. A ticket stamps a TIER; if that tier is Codex-backed, the real model is
+// the mapped id, else the tier maps to itself. Unknown names → null.
+function resolveModelId(tierName, prefs) {
+  if (tierName == null) return null;
+  const s = String(tierName).trim().toLowerCase();
+  if (VALID_MODELS.indexOf(s) === -1) return null;
+  return resolveExec(s, null, prefs).spawnId;
+}
+
+// The routing vocabulary: tickets/filters/provenance name one of the four TIERS.
+// (Codex models are per-tier backends, not independent names.) Kept for callers
+// that want the valid model set + effort set.
+function getModelVocab(_prefs) {
+  return { models: VALID_MODELS.slice(), efforts: VALID_EFFORTS.slice() };
+}
+
+// Classify a --model filter value: 'any' (blank/any/none), 'unknown' (a
+// non-empty value that's not one of the four tiers), or the resolved tier.
+function classifyModelFilter(v, _prefs) {
   if (v == null) return 'any';
   const s = String(v).trim().toLowerCase();
   if (!s || s === 'any' || s === 'none' || s === 'null') return 'any';
-  const m = coerceModel(s, prefs || getModelPrefs());
-  return m || 'unknown';
+  return VALID_MODELS.indexOf(s) !== -1 ? s : 'unknown';
 }
 
 /* ------------------------------------------------------------------ *
@@ -446,12 +433,10 @@ function routingLadder(prefs) {
     return LADDER_EFFORT_ORDER.filter((e) => row[e] !== false);
   }
 
-  // ASSEMBLE the participating tiers: every enabled built-in in capability order,
-  // then every enabled custom model anchored into the same score space. A custom
-  // ranks like a non-haiku built-in: base = LADDER_TIER_BASE[anchor] + offset, and
-  // a fractional tierRank a quarter-step below its anchor so the anchor tier wins
-  // any exact score tie against its own customs (same-anchor customs then break by
-  // slug for determinism — see the sort below).
+  // ASSEMBLE the participating tiers: every enabled built-in in capability order.
+  // Tiers are always the four built-ins; a Codex model is a per-tier BACKEND
+  // (resolved at spawn, see resolveExec), not a rung of its own, so the ladder's
+  // shape and scoring are exactly the built-in ones.
   const tiers = [];
   for (const m of MODEL_CAPABILITY_ORDER) {
     if (prefs[m] === false) continue;
@@ -461,16 +446,6 @@ function routingLadder(prefs) {
       tierRank: MODEL_CAPABILITY_ORDER.indexOf(m),
       row: m === 'haiku' ? null : builtinRow(m),
       haiku: m === 'haiku',
-    });
-  }
-  for (const c of getModelVocab(prefs).customs) {
-    if (!c.enabled) continue;
-    tiers.push({
-      model: c.slug,
-      base: LADDER_TIER_BASE[c.anchor] + c.offset,
-      tierRank: MODEL_CAPABILITY_ORDER.indexOf(c.anchor) - 0.25,
-      row: c.efforts,
-      haiku: false,
     });
   }
   // Never return an empty ladder: fall back to a single sonnet tier, seeded from
@@ -506,12 +481,11 @@ function routingLadder(prefs) {
     }
   }
   // RANK ascending by capability; exact cross-tier score ties (e.g. sonnet·high ==
-  // opus·low, or a custom vs its anchor) break by higher tier ranking above, then
-  // by model name so same-anchor customs land in a deterministic order — one
-  // merged total order.
+  // opus·low) break by higher tier ranking, then by model name — one merged total
+  // order.
   seq.sort((a, b) => (a.score - b.score) || (a.tierRank - b.tierRank) || String(a.model).localeCompare(String(b.model)));
 
-  // MAX SPARINGLY: the tier with the highest base score (built-in OR custom) owns
+  // MAX SPARINGLY: the tier with the highest base score owns
   // the sole ·max rung that sits ABOVE the whole sequence, reached only at the very
   // top of the complexity scale. Base ties resolve to the higher tier rank, then
   // slug — a single deterministic top tier. It exists iff that tier's OWN row has
@@ -579,14 +553,21 @@ function deriveRouting(complexity, prefs) {
 }
 
 // Stamp a ticket's derived model/effort in memory from its complexity (when it
-// has one). Reads are the single seam every consumer goes through, so chips,
-// claim filters and waves all reflect the ladder of the moment.
+// has one), plus a resolved `exec` telling a spawner exactly how to launch it
+// (which agent, which model param) given the current per-tier backend map. Reads
+// are the single seam every consumer goes through, so chips, claim filters, waves
+// AND the orchestrator's spawn all reflect the ladder + backend of the moment —
+// no separate tier→backend lookup at spawn, which is what prevents backend drift.
 function applyDerivedRouting(t, prefs) {
   if (!t || !t.complexity) return t;
+  prefs = prefs || getModelPrefs();
   const r = deriveRouting(t.complexity, prefs);
   if (r) {
     t.model = r.model;
     t.effort = r.effort;
+    const ex = resolveExec(r.model, r.effort, prefs);
+    // exec: what to spawn. backend "codex" also flags the card chip's Codex mark.
+    t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.slug || r.model };
   }
   return t;
 }
@@ -1015,7 +996,7 @@ function createTicket(slug, fields) {
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
     complexityWhy: String(fields.complexityWhy || '').trim().slice(0, 1000), // the mandatory motivation for the score
-    model: coerceModel(fields.model, getModelPrefs()), // legacy direct tag (built-in or custom slug); overridden at read time when complexity is set
+    model: coerceModel(fields.model), // legacy direct tag (a built-in tier); overridden at read time when complexity is set
     effort: coerceEffort(fields.effort),          // legacy direct tag; overridden at read time when complexity is set
     files: normalizeFiles(fields.files),          // declared file scope, for parallel-wave planning
     assets,
@@ -1152,7 +1133,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
-    if (patch.model !== undefined) { const m = coerceModel(patch.model, getModelPrefs()); if (m) t.model = m; }     // never clears the tier: an invalid/'any'/'none' patch leaves it unchanged (built-in or custom slug)
+    if (patch.model !== undefined) { const m = coerceModel(patch.model); if (m) t.model = m; }     // never clears the tier: an invalid/'any'/'none' patch leaves it unchanged
     if (patch.effort !== undefined) { const e = coerceEffort(patch.effort); if (e) t.effort = e; } // same for effort: once set it can only change to another valid level
     // Complexity can move to another valid score, never clear; a fresh motivation
     // rides along whenever one is provided (the CLI demands one on change).
@@ -1482,22 +1463,19 @@ function releaseTicket(slug, idOrRef, by, opts) {
 }
 
 // Build the provenance stamp recorded when a ticket is completed — which model
-// tier and reasoning effort actually worked it, plus who and when. Returns null
-// when no model is supplied (a done with no --model carries no stamp). A supplied
-// model must be a VALID_MODELS tier and, if present, effort a VALID_EFFORTS level
-// (null/omitted is allowed — haiku has no effort); anything else throws a clear
-// error, mirroring how the entry points reject bad routing values instead of
-// silently recording garbage.
-function makeWorkedBy(input, prefs) {
+// tier (or the Codex model that actually backed it) and reasoning effort worked
+// it, plus who and when. Returns null when no model is supplied. A supplied model
+// must be a VALID_MODELS tier OR a discovered catalog slug (a Codex-backed tier
+// records the real model that ran); effort, if present, a VALID_EFFORTS level
+// (null/omitted allowed — haiku has no effort). Anything else throws.
+function makeWorkedBy(input, _prefs) {
   if (!input) return null;
   const rawModel = input.model;
   if (rawModel == null || String(rawModel).trim() === '') return null; // no stamp when not provided
   const model = String(rawModel).trim().toLowerCase();
-  // A stamp may name a built-in tier OR a configured custom slug — both are real
-  // model names; only genuine garbage throws.
-  const vocab = getModelVocab(prefs || getModelPrefs());
-  if (vocab.models.indexOf(model) === -1) {
-    throw new Error(`invalid model "${rawModel}" — expected one of: ${VALID_MODELS.join(', ')} (or a configured custom model)`);
+  const known = VALID_MODELS.indexOf(model) !== -1 || !!discoveredBySlug()[model];
+  if (!known) {
+    throw new Error(`invalid model "${rawModel}" — expected one of: ${VALID_MODELS.join(', ')} (or a discovered Codex model)`);
   }
   let effort = null;
   const rawEffort = input.effort;
@@ -1536,7 +1514,7 @@ function modelMatches(ticketModel, want) {
 // opts.model restricts to that tier's work (exact-tier matches only).
 function readyTickets(slug, opts) {
   opts = opts || {};
-  const want = coerceModel(opts.model, getModelPrefs()); // resolves a custom slug too; unknown/blank → null (no filter)
+  const want = coerceModel(opts.model); // one of the four tiers; unknown/blank → null (no filter)
   return listTickets(slug)
     .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
@@ -1556,7 +1534,7 @@ function readyTickets(slug, opts) {
 function claimNext(slug, by, opts) {
   opts = opts || {};
   by = String(by || 'agent');
-  const want = coerceModel(opts.model, getModelPrefs()); // resolves a custom slug too; unknown/blank → null (no filter)
+  const want = coerceModel(opts.model); // one of the four tiers; unknown/blank → null (no filter)
   const candidates = listTickets(slug)
     .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
@@ -2134,46 +2112,6 @@ function modelPrefsFile() {
   return path.join(projectsRoot(), 'model-prefs.json');
 }
 
-// SQ-157: prefs.custom is no longer hand-authored. Its SOURCE is now the
-// auto-discovered catalog (discoverExternalModels(), e.g. codex-gateway)
-// merged with per-slug `customOverrides` the user has dialed in (enabled,
-// efforts, anchor, offset, color). The merged/normalized result flows
-// through the exact same normalizeCustomList() pipeline a hand-authored
-// list did, so routingLadder/getModelVocab/resolveModelId (all SQ-156, all
-// consumers of prefs.custom) need zero changes.
-//
-// A discovered model is DISABLED by default (enabled:false unless the
-// override says enabled:true) — detecting a sibling plugin must never
-// silently reroute a user's tickets to a different subscription/model until
-// they opt in. Efforts default to a conservative "high only" row when the
-// user hasn't picked their own effort row yet.
-//
-// No catalog present -> discoverExternalModels() returns [] -> prefs.custom
-// is [] regardless of customOverrides content, same as today with no custom
-// config at all.
-const CUSTOM_DEFAULT_EFFORTS = { low: false, medium: false, high: true, xhigh: false, max: false };
-
-function resolveCustomFromOverrides(customOverrides) {
-  const discovered = discoverExternalModels();
-  const overrides = customOverrides && typeof customOverrides === 'object' ? customOverrides : {};
-  const rawCandidates = discovered.map((d) => {
-    const ov = overrides[d.slug] && typeof overrides[d.slug] === 'object' ? overrides[d.slug] : null;
-    const efforts = Object.assign({}, CUSTOM_DEFAULT_EFFORTS, ov && ov.efforts && typeof ov.efforts === 'object' ? ov.efforts : null);
-    return {
-      slug: d.slug,
-      id: d.id,
-      label: d.label,
-      anchor: (ov && VALID_MODELS.indexOf(ov.anchor) !== -1) ? ov.anchor : d.anchor,
-      offset: ov && ov.offset !== undefined ? ov.offset : 0,
-      enabled: !!(ov && ov.enabled === true), // opt-in only, see note above
-      efforts,
-      color: ov && ov.color !== undefined ? ov.color : undefined,
-    };
-  });
-  const { customs } = normalizeCustomList(rawCandidates);
-  return { discovered, custom: customs };
-}
-
 // Missing/corrupt file -> every tier enabled, every effort enabled in every
 // model row, routing on, and a neutral (0) bias. `routing` is the master switch:
 // when false the skill's model/effort enforcement stands down and the main agent
@@ -2213,43 +2151,27 @@ function getModelPrefs() {
   out.routing = merged.routing !== false;
   out.routingBias = coerceRoutingBias(merged.routingBias);
 
-  // Custom model tiers (SQ-157): the source is discovery + customOverrides,
-  // not a hand-authored list. `customOverrides` is the only thing persisted;
-  // `custom` (and `discovered`) are resolved fresh on every read.
+  // Per-tier model backend (1.36.0): tierBackend maps each tier to "claude"
+  // (default) or a discovered Codex slug. `discovered` (the current catalog) is
+  // resolved fresh on every read for the dashboard's dropdown options, and
+  // `tierBackendWarnings` names any tier whose mapped model isn't available now.
   //
-  // Migration: a pre-SQ-157 file may still carry a hand-authored `custom`
-  // array and no `customOverrides` at all. One-time, best-effort: fold each
-  // legacy entry's enabled/efforts/anchor/offset/color into a customOverrides
-  // row keyed by its slug (only entries that also show up in the discovered
-  // catalog will actually take effect — an entry for a plugin that isn't
-  // installed just sits there inert), persist the migrated shape, and drop
-  // the legacy key so this only runs once.
-  let customOverrides = merged.customOverrides && typeof merged.customOverrides === 'object' ? merged.customOverrides : null;
-  if (!customOverrides && Array.isArray(merged.custom) && merged.custom.length) {
-    const migrated = {};
-    for (const raw of merged.custom) {
-      if (!raw || typeof raw !== 'object' || typeof raw.slug !== 'string') continue;
-      const slug = raw.slug.trim().toLowerCase();
-      if (!slug) continue;
-      const row = {};
-      if (raw.enabled !== undefined) row.enabled = raw.enabled !== false;
-      if (raw.efforts && typeof raw.efforts === 'object') row.efforts = raw.efforts;
-      if (raw.anchor !== undefined) row.anchor = raw.anchor;
-      if (raw.offset !== undefined) row.offset = raw.offset;
-      if (raw.color !== undefined) row.color = raw.color;
-      migrated[slug] = row;
-    }
-    customOverrides = migrated;
+  // The 1.35.0 `customOverrides`/`custom` keys are obsolete: strip them from the
+  // persisted file the first time we see one (only Kenny's machine ever wrote
+  // them), so an old file doesn't carry dead state forever.
+  out.tierBackend = normalizeTierBackend(merged.tierBackend);
+  const resolvedBackends = resolveTierBackends(out.tierBackend);
+  out.tierBackendResolved = resolvedBackends.byTier;
+  out.tierBackendWarnings = resolvedBackends.warnings;
+  out.discovered = discoverExternalModels();
+
+  if (merged.customOverrides !== undefined || merged.custom !== undefined) {
     const persisted = Object.assign({}, merged);
+    delete persisted.customOverrides;
     delete persisted.custom;
-    persisted.customOverrides = customOverrides;
+    persisted.tierBackend = out.tierBackend;
     writeJson(modelPrefsFile(), persisted);
   }
-  customOverrides = customOverrides || {};
-  const resolved = resolveCustomFromOverrides(customOverrides);
-  out.customOverrides = customOverrides;
-  out.discovered = resolved.discovered;
-  out.custom = resolved.custom;
   return out;
 }
 
@@ -2290,52 +2212,28 @@ function setModelPrefs(patch) {
   out.routing = (patch.routing !== undefined) ? patch.routing !== false : cur.routing;
   out.routingBias = coerceRoutingBias(patch.routingBias !== undefined ? patch.routingBias : cur.routingBias);
 
-  // Custom model tiers (SQ-157): `patch.custom` (a full hand-authored list) is
-  // no longer a thing this function reads — it's silently ignored, same as
-  // any other unknown key, per the ticket's "reject/ignore attempts to write
-  // full custom defs" contract. The only writable surface is
-  // `patch.customOverrides`, a per-slug PATCH keyed by discovered slug:
-  //   - customOverrides[slug] === null           -> remove that slug's override
-  //   - customOverrides[slug] === {...fields}    -> shallow-merge those known
-  //     fields (enabled/efforts/anchor/offset/color) onto the existing override
-  //     for that slug, sanitizing each one (garbage fields/values are dropped,
-  //     not stored)
-  // Omitting `patch.customOverrides` entirely preserves the current overrides.
-  // `custom`/`discovered` are never persisted — they're re-resolved from
-  // discovery + customOverrides on every read (see resolveCustomFromOverrides).
-  out.customOverrides = Object.assign({}, cur.customOverrides);
-  if (patch.customOverrides && typeof patch.customOverrides === 'object') {
-    for (const slug of Object.keys(patch.customOverrides)) {
-      const rawSlug = String(slug).trim().toLowerCase();
-      if (!rawSlug) continue;
-      const val = patch.customOverrides[slug];
-      if (val === null) {
-        delete out.customOverrides[rawSlug];
-        continue;
-      }
-      if (!val || typeof val !== 'object') continue;
-      const existing = out.customOverrides[rawSlug] && typeof out.customOverrides[rawSlug] === 'object' ? out.customOverrides[rawSlug] : {};
-      const row = Object.assign({}, existing);
-      if (val.enabled !== undefined) row.enabled = val.enabled === true;
-      if (val.efforts !== undefined && val.efforts && typeof val.efforts === 'object') {
-        const effortsRow = {};
-        for (const e of VALID_EFFORTS) if (e in val.efforts) effortsRow[e] = val.efforts[e] !== false;
-        row.efforts = Object.assign({}, existing.efforts, effortsRow);
-      }
-      if (val.anchor !== undefined) { if (VALID_MODELS.indexOf(val.anchor) !== -1) row.anchor = val.anchor; else delete row.anchor; }
-      if (val.offset !== undefined) row.offset = coerceCustomOffset(val.offset);
-      if (val.color !== undefined) { const c = coerceCustomColor(val.color); if (c) row.color = c; else delete row.color; }
-      out.customOverrides[rawSlug] = row;
+  // Per-tier backend (1.36.0): `patch.tierBackend` is a partial map keyed by
+  // tier, each value "claude" (or the tier name / "") to clear a mapping, or a
+  // discovered slug to point that tier at a Codex model. Merged per-tier over the
+  // current map; omitting it preserves the current mapping. Any 1.35.0
+  // `customOverrides`/`custom` in the patch is ignored (dead shape). `discovered`
+  // and the resolved backends are re-derived on read, never persisted.
+  const mergedBackend = Object.assign({}, cur.tierBackend);
+  if (patch.tierBackend && typeof patch.tierBackend === 'object') {
+    for (const tier of VALID_MODELS) {
+      if (tier in patch.tierBackend) mergedBackend[tier] = patch.tierBackend[tier];
     }
   }
+  out.tierBackend = normalizeTierBackend(mergedBackend);
 
   writeJson(modelPrefsFile(), out);
 
-  // Resolved after the write so the persisted file never carries the derived
-  // `custom`/`discovered` lists — only the returned object does.
-  const resolved = resolveCustomFromOverrides(out.customOverrides);
-  out.discovered = resolved.discovered;
-  out.custom = resolved.custom;
+  // Resolve after the write so the persisted file carries only tierBackend, while
+  // the returned object also has the derived catalog + resolution for callers.
+  const resolvedBackends = resolveTierBackends(out.tierBackend);
+  out.tierBackendResolved = resolvedBackends.byTier;
+  out.tierBackendWarnings = resolvedBackends.warnings;
+  out.discovered = discoverExternalModels();
   return out;
 }
 
@@ -2734,8 +2632,12 @@ module.exports = {
   coerceModel,
   routingLadder,
   deriveRouting,
+  applyDerivedRouting,
   getModelVocab,
   resolveModelId,
+  resolveExec,
+  resolveTierBackends,
+  normalizeTierBackend,
   classifyModelFilter,
   getModelPrefs,
   setModelPrefs,

@@ -1,11 +1,12 @@
 'use strict';
 /**
- * Runtime exec agent sync for enabled discovered/custom models (SQ-158).
- * Run: node --test plugins/sidequest/test/agentsync.test.js
+ * Runtime exec agent sync for Codex-backed tiers (1.36.0). syncExecAgents
+ * generates one agent file per (Codex-backed tier x that tier's enabled non-max
+ * effort). Driven by prefs.tierBackend + the discovered catalog.
+ * Run: node --test "plugins/sidequest/test/**\/*.test.js"
  *
- * EVERY test below passes an explicit `dir` (a temp directory) to
- * syncExecAgents — this suite must NEVER write to (or delete from) the real
- * ~/.claude/agents directory.
+ * EVERY test passes an explicit `dir` (a temp directory) to syncExecAgents —
+ * this suite must NEVER write to (or delete from) the real ~/.claude/agents.
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -13,174 +14,186 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 
+process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-home-'));
+const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-nodisc-'));
+process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
+
 const agentsync = require('../lib/agentsync.js');
+const store = require('../lib/store.js');
 
-const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', suggestedTier: 'opus' };
+const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol', suggestedTier: 'fable' };
+const LUNA = { slug: 'codex-gpt-5-6-luna', id: 'claude-codex-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna', suggestedTier: 'haiku' };
 
-function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-'));
+function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
+function readDir(dir) { return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md')).sort(); }
+
+function seedCatalog(models) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-'));
+  fs.mkdirSync(path.join(dir, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'codex-gateway', 'catalog.json'),
+    JSON.stringify({ schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }));
+  process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
 }
 
-// A raw custom entry, same shape as getModelVocab/normalizeCustomEntry expect.
-// `efforts` is the list of efforts turned ON; enabled defaults true (matches
-// normalizeCustomEntry's own default) unless overridden via `extra`.
-function mkCustom(slug, efforts, extra) {
-  const row = {};
-  for (const e of ALL_EFFORTS) row[e] = efforts.includes(e);
-  return Object.assign({ slug, id: `id-${slug}`, anchor: 'opus', offset: 0, efforts: row }, extra || {});
-}
-
-function readDir(dir) {
-  return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md')).sort();
+// Build a prefs with a given tierBackend map + a per-tier effort matrix. Always
+// sends a FULL 4-tier map (unspecified tiers -> claude) so a mapping set by an
+// earlier test in this shared home can't leak in. `efforts` maps tier -> list of
+// enabled efforts.
+function prefsWith(tierBackend, efforts) {
+  const full = { haiku: 'claude', sonnet: 'claude', opus: 'claude', fable: 'claude' };
+  const p = store.setModelPrefs({ tierBackend: Object.assign(full, tierBackend) });
+  if (efforts) {
+    p.efforts = p.efforts || {};
+    for (const tier of Object.keys(efforts)) {
+      const row = {};
+      for (const e of ['low', 'medium', 'high', 'xhigh', 'max']) row[e] = efforts[tier].includes(e);
+      p.efforts[tier] = row;
+    }
+  }
+  return p;
 }
 
 /* -------------------------------------------------------------- *
- *  Correct filenames + frontmatter for enabled customs
+ *  Filenames + frontmatter for a Codex-backed tier
  * -------------------------------------------------------------- */
 
-test('syncExecAgents: writes one file per enabled custom x enabled non-max effort, with correct name/model/effort frontmatter', () => {
+test('one file per Codex-backed tier x that tier\'s enabled non-max effort, correct frontmatter', () => {
+  seedCatalog([TERRA]);
   const dir = tmpDir();
-  const prefs = {
-    custom: [
-      mkCustom('codex-sol', ['high', 'xhigh'], { id: 'claude-codex-gpt-5.6-sol[1m]', label: 'Codex Sol' }),
-    ],
-  };
+  const prefs = prefsWith({ opus: TERRA.slug }, { opus: ['high', 'xhigh'] });
   const res = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(res.written, 2, 'two enabled non-max efforts -> two files');
-  assert.strictEqual(res.removed, 0);
-  assert.strictEqual(res.unchanged, 0);
+  assert.strictEqual(res.written, 2);
+  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md', 'sidequest-exec-codex-gpt-5-6-terra-xhigh.md']);
 
-  const files = readDir(dir);
-  assert.deepStrictEqual(files, ['sidequest-exec-codex-sol-high.md', 'sidequest-exec-codex-sol-xhigh.md']);
-
-  const highSrc = fs.readFileSync(path.join(dir, 'sidequest-exec-codex-sol-high.md'), 'utf8');
-  assert.ok(highSrc.startsWith('---\n'), 'starts with a frontmatter fence');
-  const fmEnd = highSrc.indexOf('\n---\n', 4);
-  assert.ok(fmEnd !== -1, 'frontmatter has a closing fence');
-  const frontmatter = highSrc.slice(0, fmEnd);
-  const body = highSrc.slice(fmEnd + 5);
-
-  assert.match(frontmatter, /^name: sidequest-exec-codex-sol-high$/m);
+  const src = fs.readFileSync(path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md'), 'utf8');
+  const fmEnd = src.indexOf('\n---\n', 4);
+  const frontmatter = src.slice(0, fmEnd);
+  const body = src.slice(fmEnd + 5);
+  assert.match(frontmatter, /^name: sidequest-exec-codex-gpt-5-6-terra-high$/m);
   assert.match(frontmatter, /^effort: high$/m);
-  assert.match(frontmatter, /^model: claude-codex-gpt-5\.6-sol\[1m\]$/m);
-  assert.ok(body.includes(agentsync.MARKER), 'the marker line is present in the body');
-  assert.match(body, /codex-sol/, 'the advisory note names the slug');
+  assert.match(frontmatter, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
+  assert.ok(body.includes(agentsync.MARKER));
+  assert.match(body, /codex-gpt-5-6-terra/);
 });
 
-test('syncExecAgents: max effort is never generated even if the row enables it', () => {
+test('max effort is never generated even if the tier enables it', () => {
+  seedCatalog([TERRA]);
   const dir = tmpDir();
-  const prefs = { custom: [mkCustom('codex-y', ['high', 'max'])] };
+  const prefs = prefsWith({ opus: TERRA.slug }, { opus: ['high', 'max'] });
   const res = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(res.written, 1, 'only the non-max effort produces a file');
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-y-high.md']);
+  assert.strictEqual(res.written, 1);
+  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md']);
 });
 
-test('syncExecAgents: a custom with no enabled non-max effort writes nothing', () => {
+test('a Codex-backed haiku tier gets a single fixed-effort file', () => {
+  seedCatalog([LUNA]);
   const dir = tmpDir();
-  const prefs = { custom: [mkCustom('codex-z', ['max'])] };
+  const prefs = prefsWith({ haiku: LUNA.slug });
+  const res = agentsync.syncExecAgents(prefs, { dir });
+  assert.strictEqual(res.written, 1);
+  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-luna-medium.md']);
+});
+
+test('no Codex-backed tier -> nothing generated', () => {
+  seedCatalog([TERRA]);
+  const dir = tmpDir();
+  const prefs = prefsWith({}); // every tier claude
   const res = agentsync.syncExecAgents(prefs, { dir });
   assert.strictEqual(res.written, 0);
   assert.deepStrictEqual(readDir(dir), []);
 });
 
 /* -------------------------------------------------------------- *
- *  Idempotency
+ *  Idempotency + reassignment cleanup
  * -------------------------------------------------------------- */
 
-test('syncExecAgents: re-running with the same prefs writes nothing new (idempotent)', () => {
+test('re-running with the same prefs writes nothing new (idempotent)', () => {
+  seedCatalog([TERRA]);
   const dir = tmpDir();
-  const prefs = { custom: [mkCustom('codex-a', ['low', 'high'])] };
-  const first = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(first.written, 2);
+  const prefs = prefsWith({ opus: TERRA.slug }, { opus: ['low', 'high'] });
+  assert.strictEqual(agentsync.syncExecAgents(prefs, { dir }).written, 2);
   const second = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(second.written, 0, 'nothing changed, so nothing is rewritten');
-  assert.strictEqual(second.removed, 0);
-  assert.strictEqual(second.unchanged, 2, 'both files are recognized as already correct');
+  assert.strictEqual(second.written, 0);
+  assert.strictEqual(second.unchanged, 2);
 });
 
-/* -------------------------------------------------------------- *
- *  Stale marker-bearing file cleanup
- * -------------------------------------------------------------- */
-
-test('syncExecAgents: a marker-bearing file that is no longer wanted gets removed', () => {
+test('turning off one of a tier\'s efforts removes just that file', () => {
+  seedCatalog([TERRA]);
   const dir = tmpDir();
-  const withXhigh = { custom: [mkCustom('codex-b', ['high', 'xhigh'])] };
-  const first = agentsync.syncExecAgents(withXhigh, { dir });
-  assert.strictEqual(first.written, 2);
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-b-high.md', 'sidequest-exec-codex-b-xhigh.md']);
-
-  // Turn xhigh off for the same slug: the xhigh file is now unwanted and
-  // marker-bearing, so it must be removed; the high file is untouched.
-  const highOnly = { custom: [mkCustom('codex-b', ['high'])] };
-  const second = agentsync.syncExecAgents(highOnly, { dir });
-  assert.strictEqual(second.removed, 1, 'the now-unwanted xhigh file is removed');
-  assert.strictEqual(second.unchanged, 1, 'the still-wanted high file is untouched');
-  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-b-high.md']);
+  agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['high', 'xhigh'] }), { dir });
+  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md', 'sidequest-exec-codex-gpt-5-6-terra-xhigh.md']);
+  const second = agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['high'] }), { dir });
+  assert.strictEqual(second.removed, 1);
+  assert.strictEqual(second.unchanged, 1);
+  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md']);
 });
 
-test('syncExecAgents: disabling a model removes all of its generated agent files', () => {
+test('clearing a tier back to Claude removes all its generated files', () => {
+  seedCatalog([TERRA]);
   const dir = tmpDir();
-  const enabled = { custom: [mkCustom('codex-c', ['low', 'high', 'xhigh'])] };
-  const first = agentsync.syncExecAgents(enabled, { dir });
-  assert.strictEqual(first.written, 3);
-
-  const disabled = { custom: [mkCustom('codex-c', ['low', 'high', 'xhigh'], { enabled: false })] };
-  const second = agentsync.syncExecAgents(disabled, { dir });
-  assert.strictEqual(second.removed, 3, 'all three of the disabled model\'s files are removed');
+  agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['low', 'high', 'xhigh'] }), { dir });
+  assert.strictEqual(readDir(dir).length, 3);
+  const second = agentsync.syncExecAgents(prefsWith({ opus: 'claude' }), { dir });
+  assert.strictEqual(second.removed, 3);
   assert.deepStrictEqual(readDir(dir), []);
+});
+
+test('reassigning a tier to a different model swaps the files', () => {
+  seedCatalog([TERRA, SOL]);
+  const dir = tmpDir();
+  agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['high'] }), { dir });
+  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-terra-high.md']);
+  const second = agentsync.syncExecAgents(prefsWith({ opus: SOL.slug }, { opus: ['high'] }), { dir });
+  assert.strictEqual(second.removed, 1);
+  assert.strictEqual(second.written, 1);
+  assert.deepStrictEqual(readDir(dir), ['sidequest-exec-codex-gpt-5-6-sol-high.md']);
 });
 
 /* -------------------------------------------------------------- *
  *  Never touches an unmarked file
  * -------------------------------------------------------------- */
 
-test('syncExecAgents: never overwrites a hand-authored file at a would-be-generated path', () => {
+test('never overwrites a hand-authored file at a would-be-generated path', () => {
+  seedCatalog([TERRA]);
   const dir = tmpDir();
   fs.mkdirSync(dir, { recursive: true });
-  const collidingPath = path.join(dir, 'sidequest-exec-codex-d-high.md');
-  const handAuthored = '---\nname: sidequest-exec-codex-d-high\n---\nhand-authored, not ours.\n';
+  const collidingPath = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
+  const handAuthored = '---\nname: sidequest-exec-codex-gpt-5-6-terra-high\n---\nhand-authored, not ours.\n';
   fs.writeFileSync(collidingPath, handAuthored);
-
-  const prefs = { custom: [mkCustom('codex-d', ['high'])] };
-  const res = agentsync.syncExecAgents(prefs, { dir });
-
-  assert.strictEqual(res.written, 0, 'the colliding unmarked file is not counted as written');
-  assert.strictEqual(fs.readFileSync(collidingPath, 'utf8'), handAuthored, 'content is untouched, byte-for-byte');
+  const res = agentsync.syncExecAgents(prefsWith({ opus: TERRA.slug }, { opus: ['high'] }), { dir });
+  assert.strictEqual(res.written, 0);
+  assert.strictEqual(fs.readFileSync(collidingPath, 'utf8'), handAuthored);
 });
 
-test('syncExecAgents: never deletes a hand-authored file that is not in the wanted set', () => {
+test('never deletes a hand-authored file that is not in the wanted set', () => {
+  seedCatalog([TERRA]);
   const dir = tmpDir();
   fs.mkdirSync(dir, { recursive: true });
   const foreignPath = path.join(dir, 'sidequest-exec-totally-unrelated-high.md');
-  const handAuthored = '---\nname: totally-unrelated\n---\nnot generated by us, no marker.\n';
+  const handAuthored = '---\nname: totally-unrelated\n---\nnot ours, no marker.\n';
   fs.writeFileSync(foreignPath, handAuthored);
-
-  // Nothing enabled at all -> the wanted set is empty, but the foreign file
-  // must survive because it carries no marker.
-  const res = agentsync.syncExecAgents({ custom: [] }, { dir });
+  const res = agentsync.syncExecAgents(prefsWith({}), { dir });
   assert.strictEqual(res.removed, 0);
-  assert.ok(fs.existsSync(foreignPath), 'the unmarked foreign file still exists');
-  assert.strictEqual(fs.readFileSync(foreignPath, 'utf8'), handAuthored);
+  assert.ok(fs.existsSync(foreignPath));
 });
 
 /* -------------------------------------------------------------- *
- *  Multiple enabled customs at once
+ *  Multiple Codex-backed tiers at once
  * -------------------------------------------------------------- */
 
-test('syncExecAgents: multiple enabled customs each get their own files; a disabled one is skipped entirely', () => {
+test('multiple Codex-backed tiers each get their own files', () => {
+  seedCatalog([TERRA, SOL, LUNA]);
   const dir = tmpDir();
-  const prefs = {
-    custom: [
-      mkCustom('codex-e', ['high']),
-      mkCustom('codex-f', ['low', 'medium']),
-      mkCustom('codex-g', ['high'], { enabled: false }),
-    ],
-  };
+  const prefs = prefsWith(
+    { opus: TERRA.slug, fable: SOL.slug, haiku: LUNA.slug },
+    { opus: ['high'], fable: ['high'] },
+  );
   const res = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(res.written, 3, '1 (codex-e) + 2 (codex-f); codex-g is disabled and contributes nothing');
+  assert.strictEqual(res.written, 3); // opus·high + fable·high + haiku(medium)
   assert.deepStrictEqual(readDir(dir), [
-    'sidequest-exec-codex-e-high.md',
-    'sidequest-exec-codex-f-low.md',
-    'sidequest-exec-codex-f-medium.md',
+    'sidequest-exec-codex-gpt-5-6-luna-medium.md',
+    'sidequest-exec-codex-gpt-5-6-sol-high.md',
+    'sidequest-exec-codex-gpt-5-6-terra-high.md',
   ]);
 });

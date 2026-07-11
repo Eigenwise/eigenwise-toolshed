@@ -40,7 +40,7 @@ function writeCatalogRaw(dir, body) {
 }
 function seedCatalog(models) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-catalog-'));
-  writeCatalogRaw(dir, JSON.stringify({ schema: 1, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }));
+  writeCatalogRaw(dir, JSON.stringify({ schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
   return dir;
 }
@@ -177,35 +177,34 @@ test('the real stdio server frames newline-delimited JSON-RPC', () => {
  *  silently treated as "no filter".
  * ------------------------------------------------------------------ */
 
-test('models tool lists a discovered+enabled custom slug (discovered, enabled, and the ladder)', () => {
-  seedCatalog([{ slug: 'codex-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'Codex Sol', anchor: 'opus' }]);
+test('models tool surfaces the tier-backend map, detected models, and warnings', () => {
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra', suggestedTier: 'opus' }]);
   try {
-    store.setModelPrefs({ customOverrides: { 'codex-sol': { enabled: true, offset: 10 } } });
+    store.setModelPrefs({ tierBackend: { opus: 'codex-terra' } });
     const out = callTool('models', {});
-    assert.ok(Array.isArray(out.discovered) && out.discovered.some((d) => d.slug === 'codex-sol'), 'discovered surfaces the catalog entry');
-    assert.ok(out.enabled.includes('codex-sol'), 'enabled includes the custom slug alongside built-ins');
-    assert.ok(out.ladder.some((r) => r.model === 'codex-sol'), 'the enabled custom reaches the ladder');
-    const resolved = out.prefs.custom.find((c) => c.slug === 'codex-sol');
-    assert.ok(resolved && resolved.enabled === true, 'prefs.custom is the resolved (normalized) list');
+    assert.ok(Array.isArray(out.discovered) && out.discovered.some((d) => d.slug === 'codex-terra'), 'discovered surfaces the catalog entry');
+    assert.strictEqual(out.tierBackend.opus, 'codex-terra', 'the tier backend map is reported');
+    assert.strictEqual(out.tierBackendResolved.opus.backend, 'codex', 'the resolved backend says opus runs on Codex');
+    assert.ok(out.ladder.some((r) => r.model === 'opus'), 'the ladder still names the built-in tier');
+    assert.deepStrictEqual(out.tierBackendWarnings, [], 'no warnings when the mapping is live');
   } finally {
-    store.setModelPrefs({ customOverrides: { 'codex-sol': null } });
+    store.setModelPrefs({ tierBackend: { opus: 'claude' } });
     clearCatalog();
   }
 });
 
-test('done stamps workedBy for a discovered+enabled custom slug (provenance, not just built-ins)', () => {
-  seedCatalog([{ slug: 'codex-sol', id: 'claude-codex-gpt-5.6-sol[1m]', anchor: 'opus' }]);
+test('done stamps workedBy with a discovered Codex slug (provenance of what actually ran)', () => {
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', suggestedTier: 'opus' }]);
   try {
-    store.setModelPrefs({ customOverrides: { 'codex-sol': { enabled: true } } });
-    const added = callTool('add', { title: 'custom slug provenance', complexity: 2, why: 'exercise done stamping workedBy with a discovered custom model slug over MCP' });
+    store.setModelPrefs({ tierBackend: { opus: 'codex-terra' } });
+    const added = callTool('add', { title: 'codex provenance', complexity: 2, why: 'exercise done stamping workedBy with a discovered Codex model slug over MCP' });
     const ref = added.ticket.ref;
-    callTool('claim', { ref, by: 'mcp-w-custom' });
-    const done = callTool('done', { ref, by: 'mcp-w-custom', model: 'codex-sol', effort: 'high' });
+    callTool('claim', { ref, by: 'mcp-w-codex' });
+    const done = callTool('done', { ref, by: 'mcp-w-codex', model: 'codex-terra', effort: 'high' });
     assert.strictEqual(done.ok, true);
-    assert.ok(done.ticket.workedBy, 'a workedBy stamp was recorded');
-    assert.strictEqual(done.ticket.workedBy.model, 'codex-sol', 'the stamp names the custom slug, not a built-in');
+    assert.strictEqual(done.ticket.workedBy.model, 'codex-terra', 'the stamp records the Codex model that ran');
   } finally {
-    store.setModelPrefs({ customOverrides: { 'codex-sol': null } });
+    store.setModelPrefs({ tierBackend: { opus: 'claude' } });
     clearCatalog();
   }
 });
@@ -217,26 +216,27 @@ test('ready with an unrecognized model errors instead of silently meaning "no fi
   assert.match(res.content[0].text, /totally-bogus-tier/, 'names the offending value');
 });
 
-test('claim guard refusal names the slug-qualified executor for a custom-derived tier', () => {
-  seedCatalog([{ slug: 'codex-sol', id: 'claude-codex-gpt-5.6-sol[1m]', anchor: 'opus' }]);
+test('claim guard refusal names the Codex-backed executor for a Codex-mapped tier', () => {
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', suggestedTier: 'opus' }]);
   try {
-    // offset is clamped to [-2,2] (coerceCustomOffset), so +2 anchored at opus
-    // (base 4) gives base 6 — above opus itself (a tie would lose to its own
-    // anchor, see custom-models.test.js) and above every other built-in EXCEPT
-    // fable (base 8). Disable fable so codex-sol is the unambiguous top tier.
-    store.setModelPrefs({ routing: true, fable: false, customOverrides: { 'codex-sol': { enabled: true, offset: 10 } } });
-    const added = callTool('add', { title: 'custom slug guard', complexity: 10, why: 'seed a ticket that derives to the discovered custom slug so the claim guard refusal message can be checked' });
+    // Point the opus tier at Codex, then file a ticket that derives to opus and
+    // claim it at the wrong effort. The refusal must name the Codex-backed exec.
+    const prefs = store.setModelPrefs({ routing: true, tierBackend: { opus: 'codex-terra' } });
+    // find a complexity that derives to opus with a non-max effort
+    const rung = store.routingLadder(prefs).find((r) => r.model === 'opus' && r.effort && r.effort !== 'max');
+    assert.ok(rung, 'some complexity derives to opus');
+    const added = callTool('add', { title: 'codex guard', complexity: rung.complexity, why: 'seed a ticket that derives to the opus tier so the claim guard refusal names the Codex-backed executor' });
     const ref = added.ticket.ref;
-    assert.strictEqual(added.ticket.model, 'codex-sol', 'the dominant custom tier wins the top complexity rung');
+    assert.strictEqual(added.ticket.model, 'opus', 'the ticket derived to the opus tier');
+    assert.strictEqual(added.ticket.exec.backend, 'codex', 'and its exec is Codex-backed');
     const derivedEffort = added.ticket.effort;
-    assert.ok(derivedEffort, 'a derived effort to mismatch against');
-    const wrong = store.VALID_EFFORTS.find((e) => e !== derivedEffort);
+    const wrong = store.VALID_EFFORTS.find((e) => e !== derivedEffort && e !== 'max');
     const res = callTool('claim', { ref, by: 'mcp-w-guard', effort: wrong });
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, 'effort_mismatch');
-    assert.match(res.message, new RegExp(`sidequest-exec-codex-sol-${derivedEffort}`), 'names the slug-qualified executor, not a built-in exec name');
+    assert.match(res.message, new RegExp(`sidequest-exec-codex-terra-${derivedEffort}`), 'names the Codex-backed executor');
   } finally {
-    store.setModelPrefs({ fable: true, customOverrides: { 'codex-sol': null } });
+    store.setModelPrefs({ tierBackend: { opus: 'claude' } });
     clearCatalog();
   }
 });

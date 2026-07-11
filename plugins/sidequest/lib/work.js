@@ -30,32 +30,24 @@ const DEFAULT_MAX_WAVES = 5; // safety cap on how many waves one drain will chew
 
 // Cap a ticket's derived tier to the tiers that actually exist to spawn. `fable`
 // isn't a spawnable CLI model alias, so treat opus as the ceiling for headless.
-//
-// An ENABLED custom/discovered model slug (SQ-156/157) is a real spawnable
-// target too — `claude -p --model <its resolved id>` runs it directly through
-// whatever gateway plugin owns that id — so it passes through uncapped. An
-// unrecognized or disabled slug isn't spawnable at all; that falls back to the
-// same default as any other unknown value.
+// A ticket stamps a built-in TIER. `--model fable` isn't a real `claude -p`
+// alias, so a fable-derived ticket runs headless as opus; the other three tiers
+// pass through. This only applies to CLAUDE-backed tiers — a tier pointed at a
+// Codex model resolves to that model's id instead (see resolveSpawnModel).
 const SPAWNABLE = new Set(['opus', 'sonnet', 'haiku']);
-function capTier(model, prefs) {
+function capTier(model) {
   if (SPAWNABLE.has(model)) return model;
   if (model === 'fable') return 'opus'; // fable derivations run headless as opus
-  if (prefs) {
-    const vocab = store.getModelVocab(prefs);
-    const custom = vocab.bySlug[model];
-    if (custom && custom.enabled) return model; // pass the slug through uncapped
-  }
   return 'sonnet';
 }
 
-// The real id to hand `claude -p --model`. For a built-in tier this is the
-// tier itself; for an enabled custom slug it's the resolved gateway id
-// (store.resolveModelId) — the slug is what provenance/`done` stamps, the
-// resolved id is what actually gets spawned. Falls back to `tier` unchanged
-// if it doesn't resolve (keeps existing built-in behavior exact).
-function resolveSpawnModel(tier, prefs) {
-  const resolved = store.resolveModelId(tier, prefs);
-  return resolved || tier;
+// The real model string to hand `claude -p --model` for a stamped tier: if the
+// tier is pointed at a Codex model (prefs.tierBackend), the resolved gateway id;
+// otherwise the capped built-in tier. resolveExec carries the backend decision.
+function resolveSpawnModel(tier, effort, prefs) {
+  const ex = store.resolveExec(tier, effort, prefs);
+  if (ex.backend === 'codex') return ex.spawnId;      // the real gateway id
+  return capTier(tier);                                // Claude tier, headless-capped
 }
 
 // Is the `claude` CLI present to spawn? A headless drain is pointless without it,
@@ -109,11 +101,12 @@ function planWork(slug, opts) {
   const batch = wave.slice(0, max);
   const permFlags = permissionArgs(opts);
   const plan = batch.map((t) => {
-    const tier = capTier(t.model, prefs);
-    // `tier` is what provenance stamps (a built-in tier name, OR an enabled
-    // custom slug); `spawnModel` is the real id the CLI actually launches —
-    // for a custom slug those differ, for a built-in tier they're the same.
-    const spawnModel = resolveSpawnModel(tier, prefs);
+    // The ticket stamps a built-in tier; provenance/`done` records that tier
+    // (headless-capped for fable). `spawnModel` is the real string the CLI
+    // launches — the tier's Codex backend id when it's mapped to one, else the
+    // capped tier. For a Claude tier those two are the same.
+    const tier = capTier(t.model);
+    const spawnModel = resolveSpawnModel(t.model, t.effort, prefs);
     const by = worker(t.ref);
     // The executor brief goes over STDIN, not argv — it's a large multi-line
     // string, and keeping it out of the command line is what makes the spawn

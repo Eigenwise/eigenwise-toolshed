@@ -12,11 +12,12 @@
  * VERIFIED FACT this module builds on: an agent FILE with a `model: <full-id>`
  * frontmatter key (e.g. "claude-codex-gpt-5.4[1m]") runs on that model through
  * the codex-gateway shim, and `claude -p --model <full-id>` does too. So every
- * ENABLED custom model tier gets its own real agent file —
- * sidequest-exec-<slug>-<effort>.md, one per enabled non-max effort — with a
- * `model:` frontmatter pin, generated into the user's live agents directory
- * (default ~/.claude/agents) at RUNTIME (the model wasn't known at plugin
- * build time; it's discovered from the user's machine).
+ * tier the user has POINTED AT a discovered Codex model (prefs.tierBackend, e.g.
+ * opus -> codex-gpt-5-6-terra) gets its own real agent file —
+ * sidequest-exec-<slug>-<effort>.md, one per that tier's enabled non-max effort —
+ * with a `model:` frontmatter pin, generated into the user's live agents
+ * directory (default ~/.claude/agents) at RUNTIME (the model wasn't known at
+ * plugin build time; it's discovered from the user's machine).
  *
  * Both the build-time generator (scripts/gen-exec-agents.js) and this module's
  * syncExecAgents() render through the SAME scripts/_exec-template.md via
@@ -70,46 +71,56 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote }) {
     .split('{{EXTRA_NOTE}}').join(extraNote || '');
 }
 
-// A single-line (one-paragraph) advisory appended to a custom agent's body:
-// reasoning effort is only enforced via Claude Code's own frontmatter/agent
-// machinery, which a gateway-routed model doesn't necessarily honor the same
-// way a native Claude tier does.
-function advisoryNote(custom) {
-  return `\n\n_Advisory note: this agent targets the \`${custom.slug}\` model tier (\`${custom.id}\`), routed through a gateway plugin — the \`effort\` frontmatter above is advisory on gateway models; it does not control the underlying model's own reasoning depth the way it does for a native Claude tier._`;
+// A single-line (one-paragraph) note appended to a Codex-backed agent's body:
+// its effort is set via Claude Code's frontmatter, which the codex-gateway shim
+// forwards to the Codex backend's reasoning.effort — so unlike an earlier read,
+// effort DOES reach the model. The note records which real model runs.
+function backendNote(slug, id) {
+  return `\n\n_This agent backs the \`${slug}\` tier and runs on \`${id}\` through codex-gateway. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
 }
 
-function renderCustomAgent(custom, effort) {
+function renderBackendAgent(slug, id, effort) {
   return renderExecAgent({
-    name: `sidequest-exec-${custom.slug}-${effort}`,
+    name: `sidequest-exec-${slug}-${effort}`,
     effort,
-    modelId: custom.id,
+    modelId: id,
     marker: MARKER,
-    extraNote: advisoryNote(custom),
+    extraNote: backendNote(slug, id),
   });
 }
 
-// Regenerate the runtime exec agents for every ENABLED custom model tier
-// (SQ-156/157's resolved prefs.custom, via getModelVocab) crossed with every
-// enabled non-max effort in that model's own effort row, into `dir` (default
-// ~/.claude/agents; tests must always override this — never point it at a
-// real home directory).
+// Regenerate the runtime exec agents for every ladder TIER the user has pointed
+// at a discovered Codex model (prefs.tierBackend), crossed with every enabled
+// non-max effort in that tier's own effort row, into `dir` (default
+// ~/.claude/agents; tests must always override this — never point it at a real
+// home directory).
 //
-// Idempotent: re-running with the same prefs writes nothing new (already-
-// correct files are left untouched and counted as `unchanged`). Disabling a
-// model, or turning off one of its efforts, removes exactly the files that
-// combo no longer covers on the next sync. Returns { written, removed,
-// unchanged }.
+// A tier mapped to a Codex model that isn't currently in the catalog resolves to
+// Claude (resolveTierBackends' fallback) and generates nothing. Idempotent:
+// re-running with the same prefs writes nothing new. Reassigning or clearing a
+// tier removes exactly the files it no longer covers. Returns { written,
+// removed, unchanged }.
 function syncExecAgents(prefs, opts) {
   opts = opts || {};
+  prefs = prefs || store.getModelPrefs();
   const dir = opts.dir || defaultAgentsDir();
-  const vocab = store.getModelVocab(prefs);
+  const backends = store.resolveTierBackends(prefs.tierBackend).byTier;
+
+  // A tier's enabled non-max efforts (its own row in the effort matrix). haiku
+  // has no effort row; a Codex-backed haiku tier uses a single fixed effort.
+  const HAIKU_EFF = 'medium';
+  function tierEfforts(tier) {
+    if (tier === 'haiku') return [HAIKU_EFF];
+    const row = prefs.efforts && prefs.efforts[tier];
+    return NON_MAX_EFFORTS.filter((e) => !row || row[e] !== false);
+  }
 
   const wanted = new Map(); // filename -> rendered content
-  for (const custom of vocab.customs) {
-    if (!custom.enabled) continue;
-    for (const effort of NON_MAX_EFFORTS) {
-      if (custom.efforts && custom.efforts[effort] === false) continue;
-      wanted.set(agentFileName(custom.slug, effort), renderCustomAgent(custom, effort));
+  for (const tier of ['haiku', 'sonnet', 'opus', 'fable']) {
+    const b = backends[tier];
+    if (!b || b.backend !== 'codex') continue;
+    for (const effort of tierEfforts(tier)) {
+      wanted.set(agentFileName(b.slug, effort), renderBackendAgent(b.slug, b.id, effort));
     }
   }
 

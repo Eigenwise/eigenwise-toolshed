@@ -8,11 +8,14 @@
  * routing ladder as first-class, toggleable tiers (store.js does the
  * merging; this module only finds and validates catalogs).
  *
- * FROZEN catalog contract (SQ-161, codex-gateway):
+ * Catalog contract (codex-gateway, schema 2):
  *   ~/.claude/codex-gateway/catalog.json = {
- *     schema: 1, source: "codex-gateway", updatedAt: <iso>,
- *     models: [{ slug, id, label, anchor }],
+ *     schema: 2, source: "codex-gateway", updatedAt: <iso>,
+ *     models: [{ slug, id, label, suggestedTier }],
  *   }
+ * `suggestedTier` is an optional hint (the dashboard's dropdown default); a
+ * missing/invalid one just resolves to null. The older schema-1 `anchor` field
+ * is still read as a fallback so a stale catalog on disk keeps working.
  *
  * The list of known catalogs (CATALOG_SOURCES) is intentionally an array so
  * a future sibling plugin slots in with one more entry, no other changes.
@@ -33,7 +36,7 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
 // Mirrors store.js's VALID_MODELS. Duplicated rather than imported so
 // discovery.js stays a leaf module with zero sidequest dependencies.
-const VALID_ANCHORS = ['haiku', 'sonnet', 'opus', 'fable'];
+const VALID_TIERS = ['haiku', 'sonnet', 'opus', 'fable'];
 
 // Catalogs this version of sidequest knows how to read, each resolved as
 // <discovery root>/<relPath>. Add an entry here for the next sibling plugin.
@@ -69,21 +72,24 @@ function readJsonSafe(file) {
 }
 
 // Validate + normalize one raw catalog model entry. Returns the resolved
-// {slug,id,label,anchor,source} or null when the entry is malformed.
+// {slug,id,label,suggestedTier,source} or null when the entry is malformed.
+// slug + id are required; suggestedTier is an optional hint (schema-2
+// `suggestedTier`, or the legacy schema-1 `anchor`), null when absent/invalid.
 function validateEntry(raw, source) {
   if (!raw || typeof raw !== 'object') return null;
   const slug = typeof raw.slug === 'string' ? raw.slug.trim().toLowerCase() : '';
   if (!SLUG_RE.test(slug)) return null;
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
   if (!id) return null;
-  const anchor = typeof raw.anchor === 'string' ? raw.anchor.trim().toLowerCase() : '';
-  if (VALID_ANCHORS.indexOf(anchor) === -1) return null;
+  const hintRaw = raw.suggestedTier != null ? raw.suggestedTier : raw.anchor;
+  const hint = typeof hintRaw === 'string' ? hintRaw.trim().toLowerCase() : '';
+  const suggestedTier = VALID_TIERS.indexOf(hint) !== -1 ? hint : null;
   const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : slug;
-  return { slug, id, label, anchor, source };
+  return { slug, id, label, suggestedTier, source };
 }
 
 /**
- * discoverExternalModels() -> [{slug,id,label,anchor,source}]
+ * discoverExternalModels() -> [{slug,id,label,suggestedTier,source}]
  *
  * Reads every known catalog under every discovery root, validates each
  * model entry, and dedupes by slug (first one found wins — root order then
