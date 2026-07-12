@@ -390,7 +390,9 @@ async function handle(req, res) {
     // so it doesn't notify them about their own message.
     const result = store.addComment(slug, cm[1], { by: body.by || 'you', body: body.body, kind: body.kind, source: 'dashboard' });
     if (!result.ok) {
-      sendJson(res, result.reason === 'not_found' ? 404 : 400, { error: result.reason });
+      const payload = { error: result.reason };
+      if (result.reason === 'too_long') { payload.max = result.max; payload.length = result.length; }
+      sendJson(res, result.reason === 'not_found' ? 404 : 400, payload);
       return;
     }
     sendJson(res, 201, result);
