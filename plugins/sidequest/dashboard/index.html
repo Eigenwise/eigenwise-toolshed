@@ -1119,7 +1119,16 @@
   // case a future catalog carries colors.
   function adoptBackendColors() { CUSTOM_COLORS = {}; }
   function pushModelPrefs() {
-    return api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) }).catch(function () {});
+    return api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) })
+      .then(function (d) {
+        if (d && d.prefs) {
+          modelPrefs = d.prefs;
+          adoptBackendColors();
+          renderModelPrefSettings();
+        }
+        return d;
+      })
+      .catch(function () {});
   }
 
   // Routing-bias dial (-5 frugal .. 0 neutral .. +5 generous). Reflected from the

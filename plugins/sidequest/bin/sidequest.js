@@ -1419,7 +1419,19 @@ async function cmdDashboard(opts) {
   if (opts.open === false) console.log('(browser auto-open skipped; open the URL above)');
 }
 
+async function waitForHandoff(pid, timeoutMs) {
+  if (!pid) return;
+  const deadline = Date.now() + (timeoutMs || 10 * 1000);
+  while (isPidAlive(pid)) {
+    if (Date.now() >= deadline) throw new Error(`handoff server pid ${pid} did not exit in time`);
+    await delay(100);
+  }
+}
+
 async function cmdServe(opts) {
+  // A successor spawned by server.js waits for the old listener to drain. This
+  // keeps active requests alive during the upgrade and then binds the same URL.
+  if (opts.handoffPid) await waitForHandoff(Number(opts.handoffPid));
   // Single-instance per home dir: a subagent smoke-testing "does serve start"
   // (or a human re-running it out of habit) used to spawn a second listener
   // on the next free port every time, leaving the old one running forever —
