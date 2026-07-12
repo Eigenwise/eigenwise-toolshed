@@ -341,12 +341,6 @@ anything that shares files or has a `depends-on` link stays sequential (blocked 
 
 ## Native routed execution
 
-The fan-out above runs inside your Claude session. `sidequest work`/`drain` are disabled: a CLI process
-cannot invoke the current conversation's Agent tool, so routed execution never starts a separate Claude
-process.
-
-## Native routed execution
-
 Routed tickets run through the current Claude Code conversation only. Call `native_agent` (or
 `sidequest native-agent SQ-n`) to create a temporary, backend-pinned Agent definition, invoke that
 returned definition with Agent, then run `native_agent_cleanup`. `sidequest work`/`drain` and MCP

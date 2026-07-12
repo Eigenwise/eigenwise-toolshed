@@ -16,8 +16,9 @@ function nativeDispatchRequired(slug, idOrRef) {
   if (ticket.status === 'done') return { ok: false, reason: 'done', message: `${ticket.ref} is already done.` };
   if (ticket.status !== 'todo') return { ok: false, reason: 'not_todo', message: `${ticket.ref} is ${ticket.status}; release it to todo before dispatch.` };
   if (ticket.claim) return { ok: false, reason: 'claimed', message: `${ticket.ref} is already claimed by ${ticket.claim.by}.` };
-  if (Array.isArray(ticket.blockedBy) && ticket.blockedBy.length) {
-    return { ok: false, reason: 'blocked', message: `${ticket.ref} is blocked by ${ticket.blockedBy.join(', ')}.` };
+  const blockedBy = store.openBlockers(slug, ticket);
+  if (blockedBy.length) {
+    return { ok: false, reason: 'blocked', message: `${ticket.ref} is blocked by ${blockedBy.join(', ')}.` };
   }
   return {
     ok: false,
