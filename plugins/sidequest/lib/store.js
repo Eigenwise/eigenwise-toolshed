@@ -693,6 +693,8 @@ function ensureProject(absPath, name) {
     meta = { path: resolved, name: name || defaultProjectName(resolved), createdAt: new Date().toISOString(), seq: 0, storySeq: 0 };
     writeJson(mf, meta);
   } else {
+    // ensureProject runs on ordinary reads/writes, so restoring a board is
+    // unarchiveProject's job. Keep meta.archivedAt intact here.
     let dirty = false;
     if (meta.path !== resolved) { meta.path = resolved; dirty = true; }
     if (name && meta.name !== name) { meta.name = name; dirty = true; }
@@ -768,9 +770,46 @@ function setProjectNotify(slug, on) {
   }
 }
 
+// Board-level archive is a reversible meta.json stamp. Project files and tickets
+// remain in place, and repeat calls keep the original archive timestamp.
+function archiveProject(slug) {
+  const lock = metaLockPath(slug);
+  const locked = acquireLock(lock);
+  try {
+    const mf = metaFile(slug);
+    const meta = readJson(mf, null);
+    if (!meta) return { ok: false, reason: 'not_found' };
+    if (meta.archivedAt) return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: true };
+    meta.archivedAt = new Date().toISOString();
+    writeJson(mf, meta);
+    return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: false };
+  } finally {
+    if (locked) releaseLock(lock);
+  }
+}
+
+function unarchiveProject(slug) {
+  const lock = metaLockPath(slug);
+  const locked = acquireLock(lock);
+  try {
+    const mf = metaFile(slug);
+    const meta = readJson(mf, null);
+    if (!meta) return { ok: false, reason: 'not_found' };
+    if (!meta.archivedAt) return { ok: true, slug, wasArchived: false };
+    delete meta.archivedAt;
+    writeJson(mf, meta);
+    return { ok: true, slug, wasArchived: true };
+  } finally {
+    if (locked) releaseLock(lock);
+  }
+}
+
 // List every registered project with live ticket counts. Sorted by most recent
-// activity so the busiest board floats to the top of the switcher.
-function listProjects() {
+// activity so the busiest board floats to the top of the switcher. By default,
+// archived boards are hidden. Pass { archived: true } to list only archived
+// boards, or { all: true } for internal resolution.
+function listProjects(opts) {
+  opts = opts || {};
   const root = projectsRoot();
   let slugs = [];
   try {
@@ -782,6 +821,8 @@ function listProjects() {
   for (const slug of slugs) {
     const meta = readMeta(slug);
     if (!meta) continue;
+    const archivedAt = meta.archivedAt || null;
+    if (!opts.all && (opts.archived ? !archivedAt : !!archivedAt)) continue;
     const tickets = listTickets(slug);
     const counts = { todo: 0, doing: 0, done: 0 };
     let archived = 0;
@@ -802,6 +843,7 @@ function listProjects() {
       lastActivity,
       notify: meta.notify !== false, // per-project notification switch (absent == on)
       stories: listStories(slug).length,
+      archivedAt,
     });
   }
   out.sort((a, b) => String(b.lastActivity || '').localeCompare(String(a.lastActivity || '')));
@@ -824,7 +866,7 @@ function listProjects() {
 //     registered display names to surface in the error.
 function findProject(ref) {
   const arg = String(ref == null ? '' : ref).trim();
-  const all = listProjects();
+  const all = listProjects({ all: true });
   if (!arg) return { ok: false, reason: 'not_found', known: all.map((p) => p.name) };
 
   // 1. An exact slug of an existing board (the historical fast path — a few
@@ -2862,6 +2904,8 @@ module.exports = {
   readMeta,
   listProjects,
   findProject,
+  archiveProject,
+  unarchiveProject,
   mergeProject,
   setProjectNotify,
   copyAsset,
