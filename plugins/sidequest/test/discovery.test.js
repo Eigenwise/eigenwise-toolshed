@@ -129,6 +129,23 @@ test('mapping a tier to a discovered slug: resolveExec routes to its agent, ladd
   assert.strictEqual(routingLadder(prefs).find((r) => r.model !== 'grade-1' && r.effort === 'high' && r.model === 'grade-3') !== undefined, true);
 });
 
+test('mapping grade 1 to Codex gives it effort rungs and preserves its effort prefs', () => {
+  seedCatalog([LUNA]);
+  const prefs = setModelPrefs({
+    tierBackend: { 'grade-1': LUNA.slug },
+    efforts: { 'grade-1': { low: false, medium: true, high: false, xhigh: false, max: false } },
+  });
+  assert.deepStrictEqual(prefs.profiles['grade-1'].efforts, { low: false, medium: true, high: false, xhigh: false, max: false });
+  const gradeOne = routingLadder(prefs).filter((r) => r.model === 'grade-1');
+  assert.ok(gradeOne.length > 0);
+  gradeOne.forEach((r) => assert.strictEqual(r.effort, 'medium'));
+  assert.strictEqual(store.resolveExec('grade-1', 'medium', prefs).agent, 'sidequest-exec-codex-gpt-5-6-luna-medium');
+
+  const haiku = setModelPrefs({ tierBackend: { 'grade-1': 'claude' } });
+  assert.strictEqual(haiku.profiles['grade-1'].efforts, null);
+  assert.strictEqual(haiku.efforts['grade-1'].medium, true, 'Haiku retains Grade 1 effort choices for a later remap');
+  routingLadder(haiku).filter((r) => r.model === 'grade-1').forEach((r) => assert.strictEqual(r.effort, null));
+});
 test('stale mapping (slug not in catalog) falls back to Claude with a warning', () => {
   seedCatalog([TERRA]);
   const prefs = setModelPrefs({ tierBackend: { fable: 'codex-gone' } });

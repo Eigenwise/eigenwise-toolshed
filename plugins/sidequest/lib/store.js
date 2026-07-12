@@ -205,10 +205,12 @@ function coerceModel(v, _prefs) {
 // skill, not enforced here.
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
-// The tiers that carry an effort axis — every model except haiku (which has no
-// reasoning-effort support). model-prefs stores one effort row per tier here, so
-// a single (model, effort) combo like opus·medium can be excluded on its own.
-const EFFORT_MODELS = VALID_MODELS.filter((m) => m !== 'grade-1');
+// Every grade has a stored effort row so a grade can keep its picks while its
+// runtime changes. Grade 1 only *uses* that row when it resolves to an
+// effort-capable runtime (a Codex backend); Claude Haiku still has no effort
+// axis. Keeping the dormant row makes flipping Grade 1 Haiku → Codex → Haiku
+// lossless.
+const EFFORT_MODELS = VALID_MODELS.slice();
 
 function coerceEffort(v) {
   if (v == null) return null;
@@ -295,6 +297,15 @@ function resolveTierBackends(tierBackend) {
     }
   }
   return { byTier, warnings };
+}
+
+// Return true when this grade's resolved runtime accepts an effort level.
+// Grade 1 is Claude Haiku by default, but gets the same real effort axis as every
+// other grade when its runtime is remapped to Codex.
+function gradeHasEffort(grade, prefs) {
+  const byTier = prefs && (prefs.tierBackendResolved || resolveTierBackends(prefs.tierBackend).byTier);
+  const backend = byTier && byTier[grade];
+  return grade !== 'grade-1' || !!(backend && backend.backend === 'codex');
 }
 
 // The single spawn seam: given a stamped (tier, effort), return exactly how to
@@ -460,12 +471,13 @@ function routingLadder(prefs) {
   const tiers = [];
   for (const m of MODEL_CAPABILITY_ORDER) {
     if (prefs[m] === false) continue;
+    const hasEffort = gradeHasEffort(m, prefs);
     tiers.push({
       model: m,
       base: LADDER_TIER_BASE[m],
       tierRank: MODEL_CAPABILITY_ORDER.indexOf(m),
-      row: m === 'grade-1' ? null : builtinRow(m),
-      haiku: m === 'grade-1',
+      row: hasEffort ? builtinRow(m) : null,
+      haiku: !hasEffort,
     });
   }
   // Never return an empty ladder: fall back to Grade 2.
@@ -2166,7 +2178,7 @@ function deriveProfilesView(prefs) {
       backend: b.backend,
       runsModel: b.backend === 'codex' ? b.slug : GRADE_TIER[grade],
       runsLabel: b.backend === 'codex' ? (b.label || b.slug) : CLAUDE_TIER_LABELS[grade],
-      efforts: grade === 'grade-1' ? null : Object.assign({}, (prefs.efforts && prefs.efforts[grade]) || {}),
+      efforts: gradeHasEffort(grade, prefs) ? Object.assign({}, (prefs.efforts && prefs.efforts[grade]) || {}) : null,
       complexities,
       range: complexities.length ? [complexities[0], complexities[complexities.length - 1]] : null,
     };
@@ -2205,7 +2217,7 @@ function translateProfilePatch(patch) {
       if (v && typeof v === 'object') {
         if ('enabled' in v && !(grade in patch)) out[grade] = v.enabled !== false;
         if ('backend' in v && !(grade in explicitBackend)) out.tierBackend = Object.assign({}, out.tierBackend, { [grade]: v.backend });
-        if (grade !== 'grade-1' && v.efforts && typeof v.efforts === 'object') {
+        if (v.efforts && typeof v.efforts === 'object') {
           out.efforts = Object.assign({}, out.efforts, { [grade]: Object.assign({}, v.efforts, explicitEfforts[grade]) });
         }
       } else if (!(grade in patch)) out[grade] = v !== false;

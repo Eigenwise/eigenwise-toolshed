@@ -1070,13 +1070,11 @@
   // Gates the editor's Model picker and what the orchestrator is told to use;
   // an already-tagged ticket keeps showing its chip even if its tier is off.
   // `efforts` mirrors store.getModelPrefs's per-model matrix (SQ-129): one row
-  // per non-haiku tier, all effort levels on by default. Seeded up front so a
-  // toggle that fires before the first server sync lands still PUTs a well-formed
-  // nested object instead of an empty/partial one.
+  // per grade, all effort levels on by default. Grade 1 uses its row only while
+  // remapped to an effort-capable runtime, but retaining it makes remaps lossless.
   function defaultEffortsMatrix() {
     var out = {};
     MODELS.forEach(function (m) {
-      if (m.k === "grade-1") return;
       var row = {};
       EFFORTS.forEach(function (ef) { row[ef.k] = true; });
       out[m.k] = row;
@@ -1638,12 +1636,9 @@
     box.innerHTML = "";
     renderRoutingPlan();
     // Effort levels are a per-grade matrix (SQ-129: store.getModelPrefs's
-    // `efforts` object) — grade-3·medium can be off while grade-2·medium stays
-    // on. Rows are the non-grade-1 grades in MODELS order; grade-1 has no effort
-    // axis so it never gets a row. A grade whose runtime is disabled on its card
-    // dims here (its saved effort picks aren't lost, just deemphasized) rather
-    // than disappearing, so re-enabling the grade doesn't reset anything. The
-    // grade enable + runtime dropdown live on the routing cards above, not here.
+    // `efforts` object). Grade 1 gains a real row only while its runtime is
+    // remapped to Codex; Claude Haiku keeps its effort-null behavior. Rows whose
+    // runtime has no effort axis stay hidden without discarding saved choices.
     var grid = el("div", "effort-grid");
     var headRow = el("div", "eg-row eg-headrow");
     headRow.appendChild(el("span", "eg-label"));
@@ -1653,7 +1648,10 @@
       headRow.appendChild(h);
     });
     grid.appendChild(headRow);
-    MODELS.filter(function (m) { return m.k !== "grade-1"; }).forEach(function (m) {
+    MODELS.filter(function (m) {
+      var resolved = modelPrefs.tierBackendResolved || {};
+      return m.k !== "grade-1" || (resolved[m.k] && resolved[m.k].backend === "codex");
+    }).forEach(function (m) {
       var tierOn = modelEnabled(m.k);
       var row = el("div", "eg-row" + (tierOn ? "" : " dim"));
       var label = el("span", "eg-label");
