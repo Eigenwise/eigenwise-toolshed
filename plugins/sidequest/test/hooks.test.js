@@ -100,9 +100,30 @@ test('pre-tool hook forces bypass on sidequest worktree executors only', () => {
   assert.strictEqual(generic, null, 'unrelated worktree agents keep their caller-selected permissions');
 });
 
-/* ------------------------------------------------------------------ *
- *  SessionStart — the one full doctrine block
- * ------------------------------------------------------------------ */
+test('pre-tool hook keeps built-in executor model but removes overrides for pinned Codex and native executors', () => {
+  const codex = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', model: 'fable', name: 'sq210-codex' },
+  });
+  assert.equal(codex.hookSpecificOutput.updatedInput.model, undefined);
+  assert.equal(codex.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  assert.match(codex.systemMessage, /removed the Agent model override/);
+
+  const native = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-native-sq-210-gpt-5-6-terra', model: 'sonnet', name: 'sq210-native' },
+  });
+  assert.equal(native.hookSpecificOutput.updatedInput.model, undefined);
+  assert.equal(native.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
+  const builtIn = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-high', model: 'opus', name: 'sq210-builtin' },
+  });
+  assert.equal(builtIn.hookSpecificOutput.updatedInput.model, 'opus');
+  assert.equal(builtIn.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
+
 
 test('session-start: carries the route-down + tight-loop doctrine', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
