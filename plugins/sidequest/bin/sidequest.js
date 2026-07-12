@@ -721,7 +721,12 @@ function cmdComment(opts, positional) {
     console.log(`✓ ${tag} comment added to ${res.ticket.ref} by "${by}"  — ${meta.name}`);
   } else {
     process.exitCode = 1;
-    const messages = { not_found: `no ticket "${idOrRef}" in ${meta.name}.`, empty: 'comment body cannot be empty.', busy: `${idOrRef} is locked right now — retry in a moment.` };
+    const messages = {
+      not_found: `no ticket "${idOrRef}" in ${meta.name}.`,
+      empty: 'comment body cannot be empty.',
+      too_long: `comment body is ${res.length} chars, over the ${res.max}-char cap — trim it or split into multiple comments (nothing was stored).`,
+      busy: `${idOrRef} is locked right now — retry in a moment.`,
+    };
     console.log(`✗ ${messages[res.reason] || 'comment failed: ' + res.reason}`);
   }
 }

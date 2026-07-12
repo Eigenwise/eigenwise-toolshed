@@ -137,6 +137,55 @@ test('claim -> comment -> done round-trips over the same store, tagged source mc
   assert.strictEqual(done.ticket.status, 'done');
 });
 
+test('SQ-174: a spaced comment round-trips with spaces intact and no NUL bytes', () => {
+  const added = callTool('add', { title: 'spaces intact', complexity: 1, why: 'exercise the MCP comment write path preserves internal spaces verbatim' });
+  const ref = added.ticket.ref;
+  const body = 'alpha  beta   gamma    delta'; // 2, 3, then 4 internal spaces
+  const posted = callTool('comment', { ref, body });
+  assert.strictEqual(posted.ok, true);
+  const back = callTool('comments', { ref });
+  const stored = back.comments[back.comments.length - 1].body;
+  assert.strictEqual(stored, body, 'the stored body equals the posted body verbatim');
+  assert.ok(!stored.includes('\u0000'), 'no NUL byte anywhere in the stored body');
+  assert.strictEqual((stored.match(/ /g) || []).length, 9, 'all nine internal spaces survive');
+});
+
+test('SQ-174: an author-supplied NUL (a NUL-separated key in prose) is stripped, not persisted', () => {
+  const added = callTool('add', { title: 'nul stripped', complexity: 1, why: 'a comment describing a NUL-separated dedup key must not persist the raw 0x00' });
+  const ref = added.ticket.ref;
+  // Mirrors the real SQ-171 note that misfired: `source + '\0' + slug`, but with
+  // a genuine 0x00 char between the quotes (as the reporter's body had).
+  const body = 'dedup key: source + \u0000 + slug (works)';
+  const posted = callTool('comment', { ref, body });
+  assert.strictEqual(posted.ok, true, 'the comment still stores (a lone control byte is normalized, not rejected)');
+  const back = callTool('comments', { ref });
+  const stored = back.comments[back.comments.length - 1].body;
+  assert.ok(!stored.includes('\u0000'), 'the raw NUL is gone from storage');
+  assert.strictEqual(stored, 'dedup key: source +  + slug (works)', 'only the NUL is removed; surrounding spaces stay');
+});
+
+test('SQ-173: an over-cap comment is rejected, not silently truncated', () => {
+  const added = callTool('add', { title: 'over cap', complexity: 1, why: 'confirm the MCP comment tool rejects a body past the 4k cap instead of cutting it' });
+  const ref = added.ticket.ref;
+
+  // A body one char over the cap must fail loudly, and nothing may be stored.
+  const tooLong = 'x'.repeat(4001);
+  const rejected = callTool('comment', { ref, body: tooLong });
+  assert.strictEqual(rejected.ok, false, 'the write is rejected');
+  assert.strictEqual(rejected.reason, 'too_long');
+  assert.strictEqual(rejected.max, 4000, 'the error names the cap');
+  assert.strictEqual(rejected.length, 4001, 'the error names the actual length');
+  const back = callTool('comments', { ref });
+  assert.strictEqual(back.comments.length, 0, 'no truncated comment leaked into storage');
+
+  // A body exactly at the cap still stores whole (the boundary is inclusive).
+  const atCap = 'y'.repeat(4000);
+  const ok = callTool('comment', { ref, body: atCap });
+  assert.strictEqual(ok.ok, true, 'a body exactly at the cap stores');
+  const back2 = callTool('comments', { ref });
+  assert.strictEqual(back2.comments[0].body.length, 4000, 'stored whole, not cut');
+});
+
 test('claim requires a worker id (no shared-identity default)', () => {
   const added = callTool('add', { title: 'needs by', complexity: 2, why: 'confirm the atomic-claim identity guard is enforced over MCP' });
   const res = callToolRaw('claim', { ref: added.ticket.ref });

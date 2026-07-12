@@ -1774,15 +1774,38 @@ function deleteStory(slug, idOrRef) {
  * ------------------------------------------------------------------ */
 
 const COMMENT_KINDS = ['comment', 'question'];
+// The hard storage cap for a single comment body. A body over this used to be
+// silently sliced to fit (SQ-173), so the tail of a long note vanished with no
+// signal to the caller. addComment now rejects an over-cap body instead of
+// truncating, so the write is either stored whole or fails loudly.
+const COMMENT_BODY_MAX = 4000;
 
 function newCommentId() {
   return 'c_' + Date.now().toString(36) + '_' + crypto.randomBytes(3).toString('hex');
 }
 
+// Comment bodies are stored verbatim except for control bytes that have no place
+// in prose. A raw NUL is the offender behind SQ-174: an author describing a
+// NUL-separated key (e.g. `source + '\0' + slug`) can smuggle a literal 0x00
+// into the body, and a NUL is a C-string terminator that silently truncates or
+// corrupts anything downstream that treats the body as a C string. Read back,
+// that lone NUL among hundreds of intact spaces looked like "a space turned into
+// \x00" (it never was: spaces are 0x20 and are left untouched). Strip the C0
+// control range and DEL, keeping only the whitespace that legitimately appears
+// in prose (tab, newline, carriage return). This runs at the one shared write
+// path, so the MCP `comment`/`ask` tools, the CLI `comment` command, and the
+// dashboard all get the same normalization.
+function stripControlChars(s) {
+  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+}
+
 function addComment(slug, idOrRef, fields) {
   fields = fields || {};
-  const body = String(fields.body || '').trim();
+  const body = stripControlChars(String(fields.body || '')).trim();
   if (!body) return { ok: false, reason: 'empty' };
+  if (body.length > COMMENT_BODY_MAX) {
+    return { ok: false, reason: 'too_long', max: COMMENT_BODY_MAX, length: body.length };
+  }
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
@@ -1795,7 +1818,7 @@ function addComment(slug, idOrRef, fields) {
       id: newCommentId(),
       by: String(fields.by || 'agent'),
       kind,
-      body: body.slice(0, 4000),
+      body, // over-cap bodies are rejected above, never silently truncated
       source, // 'cli' (agent) or 'dashboard' (the human) — who needsResponse() listens for
       at: new Date().toISOString(),
     };
