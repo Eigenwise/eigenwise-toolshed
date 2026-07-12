@@ -43,9 +43,36 @@ const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', lab
 const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', suggestedTier: 'grade-3' };
 const LUNA = { slug: 'codex-gpt-5-6-luna', id: 'claude-codex-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna', suggestedTier: 'grade-1' };
 
-/* -------------------------------------------------------------- *
- *  discoverExternalModels() in isolation
- * -------------------------------------------------------------- */
+test('shared runtime merges grade effort rows without duplicate or regressing runtime efforts', () => {
+  seedCatalog([TERRA]);
+  const efforts = {};
+  for (const grade of ['grade-1', 'grade-2', 'grade-3', 'grade-4']) {
+    efforts[grade] = { low: false, medium: false, high: false, xhigh: false, max: false };
+  }
+  efforts['grade-2'].high = true;
+  efforts['grade-2'].xhigh = true;
+  efforts['grade-3'].medium = true;
+  efforts['grade-3'].xhigh = true;
+  efforts['grade-3'].max = true;
+  const prefs = {
+    'grade-1': false, 'grade-2': true, 'grade-3': true, 'grade-4': false,
+    efforts, routingBias: 0,
+    tierBackend: { 'grade-2': TERRA.slug, 'grade-3': TERRA.slug },
+  };
+
+  const ladder = routingLadder(prefs);
+  const runtimePairs = ladder.map((r) => `${store.resolveModelId(r.model, prefs)}.${r.effort}`);
+  const effortRank = ['low', 'medium', 'high', 'xhigh', 'max'];
+  for (let i = 1; i < ladder.length; i++) {
+    assert.ok(effortRank.indexOf(ladder[i].effort) >= effortRank.indexOf(ladder[i - 1].effort));
+  }
+  assert.deepStrictEqual([...new Set(runtimePairs)], [
+    `${TERRA.id}.medium`, `${TERRA.id}.high`, `${TERRA.id}.xhigh`, `${TERRA.id}.max`,
+  ]);
+  assert.ok(ladder.every((r) => r.model === 'grade-3'), 'highest shared grade remains stamped for provenance');
+  clearCatalog();
+});
+
 
 test('no catalog anywhere -> []', () => {
   clearCatalog();
