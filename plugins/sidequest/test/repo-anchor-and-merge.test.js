@@ -67,6 +67,62 @@ test('nearestRepoRoot: a folder with no repo above it is returned unchanged', ()
 });
 
 /* ------------------------------------------------------------------ *
+ *  Worktrees fold back to the project root, never mint their own board
+ * ------------------------------------------------------------------ */
+
+test('nearestRepoRoot: an EnterWorktree worktree folds to the owning project root', () => {
+  // <root>\.claude\worktrees\<name> is the EnterWorktree layout. The worktree
+  // checkout carries its OWN committed .git file AND its own .claude dir — both
+  // must lose to the outermost .claude/worktrees owner.
+  const root = mkTree();
+  fs.mkdirSync(path.join(root, '.git'));
+  const wt = path.join(root, '.claude', 'worktrees', 'agent-abc123');
+  fs.mkdirSync(wt, { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /wherever/else/.git/worktrees/agent-abc123\n');
+  fs.mkdirSync(path.join(wt, '.claude')); // the worktree's own committed .claude
+  assert.strictEqual(store.nearestRepoRoot(wt), path.resolve(root));
+  assert.strictEqual(store.nearestRepoRoot(path.join(wt, 'src', 'deep')), path.resolve(root));
+});
+
+test('nearestRepoRoot: a worktree anywhere on disk folds home via its .git file', () => {
+  // The worktree lives nowhere near the repo (a manual `git worktree add`). Its
+  // .git file still points home, so it resolves to the main worktree root.
+  const repo = mkTree();
+  fs.mkdirSync(path.join(repo, '.git'));
+  const wt = mkTree(); // a completely separate tmp tree
+  const gitdir = path.join(repo, '.git', 'worktrees', 'feature').replace(/\\/g, '/');
+  fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${gitdir}\n`);
+  assert.strictEqual(store.nearestRepoRoot(wt), path.resolve(repo));
+});
+
+test('nearestRepoRoot: a worktree pointing off-machine stays its own board', () => {
+  // gitdir points at a repo that does not exist on this filesystem (remote clone,
+  // container, another OS). We must NOT anchor onto a phantom path — keep the
+  // worktree dir as its own board instead.
+  const wt = mkTree();
+  fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /does/not/exist/here/.git/worktrees/x\n');
+  assert.strictEqual(store.nearestRepoRoot(wt), path.resolve(wt));
+});
+
+test('nearestRepoRoot: a submodule (.git/modules) stays its own board', () => {
+  // A submodule is a genuinely separate repo — its .git file points at
+  // .git/modules/<name>, not /worktrees/, so it must not fold into the parent.
+  const parent = mkTree();
+  fs.mkdirSync(path.join(parent, '.git'));
+  const sub = path.join(parent, 'vendor', 'lib');
+  fs.mkdirSync(sub, { recursive: true });
+  const gitdir = path.join(parent, '.git', 'modules', 'lib').replace(/\\/g, '/');
+  fs.writeFileSync(path.join(sub, '.git'), `gitdir: ${gitdir}\n`);
+  assert.strictEqual(store.nearestRepoRoot(sub), path.resolve(sub));
+});
+
+test('mainWorktreeRoot: returns null for a .git directory (a real clone root)', () => {
+  const root = mkTree();
+  fs.mkdirSync(path.join(root, '.git'));
+  assert.strictEqual(store.mainWorktreeRoot(path.join(root, '.git')), null);
+});
+
+/* ------------------------------------------------------------------ *
  *  mergeProject
  * ------------------------------------------------------------------ */
 
