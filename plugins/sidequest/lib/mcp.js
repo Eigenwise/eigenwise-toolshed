@@ -556,10 +556,42 @@ const TOOLS = [
   },
   {
     name: 'projects',
-    description: 'Every registered board with open/doing/done counts — the switcher across all projects.',
-    inputSchema: { type: 'object', properties: {} },
-    handler() {
-      return { projects: store.listProjects() };
+    description: 'Every registered board with open/doing/done counts — the switcher across all projects. Pass archived:true to list archived boards only.',
+    inputSchema: { type: 'object', properties: { archived: { type: 'boolean', description: 'List archived boards only.' } } },
+    handler(args) {
+      return { projects: store.listProjects({ archived: !!args.archived }) };
+    },
+  },
+  {
+    name: 'archive_board',
+    description: 'Archive a board without deleting its tickets. The board reference is required so this cannot target the caller\'s default board by accident.',
+    inputSchema: {
+      type: 'object',
+      properties: { project: { type: 'string', description: 'Required registered board slug, display name, or path.' } },
+      required: ['project'],
+    },
+    handler(args) {
+      if (!args.project || !String(args.project).trim()) throw new Error('archive_board: project is required.');
+      const { slug, meta } = resolveProject(args.project);
+      const result = store.archiveProject(slug);
+      if (!result.ok) throw new Error(`archive_board: no board "${args.project}".`);
+      return Object.assign({ project: slug, projectName: meta.name }, result);
+    },
+  },
+  {
+    name: 'unarchive_board',
+    description: 'Restore an archived board. The board reference is required so this cannot target the caller\'s default board by accident.',
+    inputSchema: {
+      type: 'object',
+      properties: { project: { type: 'string', description: 'Required registered board slug, display name, or path.' } },
+      required: ['project'],
+    },
+    handler(args) {
+      if (!args.project || !String(args.project).trim()) throw new Error('unarchive_board: project is required.');
+      const { slug, meta } = resolveProject(args.project);
+      const result = store.unarchiveProject(slug);
+      if (!result.ok) throw new Error(`unarchive_board: no board "${args.project}".`);
+      return Object.assign({ project: slug, projectName: meta.name }, result);
     },
   },
 ];

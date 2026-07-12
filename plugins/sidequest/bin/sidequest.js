@@ -1053,20 +1053,54 @@ function cmdBias(rawArgs) {
 }
 
 function cmdProjects(opts) {
-  const projects = store.listProjects();
+  const projects = store.listProjects({ archived: !!opts.archived });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ projects }, null, 2) + '\n');
     return;
   }
   if (!projects.length) {
-    console.log('No sidequest boards yet. Create a ticket to start one.');
+    console.log(opts.archived ? 'No archived sidequest boards.' : 'No sidequest boards yet. Create a ticket to start one.');
     return;
   }
-  console.log(`${projects.length} board(s):`);
+  console.log(`${projects.length} ${opts.archived ? 'archived ' : ''}board(s):`);
   for (const p of projects) {
-    console.log(`  ${p.name}  —  ${p.open} open (${p.counts.todo} todo, ${p.counts.doing} doing, ${p.counts.done} done)`);
+    const stamp = opts.archived && p.archivedAt ? `, archived ${p.archivedAt}` : '';
+    console.log(`  ${p.name}  —  ${p.open} open (${p.counts.todo} todo, ${p.counts.doing} doing, ${p.counts.done} done${stamp})`);
     console.log(`    ${p.path}`);
   }
+}
+
+// Board archive commands always require an explicit reference. Never call the
+// normal default-project resolver here: running one from an unrelated cwd must
+// not archive that cwd's board by accident.
+function resolveExplicitBoard(opts, positional, action) {
+  const ref = opts.project || positional[0];
+  if (!ref) fail(`${action}: pass a board slug, display name, or registered path.`);
+  const found = store.findProject(ref);
+  if (!found.ok) fail(`${action}: board "${ref}" ${describeFindFailure(found, ref)}`);
+  return found;
+}
+
+function cmdArchiveBoard(opts, positional) {
+  const board = resolveExplicitBoard(opts, positional, 'archive-board');
+  const res = store.archiveProject(board.slug);
+  if (!res.ok) fail(`archive-board: board "${opts.project || positional[0]}" no longer exists.`);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + '\n');
+    return;
+  }
+  console.log(`✓ ${res.alreadyArchived ? 'already archived' : 'archived'} board ${board.meta.name}`);
+}
+
+function cmdUnarchiveBoard(opts, positional) {
+  const board = resolveExplicitBoard(opts, positional, 'unarchive-board');
+  const res = store.unarchiveProject(board.slug);
+  if (!res.ok) fail(`unarchive-board: board "${opts.project || positional[0]}" no longer exists.`);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + '\n');
+    return;
+  }
+  console.log(`✓ ${res.wasArchived ? 'restored' : 'already active'} board ${board.meta.name}`);
 }
 
 // Turn a findProject failure into a one-line reason for the merge error text.
@@ -1456,7 +1490,9 @@ Usage:
   sidequest list [--status todo|doing|done] [--json] [--brief]   (--brief: compact JSON, no bodies; implies --json)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--complexity 1-10 --why "<motivation>"]
   sidequest rm <id|SQ-n>
-  sidequest projects [--json]
+  sidequest projects [--archived] [--json]
+  sidequest archive-board <board-ref>                  archive a board
+  sidequest unarchive-board <board-ref>                restore an archived board
   sidequest dashboard [--port N] [--no-open]     open the live board in the browser
   sidequest serve [--port N]                     run the board server in the foreground
   sidequest stop                                 stop the running board server
@@ -1526,6 +1562,9 @@ Archive (put finished work out of the way, restorable):
   sidequest archive <id|SQ-n>                      archive one ticket    ·    --done archives ALL done
   sidequest unarchive <id|SQ-n>                    restore an archived ticket
   sidequest list --archived                        list archived tickets
+  sidequest archive-board <board-ref>               archive a board (explicit reference required)
+  sidequest unarchive-board <board-ref>             restore an archived board
+  sidequest projects --archived                     list archived boards
 
 User stories (a lightweight grouping tickets can belong to):
   sidequest story add -t "title" [-d desc] [--color <name|hex>]   create a story (prints its US-n ref)
@@ -1675,6 +1714,15 @@ async function main() {
     case 'projects':
     case 'boards':
       cmdProjects(opts);
+      break;
+    case 'archive-board':
+    case 'archive_board':
+      cmdArchiveBoard(opts, positional);
+      break;
+    case 'unarchive-board':
+    case 'unarchive_board':
+    case 'restore-board':
+      cmdUnarchiveBoard(opts, positional);
       break;
     case 'merge':
       cmdMerge(opts, positional);

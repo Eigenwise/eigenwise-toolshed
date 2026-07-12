@@ -77,7 +77,7 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'claim', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models']) {
+  for (const expected of ['list', 'ready', 'add', 'claim', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'archive_board', 'unarchive_board']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const t of resp.result.tools) {
@@ -85,6 +85,28 @@ test('tools/list advertises the board tools with input schemas', () => {
   }
 });
 
+test('MCP board archive tools require explicit refs and list archived boards', () => {
+  const board = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-archived-board'), 'MCP Archived Board');
+  store.createTicket(board.slug, { title: 'preserve me' });
+
+  const missing = callToolRaw('archive_board', {});
+  assert.ok(missing.isError);
+  assert.match(missing.content[0].text, /project is required/i);
+
+  const archived = callTool('archive_board', { project: board.slug });
+  assert.strictEqual(archived.ok, true);
+  assert.strictEqual(archived.project, board.slug);
+  assert.ok(archived.archivedAt);
+
+  const active = callTool('projects', {});
+  assert.ok(!active.projects.some((project) => project.slug === board.slug));
+  const archivedBoards = callTool('projects', { archived: true });
+  assert.ok(archivedBoards.projects.some((project) => project.slug === board.slug));
+
+  const restored = callTool('unarchive_board', { project: board.slug });
+  assert.strictEqual(restored.ok, true);
+  assert.strictEqual(restored.wasArchived, true);
+});
 test('dispatch is disabled and directs callers to native_agent', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
   assert.ok(d);
