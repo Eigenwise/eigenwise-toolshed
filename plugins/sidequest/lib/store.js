@@ -472,8 +472,10 @@ function routingLadder(prefs) {
   for (const m of MODEL_CAPABILITY_ORDER) {
     if (prefs[m] === false) continue;
     const hasEffort = gradeHasEffort(m, prefs);
+    const runtimeId = resolveExec(m, null, prefs).spawnId;
     tiers.push({
       model: m,
+      runtimeId,
       base: LADDER_TIER_BASE[m],
       tierRank: MODEL_CAPABILITY_ORDER.indexOf(m),
       row: hasEffort ? builtinRow(m) : null,
@@ -482,16 +484,41 @@ function routingLadder(prefs) {
   }
   // Never return an empty ladder: fall back to Grade 2.
   if (!tiers.length) {
-    tiers.push({ model: 'grade-2', base: LADDER_TIER_BASE['grade-2'], tierRank: MODEL_CAPABILITY_ORDER.indexOf('grade-2'), row: builtinRow('grade-2'), haiku: false });
+    tiers.push({ model: 'grade-2', runtimeId: resolveExec('grade-2', null, prefs).spawnId, base: LADDER_TIER_BASE['grade-2'], tierRank: MODEL_CAPABILITY_ORDER.indexOf('grade-2'), row: builtinRow('grade-2'), haiku: false });
   }
 
-  // ENUMERATE every enabled combo programmatically and score it by capability.
+  // Grades sharing one resolved runtime contribute one effort sequence. Keep the
+  // highest grade as the stamped provenance, use the cheapest grade's base for
+  // cross-runtime ranking, and union their enabled effort rows.
+  const runtimeGroups = [];
+  for (const tier of tiers) {
+    let group = runtimeGroups.find((candidate) => candidate.runtimeId === tier.runtimeId);
+    if (!group) {
+      group = { ...tier, row: tier.row ? { ...tier.row } : null, topBase: tier.base };
+      runtimeGroups.push(group);
+      continue;
+    }
+    group.topBase = Math.max(group.topBase, tier.base);
+    if (tier.tierRank > group.tierRank) {
+      group.model = tier.model;
+      group.tierRank = tier.tierRank;
+    }
+    if (tier.row) {
+      group.haiku = false;
+      group.row = group.row || {};
+      for (const effort of VALID_EFFORTS) {
+        group.row[effort] = group.row[effort] === true || tier.row[effort] === true;
+      }
+    }
+  }
+
+  // ENUMERATE every enabled resolved-runtime combo programmatically and score it by capability.
   // Haiku → a single effort-null rung; every other tier (built-in or custom) →
   // one rung per enabled non-max effort IN ITS OWN ROW (so opus·medium can be
   // excluded while sonnet·medium stays). A row with ONLY max enabled has max carry
   // that tier's sequence rungs (the per-tier maxInSequence fallback).
   const seq = [];
-  for (const tier of tiers) {
+  for (const tier of runtimeGroups) {
     if (tier.haiku) {
       seq.push({ model: 'grade-1', effort: null, tierRank: tier.tierRank, score: tier.base });
       continue;
@@ -521,11 +548,11 @@ function routingLadder(prefs) {
   // slug — a single deterministic top tier. It exists iff that tier's OWN row has
   // max enabled AND max isn't already carrying its sequence (only-max row); haiku
   // has no ·max, so there's none when it's the only/top tier.
-  let top = tiers[0];
-  for (const tier of tiers) {
-    if (tier.base > top.base
-      || (tier.base === top.base && tier.tierRank > top.tierRank)
-      || (tier.base === top.base && tier.tierRank === top.tierRank && String(tier.model) < String(top.model))) {
+  let top = runtimeGroups[0];
+  for (const tier of runtimeGroups) {
+    if (tier.topBase > top.topBase
+      || (tier.topBase === top.topBase && tier.tierRank > top.tierRank)
+      || (tier.topBase === top.topBase && tier.tierRank === top.tierRank && String(tier.model) < String(top.model))) {
       top = tier;
     }
   }
