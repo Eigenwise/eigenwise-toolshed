@@ -39,7 +39,7 @@ async function waitForShim(port) {
   throw new Error('shim did not start');
 }
 
-test('Codex discovery stays below the real backend context limit', async (t) => {
+test('Codex discovery advertises context metadata but keeps the local model id unsuffixed', async (t) => {
   let forwarded;
   const proxy = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {

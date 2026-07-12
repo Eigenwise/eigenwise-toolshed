@@ -165,11 +165,13 @@ note for the routing side.
 ## The fine print
 
 - **Context windows**: Codex GPT-5.6 models currently have a 372k-token backend limit. Their
-  advertised ids deliberately have no `[1m]` suffix. Claude Code treats that suffix as a local
-  promise, strips it before the provider request, and would otherwise wait until roughly 1M tokens
-  to compact, long after Codex starts rejecting the request. Gateway model discovery and
-  `/v1/messages/count_tokens` don't carry the backend capacity, so Claude Code uses its conservative
-  gateway budget and compacts safely before 372k. The env block still pins real Claude aliases to
+  advertised ids deliberately have no `[1m]` suffix. Claude Code does not use a gateway model's
+  `max_input_tokens` field for context or auto-compaction, so it keeps a conservative 200k
+  gateway budget for the unsuffixed Codex rows and compacts safely before the backend ceiling.
+  `[1m]` is a local Claude Code promise, not a provider request parameter: it delays compaction
+  to roughly 1M tokens even though the shim strips it before forwarding. Remove `[1m]` from every
+  selected Codex model, including the top-level `model` setting. Keep it only for genuine Claude
+  models. The env block pins those real aliases to
   `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]` and
   `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`, preserving their genuine 1M passthrough
   behavior. The shim translates an upstream Codex context-limit response to Anthropic's

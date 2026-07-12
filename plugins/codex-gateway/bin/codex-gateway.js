@@ -71,11 +71,11 @@ const HOSTS_BLOCK_LINE = `127.0.0.1 ${COMPAT_HOST}`;
 const STATIC_ENV_BLOCK = {
   CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
   CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
-  // Behind an ANTHROPIC_BASE_URL gateway Claude Code can't verify a model's
-  // context window, so a plain Claude alias (opus / sonnet) selected in /model
-  // gets budgeted at 200k. Pin only the real Claude 1M models to their [1m]
-  // ids. Codex models stay unsuffixed so Claude Code uses its conservative
-  // gateway budget and compacts before their 372k backend limit.
+  // Gateway discovery only identifies models. Claude Code cannot verify a
+  // third-party model's capacity from it, so ordinary gateway models use its
+  // conservative 200k context budget. Pin only the real Claude 1M models to
+  // their [1m] ids. Codex models must stay unsuffixed: [1m] is a local Claude
+  // Code override that delays compaction until far beyond Codex's 372k limit.
   ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
   ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
 };
@@ -739,9 +739,11 @@ const DEFAULT_MODELS = [
   'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
 
-// The Codex backend accepts about 372k tokens, but compaction needs headroom
-// for the summary request. Claude Code uses max_input_tokens from gateway
-// discovery to decide when to compact, so advertise 85% of the real window.
+// The Codex backend accepts about 372k tokens, but model discovery is picker
+// metadata only. Claude Code does not use `max_input_tokens` from this route
+// for its context or auto-compaction calculation. Keep the field as accurate
+// gateway metadata, while the unsuffixed Codex id keeps Claude Code's safe
+// conservative gateway budget instead of forcing an impossible 1M window.
 const CODEX_COMPACT_CONTEXT_WINDOW = 316200;
 
 function gatewayModel(id) {
