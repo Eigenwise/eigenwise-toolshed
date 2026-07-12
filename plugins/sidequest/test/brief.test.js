@@ -37,7 +37,8 @@ const { callTool } = makeMcpCaller(mcp);
 // not drift: every key is paid for on every orchestration read, and the
 // MCP/skill docs enumerate this list.
 const BRIEF_KEYS = [
-  'ref', 'title', 'status', 'priority', 'complexity', 'model', 'effort',
+  'ref', 'title', 'status', 'priority', 'complexity', 'profile', 'model', 'backend',
+  'runsModel', 'runsLabel', 'executor', 'effort',
   'files', 'claim', 'blockedBy', 'comments', 'awaitingReply',
 ].sort();
 
@@ -60,6 +61,7 @@ test('CLI: list --json --brief returns the compact shape only', () => {
   }
   const a = out.tickets.find((t) => t.ref === refA);
   assert.ok(a.model && a.effort !== undefined, 'derived routing is stamped on the brief read');
+  assert.ok(a.profile && a.backend && a.runsLabel, 'brief includes the authoritative resolved runtime');
   assert.strictEqual(a.comments, 1, 'thread is a count, not the entries');
 });
 

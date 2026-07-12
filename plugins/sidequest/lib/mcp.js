@@ -113,6 +113,23 @@ function effortDrift(slug, idOrRef, claimedEffort) {
   };
 }
 
+function executorDrift(slug, idOrRef, claimedEffort, executorName) {
+  const effort = effortDrift(slug, idOrRef, claimedEffort);
+  if (effort) return effort;
+  if (!executorName) return null;
+  const prefs = store.getModelPrefs();
+  if (prefs.routing === false) return null;
+  const t = store.getTicket(slug, idOrRef);
+  if (!t || !t.complexity || !t.exec || t.exec.backend !== 'codex') return null;
+  if (executorName === t.exec.agent) return null;
+  return {
+    reason: 'executor_mismatch', ref: t.ref, profile: t.profile,
+    derivedModel: t.model, derivedEffort: t.effort, backend: t.exec.backend,
+    runsLabel: t.exec.runsLabel, executor: executorName, expectedExecutor: t.exec.agent,
+    message: `${t.ref} resolves to ${t.profile} · ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Spawn ${t.exec.agent} or use Sidequest dispatch. Claim refused.`,
+  };
+}
+
 /* ------------------------------------------------------------------ *
  *  Model-argument validation
  *
@@ -273,7 +290,7 @@ const TOOLS = [
   },
   {
     name: 'claim',
-    description: 'Atomically claim a ticket before working it (moves it to doing). Fails if gone/done/claimed. by must be a UNIQUE per-worker id. Pass effort (the executor\'s baked level) to be refused if it doesn\'t match the derived tier. Never work a ticket whose claim did not return ok:true.',
+    description: 'Atomically claim a ticket before working it (moves it to doing). Fails if gone/done/claimed. For Codex routes, pass executor from the ticket\'s authoritative runtime so generic executors are refused. by must be a UNIQUE per-worker id. Pass effort (the executor\'s baked level) to be refused if it doesn\'t match the derived tier. Never work a ticket whose claim did not return ok:true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -281,6 +298,7 @@ const TOOLS = [
         project: PROJECT_PROP,
         by: { type: 'string', description: 'Unique per-worker id (e.g. claude-<8 hex>).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
+        executor: { type: 'string', description: 'Exact executor name from the ticket runtime; proves a Codex route uses its backend-specific generated executor.' },
         force: { type: 'boolean', description: 'Steal a live claim — only when certain.' },
         session: { type: 'string' },
       },
@@ -289,7 +307,7 @@ const TOOLS = [
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'claim');
-      const drift = effortDrift(slug, args.ref, args.effort);
+      const drift = executorDrift(slug, args.ref, args.effort, args.executor);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, source: 'mcp', sessionId: sessionOf(args) });
       return Object.assign({ project: slug }, res);

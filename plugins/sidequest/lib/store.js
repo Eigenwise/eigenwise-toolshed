@@ -163,6 +163,45 @@ const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 // time); this tag drives that routing and the `next`/`ready` --model filter.
 const VALID_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
 
+/* ------------------------------------------------------------------ *
+ *  Execution profiles (SQ-188)
+ *
+ *  The provider-neutral, user-facing names of the routing plan. Each profile is
+ *  a stable alias for exactly one internal capability tier — the ladder, the
+ *  scoring, the persisted prefs file, and every tested routing invariant still
+ *  run on the four tiers; a profile just lets the user (and the dashboard's
+ *  execution-plan UI) reason about "what kind of work" without caring which
+ *  vendor model currently backs it (that's the tier's backend, see tierBackend).
+ *
+ *    routine  → haiku    small chores
+ *    everyday → sonnet   bread-and-butter work
+ *    complex  → opus     hard, multi-file work
+ *    frontier → fable    the genuinely hardest work
+ * ------------------------------------------------------------------ */
+const EXECUTION_PROFILES = ['routine', 'everyday', 'complex', 'frontier'];
+const PROFILE_TIER = { routine: 'haiku', everyday: 'sonnet', complex: 'opus', frontier: 'fable' };
+const TIER_PROFILE = { haiku: 'routine', sonnet: 'everyday', opus: 'complex', fable: 'frontier' };
+// Human display names for a Claude-backed tier in the derived profiles view.
+// resolveExec's runsLabel keeps its raw tier value (a tested shape); this is
+// purely the friendlier string the plan UI shows for "what runs this profile".
+const CLAUDE_TIER_LABELS = { haiku: 'Claude Haiku', sonnet: 'Claude Sonnet', opus: 'Claude Opus', fable: 'Claude Fable' };
+
+// A profile OR tier name → the internal tier, else null.
+function tierForProfile(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  if (PROFILE_TIER[s]) return PROFILE_TIER[s];
+  return VALID_MODELS.indexOf(s) !== -1 ? s : null;
+}
+
+// A tier OR profile name → the neutral profile, else null.
+function profileForTier(v) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  if (TIER_PROFILE[s]) return TIER_PROFILE[s];
+  return PROFILE_TIER[s] ? s : null;
+}
+
 // Normalize a requested model tier to one of VALID_MODELS, or null. Blank /
 // "any" / "none" / an unknown alias all coerce to null — which is exactly what
 // the entry points (CLI add, dashboard POST) reject: every ticket must be filed
@@ -172,12 +211,16 @@ const VALID_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
 // Tiers are ALWAYS the four built-ins — a Codex model is a per-tier BACKEND
 // (which real model actually runs an opus-tier ticket), not a ladder tier of its
 // own, so it never appears here. `prefs` is accepted for signature stability but
-// no longer widens the vocabulary.
+// no longer widens the vocabulary. The old tier aliases (haiku/sonnet/opus/
+// fable) stay first-class for compatibility; a neutral profile name (routine/
+// everyday/complex/frontier) resolves to its tier, so both vocabularies work at
+// every entry point that takes a model.
 function coerceModel(v, _prefs) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
   if (!s || s === 'any' || s === 'none' || s === 'null') return null;
-  return VALID_MODELS.indexOf(s) !== -1 ? s : null;
+  if (VALID_MODELS.indexOf(s) !== -1) return s;
+  return PROFILE_TIER[s] || null;
 }
 
 // How hard the executor should think — the reasoning-effort levels Claude Code
@@ -324,12 +367,15 @@ function getModelVocab(_prefs) {
 }
 
 // Classify a --model filter value: 'any' (blank/any/none), 'unknown' (a
-// non-empty value that's not one of the four tiers), or the resolved tier.
+// non-empty value that's not one of the four tiers), or the resolved tier. A
+// neutral profile name resolves to its tier, so `--model complex` filters the
+// same set as `--model opus` (old aliases preserved, new vocabulary accepted).
 function classifyModelFilter(v, _prefs) {
   if (v == null) return 'any';
   const s = String(v).trim().toLowerCase();
   if (!s || s === 'any' || s === 'none' || s === 'null') return 'any';
-  return VALID_MODELS.indexOf(s) !== -1 ? s : 'unknown';
+  if (VALID_MODELS.indexOf(s) !== -1) return s;
+  return PROFILE_TIER[s] || 'unknown';
 }
 
 /* ------------------------------------------------------------------ *
@@ -561,17 +607,30 @@ function deriveRouting(complexity, prefs) {
 // AND the orchestrator's spawn all reflect the ladder + backend of the moment —
 // no separate tier→backend lookup at spawn, which is what prevents backend drift.
 function applyDerivedRouting(t, prefs) {
-  if (!t || !t.complexity) return t;
-  prefs = prefs || getModelPrefs();
-  const r = deriveRouting(t.complexity, prefs);
-  if (r) {
-    t.model = r.model;
-    t.effort = r.effort;
-    const ex = resolveExec(r.model, r.effort, prefs);
-    // exec: what to spawn. backend "codex" flags the card chip's Codex mark and
-    // tells the orchestrator to announce which model actually runs (runsLabel).
+  if (!t) return t;
+  if (t.complexity) {
+    prefs = prefs || getModelPrefs();
+    const r = deriveRouting(t.complexity, prefs);
+    if (r) {
+      t.model = r.model;
+      t.effort = r.effort;
+      const ex = resolveExec(r.model, r.effort, prefs);
+      // exec: what to spawn. backend "codex" flags the card chip's Codex mark and
+      // tells the orchestrator to announce which model actually runs (runsLabel).
+      t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel };
+    }
+  } else if (VALID_MODELS.indexOf(t.model) !== -1) {
+    // Legacy no-complexity ticket with a stored tier tag: the tag is honored
+    // (nothing re-derives it), but the READ still resolves what would actually
+    // run it, so a Codex-backed tier can't silently fall back to the generic
+    // Claude executor path just because the ticket predates complexity scoring.
+    prefs = prefs || getModelPrefs();
+    const ex = resolveExec(t.model, t.effort || null, prefs);
     t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel };
   }
+  // Every read carries the neutral profile of whatever tier the ticket routed
+  // (or was tagged) to — the user-facing name for "SQ-n · Cn Profile · …" lines.
+  t.profile = TIER_PROFILE[t.model] || null;
   return t;
 }
 
@@ -1907,7 +1966,12 @@ function briefTicket(slug, t, opts) {
     status: t.status,
     priority: t.priority,
     complexity: t.complexity || null,
+    profile: t.profile || null,
     model: t.model || null,
+    backend: t.exec ? t.exec.backend : null,
+    runsModel: t.exec ? t.exec.runsModel : null,
+    runsLabel: t.exec ? t.exec.runsLabel : null,
+    executor: t.exec ? t.exec.agent : null,
     effort: t.effort || null,
     files: Array.isArray(t.files) ? t.files : [],
     claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
@@ -2115,6 +2179,104 @@ function modelPrefsFile() {
   return path.join(projectsRoot(), 'model-prefs.json');
 }
 
+// The provider-neutral EXECUTION-PLAN view over the tier prefs (SQ-188): one
+// entry per profile with its tier, enabled flag, resolved runtime (backend +
+// what actually runs, with a human label), its effort row, and which
+// complexities the CURRENT ladder routes to it. Derived on every read, never
+// persisted — the tier-keyed file stays the storage shape, so a legacy prefs
+// file (tier booleans, per-tier effort matrix, tierBackend) maps into profiles
+// losslessly by construction, and the tested ladder stays the routing truth.
+function deriveProfilesView(prefs) {
+  const byTier = prefs.tierBackendResolved || resolveTierBackends(prefs.tierBackend).byTier;
+  const ladder = routingLadder(prefs);
+  const out = {};
+  for (const profile of EXECUTION_PROFILES) {
+    const tier = PROFILE_TIER[profile];
+    const b = byTier[tier] || { backend: 'claude', slug: null, id: null, label: null };
+    const complexities = [];
+    for (const r of ladder) if (r.model === tier) complexities.push(r.complexity);
+    out[profile] = {
+      profile,
+      tier,
+      enabled: prefs[tier] !== false,
+      backend: b.backend,
+      runsModel: b.backend === 'codex' ? b.slug : tier,
+      runsLabel: b.backend === 'codex' ? (b.label || b.slug) : CLAUDE_TIER_LABELS[tier],
+      efforts: tier === 'haiku' ? null : Object.assign({}, (prefs.efforts && prefs.efforts[tier]) || {}),
+      complexities,
+      range: complexities.length ? [complexities[0], complexities[complexities.length - 1]] : null,
+    };
+  }
+  return out;
+}
+
+// Translate a profile-keyed patch into the tier-keyed shape setModelPrefs has
+// always persisted. Accepted profile forms, all optional and all additive over
+// the existing tier/effort/tierBackend keys (which keep working unchanged):
+//   { profiles: { everyday: false } }                      → { sonnet: false }
+//   { profiles: { complex: { enabled, backend, efforts } } }
+//       enabled → the tier boolean; backend ("claude"|slug) → tierBackend[tier];
+//       efforts (partial row) → efforts[tier] (ignored for routine/haiku)
+//   { routine: false }                                     → { haiku: false }
+//   { tierBackend: { frontier: <slug> } }                  → tierBackend.fable
+// Only the translation lives here; guards, merging, and persistence are the
+// existing tier-keyed logic below, so nothing profile-shaped ever hits disk.
+// PRECEDENCE: an explicit tier-keyed value in the same patch always beats a
+// profile-derived one. This matters because getModelPrefs() now returns
+// `profiles` alongside the tier keys, and the dashboard PUTs the whole object
+// back — a stale profile echo riding a legacy-shaped patch must never clobber
+// the tier toggle the user actually flipped.
+function translateProfilePatch(patch) {
+  if (!patch || typeof patch !== 'object') return {};
+  const out = Object.assign({}, patch);
+  const src = patch.profiles && typeof patch.profiles === 'object' ? patch.profiles : null;
+  if ('profiles' in out) delete out.profiles;
+  const explicitTierBackend = patch.tierBackend && typeof patch.tierBackend === 'object' ? patch.tierBackend : {};
+  const explicitEfforts = patch.efforts && typeof patch.efforts === 'object' ? patch.efforts : {};
+  if (src) {
+    for (const profile of EXECUTION_PROFILES) {
+      if (!(profile in src)) continue;
+      const tier = PROFILE_TIER[profile];
+      const v = src[profile];
+      if (v && typeof v === 'object') {
+        if ('enabled' in v && !(tier in patch)) out[tier] = v.enabled !== false;
+        if ('backend' in v && !(tier in explicitTierBackend)) {
+          out.tierBackend = Object.assign({}, out.tierBackend, { [tier]: v.backend });
+        }
+        if (tier !== 'haiku' && v.efforts && typeof v.efforts === 'object') {
+          // Profile efforts sit UNDER any explicit row for the same tier.
+          out.efforts = Object.assign({}, out.efforts);
+          out.efforts[tier] = Object.assign({}, v.efforts, explicitEfforts[tier]);
+        }
+      } else if (!(tier in patch)) {
+        out[tier] = v !== false;
+      }
+    }
+  }
+  // Bare profile names as top-level tier-boolean aliases: { frontier: false }.
+  for (const profile of EXECUTION_PROFILES) {
+    if (profile in out) {
+      const tier = PROFILE_TIER[profile];
+      const v = out[profile];
+      delete out[profile];
+      if (typeof v !== 'object' && !(tier in patch)) out[tier] = v !== false;
+    }
+  }
+  // Profile names as tierBackend keys: { tierBackend: { complex: <slug> } }.
+  if (out.tierBackend && typeof out.tierBackend === 'object') {
+    const tb = Object.assign({}, out.tierBackend);
+    for (const profile of EXECUTION_PROFILES) {
+      if (profile in tb) {
+        const tier = PROFILE_TIER[profile];
+        if (!(tier in explicitTierBackend)) tb[tier] = tb[profile];
+        delete tb[profile];
+      }
+    }
+    out.tierBackend = tb;
+  }
+  return out;
+}
+
 // Missing/corrupt file -> every tier enabled, every effort enabled in every
 // model row, routing on, and a neutral (0) bias. `routing` is the master switch:
 // when false the skill's model/effort enforcement stands down and the main agent
@@ -2175,6 +2337,10 @@ function getModelPrefs() {
     persisted.tierBackend = out.tierBackend;
     writeJson(modelPrefsFile(), persisted);
   }
+
+  // The neutral execution-plan view (SQ-188): derived fresh from the tier
+  // prefs above on every read, alongside (never instead of) the tier keys.
+  out.profiles = deriveProfilesView(out);
   return out;
 }
 
@@ -2191,7 +2357,10 @@ function getModelPrefs() {
 // `routingBias` dial carry through independently; routingBias clamps on write.
 function setModelPrefs(patch) {
   const cur = getModelPrefs();
-  patch = patch || {};
+  // Profile-keyed patches (the neutral execution-plan vocabulary, SQ-188) are
+  // translated to tier keys up front; everything below — guards, merging, and
+  // the persisted tier-keyed shape — is unchanged.
+  patch = translateProfilePatch(patch || {});
   const out = {};
 
   // Tiers: carried from the current set unless the patch names them.
@@ -2237,6 +2406,7 @@ function setModelPrefs(patch) {
   out.tierBackendResolved = resolvedBackends.byTier;
   out.tierBackendWarnings = resolvedBackends.warnings;
   out.discovered = discoverExternalModels();
+  out.profiles = deriveProfilesView(out);
   return out;
 }
 
@@ -2631,6 +2801,10 @@ module.exports = {
   VALID_MODELS,
   VALID_EFFORTS,
   MODEL_CAPABILITY_ORDER,
+  EXECUTION_PROFILES,
+  profileForTier,
+  tierForProfile,
+  deriveProfilesView,
   coerceComplexity,
   coerceModel,
   routingLadder,

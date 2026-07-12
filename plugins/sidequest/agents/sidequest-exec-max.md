@@ -30,10 +30,9 @@ board action below (claim/comments/comment/done/release, same fields as the CLI 
 the `sidequest` CLI via Bash only when they aren't.
 
 Protocol, per ticket, in order:
-1. **Claim first**: `sidequest claim <ref> --by <worker-id> --effort max --project <project>`
-   (add `--effort max` even if the command you were handed omits it — the board refuses the
-   claim if the ticket's derived effort isn't `max`, i.e. the orchestrator spawned the wrong
-   executor). If the claim FAILS for ANY reason (already claimed / done / gone / effort mismatch), do
+1. **Claim first**: `sidequest claim <ref> --by <worker-id> --executor sidequest-exec-max --effort max --project <project>`
+   (add `--executor sidequest-exec-max` and `--effort max` even if the command you were handed omits them. The board refuses the claim if this agent is not the ticket's authoritative generated executor or its derived effort is not `max`.)
+   If the claim FAILS for ANY reason (already claimed / done / gone / wrong executor / effort mismatch), do
    NOT touch any file for that ticket — in a batch, report the failure and move to the next ref;
    for a single ticket, stop and report the failure verbatim. On an effort mismatch the failure names
    the executor to spawn instead, so the orchestrator can re-route.
