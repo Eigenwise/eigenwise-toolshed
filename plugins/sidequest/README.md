@@ -377,6 +377,20 @@ A ticket that is **blocked by an unfinished ticket** is shown as **⛔ blocked**
 `next`/`ready`** — an agent grabbing the top task never picks up work that isn't ready. Once the blocker
 is `done`, it unblocks automatically. On the dashboard, links (and an unlink ✕) live in the ticket detail.
 
+## Board archive and deletion
+
+Boards can be archived when you want them out of the active switcher without losing their data. Archive and restore use an explicit board reference, so they never silently target the current directory's board:
+
+```bash
+sidequest archive-board <board-ref>       # hide the board and keep all tickets
+sidequest unarchive-board <board-ref>     # restore an archived board
+sidequest projects --archived             # list archived boards
+```
+
+The dashboard exposes the same controls from a board's context menu. Archived boards appear under **Archived boards** in the sidebar, with **Restore board** available. Archiving is reversible and keeps the board files and tickets intact.
+
+Permanent deletion is a separate action. The dashboard's **Delete board…** prompt requires the exact board slug before it sends the delete request. Deletion removes the board directory and all of its tickets and assets permanently; there is no restore path. The CLI intentionally exposes archive and restore, but no board-delete command.
+
 ## Archive
 
 Finished work piles up in **Done**. Archive it to tuck it away — kept and fully restorable, just out of
