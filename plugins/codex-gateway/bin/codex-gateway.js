@@ -702,6 +702,18 @@ async function doctor() {
 
 // ---------------------------------------------------------------- the shim
 
+// display_name feeds the /model PICKER only (with gateway model discovery on,
+// for ids starting with claude-/anthropic-), where it shows correctly as e.g.
+// "GPT-5.6 Terra (Codex)". It does NOT reach the running-subagent CARD: that
+// surface resolves the model label internally and maps an unrecognized claude-*
+// id (like claude-codex-gpt-5.6-terra) to a Claude family name — it renders
+// "Fable 5" for a Terra run. Nothing we return here overrides that (verified:
+// the response model field is "gpt-5.6-terra" and the model self-reports GPT-5,
+// so the RUN is correct — only the card label lies). Native subagent model
+// display isn't a supported feature (anthropics/claude-code#24094, not planned).
+// The sidequest agent NAME (sidequest-exec-codex-gpt-5-6-terra-*) carries the
+// true runtime, so don't chase the badge by editing display_name — it's a dead
+// end. See SQ-202.
 function displayName(id) {
   return id.replace(/^gpt-/, 'GPT-').replace(/\[1m\]$/, '') + ' (Codex)';
 }
