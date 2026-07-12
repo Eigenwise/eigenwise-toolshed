@@ -23,6 +23,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const WIN = process.platform === 'win32';
 const store = require('./store');
 
 const CLI_PATH = path.join(__dirname, '..', 'bin', 'sidequest.js');
@@ -54,9 +55,16 @@ function resolveSpawnModel(tier, effort, prefs) {
 // Is the `claude` CLI present to spawn? A headless drain is pointless without it,
 // and we'd rather say so than hang. shell:true so a Windows `claude.cmd` shim on
 // PATH is found (a bare spawn misses `.cmd`/`.ps1` launchers).
+function claudeCommand() {
+  if (!WIN) return 'claude';
+  const found = spawnSync('where.exe', ['claude.exe'], { encoding: 'utf8', timeout: 10000 });
+  const first = String(found.stdout || '').split(/\r?\n/).find(Boolean);
+  return first || 'claude.exe';
+}
+
 function claudeAvailable() {
   try {
-    const r = spawnSync('claude', ['--version'], { encoding: 'utf8', timeout: 10000, shell: true });
+    const r = spawnSync(claudeCommand(), ['--version'], { encoding: 'utf8', timeout: 10000 });
     return r.status === 0 || (r.stdout && /\d+\.\d+/.test(r.stdout));
   } catch (_) {
     return false;
@@ -144,9 +152,8 @@ function dispatchTicket(slug, idOrRef) {
   const fd = fs.openSync(logPath, 'a');
   let child;
   try {
-    child = spawn('claude', item.argv, {
+    child = spawn(claudeCommand(), item.argv, {
       cwd: item.cwd,
-      shell: true,
       detached: true,
       stdio: ['pipe', fd, fd],
       windowsHide: true,
@@ -189,13 +196,10 @@ function planWork(slug, opts) {
   return { waves, waveCount: waves.length, plan, dropped: Math.max(0, wave.length - batch.length) };
 }
 
-// The permission posture for the spawned runs. A drain is unattended, so the
-// default lets it edit and run its own board commands; the user can harden or
-// loosen it. `--yolo` is the escape hatch for a fully non-interactive run.
-function permissionArgs(opts) {
-  if (opts.yolo) return ['--dangerously-skip-permissions'];
-  if (opts.permissionMode) return ['--permission-mode', String(opts.permissionMode)];
-  return ['--permission-mode', 'acceptEdits'];
+// Every Sidequest executor is unattended. Always bypass permissions so Bash,
+// file edits, and board commands cannot block on a prompt in the lead session.
+function permissionArgs() {
+  return ['--dangerously-skip-permissions'];
 }
 
 // Spawn one headless run, resolving to a result record. Never rejects — a spawn
@@ -204,9 +208,7 @@ function spawnOne(item) {
   return new Promise((resolve) => {
     let child;
     try {
-      // shell:true finds a Windows claude.cmd shim; the prompt rides on stdin so
-      // no giant multi-line arg ever hits the shell.
-      child = spawn('claude', item.argv, { cwd: item.cwd, shell: true });
+      child = spawn(claudeCommand(), item.argv, { cwd: item.cwd });
     } catch (e) {
       resolve({ ref: item.ref, ok: false, error: (e && e.message) || String(e) });
       return;
@@ -258,5 +260,5 @@ async function runWork(slug, opts, log) {
 
 module.exports = {
   planWork, runWork, planTicket, dispatchTicket, capTier, resolveSpawnModel,
-  claudeAvailable, executorPrompt, CLI_PATH,
+  claudeAvailable, claudeCommand, executorPrompt, CLI_PATH,
 };

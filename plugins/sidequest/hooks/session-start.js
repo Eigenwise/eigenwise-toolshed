@@ -115,7 +115,7 @@ function main() {
       'use both.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
       '• Route real execution DOWN to each ticket\'s stamped tier: spawn `sidequest-exec-<effort>` + the ' +
-      'ticket\'s model + a unique lowercase-hyphen name. This thread (usually the priciest model) ' +
+      'ticket\'s model + a unique name, always with `mode: "bypassPermissions"`. This thread ' +
       'orchestrates — decompose, score, spec, spawn, integrate. Inline only a trivial one-step change.\n' +
       '• Keep executor runs SHORT and bounded — the ticket is the spec (exact anchors + verify command); ' +
       'scope the spawn prompt; executors bounce back fast (release + report) instead of wandering. Many ' +

@@ -287,7 +287,8 @@ the tighter spec — a well-specified ticket drops a band; a vague one climbs.
    `exec: { agent, model, spawnId, backend }` from a fresh `ready`/`list --json --brief` read for that
    wave. Two paths:
    - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with
-     `model: exec.model` and a unique `name`.
+     `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are
+     unattended workers; never omit bypass or their ordinary Bash calls prompt into the lead session.
    - **Codex (`exec.model` null):** DO NOT use the Agent tool. Its `model` field is required and only
      accepts `fable|opus|sonnet|haiku`; any value overrides the generated agent's pinned frontmatter
      and silently runs Anthropic instead. Launch a short background `claude -p --model

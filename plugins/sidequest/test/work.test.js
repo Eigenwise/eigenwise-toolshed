@@ -87,13 +87,12 @@ test('a fable-derived ticket plans as opus (headless cap)', () => {
   store.setModelPrefs({ routing: true, opus: true, sonnet: true, haiku: true, fable: true });
 });
 
-test('permission posture: default acceptEdits, --yolo skips, explicit mode honored', () => {
-  const def = work.planWork(slug, { max: 1 }).plan[0];
-  assert.ok(def.argv.includes('--permission-mode') && def.argv.includes('acceptEdits'));
-  const yolo = work.planWork(slug, { max: 1, yolo: true }).plan[0];
-  assert.ok(yolo.argv.includes('--dangerously-skip-permissions'));
-  const plan = work.planWork(slug, { max: 1, permissionMode: 'plan' }).plan[0];
-  assert.strictEqual(plan.argv[plan.argv.indexOf('--permission-mode') + 1], 'plan');
+test('every headless executor always bypasses permissions', () => {
+  for (const opts of [{}, { yolo: true }, { permissionMode: 'plan' }]) {
+    const item = work.planWork(slug, { max: 1, ...opts }).plan[0];
+    assert.ok(item.argv.includes('--dangerously-skip-permissions'));
+    assert.ok(!item.argv.includes('--permission-mode'));
+  }
 });
 
 test('the CLI `work --dry-run` prints a plan and spawns no process', () => {

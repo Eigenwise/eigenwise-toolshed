@@ -1475,10 +1475,11 @@ Complexity → routing (score the task; model + effort are derived, never tagged
   list/ready); the orchestrator routes by reading it. Haiku rungs have no effort.
 
 Headless / autonomous draining (work the board without an interactive session):
-  sidequest work [--dry-run] [--max N=3] [--max-waves N=5] [--model tier] [--wave] [--yolo] [--permission-mode M]
+  sidequest work [--dry-run] [--max N=3] [--max-waves N=5] [--model tier] [--wave]
     Spawns one headless \`claude -p\` run per ready ticket at its derived tier, wave by wave, until the
-    board is drained. --dry-run prints the plan (spawns nothing). --wave does a single wave. --yolo maps to
-    --dangerously-skip-permissions; otherwise runs at --permission-mode (default acceptEdits). Effort isn't
+    board is drained. --dry-run prints the plan (spawns nothing). --wave does a single wave. Every
+    executor runs with --dangerously-skip-permissions so unattended work cannot prompt into the lead
+    session. Effort isn't
     settable headless, so a run carries the ticket's MODEL and runs at that model's default effort. Safe
     beside an interactive session — claiming stays atomic. Needs the \`claude\` CLI on PATH.
   sidequest reconcile [--session <id>] [--reason "..."]   release a session's stale claims back to todo now

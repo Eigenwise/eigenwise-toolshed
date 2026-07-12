@@ -42,6 +42,14 @@ function seedCatalog(models) {
 }
 function clearCatalog() { process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR; }
 
+function builtInFiles() {
+  return ['high', 'low', 'max', 'medium', 'xhigh'].map((e) => `sidequest-exec-${e}.md`).sort();
+}
+
+function customFiles(dir) {
+  return readDir(dir).filter((f) => !builtInFiles().includes(f));
+}
+
 // The four non-max effort filenames a discovered model slug produces, sorted the
 // way readDir sorts (high, low, medium, xhigh).
 function fourFiles(slug) {
@@ -56,8 +64,8 @@ test('one file per discovered model x every non-max effort, correct frontmatter'
   seedCatalog([TERRA]);
   const dir = tmpDir();
   const res = agentsync.syncExecAgents({}, { dir });
-  assert.strictEqual(res.written, 4);
-  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-terra'));
+  assert.strictEqual(res.written, 9);
+  assert.deepStrictEqual(customFiles(dir), fourFiles('codex-gpt-5-6-terra'));
 
   const src = fs.readFileSync(path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md'), 'utf8');
   const fmEnd = src.indexOf('\n---\n', 4);
@@ -66,6 +74,7 @@ test('one file per discovered model x every non-max effort, correct frontmatter'
   assert.match(frontmatter, /^name: sidequest-exec-codex-gpt-5-6-terra-high$/m);
   assert.match(frontmatter, /^effort: high$/m);
   assert.match(frontmatter, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
+  assert.match(frontmatter, /^permissionMode: bypassPermissions$/m);
   assert.ok(body.includes(agentsync.MARKER));
   assert.match(body, /codex-gpt-5-6-terra/);
 });
@@ -74,8 +83,8 @@ test('max effort is never generated', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
   agentsync.syncExecAgents({}, { dir });
-  assert.ok(!readDir(dir).includes('sidequest-exec-codex-gpt-5-6-terra-max.md'));
-  assert.strictEqual(readDir(dir).length, 4);
+  assert.ok(!customFiles(dir).includes('sidequest-exec-codex-gpt-5-6-terra-max.md'));
+  assert.strictEqual(customFiles(dir).length, 4);
 });
 
 /* -------------------------------------------------------------- *
@@ -89,8 +98,8 @@ test('a discovered-but-unmapped model still generates its files (no tier mapping
   // ready for the moment a tier IS pointed at it.
   const prefs = { tierBackend: { haiku: 'claude', sonnet: 'claude', opus: 'claude', fable: 'claude' } };
   const res = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(res.written, 4);
-  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-sol'));
+  assert.strictEqual(res.written, 9);
+  assert.deepStrictEqual(customFiles(dir), fourFiles('codex-gpt-5-6-sol'));
 });
 
 test('the effort allowlist does not change the generated files', () => {
@@ -99,15 +108,18 @@ test('the effort allowlist does not change the generated files', () => {
   const prefs = { efforts: { opus: { low: false, medium: false, high: true, xhigh: false, max: false } } };
   agentsync.syncExecAgents(prefs, { dir });
   // all four non-max efforts are present regardless of what the allowlist enables
-  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-terra'));
+  assert.deepStrictEqual(customFiles(dir), fourFiles('codex-gpt-5-6-terra'));
 });
 
-test('empty catalog (codex-gateway not installed) -> nothing generated', () => {
+test('empty catalog still mirrors five built-in executors with bypass permissions', () => {
   clearCatalog();
   const dir = tmpDir();
   const res = agentsync.syncExecAgents({}, { dir });
-  assert.strictEqual(res.written, 0);
-  assert.deepStrictEqual(readDir(dir), []);
+  assert.strictEqual(res.written, 5);
+  assert.deepStrictEqual(readDir(dir), builtInFiles());
+  for (const file of builtInFiles()) {
+    assert.match(fs.readFileSync(path.join(dir, file), 'utf8'), /^permissionMode: bypassPermissions$/m);
+  }
 });
 
 /* -------------------------------------------------------------- *
@@ -117,33 +129,33 @@ test('empty catalog (codex-gateway not installed) -> nothing generated', () => {
 test('re-running with the same catalog writes nothing new (idempotent)', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
-  assert.strictEqual(agentsync.syncExecAgents({}, { dir }).written, 4);
+  assert.strictEqual(agentsync.syncExecAgents({}, { dir }).written, 9);
   const second = agentsync.syncExecAgents({}, { dir });
   assert.strictEqual(second.written, 0);
-  assert.strictEqual(second.unchanged, 4);
+  assert.strictEqual(second.unchanged, 9);
 });
 
 test('a model dropped from the catalog has its files removed', () => {
   seedCatalog([TERRA, SOL]);
   const dir = tmpDir();
   agentsync.syncExecAgents({}, { dir });
-  assert.strictEqual(readDir(dir).length, 8);
+  assert.strictEqual(customFiles(dir).length, 8);
   seedCatalog([TERRA]); // SOL vanished from the catalog
   const second = agentsync.syncExecAgents({}, { dir });
   assert.strictEqual(second.removed, 4);
-  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-terra'));
+  assert.deepStrictEqual(customFiles(dir), fourFiles('codex-gpt-5-6-terra'));
 });
 
 test('swapping the catalog swaps the files', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
   agentsync.syncExecAgents({}, { dir });
-  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-terra'));
+  assert.deepStrictEqual(customFiles(dir), fourFiles('codex-gpt-5-6-terra'));
   seedCatalog([SOL]);
   const second = agentsync.syncExecAgents({}, { dir });
   assert.strictEqual(second.removed, 4);
   assert.strictEqual(second.written, 4);
-  assert.deepStrictEqual(readDir(dir), fourFiles('codex-gpt-5-6-sol'));
+  assert.deepStrictEqual(customFiles(dir), fourFiles('codex-gpt-5-6-sol'));
 });
 
 /* -------------------------------------------------------------- *
@@ -158,7 +170,7 @@ test('never overwrites a hand-authored file at a would-be-generated path', () =>
   const handAuthored = '---\nname: sidequest-exec-codex-gpt-5-6-terra-high\n---\nhand-authored, not ours.\n';
   fs.writeFileSync(collidingPath, handAuthored);
   const res = agentsync.syncExecAgents({}, { dir });
-  assert.strictEqual(res.written, 3); // the other three efforts; the collider is left alone
+  assert.strictEqual(res.written, 8); // five built-ins plus the other three custom efforts
   assert.strictEqual(fs.readFileSync(collidingPath, 'utf8'), handAuthored);
 });
 
@@ -182,8 +194,8 @@ test('multiple discovered models each get their four files', () => {
   seedCatalog([TERRA, SOL, LUNA]);
   const dir = tmpDir();
   const res = agentsync.syncExecAgents({}, { dir });
-  assert.strictEqual(res.written, 12);
-  assert.deepStrictEqual(readDir(dir), [
+  assert.strictEqual(res.written, 17);
+  assert.deepStrictEqual(customFiles(dir), [
     ...fourFiles('codex-gpt-5-6-luna'),
     ...fourFiles('codex-gpt-5-6-sol'),
     ...fourFiles('codex-gpt-5-6-terra'),

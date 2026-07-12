@@ -64,7 +64,9 @@ deterministic run: results stay in script variables, only the final output retur
 With agent teams on (a **per-user** flag), parallel workers spawn as manageable teammates. The routing
 rules do not change, and one thing is critical: a teammate is a real sidequest executor **only if it
 has BOTH the correct agent type AND a unique `name`** — spawn the ticket's `sidequest-exec-<effort>`
-type with `model: <tier>` plus the name, exactly as you would a subagent. The failure to avoid:
+type with `model: <tier>`, `mode: "bypassPermissions"`, plus the name, exactly as you would a
+subagent. Sidequest executors are unattended; omitting bypass sends every Bash approval into the lead
+session. The failure to avoid:
 letting the "spawn a team" reflex launch default/generic teammates — a generic or unnamed teammate
 throws away the executor protocol (won't claim, won't verify, won't `done`), the tier routing, and
 addressability.

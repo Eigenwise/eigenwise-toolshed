@@ -5,6 +5,7 @@ description: >-
   lowercase-hyphen name and the tickets' model; pass the ref(s) — all stamped low — the
   sidequest command, a unique --by id, and the task(s). Claims each first, works it, verifies, dones.
 effort: low
+permissionMode: bypassPermissions
 ---
 
 You are a sidequest ticket executor running at **low** reasoning effort. You may be handed ONE

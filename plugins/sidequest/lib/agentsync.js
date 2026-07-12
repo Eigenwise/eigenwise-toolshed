@@ -66,11 +66,10 @@ function agentFileName(slug, effort) {
   return `sidequest-exec-${slug}-${effort}.md`;
 }
 
-// Render one agent file's full source from the shared template. `name` and
-// `effort` are required; `modelId`, `marker`, and `extraNote` are optional and
-// each default to a no-op (empty) substitution — which is exactly what lets
-// the build-time generator reuse this same function and still emit the
-// byte-identical five shipped files it always has.
+// Render one agent file's full source from the shared template. Every runtime
+// file is user-scoped rather than plugin-scoped so Claude Code honors its
+// permissionMode: bypassPermissions frontmatter. `name` and `effort` are
+// required; `modelId`, `marker`, and `extraNote` are optional.
 function renderExecAgent({ name, effort, modelId, marker, extraNote }) {
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   return template
@@ -121,6 +120,15 @@ function syncExecAgents(prefs, opts) {
   const dir = opts.dir || defaultAgentsDir();
 
   const wanted = new Map(); // filename -> rendered content
+  // Plugin subagents ignore permissionMode frontmatter. Mirror the built-in
+  // executors into the user's agent directory so their bypass policy is active.
+  for (const effort of [...NON_MAX_EFFORTS, 'max']) {
+    wanted.set(`sidequest-exec-${effort}.md`, renderExecAgent({
+      name: `sidequest-exec-${effort}`,
+      effort,
+      marker: MARKER,
+    }));
+  }
   for (const m of discovery.discoverExternalModels()) {
     if (!m || !m.slug || !m.id) continue;
     for (const effort of NON_MAX_EFFORTS) {
