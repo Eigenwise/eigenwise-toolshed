@@ -16,7 +16,7 @@ const store = require('../lib/store.js');
 const { routingLadder, deriveRouting, coerceComplexity, setModelPrefs } = store;
 
 const TIER_ORDER = ['grade-1', 'grade-2', 'grade-3', 'grade-4'];
-const EFFORT_MODELS = ['grade-2', 'grade-3', 'grade-4']; // tiers that carry an effort row (haiku has none)
+const EFFORT_MODELS = TIER_ORDER.slice(); // every grade stores a row; grade-1 uses it only with an effort-capable runtime
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh']; // non-max scale
 const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Per-tier base offsets mirroring store.js's LADDER_TIER_BASE (SQ-93: the
@@ -49,8 +49,8 @@ const BIASES = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5];
 // convenient mode the invariant sweep and oracles rely on) OR an object mapping
 // model -> array for per-model control (opus·medium excluded while sonnet keeps
 // it, etc.). Missing rows in the object form default to no efforts enabled.
-function mkPrefs(tiers, efforts, bias) {
-  const p = { routingBias: bias };
+function mkPrefs(tiers, efforts, bias, tierBackend) {
+  const p = { routingBias: bias, tierBackend: tierBackend || {} };
   for (const t of TIER_ORDER) p[t] = tiers.includes(t);
   p.efforts = {};
   for (const m of EFFORT_MODELS) {

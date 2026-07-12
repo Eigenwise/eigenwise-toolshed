@@ -39,7 +39,7 @@ test('legacy provider, profile, effort and backend prefs migrate losslessly', ()
   const raw = JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8'));
   assert.deepStrictEqual(Object.keys(raw).filter((k) => /^grade-/.test(k)), GRADES);
   for (const old of ['haiku', 'sonnet', 'opus', 'fable', 'routine', 'everyday', 'complex', 'frontier']) assert.ok(!(old in raw), old + ' must not persist');
-  assert.deepStrictEqual(Object.keys(raw.efforts).sort(), ['grade-2', 'grade-3', 'grade-4']);
+  assert.deepStrictEqual(Object.keys(raw.efforts).sort(), ['grade-1', 'grade-2', 'grade-3', 'grade-4']);
   assert.deepStrictEqual(Object.keys(raw.tierBackend).sort(), GRADES);
 });
 
