@@ -71,9 +71,13 @@ test('one file per discovered model x every non-max effort, correct frontmatter'
   const fmEnd = src.indexOf('\n---\n', 4);
   const frontmatter = src.slice(0, fmEnd);
   const body = src.slice(fmEnd + 5);
+  // The frontmatter IS the dispatch contract: routed Codex work is spawned via
+  // the native Agent tool by this exact name with the Agent `model` param
+  // OMITTED, so the pinned model + bypass below are what actually runs.
   assert.match(frontmatter, /^name: sidequest-exec-codex-gpt-5-6-terra-high$/m);
   assert.match(frontmatter, /^effort: high$/m);
   assert.match(frontmatter, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
+  assert.strictEqual((frontmatter.match(/^model:/gm) || []).length, 1, 'exactly one model pin');
   assert.match(frontmatter, /^permissionMode: bypassPermissions$/m);
   assert.ok(body.includes(agentsync.MARKER));
   assert.match(body, /codex-gpt-5-6-terra/);

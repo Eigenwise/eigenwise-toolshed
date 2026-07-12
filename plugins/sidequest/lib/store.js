@@ -239,8 +239,8 @@ function coerceEffort(v) {
 const BACKEND_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
 // haiku has no effort axis on the ladder (its rung is effort-null), but a Codex
-// model mapped to the haiku slot still needs an effort for its generated agent
-// and its `claude -p` spawn. Give that one case a sane fixed effort.
+// model mapped to the haiku slot still needs an effort for its generated agent.
+// Give that one case a sane fixed effort.
 const HAIKU_BACKEND_EFFORT = 'medium';
 
 // The discovered catalog as a slug -> entry map ({slug,id,label,suggestedTier,
@@ -309,15 +309,20 @@ function gradeHasEffort(grade, prefs) {
 }
 
 // The single spawn seam: given a stamped (tier, effort), return exactly how to
-// launch it — { agent, model, spawnId }.
-//   - Claude-backed tier: { agent: "sidequest-exec-<effort>", model: <tier>, spawnId: <tier> }
+// launch it — { agent, model, spawnId, dispatch }. Every route dispatches
+// through the native Agent tool (dispatch: 'native-agent'):
+//   - Claude-backed tier: { agent: "sidequest-exec-<effort>", model: <tier>, ... }
 //     (haiku has no effort → agent null, caller spawns a plain agent with model haiku)
-//   - Codex-backed tier:  { agent: "sidequest-exec-<slug>-<effort>", model: null, spawnId: <real id> }
+//   - Codex-backed tier:  { agent: "sidequest-exec-<slug>-<effort>", model: null, ... }
 // The agent name is what the orchestrator spawns; `model` is the Agent-tool
-// model param (null for Codex — the id is pinned in the generated agent's
-// frontmatter); spawnId is the raw model string for the headless `claude -p`
-// path. effort is the ticket's stamped effort (null only for a Claude haiku tier;
-// a Codex-backed haiku uses HAIKU_BACKEND_EFFORT for its agent).
+// model param — null for Codex means OMIT the param entirely: the real id is
+// pinned in the generated agent's frontmatter and runs for real when the param
+// is left out, while any explicit Agent `model` value overrides that pin and
+// silently runs Anthropic. spawnId is the resolved runtime model id, kept for
+// non-dispatch callers that need model identity (native-agent frontmatter
+// pinning, ladder runtime ids). effort is the ticket's stamped effort (null
+// only for a Claude haiku tier; a Codex-backed haiku uses HAIKU_BACKEND_EFFORT
+// for its agent).
 function resolveExec(grade, effort, prefs) {
   grade = coerceModel(grade);
   prefs = prefs || getModelPrefs();
@@ -326,12 +331,12 @@ function resolveExec(grade, effort, prefs) {
   const b = byTier[grade] || { backend: 'claude', slug: null, id: null };
   if (b.backend === 'codex') {
     const eff = effort || HAIKU_BACKEND_EFFORT;
-    return { agent: `sidequest-exec-${b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', slug: b.slug, runsModel: b.slug, runsLabel: b.label || b.slug };
+    return { agent: `sidequest-exec-${b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', slug: b.slug, runsModel: b.slug, runsLabel: b.label || b.slug, dispatch: 'native-agent' };
   }
   if (grade === 'grade-1' || !effort) {
-    return { agent: null, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy };
+    return { agent: null, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy, dispatch: 'native-agent' };
   }
-  return { agent: `sidequest-exec-${effort}`, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy };
+  return { agent: `sidequest-exec-${effort}`, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy, dispatch: 'native-agent' };
 }
 
 // Resolve a stamped model name to the real string handed to Claude Code at spawn
@@ -626,14 +631,16 @@ function applyDerivedRouting(t, prefs) {
       const ex = resolveExec(r.model, r.effort, prefs);
       // exec: what to spawn. backend "codex" flags the card chip's Codex mark and
       // tells the orchestrator to announce which model actually runs (runsLabel).
-      t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel };
+      // dispatch advertises the execution path: every route is native Agent
+      // dispatch (model: null on a Codex route means omit the Agent model param).
+      t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel, dispatch: ex.dispatch };
     }
   } else if (coerceModel(t.model)) {
     // Legacy no-complexity ticket: normalize deprecated tier aliases on read.
     t.model = coerceModel(t.model);
     prefs = prefs || getModelPrefs();
     const ex = resolveExec(t.model, t.effort || null, prefs);
-    t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel };
+    t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel, dispatch: ex.dispatch };
   }
   t.profile = t.model || null;
   return t;

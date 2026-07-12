@@ -9,10 +9,16 @@
  * string, so a discovered custom model (SQ-156/157, e.g. a codex-gateway tier)
  * has no way to ride it.
  *
- * VERIFIED FACT this module builds on: an agent FILE with a `model: <full-id>`
- * frontmatter key (e.g. "claude-codex-gpt-5.4[1m]") runs on that model through
- * the codex-gateway shim, and `claude -p --model <full-id>` does too. So every
- * tier the user has POINTED AT a discovered Codex model (prefs.tierBackend, e.g.
+ * VERIFIED FACT this module builds on: a registered agent FILE with a
+ * `model: <full-id>` frontmatter pin (e.g. "claude-codex-gpt-5.6-terra[1m]")
+ * genuinely runs on that model through the codex-gateway shim when spawned via
+ * the native Agent tool with the `model` parameter OMITTED — the spawned agent
+ * self-reports the GPT backend and the gateway's codex request counter
+ * advances. Passing ANY Agent `model` value overrides the pin and silently
+ * runs Anthropic instead, so dispatchers must leave the param out for Codex
+ * routes (store.resolveExec advertises this as model: null with
+ * dispatch: 'native-agent'). So every tier the user has POINTED AT a
+ * discovered Codex model (prefs.tierBackend, e.g.
  * opus -> codex-gpt-5-6-terra) gets its own real agent file —
  * sidequest-exec-<slug>-<effort>.md, one per that tier's enabled non-max effort —
  * with a `model:` frontmatter pin, generated into the user's live agents

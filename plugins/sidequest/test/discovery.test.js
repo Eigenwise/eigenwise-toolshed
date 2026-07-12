@@ -146,12 +146,22 @@ test('mapping a tier to a discovered slug: resolveExec routes to its agent, ladd
   assert.strictEqual(prefs.tierBackend['grade-3'], 'codex-gpt-5-6-terra');
   assert.deepStrictEqual(prefs.tierBackendWarnings, []);
   const ex = store.resolveExec('grade-3', 'high', prefs);
+  // The Codex contract a dispatcher relies on: the exact generated backend-
+  // specific agent, model null (the Agent-tool model param must be OMITTED so
+  // the agent's pinned frontmatter model actually runs), and the advertised
+  // native-Agent execution path.
   assert.strictEqual(ex.agent, 'sidequest-exec-codex-gpt-5-6-terra-high');
   assert.strictEqual(ex.model, null);
   assert.strictEqual(ex.backend, 'codex');
+  assert.strictEqual(ex.dispatch, 'native-agent');
   assert.strictEqual(ex.spawnId, TERRA.id);
-  // sonnet still Claude
-  assert.strictEqual(store.resolveExec('grade-2', 'high', prefs).backend, 'claude');
+  // sonnet still Claude — and still native Agent dispatch, with a real model param
+  const claudeEx = store.resolveExec('grade-2', 'high', prefs);
+  assert.strictEqual(claudeEx.backend, 'claude');
+  assert.strictEqual(claudeEx.dispatch, 'native-agent');
+  assert.strictEqual(claudeEx.model, 'sonnet');
+  // haiku (effort-null Claude route) advertises the same execution path
+  assert.strictEqual(store.resolveExec('grade-1', null, prefs).dispatch, 'native-agent');
   // ladder still stamps the tier, not the backend slug
   assert.strictEqual(routingLadder(prefs).find((r) => r.model !== 'grade-1' && r.effort === 'high' && r.model === 'grade-3') !== undefined, true);
 });
