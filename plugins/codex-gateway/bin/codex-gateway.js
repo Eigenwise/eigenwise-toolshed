@@ -47,6 +47,11 @@ const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
 const PREFIX = 'claude-codex-';
 const REPO = 'raine/claude-code-proxy';
 const ANTHROPIC_UPSTREAM = process.env.CODEX_GATEWAY_ANTHROPIC_UPSTREAM || 'https://api.anthropic.com';
+// Disabled unless explicitly requested. Route logs are metadata-only: never write
+// prompts, tool payloads, auth, or arbitrary headers. Set to `1` while tracing
+// unexpected model usage; see requestRouteLog below.
+const REQUEST_ROUTE_LOG = process.env.CODEX_GATEWAY_REQUEST_LOG === '1';
+const REQUEST_ROUTE_LOG_PATH = process.env.CODEX_GATEWAY_REQUEST_LOG_PATH || path.join(LOGS, 'request-routes.jsonl');
 
 // ---------------------------------------------------- RC-compatibility mode
 //
@@ -103,7 +108,12 @@ const USAGE = `usage: codex-gateway.js <command>
   doctor           full health check
   remote-control <enable|disable|doctor>
                    manage the opt-in hosts-file compatibility mode
-  serve-shim       (internal) run the router in the foreground`;
+  serve-shim       (internal) run the router in the foreground
+
+  Request route logging (off by default):
+    CODEX_GATEWAY_REQUEST_LOG=1
+    Writes JSONL route metadata to ${REQUEST_ROUTE_LOG_PATH}. Override the path with
+    CODEX_GATEWAY_REQUEST_LOG_PATH. It records no request bodies, prompts, tools, or auth.`;
 
 const cmd = process.argv[2];
 const args = process.argv.slice(3);
@@ -917,6 +927,29 @@ function runShim() {
   const compatState = { hostsDetected: false, hostsLine: null, port80Bound: false, reason: null };
   const anthropicBypass = createHostsBypassResolver();
 
+  // A local audit trail for which model went where. This is intentionally a
+  // small, fixed schema, never a dump of the request: prompts, messages, tools,
+  // auth, and arbitrary headers are all excluded. Claude Code currently sends a
+  // session id in x-claude-code-session-id when it has one; keep only that safe
+  // caller correlation value.
+  function requestRouteLog(req, backend, model, pathOnly) {
+    if (!REQUEST_ROUTE_LOG) return;
+    const sessionId = req.headers['x-claude-code-session-id'];
+    const entry = {
+      at: new Date().toISOString(),
+      backend,
+      model: typeof model === 'string' ? model : null,
+      path: pathOnly,
+      ...(typeof sessionId === 'string' && sessionId ? { sessionId } : {}),
+    };
+    try {
+      mkdirs();
+      fs.appendFileSync(REQUEST_ROUTE_LOG_PATH, JSON.stringify(entry) + '\n', { encoding: 'utf8', mode: 0o600 });
+    } catch (error) {
+      console.error(`codex-gateway: could not write request route log: ${error.code || error.message}`);
+    }
+  }
+
   async function refreshModels() {
     let ids = null;
     try {
@@ -1041,9 +1074,11 @@ function runShim() {
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
       const raw = chunks.length ? Buffer.concat(chunks) : null;
+      let requestedModel = null;
       if (raw && pathOnly.startsWith('/v1/messages')) {
         try {
           const parsed = JSON.parse(raw.toString());
+          requestedModel = typeof parsed.model === 'string' ? parsed.model : null;
           if (typeof parsed.model === 'string' && parsed.model.startsWith(PREFIX)) {
             // Accept legacy typed ids from pre-0.4.2 sessions even though new
             // discovery rows are unsuffixed.
@@ -1057,6 +1092,7 @@ function runShim() {
               parsed.tools = parsed.tools.filter((t) => !PLAN_TOOLS.includes(t && t.name));
             }
             counters.codex++;
+            requestRouteLog(req, 'codex', requestedModel, pathOnly);
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
               JSON.stringify(parsed), ['authorization', 'x-api-key'], true);
@@ -1064,6 +1100,7 @@ function runShim() {
         } catch { /* not JSON; fall through to passthrough */ }
       }
       counters.anthropic++;
+      requestRouteLog(req, 'anthropic', requestedModel, pathOnly);
       forward(req, res, ANTHROPIC_UPSTREAM, raw);
     });
   }

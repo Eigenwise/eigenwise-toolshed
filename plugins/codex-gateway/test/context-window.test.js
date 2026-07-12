@@ -14,10 +14,10 @@ function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 }
 
-function request(port, method, pathname, body) {
+function request(port, method, pathname, body, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, method, path: pathname,
-      headers: body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {} }, (res) => {
+      headers: { ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}), ...extraHeaders } }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
@@ -83,6 +83,50 @@ test('Codex discovery stays below the real backend context limit', async (t) => 
     messages: [{ role: 'user', content: 'legacy session' }],
   }));
   assert.equal(forwarded.model, 'gpt-5.6-sol');
+});
+
+test('opt-in request route logging records Fable metadata but never prompt data', async (t) => {
+  const logFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-routes-')), 'routes.jsonl');
+  const anthropic = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true })); });
+  });
+  const anthropicPort = await listen(anthropic);
+  t.after(() => anthropic.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(shimPort + 1),
+      CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
+      CODEX_GATEWAY_REQUEST_LOG: '1',
+      CODEX_GATEWAY_REQUEST_LOG_PATH: logFile,
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const sentinel = 'DO-NOT-LOG-this-private-prompt';
+  await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
+    model: 'claude-fable-5', max_tokens: 1, messages: [{ role: 'user', content: sentinel }],
+  }), { 'x-claude-code-session-id': 'session-safe-id' });
+
+  const logged = fs.readFileSync(logFile, 'utf8');
+  assert.equal(logged.includes(sentinel), false);
+  const entries = logged.trim().split('\n').map(JSON.parse);
+  assert.deepEqual(entries, [{
+    at: entries[0].at,
+    backend: 'anthropic',
+    model: 'claude-fable-5',
+    path: '/v1/messages',
+    sessionId: 'session-safe-id',
+  }]);
 });
 
 test('Codex context errors use Claude Code compact-and-retry wording', async (t) => {

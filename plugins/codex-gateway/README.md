@@ -87,6 +87,21 @@ the proxy.
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
 | `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility workflow, or read-only diagnosis |
 
+### Trace unexpected model usage
+
+Set `CODEX_GATEWAY_REQUEST_LOG=1` before starting the shim. It appends one JSON object per routed
+request to `~/.claude/codex-gateway/logs/request-routes.jsonl`: timestamp, route (`codex` or
+`anthropic`), requested model, request path, and Claude Code's session id when supplied. It never
+writes request bodies, prompts, tool payloads, authorization, or arbitrary headers. Set
+`CODEX_GATEWAY_REQUEST_LOG_PATH` to put this metadata-only log somewhere else.
+
+```text
+{"at":"...","backend":"anthropic","model":"claude-fable-5","path":"/v1/messages","sessionId":"..."}
+```
+
+After changing either variable, restart the gateway (`stop`, then `start`) so its detached shim gets
+the new environment.
+
 ## RC-compatibility mode (restoring `/remote-control`)
 
 Claude Code's built-in `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the
