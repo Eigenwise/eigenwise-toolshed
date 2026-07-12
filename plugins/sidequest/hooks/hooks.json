@@ -1,6 +1,18 @@
 {
   "description": "sidequest: on every prompt, nudge Claude to capture a mentioned side issue as a ticket without derailing the current task",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

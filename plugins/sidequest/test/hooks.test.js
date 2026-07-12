@@ -36,6 +36,7 @@ const { execFileSync } = require('node:child_process');
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const CAPTURE = path.join(HOOKS, 'capture-nudge.js');
 const SESSION = path.join(HOOKS, 'session-start.js');
+const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 
 // Byte budgets (chars ≈ tokens × ~4). CLI paths inside the blocks vary by
 // machine, so these have headroom — the point is catching a doctrine block
@@ -50,13 +51,17 @@ const BUDGET = {
 
 // Run a hook with the given stdin payload and return the injected
 // additionalContext string (or '' when the hook stays silent).
-function runHook(script, payload) {
+function runHookOutput(script, payload) {
   const out = execFileSync(process.execPath, [script], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
   });
-  if (!out.trim()) return '';
-  const parsed = JSON.parse(out);
+  return out.trim() ? JSON.parse(out) : null;
+}
+
+function runHook(script, payload) {
+  const parsed = runHookOutput(script, payload);
+  if (!parsed) return '';
   return (parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext) || '';
 }
 
@@ -72,6 +77,28 @@ function assertNoRetiredDoctrine(ctx, where) {
     assert.ok(!ctx.includes(phrase), `${where} must not carry retired doctrine ("${phrase}")`);
   }
 }
+
+test('pre-tool hook forces bypass on sidequest worktree executors only', () => {
+  const original = {
+    subagent_type: 'sidequest-exec-high',
+    isolation: 'worktree',
+    model: 'opus',
+    name: 'sq36-srs-cards',
+    prompt: 'work SQ-36',
+  };
+  const out = runHookOutput(FORCE_BYPASS, { tool_name: 'Agent', tool_input: original });
+  assert.deepStrictEqual(out.hookSpecificOutput.updatedInput, {
+    ...original,
+    mode: 'bypassPermissions',
+  });
+  assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+
+  const generic = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'code-explorer', isolation: 'worktree' },
+  });
+  assert.strictEqual(generic, null, 'unrelated worktree agents keep their caller-selected permissions');
+});
 
 /* ------------------------------------------------------------------ *
  *  SessionStart — the one full doctrine block
