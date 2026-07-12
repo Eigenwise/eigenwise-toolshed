@@ -207,23 +207,64 @@ test('multiple discovered models each get their four files', () => {
  * -------------------------------------------------------------- */
 
 
-test('temporary native agent returns an Agent-ready spawn spec and cleans up by name', () => {
+test('temporary native agent names itself after the resolved runtime (Codex slug), no hex nonce', () => {
   const dir = tmpDir();
   const created = agentsync.createNativeAgent({
-    ref: 'SQ-42', nonce: 'abcdef12', modelId: 'claude-codex-gpt-5.6-terra[1m]',
-    effort: 'medium', grade: 'grade-3', sessionId: 'session-42', tools: ['Read', 'Bash', 'SendMessage'],
+    ref: 'SQ-198', runtime: 'codex-gpt-5-6-luna', modelId: 'claude-codex-gpt-5.6-luna[1m]',
+    effort: 'medium', grade: 'grade-1', sessionId: 'session-198', tools: ['Read', 'Bash', 'SendMessage'],
   }, { dir, waitMs: 0 });
-  assert.strictEqual(created.name, 'sidequest-native-sq-42-abcdef12');
+  // The runtime shows in the card; the noisy "codex-" catalog prefix is dropped
+  // and there is no meaningless hex suffix.
+  assert.strictEqual(created.name, 'sidequest-native-sq-198-gpt-5-6-luna');
+  assert.ok(created.name.startsWith(agentsync.TEMP_PREFIX)); // still discoverable for cleanup
+  assert.ok(!/-[0-9a-f]{8}$/.test(created.name)); // no hex nonce tail
   assert.deepStrictEqual(created.spawn, { subagent_type: created.name, name: created.name, mode: 'bypassPermissions' });
   const source = fs.readFileSync(created.file, 'utf8');
-  assert.match(source, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
+  assert.match(source, /^model: claude-codex-gpt-5\.6-luna\[1m\]$/m);
   assert.match(source, /^effort: medium$/m);
   assert.match(source, /^tools: Read, Bash, SendMessage$/m);
   assert.match(source, /^permissionMode: bypassPermissions$/m);
   assert.ok(source.includes(agentsync.TEMP_MARKER));
-  assert.ok(source.includes('sidequest-native-grade: grade-3'));
+  assert.ok(source.includes('sidequest-native-grade: grade-1')); // routing id stays neutral
   assert.strictEqual(agentsync.cleanupNativeAgents({ name: created.name, dir }).removed, 1);
   assert.ok(!fs.existsSync(created.file));
+});
+
+test('a Claude-backed tier embeds its runtime alias in the name', () => {
+  const dir = tmpDir();
+  const created = agentsync.createNativeAgent({
+    ref: 'SQ-7', runtime: 'opus', modelId: 'opus',
+    effort: 'high', grade: 'grade-3', sessionId: 'session-7',
+  }, { dir, waitMs: 0 });
+  assert.strictEqual(created.name, 'sidequest-native-sq-7-opus');
+});
+
+test('same ref + same runtime collides safely: a nonce is appended, prefix cleanup still gets both', () => {
+  const dir = tmpDir();
+  const first = agentsync.createNativeAgent({
+    ref: 'SQ-198', runtime: 'codex-gpt-5-6-luna', modelId: 'claude-codex-gpt-5.6-luna[1m]',
+    effort: 'medium', grade: 'grade-1', sessionId: 'session-198',
+  }, { dir, waitMs: 0 });
+  const second = agentsync.createNativeAgent({
+    ref: 'SQ-198', runtime: 'codex-gpt-5-6-luna', modelId: 'claude-codex-gpt-5.6-luna[1m]',
+    effort: 'medium', grade: 'grade-1', sessionId: 'session-198',
+  }, { dir, waitMs: 0 });
+  assert.strictEqual(first.name, 'sidequest-native-sq-198-gpt-5-6-luna');
+  assert.notStrictEqual(second.name, first.name); // unique
+  assert.match(second.name, /^sidequest-native-sq-198-gpt-5-6-luna-[0-9a-f]{6,32}$/); // runtime kept, nonce appended
+  assert.ok(fs.existsSync(first.file) && fs.existsSync(second.file));
+  // Both are still TEMP_PREFIX-prefixed, so a by-session (prefix-scanning) cleanup takes both.
+  assert.strictEqual(agentsync.cleanupNativeAgents({ sessionId: 'session-198', dir }).removed, 2);
+  assert.ok(!fs.existsSync(first.file) && !fs.existsSync(second.file));
+});
+
+test('an explicit nonce is still honored (deterministic) and follows the runtime token', () => {
+  const dir = tmpDir();
+  const created = agentsync.createNativeAgent({
+    ref: 'SQ-42', runtime: 'codex-gpt-5-6-terra', nonce: 'abcdef12', modelId: 'claude-codex-gpt-5.6-terra[1m]',
+    effort: 'medium', grade: 'grade-3', sessionId: 'session-42',
+  }, { dir, waitMs: 0 });
+  assert.strictEqual(created.name, 'sidequest-native-sq-42-gpt-5-6-terra-abcdef12');
 });
 
 test('temporary native agent cleanup respects session boundaries and recovers stale files', () => {

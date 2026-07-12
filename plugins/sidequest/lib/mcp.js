@@ -501,6 +501,7 @@ const TOOLS = [
         modelId: resolved.spawnId,
         effort: ticket.effort,
         grade: ticket.model,
+        runtime: resolved.runsModel,
         tools: args.tools,
         sessionId: sessionOf(args),
       });
