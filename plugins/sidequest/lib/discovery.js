@@ -96,8 +96,8 @@ function validateEntry(raw, source) {
  * discoverExternalModels() -> [{slug,id,label,suggestedTier,source}]
  *
  * Reads every known catalog under every discovery root, validates each
- * model entry, and dedupes by slug (first one found wins — root order then
- * CATALOG_SOURCES order is the precedence). Never throws. Not cached across
+ * model entry, and dedupes by `(source, slug)` (first entry from each source
+ * wins — root order then CATALOG_SOURCES order is the precedence). Never throws. Not cached across
  * calls, so a caller (or a test resetting SIDEQUEST_DISCOVERY_DIRS/writing a
  * new catalog file) always sees the current on-disk state.
  */
@@ -112,8 +112,9 @@ function discoverExternalModels() {
       const models = Array.isArray(data.models) ? data.models : [];
       for (const raw of models) {
         const entry = validateEntry(raw, source);
-        if (!entry || seen.has(entry.slug)) continue;
-        seen.add(entry.slug);
+        const key = entry && `${entry.source}:${entry.slug}`;
+        if (!entry || seen.has(key)) continue;
+        seen.add(key);
         out.push(entry);
       }
     }
@@ -121,4 +122,4 @@ function discoverExternalModels() {
   return out;
 }
 
-module.exports = { discoverExternalModels };
+module.exports = { CATALOG_SOURCES, discoverExternalModels };

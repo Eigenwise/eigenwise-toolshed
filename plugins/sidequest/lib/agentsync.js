@@ -20,7 +20,8 @@
  * dispatch: 'native-agent'). So every tier the user has POINTED AT a
  * discovered Codex model (prefs.tierBackend, e.g.
  * opus -> codex-gpt-5-6-terra) gets its own real agent file —
- * sidequest-exec-<slug>-<effort>.md, one per that tier's enabled non-max effort —
+ * sidequest-exec-<source>-<slug>-<effort>.md, one per that tier's enabled
+ * non-max effort —
  * with a `model:` frontmatter pin, generated into the user's live agents
  * directory (default ~/.claude/agents) at RUNTIME (the model wasn't known at
  * plugin build time; it's discovered from the user's machine).
@@ -71,8 +72,9 @@ function defaultAgentsDir() {
   return path.join(os.homedir(), '.claude', 'agents');
 }
 
-function agentFileName(slug, effort) {
-  return `sidequest-exec-${slug}-${effort}.md`;
+function agentFileName(source, slug, effort, namespace) {
+  const prefix = namespace ? `${source}-` : '';
+  return `sidequest-exec-${prefix}${slug}-${effort}.md`;
 }
 
 // Render one agent file's full source from the shared template. Every runtime
@@ -98,9 +100,10 @@ function backendNote(slug, id) {
   return `\n\n_This agent is the authoritative Sidequest executor for the \`${slug}\` runtime and runs on \`${runtime}\` through codex-gateway. Claude Code's native suffix is external metadata; the Sidequest route line and this backend-specific executor name are authoritative. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
 }
 
-function renderBackendAgent(slug, id, effort) {
+function renderBackendAgent(source, slug, id, effort, namespace) {
+  const prefix = namespace ? `${source}-` : '';
   return renderExecAgent({
-    name: `sidequest-exec-${slug}-${effort}`,
+    name: `sidequest-exec-${prefix}${slug}-${effort}`,
     effort,
     modelId: id,
     marker: MARKER,
@@ -284,10 +287,17 @@ function syncExecAgents(prefs, opts) {
       marker: MARKER,
     }));
   }
-  for (const m of discovery.discoverExternalModels()) {
-    if (!m || !m.slug || !m.id) continue;
+  const models = discovery.discoverExternalModels().filter((m) => m && m.slug && m.id);
+  const duplicateSlugs = new Set();
+  const seenSlugs = new Set();
+  for (const m of models) {
+    if (seenSlugs.has(m.slug)) duplicateSlugs.add(m.slug);
+    seenSlugs.add(m.slug);
+  }
+  for (const m of models) {
     for (const effort of NON_MAX_EFFORTS) {
-      wanted.set(agentFileName(m.slug, effort), renderBackendAgent(m.slug, m.id, effort));
+      const namespace = duplicateSlugs.has(m.slug);
+      wanted.set(agentFileName(m.source, m.slug, effort, namespace), renderBackendAgent(m.source, m.slug, m.id, effort, namespace));
     }
   }
 

@@ -18,13 +18,16 @@ process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery
 const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-empty-'));
 process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
-const { discoverExternalModels } = require('../lib/discovery.js');
+const discovery = require('../lib/discovery.js');
+const { discoverExternalModels } = discovery;
+const SECOND_SOURCE = { source: 'other-gateway', relPath: path.join('other-gateway', 'catalog.json') };
+discovery.CATALOG_SOURCES.push(SECOND_SOURCE);
 const store = require('../lib/store.js');
 const { getModelPrefs, setModelPrefs, routingLadder } = store;
 
-function writeCatalogRaw(dir, body) {
-  fs.mkdirSync(path.join(dir, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'codex-gateway', 'catalog.json'), body);
+function writeCatalogRaw(dir, body, source) {
+  fs.mkdirSync(path.join(dir, source || 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(dir, source || 'codex-gateway', 'catalog.json'), body);
 }
 
 // Seed a schema-2 catalog and point discovery at it.
@@ -118,11 +121,35 @@ test('individual bad entries skipped, good ones survive', () => {
   assert.strictEqual(got[0].slug, TERRA.slug);
 });
 
-test('duplicate slugs across the catalog -> first wins', () => {
+test('duplicate slugs within one source -> first wins', () => {
   seedCatalog([TERRA, Object.assign({}, TERRA, { label: 'Dupe' })]);
   const got = discoverExternalModels();
   assert.strictEqual(got.length, 1);
   assert.strictEqual(got[0].label, 'GPT-5.6 Terra');
+});
+
+test('same slug from different sources remains independently resolvable', () => {
+  const dir = seedCatalog([{ slug: 'shared-model', id: 'claude-codex-primary[1m]', label: 'Primary' }]);
+  writeCatalogRaw(dir, JSON.stringify({ schema: 2, source: 'other-gateway', models: [
+    { slug: 'shared-model', id: 'claude-codex-secondary[1m]', label: 'Secondary' },
+  ] }), SECOND_SOURCE.source);
+
+  const got = discoverExternalModels().filter((entry) => entry.slug === 'shared-model');
+  assert.deepStrictEqual(got.map((entry) => entry.source), ['codex-gateway', 'other-gateway']);
+
+  const primary = store.setModelPrefs({ tierBackend: { 'grade-2': 'codex-gateway:shared-model' } });
+  const primaryExec = store.resolveExec('grade-2', 'high', primary);
+  assert.strictEqual(primaryExec.spawnId, 'claude-codex-primary[1m]');
+  assert.strictEqual(primaryExec.agent, 'sidequest-exec-codex-gateway-shared-model-high');
+
+  const secondary = store.setModelPrefs({ tierBackend: { 'grade-2': 'other-gateway:shared-model' } });
+  const secondaryExec = store.resolveExec('grade-2', 'high', secondary);
+  assert.strictEqual(secondaryExec.spawnId, 'claude-codex-secondary[1m]');
+  assert.strictEqual(secondaryExec.agent, 'sidequest-exec-other-gateway-shared-model-high');
+
+  const legacy = store.setModelPrefs({ tierBackend: { 'grade-2': 'shared-model' } });
+  assert.strictEqual(store.resolveExec('grade-2', 'high', legacy).spawnId, 'claude-codex-primary[1m]');
+  store.setModelPrefs({ tierBackend: { 'grade-2': 'claude' } });
 });
 
 /* -------------------------------------------------------------- *

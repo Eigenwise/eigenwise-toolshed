@@ -230,9 +230,10 @@ function coerceEffort(v) {
  *  own Claude model → byte-identical built-in behavior.
  *
  *  Stored as prefs.tierBackend: { haiku, sonnet, opus, fable }, each value
- *  "claude" (default) or a discovered catalog slug. A mapped slug that isn't in
- *  the current catalog (gateway uninstalled / model gone) falls back to Claude
- *  with a warning, so routing can never break.
+ *  "claude" (default), a source-qualified `source:slug`, or a legacy discovered
+ *  catalog slug. A mapped model that isn't in the current catalog (gateway
+ *  uninstalled / model gone) falls back to Claude with a warning, so routing can
+ *  never break.
  * ------------------------------------------------------------------ */
 
 // A discovered catalog slug: 2..32 chars, lowercase alnum + dashes, alnum-start.
@@ -243,15 +244,30 @@ const BACKEND_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 // Give that one case a sane fixed effort.
 const HAIKU_BACKEND_EFFORT = 'medium';
 
-// The discovered catalog as a slug -> entry map ({slug,id,label,suggestedTier,
-// source}). This is the set of models a tier may be pointed at right now.
-function discoveredBySlug() {
+// A discovered catalog model key: `source:slug`. Source and slug are both
+// sidequest-controlled lowercase tokens, so the separator is unambiguous.
+const BACKEND_KEY_RE = /^([a-z0-9][a-z0-9-]{0,31}):([a-z0-9][a-z0-9-]{1,31})$/;
+
+function backendKey(source, slug) {
+  return `${source}:${slug}`;
+}
+
+// The discovered catalog as a source-qualified key -> entry map. Legacy bare
+// slug lookup stays available at resolve time for older prefs files.
+function discoveredByKey() {
   const out = {};
-  for (const d of discoverExternalModels()) out[d.slug] = d;
+  for (const d of discoverExternalModels()) out[backendKey(d.source, d.slug)] = d;
   return out;
 }
 
-// Normalize a raw tierBackend patch/stored value into { tier: "claude"|slug }.
+function discoveredBySlug() {
+  const out = {};
+  for (const d of discoverExternalModels()) if (!(d.slug in out)) out[d.slug] = d;
+  return out;
+}
+
+// Normalize a raw tierBackend patch/stored value into
+// { tier: "claude"|"source:slug"|legacy-slug }.
 // Each tier defaults to "claude"; a value is kept only if it's "claude" or a
 // syntactically valid slug (existence in the catalog is checked at resolve time,
 // not here — a mapping for a temporarily-absent gateway is preserved, not lost).
@@ -264,7 +280,7 @@ function normalizeTierBackend(raw) {
     if (typeof v === 'string') {
       const s = v.trim().toLowerCase();
       if (s === 'claude' || s === '' || s === legacy) out[grade] = 'claude';
-      else if (BACKEND_SLUG_RE.test(s)) out[grade] = s;
+      else if (BACKEND_SLUG_RE.test(s) || BACKEND_KEY_RE.test(s)) out[grade] = s;
       else out[grade] = 'claude';
     } else {
       out[grade] = 'claude';
@@ -275,25 +291,31 @@ function normalizeTierBackend(raw) {
 
 // Resolve, for the current prefs, what actually runs each tier: the mapped Codex
 // model when the tier points at one that's still in the catalog, else the tier's
-// own Claude model. Returns { byTier: {tier: {backend, slug, id, label}}, warnings }
-// where backend is "claude" or "codex". A mapping to a now-absent slug degrades
-// to claude and adds a warning (surfaced in getModelPrefs.tierBackendWarnings).
+// own Claude model. Source-qualified values resolve exactly; legacy bare slugs
+// preserve the previous first-discovered match. Returns
+// { byTier: {tier: {backend, source, slug, id, label}}, warnings } where backend
+// is "claude" or "codex". A mapping to a now-absent model degrades to claude and
+// adds a warning (surfaced in getModelPrefs.tierBackendWarnings).
 function resolveTierBackends(tierBackend) {
   const map = normalizeTierBackend(tierBackend);
-  const catalog = discoveredBySlug();
+  const catalog = discoveredByKey();
+  const discovered = Object.values(catalog);
   const byTier = {};
   const warnings = [];
   for (const grade of VALID_MODELS) {
     const v = map[grade];
     const legacy = GRADE_TIER[grade];
-    if (v !== 'claude' && catalog[v]) {
-      const d = catalog[v];
-      byTier[grade] = { backend: 'codex', slug: d.slug, id: d.id, label: d.label };
+    const d = v === 'claude' ? null : (catalog[v] || discovered.find((entry) => entry.slug === v));
+    if (d) {
+      const agentSlug = discovered.filter((entry) => entry.slug === d.slug).length > 1
+        ? `${d.source}-${d.slug}`
+        : d.slug;
+      byTier[grade] = { backend: 'codex', source: d.source, slug: d.slug, agentSlug, id: d.id, label: d.label };
     } else {
-      if (v !== 'claude' && !catalog[v]) {
+      if (v !== 'claude') {
         warnings.push(`${GRADE_LABELS[grade]} is mapped to "${v}", which isn't currently available — falling back to Claude ${legacy}`);
       }
-      byTier[grade] = { backend: 'claude', slug: null, id: null, label: null };
+      byTier[grade] = { backend: 'claude', source: null, slug: null, id: null, label: null };
     }
   }
   return { byTier, warnings };
@@ -328,10 +350,10 @@ function resolveExec(grade, effort, prefs) {
   prefs = prefs || getModelPrefs();
   const { byTier } = resolveTierBackends(prefs.tierBackend);
   const legacy = GRADE_TIER[grade];
-  const b = byTier[grade] || { backend: 'claude', slug: null, id: null };
+  const b = byTier[grade] || { backend: 'claude', source: null, slug: null, id: null };
   if (b.backend === 'codex') {
     const eff = effort || HAIKU_BACKEND_EFFORT;
-    return { agent: `sidequest-exec-${b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', slug: b.slug, runsModel: b.slug, runsLabel: b.label || b.slug, dispatch: 'native-agent' };
+    return { agent: `sidequest-exec-${b.agentSlug || b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', source: b.source, slug: b.slug, runsModel: b.slug, runsLabel: b.label || b.slug, dispatch: 'native-agent' };
   }
   if (grade === 'grade-1' || !effort) {
     return { agent: null, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy, dispatch: 'native-agent' };

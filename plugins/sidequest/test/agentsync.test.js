@@ -52,8 +52,9 @@ function customFiles(dir) {
 
 // The four non-max effort filenames a discovered model slug produces, sorted the
 // way readDir sorts (high, low, medium, xhigh).
-function fourFiles(slug) {
-  return ['high', 'low', 'medium', 'xhigh'].map((e) => `sidequest-exec-${slug}-${e}.md`).sort();
+function fourFiles(slug, source) {
+  const prefix = source ? `${source}-` : '';
+  return ['high', 'low', 'medium', 'xhigh'].map((e) => `sidequest-exec-${prefix}${slug}-${e}.md`).sort();
 }
 
 /* -------------------------------------------------------------- *
@@ -206,10 +207,28 @@ test('multiple discovered models each get their four files', () => {
   ].sort());
 });
 
-/* -------------------------------------------------------------- *
- *  defaultAgentsDir never targets the real ~/.claude/agents under a test home
- * -------------------------------------------------------------- */
-
+test('same slug from different sources gets source-namespaced agent files', () => {
+  const source = { source: 'other-gateway', relPath: path.join('other-gateway', 'catalog.json') };
+  const discovery = require('../lib/discovery.js');
+  discovery.CATALOG_SOURCES.push(source);
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-collision-'));
+    const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-collision-catalog-'));
+    fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
+    fs.mkdirSync(path.join(catalog, source.source), { recursive: true });
+    fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({ models: [{ slug: 'shared-model', id: 'claude-primary', label: 'Primary' }] }));
+    fs.writeFileSync(path.join(catalog, source.source, 'catalog.json'), JSON.stringify({ models: [{ slug: 'shared-model', id: 'claude-secondary', label: 'Secondary' }] }));
+    process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
+    agentsync.syncExecAgents({}, { dir });
+    assert.deepStrictEqual(customFiles(dir), [
+      ...fourFiles('shared-model', 'codex-gateway'),
+      ...fourFiles('shared-model', source.source),
+    ].sort());
+  } finally {
+    discovery.CATALOG_SOURCES.pop();
+    clearCatalog();
+  }
+});
 
 test('temporary native agent names itself after the resolved runtime (Codex slug), no hex nonce', () => {
   const dir = tmpDir();
