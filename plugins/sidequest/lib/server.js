@@ -16,7 +16,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const store = require('./store');
 const agentsync = require('./agentsync');
 
@@ -673,7 +673,7 @@ function startReminderScheduler() {
  *  SAME port deterministically (no surprise URL for an open browser tab).
  * ------------------------------------------------------------------ */
 
-const VERSION_WATCH_MS = 20 * 1000;
+const VERSION_WATCH_MS = Number(process.env.SIDEQUEST_VERSION_WATCH_MS) || 20 * 1000;
 const CLEAN_SEMVER_RE = /^\d+\.\d+\.\d+$/;
 
 // Runs the handoff at most once per process — a second tick firing mid-spawn
@@ -738,7 +738,30 @@ function findNewerInstall() {
   }
 }
 
+// Confirm that the successor's entrypoint can at least load before we stop
+// serving. A half-written or corrupt cached install is the common failed-upgrade
+// case; leave the current dashboard alone and retry after the next watch tick.
+function canRunInstall(targetBin) {
+  try {
+    const targetRoot = path.resolve(targetBin, '..', '..');
+    for (const file of [targetBin, path.join(targetRoot, 'lib', 'server.js')]) {
+      const result = spawnSync(process.execPath, ['--check', file], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      if (result.error || result.status !== 0) return false;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Poll for a newer sibling install and hand the port off exactly once.
+// The successor waits for this process rather than reaping it: server.close()
+// stops new connections but lets active API requests complete before the old
+// process exits. A bad cached install fails the preflight above, so the current
+// dashboard keeps serving instead of disappearing mid-upgrade.
 // Returns the interval handle so start() can fold it into its cleanup
 // alongside the reminder timer.
 function startVersionWatch(server, ownPort, reminderTimer) {
@@ -747,6 +770,14 @@ function startVersionWatch(server, ownPort, reminderTimer) {
       if (recycling) return;
       const targetBin = findNewerInstall();
       if (!targetBin) return;
+      if (!canRunInstall(targetBin)) {
+        try {
+          process.stderr.write(`sidequest: newer install failed preflight (${targetBin}) — keeping the current dashboard\n`);
+        } catch (_) {
+          /* best effort */
+        }
+        return;
+      }
       recycling = true;
       try {
         process.stderr.write(`sidequest: newer install found (${targetBin}) — handing off port ${ownPort}\n`);
@@ -755,10 +786,15 @@ function startVersionWatch(server, ownPort, reminderTimer) {
       }
       let child;
       try {
-        child = spawn(process.execPath, [targetBin, 'serve', '--port', String(ownPort)], {
+        child = spawn(process.execPath, [targetBin, 'serve', '--port', String(ownPort), '--handoff-pid', String(process.pid)], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
+        });
+        child.once('error', () => {
+          // Before close() begins, an OS-level spawn failure leaves this server
+          // healthy and lets a later watch tick retry the install.
+          recycling = false;
         });
         child.unref();
       } catch (_) {
@@ -766,22 +802,17 @@ function startVersionWatch(server, ownPort, reminderTimer) {
         recycling = false;
         return;
       }
-      // Only after a successful spawn do we free the port for the successor:
-      // stop our own timers and listener, then drop the lockfile if it's ours.
       clearInterval(reminderTimer);
       clearInterval(watchTimer);
-      try {
-        server.close();
-      } catch (_) {
-        /* best effort */
-      }
-      try {
-        const cur = store.readServerInfo();
-        if (cur && cur.pid === process.pid) store.clearServerInfo();
-      } catch (_) {
-        /* best effort */
-      }
-      process.exit(0);
+      server.close(() => {
+        try {
+          const cur = store.readServerInfo();
+          if (cur && cur.pid === process.pid) store.clearServerInfo();
+        } catch (_) {
+          /* best effort */
+        }
+        process.exit(0);
+      });
     } catch (_) {
       /* fail-soft: a watch hiccup must never take the server down */
     }

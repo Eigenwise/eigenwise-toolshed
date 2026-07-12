@@ -8,6 +8,8 @@ const assert = require('node:assert');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const { spawn } = require('child_process');
 
 // Point the store at a throwaway home so any incidental store reads/writes
 // (findNewerInstall never touches it, but requiring server.js pulls in
@@ -123,4 +125,118 @@ test('dashboard presents execution profiles before advanced ladder controls', ()
 
 test('findNewerInstall: never throws even with guards disabled', () => {
   assert.doesNotThrow(() => findNewerInstall());
+});
+
+function copyPlugin(from, to, version) {
+  fs.cpSync(from, to, { recursive: true });
+  const manifest = path.join(to, '.claude-plugin', 'plugin.json');
+  const plugin = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  plugin.version = version;
+  fs.writeFileSync(manifest, `${JSON.stringify(plugin, null, 2)}\n`);
+}
+
+function waitFor(check, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const tick = async () => {
+      try {
+        if (await check()) {
+          resolve();
+          return;
+        }
+        if (Date.now() >= deadline) {
+          reject(new Error(`timed out waiting for ${label}`));
+          return;
+        }
+        setTimeout(tick, 50);
+      } catch (_) {
+        if (Date.now() >= deadline) {
+          reject(new Error(`timed out waiting for ${label}`));
+          return;
+        }
+        setTimeout(tick, 50);
+      }
+    };
+    tick();
+  });
+}
+
+function fetchJson(port, endpoint) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path: endpoint, timeout: 1000 }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => (body += chunk));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+test('dashboard self-updates to a newer cached install at the same URL', { timeout: 20000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-upgrade-'));
+  const oldRoot = path.join(root, '1.37.0');
+  const newRoot = path.join(root, '1.37.1');
+  const source = path.join(__dirname, '..');
+  const home = path.join(root, 'home');
+  copyPlugin(source, oldRoot, '1.37.0');
+
+  const port = 43000 + Math.floor(Math.random() * 1000);
+  const env = Object.assign({}, process.env, {
+    SIDEQUEST_HOME: home,
+    SIDEQUEST_VERSION_WATCH_MS: '100',
+  });
+  delete env.SIDEQUEST_NO_HOT_RECYCLE;
+  const old = spawn(process.execPath, [path.join(oldRoot, 'bin', 'sidequest.js'), 'serve', '--port', String(port)], {
+    env,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  t.after(() => {
+    for (const child of [old]) {
+      if (child.pid && isAlive(child.pid)) {
+        try { process.kill(child.pid); } catch (_) {}
+      }
+    }
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+  });
+
+  await waitFor(async () => {
+    try {
+      const health = await fetchJson(port, '/api/health');
+      return health.version === '1.37.0';
+    } catch (_) {
+      return false;
+    }
+  }, 5000, 'the old dashboard');
+
+  const oldHealth = await fetchJson(port, '/api/health');
+  copyPlugin(source, newRoot, '1.37.1');
+
+  await waitFor(async () => {
+    try {
+      const health = await fetchJson(port, '/api/health');
+      return health.version === '1.37.1';
+    } catch (_) {
+      return false;
+    }
+  }, 10000, 'the upgraded dashboard');
+
+  const newHealth = await fetchJson(port, '/api/health');
+  assert.strictEqual(newHealth.version, '1.37.1');
+  assert.notStrictEqual(newHealth.pid, oldHealth.pid);
+  assert.strictEqual(isAlive(old.pid), false);
 });
