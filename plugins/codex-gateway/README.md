@@ -109,9 +109,10 @@ note for the routing side.
   `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`, preserving their genuine 1M passthrough
   behavior. The shim translates an upstream Codex context-limit response to Anthropic's
   `prompt is too long` error so Claude Code runs its built-in compact-and-retry path instead of
-  stopping on the proxy's raw 502. Version 0.4.3 also removes stale pre-0.4.2 `[1m]` Codex rows
-  from Claude Code's gateway-model cache; restart Claude Code once after upgrading so an
-  already-open session drops its old model budget. Version 0.4.2 removes the old global
+  stopping on the proxy's raw 502. Version 0.4.4 rewrites stale pre-0.4.2 `[1m]` Codex rows
+  in Claude Code's gateway-model cache in place and serves the built-in rows immediately during
+  shim startup, so the model picker always has a valid fallback. Restart Claude Code once after
+  upgrading so an already-open session reloads its picker. Version 0.4.2 removes the old global
   `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` override when it rewrites settings. Legacy typed Codex
   ids ending in `[1m]` still route, but new sessions should select the unsuffixed picker rows.
 - **Model quality of life**: typed selection works too: `/model claude-codex-gpt-5.4`, any string

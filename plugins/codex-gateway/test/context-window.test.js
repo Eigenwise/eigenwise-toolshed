@@ -149,7 +149,9 @@ test('SessionStart cleanup migrates an already-wired install', () => {
   assert.equal(settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(settings.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:18764');
   assert.equal(settings.env.USER_SETTING, 'keep-me');
-  assert.equal(fs.existsSync(gatewayCache), false);
+  const migratedCache = JSON.parse(fs.readFileSync(gatewayCache, 'utf8'));
+  assert.equal(migratedCache.baseUrl, 'http://127.0.0.1:18764');
+  assert.equal(migratedCache.models[0].id, 'claude-codex-gpt-5.6-sol');
 });
 
 test('SessionStart cleanup leaves unrelated gateway caches alone', () => {

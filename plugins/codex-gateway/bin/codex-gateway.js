@@ -173,7 +173,13 @@ function cleanLegacyGatewayModelCache() {
   if (cache.baseUrl !== ENV_BLOCK.ANTHROPIC_BASE_URL || !Array.isArray(cache.models)) return false;
   if (!cache.models.some((m) => m && typeof m.id === 'string'
     && m.id.startsWith(PREFIX) && /\[1m\]$/.test(m.id))) return false;
-  try { fs.rmSync(GATEWAY_MODELS_CACHE); } catch { return false; }
+  cache.models = cache.models.map((m) => {
+    if (!m || typeof m.id !== 'string' || !m.id.startsWith(PREFIX)) return m;
+    return { ...m, id: m.id.replace(/\[1m\]$/, '') };
+  });
+  try {
+    fs.writeFileSync(GATEWAY_MODELS_CACHE, JSON.stringify(cache, null, 2) + '\n');
+  } catch { return false; }
   return true;
 }
 
@@ -534,7 +540,14 @@ async function catalogCommand() {
 }
 
 function runShim() {
-  let modelCache = { at: 0, data: [] };
+  let modelCache = {
+    at: 0,
+    data: DEFAULT_MODELS.map((id) => ({
+      id: `${PREFIX}${id}`,
+      display_name: displayName(id),
+      type: 'model',
+    })),
+  };
   const counters = { models: 0, codex: 0, anthropic: 0 };
 
   async function refreshModels() {
