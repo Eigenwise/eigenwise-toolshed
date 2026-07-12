@@ -216,12 +216,12 @@
   .profile-band { display: block; margin-top: 3px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
   .profile-runtime { text-align: right; font-size: 11.5px; color: var(--text-dim); }
   .profile-runtime b { display: block; color: var(--text); font-weight: 600; }
-  .edit-plan { margin-top: 10px; display: flex; justify-content: flex-end; }
-  .edit-plan button, .advanced-routing summary { border: 1px solid var(--line); background: var(--card); color: var(--text-dim); border-radius: var(--radius-sm); font: 600 11.5px var(--sans); cursor: pointer; }
-  .edit-plan button { padding: 6px 10px; }
+  .routing-direct-controls { margin-top: 14px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
+  .routing-direct-controls .pop-head { padding-left: 0; }
+  .routing-direct-controls .model-pref-list { margin-bottom: 10px; }
+  .advanced-routing summary { border: 1px solid var(--line); background: var(--card); color: var(--text-dim); border-radius: var(--radius-sm); font: 600 11.5px var(--sans); cursor: pointer; }
   .advanced-routing { grid-column: 1 / -1; border-top: 1px solid var(--line-soft); }
   .advanced-routing summary { list-style: none; margin: 10px 18px; padding: 7px 10px; width: fit-content; }
-  .advanced-routing summary::-webkit-details-marker { display: none; }
   .advanced-routing summary::before { content: "+"; margin-right: 7px; color: var(--gold); }
   .advanced-routing[open] summary::before { content: "−"; }
   .advanced-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line-soft); }
@@ -748,7 +748,7 @@
                 <label class="pop-row routing-toggle"><input type="checkbox" id="routingEnabled" /><span>Automatic</span></label>
               </div>
               <div class="routing-profiles" id="routingProfiles"></div>
-              <div class="edit-plan"><button type="button" id="editPlanBtn">Edit plan</button></div>
+              <div class="routing-direct-controls"><div class="pop-head">Effort controls</div><div class="model-pref-list" id="modelPrefList"></div><div class="pop-head">Band preference</div><div class="bias-view" id="biasView"></div><div class="backend-warn" id="tierBackendWarn"></div></div>
             </section>
             <div class="sp-col">
               <div class="pop-head">Desktop notifications</div>
@@ -769,15 +769,6 @@
             <details class="advanced-routing" id="advancedRouting">
               <summary>Advanced routing</summary>
               <div class="advanced-grid">
-                <div class="sp-col">
-                  <div class="pop-head">Runtimes &amp; effort</div>
-                  <div class="model-pref-list" id="modelPrefList"></div>
-                  <div class="backend-warn" id="tierBackendWarn"></div>
-                </div>
-                <div class="sp-col">
-                  <div class="pop-head">Band preference</div>
-                  <div class="bias-view" id="biasView"></div>
-                </div>
                 <div class="sp-col">
                   <div class="pop-head">Exact C1–C10 ladder</div>
                   <div class="ladder-view" id="ladderView"></div>
@@ -969,10 +960,12 @@
   // — the filer must pick one; there is no default. Each tier gets a distinct
   // on-brand accent so the card chip is glanceable.
   var MODELS = [
-    { k: "opus", label: "Opus" }, { k: "sonnet", label: "Sonnet" },
-    { k: "haiku", label: "Haiku" }, { k: "fable", label: "Fable" }
+    { k: "grade-1", label: "Grade 1", hint: "small, tightly-scoped work" },
+    { k: "grade-2", label: "Grade 2", hint: "everyday coding work" },
+    { k: "grade-3", label: "Grade 3", hint: "hard multi-file work" },
+    { k: "grade-4", label: "Grade 4", hint: "the hardest work" }
   ];
-  var MODEL_COLORS = { opus: "#404683", sonnet: "#3f8f8a", haiku: "#a8672e", fable: "#7a5ba8" };
+  var MODEL_COLORS = { "grade-1": "#a8672e", "grade-2": "#3f8f8a", "grade-3": "#404683", "grade-4": "#7a5ba8" };
   // A detected (codex-gateway) model can carry its own color; otherwise give it
   // a stable on-brand hue derived from the slug so its ladder rung and card chip
   // read the same every time. modelColor() is the single lookup everything uses.
@@ -1096,14 +1089,14 @@
   function defaultEffortsMatrix() {
     var out = {};
     MODELS.forEach(function (m) {
-      if (m.k === "haiku") return;
+      if (m.k === "grade-1") return;
       var row = {};
       EFFORTS.forEach(function (ef) { row[ef.k] = true; });
       out[m.k] = row;
     });
     return out;
   }
-  var modelPrefs = { opus: true, sonnet: true, haiku: true, fable: true, routing: true, efforts: defaultEffortsMatrix() };
+  var modelPrefs = { "grade-1": true, "grade-2": true, "grade-3": true, "grade-4": true, routing: true, efforts: defaultEffortsMatrix() };
   function modelEnabled(k) { return modelPrefs[k] !== false; }
   function effortEnabled(model, k) {
     var row = modelPrefs.efforts && modelPrefs.efforts[model];
@@ -1719,7 +1712,7 @@
       headRow.appendChild(h);
     });
     grid.appendChild(headRow);
-    MODELS.filter(function (m) { return m.k !== "haiku"; }).forEach(function (m) {
+    MODELS.filter(function (m) { return m.k !== "grade-1"; }).forEach(function (m) {
       var tierOn = modelEnabled(m.k);
       var row = el("div", "eg-row" + (tierOn ? "" : " dim"));
       var label = el("span", "eg-label");
@@ -1767,20 +1760,20 @@
       toggle.checked = modelPrefs.routing !== false;
       toggle.onchange = function () { modelPrefs.routing = toggle.checked; pushModelPrefs(); };
     }
-    var profilesView = modelPrefs.profiles || {};
-    var profiles = Array.isArray(profilesView) ? profilesView : ["routine", "everyday", "complex", "frontier"].map(function (k) { return profilesView[k]; }).filter(Boolean);
+    var gradesView = modelPrefs.profiles || {};
+    var grades = MODELS.map(function (m) { return gradesView[m.k]; }).filter(Boolean);
     box.innerHTML = "";
-    profiles.forEach(function (p) {
+    grades.forEach(function (p) {
       var row = el("div", "profile-row" + (p.enabled === false ? " muted" : ""));
       var cs = (p.complexities || []).map(function (n) { return "C" + n; }).join(", ") || "No active scores";
-      row.innerHTML = '<span class="profile-dot" style="background:' + modelColor(p.tier) + '"></span>' +
-        '<span><span class="profile-name">' + esc(p.profile[0].toUpperCase() + p.profile.slice(1)) + '</span><span class="profile-band">' + esc(cs) + '</span></span>' +
-        '<span class="profile-runtime"><b>' + esc(p.runsLabel || p.runsModel || p.tier) + '</b>' + esc(p.backend === "codex" ? "Codex runtime" : "Claude runtime") + '</span>';
+      row.innerHTML = '<span class="profile-dot" style="background:' + modelColor(p.grade) + '"></span>' +
+        '<span><span class="profile-name">' + esc(p.label || p.grade) + '</span><span class="profile-band">' + esc(cs) + '</span></span>' +
+        '<span class="profile-runtime"><b>' + esc(p.runsLabel || p.runsModel) + '</b>' + esc(p.backend === "codex" ? "Codex runtime" : "Claude runtime") + '</span>';
+      var det = modelPrefs.discovered || [];
+      if (det.length) row.appendChild(backendSelect(p.grade, det));
       box.appendChild(row);
     });
-    if (!profiles.length) box.innerHTML = '<div class="ladder-empty">Loading execution plan…</div>';
-    var edit = $("editPlanBtn");
-    if (edit) edit.onclick = function () { var a = $("advancedRouting"); if (a) { a.open = true; a.scrollIntoView({ block: "nearest" }); } };
+    if (!grades.length) box.innerHTML = '<div class="ladder-empty">Loading grades…</div>';
   }
 
   // Per-tier backend (1.36.0): each tier runs on its Claude model by default, or
@@ -1799,7 +1792,10 @@
     var sel = document.createElement("select");
     sel.setAttribute("aria-label", tier + " backend model");
     var cur = currentBackend(tier);
-    var opts = ['<option value="claude"' + (cur === "claude" ? " selected" : "") + ">Claude " + esc(tier[0].toUpperCase() + tier.slice(1)) + "</option>"];
+    // The "claude" option names the actual Claude runtime backing this grade —
+    // never the grade itself (grades are neutral IDs, runtimes are models).
+    var claudeRuntime = { "grade-1": "Claude Haiku", "grade-2": "Claude Sonnet", "grade-3": "Claude Opus", "grade-4": "Claude Fable" }[tier] || "Claude";
+    var opts = ['<option value="claude"' + (cur === "claude" ? " selected" : "") + ">" + esc(claudeRuntime) + "</option>"];
     det.forEach(function (dm) {
       var suggested = dm.suggestedTier === tier ? " (suggested)" : "";
       opts.push('<option value="' + esc(dm.slug) + '"' + (cur === dm.slug ? " selected" : "") + ">" + esc(dm.label) + suggested + "</option>");
@@ -1813,9 +1809,10 @@
       renderModelPrefSettings();
       pushModelPrefs().then(function () { refreshLadder(); });
       var dm = det.filter(function (x) { return x.slug === sel.value; })[0];
+      var gradeLabel = { "grade-1": "Grade 1", "grade-2": "Grade 2", "grade-3": "Grade 3", "grade-4": "Grade 4" }[tier] || tier;
       toast(sel.value === "claude"
-        ? tier + " tier runs on Claude"
-        : tier + " tier now runs on " + (dm ? dm.label : sel.value) + " — regenerating its executor agents");
+        ? gradeLabel + " runs on " + claudeRuntime
+        : gradeLabel + " now runs on " + (dm ? dm.label : sel.value) + " — regenerating its executor agents");
     });
     wrap.appendChild(sel);
     return wrap;

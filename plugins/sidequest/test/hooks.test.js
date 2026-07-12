@@ -82,7 +82,7 @@ test('pre-tool hook forces bypass on sidequest worktree executors only', () => {
   const original = {
     subagent_type: 'sidequest-exec-high',
     isolation: 'worktree',
-    model: 'opus',
+    model: 'grade-3',
     name: 'sq36-srs-cards',
     prompt: 'work SQ-36',
   };

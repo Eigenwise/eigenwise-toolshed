@@ -36,11 +36,19 @@ const DEFAULT_MAX_WAVES = 5; // safety cap on how many waves one drain will chew
 // alias, so a fable-derived ticket runs headless as opus; the other three tiers
 // pass through. This only applies to CLAUDE-backed tiers — a tier pointed at a
 // Codex model resolves to that model's id instead (see resolveSpawnModel).
-const SPAWNABLE = new Set(['opus', 'sonnet', 'haiku']);
+// Grades are the routing identifiers everywhere in the plan; only the final
+// `claude -p --model` argv needs a real Claude alias. capTier stays in grade
+// space: grade-4's runtime (Fable) has no headless alias, so it caps to grade-3.
+const SPAWNABLE_GRADES = new Set(['grade-1', 'grade-2', 'grade-3']);
+const GRADE_SPAWN_ALIAS = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus' };
 function capTier(model) {
-  if (SPAWNABLE.has(model)) return model;
-  if (model === 'fable') return 'opus'; // fable derivations run headless as opus
-  return 'sonnet';
+  if (SPAWNABLE_GRADES.has(model)) return model;
+  if (model === 'grade-4') return 'grade-3'; // no headless fable alias
+  return 'grade-2';
+}
+// The Claude alias `claude -p --model` actually accepts for a (capped) grade.
+function spawnAliasFor(grade) {
+  return GRADE_SPAWN_ALIAS[capTier(grade)] || 'sonnet';
 }
 
 // The real model string to hand `claude -p --model` for a stamped tier: if the
@@ -49,7 +57,7 @@ function capTier(model) {
 function resolveSpawnModel(tier, effort, prefs) {
   const ex = store.resolveExec(tier, effort, prefs);
   if (ex.backend === 'codex') return ex.spawnId;      // the real gateway id
-  return capTier(tier);                                // Claude tier, headless-capped
+  return spawnAliasFor(tier);                          // Claude alias, headless-capped
 }
 
 // Is the `claude` CLI present to spawn? A headless drain is pointless without it,

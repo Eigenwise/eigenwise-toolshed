@@ -23,9 +23,9 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
 const agentsync = require('../lib/agentsync.js');
 
-const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', suggestedTier: 'opus' };
-const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol', suggestedTier: 'fable' };
-const LUNA = { slug: 'codex-gpt-5-6-luna', id: 'claude-codex-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna', suggestedTier: 'haiku' };
+const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', suggestedTier: 'grade-3' };
+const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol', suggestedTier: 'grade-4' };
+const LUNA = { slug: 'codex-gpt-5-6-luna', id: 'claude-codex-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna', suggestedTier: 'grade-1' };
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function readDir(dir) { return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md')).sort(); }
@@ -205,6 +205,37 @@ test('multiple discovered models each get their four files', () => {
 /* -------------------------------------------------------------- *
  *  defaultAgentsDir never targets the real ~/.claude/agents under a test home
  * -------------------------------------------------------------- */
+
+
+test('temporary native agent returns an Agent-ready spawn spec and cleans up by name', () => {
+  const dir = tmpDir();
+  const created = agentsync.createNativeAgent({
+    ref: 'SQ-42', nonce: 'abcdef12', modelId: 'claude-codex-gpt-5.6-terra[1m]',
+    effort: 'medium', grade: 'grade-3', sessionId: 'session-42', tools: ['Read', 'Bash', 'SendMessage'],
+  }, { dir, waitMs: 0 });
+  assert.strictEqual(created.name, 'sidequest-native-sq-42-abcdef12');
+  assert.deepStrictEqual(created.spawn, { subagent_type: created.name, name: created.name, mode: 'bypassPermissions' });
+  const source = fs.readFileSync(created.file, 'utf8');
+  assert.match(source, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
+  assert.match(source, /^effort: medium$/m);
+  assert.match(source, /^tools: Read, Bash, SendMessage$/m);
+  assert.match(source, /^permissionMode: bypassPermissions$/m);
+  assert.ok(source.includes(agentsync.TEMP_MARKER));
+  assert.ok(source.includes('sidequest-native-grade: grade-3'));
+  assert.strictEqual(agentsync.cleanupNativeAgents({ name: created.name, dir }).removed, 1);
+  assert.ok(!fs.existsSync(created.file));
+});
+
+test('temporary native agent cleanup respects session boundaries and recovers stale files', () => {
+  const dir = tmpDir();
+  const a = agentsync.createNativeAgent({ ref: 'SQ-1', nonce: 'abcdef12', modelId: 'claude-a', effort: 'low', grade: 'grade-1', sessionId: 'one' }, { dir, waitMs: 0 });
+  const b = agentsync.createNativeAgent({ ref: 'SQ-2', nonce: 'abcdef34', modelId: 'claude-b', effort: 'high', grade: 'grade-2', sessionId: 'two' }, { dir, waitMs: 0 });
+  assert.strictEqual(agentsync.cleanupNativeAgents({ sessionId: 'one', dir }).removed, 1);
+  assert.ok(!fs.existsSync(a.file));
+  assert.ok(fs.existsSync(b.file));
+  assert.strictEqual(agentsync.cleanupNativeAgents({ dir, staleBefore: Date.now() + 1000 }).removed, 1);
+  assert.ok(!fs.existsSync(b.file));
+});
 
 test('defaultAgentsDir: SIDEQUEST_HOME redirects to <home>/agents, never the real dir (SQ-170)', () => {
   const realDir = path.join(os.homedir(), '.claude', 'agents');

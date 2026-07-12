@@ -116,10 +116,11 @@ test('findNewerInstall: repo-source checkout (non-semver dir name) never self-re
 test('dashboard presents execution profiles before advanced ladder controls', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
   assert.match(html, /id="routingProfiles"/);
-  assert.match(html, /id="editPlanBtn"/);
+  assert.doesNotMatch(html, /id="editPlanBtn"/);
+  assert.match(html, /routing-direct-controls/);
   assert.match(html, /<details class="advanced-routing"/);
   assert.ok(html.indexOf('id="routingProfiles"') < html.indexOf('id="ladderView"'));
-  assert.match(html, /modelPrefs\.profiles \|\| \{\}/);
+  assert.match(html, /var gradesView = modelPrefs\.profiles \|\| \{\}/);
   assert.match(html, /p\.complexities \|\| \[\]/);
 });
 

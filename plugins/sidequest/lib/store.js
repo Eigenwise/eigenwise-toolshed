@@ -155,72 +155,45 @@ function newTicketId() {
 const VALID_STATUS = ['todo', 'doing', 'done'];
 const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 
-// The agent tier a ticket wants working it — the same aliases Claude Code's Task
-// tool accepts, so the orchestrator can pass a ticket's tag straight through as a
-// subagent's model (plan with the top tier, execute a tier down). Required on
-// every ticket at the entry points; the filing agent chooses by complexity.
-// sidequest can't *force* a model (only the orchestrator picks one at spawn
-// time); this tag drives that routing and the `next`/`ready` --model filter.
-const VALID_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
+// Routing identity is intentionally provider-neutral. A grade owns the capability
+// slot; its runtime assignment says what actually executes work in that slot.
+const VALID_MODELS = ['grade-1', 'grade-2', 'grade-3', 'grade-4'];
+const LEGACY_TIER_GRADE = { haiku: 'grade-1', sonnet: 'grade-2', opus: 'grade-3', fable: 'grade-4' };
+const GRADE_TIER = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus', 'grade-4': 'fable' };
+const GRADE_LABELS = { 'grade-1': 'Grade 1', 'grade-2': 'Grade 2', 'grade-3': 'Grade 3', 'grade-4': 'Grade 4' };
 
 /* ------------------------------------------------------------------ *
- *  Execution profiles (SQ-188)
- *
- *  The provider-neutral, user-facing names of the routing plan. Each profile is
- *  a stable alias for exactly one internal capability tier — the ladder, the
- *  scoring, the persisted prefs file, and every tested routing invariant still
- *  run on the four tiers; a profile just lets the user (and the dashboard's
- *  execution-plan UI) reason about "what kind of work" without caring which
- *  vendor model currently backs it (that's the tier's backend, see tierBackend).
- *
- *    routine  → haiku    small chores
- *    everyday → sonnet   bread-and-butter work
- *    complex  → opus     hard, multi-file work
- *    frontier → fable    the genuinely hardest work
+ *  Grades and deprecated input aliases
  * ------------------------------------------------------------------ */
-const EXECUTION_PROFILES = ['routine', 'everyday', 'complex', 'frontier'];
-const PROFILE_TIER = { routine: 'haiku', everyday: 'sonnet', complex: 'opus', frontier: 'fable' };
-const TIER_PROFILE = { haiku: 'routine', sonnet: 'everyday', opus: 'complex', fable: 'frontier' };
-// Human display names for a Claude-backed tier in the derived profiles view.
-// resolveExec's runsLabel keeps its raw tier value (a tested shape); this is
-// purely the friendlier string the plan UI shows for "what runs this profile".
-const CLAUDE_TIER_LABELS = { haiku: 'Claude Haiku', sonnet: 'Claude Sonnet', opus: 'Claude Opus', fable: 'Claude Fable' };
 
-// A profile OR tier name → the internal tier, else null.
+// The old provider-family names and short-lived task-shape names remain accepted
+// at input boundaries only. They never appear in canonical reads or prefs files.
+const EXECUTION_PROFILES = VALID_MODELS.slice();
+const PROFILE_TIER = {
+  routine: 'grade-1', everyday: 'grade-2', complex: 'grade-3', frontier: 'grade-4',
+  haiku: 'grade-1', sonnet: 'grade-2', opus: 'grade-3', fable: 'grade-4',
+};
+const TIER_PROFILE = Object.assign({}, GRADE_TIER);
+const CLAUDE_TIER_LABELS = {
+  'grade-1': 'Claude Haiku', 'grade-2': 'Claude Sonnet',
+  'grade-3': 'Claude Opus', 'grade-4': 'Claude Fable',
+};
+
 function tierForProfile(v) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
-  if (PROFILE_TIER[s]) return PROFILE_TIER[s];
-  return VALID_MODELS.indexOf(s) !== -1 ? s : null;
+  return VALID_MODELS.includes(s) ? s : (PROFILE_TIER[s] || null);
 }
 
-// A tier OR profile name → the neutral profile, else null.
 function profileForTier(v) {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  if (TIER_PROFILE[s]) return TIER_PROFILE[s];
-  return PROFILE_TIER[s] ? s : null;
+  return tierForProfile(v);
 }
 
-// Normalize a requested model tier to one of VALID_MODELS, or null. Blank /
-// "any" / "none" / an unknown alias all coerce to null — which is exactly what
-// the entry points (CLI add, dashboard POST) reject: every ticket must be filed
-// with a real tier, and sidequest never picks one for you. The data layer itself
-// stays permissive/fail-soft (the capture hook must never crash).
-//
-// Tiers are ALWAYS the four built-ins — a Codex model is a per-tier BACKEND
-// (which real model actually runs an opus-tier ticket), not a ladder tier of its
-// own, so it never appears here. `prefs` is accepted for signature stability but
-// no longer widens the vocabulary. The old tier aliases (haiku/sonnet/opus/
-// fable) stay first-class for compatibility; a neutral profile name (routine/
-// everyday/complex/frontier) resolves to its tier, so both vocabularies work at
-// every entry point that takes a model.
 function coerceModel(v, _prefs) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
   if (!s || s === 'any' || s === 'none' || s === 'null') return null;
-  if (VALID_MODELS.indexOf(s) !== -1) return s;
-  return PROFILE_TIER[s] || null;
+  return VALID_MODELS.includes(s) ? s : (PROFILE_TIER[s] || null);
 }
 
 // How hard the executor should think — the reasoning-effort levels Claude Code
@@ -235,7 +208,7 @@ const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // The tiers that carry an effort axis — every model except haiku (which has no
 // reasoning-effort support). model-prefs stores one effort row per tier here, so
 // a single (model, effort) combo like opus·medium can be excluded on its own.
-const EFFORT_MODELS = VALID_MODELS.filter((m) => m !== 'haiku');
+const EFFORT_MODELS = VALID_MODELS.filter((m) => m !== 'grade-1');
 
 function coerceEffort(v) {
   if (v == null) return null;
@@ -283,15 +256,16 @@ function discoveredBySlug() {
 function normalizeTierBackend(raw) {
   const out = {};
   const src = raw && typeof raw === 'object' ? raw : {};
-  for (const tier of VALID_MODELS) {
-    const v = src[tier];
+  for (const grade of VALID_MODELS) {
+    const legacy = GRADE_TIER[grade];
+    const v = src[grade] !== undefined ? src[grade] : src[legacy];
     if (typeof v === 'string') {
       const s = v.trim().toLowerCase();
-      if (s === 'claude' || s === '' || s === tier) out[tier] = 'claude';
-      else if (BACKEND_SLUG_RE.test(s)) out[tier] = s;
-      else out[tier] = 'claude';
+      if (s === 'claude' || s === '' || s === legacy) out[grade] = 'claude';
+      else if (BACKEND_SLUG_RE.test(s)) out[grade] = s;
+      else out[grade] = 'claude';
     } else {
-      out[tier] = 'claude';
+      out[grade] = 'claude';
     }
   }
   return out;
@@ -307,16 +281,17 @@ function resolveTierBackends(tierBackend) {
   const catalog = discoveredBySlug();
   const byTier = {};
   const warnings = [];
-  for (const tier of VALID_MODELS) {
-    const v = map[tier];
+  for (const grade of VALID_MODELS) {
+    const v = map[grade];
+    const legacy = GRADE_TIER[grade];
     if (v !== 'claude' && catalog[v]) {
       const d = catalog[v];
-      byTier[tier] = { backend: 'codex', slug: d.slug, id: d.id, label: d.label };
+      byTier[grade] = { backend: 'codex', slug: d.slug, id: d.id, label: d.label };
     } else {
       if (v !== 'claude' && !catalog[v]) {
-        warnings.push(`${tier} tier is mapped to "${v}", which isn't currently available — falling back to Claude ${tier}`);
+        warnings.push(`${GRADE_LABELS[grade]} is mapped to "${v}", which isn't currently available — falling back to Claude ${legacy}`);
       }
-      byTier[tier] = { backend: 'claude', slug: null, id: null, label: null };
+      byTier[grade] = { backend: 'claude', slug: null, id: null, label: null };
     }
   }
   return { byTier, warnings };
@@ -332,31 +307,28 @@ function resolveTierBackends(tierBackend) {
 // frontmatter); spawnId is the raw model string for the headless `claude -p`
 // path. effort is the ticket's stamped effort (null only for a Claude haiku tier;
 // a Codex-backed haiku uses HAIKU_BACKEND_EFFORT for its agent).
-function resolveExec(tier, effort, prefs) {
+function resolveExec(grade, effort, prefs) {
+  grade = coerceModel(grade);
   prefs = prefs || getModelPrefs();
   const { byTier } = resolveTierBackends(prefs.tierBackend);
-  const b = byTier[tier] || { backend: 'claude', slug: null, id: null };
+  const legacy = GRADE_TIER[grade];
+  const b = byTier[grade] || { backend: 'claude', slug: null, id: null };
   if (b.backend === 'codex') {
     const eff = effort || HAIKU_BACKEND_EFFORT;
-    // runsLabel is the human name of what actually runs, for a visible spawn
-    // announcement (e.g. "GPT-5.6 Terra"); runsModel is its slug.
     return { agent: `sidequest-exec-${b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', slug: b.slug, runsModel: b.slug, runsLabel: b.label || b.slug };
   }
-  // Claude-backed. haiku has no effort agent (plain agent, model: haiku).
-  if (tier === 'haiku' || !effort) {
-    return { agent: null, model: tier, spawnId: tier, backend: 'claude', slug: null, runsModel: tier, runsLabel: tier };
+  if (grade === 'grade-1' || !effort) {
+    return { agent: null, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy };
   }
-  return { agent: `sidequest-exec-${effort}`, model: tier, spawnId: tier, backend: 'claude', slug: null, runsModel: tier, runsLabel: tier };
+  return { agent: `sidequest-exec-${effort}`, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy };
 }
 
 // Resolve a stamped model name to the real string handed to Claude Code at spawn
 // time. A ticket stamps a TIER; if that tier is Codex-backed, the real model is
 // the mapped id, else the tier maps to itself. Unknown names → null.
-function resolveModelId(tierName, prefs) {
-  if (tierName == null) return null;
-  const s = String(tierName).trim().toLowerCase();
-  if (VALID_MODELS.indexOf(s) === -1) return null;
-  return resolveExec(s, null, prefs).spawnId;
+function resolveModelId(gradeName, prefs) {
+  const grade = coerceModel(gradeName);
+  return grade ? resolveExec(grade, null, prefs).spawnId : null;
 }
 
 // The routing vocabulary: tickets/filters/provenance name one of the four TIERS.
@@ -393,7 +365,7 @@ function classifyModelFilter(v, _prefs) {
 
 // Capability order, weakest first — the axis the ladder scales along.
 // (VALID_MODELS is unordered vocabulary; this is the ranking.)
-const MODEL_CAPABILITY_ORDER = ['haiku', 'sonnet', 'opus', 'fable'];
+const MODEL_CAPABILITY_ORDER = VALID_MODELS.slice();
 
 // An integer score 1..10, or null when absent/garbage.
 function coerceComplexity(v) {
@@ -444,7 +416,7 @@ function coerceRoutingBias(v) {
 //     ceiling) as the rung directly below it instead of being skipped.
 // Bump a tier's offset further above its neighbor's to weaken/eliminate overlap
 // there (more tier-major); pull it closer to widen the crossover band.
-const LADDER_TIER_BASE = { haiku: 0, sonnet: 2, opus: 4, fable: 8 };
+const LADDER_TIER_BASE = { 'grade-1': 0, 'grade-2': 2, 'grade-3': 4, 'grade-4': 8 };
 // The effort axis the score indexes along (max held out — it's the sparing top
 // rung, ranked separately). Position in this list == a rung's effortIndex.
 const LADDER_EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh'];
@@ -492,15 +464,13 @@ function routingLadder(prefs) {
       model: m,
       base: LADDER_TIER_BASE[m],
       tierRank: MODEL_CAPABILITY_ORDER.indexOf(m),
-      row: m === 'haiku' ? null : builtinRow(m),
-      haiku: m === 'haiku',
+      row: m === 'grade-1' ? null : builtinRow(m),
+      haiku: m === 'grade-1',
     });
   }
-  // Never return an empty ladder: fall back to a single sonnet tier, seeded from
-  // its own row so an all-false efforts object still yields the medium fallback
-  // below. Unreachable via setModelPrefs (the tier guard keeps a built-in on).
+  // Never return an empty ladder: fall back to Grade 2.
   if (!tiers.length) {
-    tiers.push({ model: 'sonnet', base: LADDER_TIER_BASE.sonnet, tierRank: MODEL_CAPABILITY_ORDER.indexOf('sonnet'), row: builtinRow('sonnet'), haiku: false });
+    tiers.push({ model: 'grade-2', base: LADDER_TIER_BASE['grade-2'], tierRank: MODEL_CAPABILITY_ORDER.indexOf('grade-2'), row: builtinRow('grade-2'), haiku: false });
   }
 
   // ENUMERATE every enabled combo programmatically and score it by capability.
@@ -511,7 +481,7 @@ function routingLadder(prefs) {
   const seq = [];
   for (const tier of tiers) {
     if (tier.haiku) {
-      seq.push({ model: 'haiku', effort: null, tierRank: tier.tierRank, score: tier.base });
+      seq.push({ model: 'grade-1', effort: null, tierRank: tier.tierRank, score: tier.base });
       continue;
     }
     let tierEfforts = seqEffortsOf(tier.row);
@@ -619,18 +589,14 @@ function applyDerivedRouting(t, prefs) {
       // tells the orchestrator to announce which model actually runs (runsLabel).
       t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel };
     }
-  } else if (VALID_MODELS.indexOf(t.model) !== -1) {
-    // Legacy no-complexity ticket with a stored tier tag: the tag is honored
-    // (nothing re-derives it), but the READ still resolves what would actually
-    // run it, so a Codex-backed tier can't silently fall back to the generic
-    // Claude executor path just because the ticket predates complexity scoring.
+  } else if (coerceModel(t.model)) {
+    // Legacy no-complexity ticket: normalize deprecated tier aliases on read.
+    t.model = coerceModel(t.model);
     prefs = prefs || getModelPrefs();
     const ex = resolveExec(t.model, t.effort || null, prefs);
     t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel };
   }
-  // Every read carries the neutral profile of whatever tier the ticket routed
-  // (or was tagged) to — the user-facing name for "SQ-n · Cn Profile · …" lines.
-  t.profile = TIER_PROFILE[t.model] || null;
+  t.profile = t.model || null;
   return t;
 }
 
@@ -1534,8 +1500,8 @@ function makeWorkedBy(input, _prefs) {
   if (!input) return null;
   const rawModel = input.model;
   if (rawModel == null || String(rawModel).trim() === '') return null; // no stamp when not provided
-  const model = String(rawModel).trim().toLowerCase();
-  const known = VALID_MODELS.indexOf(model) !== -1 || !!discoveredBySlug()[model];
+  const model = coerceModel(rawModel) || String(rawModel).trim().toLowerCase();
+  const known = VALID_MODELS.indexOf(model) !== -1 || !!PROFILE_TIER[model] || !!discoveredBySlug()[model];
   if (!known) {
     throw new Error(`invalid model "${rawModel}" — expected one of: ${VALID_MODELS.join(', ')} (or a discovered Codex model)`);
   }
@@ -2190,19 +2156,17 @@ function deriveProfilesView(prefs) {
   const byTier = prefs.tierBackendResolved || resolveTierBackends(prefs.tierBackend).byTier;
   const ladder = routingLadder(prefs);
   const out = {};
-  for (const profile of EXECUTION_PROFILES) {
-    const tier = PROFILE_TIER[profile];
-    const b = byTier[tier] || { backend: 'claude', slug: null, id: null, label: null };
-    const complexities = [];
-    for (const r of ladder) if (r.model === tier) complexities.push(r.complexity);
-    out[profile] = {
-      profile,
-      tier,
-      enabled: prefs[tier] !== false,
+  for (const grade of VALID_MODELS) {
+    const b = byTier[grade] || { backend: 'claude', slug: null, id: null, label: null };
+    const complexities = ladder.filter((r) => r.model === grade).map((r) => r.complexity);
+    out[grade] = {
+      grade,
+      label: GRADE_LABELS[grade],
+      enabled: prefs[grade] !== false,
       backend: b.backend,
-      runsModel: b.backend === 'codex' ? b.slug : tier,
-      runsLabel: b.backend === 'codex' ? (b.label || b.slug) : CLAUDE_TIER_LABELS[tier],
-      efforts: tier === 'haiku' ? null : Object.assign({}, (prefs.efforts && prefs.efforts[tier]) || {}),
+      runsModel: b.backend === 'codex' ? b.slug : GRADE_TIER[grade],
+      runsLabel: b.backend === 'codex' ? (b.label || b.slug) : CLAUDE_TIER_LABELS[grade],
+      efforts: grade === 'grade-1' ? null : Object.assign({}, (prefs.efforts && prefs.efforts[grade]) || {}),
       complexities,
       range: complexities.length ? [complexities[0], complexities[complexities.length - 1]] : null,
     };
@@ -2230,46 +2194,37 @@ function translateProfilePatch(patch) {
   if (!patch || typeof patch !== 'object') return {};
   const out = Object.assign({}, patch);
   const src = patch.profiles && typeof patch.profiles === 'object' ? patch.profiles : null;
-  if ('profiles' in out) delete out.profiles;
-  const explicitTierBackend = patch.tierBackend && typeof patch.tierBackend === 'object' ? patch.tierBackend : {};
+  delete out.profiles;
+  const explicitBackend = patch.tierBackend && typeof patch.tierBackend === 'object' ? patch.tierBackend : {};
   const explicitEfforts = patch.efforts && typeof patch.efforts === 'object' ? patch.efforts : {};
   if (src) {
-    for (const profile of EXECUTION_PROFILES) {
-      if (!(profile in src)) continue;
-      const tier = PROFILE_TIER[profile];
-      const v = src[profile];
+    for (const alias of Object.keys(src)) {
+      const grade = coerceModel(alias);
+      if (!grade) continue;
+      const v = src[alias];
       if (v && typeof v === 'object') {
-        if ('enabled' in v && !(tier in patch)) out[tier] = v.enabled !== false;
-        if ('backend' in v && !(tier in explicitTierBackend)) {
-          out.tierBackend = Object.assign({}, out.tierBackend, { [tier]: v.backend });
+        if ('enabled' in v && !(grade in patch)) out[grade] = v.enabled !== false;
+        if ('backend' in v && !(grade in explicitBackend)) out.tierBackend = Object.assign({}, out.tierBackend, { [grade]: v.backend });
+        if (grade !== 'grade-1' && v.efforts && typeof v.efforts === 'object') {
+          out.efforts = Object.assign({}, out.efforts, { [grade]: Object.assign({}, v.efforts, explicitEfforts[grade]) });
         }
-        if (tier !== 'haiku' && v.efforts && typeof v.efforts === 'object') {
-          // Profile efforts sit UNDER any explicit row for the same tier.
-          out.efforts = Object.assign({}, out.efforts);
-          out.efforts[tier] = Object.assign({}, v.efforts, explicitEfforts[tier]);
-        }
-      } else if (!(tier in patch)) {
-        out[tier] = v !== false;
-      }
+      } else if (!(grade in patch)) out[grade] = v !== false;
     }
   }
-  // Bare profile names as top-level tier-boolean aliases: { frontier: false }.
-  for (const profile of EXECUTION_PROFILES) {
-    if (profile in out) {
-      const tier = PROFILE_TIER[profile];
-      const v = out[profile];
-      delete out[profile];
-      if (typeof v !== 'object' && !(tier in patch)) out[tier] = v !== false;
-    }
+  for (const alias of Object.keys(PROFILE_TIER)) {
+    if (!(alias in out)) continue;
+    const grade = PROFILE_TIER[alias];
+    const v = out[alias];
+    delete out[alias];
+    if (typeof v !== 'object' && !(grade in patch)) out[grade] = v !== false;
   }
-  // Profile names as tierBackend keys: { tierBackend: { complex: <slug> } }.
   if (out.tierBackend && typeof out.tierBackend === 'object') {
     const tb = Object.assign({}, out.tierBackend);
-    for (const profile of EXECUTION_PROFILES) {
-      if (profile in tb) {
-        const tier = PROFILE_TIER[profile];
-        if (!(tier in explicitTierBackend)) tb[tier] = tb[profile];
-        delete tb[profile];
+    for (const alias of Object.keys(PROFILE_TIER)) {
+      if (alias in tb) {
+        const grade = PROFILE_TIER[alias];
+        if (!(grade in explicitBackend)) tb[grade] = tb[alias];
+        delete tb[alias];
       }
     }
     out.tierBackend = tb;
@@ -2297,14 +2252,19 @@ function getModelPrefs() {
   const saved = readJson(modelPrefsFile(), null);
   const merged = saved && typeof saved === 'object' ? saved : {};
   const out = {};
-  for (const m of VALID_MODELS) out[m] = merged[m] !== false;
+  for (const grade of VALID_MODELS) {
+    const legacy = GRADE_TIER[grade];
+    out[grade] = merged[grade] !== false && merged[legacy] !== false;
+  }
 
   const savedEfforts = merged.efforts && typeof merged.efforts === 'object' ? merged.efforts : null;
   // Only fall back to legacy flat keys when there's no matrix at all.
   const hasLegacyFlat = !savedEfforts && VALID_EFFORTS.some((e) => e in merged);
   out.efforts = {};
   for (const m of EFFORT_MODELS) {
-    const savedRow = savedEfforts && merged.efforts[m] && typeof merged.efforts[m] === 'object' ? merged.efforts[m] : null;
+    const legacy = GRADE_TIER[m];
+    const savedRow = savedEfforts && (merged.efforts[m] || merged.efforts[legacy]) && typeof (merged.efforts[m] || merged.efforts[legacy]) === 'object'
+      ? (merged.efforts[m] || merged.efforts[legacy]) : null;
     const row = {};
     for (const e of VALID_EFFORTS) {
       if (savedRow) row[e] = savedRow[e] !== false;
@@ -2330,17 +2290,8 @@ function getModelPrefs() {
   out.tierBackendWarnings = resolvedBackends.warnings;
   out.discovered = discoverExternalModels();
 
-  if (merged.customOverrides !== undefined || merged.custom !== undefined) {
-    const persisted = Object.assign({}, merged);
-    delete persisted.customOverrides;
-    delete persisted.custom;
-    persisted.tierBackend = out.tierBackend;
-    writeJson(modelPrefsFile(), persisted);
-  }
-
-  // The neutral execution-plan view (SQ-188): derived fresh from the tier
-  // prefs above on every read, alongside (never instead of) the tier keys.
   out.profiles = deriveProfilesView(out);
+  if (JSON.stringify(merged) !== JSON.stringify(persistedPrefs(out))) writeJson(modelPrefsFile(), persistedPrefs(out));
   return out;
 }
 
@@ -2355,6 +2306,16 @@ function getModelPrefs() {
 // is written to disk. Per-row guard mirrors the tier guard: each model row keeps
 // at least one effort enabled (fallback medium). The `routing` switch and
 // `routingBias` dial carry through independently; routingBias clamps on write.
+function persistedPrefs(prefs) {
+  const out = {};
+  for (const grade of VALID_MODELS) out[grade] = prefs[grade] !== false;
+  out.efforts = prefs.efforts;
+  out.routing = prefs.routing !== false;
+  out.routingBias = coerceRoutingBias(prefs.routingBias);
+  out.tierBackend = normalizeTierBackend(prefs.tierBackend);
+  return out;
+}
+
 function setModelPrefs(patch) {
   const cur = getModelPrefs();
   // Profile-keyed patches (the neutral execution-plan vocabulary, SQ-188) are
@@ -2365,7 +2326,7 @@ function setModelPrefs(patch) {
 
   // Tiers: carried from the current set unless the patch names them.
   for (const m of VALID_MODELS) out[m] = (m in patch) ? patch[m] !== false : cur[m];
-  if (!VALID_MODELS.some((m) => out[m])) out[VALID_MODELS.indexOf('sonnet') !== -1 ? 'sonnet' : VALID_MODELS[0]] = true;
+  if (!VALID_MODELS.some((m) => out[m])) out['grade-2'] = true;
 
   // Efforts: start from the current matrix, layer any legacy flat keys over every
   // row, then layer a nested patch row per-key on top (nested wins over flat).
@@ -2375,7 +2336,9 @@ function setModelPrefs(patch) {
   for (const m of EFFORT_MODELS) {
     const row = Object.assign({}, cur.efforts[m]);
     for (const e of flatKeys) row[e] = patch[e] !== false;
-    const pr = patchEfforts && patchEfforts[m] && typeof patchEfforts[m] === 'object' ? patchEfforts[m] : null;
+    const legacy = GRADE_TIER[m];
+    const pr = patchEfforts && (patchEfforts[m] || patchEfforts[legacy]) && typeof (patchEfforts[m] || patchEfforts[legacy]) === 'object'
+      ? (patchEfforts[m] || patchEfforts[legacy]) : null;
     if (pr) for (const e of VALID_EFFORTS) { if (e in pr) row[e] = pr[e] !== false; }
     if (!VALID_EFFORTS.some((e) => row[e])) row.medium = true; // per-row guard: never leave a tier effortless
     out.efforts[m] = row;
@@ -2392,13 +2355,15 @@ function setModelPrefs(patch) {
   // and the resolved backends are re-derived on read, never persisted.
   const mergedBackend = Object.assign({}, cur.tierBackend);
   if (patch.tierBackend && typeof patch.tierBackend === 'object') {
-    for (const tier of VALID_MODELS) {
-      if (tier in patch.tierBackend) mergedBackend[tier] = patch.tierBackend[tier];
+    for (const grade of VALID_MODELS) {
+      const legacy = GRADE_TIER[grade];
+      if (grade in patch.tierBackend) mergedBackend[grade] = patch.tierBackend[grade];
+      else if (legacy in patch.tierBackend) mergedBackend[grade] = patch.tierBackend[legacy];
     }
   }
   out.tierBackend = normalizeTierBackend(mergedBackend);
 
-  writeJson(modelPrefsFile(), out);
+  writeJson(modelPrefsFile(), persistedPrefs(out));
 
   // Resolve after the write so the persisted file carries only tierBackend, while
   // the returned object also has the derived catalog + resolution for callers.

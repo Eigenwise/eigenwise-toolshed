@@ -26,6 +26,7 @@ const path = require('path');
 const fs = require('fs');
 const store = require('./store');
 const work = require('./work');
+const agentsync = require('./agentsync');
 
 const SERVER_NAME = 'sidequest';
 // The latest MCP protocol revision we implement. In `initialize` we echo the
@@ -96,7 +97,7 @@ function effortDrift(slug, idOrRef, claimedEffort) {
   if (prefs.routing === false) return null;
   const t = store.getTicket(slug, idOrRef);
   if (!t || !t.complexity) return null;
-  if (t.model === 'haiku' || !t.effort) return null;
+  if (t.model === 'grade-1' || !t.effort) return null;
   const claimed = String(claimedEffort).toLowerCase();
   if (claimed === t.effort) return null;
   // The ticket read already resolved which agent to spawn (t.exec.agent): a
@@ -154,11 +155,11 @@ function requireKnownModelFilter(action, value, prefs) {
 function requireKnownModel(action, value, prefs) {
   if (value == null || !String(value).trim()) return;
   const s = String(value).trim().toLowerCase();
-  const known = store.VALID_MODELS.indexOf(s) !== -1
-    || (prefs.discovered || []).some((d) => d.slug === s);
+  const known = store.coerceModel(s) || (prefs.discovered || []).some((d) => d.slug === s);
   if (!known) {
     const slugs = (prefs.discovered || []).map((d) => d.slug);
-    throw new Error(`${action}: unknown model "${value}" — known: ${store.VALID_MODELS.concat(slugs).join(', ')}`);
+    const aliases = ['haiku', 'sonnet', 'opus', 'fable'];
+    throw new Error(`${action}: unknown model "${value}" — known: ${store.VALID_MODELS.concat(aliases, slugs).join(', ')}`);
   }
 }
 
@@ -198,7 +199,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         project: PROJECT_PROP,
-        model: { type: 'string', description: 'Filter to one derived tier — a built-in (opus/sonnet/haiku/fable) or any slug listed by the models tool. Omit for no filter; an unrecognized value errors.' },
+        model: { type: 'string', description: 'Filter to a derived grade (grade-1 through grade-4). Deprecated aliases are accepted as input.' },
         brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies.' },
       },
     },
@@ -321,7 +322,7 @@ const TOOLS = [
       properties: {
         project: PROJECT_PROP,
         by: { type: 'string' },
-        model: { type: 'string', description: 'Filter to one derived tier — a built-in (opus/sonnet/haiku/fable) or any slug listed by the models tool. Omit for no filter; an unrecognized value errors.' },
+        model: { type: 'string', description: 'Filter to a derived grade (grade-1 through grade-4). Deprecated aliases are accepted as input.' },
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         session: { type: 'string' },
       },
@@ -345,7 +346,7 @@ const TOOLS = [
         ref: { type: 'string' },
         project: PROJECT_PROP,
         by: { type: 'string' },
-        model: { type: 'string', description: 'The model tier that actually worked this ticket (provenance) — a built-in (opus/sonnet/haiku/fable) or any slug listed by the models tool.' },
+        model: { type: 'string', description: 'The grade or runtime model that actually worked this ticket (provenance).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         session: { type: 'string' },
       },
@@ -473,6 +474,49 @@ const TOOLS = [
       const res = store.assignTicket(slug, args.ref, who, { source: 'mcp' });
       if (!res.ok) throw new Error(`assign: no ticket "${args.ref}".`);
       return Object.assign({ project: slug }, res);
+    },
+  },
+  {
+    name: 'native_agent',
+    description: 'Create one temporary, backend-pinned native Agent definition for a ticket in this Claude Code session. Call it immediately before Agent, pass the returned spawn object unchanged plus your task prompt, then call native_agent_cleanup after the Agent finishes. The returned grade is neutral; model names stay out of routing identifiers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        prompt: { type: 'string', description: 'The bounded ticket-execution prompt passed unchanged to the native Agent.' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Optional native Agent tool allowlist.' },
+        session: { type: 'string' },
+      },
+      required: ['ref', 'prompt'],
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      const ticket = store.getTicket(slug, args.ref);
+      if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
+      if (!ticket.model || !ticket.effort) throw new Error(`native_agent: ${ticket.ref} has no routable model and effort.`);
+      const resolved = store.resolveExec(ticket.model, ticket.effort, store.getModelPrefs());
+      const created = agentsync.createNativeAgent({
+        ref: ticket.ref,
+        modelId: resolved.spawnId,
+        effort: ticket.effort,
+        grade: ticket.model,
+        tools: args.tools,
+        sessionId: sessionOf(args),
+      });
+      return Object.assign({ project: slug, ref: ticket.ref, prompt: args.prompt }, created);
+    },
+  },
+  {
+    name: 'native_agent_cleanup',
+    description: 'Remove a temporary Sidequest native Agent definition after its Agent run ends or the session is cleaning up. Pass the name returned by native_agent, or session to remove that session\'s stale files.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, session: { type: 'string' } },
+    },
+    handler(args) {
+      if (!args.name && !sessionOf(args)) throw new Error('native_agent_cleanup: pass name or session.');
+      return agentsync.cleanupNativeAgents({ name: args.name, sessionId: sessionOf(args) });
     },
   },
   {

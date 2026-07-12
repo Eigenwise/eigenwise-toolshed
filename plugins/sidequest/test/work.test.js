@@ -37,10 +37,10 @@ function add(title, complexity, files) {
 }
 
 test('capTier keeps spawnable tiers and folds fable down to opus', () => {
-  assert.strictEqual(work.capTier('sonnet'), 'sonnet');
-  assert.strictEqual(work.capTier('opus'), 'opus');
-  assert.strictEqual(work.capTier('haiku'), 'haiku');
-  assert.strictEqual(work.capTier('fable'), 'opus');
+  assert.strictEqual(work.capTier('grade-2'), 'grade-2');
+  assert.strictEqual(work.capTier('grade-3'), 'grade-3');
+  assert.strictEqual(work.capTier('grade-1'), 'grade-1');
+  assert.strictEqual(work.capTier('grade-4'), 'grade-3');
 });
 
 test('planWork produces one spawn per wave-1 ready ticket, at its derived+capped tier, spawning nothing', () => {
@@ -56,12 +56,13 @@ test('planWork produces one spawn per wave-1 ready ticket, at its derived+capped
   assert.deepStrictEqual(refs, [a.ref, b.ref].sort(), 'wave 1 is the two disjoint tickets');
 
   for (const p of plan) {
-    assert.ok(['opus', 'sonnet', 'haiku'].includes(p.tier), 'tier is a spawnable alias');
+    assert.ok(['grade-3', 'grade-2', 'grade-1'].includes(p.tier), 'tier is a spawnable alias');
     assert.match(p.by, /^headless-sq-\d+-[0-9a-f]{6}$/, 'each run gets a unique worker id');
     // The argv is a real headless invocation carrying the model and JSON output;
     // the (large, multi-line) prompt rides separately, over stdin.
     assert.ok(p.argv.includes('-p'));
-    assert.strictEqual(p.argv[p.argv.indexOf('--model') + 1], p.tier);
+    const spawnAlias = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus' }[p.tier];
+    assert.strictEqual(p.argv[p.argv.indexOf('--model') + 1], spawnAlias, 'argv --model is the grade\'s Claude spawn alias');
     assert.ok(p.argv.includes('--output-format') && p.argv.includes('json'));
     assert.ok(!p.argv.some((a) => /ONE ticket/.test(a)), 'the prompt is NOT in argv (it goes over stdin)');
     // The executor brief names the ticket and the claim-first protocol.
@@ -83,7 +84,7 @@ test('a fable-derived ticket plans as opus (headless cap)', () => {
   const { plan } = work.planWork(slug, { max: 10 });
   const entry = plan.find((p) => p.ref === t.ref);
   assert.ok(entry, 'the fable ticket is in the plan');
-  assert.strictEqual(entry.tier, 'opus', 'fable caps to opus for a spawnable headless model');
+  assert.strictEqual(entry.tier, 'grade-3', 'fable caps to opus for a spawnable headless model');
   store.setModelPrefs({ routing: true, opus: true, sonnet: true, haiku: true, fable: true });
 });
 
@@ -112,14 +113,14 @@ test('targeted plan keeps authoritative Codex model, fable provenance, and alway
     path.join(DISCOVERY_DIR, 'codex-gateway', 'catalog.json'),
     JSON.stringify({
       schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(),
-      models: [{ slug: 'codex-target-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'Target Sol', suggestedTier: 'fable' }],
+      models: [{ slug: 'codex-target-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'Target Sol', suggestedTier: 'grade-4' }],
     }),
   );
   const prefs = store.setModelPrefs({
     routing: true, opus: false, sonnet: false, haiku: false, fable: true,
     tierBackend: { fable: 'codex-target-sol' },
   });
-  const rung = store.routingLadder(prefs).find((r) => r.model === 'fable' && r.effort !== 'max');
+  const rung = store.routingLadder(prefs).find((r) => r.model === 'grade-4' && r.effort !== 'max');
   assert.ok(rung);
   const created = store.createTicket(slug, {
     title: 'targeted Sol ticket', complexity: rung.complexity,
@@ -129,11 +130,11 @@ test('targeted plan keeps authoritative Codex model, fable provenance, and alway
   const planned = work.planTicket(slug, created.ref, { yolo: true });
   assert.strictEqual(planned.ok, true);
   assert.strictEqual(planned.item.backend, 'codex');
-  assert.strictEqual(planned.item.tier, 'fable', 'Codex-backed fable stays fable for done provenance');
+  assert.strictEqual(planned.item.tier, 'grade-4', 'Codex-backed fable stays fable for done provenance');
   assert.strictEqual(planned.item.spawnModel, 'claude-codex-gpt-5.6-sol[1m]');
   assert.ok(planned.item.argv.includes('--dangerously-skip-permissions'));
   assert.ok(!planned.item.argv.includes('--permission-mode'));
-  assert.match(planned.item.prompt, /--model fable/, 'executor closes with fable provenance');
+  assert.match(planned.item.prompt, /--model grade-4/, 'executor closes with grade-4 provenance');
 
   store.setModelPrefs({
     routing: true, opus: true, sonnet: true, haiku: true, fable: true,
@@ -181,7 +182,7 @@ test('a Codex-backed tier spawns the resolved id; the plan tier stays the built-
       schema: 2,
       source: 'codex-gateway',
       updatedAt: new Date().toISOString(),
-      models: [{ slug: 'codex-work-test', id: 'claude-codex-gpt-5.4[1m]', label: 'Codex Test', suggestedTier: 'opus' }],
+      models: [{ slug: 'codex-work-test', id: 'claude-codex-gpt-5.4[1m]', label: 'Codex Test', suggestedTier: 'grade-3' }],
     }),
   );
   const prefs = store.setModelPrefs({
@@ -190,7 +191,7 @@ test('a Codex-backed tier spawns the resolved id; the plan tier stays the built-
   });
   // Find a complexity that derives to the opus tier.
   const ladder = store.routingLadder(prefs);
-  const rung = ladder.find((r) => r.model === 'opus' && r.effort !== 'max');
+  const rung = ladder.find((r) => r.model === 'grade-3' && r.effort !== 'max');
   assert.ok(rung, 'sanity: some complexity derives to opus');
 
   const created = store.createTicket(slug, {
@@ -199,19 +200,19 @@ test('a Codex-backed tier spawns the resolved id; the plan tier stays the built-
     files: ['src/opus-tier-only.js'], source: 'cli',
   });
   const t = store.getTicket(slug, created.ref);
-  assert.strictEqual(t.model, 'opus', 'the ticket derived onto the opus tier');
+  assert.strictEqual(t.model, 'grade-3', 'the ticket derived onto the opus tier');
   assert.strictEqual(t.exec.backend, 'codex', 'and its resolved exec is Codex-backed');
 
-  const { plan } = work.planWork(slug, { max: 10, model: 'opus' });
+  const { plan } = work.planWork(slug, { max: 10, model: 'grade-3' });
   const entry = plan.find((p) => p.ref === t.ref);
   assert.ok(entry, 'the ticket is in the plan');
-  assert.strictEqual(entry.tier, 'opus', 'provenance/done stamping keeps the built-in tier');
+  assert.strictEqual(entry.tier, 'grade-3', 'provenance/done stamping keeps the built-in tier');
   assert.strictEqual(
     entry.argv[entry.argv.indexOf('--model') + 1],
     'claude-codex-gpt-5.4[1m]',
     'the spawned argv --model is the tier\'s resolved Codex id',
   );
-  assert.match(entry.prompt, /--model opus/, 'the done-command in the prompt stamps the tier for provenance');
+  assert.match(entry.prompt, /--model grade-3/, 'the done-command in the prompt stamps the grade for provenance');
 
   // Clean up so this doesn't leak into later tests in this file.
   store.setModelPrefs({ tierBackend: { opus: 'claude' } });
