@@ -8,7 +8,11 @@ desktop.ini
 .vscode/
 
 # Claude Code local settings + tool artifacts (never commit to this public repo)
-.claude/
+# — everything under .claude/ is ignored EXCEPT the shared project settings,
+# which ships the executor permission allowlist so background fan-out doesn't
+# prompt (SQ-163). settings.local.json (per-machine overrides) stays ignored.
+.claude/*
+!.claude/settings.json
 .playwright-mcp/
 
 # Node (only relevant if a plugin ever adds tooling)
