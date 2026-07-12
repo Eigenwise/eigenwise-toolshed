@@ -478,7 +478,7 @@ const TOOLS = [
   },
   {
     name: 'native_agent',
-    description: 'Create one temporary, backend-pinned native Agent definition for a ticket in this Claude Code session. Call it immediately before Agent, pass the returned spawn object unchanged plus your task prompt, then call native_agent_cleanup after the Agent finishes. The returned grade is neutral; model names stay out of routing identifiers.',
+    description: 'Return a stable native Agent spawn spec for a ticket. Claude Code snapshots agent definitions at session start, so temporary definitions written mid-session cannot be safely spawned. The returned executor is already registered, uses the ticket runtime, and must be passed to Agent unchanged.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -498,7 +498,8 @@ const TOOLS = [
       const resolved = store.resolveExec(ticket.model, ticket.effort, store.getModelPrefs());
       const created = agentsync.createNativeAgent({
         ref: ticket.ref,
-        modelId: resolved.spawnId,
+        agentType: resolved.agent || `sidequest-exec-${ticket.effort || 'low'}`,
+        spawnModel: resolved.model,
         effort: ticket.effort,
         grade: ticket.model,
         runtime: resolved.runsModel,

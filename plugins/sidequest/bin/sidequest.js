@@ -904,7 +904,8 @@ function cmdNativeAgent(opts, positional) {
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   const created = agentsync.createNativeAgent({
     ref: ticket.ref,
-    modelId: resolved.spawnId,
+    agentType: resolved.agent || `sidequest-exec-${ticket.effort || 'low'}`,
+    spawnModel: resolved.model,
     effort: ticket.effort,
     grade: ticket.model,
     runtime: resolved.runsModel,
@@ -1529,9 +1530,9 @@ Complexity → routing (score the task; model + effort are derived, never tagged
   list/ready); the orchestrator routes by reading it. Haiku rungs have no effort.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest native-agent <SQ-n> [--json]             write a temporary native Agent definition and return its spawn spec
+  sidequest native-agent <SQ-n> [--json]             return an already-registered native Agent spawn spec
   sidequest native-agent cleanup --name <name>        remove one temporary native Agent definition
-    Invoke the returned definition through the current conversation's Agent tool, then clean it up.
+    Invoke the returned definition through the current conversation's Agent tool. Temporary definitions are not spawnable until a new session reloads the registry.
     \`sidequest work\`/\`drain\` are disabled because they cannot invoke Agent and never start a separate Claude process.
   sidequest reconcile [--session <id>] [--reason "..."]   release a session's stale claims back to todo now
     (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's

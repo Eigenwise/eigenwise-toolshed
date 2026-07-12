@@ -188,6 +188,27 @@ function waitForNativeAgentReload(waitMs) {
 function createNativeAgent(spec, opts) {
   opts = opts || {};
   spec = spec || {};
+  // Claude Code snapshots the user-agent registry when the session starts. A
+  // definition written mid-session can appear in a later agent listing yet still
+  // be rejected by Agent as unknown. Route native dispatch through the stable,
+  // session-start-provisioned executor instead. Keep a unique display name so
+  // concurrent ticket cards remain distinguishable, but do not create a stale
+  // temporary definition that Agent cannot resolve.
+  if (spec.agentType) {
+    const name = nativeAgentName(spec.ref, spec.runtime, spec.nonce);
+    const model = spec.spawnModel == null ? null : String(spec.spawnModel).trim();
+    return {
+      name,
+      file: null,
+      fallback: true,
+      spawn: Object.assign({
+        subagent_type: String(spec.agentType),
+        name,
+        mode: 'bypassPermissions',
+      }, model ? { model } : {}),
+      cleanup: { name, sessionId: spec.sessionId || null },
+    };
+  }
   const dir = opts.dir || defaultAgentsDir();
   fs.mkdirSync(dir, { recursive: true });
   // The runtime label (resolveExec's runsModel, which is the catalog slug for a

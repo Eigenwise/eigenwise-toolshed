@@ -230,6 +230,25 @@ test('same slug from different sources gets source-namespaced agent files', () =
   }
 });
 
+test('a native dispatch falls back to an already-registered executor without writing a mid-session definition', () => {
+  const dir = tmpDir();
+  const created = agentsync.createNativeAgent({
+    ref: 'SQ-204', agentType: 'sidequest-exec-codex-gpt-5-6-terra-medium',
+    runtime: 'codex-gpt-5-6-terra', effort: 'medium', grade: 'grade-3',
+    sessionId: 'session-204',
+  }, { dir, waitMs: 0 });
+
+  assert.strictEqual(created.fallback, true);
+  assert.strictEqual(created.file, null);
+  assert.deepStrictEqual(created.spawn, {
+    subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-medium',
+    name: 'sidequest-native-sq-204-gpt-5-6-terra',
+    mode: 'bypassPermissions',
+  });
+  assert.deepStrictEqual(readDir(dir), []);
+});
+
+
 test('temporary native agent names itself after the resolved runtime (Codex slug), no hex nonce', () => {
   const dir = tmpDir();
   const created = agentsync.createNativeAgent({
