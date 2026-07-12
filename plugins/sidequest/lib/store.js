@@ -2195,7 +2195,10 @@ function listPayload(slug, opts) {
   opts = opts || {};
   const all = listTickets(slug);
   let tickets = opts.archived ? all.filter((t) => t.archived) : all.filter((t) => !t.archived);
-  if (opts.status) tickets = tickets.filter((t) => t.status === String(opts.status).toLowerCase());
+  if (opts.status) {
+    const statuses = (Array.isArray(opts.status) ? opts.status : [opts.status]).map((status) => String(status).toLowerCase());
+    tickets = tickets.filter((t) => statuses.includes(t.status));
+  }
   if (opts.brief) {
     // Blockers may live outside the filtered set, so index the whole board.
     const index = new Map(all.map((t) => [String(t.ref).toUpperCase(), t]));

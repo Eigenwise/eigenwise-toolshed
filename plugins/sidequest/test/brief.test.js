@@ -117,10 +117,26 @@ test('MCP: waves are refs with and without brief (one shape per field)', () => {
   assert.ok(full.tickets.some((t) => typeof t.description === 'string'), 'full tickets still ride in tickets');
 });
 
-test('MCP: list without brief still returns full tickets', () => {
+test('MCP: list defaults to active compact tickets, with done/full explicit overrides', () => {
+  const done = cliJson(['add', '-t', 'completed MCP fixture', '--complexity', '2', '--why', 'a completed fixture proves default MCP reads exclude finished tickets', '--json']);
+  const finished = runCli(['done', done.ticket.ref, '--by', 'brief-test-worker']);
+  assert.strictEqual(finished.status, 0, finished.stderr);
+
   const list = callTool('list', {});
-  const a = list.tickets.find((t) => t.ref === refA);
-  assert.ok(a.description.includes('long developer-to-developer'), 'full read keeps the body');
+  assert.ok(list.tickets.length >= 2, 'active fixtures remain listed');
+  assert.ok(!list.tickets.some((t) => t.ref === done.ticket.ref), 'default list excludes done tickets');
+  for (const t of list.tickets) {
+    assert.ok(['todo', 'doing'].includes(t.status), 'default list includes active tickets only');
+    assert.deepStrictEqual(Object.keys(t).sort(), BRIEF_KEYS, 'default list is compact');
+  }
+
+  const completed = callTool('list', { status: 'done' });
+  assert.ok(completed.tickets.some((t) => t.ref === done.ticket.ref), 'explicit done status includes completed tickets');
+  for (const t of completed.tickets) assert.deepStrictEqual(Object.keys(t).sort(), BRIEF_KEYS);
+
+  const full = callTool('list', { brief: false });
+  const a = full.tickets.find((t) => t.ref === refA);
+  assert.ok(a.description.includes('long developer-to-developer'), 'explicit brief:false keeps full bodies');
 });
 
 test('brief blockedBy resolves open blockers (in-memory index, correct field name)', () => {

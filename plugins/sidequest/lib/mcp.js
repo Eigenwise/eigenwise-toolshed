@@ -188,7 +188,11 @@ const TOOLS = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const payload = store.listPayload(slug, { status: args.status, archived: args.archived, brief: args.brief });
+      // MCP board reads are routine orchestration reads, so omit completed work
+      // and ticket bodies unless the caller explicitly asks for either.
+      const status = args.status == null ? ['todo', 'doing'] : args.status;
+      const brief = args.brief == null ? true : args.brief;
+      const payload = store.listPayload(slug, { status, archived: args.archived, brief });
       return Object.assign({ project: slug, projectName: meta.name }, payload);
     },
   },
