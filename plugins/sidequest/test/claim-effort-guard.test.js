@@ -140,7 +140,7 @@ test('haiku-derived ticket (no effort axis): the guard stands down', () => {
   // Enable only haiku → every rung is haiku, effort null, so there is nothing to match.
   store.setModelPrefs({ routing: true, opus: false, sonnet: false, fable: false, haiku: true });
   try {
-    assert.strictEqual(derivedOf(ref).model, 'haiku', 'ticket should derive to haiku');
+    assert.strictEqual(derivedOf(ref).model, 'grade-1', 'ticket should derive to haiku');
     const claim = cliJson(['claim', ref, '--by', 'w1', '--effort', 'high']);
     assert.strictEqual(claim.ok, true, 'a haiku ticket has no effort to guard against');
   } finally {

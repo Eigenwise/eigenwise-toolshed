@@ -58,7 +58,9 @@ function pluginRoot() {
 // a sync problem can NEVER break session start. Empty catalog -> no-op.
 function provisionExecAgents() {
   try {
-    require(path.join(pluginRoot(), 'lib', 'agentsync.js')).syncExecAgents();
+    const sync = require(path.join(pluginRoot(), 'lib', 'agentsync.js'));
+    sync.cleanupNativeAgents({ staleBefore: Date.now() - 6 * 60 * 60 * 1000 });
+    sync.syncExecAgents();
   } catch (_) {
     /* best effort — never break the session over agent provisioning */
   }

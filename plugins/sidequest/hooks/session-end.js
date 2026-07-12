@@ -53,6 +53,7 @@ function main() {
   }
   try {
     store.reconcileSession(String(sessionId), { reason, source: 'session-end' });
+    require(path.join(pluginRoot(), 'lib', 'agentsync.js')).cleanupNativeAgents({ sessionId: String(sessionId) });
   } catch (_) {
     /* best effort */
   }

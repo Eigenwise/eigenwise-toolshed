@@ -39,9 +39,9 @@ function clearCatalog() {
   process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 }
 
-const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol', suggestedTier: 'fable' };
-const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', suggestedTier: 'opus' };
-const LUNA = { slug: 'codex-gpt-5-6-luna', id: 'claude-codex-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna', suggestedTier: 'haiku' };
+const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol', suggestedTier: 'grade-4' };
+const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', suggestedTier: 'grade-3' };
+const LUNA = { slug: 'codex-gpt-5-6-luna', id: 'claude-codex-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna', suggestedTier: 'grade-1' };
 
 /* -------------------------------------------------------------- *
  *  discoverExternalModels() in isolation
@@ -56,7 +56,7 @@ test('a valid schema-2 catalog resolves to [{slug,id,label,suggestedTier,source}
   seedCatalog([TERRA]);
   const got = discoverExternalModels();
   assert.strictEqual(got.length, 1);
-  assert.deepStrictEqual(got[0], { slug: TERRA.slug, id: TERRA.id, label: TERRA.label, suggestedTier: 'opus', source: 'codex-gateway' });
+  assert.deepStrictEqual(got[0], { slug: TERRA.slug, id: TERRA.id, label: TERRA.label, suggestedTier: 'grade-3', source: 'codex-gateway' });
 });
 
 test('suggestedTier missing/invalid -> null (still discovered)', () => {
@@ -68,12 +68,12 @@ test('suggestedTier missing/invalid -> null (still discovered)', () => {
 });
 
 test('legacy schema-1 anchor field is read as suggestedTier', () => {
-  seedCatalog([{ slug: 'codex-old', id: 'claude-codex-old[1m]', label: 'Old', anchor: 'opus' }], 1);
-  assert.strictEqual(discoverExternalModels()[0].suggestedTier, 'opus');
+  seedCatalog([{ slug: 'codex-old', id: 'claude-codex-old[1m]', label: 'Old', anchor: 'grade-3' }], 1);
+  assert.strictEqual(discoverExternalModels()[0].suggestedTier, 'grade-3');
 });
 
 test('label falls back to slug when absent', () => {
-  seedCatalog([{ slug: 'codex-nolabel', id: 'claude-codex-nolabel[1m]', suggestedTier: 'haiku' }]);
+  seedCatalog([{ slug: 'codex-nolabel', id: 'claude-codex-nolabel[1m]', suggestedTier: 'grade-1' }]);
   assert.strictEqual(discoverExternalModels()[0].label, 'codex-nolabel');
 });
 
@@ -106,42 +106,42 @@ test('no catalog -> discovered=[], every tier "claude", ladder built-in only', (
   clearCatalog();
   const prefs = getModelPrefs();
   assert.deepStrictEqual(prefs.discovered, []);
-  assert.deepStrictEqual(prefs.tierBackend, { opus: 'claude', sonnet: 'claude', haiku: 'claude', fable: 'claude' });
+  assert.deepStrictEqual(prefs.tierBackend, { 'grade-1': 'claude', 'grade-2': 'claude', 'grade-3': 'claude', 'grade-4': 'claude' });
   // every ladder rung is a built-in tier
   for (const rung of routingLadder(prefs)) {
-    assert.ok(['opus', 'sonnet', 'haiku', 'fable'].includes(rung.model), `rung ${rung.model} is a built-in`);
+    assert.ok(['grade-3', 'grade-2', 'grade-1', 'grade-4'].includes(rung.model), `rung ${rung.model} is a built-in`);
   }
 });
 
 test('mapping a tier to a discovered slug: resolveExec routes to its agent, ladder shape unchanged', () => {
   seedCatalog([TERRA, SOL, LUNA]);
   const prefs = setModelPrefs({ tierBackend: { opus: 'codex-gpt-5-6-terra' } });
-  assert.strictEqual(prefs.tierBackend.opus, 'codex-gpt-5-6-terra');
+  assert.strictEqual(prefs.tierBackend['grade-3'], 'codex-gpt-5-6-terra');
   assert.deepStrictEqual(prefs.tierBackendWarnings, []);
-  const ex = store.resolveExec('opus', 'high', prefs);
+  const ex = store.resolveExec('grade-3', 'high', prefs);
   assert.strictEqual(ex.agent, 'sidequest-exec-codex-gpt-5-6-terra-high');
   assert.strictEqual(ex.model, null);
   assert.strictEqual(ex.backend, 'codex');
   assert.strictEqual(ex.spawnId, TERRA.id);
   // sonnet still Claude
-  assert.strictEqual(store.resolveExec('sonnet', 'high', prefs).backend, 'claude');
+  assert.strictEqual(store.resolveExec('grade-2', 'high', prefs).backend, 'claude');
   // ladder still stamps the tier, not the backend slug
-  assert.strictEqual(routingLadder(prefs).find((r) => r.model !== 'haiku' && r.effort === 'high' && r.model === 'opus') !== undefined, true);
+  assert.strictEqual(routingLadder(prefs).find((r) => r.model !== 'grade-1' && r.effort === 'high' && r.model === 'grade-3') !== undefined, true);
 });
 
 test('stale mapping (slug not in catalog) falls back to Claude with a warning', () => {
   seedCatalog([TERRA]);
   const prefs = setModelPrefs({ tierBackend: { fable: 'codex-gone' } });
-  assert.ok(prefs.tierBackendWarnings.some((w) => w.includes('fable') && w.includes('codex-gone')));
-  assert.strictEqual(store.resolveExec('fable', 'high', prefs).backend, 'claude');
+  assert.ok(prefs.tierBackendWarnings.some((w) => w.includes('Grade 4') && w.includes('codex-gone')));
+  assert.strictEqual(store.resolveExec('grade-4', 'high', prefs).backend, 'claude');
 });
 
 test('clearing a mapping back to claude', () => {
   seedCatalog([TERRA]);
   setModelPrefs({ tierBackend: { opus: 'codex-gpt-5-6-terra' } });
   const prefs = setModelPrefs({ tierBackend: { opus: 'claude' } });
-  assert.strictEqual(prefs.tierBackend.opus, 'claude');
-  assert.strictEqual(store.resolveExec('opus', 'high', prefs).backend, 'claude');
+  assert.strictEqual(prefs.tierBackend['grade-3'], 'claude');
+  assert.strictEqual(store.resolveExec('grade-3', 'high', prefs).backend, 'claude');
 });
 
 test('a stale 1.35.0 customOverrides file is stripped on read, tierBackend defaults', () => {

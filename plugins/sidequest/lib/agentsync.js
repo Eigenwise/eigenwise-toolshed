@@ -35,6 +35,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const discovery = require('./discovery.js');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md');
@@ -42,6 +43,8 @@ const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md')
 // Marks a file as ours. Must stay unique enough that no human-authored agent
 // file would plausibly contain it verbatim.
 const MARKER = '<!-- generated-by: sidequest-agentsync -->';
+const TEMP_MARKER = '<!-- generated-by: sidequest-native-agent -->';
+const TEMP_PREFIX = 'sidequest-native-';
 
 // The effort axis a generated agent's frontmatter can pin — `max` is the
 // sparing top rung (see store.js's routingLadder) and, like the five shipped
@@ -97,6 +100,99 @@ function renderBackendAgent(slug, id, effort) {
     marker: MARKER,
     extraNote: backendNote(slug, id),
   });
+}
+
+function nativeAgentName(ref, nonce) {
+  const ticket = String(ref || 'ticket').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'ticket';
+  const suffix = String(nonce || crypto.randomBytes(4).toString('hex')).toLowerCase();
+  if (!/^[a-z0-9]{6,32}$/.test(suffix)) throw new Error('native agent nonce must be 6-32 lowercase alphanumeric characters.');
+  return `${TEMP_PREFIX}${ticket}-${suffix}`;
+}
+
+function nativeAgentFile(name, dir) {
+  if (!String(name || '').startsWith(TEMP_PREFIX)) throw new Error('native agent name must use the Sidequest temporary prefix.');
+  return path.join(dir || defaultAgentsDir(), `${name}.md`);
+}
+
+function nativeAgentSource(spec) {
+  const tools = Array.isArray(spec.tools) && spec.tools.length ? spec.tools : ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'SendMessage'];
+  if (!tools.every((tool) => /^[A-Za-z][A-Za-z0-9:_-]*$/.test(String(tool)))) throw new Error('native agent tools must be valid tool names.');
+  const model = String(spec.modelId || '').trim();
+  const effort = String(spec.effort || '').trim();
+  const grade = String(spec.grade || '').trim();
+  if (!model || /[\r\n]/.test(model)) throw new Error('native agent model id is required and must be one line.');
+  if (!NON_MAX_EFFORTS.includes(effort)) throw new Error(`native agent effort must be one of: ${NON_MAX_EFFORTS.join(', ')}.`);
+  if (!/^grade-[1-4]$/.test(grade)) throw new Error('native agent grade must be a neutral grade-1 through grade-4 identifier.');
+  const session = String(spec.sessionId || '').replace(/[\r\n]/g, '');
+  return [
+    '---',
+    `name: ${spec.name}`,
+    'description: Temporary Sidequest native executor. Removed after this run.',
+    `model: ${model}`,
+    `effort: ${effort}`,
+    `tools: ${tools.join(', ')}`,
+    'permissionMode: bypassPermissions',
+    '---',
+    TEMP_MARKER,
+    `<!-- sidequest-native-session: ${session} -->`,
+    `<!-- sidequest-native-grade: ${grade} -->`,
+    'You are a temporary Sidequest executor. Follow the exact task prompt from your parent. Stay within its ticket scope, verify the requested behavior, and report concise evidence. The parent owns orchestration. Before ending after success or failure, run the cleanup command supplied in your task prompt.',
+    '',
+  ].join('\n');
+}
+
+// Claude Code sees user-scoped agent definitions without a plugin rebuild. The
+// short synchronous debounce lets its watcher register the new definition before
+// the caller invokes Agent; tests pass waitMs: 0.
+function waitForNativeAgentReload(waitMs) {
+  const ms = Number.isFinite(Number(waitMs)) ? Math.max(0, Number(waitMs)) : 175;
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function createNativeAgent(spec, opts) {
+  opts = opts || {};
+  const dir = opts.dir || defaultAgentsDir();
+  const name = nativeAgentName(spec && spec.ref, spec && spec.nonce);
+  const source = nativeAgentSource(Object.assign({}, spec, { name }));
+  fs.mkdirSync(dir, { recursive: true });
+  const file = nativeAgentFile(name, dir);
+  fs.writeFileSync(file, source, { flag: 'wx' });
+  waitForNativeAgentReload(opts.waitMs);
+  return {
+    name,
+    file,
+    spawn: {
+      subagent_type: name,
+      name,
+      mode: 'bypassPermissions',
+    },
+    cleanup: { name, sessionId: spec.sessionId || null },
+  };
+}
+
+function cleanupNativeAgents(opts) {
+  opts = opts || {};
+  const dir = opts.dir || defaultAgentsDir();
+  const name = opts.name ? String(opts.name) : null;
+  const sessionId = opts.sessionId == null ? null : String(opts.sessionId);
+  let removed = 0;
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.startsWith(TEMP_PREFIX) && f.endsWith('.md')); } catch (_) { return { removed }; }
+  for (const fileName of files) {
+    if (name && fileName !== `${name}.md`) continue;
+    const file = path.join(dir, fileName);
+    let source = '';
+    try { source = fs.readFileSync(file, 'utf8'); } catch (_) { continue; }
+    if (!source.includes(TEMP_MARKER)) continue;
+    if (sessionId && !source.includes(`<!-- sidequest-native-session: ${sessionId} -->`)) continue;
+    if (opts.staleBefore != null) {
+      let stat;
+      try { stat = fs.statSync(file); } catch (_) { continue; }
+      if (stat.mtimeMs >= Number(opts.staleBefore)) continue;
+    }
+    try { fs.unlinkSync(file); removed++; } catch (_) { /* best effort */ }
+  }
+  return { removed };
 }
 
 // Regenerate the runtime Codex exec agents. The wanted set is a pure function of
@@ -192,9 +288,15 @@ function syncExecAgents(prefs, opts) {
 
 module.exports = {
   MARKER,
+  TEMP_MARKER,
+  TEMP_PREFIX,
   NON_MAX_EFFORTS,
   agentFileName,
   renderExecAgent,
+  createNativeAgent,
+  cleanupNativeAgents,
+  nativeAgentName,
+  nativeAgentSource,
   syncExecAgents,
   defaultAgentsDir,
 };

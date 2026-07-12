@@ -36,7 +36,10 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
 // Mirrors store.js's VALID_MODELS. Duplicated rather than imported so
 // discovery.js stays a leaf module with zero sidequest dependencies.
-const VALID_TIERS = ['haiku', 'sonnet', 'opus', 'fable'];
+const VALID_TIERS = ['grade-1', 'grade-2', 'grade-3', 'grade-4'];
+// Catalog files (codex-gateway schema-2, and the older schema-1 `anchor`) still
+// carry provider-family hints; normalize those to grade IDs at this boundary.
+const LEGACY_TIER_HINTS = { haiku: 'grade-1', sonnet: 'grade-2', opus: 'grade-3', fable: 'grade-4' };
 
 // Catalogs this version of sidequest knows how to read, each resolved as
 // <discovery root>/<relPath>. Add an entry here for the next sibling plugin.
@@ -82,7 +85,8 @@ function validateEntry(raw, source) {
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
   if (!id) return null;
   const hintRaw = raw.suggestedTier != null ? raw.suggestedTier : raw.anchor;
-  const hint = typeof hintRaw === 'string' ? hintRaw.trim().toLowerCase() : '';
+  const hintNorm = typeof hintRaw === 'string' ? hintRaw.trim().toLowerCase() : '';
+  const hint = LEGACY_TIER_HINTS[hintNorm] || hintNorm;
   const suggestedTier = VALID_TIERS.indexOf(hint) !== -1 ? hint : null;
   const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : slug;
   return { slug, id, label, suggestedTier, source };

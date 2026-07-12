@@ -370,7 +370,7 @@ function effortDriftReason(slug, idOrRef, claimedEffort) {
   if (prefs.routing === false) return null;
   const t = store.getTicket(slug, idOrRef); // carries derived model/effort at read time
   if (!t || !t.complexity) return null;
-  if (t.model === 'haiku' || !t.effort) return null;
+  if (t.model === 'grade-1' || !t.effort) return null;
   const claimed = String(claimedEffort).toLowerCase();
   if (claimed === t.effort) return null;
   // The read already resolved which agent to spawn (t.exec.agent): a Claude tier
@@ -936,6 +936,34 @@ function cmdUnarchive(opts, positional) {
     process.exitCode = 1;
     console.log(`✗ unarchive: no ticket "${idOrRef}" in ${meta.name}`);
   }
+}
+
+function cmdNativeAgent(opts, positional) {
+  const action = String(positional[0] || '').toLowerCase();
+  if (action === 'cleanup') {
+    const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID;
+    if (!opts.name && !sessionId) fail('native-agent cleanup: pass --name or run inside a Claude Code session.');
+    const res = agentsync.cleanupNativeAgents({ name: opts.name, sessionId });
+    process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    return;
+  }
+
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('native-agent: pass a ticket ref, e.g. sidequest native-agent SQ-12 --json.');
+  const { slug } = resolveProject(opts);
+  const ticket = store.getTicket(slug, idOrRef);
+  if (!ticket) fail(`native-agent: no ticket "${idOrRef}".`);
+  if (!ticket.model || !ticket.effort) fail(`native-agent: ${ticket.ref} has no routable model and effort.`);
+  const resolved = store.resolveExec(ticket.model, ticket.effort, store.getModelPrefs());
+  const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
+  const created = agentsync.createNativeAgent({
+    ref: ticket.ref,
+    modelId: resolved.spawnId,
+    effort: ticket.effort,
+    grade: ticket.model,
+    sessionId,
+  });
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug, ref: ticket.ref }, created), null, 2) + '\n');
 }
 
 // `sidequest models sync-agents` — regenerate the runtime
@@ -1525,6 +1553,10 @@ Headless / autonomous draining (work the board without an interactive session):
     session. Effort isn't
     settable headless, so a run carries the ticket's MODEL and runs at that model's default effort. Safe
     beside an interactive session — claiming stays atomic. Needs the \`claude\` CLI on PATH.
+  sidequest native-agent <SQ-n> [--json]             write a temporary native Agent definition and return its spawn spec
+  sidequest native-agent cleanup --name <name>        remove one temporary native Agent definition
+    Native Agent definitions pin the resolved backend model, effort, bypass permission mode, and neutral
+    grade identity. They hot-reload for the current session; remove them after the Agent finishes.
   sidequest reconcile [--session <id>] [--reason "..."]   release a session's stale claims back to todo now
     (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's
     tickets recover immediately instead of waiting out the claim TTL; safe — it only touches that session's
@@ -1692,6 +1724,10 @@ async function main() {
     case 'unarchive':
     case 'restore':
       cmdUnarchive(opts, positional);
+      break;
+    case 'native-agent':
+    case 'native_agent':
+      cmdNativeAgent(opts, positional);
       break;
     case 'models':
       cmdModels(opts, positional);

@@ -15,15 +15,15 @@ process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-ladder-te
 const store = require('../lib/store.js');
 const { routingLadder, deriveRouting, coerceComplexity, setModelPrefs } = store;
 
-const TIER_ORDER = ['haiku', 'sonnet', 'opus', 'fable'];
-const EFFORT_MODELS = ['sonnet', 'opus', 'fable']; // tiers that carry an effort row (haiku has none)
+const TIER_ORDER = ['grade-1', 'grade-2', 'grade-3', 'grade-4'];
+const EFFORT_MODELS = ['grade-2', 'grade-3', 'grade-4']; // tiers that carry an effort row (haiku has none)
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh']; // non-max scale
 const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Per-tier base offsets mirroring store.js's LADDER_TIER_BASE (SQ-93: the
 // sonnet<->opus boundary keeps the old uniform gap of 2 — evidence-supported
 // crossover, unchanged — while the opus<->fable boundary widens to a gap of 4,
-// eliminating the previously-unsupported fable.low == opus.high tie).
-const TIER_BASE = { haiku: 0, sonnet: 2, opus: 4, fable: 8 };
+// eliminating the previously-unsupported grade-4.low == grade-3.high tie).
+const TIER_BASE = { 'grade-1': 0, 'grade-2': 2, 'grade-3': 4, 'grade-4': 8 };
 
 // All 15 non-empty tier subsets.
 const tierSubsets = [];
@@ -90,7 +90,7 @@ test('invariant sweep: 15 tier subsets x 5 effort subsets x 5 biases', () => {
           // No disabled tier emitted.
           assert.ok(tiers.includes(r.model), `${label} c${i + 1} model ${r.model} enabled`);
           // Effort null only on haiku; otherwise an enabled effort.
-          if (r.model === 'haiku') {
+          if (r.model === 'grade-1') {
             assert.strictEqual(r.effort, null, `${label} haiku effort null`);
           } else {
             assert.notStrictEqual(r.effort, null, `${label} non-haiku effort non-null`);
@@ -102,7 +102,7 @@ test('invariant sweep: 15 tier subsets x 5 effort subsets x 5 biases', () => {
         const nonMaxEfforts = efforts.filter((e) => e !== 'max');
         const maxInSequence = nonMaxEfforts.length === 0;
         const topTier = tiers[tiers.length - 1];
-        const hasMaxRung = efforts.includes('max') && !maxInSequence && topTier !== 'haiku';
+        const hasMaxRung = efforts.includes('max') && !maxInSequence && topTier !== 'grade-1';
 
         // Monotone capability as complexity rises (tie-break: higher tier ranks higher).
         for (let i = 1; i < 10; i++) {
@@ -136,13 +136,13 @@ test('invariant sweep: 15 tier subsets x 5 effort subsets x 5 biases', () => {
         // c1 -> cheapest rung: lowest tier, and its weakest enabled effort.
         const cheapTier = tiers[0];
         assert.strictEqual(ladder[0].model, cheapTier, `${label} c1 cheapest tier`);
-        if (cheapTier !== 'haiku') {
+        if (cheapTier !== 'grade-1') {
           const seqEfforts = maxInSequence ? efforts : nonMaxEfforts;
           assert.strictEqual(ladder[0].effort, seqEfforts[0], `${label} c1 weakest effort`);
         }
         // c10 -> top rung: top tier at its strongest available effort.
         assert.strictEqual(ladder[9].model, topTier, `${label} c10 top tier`);
-        if (topTier !== 'haiku') {
+        if (topTier !== 'grade-1') {
           const seqEfforts = maxInSequence ? efforts : nonMaxEfforts;
           const expectTopEff = hasMaxRung ? 'max' : seqEfforts[seqEfforts.length - 1];
           assert.strictEqual(ladder[9].effort, expectTopEff, `${label} c10 strongest effort`);
@@ -181,151 +181,151 @@ test('exact ladder: all tiers, max off, bias 0 (crossovers + tie-break, SQ-134 f
   // seq (score, tie->higher tier later): h0, sL2, sM3, sH4, oL4, sX5, oM5, oH6,
   // oX7, fL8, fM9, fH10, fX11 — N=13 bins; idx = min(12, floor((c-1)/10 * 13)),
   // with c=10 pinned to 12 (no max rung). Floor bucketing skips some rungs
-  // entirely (opus.low, opus.xhigh, fable.high never surface here) rather than
+  // entirely (grade-3.low, grade-3.xhigh, grade-4.high never surface here) rather than
   // round()'s interior-weighted spread — that's the intended bottom-weighting.
   // The sonnet<->opus boundary still ties/overlaps (sH4~oL4, sX5~oM5,
   // unchanged), but the opus<->fable boundary (SQ-93) no longer does:
-  // opus.xhigh(7) sits strictly below fable.low(8).
+  // grade-3.xhigh(7) sits strictly below grade-4.low(8).
   const prefs = mkPrefs(TIER_ORDER, ['low', 'medium', 'high', 'xhigh'], 0);
   const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
   assert.deepStrictEqual(got, [
-    'haiku.null', 'sonnet.low', 'sonnet.medium', 'sonnet.high', 'sonnet.xhigh',
-    'opus.medium', 'opus.high', 'fable.low', 'fable.medium', 'fable.xhigh',
+    'grade-1.null', 'grade-2.low', 'grade-2.medium', 'grade-2.high', 'grade-2.xhigh',
+    'grade-3.medium', 'grade-3.high', 'grade-4.low', 'grade-4.medium', 'grade-4.xhigh',
   ]);
 });
 
-test('SQ-93 oracle: fable.low ranks strictly above opus.high (widened opus<->fable gap)', () => {
-  // Under the OLD uniform gap (tierRank*2), opus.high scored 2*2+2=6 and
-  // fable.low scored 3*2+0=6 — an exact tie, broken toward fable (the higher
-  // tier) so fable.low still landed just above opus.high in the merged order.
+test('SQ-93 oracle: grade-4.low ranks strictly above grade-3.high (widened opus<->fable gap)', () => {
+  // Under the OLD uniform gap (tierRank*2), grade-3.high scored 2*2+2=6 and
+  // grade-4.low scored 3*2+0=6 — an exact tie, broken toward fable (the higher
+  // tier) so grade-4.low still landed just above grade-3.high in the merged order.
   // The new per-tier base (opus=4, fable=8) pushes fable's floor strictly past
   // opus's ceiling (4+2=6 < 8+0=8): no tie, no ambiguity.
-  const fableLowScore = TIER_BASE.fable + EFFORT_ORDER.indexOf('low');
-  const opusHighScore = TIER_BASE.opus + EFFORT_ORDER.indexOf('high');
+  const fableLowScore = TIER_BASE["grade-4"] + EFFORT_ORDER.indexOf('low');
+  const opusHighScore = TIER_BASE["grade-3"] + EFFORT_ORDER.indexOf('high');
   assert.ok(
     fableLowScore > opusHighScore,
-    `fable.low score (${fableLowScore}) must be strictly above opus.high score (${opusHighScore})`
+    `grade-4.low score (${fableLowScore}) must be strictly above grade-3.high score (${opusHighScore})`
   );
 
   // End-to-end, through the actual merged sequence (opus+fable, all non-max
-  // efforts enabled, bias 0): opus.high must appear at a lower complexity than
-  // fable.low.
-  const prefs = mkPrefs(['opus', 'fable'], EFFORT_ORDER, 0);
+  // efforts enabled, bias 0): grade-3.high must appear at a lower complexity than
+  // grade-4.low.
+  const prefs = mkPrefs(['grade-3', 'grade-4'], EFFORT_ORDER, 0);
   const ladder = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
-  const idxOpusHigh = ladder.indexOf('opus.high');
-  const idxFableLow = ladder.indexOf('fable.low');
-  assert.ok(idxOpusHigh !== -1, 'opus.high must appear in the ladder');
-  assert.ok(idxFableLow !== -1, 'fable.low must appear in the ladder');
+  const idxOpusHigh = ladder.indexOf('grade-3.high');
+  const idxFableLow = ladder.indexOf('grade-4.low');
+  assert.ok(idxOpusHigh !== -1, 'grade-3.high must appear in the ladder');
+  assert.ok(idxFableLow !== -1, 'grade-4.low must appear in the ladder');
   assert.ok(
     idxOpusHigh < idxFableLow,
-    `opus.high (c${idxOpusHigh + 1}) must rank below fable.low (c${idxFableLow + 1})`
+    `grade-3.high (c${idxOpusHigh + 1}) must rank below grade-4.low (c${idxFableLow + 1})`
   );
 });
 
-test('SQ-93 oracle: sonnet.xhigh still ties-or-adjacent opus.medium (unchanged crossover)', () => {
-  const sonnetXhighScore = TIER_BASE.sonnet + EFFORT_ORDER.indexOf('xhigh');
-  const opusMediumScore = TIER_BASE.opus + EFFORT_ORDER.indexOf('medium');
+test('SQ-93 oracle: grade-2.xhigh still ties-or-adjacent grade-3.medium (unchanged crossover)', () => {
+  const sonnetXhighScore = TIER_BASE["grade-2"] + EFFORT_ORDER.indexOf('xhigh');
+  const opusMediumScore = TIER_BASE["grade-3"] + EFFORT_ORDER.indexOf('medium');
   assert.ok(
     Math.abs(sonnetXhighScore - opusMediumScore) <= 1,
-    `sonnet.xhigh score (${sonnetXhighScore}) and opus.medium score (${opusMediumScore}) must tie or be adjacent`
+    `grade-2.xhigh score (${sonnetXhighScore}) and grade-3.medium score (${opusMediumScore}) must tie or be adjacent`
   );
   // This boundary is unchanged from the old formula: an exact tie, resolved to
   // the higher tier (opus) by the tie-break rule.
-  assert.strictEqual(sonnetXhighScore, opusMediumScore, 'sonnet.xhigh == opus.medium (exact tie, unchanged)');
+  assert.strictEqual(sonnetXhighScore, opusMediumScore, 'grade-2.xhigh == grade-3.medium (exact tie, unchanged)');
 
-  const prefs = mkPrefs(['sonnet', 'opus'], EFFORT_ORDER, 0);
+  const prefs = mkPrefs(['grade-2', 'grade-3'], EFFORT_ORDER, 0);
   const ladder = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
-  const idxSonnetXhigh = ladder.indexOf('sonnet.xhigh');
-  const idxOpusMedium = ladder.indexOf('opus.medium');
+  const idxSonnetXhigh = ladder.indexOf('grade-2.xhigh');
+  const idxOpusMedium = ladder.indexOf('grade-3.medium');
   assert.ok(idxSonnetXhigh !== -1 && idxOpusMedium !== -1, 'both rungs appear in the ladder');
   assert.ok(
     idxOpusMedium >= idxSonnetXhigh,
-    `opus.medium (c${idxOpusMedium + 1}) must not rank below sonnet.xhigh (c${idxSonnetXhigh + 1})`
+    `grade-3.medium (c${idxOpusMedium + 1}) must not rank below grade-2.xhigh (c${idxSonnetXhigh + 1})`
   );
 });
 
 test('skipped middle tier keeps absolute ranks: haiku+opus, low+medium, bias 0 (SQ-134 floor bucketing)', () => {
-  // seq: h0, opus.low(4), opus.medium(5) — N=3 bins, no max rung (normalCount=10).
+  // seq: h0, grade-3.low(4), grade-3.medium(5) — N=3 bins, no max rung (normalCount=10).
   // idx = min(2, floor((c-1)/10 * 3)): bottom-weighted, so haiku (the cheapest
   // bucket) now claims 4 complexities instead of round()'s 3.
-  const prefs = mkPrefs(['haiku', 'opus'], ['low', 'medium'], 0);
+  const prefs = mkPrefs(['grade-1', 'grade-3'], ['low', 'medium'], 0);
   const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
   assert.deepStrictEqual(got, [
-    'haiku.null', 'haiku.null', 'haiku.null', 'haiku.null', 'opus.low',
-    'opus.low', 'opus.low', 'opus.medium', 'opus.medium', 'opus.medium',
+    'grade-1.null', 'grade-1.null', 'grade-1.null', 'grade-1.null', 'grade-3.low',
+    'grade-3.low', 'grade-3.low', 'grade-3.medium', 'grade-3.medium', 'grade-3.medium',
   ]);
 });
 
 test('C9 max edge: haiku+opus all efforts, bias +5 gives max at 9 and 10 only', () => {
-  const ladder = routingLadder(mkPrefs(['haiku', 'opus'], ALL_EFFORTS, 5));
+  const ladder = routingLadder(mkPrefs(['grade-1', 'grade-3'], ALL_EFFORTS, 5));
   assert.deepStrictEqual(
     ladder.filter((r) => r.effort === 'max').map((r) => r.complexity),
     [9, 10]
   );
-  assert.strictEqual(ladder[8].model, 'opus');
+  assert.strictEqual(ladder[8].model, 'grade-3');
   // At bias +3 (and below), c9 stays off max.
-  const l3 = routingLadder(mkPrefs(['haiku', 'opus'], ALL_EFFORTS, 3));
+  const l3 = routingLadder(mkPrefs(['grade-1', 'grade-3'], ALL_EFFORTS, 3));
   assert.notStrictEqual(l3[8].effort, 'max');
   assert.strictEqual(l3[9].effort, 'max');
 });
 
 // SQ-134 acceptance tables: bottom-weighted floor bucketing, spec prefs
-// {haiku:false, sonnet:true, opus:true, fable:false,
-//  efforts:{sonnet:{low:false,medium:false},opus:{low:false,medium:false}}}
+// {'grade-1':false, 'grade-2':true, 'grade-3':true, 'grade-4':false,
+//  efforts:{'grade-2':{low:false,medium:false},'grade-3':{low:false,medium:false}}}
 // i.e. sonnet hi+xhi, opus hi+xhi+max (low/medium off on both, max defaults on).
-const SQ134_TICKET_EFFORTS = { sonnet: ['high', 'xhigh', 'max'], opus: ['high', 'xhigh', 'max'] };
+const SQ134_TICKET_EFFORTS = { 'grade-2': ['high', 'xhigh', 'max'], 'grade-3': ['high', 'xhigh', 'max'] };
 
 test('SQ-134 acceptance: neutral bias 0 (sonnet hi+xhi, opus hi+xhi+max)', () => {
-  const prefs = mkPrefs(['sonnet', 'opus'], SQ134_TICKET_EFFORTS, 0);
+  const prefs = mkPrefs(['grade-2', 'grade-3'], SQ134_TICKET_EFFORTS, 0);
   const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
   assert.deepStrictEqual(got, [
-    'sonnet.high', 'sonnet.high', 'sonnet.high',
-    'sonnet.xhigh', 'sonnet.xhigh',
-    'opus.high', 'opus.high',
-    'opus.xhigh', 'opus.xhigh',
-    'opus.max',
+    'grade-2.high', 'grade-2.high', 'grade-2.high',
+    'grade-2.xhigh', 'grade-2.xhigh',
+    'grade-3.high', 'grade-3.high',
+    'grade-3.xhigh', 'grade-3.xhigh',
+    'grade-3.max',
   ]);
 });
 
-test('SQ-134 acceptance: frugal bias -5, gamma=3 (sonnet hi+xhi, opus hi+xhi+max) — opus.xhigh absent below max', () => {
-  const prefs = mkPrefs(['sonnet', 'opus'], SQ134_TICKET_EFFORTS, -5);
+test('SQ-134 acceptance: frugal bias -5, gamma=3 (sonnet hi+xhi, opus hi+xhi+max) — grade-3.xhigh absent below max', () => {
+  const prefs = mkPrefs(['grade-2', 'grade-3'], SQ134_TICKET_EFFORTS, -5);
   const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
   assert.deepStrictEqual(got, [
-    'sonnet.high', 'sonnet.high', 'sonnet.high', 'sonnet.high', 'sonnet.high', 'sonnet.high',
-    'sonnet.xhigh', 'sonnet.xhigh',
-    'opus.high',
-    'opus.max',
+    'grade-2.high', 'grade-2.high', 'grade-2.high', 'grade-2.high', 'grade-2.high', 'grade-2.high',
+    'grade-2.xhigh', 'grade-2.xhigh',
+    'grade-3.high',
+    'grade-3.max',
   ]);
-  assert.ok(!got.includes('opus.xhigh'), 'opus.xhigh must not appear below the max rung at frugal bias');
+  assert.ok(!got.includes('grade-3.xhigh'), 'grade-3.xhigh must not appear below the max rung at frugal bias');
 });
 
 test('SQ-134 acceptance: full matrix, both tiers all four efforts + max, bias 0 — top normal rung at C9', () => {
-  const prefs = mkPrefs(['sonnet', 'opus'], ALL_EFFORTS, 0);
+  const prefs = mkPrefs(['grade-2', 'grade-3'], ALL_EFFORTS, 0);
   const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
   assert.deepStrictEqual(got, [
-    'sonnet.low', 'sonnet.low', 'sonnet.medium', 'sonnet.high', 'opus.low',
-    'sonnet.xhigh', 'opus.medium', 'opus.high', 'opus.xhigh', 'opus.max',
+    'grade-2.low', 'grade-2.low', 'grade-2.medium', 'grade-2.high', 'grade-3.low',
+    'grade-2.xhigh', 'grade-3.medium', 'grade-3.high', 'grade-3.xhigh', 'grade-3.max',
   ]);
-  assert.strictEqual(got[0], 'sonnet.low', 'C1-2 land the cheapest rung');
-  assert.strictEqual(got[1], 'sonnet.low', 'C1-2 land the cheapest rung');
-  assert.strictEqual(got[8], 'opus.xhigh', 'C9 reaches the top NORMAL rung');
-  assert.strictEqual(got[9], 'opus.max', 'C10 is the sparing max rung');
+  assert.strictEqual(got[0], 'grade-2.low', 'C1-2 land the cheapest rung');
+  assert.strictEqual(got[1], 'grade-2.low', 'C1-2 land the cheapest rung');
+  assert.strictEqual(got[8], 'grade-3.xhigh', 'C9 reaches the top NORMAL rung');
+  assert.strictEqual(got[9], 'grade-3.max', 'C10 is the sparing max rung');
 });
 
 test('SQ-134 invariants: ticket prefs (sonnet hi+xhi, opus hi+xhi+max) hold at every bias -5..+5', () => {
   for (let bias = -5; bias <= 5; bias++) {
     const label = `bias ${bias}`;
-    const ladder = routingLadder(mkPrefs(['sonnet', 'opus'], SQ134_TICKET_EFFORTS, bias));
+    const ladder = routingLadder(mkPrefs(['grade-2', 'grade-3'], SQ134_TICKET_EFFORTS, bias));
     // C1 = cheapest enabled rung.
-    assert.strictEqual(ladder[0].model, 'sonnet', `${label} C1 cheapest tier`);
+    assert.strictEqual(ladder[0].model, 'grade-2', `${label} C1 cheapest tier`);
     assert.strictEqual(ladder[0].effort, 'high', `${label} C1 cheapest effort`);
     // C10 = max rung (hasMaxRung is true here: opus's row keeps max enabled).
-    assert.strictEqual(ladder[9].model, 'opus', `${label} C10 top tier`);
+    assert.strictEqual(ladder[9].model, 'grade-3', `${label} C10 top tier`);
     assert.strictEqual(ladder[9].effort, 'max', `${label} C10 hits the max rung`);
     // Monotone non-decreasing capability across C1..C10.
     const rank = (r) => {
       if (r.effort === 'max') return Infinity;
-      const base = r.model === 'opus' ? 4 : 2;
+      const base = r.model === 'grade-3' ? 4 : 2;
       return base + ['low', 'medium', 'high', 'xhigh'].indexOf(r.effort);
     };
     for (let i = 1; i < 10; i++) {
@@ -335,26 +335,26 @@ test('SQ-134 invariants: ticket prefs (sonnet hi+xhi, opus hi+xhi+max) hold at e
 });
 
 test('only max enabled: max carries the whole sequence, no extra sparing rung', () => {
-  const ladder = routingLadder(mkPrefs(['sonnet', 'opus'], ['max'], 0));
+  const ladder = routingLadder(mkPrefs(['grade-2', 'grade-3'], ['max'], 0));
   ladder.forEach((r) => assert.strictEqual(r.effort, 'max'));
-  assert.strictEqual(ladder[0].model, 'sonnet');
-  assert.strictEqual(ladder[9].model, 'opus');
+  assert.strictEqual(ladder[0].model, 'grade-2');
+  assert.strictEqual(ladder[9].model, 'grade-3');
 });
 
 test('haiku-only: 10 effort-null rungs, no max even when max enabled', () => {
   for (const bias of BIASES) {
-    const ladder = routingLadder(mkPrefs(['haiku'], ALL_EFFORTS, bias));
+    const ladder = routingLadder(mkPrefs(['grade-1'], ALL_EFFORTS, bias));
     ladder.forEach((r) => {
-      assert.strictEqual(r.model, 'haiku');
+      assert.strictEqual(r.model, 'grade-1');
       assert.strictEqual(r.effort, null);
     });
   }
 });
 
 test('single tier + single effort: constant ladder', () => {
-  const ladder = routingLadder(mkPrefs(['sonnet'], ['high'], -5));
+  const ladder = routingLadder(mkPrefs(['grade-2'], ['high'], -5));
   ladder.forEach((r) => {
-    assert.strictEqual(r.model, 'sonnet');
+    assert.strictEqual(r.model, 'grade-2');
     assert.strictEqual(r.effort, 'high');
   });
 });
@@ -364,7 +364,7 @@ test('empty prefs can never yield an empty ladder (defensive fallbacks)', () => 
   const ladder = routingLadder(prefs);
   assert.strictEqual(ladder.length, 10);
   ladder.forEach((r) => {
-    assert.strictEqual(r.model, 'sonnet');
+    assert.strictEqual(r.model, 'grade-2');
     assert.strictEqual(r.effort, 'medium');
   });
 });
@@ -375,7 +375,7 @@ test('setModelPrefs guards: refusing to disable every tier / every effort per ro
   for (const e of ALL_EFFORTS) allOff[e] = false; // flat keys broadcast "off" to every model row
   const saved = setModelPrefs(allOff);
   assert.ok(TIER_ORDER.some((t) => saved[t]), 'at least one tier stays enabled');
-  assert.strictEqual(saved.sonnet, true);
+  assert.strictEqual(saved['grade-2'], true);
   // Per-row guard: every model row keeps at least one effort, falling back to medium.
   for (const m of EFFORT_MODELS) {
     assert.ok(ALL_EFFORTS.some((e) => saved.efforts[m][e]), `${m} keeps an effort enabled`);
@@ -389,28 +389,28 @@ test('setModelPrefs guards: refusing to disable every tier / every effort per ro
   assert.strictEqual(setModelPrefs({ routingBias: 'garbage' }).routingBias, 0);
 });
 
-test('per-model efforts: disabling opus.medium drops that rung but keeps sonnet.medium', () => {
-  const prefs = mkPrefs(['sonnet', 'opus'], {
-    sonnet: ['low', 'medium', 'high', 'xhigh'],
-    opus: ['low', 'high', 'xhigh'], // medium excluded on opus only
+test('per-model efforts: disabling grade-3.medium drops that rung but keeps grade-2.medium', () => {
+  const prefs = mkPrefs(['grade-2', 'grade-3'], {
+    'grade-2': ['low', 'medium', 'high', 'xhigh'],
+    'grade-3': ['low', 'high', 'xhigh'], // medium excluded on opus only
   }, 0);
   const got = routingLadder(prefs).map((r) => `${r.model}.${r.effort}`);
-  assert.ok(got.includes('sonnet.medium'), 'sonnet.medium still routed');
-  assert.ok(!got.includes('opus.medium'), 'opus.medium never routed');
+  assert.ok(got.includes('grade-2.medium'), 'grade-2.medium still routed');
+  assert.ok(!got.includes('grade-3.medium'), 'grade-3.medium never routed');
   // opus's other rungs survive, so it's a targeted exclusion, not opus-wide.
-  assert.ok(got.includes('opus.low') && got.includes('opus.high'), 'opus keeps its other rungs');
+  assert.ok(got.includes('grade-3.low') && got.includes('grade-3.high'), 'opus keeps its other rungs');
 });
 
-test('per-model efforts: disabling fable.max (all tiers on) removes the sparing rung, c10 = top normal rung', () => {
+test('per-model efforts: disabling grade-4.max (all tiers on) removes the sparing rung, c10 = top normal rung', () => {
   const prefs = mkPrefs(TIER_ORDER, {
-    sonnet: ALL_EFFORTS,
-    opus: ALL_EFFORTS,
-    fable: ['low', 'medium', 'high', 'xhigh'], // top tier's row has max OFF
+    'grade-2': ALL_EFFORTS,
+    'grade-3': ALL_EFFORTS,
+    'grade-4': ['low', 'medium', 'high', 'xhigh'], // top tier's row has max OFF
   }, 0);
   const ladder = routingLadder(prefs);
   const got = ladder.map((r) => `${r.model}.${r.effort}`);
   assert.ok(!got.some((s) => s.endsWith('.max')), 'no max rung anywhere (top tier max off)');
-  assert.strictEqual(got[9], 'fable.xhigh', 'c10 lands the top normal rung');
+  assert.strictEqual(got[9], 'grade-4.xhigh', 'c10 lands the top normal rung');
 });
 
 test('migration: a legacy flat-key file on disk broadcasts into every model row', () => {
@@ -418,7 +418,7 @@ test('migration: a legacy flat-key file on disk broadcasts into every model row'
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // Old shape: no `efforts` object, just the flat effort booleans.
   fs.writeFileSync(file, JSON.stringify({
-    haiku: true, sonnet: true, opus: true, fable: true,
+    'grade-1': true, 'grade-2': true, 'grade-3': true, 'grade-4': true,
     low: true, medium: false, high: true, xhigh: true, max: false,
     routing: true, routingBias: 0,
   }));
@@ -442,18 +442,18 @@ test('setModelPrefs: a flat-key patch broadcasts to every model row and writes n
   for (const e of ALL_EFFORTS) assert.ok(!(e in saved), `no flat "${e}" key on the written shape`);
 });
 
-test('setModelPrefs: per-row guard — disabling all of opus efforts leaves opus.medium on', () => {
+test('setModelPrefs: per-row guard — disabling all of opus efforts leaves grade-3.medium on', () => {
   // Start from a known-good baseline so sonnet/fable rows are unaffected by prior tests.
-  setModelPrefs({ efforts: { sonnet: ALL_EFFORTS.reduce((o, e) => ((o[e] = true), o), {}) } });
+  setModelPrefs({ efforts: { 'grade-2': ALL_EFFORTS.reduce((o, e) => ((o[e] = true), o), {}) } });
   const saved = setModelPrefs({
-    efforts: { opus: { low: false, medium: false, high: false, xhigh: false, max: false } },
+    efforts: { 'grade-3': { low: false, medium: false, high: false, xhigh: false, max: false } },
   });
-  assert.strictEqual(saved.efforts.opus.medium, true, 'opus falls back to medium');
+  assert.strictEqual(saved.efforts["grade-3"].medium, true, 'opus falls back to medium');
   for (const e of ['low', 'high', 'xhigh', 'max']) {
-    assert.strictEqual(saved.efforts.opus[e], false, `opus.${e} stays off`);
+    assert.strictEqual(saved.efforts["grade-3"][e], false, `grade-3.${e} stays off`);
   }
   // The nested patch touched only opus; sonnet keeps its full row.
-  assert.strictEqual(saved.efforts.sonnet.low, true, 'sonnet row untouched by the opus-only patch');
+  assert.strictEqual(saved.efforts["grade-2"].low, true, 'sonnet row untouched by the opus-only patch');
 });
 
 test('deriveRouting: shape and null on invalid complexity', () => {
