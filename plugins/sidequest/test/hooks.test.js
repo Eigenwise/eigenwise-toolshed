@@ -130,7 +130,9 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.match(ctx, /sidequest \(active\)/);
   assert.ok(ctx.includes('ATOMIC'), 'must demand atomic tickets (stuck executors come from oversized scope)');
   assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the stamped tier');
-  assert.ok(ctx.includes('sidequest-exec-'), 'must name the routed executor');
+  assert.ok(ctx.includes('exec.agent'), 'must use the ticket-provided persistent executor');
+  assert.ok(ctx.includes('already-registered'), 'must explain why it must not create a temporary agent at dispatch time');
+  assert.ok(ctx.includes('Do not use `native_agent`'), 'must reject temporary native dispatch for normal execution');
   assert.ok(ctx.includes('bypassPermissions'), 'must require unattended executors to launch in bypass');
   assert.ok(ctx.includes('SHORT'), 'must demand short, bounded executor runs');
   assert.ok(ctx.includes('bounce back'), 'must tell executors to bounce back, not wander');

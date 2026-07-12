@@ -100,9 +100,7 @@ function main() {
     emit(
       '=== sidequest (active — context restored) ===\n' +
         'Context was just compacted/resumed — RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
-        'Discipline: plan multi-part work as tickets; route execution to each ticket\'s stamped (cheap) ' +
-        'tier as short, bounded executor runs — batch small same-tier tickets; inline only trivial ' +
-        'one-steps.'
+        'Discipline: plan multi-part work as tickets; route execution to the ticket\'s already-registered `exec.agent` as short, bounded executor runs — batch small same-tier tickets; inline only trivial one-steps.'
     );
     process.exit(0);
   }
@@ -116,9 +114,7 @@ function main() {
       '(Jira/Linear/GitHub Issues), that owns the deliverable — sidequest is the local execution layer; ' +
       'use both.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
-      '• Route real execution DOWN to each ticket\'s stamped tier: spawn `sidequest-exec-<effort>` + the ' +
-      'ticket\'s model + a unique name, always with `mode: "bypassPermissions"`. This thread ' +
-      'orchestrates — decompose, score, spec, spawn, integrate. Inline only a trivial one-step change.\n' +
+      '• Route real execution DOWN: pass the ticket\'s `exec.agent` to Agent as `subagent_type`, with a unique name + `bypassPermissions`. It is already-registered. Do not use `native_agent` for ticket execution. This thread orchestrates; inline only trivial one-steps.\n' +
       '• Keep executor runs SHORT and bounded — the ticket is the spec (exact anchors + verify command); ' +
       'scope the spawn prompt; executors bounce back fast (release + report) instead of wandering. Many ' +
       'short orchestrator↔executor round-trips beat one long autonomous run. Verify reports by artifact ' +
