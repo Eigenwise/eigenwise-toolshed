@@ -1120,6 +1120,19 @@ function coercePriority(p, fallback) {
   return VALID_PRIORITY.includes(p) ? p : fallback;
 }
 
+const EXECUTOR_ANCHORS_MAX = 4000;
+const EXECUTOR_VERIFY_MAX = 1000;
+
+// Per-ticket executor context stays deliberately small: this data may be passed
+// through a Windows command surface with an 8191-character ceiling. Keep the
+// anchors as written so the eventual executor prompt can carry them verbatim.
+function executorText(value, max, label) {
+  if (value == null) return '';
+  const text = String(value);
+  if (text.length > max) throw new Error(`${label} exceeds the ${max}-character executor-context limit.`);
+  return text;
+}
+
 function createTicket(slug, fields) {
   fields = fields || {};
   const id = newTicketId();
@@ -1158,6 +1171,8 @@ function createTicket(slug, fields) {
     model: coerceModel(fields.model), // legacy direct tag (a built-in tier); overridden at read time when complexity is set
     effort: coerceEffort(fields.effort),          // legacy direct tag; overridden at read time when complexity is set
     files: normalizeFiles(fields.files),          // declared file scope, for parallel-wave planning
+    executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
+    executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command'),
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
@@ -1299,6 +1314,8 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
     if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
     if (patch.files !== undefined) t.files = normalizeFiles(patch.files);
+    if (patch.executorAnchors !== undefined) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors');
+    if (patch.executorVerify !== undefined) t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
     // A provenance stamp may ride along a patch (e.g. the dashboard completing a
     // ticket). Permissive like the routing fields above: a valid stamp is set, a
     // bad one is ignored rather than thrown (the data layer never crashes a write).
@@ -2919,6 +2936,8 @@ module.exports = {
   VALID_PRIORITY,
   VALID_MODELS,
   VALID_EFFORTS,
+  EXECUTOR_ANCHORS_MAX,
+  EXECUTOR_VERIFY_MAX,
   MODEL_CAPABILITY_ORDER,
   EXECUTION_PROFILES,
   profileForTier,

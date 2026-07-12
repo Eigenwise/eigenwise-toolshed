@@ -30,6 +30,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 const store = require('../lib/store');
 const agentsync = require('../lib/agentsync');
+const work = require('../lib/work');
 
 /* ------------------------------------------------------------------ *
  *  Arg parsing
@@ -203,6 +204,8 @@ function cmdAdd(opts) {
     labels: opts.label,
     images: opts.image || [],
     files: opts.file,
+    executorAnchors: opts.anchors,
+    executorVerify: opts.verify,
     storyId: opts.story,
     complexity: opts.complexity,
     complexityWhy: opts.why,
@@ -279,6 +282,8 @@ function cmdUpdate(opts, positional) {
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
   if (opts.file != null) patch.files = (opts.file.length === 1 && String(opts.file[0]).toLowerCase() === 'none') ? [] : opts.file;
+  if (opts.anchors != null) patch.executorAnchors = opts.anchors;
+  if (opts.verify != null) patch.executorVerify = opts.verify;
   if (opts.assignee != null) patch.assignee = opts.assignee;
   if (opts.complexity != null) {
     // A changed score must arrive with a fresh justification — routing derives
@@ -911,7 +916,7 @@ function cmdNativeAgent(opts, positional) {
     runtime: resolved.runsModel,
     sessionId,
   });
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, ref: ticket.ref }, created), null, 2) + '\n');
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug, ref: ticket.ref, prompt: work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`) }, created), null, 2) + '\n');
 }
 
 // `sidequest models sync-agents` — regenerate the runtime
@@ -1512,6 +1517,9 @@ Working the board safely (multi-agent):
   sidequest add/update ... --file path [--file path...]   declare the files a ticket will touch — repeat for
     several; "none" clears (update only). 'ready' groups tickets into parallel-safe waves by declared file
     scope: tickets in the same wave never touch overlapping files/directories; untagged tickets never conflict.
+  sidequest add/update ... --anchors "file:line symbol" --verify "<exact command>"
+    seed a bounded executor with scout findings and its exact check. Anchors (4k), verify (1k), and the
+    final prompt (7.6k) stay below the Windows command-line ceiling; values are preserved verbatim.
 
 Complexity → routing (score the task; model + effort are derived, never tagged directly):
   sidequest add ... --complexity <1-10> --why "<motivation>"
@@ -1530,9 +1538,9 @@ Complexity → routing (score the task; model + effort are derived, never tagged
   list/ready); the orchestrator routes by reading it. Haiku rungs have no effort.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest native-agent <SQ-n> [--json]             return an already-registered native Agent spawn spec
-  sidequest native-agent cleanup --name <name>        remove one temporary native Agent definition
-    Invoke the returned definition through the current conversation's Agent tool. Temporary definitions are not spawnable until a new session reloads the registry.
+  sidequest native-agent <SQ-n> [--prompt "task"] [--json]  return an already-registered native Agent spawn spec + bounded prompt
+  sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
+    Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
     \`sidequest work\`/\`drain\` are disabled because they cannot invoke Agent and never start a separate Claude process.
   sidequest reconcile [--session <id>] [--reason "..."]   release a session's stale claims back to todo now
     (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's

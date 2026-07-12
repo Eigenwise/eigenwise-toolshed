@@ -202,8 +202,8 @@ marking its suggested tier. This is a swap, not an extra rung: the ladder keeps 
 is still scored and stamped by tier (opus·high stays opus·high), you just choose which model *runs* the
 tier. Map the opus tier to Terra and opus-tier tickets use Terra. The executor agents for every discovered
 Codex model are provisioned automatically at session start (persistent files under `~/.claude/agents`).
-Routed work stays in the current Claude Code conversation: Sidequest creates a temporary native Agent
-definition, then the conversation invokes it through Agent. A card chip shows a small `gpt` mark when
+Routed work stays in the current Claude Code conversation: Sidequest returns an already-registered native Agent
+executor, then the conversation invokes it through Agent. A card chip shows a small `gpt` mark when
 its tier is Codex-backed.
 
 This ladder engine also ships standalone as the **switchboard** plugin (same rungs, same bias math,
@@ -342,9 +342,9 @@ anything that shares files or has a `depends-on` link stays sequential (blocked 
 ## Native routed execution
 
 Routed tickets run through the current Claude Code conversation only. Call `native_agent` (or
-`sidequest native-agent SQ-n`) to create a temporary, backend-pinned Agent definition, invoke that
-returned definition with Agent, then run `native_agent_cleanup`. `sidequest work`/`drain` and MCP
-`dispatch` are disabled because neither can invoke the current conversation's Agent tool.
+`sidequest native-agent SQ-n`) to return the already-registered executor and bounded prompt, then invoke
+that spawn spec with Agent. `sidequest work`/`drain` and MCP `dispatch` are disabled because neither can
+invoke the current conversation's Agent tool.
 
 ## Comments & questions
 
@@ -436,8 +436,8 @@ node <plugin>/bin/sidequest.js models                               # the live c
 node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only work whose DERIVED tier is sonnet
 node <plugin>/bin/sidequest.js models [--json]                      # the tiers you allow + each tier's enabled efforts
 node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
-node <plugin>/bin/sidequest.js native-agent SQ-3 [--json]          # create a temporary Agent definition; invoke it through Agent
-node <plugin>/bin/sidequest.js native-agent cleanup --name <name> # remove it after the Agent run
+node <plugin>/bin/sidequest.js native-agent SQ-3 [--prompt "task"] [--json] # return the registered executor + bounded prompt
+node <plugin>/bin/sidequest.js native-agent cleanup --name <name> # remove a legacy temporary definition
 node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
 node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket

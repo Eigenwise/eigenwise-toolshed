@@ -224,6 +224,8 @@ const TOOLS = [
         status: { type: 'string', enum: store.VALID_STATUS },
         labels: { type: 'array', items: { type: 'string' } },
         files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes) for parallel-wave planning.' },
+        anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Optional pre-scouted executor anchors, carried verbatim into the native task prompt.' },
+        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Optional exact verification command, carried verbatim into the native task prompt.' },
         story: { type: 'string', description: 'A story ref (US-n) to file this ticket into.' },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string', description: 'Motivation for the complexity score, against the actual task (min 20 chars).' },
@@ -243,6 +245,8 @@ const TOOLS = [
         status: args.status,
         labels: args.labels,
         files: args.files,
+        executorAnchors: args.anchors,
+        executorVerify: args.verify,
         storyId: args.story,
         complexity: args.complexity,
         complexityWhy: args.why,
@@ -265,7 +269,9 @@ const TOOLS = [
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         status: { type: 'string', enum: store.VALID_STATUS },
         labels: { type: 'array', items: { type: 'string' } },
-        files: { type: 'array', items: { type: 'string' } },
+        files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes) for parallel-wave planning.' },
+        anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Optional pre-scouted executor anchors, carried verbatim into the native task prompt.' },
+        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Optional exact verification command, carried verbatim into the native task prompt.' },
         story: { type: 'string' },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string' },
@@ -282,6 +288,8 @@ const TOOLS = [
       for (const k of ['title', 'description', 'priority', 'status', 'labels', 'files', 'complexity']) {
         if (args[k] !== undefined) patch[k] = args[k];
       }
+      if (args.anchors !== undefined) patch.executorAnchors = args.anchors;
+      if (args.verify !== undefined) patch.executorVerify = args.verify;
       if (args.story !== undefined) patch.storyId = args.story;
       if (args.why !== undefined) patch.complexityWhy = args.why;
       const t = store.updateTicket(slug, args.ref, patch);
@@ -484,8 +492,7 @@ const TOOLS = [
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        prompt: { type: 'string', description: 'The bounded ticket-execution prompt passed unchanged to the native Agent.' },
-        tools: { type: 'array', items: { type: 'string' }, description: 'Optional native Agent tool allowlist.' },
+        prompt: { type: 'string', description: 'The bounded ticket-execution prompt augmented with stored anchors and verify command.' },
         session: { type: 'string' },
       },
       required: ['ref', 'prompt'],
@@ -503,15 +510,18 @@ const TOOLS = [
         effort: ticket.effort,
         grade: ticket.model,
         runtime: resolved.runsModel,
-        tools: args.tools,
         sessionId: sessionOf(args),
       });
-      return Object.assign({ project: slug, ref: ticket.ref, prompt: args.prompt }, created);
+      return Object.assign({
+        project: slug,
+        ref: ticket.ref,
+        prompt: work.executorPrompt(ticket, args.prompt),
+      }, created);
     },
   },
   {
     name: 'native_agent_cleanup',
-    description: 'Remove a temporary Sidequest native Agent definition after its Agent run ends or the session is cleaning up. Pass the name returned by native_agent, or session to remove that session\'s stale files.',
+    description: 'Remove a legacy temporary Sidequest native Agent definition after a failed older run. Stable native_agent dispatch does not create files.',
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string' }, session: { type: 'string' } },
@@ -523,7 +533,7 @@ const TOOLS = [
   },
   {
     name: 'dispatch',
-    description: 'Disabled. Routed work must use native_agent to create the temporary backend-pinned definition, then the current conversation invokes it through Agent. Sidequest never starts a separate Claude process.',
+    description: 'Disabled. Routed work must use native_agent to return an already-registered executor, then the current conversation invokes it through Agent. Sidequest never starts a separate Claude process.',
     inputSchema: {
       type: 'object',
       properties: {

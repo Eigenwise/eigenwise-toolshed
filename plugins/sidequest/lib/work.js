@@ -10,6 +10,24 @@
 
 const store = require('./store');
 
+// Native Agent prompts travel through Claude Code's Windows command surface.
+// Leave room below the 8191-character argv ceiling for the Agent wrapper and
+// preserve every supplied anchor/verify character rather than truncating it.
+const NATIVE_PROMPT_MAX = 7600;
+
+function executorPrompt(ticket, taskPrompt) {
+  const base = String(taskPrompt || '').trim();
+  if (!base) throw new Error('native_agent: prompt is required.');
+  const parts = [base];
+  if (ticket.executorAnchors) parts.push(`Anchors:\n${ticket.executorAnchors}`);
+  if (ticket.executorVerify) parts.push(`Verify command:\n${ticket.executorVerify}`);
+  const prompt = parts.join('\n\n');
+  if (prompt.length > NATIVE_PROMPT_MAX) {
+    throw new Error(`native_agent: task prompt plus ticket context exceeds the ${NATIVE_PROMPT_MAX}-character Windows-safe limit.`);
+  }
+  return prompt;
+}
+
 function nativeDispatchRequired(slug, idOrRef) {
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) return { ok: false, reason: 'missing', message: `no ticket "${idOrRef}".` };
@@ -27,4 +45,4 @@ function nativeDispatchRequired(slug, idOrRef) {
   };
 }
 
-module.exports = { nativeDispatchRequired };
+module.exports = { nativeDispatchRequired, executorPrompt, NATIVE_PROMPT_MAX };

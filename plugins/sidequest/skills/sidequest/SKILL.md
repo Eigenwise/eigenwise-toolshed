@@ -79,7 +79,7 @@ They take the same fields as the CLI flags shown below — the examples in this 
 compactness, not as a recommendation.
 
 The **CLI** is for when the MCP tools aren't loaded, for humans, and for the things only it does:
-`dashboard`/`serve` and temporary `native-agent` definitions. Routed work must use `native_agent` plus
+`dashboard`/`serve` and legacy temporary `native-agent` cleanup. Routed work must use `native_agent` plus
 the current conversation's Agent tool. The SessionStart hook injects the **resolved
 absolute command** (`node "<path>/bin/sidequest.js"`) into your context — use exactly that with the
 Bash tool; `sidequest` in this file is shorthand for it. Commands default to the current project
@@ -113,6 +113,9 @@ sidequest add -t "Contact form does not send" -d "Submit does nothing; no email 
   (`--model`/`--effort` are rejected). See "Complexity-driven routing" below.
 - `-s` status `todo|doing|done` · `-i` image path (repeatable) · `--file` scope (repeatable) ·
   `--story US-n`
+- `--anchors "file:line symbol"` and `--verify "exact command"` seed native executor prompts verbatim.
+  Keep anchors under 4k chars, verify under 1k, and the assembled prompt under 7.6k so Windows'
+  8191-character command limit stays safe.
 
 **Descriptions are developer-to-developer specs, never a PM summary.** A ticket says *which* files and
 functions (**Where**), *what* changes at a code level — inputs → outputs, edge cases, error behavior

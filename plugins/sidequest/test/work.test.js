@@ -67,6 +67,18 @@ test('nativeDispatchRequired accepts available tickets only for native Agent dis
   assert.match(checked.message, /Agent tool/);
 });
 
+test('executorPrompt appends ticket anchors and verify command verbatim', () => {
+  const t = ticket({ executorAnchors: 'lib/work.js:14 executorPrompt', executorVerify: 'node --test plugins/sidequest/test/work.test.js' });
+  assert.strictEqual(
+    work.executorPrompt(t, 'Implement the bounded change.'),
+    'Implement the bounded change.\n\nAnchors:\nlib/work.js:14 executorPrompt\n\nVerify command:\nnode --test plugins/sidequest/test/work.test.js'
+  );
+});
+
+test('executorPrompt refuses task context beyond the Windows-safe bound', () => {
+  const t = ticket({ executorAnchors: 'anchor' });
+  assert.throws(() => work.executorPrompt(t, 'x'.repeat(work.NATIVE_PROMPT_MAX)), /Windows-safe limit/);
+});
 test('CLI work refuses without launching a separate process', () => {
   const t = ticket();
   const res = runCli(['work', '--ref', t.ref]);

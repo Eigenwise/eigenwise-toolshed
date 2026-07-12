@@ -120,24 +120,26 @@ test('dispatch is disabled and directs callers to native_agent', () => {
   assert.match(res.content[0].text, /native_agent.*Agent tool/i);
 });
 
-test('native_agent returns an already-registered executor instead of a stale temporary definition', () => {
+test('native_agent carries ticket anchors and verify command through its stable fallback', () => {
   const catalog = seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
   const savedPrefs = store.getModelPrefs();
   try {
     store.setModelPrefs({ tierBackend: { ...savedPrefs.tierBackend, 'grade-3': 'codex-gpt-5-6-terra' } });
-    const added = callTool('add', { title: 'native fallback', complexity: 6, why: 'exercise a routed native dispatch against the stable registered executor' });
-    const out = callTool('native_agent', { ref: added.ticket.ref, prompt: 'do the ticket' });
-    assert.strictEqual(out.fallback, true);
-    assert.strictEqual(out.file, null);
-    assert.strictEqual(out.spawn.subagent_type, 'sidequest-exec-codex-gpt-5-6-terra-high');
-    assert.strictEqual(out.spawn.model, undefined);
+    const added = callTool('add', {
+      title: 'prompt context', complexity: 6, why: 'exercise the stored executor context passed into a stable native-agent fallback',
+      anchors: 'lib/work.js:14 executorPrompt', verify: 'node --test plugins/sidequest/test/work.test.js',
+    });
+    const native = callTool('native_agent', { ref: added.ticket.ref, prompt: 'Implement exactly this ticket.' });
+    assert.strictEqual(native.fallback, true);
+    assert.strictEqual(native.file, null);
+    assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-codex-gpt-5-6-terra-high');
+    assert.match(native.prompt, /Anchors:\nlib\/work\.js:14 executorPrompt/);
+    assert.match(native.prompt, /Verify command:\nnode --test plugins\/sidequest\/test\/work\.test\.js/);
   } finally {
     store.setModelPrefs(savedPrefs);
     clearCatalog();
   }
 });
-
-
 test('an unknown method is a JSON-RPC method-not-found error', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 3, method: 'does/not/exist' });
   assert.ok(resp.error, 'returns an error object');
