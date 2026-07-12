@@ -717,6 +717,20 @@ const DEFAULT_MODELS = [
   'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
 
+// The Codex backend accepts about 372k tokens, but compaction needs headroom
+// for the summary request. Claude Code uses max_input_tokens from gateway
+// discovery to decide when to compact, so advertise 85% of the real window.
+const CODEX_COMPACT_CONTEXT_WINDOW = 316200;
+
+function gatewayModel(id) {
+  return {
+    id: `${PREFIX}${id}`,
+    display_name: displayName(id),
+    type: 'model',
+    max_input_tokens: CODEX_COMPACT_CONTEXT_WINDOW,
+  };
+}
+
 // ------------------------------------------------------------ model catalog
 //
 // sidequest (same marketplace) auto-discovers Codex models by reading this
@@ -882,11 +896,7 @@ function createHostsBypassResolver({ resolve4, resolve6, ttlMs = 5 * 60 * 1000 }
 function runShim() {
   let modelCache = {
     at: 0,
-    data: DEFAULT_MODELS.map((id) => ({
-      id: `${PREFIX}${id}`,
-      display_name: displayName(id),
-      type: 'model',
-    })),
+    data: DEFAULT_MODELS.map(gatewayModel),
   };
   const counters = { models: 0, codex: 0, anthropic: 0 };
   // hostsDetected drives the DNS-bypass decision below regardless of whether
@@ -910,11 +920,7 @@ function runShim() {
     if (!Array.isArray(ids) || !ids.length) ids = DEFAULT_MODELS;
     modelCache = {
       at: Date.now(),
-      data: ids.map((id) => ({
-        id: `${PREFIX}${id}`,
-        display_name: displayName(id),
-        type: 'model',
-      })),
+      data: ids.map(gatewayModel),
     };
   }
   refreshModels();

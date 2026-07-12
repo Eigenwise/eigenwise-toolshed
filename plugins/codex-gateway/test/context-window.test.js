@@ -74,6 +74,7 @@ test('Codex discovery stays below the real backend context limit', async (t) => 
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   assert.equal(models.data[0].id, 'claude-codex-gpt-5.6-sol');
+  assert.equal(models.data[0].max_input_tokens, 316200);
   assert.equal(models.data[0].id.includes('[1m]'), false);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
