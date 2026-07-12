@@ -102,11 +102,38 @@ function renderBackendAgent(slug, id, effort) {
   });
 }
 
-function nativeAgentName(ref, nonce) {
-  const ticket = String(ref || 'ticket').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'ticket';
-  const suffix = String(nonce || crypto.randomBytes(4).toString('hex')).toLowerCase();
+function refToken(ref) {
+  return String(ref || 'ticket').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'ticket';
+}
+
+// Turn a resolved runtime (resolveExec's runsModel / slug, e.g.
+// "codex-gpt-5-6-luna" or the Claude alias "opus") into a filesystem-safe
+// DISPLAY token for the agent name: drop the noisy "codex-" catalog prefix so
+// the subagent card reads `gpt-5-6-luna`, and reduce to lowercase [a-z0-9-].
+// Returns '' when there's no runtime to show.
+function runtimeToken(runtime) {
+  return String(runtime || '')
+    .toLowerCase()
+    .replace(/^codex-/, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// Name the temporary native executor after the runtime it actually runs, so
+// Claude Code's subagent card shows the model (e.g.
+// sidequest-native-sq-198-gpt-5-6-luna) instead of a meaningless hex nonce. The
+// name STAYS TEMP_PREFIX-prefixed so cleanupNativeAgents still finds it, and the
+// runtime token is a display label only — routing ids stay neutral. A short hex
+// nonce is appended only to break a same-runtime collision for the same ref
+// (createNativeAgent supplies one when the base name is already on disk).
+function nativeAgentName(ref, runtime, nonce) {
+  const ticket = refToken(ref);
+  const token = runtimeToken(runtime);
+  const base = token ? `${TEMP_PREFIX}${ticket}-${token}` : `${TEMP_PREFIX}${ticket}`;
+  if (nonce == null || nonce === '') return base;
+  const suffix = String(nonce).toLowerCase();
   if (!/^[a-z0-9]{6,32}$/.test(suffix)) throw new Error('native agent nonce must be 6-32 lowercase alphanumeric characters.');
-  return `${TEMP_PREFIX}${ticket}-${suffix}`;
+  return `${base}-${suffix}`;
 }
 
 function nativeAgentFile(name, dir) {
@@ -151,12 +178,37 @@ function waitForNativeAgentReload(waitMs) {
 
 function createNativeAgent(spec, opts) {
   opts = opts || {};
+  spec = spec || {};
   const dir = opts.dir || defaultAgentsDir();
-  const name = nativeAgentName(spec && spec.ref, spec && spec.nonce);
-  const source = nativeAgentSource(Object.assign({}, spec, { name }));
   fs.mkdirSync(dir, { recursive: true });
-  const file = nativeAgentFile(name, dir);
-  fs.writeFileSync(file, source, { flag: 'wx' });
+  // The runtime label (resolveExec's runsModel, which is the catalog slug for a
+  // Codex tier or the Claude alias for a Claude tier) is what makes the name
+  // readable. An explicit spec.nonce forces that suffix; otherwise the name is
+  // the bare runtime-labeled base and a nonce is added only on collision.
+  const runtime = spec.runtime != null ? spec.runtime : spec.runsModel;
+  const explicitNonce = spec.nonce != null ? spec.nonce : null;
+  let name = nativeAgentName(spec.ref, runtime, explicitNonce);
+  if (explicitNonce == null && fs.existsSync(nativeAgentFile(name, dir))) {
+    // A same-runtime name for the same ref already exists on disk — disambiguate.
+    name = nativeAgentName(spec.ref, runtime, crypto.randomBytes(4).toString('hex'));
+  }
+  let file = nativeAgentFile(name, dir);
+  for (let attempt = 0; ; attempt++) {
+    const source = nativeAgentSource(Object.assign({}, spec, { name }));
+    try {
+      fs.writeFileSync(file, source, { flag: 'wx' });
+      break;
+    } catch (err) {
+      // Lost a create race against a parallel worker: try a fresh nonce. Only
+      // when we own the nonce (no explicit one was pinned by the caller).
+      if (err && err.code === 'EEXIST' && explicitNonce == null && attempt < 25) {
+        name = nativeAgentName(spec.ref, runtime, crypto.randomBytes(4).toString('hex'));
+        file = nativeAgentFile(name, dir);
+        continue;
+      }
+      throw err;
+    }
+  }
   waitForNativeAgentReload(opts.waitMs);
   return {
     name,

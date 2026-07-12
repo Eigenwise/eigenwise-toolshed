@@ -961,6 +961,7 @@ function cmdNativeAgent(opts, positional) {
     modelId: resolved.spawnId,
     effort: ticket.effort,
     grade: ticket.model,
+    runtime: resolved.runsModel,
     sessionId,
   });
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, ref: ticket.ref }, created), null, 2) + '\n');
