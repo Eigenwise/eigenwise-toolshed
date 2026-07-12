@@ -53,6 +53,7 @@ const ENV_BLOCK = {
 const LEGACY_ENV_BLOCK = {
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
 };
+const GATEWAY_MODELS_CACHE = path.join(os.homedir(), '.claude', 'cache', 'gateway-models.json');
 
 const USAGE = `usage: codex-gateway.js <command>
 
@@ -164,6 +165,16 @@ function cleanLegacyEnvSettings() {
     if (!Object.keys(settings.env).length) delete settings.env;
     fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   }
+}
+
+function cleanLegacyGatewayModelCache() {
+  let cache;
+  try { cache = JSON.parse(fs.readFileSync(GATEWAY_MODELS_CACHE, 'utf8')); } catch { return false; }
+  if (cache.baseUrl !== ENV_BLOCK.ANTHROPIC_BASE_URL || !Array.isArray(cache.models)) return false;
+  if (!cache.models.some((m) => m && typeof m.id === 'string'
+    && m.id.startsWith(PREFIX) && /\[1m\]$/.test(m.id))) return false;
+  try { fs.rmSync(GATEWAY_MODELS_CACHE); } catch { return false; }
+  return true;
 }
 
 function isWired() {
@@ -340,6 +351,7 @@ function writeEnv(scope, remove) {
     for (const [k, v] of Object.entries(LEGACY_ENV_BLOCK)) {
       if (String(settings.env[k]) === String(v)) delete settings.env[k];
     }
+    cleanLegacyGatewayModelCache();
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
@@ -552,7 +564,7 @@ function runShim() {
   const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
   const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = []) {
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false) {
     const url = new URL(clientReq.url, target);
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
@@ -565,8 +577,46 @@ function runShim() {
     }, (upRes) => {
       const resHeaders = { ...upRes.headers };
       for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
+      if (normalizeContextErrors && upRes.statusCode >= 400) {
+        const chunks = [];
+        let settled = false;
+        const failBufferedResponse = () => {
+          if (settled) return;
+          settled = true;
+          if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
+          clientRes.end(JSON.stringify({
+            type: 'error',
+            error: { type: 'api_error', message: 'codex-gateway shim: upstream response ended early' },
+          }));
+        };
+        upRes.on('data', (c) => chunks.push(c));
+        upRes.on('error', failBufferedResponse);
+        upRes.on('aborted', failBufferedResponse);
+        upRes.on('end', () => {
+          if (settled) return;
+          settled = true;
+          const upstreamBody = Buffer.concat(chunks);
+          const text = upstreamBody.toString();
+          if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
+            const normalized = JSON.stringify({
+              type: 'error',
+              error: { type: 'invalid_request_error', message: 'prompt is too long' },
+            });
+            clientRes.writeHead(400, {
+              'content-type': 'application/json',
+              'content-length': Buffer.byteLength(normalized),
+              'x-codex-gateway-upstream-status': String(upRes.statusCode),
+            });
+            return clientRes.end(normalized);
+          }
+          resHeaders['content-length'] = upstreamBody.length;
+          clientRes.writeHead(upRes.statusCode, resHeaders);
+          clientRes.end(upstreamBody);
+        });
+        return;
+      }
       clientRes.writeHead(upRes.statusCode, resHeaders);
-      upRes.pipe(clientRes); // never buffer: Claude Code needs the SSE stream live
+      upRes.pipe(clientRes); // never buffer successful SSE: Claude Code needs the stream live
     });
     upReq.setTimeout(3600000, () => upReq.destroy(new Error('upstream timeout')));
     upReq.on('error', (e) => {
@@ -622,7 +672,7 @@ function runShim() {
             counters.codex++;
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              JSON.stringify(parsed), ['authorization', 'x-api-key']);
+              JSON.stringify(parsed), ['authorization', 'x-api-key'], true);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }
@@ -662,9 +712,10 @@ function runShim() {
       log('stopped');
       break;
     case 'ensure': {
-      // Clean the unsafe value written by versions through 0.4.1 on the first
-      // session after the plugin cache updates. Exact-match only.
+      // Clean the unsafe values and discovery rows written by versions through
+      // 0.4.1 on the first session after the plugin cache updates.
       cleanLegacyEnvSettings();
+      cleanLegacyGatewayModelCache();
       // SessionStart hook path: stdout lands in Claude's context, so stay
       // silent when healthy and emit exactly one actionable line otherwise
       const quiet = flag('--quiet');

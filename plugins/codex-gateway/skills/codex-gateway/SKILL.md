@@ -46,7 +46,10 @@ and fails silently if the shim answers slowly; `models` shows exactly what's adv
 - Codex GPT-5.6 models have a 372k backend window. Their advertised ids stay unsuffixed so Claude
   Code uses its conservative gateway budget and compacts before that limit. `[1m]` is only a local
   Claude Code promise, not provider capacity metadata; discovery and `count_tokens` don't report
-  the backend limit. Legacy typed Codex ids ending in `[1m]` still route.
+  the backend limit. The shim rewrites upstream context-limit errors to Claude Code's recognized
+  `prompt is too long` shape, which triggers compact-and-retry. Legacy typed Codex ids ending in
+  `[1m]` still route, but they retain a 1M client budget for that open session: switch to the
+  unsuffixed picker row and restart Claude Code after upgrading from 0.4.1.
 - Real Claude Opus/Sonnet passthrough aliases remain pinned to their `[1m]` ids, so their genuine
   1M windows still work. Do not set a global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both
   providers and can make Codex `/compact` fail after history already exceeds 372k.

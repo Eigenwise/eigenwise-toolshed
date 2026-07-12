@@ -84,10 +84,48 @@ test('Codex discovery stays below the real backend context limit', async (t) => 
   assert.equal(forwarded.model, 'gpt-5.6-sol');
 });
 
+test('Codex context errors use Claude Code compact-and-retry wording', async (t) => {
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    res.writeHead(502, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Your input exceeds the context window of this model.' } }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const response = await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
+    model: 'claude-codex-gpt-5.6-sol',
+    max_tokens: 1,
+    messages: [{ role: 'user', content: 'oversized' }],
+  }));
+  assert.equal(response.status, 400);
+  assert.deepEqual(JSON.parse(response.body), {
+    type: 'error',
+    error: { type: 'invalid_request_error', message: 'prompt is too long' },
+  });
+});
+
 test('SessionStart cleanup migrates an already-wired install', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-home-'));
   const claudeDir = path.join(home, '.claude');
-  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.mkdirSync(path.join(claudeDir, 'cache'), { recursive: true });
   const settingsPath = path.join(claudeDir, 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify({
     env: {
@@ -95,6 +133,11 @@ test('SessionStart cleanup migrates an already-wired install', () => {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
       USER_SETTING: 'keep-me',
     },
+  }));
+  const gatewayCache = path.join(claudeDir, 'cache', 'gateway-models.json');
+  fs.writeFileSync(gatewayCache, JSON.stringify({
+    baseUrl: 'http://127.0.0.1:18764',
+    models: [{ id: 'claude-codex-gpt-5.6-sol[1m]' }],
   }));
 
   spawnSync(process.execPath, [CLI, 'ensure', '--quiet'], {
@@ -106,6 +149,26 @@ test('SessionStart cleanup migrates an already-wired install', () => {
   assert.equal(settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(settings.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:18764');
   assert.equal(settings.env.USER_SETTING, 'keep-me');
+  assert.equal(fs.existsSync(gatewayCache), false);
+});
+
+test('SessionStart cleanup leaves unrelated gateway caches alone', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-other-cache-'));
+  const cacheDir = path.join(home, '.claude', 'cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const gatewayCache = path.join(cacheDir, 'gateway-models.json');
+  const original = JSON.stringify({
+    baseUrl: 'http://other-gateway.example',
+    models: [null, { id: 'claude-codex-gpt-5.6-sol[1m]' }],
+  });
+  fs.writeFileSync(gatewayCache, original);
+
+  spawnSync(process.execPath, [CLI, 'ensure', '--quiet'], {
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+    encoding: 'utf8',
+  });
+
+  assert.equal(fs.readFileSync(gatewayCache, 'utf8'), original);
 });
 
 test('env wiring preserves Claude 1M aliases and removes the unsafe global threshold', () => {

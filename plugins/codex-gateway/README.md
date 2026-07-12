@@ -107,7 +107,11 @@ note for the routing side.
   gateway budget and compacts safely before 372k. The env block still pins real Claude aliases to
   `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]` and
   `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`, preserving their genuine 1M passthrough
-  behavior. Version 0.4.2 also removes the old global
+  behavior. The shim translates an upstream Codex context-limit response to Anthropic's
+  `prompt is too long` error so Claude Code runs its built-in compact-and-retry path instead of
+  stopping on the proxy's raw 502. Version 0.4.3 also removes stale pre-0.4.2 `[1m]` Codex rows
+  from Claude Code's gateway-model cache; restart Claude Code once after upgrading so an
+  already-open session drops its old model budget. Version 0.4.2 removes the old global
   `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` override when it rewrites settings. Legacy typed Codex
   ids ending in `[1m]` still route, but new sessions should select the unsuffixed picker rows.
 - **Model quality of life**: typed selection works too: `/model claude-codex-gpt-5.4`, any string
