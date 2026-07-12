@@ -1,7 +1,7 @@
-# Orchestration: fan-out, workflows, agent teams, unattended draining
+# Orchestration: fan-out, workflows, and agent teams
 
 Read this when you're about to run more than a couple of executors at once, when agent teams is on,
-when a workflow might fit, or when the user wants the board drained unattended. The baseline
+or when a workflow might fit. The baseline
 delegation rule (route execution down to each ticket's stamped cheap tier as short bounded runs,
 batch small same-tier tickets, fan out over independent waves, inline only trivial one-steps) lives
 in the main skill — this file is the detail on the bigger shapes.
@@ -103,13 +103,9 @@ add commands to the executor surface, extend the allowlist (the `fewer-permissio
 generate it from transcripts). Never add `ask` rules — an `ask` forces a prompt even under a genuine
 bypass.
 
-## Unattended draining (`sidequest work`)
+## Native Agent dispatch
 
-Interactive fan-out through the `sidequest-exec-*` agents is the default — it keeps the effort axis
-and stays in your session. When the user wants the board worked **without** a live session ("just
-drain the backlog"), `sidequest work` spawns one headless `claude -p` run per ready ticket at its
-derived tier, wave by wave, until the board clears. Suggest it for the "work it while I'm away" ask;
-`sidequest work --dry-run` shows the plan first. Headless runs can't pin reasoning effort (that's
-agent-frontmatter only), so they carry the ticket's **model** at that model's default effort — which
-is why it's the overflow/unattended path, not a replacement for interactive effort-pinned execution.
-It's safe beside anything else (claiming stays atomic).
+All routed execution stays in the current conversation. Call `native_agent`, pass its returned spawn
+object unchanged to Agent, and call `native_agent_cleanup` when the executor finishes. `sidequest work`
+and MCP `dispatch` are disabled because they cannot invoke Agent and must never start a separate Claude
+process.

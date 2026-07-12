@@ -72,11 +72,10 @@ SessionStart hook writes `sidequest-exec-<slug>-<effort>.md` under `~/.claude/ag
 files are persistent, so they already exist on disk before you point any tier at any model — mapping
 a tier is then instant, with no manual sync and no restart. (A model that appears in the catalog for
 the very first time registers on the next session start; after that it's always ready.) `sidequest
-models sync-agents` and a dashboard save run the same sync on demand if you want it immediately. The
-headless `sidequest work` drainer doesn't need the agent files at all — it resolves the tier to the
-id and spawns `claude -p --model <id>` directly. Effort **is** forwarded to Codex: the codex-gateway
-shim maps Claude Code's effort to the Codex backend's `reasoning.effort`, so a tier·effort rung means
-the same thing on a Codex model as on a Claude one.
+models sync-agents` and a dashboard save run the same sync on demand if you want it immediately.
+Routed execution uses a temporary native Agent definition, so the current conversation invokes the
+resolved backend with its pinned effort. The codex-gateway shim maps Claude Code's effort to the Codex
+backend's `reasoning.effort`, so a tier·effort rung means the same thing on a Codex model as on a Claude one.
 
 ## Re-scoring
 

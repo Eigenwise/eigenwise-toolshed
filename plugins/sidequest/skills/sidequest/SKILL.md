@@ -22,7 +22,7 @@ Detail that used to live inline here is split into reference files — **read th
 situation calls for it**:
 
 - [references/orchestration.md](references/orchestration.md) — fan-out waves, workflows (opt-in,
-  sizing), agent-teams caveats, spike tickets, unattended draining (`sidequest work`).
+  sizing), agent-teams caveats, spike tickets, native Agent dispatch.
 - [references/routing-details.md](references/routing-details.md) — how the capability ladder is built,
   bias, the effort grid, a worked routing example.
 - [references/routing-guide.md](references/routing-guide.md) — the official Anthropic grounding for
@@ -79,7 +79,8 @@ They take the same fields as the CLI flags shown below — the examples in this 
 compactness, not as a recommendation.
 
 The **CLI** is for when the MCP tools aren't loaded, for humans, and for the things only it does:
-`dashboard`/`serve` and the headless `work` drain. The SessionStart hook injects the **resolved
+`dashboard`/`serve` and temporary `native-agent` definitions. Routed work must use `native_agent` plus
+the current conversation's Agent tool. The SessionStart hook injects the **resolved
 absolute command** (`node "<path>/bin/sidequest.js"`) into your context — use exactly that with the
 Bash tool; `sidequest` in this file is shorthand for it. Commands default to the current project
 (`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another

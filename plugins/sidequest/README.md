@@ -200,13 +200,11 @@ dropdown: run that tier on its Claude model (the default) or on one of your Chat
 models. sidequest reads the catalog codex-gateway publishes and offers Sol/Terra/Luna as options, each
 marking its suggested tier. This is a swap, not an extra rung: the ladder keeps its shape and a ticket
 is still scored and stamped by tier (opus·high stays opus·high), you just choose which model *runs* the
-tier. Map the opus tier to Terra and opus-tier tickets spawn Terra. The executor agents for every
-discovered Codex model are provisioned automatically at session start (persistent files under
-`~/.claude/agents`), so mapping a tier is instant — no manual sync, no restart, since the file already
-exists from a prior session (a model appearing for the very first time registers on the next restart).
-Codex tiers also work headless via `sidequest work`. The point is billing headroom: put a tier on a
-second subscription and heavy fan-out at that tier spends the other plan. A card chip shows a small
-`gpt` mark when its tier is Codex-backed.
+tier. Map the opus tier to Terra and opus-tier tickets use Terra. The executor agents for every discovered
+Codex model are provisioned automatically at session start (persistent files under `~/.claude/agents`).
+Routed work stays in the current Claude Code conversation: Sidequest creates a temporary native Agent
+definition, then the conversation invokes it through Agent. A card chip shows a small `gpt` mark when
+its tier is Codex-backed.
 
 This ladder engine also ships standalone as the **switchboard** plugin (same rungs, same bias math,
 no ticket board attached). It's shared by copy, not by dependency: each plugin keeps its own tests,
@@ -341,24 +339,18 @@ a race it just moves on, so two agents never collide. Only **independent** ticke
 anything that shares files or has a `depends-on` link stays sequential (blocked tickets aren't even in
 `ready`). The bundled hook and skill make this the default behavior, not an afterthought.
 
-## Drain the board without a live session
+## Native routed execution
 
-The fan-out above runs inside your Claude session. When you'd rather the board work itself — *"drain the
-backlog while I'm out"* — `sidequest work` spawns one headless `claude -p` run per ready ticket at the
-tier its complexity earned, wave by wave, until the board clears. File tickets during the day, come back
-to a drained board.
+The fan-out above runs inside your Claude session. `sidequest work`/`drain` are disabled: a CLI process
+cannot invoke the current conversation's Agent tool, so routed execution never starts a separate Claude
+process.
 
-```bash
-sidequest work --dry-run     # print the plan (which tickets, which tier) — spawns nothing
-sidequest work               # drain it: one headless run per ready ticket, wave by wave
-sidequest work --max 2 --wave    # just the first wave, at most 2 at once
-```
+## Native routed execution
 
-It's safe beside anything else, because claiming stays atomic — a headless run that loses a race just
-moves on. It needs the `claude` CLI on your PATH. One caveat: reasoning **effort** can only be set through
-an agent definition, which a headless run has no equivalent for, so each run carries the ticket's **model**
-tier and runs at that model's default effort. That's why headless draining is the unattended-overflow
-path, not a replacement for the effort-pinned interactive fan-out above.
+Routed tickets run through the current Claude Code conversation only. Call `native_agent` (or
+`sidequest native-agent SQ-n`) to create a temporary, backend-pinned Agent definition, invoke that
+returned definition with Agent, then run `native_agent_cleanup`. `sidequest work`/`drain` and MCP
+`dispatch` are disabled because neither can invoke the current conversation's Agent tool.
 
 ## Comments & questions
 
@@ -416,8 +408,9 @@ CLI on every action. Same store, same rules — but one tool approval covers the
 prompt per call, the data comes back as structured JSON, and a multi-line ticket description is just a
 string (no shell-quoting). It registers automatically when the plugin loads; you don't configure anything.
 
-The **CLI is still the human interface** and does everything the tools do plus `dashboard`/`serve` and the
-headless `work` drain. The two are interchangeable and act on the same boards.
+The **CLI is still the human interface** and does everything the tools do plus `dashboard`/`serve`.
+Routed execution uses `native-agent` plus the current conversation's Agent tool. The two board surfaces
+act on the same boards.
 
 ## CLI
 
@@ -435,7 +428,8 @@ node <plugin>/bin/sidequest.js models                               # the live c
 node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only work whose DERIVED tier is sonnet
 node <plugin>/bin/sidequest.js models [--json]                      # the tiers you allow + each tier's enabled efforts
 node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
-node <plugin>/bin/sidequest.js work [--dry-run] [--max N]     # drain the ready set with headless claude runs
+node <plugin>/bin/sidequest.js native-agent SQ-3 [--json]          # create a temporary Agent definition; invoke it through Agent
+node <plugin>/bin/sidequest.js native-agent cleanup --name <name> # remove it after the Agent run
 node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
 node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket

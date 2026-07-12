@@ -85,20 +85,17 @@ test('tools/list advertises the board tools with input schemas', () => {
   }
 });
 
-test('dispatch schema is narrowly scoped and has no caller model/prompt/permission override', () => {
+test('dispatch is disabled and directs callers to native_agent', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
   assert.ok(d);
   assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
-  assert.match(d.description, /bypass permissions/i);
-});
+  assert.match(d.description, /native_agent/i);
 
-test('dispatch refuses a claimed ticket before launching', () => {
-  const added = callTool('add', { title: 'dispatch refusal', complexity: 2, why: 'confirm MCP dispatch refuses a ticket already owned by another worker' });
-  callTool('claim', { ref: added.ticket.ref, by: 'dispatch-other' });
+  const added = callTool('add', { title: 'native dispatch only', complexity: 2, why: 'confirm MCP dispatch cannot start a separate Claude process anymore' });
   const res = callToolRaw('dispatch', { ref: added.ticket.ref });
   assert.ok(res.isError);
-  assert.match(res.content[0].text, /doing|release.*todo/i);
+  assert.match(res.content[0].text, /native_agent.*Agent tool/i);
 });
 
 test('an unknown method is a JSON-RPC method-not-found error', () => {

@@ -1,220 +1,32 @@
 'use strict';
-/**
- * Tests for the headless drainer (SQ-154): lib/work.js planning + the
- * `sidequest work --dry-run` CLI path.
- *
- * These NEVER spawn `claude` — they exercise planWork() (pure) and the --dry-run
- * command, which compute exactly what WOULD be launched without launching it.
- * The plan must have one entry per wave-1 ready ticket at its capped derived tier.
- *
- * Run: node --test plugins/sidequest/test/work.test.js
- */
+/** Regression coverage for SQ-213 native-only routed work. */
 const test = require('node:test');
 const assert = require('node:assert');
-const os = require('os');
-const path = require('path');
-const fs = require('fs');
-const { spawnSync } = require('child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
-const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-work-test-'));
-process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
-// Throwaway discovery root (SQ-157/158): getModelPrefs's prefs.custom sources
-// from discoverExternalModels(), whose default root is ~/.claude — NOT
-// SIDEQUEST_HOME. Point it at an empty dir so a dev box's real
-// ~/.claude/codex-gateway/catalog.json (if any) can never leak in here; the
-// custom-slug test below seeds its own fake catalog into this same dir.
-const DISCOVERY_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-work-discovery-'));
-process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY_DIR;
-const PROJ = path.join(os.tmpdir(), 'sq-work-fixtures', 'board');
-process.env.CLAUDE_PROJECT_DIR = PROJ;
-
-const store = require('../lib/store.js');
+const ROOT = path.join(__dirname, '..');
 const work = require('../lib/work.js');
-const { slug } = store.ensureProject(PROJ);
 
-function add(title, complexity, files) {
-  return store.createTicket(slug, { title, complexity, complexityWhy: 'seed a ready ticket for the headless drain planning tests', files, source: 'cli' });
-}
-
-test('capTier keeps spawnable tiers and folds fable down to opus', () => {
-  assert.strictEqual(work.capTier('grade-2'), 'grade-2');
-  assert.strictEqual(work.capTier('grade-3'), 'grade-3');
-  assert.strictEqual(work.capTier('grade-1'), 'grade-1');
-  assert.strictEqual(work.capTier('grade-4'), 'grade-3');
+test('routed work has no Claude-process launcher', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'lib', 'work.js'), 'utf8');
+  assert.doesNotMatch(source, /require\(['"]child_process['"]\)/);
+  assert.doesNotMatch(source, /\bclaude\b\s*-p/);
+  assert.doesNotMatch(source, /\bspawn\s*\(/);
 });
 
-test('planWork produces one spawn per wave-1 ready ticket, at its derived+capped tier, spawning nothing', () => {
-  store.setModelPrefs({ routing: true, opus: true, sonnet: true, haiku: true, fable: true });
-  // Two file-disjoint tickets -> same wave; one overlapping -> a later wave.
-  const a = add('a', 3, ['src/a.js']);
-  const b = add('b', 6, ['src/b.js']);
-  add('c', 4, ['src/a.js']); // overlaps a -> wave 2
-
-  const { plan, waveCount } = work.planWork(slug, { max: 5 });
-  assert.ok(waveCount >= 2, 'the overlapping ticket forces a second wave');
-  const refs = plan.map((p) => p.ref).sort();
-  assert.deepStrictEqual(refs, [a.ref, b.ref].sort(), 'wave 1 is the two disjoint tickets');
-
-  for (const p of plan) {
-    assert.ok(['grade-3', 'grade-2', 'grade-1'].includes(p.tier), 'tier is a spawnable alias');
-    assert.match(p.by, /^headless-sq-\d+-[0-9a-f]{6}$/, 'each run gets a unique worker id');
-    // The argv is a real headless invocation carrying the model and JSON output;
-    // the (large, multi-line) prompt rides separately, over stdin.
-    assert.ok(p.argv.includes('-p'));
-    const spawnAlias = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus' }[p.tier];
-    assert.strictEqual(p.argv[p.argv.indexOf('--model') + 1], spawnAlias, 'argv --model is the grade\'s Claude spawn alias');
-    assert.ok(p.argv.includes('--output-format') && p.argv.includes('json'));
-    assert.ok(!p.argv.some((a) => /ONE ticket/.test(a)), 'the prompt is NOT in argv (it goes over stdin)');
-    // The executor brief names the ticket and the claim-first protocol.
-    assert.match(p.prompt, new RegExp(`ONE ticket: ${p.ref}`));
-    assert.match(p.prompt, /CLAIM FIRST/);
-  }
+test('CLI work path is disabled rather than spawning a separate process', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'bin', 'sidequest.js'), 'utf8');
+  const start = source.indexOf('async function cmdWork');
+  const end = source.indexOf('\n// Release every claim', start);
+  const cmdWork = source.slice(start, end);
+  assert.match(cmdWork, /is disabled/);
+  assert.doesNotMatch(cmdWork, /dispatchTicket|runWork|planWork|spawn\s*\(/);
 });
 
-test('--max caps the wave-1 batch and records how many were dropped', () => {
-  const res = work.planWork(slug, { max: 1 });
-  assert.strictEqual(res.plan.length, 1, 'only one run planned');
-  assert.ok(res.dropped >= 1, 'the rest of the wave is reported as dropped over --max');
-});
-
-test('a fable-derived ticket plans as opus (headless cap)', () => {
-  // Enable only fable so every derivation is fable, then confirm the plan caps it.
-  store.setModelPrefs({ routing: true, opus: false, sonnet: false, haiku: false, fable: true });
-  const t = store.createTicket(slug, { title: 'fable one', complexity: 9, complexityWhy: 'a high-complexity ticket that derives to the fable tier for the cap test', files: ['src/fable-only.js'], source: 'cli' });
-  const { plan } = work.planWork(slug, { max: 10 });
-  const entry = plan.find((p) => p.ref === t.ref);
-  assert.ok(entry, 'the fable ticket is in the plan');
-  assert.strictEqual(entry.tier, 'grade-3', 'fable caps to opus for a spawnable headless model');
-  store.setModelPrefs({ routing: true, opus: true, sonnet: true, haiku: true, fable: true });
-});
-
-test('every headless executor always bypasses permissions', () => {
-  for (const opts of [{}, { yolo: true }, { permissionMode: 'plan' }]) {
-    const item = work.planWork(slug, { max: 1, ...opts }).plan[0];
-    assert.ok(item.argv.includes('--dangerously-skip-permissions'));
-    assert.ok(!item.argv.includes('--permission-mode'));
-  }
-});
-
-test('the CLI `work --dry-run` prints a plan and spawns no process', () => {
-  const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
-  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
-  const res = spawnSync(process.execPath, [BIN, 'work', '--dry-run', '--json'], { encoding: 'utf8', env });
-  assert.strictEqual(res.status, 0, res.stderr);
-  const out = JSON.parse(res.stdout);
-  assert.ok(Array.isArray(out.plan), 'dry-run emits a plan array');
-  assert.ok(out.plan.length >= 1, 'there is ready work to plan');
-  assert.ok(out.plan.every((p) => Array.isArray(p.argv)), 'each plan entry has an argv');
-});
-
-test('targeted plan keeps authoritative Codex model, fable provenance, and always bypasses permissions', () => {
-  fs.mkdirSync(path.join(DISCOVERY_DIR, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(
-    path.join(DISCOVERY_DIR, 'codex-gateway', 'catalog.json'),
-    JSON.stringify({
-      schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(),
-      models: [{ slug: 'codex-target-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'Target Sol', suggestedTier: 'grade-4' }],
-    }),
-  );
-  const prefs = store.setModelPrefs({
-    routing: true, opus: false, sonnet: false, haiku: false, fable: true,
-    tierBackend: { fable: 'codex-target-sol' },
-  });
-  const rung = store.routingLadder(prefs).find((r) => r.model === 'grade-4' && r.effort !== 'max');
-  assert.ok(rung);
-  const created = store.createTicket(slug, {
-    title: 'targeted Sol ticket', complexity: rung.complexity,
-    complexityWhy: 'seed a targeted fable ticket that must preserve Sol routing and fable provenance',
-    files: ['src/targeted-sol.js'], source: 'cli',
-  });
-  const planned = work.planTicket(slug, created.ref, { yolo: true });
-  assert.strictEqual(planned.ok, true);
-  assert.strictEqual(planned.item.backend, 'codex');
-  assert.strictEqual(planned.item.tier, 'grade-4', 'Codex-backed fable stays fable for done provenance');
-  assert.strictEqual(planned.item.spawnModel, 'claude-codex-gpt-5.6-sol[1m]');
-  assert.ok(planned.item.argv.includes('--dangerously-skip-permissions'));
-  assert.ok(!planned.item.argv.includes('--permission-mode'));
-  assert.match(planned.item.prompt, /--model grade-4/, 'executor closes with grade-4 provenance');
-
-  store.setModelPrefs({
-    routing: true, opus: true, sonnet: true, haiku: true, fable: true,
-    tierBackend: { fable: 'claude' },
-  });
-  fs.rmSync(path.join(DISCOVERY_DIR, 'codex-gateway'), { recursive: true, force: true });
-});
-
-test('targeted plan refuses claimed and done tickets before launch', () => {
-  const t = add('target refusal', 3, ['src/target-refusal.js']);
-  assert.strictEqual(work.planTicket(slug, t.ref, { yolo: true }).ok, true);
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'other-worker').ok, true);
-  const claimed = work.planTicket(slug, t.ref, { yolo: true });
-  assert.strictEqual(claimed.reason, 'not_todo');
-  assert.strictEqual(store.completeTicket(slug, t.ref, 'other-worker').ok, true);
-  const done = work.planTicket(slug, t.ref, { yolo: true });
-  assert.strictEqual(done.reason, 'done');
-});
-
-test('the CLI `work --ref --dry-run` prints one targeted bypass plan and spawns nothing', () => {
-  const t = add('target cli dry run', 3, ['src/target-cli.js']);
-  const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
-  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
-  const res = spawnSync(process.execPath, [BIN, 'work', '--ref', t.ref, '--dry-run', '--json'], { encoding: 'utf8', env });
-  assert.strictEqual(res.status, 0, res.stderr);
-  const out = JSON.parse(res.stdout);
-  assert.strictEqual(out.item.ref, t.ref);
-  assert.ok(out.item.argv.includes('--dangerously-skip-permissions'));
-});
-
-test('an empty board plans nothing', () => {
-  const empty = store.ensureProject(path.join(os.tmpdir(), 'sq-work-empty', 'board'));
-  const { plan } = work.planWork(empty.slug, {});
-  assert.deepStrictEqual(plan, []);
-});
-
-test('a Codex-backed tier spawns the resolved id; the plan tier stays the built-in tier (1.36.0)', () => {
-  // Seed a fake codex-gateway catalog and point the opus tier at it — the
-  // per-tier backend model: a ticket still derives to the opus TIER, but the
-  // drainer spawns the tier's mapped Codex model.
-  fs.mkdirSync(path.join(DISCOVERY_DIR, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(
-    path.join(DISCOVERY_DIR, 'codex-gateway', 'catalog.json'),
-    JSON.stringify({
-      schema: 2,
-      source: 'codex-gateway',
-      updatedAt: new Date().toISOString(),
-      models: [{ slug: 'codex-work-test', id: 'claude-codex-gpt-5.4[1m]', label: 'Codex Test', suggestedTier: 'grade-3' }],
-    }),
-  );
-  const prefs = store.setModelPrefs({
-    routing: true, opus: true, sonnet: true, haiku: true, fable: true,
-    tierBackend: { opus: 'codex-work-test' },
-  });
-  // Find a complexity that derives to the opus tier.
-  const ladder = store.routingLadder(prefs);
-  const rung = ladder.find((r) => r.model === 'grade-3' && r.effort !== 'max');
-  assert.ok(rung, 'sanity: some complexity derives to opus');
-
-  const created = store.createTicket(slug, {
-    title: 'opus-tier ticket', complexity: rung.complexity,
-    complexityWhy: 'seed a ticket that derives onto the opus tier for the backend spawn-resolution test',
-    files: ['src/opus-tier-only.js'], source: 'cli',
-  });
-  const t = store.getTicket(slug, created.ref);
-  assert.strictEqual(t.model, 'grade-3', 'the ticket derived onto the opus tier');
-  assert.strictEqual(t.exec.backend, 'codex', 'and its resolved exec is Codex-backed');
-
-  const { plan } = work.planWork(slug, { max: 10, model: 'grade-3' });
-  const entry = plan.find((p) => p.ref === t.ref);
-  assert.ok(entry, 'the ticket is in the plan');
-  assert.strictEqual(entry.tier, 'grade-3', 'provenance/done stamping keeps the built-in tier');
-  assert.strictEqual(
-    entry.argv[entry.argv.indexOf('--model') + 1],
-    'claude-codex-gpt-5.4[1m]',
-    'the spawned argv --model is the tier\'s resolved Codex id',
-  );
-  assert.match(entry.prompt, /--model grade-3/, 'the done-command in the prompt stamps the grade for provenance');
-
-  // Clean up so this doesn't leak into later tests in this file.
-  store.setModelPrefs({ tierBackend: { opus: 'claude' } });
-  fs.rmSync(path.join(DISCOVERY_DIR, 'codex-gateway'), { recursive: true, force: true });
+test('work module directs routed execution to native_agent and Agent', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'lib', 'work.js'), 'utf8');
+  assert.match(source, /native_agent/);
+  assert.match(source, /Agent tool/);
+  assert.deepStrictEqual(Object.keys(work), ['nativeDispatchRequired']);
 });

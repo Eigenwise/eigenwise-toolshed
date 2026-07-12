@@ -529,75 +529,16 @@ function cmdNext(opts) {
   }
 }
 
-// Drain the ready set with headless `claude -p` runs, one per ready ticket at
-// its derived tier (see lib/work.js). --dry-run prints the plan without spawning.
+// Routed work must stay inside the current conversation. Use `native-agent` to
+// create the temporary definition, then invoke it through the native Agent tool.
+// A CLI process cannot invoke that tool, so the former `work` drain is disabled.
 async function cmdWork(opts) {
-  const { slug, meta } = resolveProject(opts);
+  const { slug } = resolveProject(opts);
   const work = require('../lib/work');
-  const wopts = {
-    max: opts.max,
-    maxWaves: opts['max-waves'],
-    model: opts.model,
-    singleWave: !!opts.wave,
-    yolo: !!opts.yolo,
-    permissionMode: opts['permission-mode'],
-  };
-
-  // Targeted dispatch: one ref, authoritative resolved backend, always bypass.
-  // This is the CLI twin of MCP dispatch and the fallback for clients whose MCP
-  // tool list has not reloaded yet.
-  if (opts.ref) {
-    if (opts['dry-run']) {
-      const planned = work.planTicket(slug, opts.ref, { yolo: true });
-      if (!planned.ok) fail(`work --ref: ${planned.message || planned.reason}`);
-      const out = Object.assign({ project: slug, projectName: meta.name }, planned);
-      if (opts.json) process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-      else console.log(`Would dispatch ${planned.item.ref} → ${planned.item.runsLabel} (${planned.item.spawnModel}) with bypass permissions.`);
-      return;
-    }
-    const res = work.dispatchTicket(slug, opts.ref);
-    if (!res.ok) fail(`work --ref: ${res.message || res.reason}`);
-    const out = Object.assign({ project: slug, projectName: meta.name }, res);
-    if (opts.json) process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-    else console.log(`✓ dispatched ${res.ref} → ${res.runsLabel} (${res.backend})  pid ${res.pid}\n  log: ${res.log}`);
-    return;
-  }
-
-  if (opts['dry-run']) {
-    const { plan, waveCount, dropped } = work.planWork(slug, wopts);
-    if (opts.json) {
-      process.stdout.write(JSON.stringify({ project: slug, waveCount, dropped, plan }, null, 2) + '\n');
-      return;
-    }
-    if (!plan.length) {
-      console.log(`No ready tickets to work in ${meta.name}. Board is drained.`);
-      return;
-    }
-    console.log(`Would launch ${plan.length} headless run(s) for wave 1 of ${waveCount} in ${meta.name}${dropped ? ` (${dropped} more this wave over --max)` : ''}:`);
-    for (const p of plan) {
-      console.log(`  ${p.ref}  →  claude --model ${p.tier}${p.effort ? `  (derived effort ${p.effort}; headless runs at model default)` : ''}  --by ${p.by}`);
-    }
-    console.log(`\n(dry run — nothing was spawned. Drop --dry-run to launch; ${work.claudeAvailable() ? 'claude CLI found' : 'WARNING: claude CLI not on PATH'}.)`);
-    return;
-  }
-
-  const res = await work.runWork(slug, wopts, (line) => console.log(line));
-  if (!res.ok) {
-    fail(`work: ${res.message || res.reason}`);
-  }
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
-    return;
-  }
-  if (!res.wavesRun) {
-    console.log(`No ready tickets to work in ${meta.name}. Board is drained.`);
-    return;
-  }
-  const okc = res.results.filter((r) => r.ok).length;
-  console.log(`\nHeadless drain finished: ${res.wavesRun} wave(s), ${okc}/${res.results.length} run(s) exited clean.`);
-  for (const r of res.results) {
-    console.log(`  ${r.ref}: ${r.ok ? '✓ ok' : `✗ ${r.error || 'exit ' + r.code}`}`);
-  }
+  const ref = opts.ref ? ` for ${opts.ref}` : '';
+  const check = opts.ref ? work.nativeDispatchRequired(slug, opts.ref) : null;
+  const detail = check && check.reason !== 'native_agent_required' ? ` ${check.message}` : '';
+  fail(`work${ref} is disabled: routed work must use \`native-agent\` followed by the current conversation's Agent tool.${detail}`);
 }
 
 // Release every claim a session left behind (moving each ticket back to todo),
@@ -1551,18 +1492,11 @@ Complexity → routing (score the task; model + effort are derived, never tagged
   Sidequest can't force a model or effort — it records the score and derives the tag (⚙C<n>→tier·effort on
   list/ready); the orchestrator routes by reading it. Haiku rungs have no effort.
 
-Headless / autonomous draining (work the board without an interactive session):
-  sidequest work [--dry-run] [--max N=3] [--max-waves N=5] [--model tier] [--wave]
-    Spawns one headless \`claude -p\` run per ready ticket at its derived tier, wave by wave, until the
-    board is drained. --dry-run prints the plan (spawns nothing). --wave does a single wave. Every
-    executor runs with --dangerously-skip-permissions so unattended work cannot prompt into the lead
-    session. Effort isn't
-    settable headless, so a run carries the ticket's MODEL and runs at that model's default effort. Safe
-    beside an interactive session — claiming stays atomic. Needs the \`claude\` CLI on PATH.
+Native Agent dispatch (routed work stays in this conversation):
   sidequest native-agent <SQ-n> [--json]             write a temporary native Agent definition and return its spawn spec
   sidequest native-agent cleanup --name <name>        remove one temporary native Agent definition
-    Native Agent definitions pin the resolved backend model, effort, bypass permission mode, and neutral
-    grade identity. They hot-reload for the current session; remove them after the Agent finishes.
+    Invoke the returned definition through the current conversation's Agent tool, then clean it up.
+    \`sidequest work\`/\`drain\` are disabled because they cannot invoke Agent and never start a separate Claude process.
   sidequest reconcile [--session <id>] [--reason "..."]   release a session's stale claims back to todo now
     (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's
     tickets recover immediately instead of waiting out the claim TTL; safe — it only touches that session's

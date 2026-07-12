@@ -522,7 +522,7 @@ const TOOLS = [
   },
   {
     name: 'dispatch',
-    description: 'Launch exactly one ready ticket on its authoritative resolved backend and return immediately. Use this for Codex-backed tickets instead of the Agent tool: Sidequest owns the model id and headless executor prompt, so a fable tier mapped to Sol actually runs Sol. Launches unattended with bypass permissions for subagent parity. The ticket must be todo, unclaimed, and unblocked.',
+    description: 'Disabled. Routed work must use native_agent to create the temporary backend-pinned definition, then the current conversation invokes it through Agent. Sidequest never starts a separate Claude process.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -532,10 +532,9 @@ const TOOLS = [
       required: ['ref'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      const res = work.dispatchTicket(slug, args.ref);
-      if (!res.ok) throw new Error(`dispatch: ${res.message || res.reason}`);
-      return Object.assign({ project: slug, projectName: meta.name }, res);
+      const { slug } = resolveProject(args.project);
+      const res = work.nativeDispatchRequired(slug, args.ref);
+      throw new Error(`dispatch: ${res.message || res.reason}`);
     },
   },
   {
