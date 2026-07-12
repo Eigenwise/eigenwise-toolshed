@@ -44,7 +44,11 @@ test('Codex discovery advertises context metadata but keeps the local model id u
   const proxy = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+      return res.end(JSON.stringify({ data: [
+        { id: 'gpt-5.6-sol' },
+        { id: 'gpt-5.6-terra' },
+        { id: 'gpt-5.6-luna' },
+      ] }));
     }
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
@@ -73,9 +77,12 @@ test('Codex discovery advertises context metadata but keeps the local model id u
   await waitForShim(shimPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
-  assert.equal(models.data[0].id, 'claude-codex-gpt-5.6-sol');
-  assert.equal(models.data[0].max_input_tokens, 316200);
-  assert.equal(models.data[0].id.includes('[1m]'), false);
+  assert.deepEqual(models.data.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
+    { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 316200 },
+    { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 316200 },
+    { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 316200 },
+  ]);
+  assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
     model: 'claude-codex-gpt-5.6-sol[1m]',

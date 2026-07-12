@@ -739,11 +739,8 @@ const DEFAULT_MODELS = [
   'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
 
-// The Codex backend accepts about 372k tokens, but model discovery is picker
-// metadata only. Claude Code does not use `max_input_tokens` from this route
-// for its context or auto-compaction calculation. Keep the field as accurate
-// gateway metadata, while the unsuffixed Codex id keeps Claude Code's safe
-// conservative gateway budget instead of forcing an impossible 1M window.
+// All current Codex models share the same real ~372k context window. Revisit this
+// constant if a future model advertises a different window.
 const CODEX_COMPACT_CONTEXT_WINDOW = 316200;
 
 function gatewayModel(id) {
