@@ -162,6 +162,25 @@ test('stable cwd lets a detached child outlive a removed worktree-like cwd', { t
   assert.strictEqual(fs.readFileSync(marker, 'utf8'), 'ready');
 });
 
+test('dashboard exposes board archive routes and guarded project controls', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  assert.match(server, /\/api\/projects\/archived/);
+  assert.match(server, /archive\|unarchive/);
+  assert.match(server, /store\.deleteProjectExact/);
+  assert.match(html, /openProjectMenu/);
+  assert.match(html, /Archive board/);
+  assert.match(html, /Delete board…/);
+  assert.match(html, /Archived boards/);
+  assert.match(html, /projectTicketCount/);
+  assert.match(html, /and its ' \+ count \+ ' ticket/);
+  assert.match(html, /if \(archived\) item\("Restore board"/);
+  assert.match(html, /else \{\s*item\("Archive board"[\s\S]*item\("Delete board…"/);
+  assert.match(html, /Type its exact board slug/);
+  assert.match(html, /Archive failed:/);
+  assert.match(html, /Restore failed:/);
+});
+
 function copyPlugin(from, to, version) {
   fs.cpSync(from, to, { recursive: true });
   const manifest = path.join(to, '.claude-plugin', 'plugin.json');

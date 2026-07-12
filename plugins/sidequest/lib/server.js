@@ -173,6 +173,28 @@ async function handle(req, res) {
     return;
   }
 
+  // --- Archived boards ---
+  if (req.method === 'GET' && pathname === '/api/projects/archived') {
+    sendJson(res, 200, { projects: store.listProjects({ archived: true }) });
+    return;
+  }
+
+  // Board archive is reversible; permanent deletion accepts only an exact slug.
+  const projectAction = /^\/api\/projects\/([^/]+)\/(archive|unarchive)$/.exec(pathname);
+  if (req.method === 'POST' && projectAction) {
+    const result = projectAction[2] === 'archive'
+      ? store.archiveProject(projectAction[1])
+      : store.unarchiveProject(projectAction[1]);
+    sendJson(res, result.ok ? 200 : 404, result);
+    return;
+  }
+  const projectDelete = /^\/api\/projects\/([^/]+)$/.exec(pathname);
+  if (req.method === 'DELETE' && projectDelete) {
+    const result = store.deleteProjectExact(projectDelete[1]);
+    sendJson(res, result.ok ? 200 : 404, result);
+    return;
+  }
+
   // --- Per-project notification switch (/api/projects/:slug/notify) ---
   const pn = /^\/api\/projects\/([^/]+)\/notify$/.exec(pathname);
   if ((req.method === 'POST' || req.method === 'PUT') && pn) {

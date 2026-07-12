@@ -826,6 +826,27 @@ function unarchiveProject(slug) {
   }
 }
 
+// Permanent deletion is deliberately strict: callers must already have the exact
+// stored slug. This avoids turning an untrusted display name or path into a new
+// project lookup at a destructive boundary.
+function deleteProjectExact(slug) {
+  if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9-]{1,80}$/.test(slug)) return { ok: false, reason: 'not_found' };
+  const dir = projectDir(slug);
+  const lock = metaLockPath(slug);
+  const locked = acquireLock(lock);
+  let exists = false;
+  try {
+    exists = !!readJson(metaFile(slug), null);
+  } finally {
+    // The lock file lives inside the board directory. Release it before removal so
+    // Windows never holds an open handle on a child of the tree being deleted.
+    if (locked) releaseLock(lock);
+  }
+  if (!exists) return { ok: false, reason: 'not_found' };
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { ok: true, slug };
+}
+
 // List every registered project with live ticket counts. Sorted by most recent
 // activity so the busiest board floats to the top of the switcher. By default,
 // archived boards are hidden. Pass { archived: true } to list only archived
@@ -2928,6 +2949,7 @@ module.exports = {
   findProject,
   archiveProject,
   unarchiveProject,
+  deleteProjectExact,
   mergeProject,
   setProjectNotify,
   copyAsset,

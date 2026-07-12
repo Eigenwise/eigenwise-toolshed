@@ -117,3 +117,16 @@ test('legacy metadata remains active and ensureProject does not silently restore
   assert.ok(!store.listProjects().some((project) => project.slug === archived.slug));
   store.unarchiveProject(archived.slug);
 });
+
+test('exact-slug project deletion removes only the named board', () => {
+  const doomed = store.ensureProject(path.join(os.tmpdir(), 'sq-archive-project-test', 'doomed'), 'Doomed Board');
+  const sibling = store.ensureProject(path.join(os.tmpdir(), 'sq-archive-project-test', 'sibling'), 'Sibling Board');
+  store.createTicket(doomed.slug, { title: 'gone with board' });
+
+  assert.deepStrictEqual(store.deleteProjectExact('Doomed Board'), { ok: false, reason: 'not_found' });
+  assert.deepStrictEqual(store.deleteProjectExact(doomed.slug), { ok: true, slug: doomed.slug });
+  assert.strictEqual(fs.existsSync(path.join(store.projectDir(doomed.slug), '.meta.lock')), false);
+  assert.strictEqual(store.readMeta(doomed.slug), null);
+  assert.ok(store.readMeta(sibling.slug));
+  assert.deepStrictEqual(store.deleteProjectExact(doomed.slug), { ok: false, reason: 'not_found' });
+});

@@ -93,6 +93,16 @@
   .proj .bar .t { background: var(--indigo); }
   .proj .bar .d { background: var(--high); }
   .proj .bar .n { background: var(--mint); }
+  .project-menu { position: fixed; z-index: 90; min-width: 156px; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 8px 20px rgba(28,30,43,.14); }
+  .project-menu button { display: block; width: 100%; border: 0; background: transparent; color: var(--text-dim); text-align: left; padding: 7px 9px; border-radius: var(--radius-sm); cursor: pointer; font: inherit; font-size: 12px; }
+  .project-menu button:hover, .project-menu button:focus-visible { background: var(--panel-2); color: var(--text); outline: none; }
+  .project-menu button.danger { color: var(--urgent); }
+  .project-menu button.danger:hover, .project-menu button.danger:focus-visible { background: #f8e5e2; }
+  .archived-rail { border-top: 1px solid var(--line-soft); margin: 8px 10px 0; padding: 8px 0 0; }
+  .archived-rail summary { cursor: pointer; color: var(--text-faint); font: 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 0 10px 6px; }
+  .archived-project { color: var(--text-faint); }
+  .archived-project .name::after { content: "archived"; margin-left: 7px; font: 9px var(--mono); color: var(--text-faint); letter-spacing: .04em; }
+  .archived-project .row1 { gap: 5px; }
   /* Unread badge: how many tickets Claude changed in this board since you looked. */
   .newbadge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--gold); color: var(--bg); font-family: var(--mono); font-size: 10.5px; font-weight: 700; flex: none; }
   .newbadge.pop { animation: badgepop .35s cubic-bezier(.2,.8,.3,1.2) both; }
@@ -1006,6 +1016,7 @@
   // ---------------- state ----------------
   var state = {
     projects: [],
+    archivedProjects: [],
     current: "all",           // "all" or a project slug
     allTickets: [],           // every project's tickets (each carries .project/.projectName)
     tickets: [],              // the current view, derived from allTickets
@@ -1302,7 +1313,13 @@
 
   // ---------------- data loading ----------------
   function loadProjects() {
-    return api("/api/projects").then(function (d) { state.projects = d.projects || []; });
+    return Promise.all([
+      api("/api/projects"),
+      api("/api/projects/archived")
+    ]).then(function (rows) {
+      state.projects = rows[0].projects || [];
+      state.archivedProjects = rows[1].projects || [];
+    });
   }
   // Always load every project's tickets (one source of truth). The board view is
   // derived by filtering, and the sidebar badges + notifications need to know
@@ -1360,6 +1377,13 @@
     nav.appendChild(projButton({ slug: "all", name: "All boards", path: state.projects.length + " project" + (state.projects.length === 1 ? "" : "s"), counts: totals, open: totals.open }, true));
 
     state.projects.forEach(function (p) { nav.appendChild(projButton(p, false)); });
+    if (state.archivedProjects.length) {
+      var archived = el("details", "archived-rail");
+      var summary = el("summary", "", "Archived boards (" + state.archivedProjects.length + ")");
+      archived.appendChild(summary);
+      state.archivedProjects.forEach(function (p) { archived.appendChild(archivedProjButton(p)); });
+      nav.appendChild(archived);
+    }
 
     // Archive button reflects the archived count for the current scope + active state.
     var arch = state.projects.reduce(function (n, p) {
@@ -1395,7 +1419,72 @@
       '<span class="count">' + (p.open || 0) + '</span></div>' +
       '<div class="path">' + esc(p.path || "") + '</div>' + seg;
     b.addEventListener("click", function () { selectProject(p.slug); });
+    if (!isAll) b.addEventListener("contextmenu", function (e) { e.preventDefault(); openProjectMenu(p, e.clientX, e.clientY); });
     return b;
+  }
+
+  function archivedProjButton(p) {
+    var b = el("button", "proj archived-project");
+    b.type = "button";
+    b.innerHTML = '<div class="row1"><span class="name">' + esc(p.name) + '</span></div><div class="path">' + esc(p.path || "") + '</div>';
+    b.title = "Restore " + p.name;
+    b.addEventListener("click", function () { restoreProject(p); });
+    b.addEventListener("contextmenu", function (e) { e.preventDefault(); openProjectMenu(p, e.clientX, e.clientY, true); });
+    return b;
+  }
+
+  function closeProjectMenu() {
+    var menu = document.querySelector(".project-menu");
+    if (menu) menu.remove();
+  }
+
+  function openProjectMenu(project, x, y, archived) {
+    closeProjectMenu();
+    var menu = el("div", "project-menu");
+    menu.setAttribute("role", "menu");
+    function item(label, action, danger) {
+      var b = el("button", danger ? "danger" : "", label);
+      b.type = "button"; b.setAttribute("role", "menuitem");
+      b.addEventListener("click", function () { closeProjectMenu(); action(); });
+      menu.appendChild(b);
+    }
+    if (archived) item("Restore board", function () { restoreProject(project); });
+    else {
+      item("Archive board", function () { archiveProject(project); });
+      item("Delete board…", function () { deleteProject(project); }, true);
+    }
+    menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 172)) + "px";
+    menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 96)) + "px";
+    document.body.appendChild(menu);
+    menu.querySelector("button").focus();
+  }
+
+  function projectTicketCount(project) {
+    var counts = project.counts || {};
+    return (counts.todo || 0) + (counts.doing || 0) + (counts.done || 0) + (project.archived || 0);
+  }
+
+  function archiveProject(project) {
+    var count = projectTicketCount(project);
+    if (!window.confirm('Archive "' + project.name + '" and its ' + count + ' ticket' + (count === 1 ? '' : 's') + '? You can restore the board from Archived boards.')) return;
+    mutate("POST", "/api/projects/" + encodeURIComponent(project.slug) + "/archive")
+      .then(function () { toast('Archived "' + project.name + '"'); if (state.current === project.slug) state.current = "all"; return refresh(true); })
+      .catch(function (e) { toast("Archive failed: " + e.message); refresh(true); });
+  }
+
+  function restoreProject(project) {
+    mutate("POST", "/api/projects/" + encodeURIComponent(project.slug) + "/unarchive")
+      .then(function () { toast('Restored "' + project.name + '"'); return refresh(true); })
+      .catch(function (e) { toast("Restore failed: " + e.message); refresh(true); });
+  }
+
+  function deleteProject(project) {
+    var count = projectTicketCount(project);
+    var exact = window.prompt('Delete "' + project.name + '" and its ' + count + ' ticket' + (count === 1 ? '' : 's') + ' permanently? Type its exact board slug to continue:\n' + project.slug);
+    if (exact !== project.slug) { if (exact !== null) toast("Delete cancelled: slug did not match"); return; }
+    mutate("DELETE", "/api/projects/" + encodeURIComponent(project.slug))
+      .then(function () { toast('Deleted "' + project.name + '"'); if (state.current === project.slug) state.current = "all"; return refresh(true); })
+      .catch(function (e) { toast("Delete failed: " + e.message); refresh(true); });
   }
 
   function renderFilters() {
@@ -3141,6 +3230,7 @@
       if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderBiasControl(); renderLadderView(); }
     });
     document.addEventListener("click", function (e) {
+      if (!e.target.closest(".project-menu")) closeProjectMenu();
       if (e.target.closest(".popwrap")) return;
       closeSettings(); closeSort(); closeAssign(); closeStory(); closeInbox();
     });
@@ -3174,7 +3264,7 @@
     $("search").addEventListener("input", function (e) { state.query = e.target.value; renderBoard(); });
 
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") { if ($("lightbox").classList.contains("show")) { $("lightbox").classList.remove("show"); return; } if ($("overlay").classList.contains("show")) closeModal(); }
+      if (e.key === "Escape") { if (document.querySelector(".project-menu")) { closeProjectMenu(); return; } if ($("lightbox").classList.contains("show")) { $("lightbox").classList.remove("show"); return; } if ($("overlay").classList.contains("show")) closeModal(); }
       if ((e.key === "n" || e.key === "N") && !/input|textarea|select/i.test(document.activeElement.tagName) && !$("overlay").classList.contains("show")) { e.preventDefault(); openEditor(null); }
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && $("overlay").classList.contains("show")) { e.preventDefault(); saveEditor(); }
     });
