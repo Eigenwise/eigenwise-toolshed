@@ -83,6 +83,26 @@ Caveats:
   research/debate/review; if you're spawning teammates anyway, they must still be `sidequest-exec`
   executors.
 
+## Background fan-out and the permission allowlist
+
+Passing `mode: "bypassPermissions"` on a spawn is necessary but **not currently sufficient** for
+background/fleet executors. Claude Code's background dispatch path doesn't honor
+`permissions.defaultMode=bypassPermissions`
+([anthropics/claude-code#59112](https://github.com/anthropics/claude-code/issues/59112)), and
+Agent-tool subagents can still prompt for Edit/Write even under a bypassed parent (#40241, #38026,
+#37442, #57118). So a background executor can fall back to `default` mode and prompt on every Bash
+call — and those prompts surface in the **lead** session, defeating hands-off fan-out.
+
+Until that upstream bug is fixed, background fan-out depends on a project **allowlist** in the
+consuming project's own committed `.claude/settings.json` — a `permissions.allow` list covering the
+exact commands executors run (`node <sidequest bin>`, `node --test`, `git`, and whatever the ticket
+work invokes). A subagent that fell back to `default` mode still won't prompt for that known set. This
+repo carries such a file as the worked example. `.claude/settings.json` is the *shared* (committed)
+settings; per-machine overrides go in `.claude/settings.local.json`, which stays git-ignored. If you
+add commands to the executor surface, extend the allowlist (the `fewer-permission-prompts` skill can
+generate it from transcripts). Never add `ask` rules — an `ask` forces a prompt even under a genuine
+bypass.
+
 ## Unattended draining (`sidequest work`)
 
 Interactive fan-out through the `sidequest-exec-*` agents is the default — it keeps the effort axis

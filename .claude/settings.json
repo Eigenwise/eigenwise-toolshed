@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node plugins/sidequest/bin/sidequest.js:*)",
+      "Bash(node plugins/codex-gateway/bin/codex-gateway.js:*)",
+      "Bash(node --test:*)",
+      "Bash(git:*)"
+    ]
+  },
+  "enabledPlugins": {
+    "playwright@claude-plugins-official": true
+  }
+}
