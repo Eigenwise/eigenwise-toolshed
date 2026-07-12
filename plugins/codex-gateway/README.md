@@ -85,6 +85,56 @@ the proxy.
 | `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
 | `env [--write-user\|--write-project\|--remove]` | Print or wire/unwire the Claude Code env block |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
+| `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility workflow, or read-only diagnosis |
+
+## RC-compatibility mode (restoring `/remote-control`)
+
+Claude Code's built-in `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the
+real Anthropic host. There's no supported way to keep Codex routing *and* get that exact host at
+the same time without touching the OS — no hosts-file changes, custom CA, admin rights, or Claude
+binary patching is possible for both features simultaneously. So it's opt-in, detected, and
+completely reversible:
+
+1. Run `node <plugin>/bin/codex-gateway.js remote-control doctor` first. It is read-only and
+   reports partial blocks, conflicting mappings, elevation needs, port conflicts, stale settings,
+   and recovery failures.
+2. **You** (never this plugin) can add one marker-delimited block to your hosts file, mapping
+   `api.anthropic.com` to loopback. The `remote-control-compatibility` skill explains the exact
+   edit, asks for direct user confirmation, backs up the file, then runs
+   `remote-control enable --confirm` only after that answer:
+
+   | OS | Hosts file | Managed line |
+   |---|---|---|
+   | Windows | `C:\Windows\System32\drivers\etc\hosts` (edit as Administrator) | `127.0.0.1 api.anthropic.com` |
+   | macOS | `/etc/hosts` (edit with `sudo`) | `127.0.0.1 api.anthropic.com` |
+   | Linux | `/etc/hosts` (edit with `sudo`) | `127.0.0.1 api.anthropic.com` |
+
+   The match has to be exact: a loopback address (`127.0.0.1` or `::1`) and the literal hostname
+   `api.anthropic.com` (other aliases on the same line are fine; comments after `#` are ignored).
+   The plugin writes only its own marked block and preserves all unrelated hosts content.
+3. On the next `ensure` (the SessionStart hook, or `setup`/`doctor`), codex-gateway detects the
+   entry, confirms it can actually bind loopback **port 80**, and — only if both hold — switches
+   the plugin-owned `ANTHROPIC_BASE_URL` to `http://api.anthropic.com` and starts a second listener
+   on that port next to the usual `127.0.0.1:18764`. Nothing else in your settings changes. You get
+   exactly one line telling you to restart Claude Code.
+4. Restart Claude Code. `/model` still shows the Codex rows, and `/remote-control` is now available,
+   because Claude Code sees the real Anthropic host.
+5. Run `remote-control disable --confirm` after another direct confirmation to remove only the
+   plugin-marked block, restore default mode, and verify it. If you manually remove the hosts block,
+   the next `ensure` also reverts the gateway automatically.
+
+Notes:
+- Port 80 needs no special privilege on Windows, but Linux and macOS reserve ports below 1024 for
+  root; without `sudo`/`CAP_NET_BIND_SERVICE` the bind fails and codex-gateway just stays in
+  default mode (`doctor` shows why).
+- The shim avoids routing back into itself: real (non-Codex) requests still need to reach the
+  actual Anthropic servers, so when the hosts entry is active the shim resolves `api.anthropic.com`
+  with a direct DNS query (which, unlike the OS resolver, never consults the hosts file) instead of
+  the poisoned address your hosts file hands to everything else.
+- `doctor` reports the hosts entry (if any), whether port 80 actually bound, and which mode each
+  settings scope is currently wired to.
+- Test-only overrides (never needed for normal use): `CODEX_GATEWAY_HOSTS_FILE` points detection at
+  a different file, `CODEX_GATEWAY_COMPAT_PORT` changes the port from 80.
 
 ## Use with sidequest
 

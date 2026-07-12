@@ -58,6 +58,32 @@ and fails silently if the shim answers slowly; `models` shows exactly what's adv
 - Claude models keep working normally at the same time (passthrough path); subagents can mix
   tiers freely.
 
+## RC-compatibility mode (restoring `/remote-control`)
+
+For the confirmation-gated workflow, use the `remote-control-compatibility` skill. It manages the
+plugin-marked hosts block, creates a backup before an elevated write, reconciles gateway mode, and
+checks the final state. Do not edit the hosts file outside that workflow.
+
+Claude Code's `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the real
+Anthropic host, which conflicts with gateway routing. codex-gateway offers an opt-in, fully
+reversible workaround instead of pretending both can coexist by default:
+
+- The user (never this plugin, never automatically) adds one hosts entry mapping
+  `api.anthropic.com` to loopback — `127.0.0.1 api.anthropic.com` on Windows
+  (`C:\Windows\System32\drivers\etc\hosts`, needs Administrator), macOS, and Linux (`/etc/hosts`,
+  needs `sudo`). If asked to help with this, tell the user the exact line and file, and that they
+  need elevated privileges to save it; do not attempt to edit the hosts file yourself.
+- `ensure`/`setup`/`doctor` detect the entry (read-only) and, only after confirming the shim can
+  actually bind loopback port 80, switch `ANTHROPIC_BASE_URL` to `http://api.anthropic.com` and
+  start a second listener on port 80 next to the usual `127.0.0.1:18764`. Exactly one line tells
+  the user to restart Claude Code when the mode changes either direction.
+- Removing the hosts entry, or port 80 becoming unavailable (no permission, or something else is
+  using it), reverts to default mode automatically, again with one restart line.
+- `doctor` reports the hosts entry (if any), whether port 80 actually bound (and why not if it
+  didn't), and which mode each settings scope (user/project) is wired to.
+- Test/advanced overrides: `CODEX_GATEWAY_HOSTS_FILE` (custom hosts path), `CODEX_GATEWAY_COMPAT_PORT`
+  (port other than 80). Neither is needed for normal use.
+
 ## Day-2 operations
 
 ```bash

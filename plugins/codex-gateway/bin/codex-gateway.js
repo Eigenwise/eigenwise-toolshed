@@ -14,10 +14,22 @@
  *      shim's /v1/models advertises the proxy's Codex models under the
  *      `claude-codex-` prefix because Claude Code's gateway model discovery
  *      drops ids that don't start with "claude" or "anthropic".
+ *
+ * Default mode above is zero-admin and always available, but Claude Code's
+ * built-in /remote-control only lights up when ANTHROPIC_BASE_URL is exactly
+ * the real Anthropic host. There's no supported way to get gateway routing
+ * and that exact host at once without touching the OS resolver, so it's an
+ * opt-in "RC-compatibility" mode: the user (never this plugin) adds one hosts
+ * entry mapping api.anthropic.com to loopback, and once detected the shim
+ * additionally binds loopback:80 and Claude Code's env is pointed at
+ * http://api.anthropic.com instead of 127.0.0.1:<shim port>. See
+ * detectHostsCompat / syncCompatMode below. Never automatic on the hosts side;
+ * only the env switch and the extra listener are automatic.
  */
 
 const { spawn, spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
+const dns = require('node:dns');
 const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
@@ -35,8 +47,23 @@ const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
 const PREFIX = 'claude-codex-';
 const REPO = 'raine/claude-code-proxy';
 const ANTHROPIC_UPSTREAM = process.env.CODEX_GATEWAY_ANTHROPIC_UPSTREAM || 'https://api.anthropic.com';
-const ENV_BLOCK = {
-  ANTHROPIC_BASE_URL: `http://127.0.0.1:${SHIM_PORT}`,
+
+// ---------------------------------------------------- RC-compatibility mode
+//
+// COMPAT_PORT/COMPAT_HOST/hostsFilePath are overridable so tests never touch
+// a real port 80 or a real hosts file; CODEX_GATEWAY_COMPAT_PORT and
+// CODEX_GATEWAY_HOSTS_FILE are test/advanced-use knobs, not part of normal
+// setup (the shim always wants real port 80 and the real OS hosts file
+// outside of tests).
+const COMPAT_HOST = 'api.anthropic.com';
+const COMPAT_PORT = Number(process.env.CODEX_GATEWAY_COMPAT_PORT || 80);
+const DEFAULT_BASE_URL = `http://127.0.0.1:${SHIM_PORT}`;
+const COMPAT_BASE_URL = `http://${COMPAT_HOST}`;
+const HOSTS_BLOCK_START = '# >>> codex-gateway RC compatibility >>>';
+const HOSTS_BLOCK_END = '# <<< codex-gateway RC compatibility <<<';
+const HOSTS_BLOCK_LINE = `127.0.0.1 ${COMPAT_HOST}`;
+
+const STATIC_ENV_BLOCK = {
   CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
   CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
   // Behind an ANTHROPIC_BASE_URL gateway Claude Code can't verify a model's
@@ -47,6 +74,13 @@ const ENV_BLOCK = {
   ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
   ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
 };
+
+// The only plugin-owned setting that differs between default and
+// RC-compatibility mode is ANTHROPIC_BASE_URL; everything else stays put.
+function envBlockFor(mode) {
+  return { ANTHROPIC_BASE_URL: mode === 'compat' ? COMPAT_BASE_URL : DEFAULT_BASE_URL, ...STATIC_ENV_BLOCK };
+}
+function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
 // the next env write/remove, but leave a user-supplied different value alone.
@@ -67,6 +101,8 @@ const USAGE = `usage: codex-gateway.js <command>
   env [--write-user | --write-project | --remove]
                    print the Claude Code env block, or merge/remove it in settings.json
   doctor           full health check
+  remote-control <enable|disable|doctor>
+                   manage the opt-in hosts-file compatibility mode
   serve-shim       (internal) run the router in the foreground`;
 
 const cmd = process.argv[2];
@@ -170,7 +206,7 @@ function cleanLegacyEnvSettings() {
 function cleanLegacyGatewayModelCache() {
   let cache;
   try { cache = JSON.parse(fs.readFileSync(GATEWAY_MODELS_CACHE, 'utf8')); } catch { return false; }
-  if (cache.baseUrl !== ENV_BLOCK.ANTHROPIC_BASE_URL || !Array.isArray(cache.models)) return false;
+  if (!ourBaseUrls().includes(cache.baseUrl) || !Array.isArray(cache.models)) return false;
   if (!cache.models.some((m) => m && typeof m.id === 'string'
     && m.id.startsWith(PREFIX) && /\[1m\]$/.test(m.id))) return false;
   cache.models = cache.models.map((m) => {
@@ -184,14 +220,210 @@ function cleanLegacyGatewayModelCache() {
 }
 
 function isWired() {
-  if (process.env.ANTHROPIC_BASE_URL === ENV_BLOCK.ANTHROPIC_BASE_URL) return true;
+  if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL)) return true;
   for (const scope of ['user', 'project']) {
     try {
       const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
-      if (s.env && s.env.ANTHROPIC_BASE_URL === ENV_BLOCK.ANTHROPIC_BASE_URL) return true;
+      if (s.env && ourBaseUrls().includes(s.env.ANTHROPIC_BASE_URL)) return true;
     } catch { /* absent or unparsable */ }
   }
   return false;
+}
+
+// Which scope currently has a plugin-owned ANTHROPIC_BASE_URL, and which mode
+// it encodes. null means codex-gateway hasn't wired anything yet.
+function wiredMode() {
+  for (const scope of ['user', 'project']) {
+    try {
+      const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
+      const base = s.env && s.env.ANTHROPIC_BASE_URL;
+      if (base === COMPAT_BASE_URL) return { scope, mode: 'compat' };
+      if (base === DEFAULT_BASE_URL) return { scope, mode: 'default' };
+    } catch { /* absent or unparsable */ }
+  }
+  return null;
+}
+
+// ------------------------------------------------- RC-compatibility hosts
+
+const LOOPBACK_IPS = new Set(['127.0.0.1', '::1']);
+
+function hostsFilePath() {
+  if (process.env.CODEX_GATEWAY_HOSTS_FILE) return process.env.CODEX_GATEWAY_HOSTS_FILE;
+  return WIN
+    ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts')
+    : '/etc/hosts';
+}
+
+// Cross-platform hosts syntax is identical on Windows/macOS/Linux: one entry
+// per line, "<ip> <hostname> [alias...]", '#' starts a trailing comment,
+// fields are whitespace-separated. Only an EXACT loopback mapping for
+// api.anthropic.com counts — anything mapping to a non-loopback address is
+// ignored (it isn't a route back to this shim, so switching would break
+// Claude Code, not enable compatibility mode).
+function parseHostsCompatEntry(text) {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.split('#')[0].trim();
+    if (!line) continue;
+    const [ip, ...names] = line.split(/\s+/);
+    if (!LOOPBACK_IPS.has(ip)) continue;
+    if (names.some((n) => n.toLowerCase().replace(/\.$/, '') === COMPAT_HOST)) {
+      return { ip, line: rawLine.trim() };
+    }
+  }
+  return null;
+}
+
+function parseHostsCompatBlock(text) {
+  const start = text.indexOf(HOSTS_BLOCK_START);
+  const end = text.indexOf(HOSTS_BLOCK_END);
+  if (start < 0 && end < 0) return { state: 'absent', block: null };
+  if (start < 0 || end < 0 || end < start) return { state: 'partial', block: null };
+  const endIndex = end + HOSTS_BLOCK_END.length;
+  const block = text.slice(start, endIndex);
+  const before = text.slice(0, start);
+  const after = text.slice(endIndex);
+  if (parseHostsCompatEntry(block)) return { state: 'valid', block, before, after };
+  return { state: 'invalid', block, before, after };
+}
+
+function managedHostsBlock(eol = '\n') {
+  return [HOSTS_BLOCK_START, HOSTS_BLOCK_LINE, HOSTS_BLOCK_END].join(eol) + eol;
+}
+
+function addManagedHostsBlock(text) {
+  const parsed = parseHostsCompatBlock(text);
+  if (parsed.state === 'valid') return { text, changed: false };
+  if (parsed.state !== 'absent') throw new Error(`plugin-marked hosts block is ${parsed.state}; run remote-control doctor and repair it manually`);
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const separator = text && !text.endsWith('\n') ? eol : '';
+  return { text: text + separator + managedHostsBlock(eol), changed: true };
+}
+
+function removeManagedHostsBlock(text) {
+  const parsed = parseHostsCompatBlock(text);
+  if (parsed.state === 'absent') return { text, changed: false };
+  if (parsed.state !== 'valid') throw new Error(`plugin-marked hosts block is ${parsed.state}; run remote-control doctor and repair it manually`);
+  const after = parsed.after.replace(/^\r?\n/, '');
+  const next = (parsed.before + after).replace(/(?:\r?\n){3,}/g, (match) => match.includes('\r\n') ? '\r\n\r\n' : '\n\n');
+  return { text: next, changed: true };
+}
+
+function findConflictingHostsMappings(text) {
+  const conflicts = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    if (rawLine.includes(HOSTS_BLOCK_START) || rawLine.includes(HOSTS_BLOCK_END)) continue;
+    const line = rawLine.split('#')[0].trim();
+    if (!line) continue;
+    const [ip, ...names] = line.split(/\s+/);
+    if (names.some((name) => name.toLowerCase().replace(/\.$/, '') === COMPAT_HOST) && !LOOPBACK_IPS.has(ip)) {
+      conflicts.push(rawLine.trim());
+    }
+  }
+  return conflicts;
+}
+
+function readHostsFile() {
+  const file = hostsFilePath();
+  try { return { file, text: fs.readFileSync(file, 'utf8') }; }
+  catch (error) { return { file, text: null, error }; }
+}
+
+function hostsWriteStatus(file) {
+  try {
+    fs.accessSync(file, fs.constants.W_OK);
+    return 'available';
+  } catch { return 'missing (run from an elevated terminal)'; }
+}
+
+async function lookupCompatHost() {
+  try { return await dns.promises.lookup(COMPAT_HOST); }
+  catch { return null; }
+}
+
+function elevatedHostsInstructions(action) {
+  if (WIN) {
+    return `Open Notepad as Administrator, then ${action} the plugin-marked block in ${hostsFilePath()}.`;
+  }
+  return `Use sudo to ${action} the plugin-marked block in ${hostsFilePath()}.`;
+}
+
+async function remoteControlCommand() {
+  const action = args[0];
+  if (!['enable', 'disable', 'doctor'].includes(action)) {
+    die('usage: remote-control <enable|disable|doctor>');
+  }
+  const { file, text, error } = readHostsFile();
+  const parsed = text == null ? { state: 'unreadable', block: null } : parseHostsCompatBlock(text);
+  const conflicts = text == null ? [] : findConflictingHostsMappings(text);
+  const detected = text == null ? null : parseHostsCompatEntry(text);
+
+  if (action === 'doctor') {
+    log(`hosts file: ${file}`);
+    log(`plugin block: ${parsed.state}`);
+    log(`loopback mapping: ${detected ? detected.line : 'not present'}`);
+    log(`conflicting mappings: ${conflicts.length ? conflicts.join(' | ') : 'none'}`);
+    log(`elevated write: ${hostsWriteStatus(file)}`);
+    const dnsResult = await lookupCompatHost();
+    log(`DNS lookup: ${dnsResult ? `${dnsResult.address} (IPv${dnsResult.family})` : 'failed'}`);
+    await doctor();
+    return;
+  }
+
+  if (text == null) {
+    die(`cannot read hosts file ${file}: ${error && (error.code || error.message)}`);
+  }
+  if (conflicts.length) {
+    die(`conflicting non-loopback mapping for ${COMPAT_HOST}: ${conflicts.join(' | ')}. Remove it manually before enabling compatibility mode.`);
+  }
+
+  const operation = action === 'enable' ? addManagedHostsBlock : removeManagedHostsBlock;
+  let transformed;
+  try { transformed = operation(text); } catch (error) { die(error.message); }
+  if (!transformed.changed) {
+    log(`remote-control compatibility is already ${action === 'enable' ? 'enabled' : 'disabled'} in ${file}`);
+    return;
+  }
+
+  log(`${action === 'enable' ? 'Enable' : 'Disable'} Remote Control compatibility by ${action === 'enable' ? 'adding' : 'removing'} only this block:`);
+  log(action === 'enable' ? managedHostsBlock(text.includes('\r\n') ? '\r\n' : '\n').trim() : parsed.block);
+  log(`This needs elevation. ${elevatedHostsInstructions(action === 'enable' ? 'add' : 'remove')}`);
+  log('Do you want to make this hosts-file change now? Re-run with --confirm only after the user answers yes.');
+  if (!flag('--confirm')) return;
+
+  const backup = `${file}.codex-gateway-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
+  try {
+    fs.copyFileSync(file, backup);
+    fs.writeFileSync(file, transformed.text);
+  } catch (writeError) {
+    die(`could not write ${file}: ${writeError.code || writeError.message}. Backup ${backup} may exist. ${elevatedHostsInstructions('edit')}`);
+  }
+  log(`backup: ${backup}`);
+  const result = await startAll();
+  if (!result.ok) die(`hosts file changed, but gateway reconciliation failed: ${result.reason}`);
+  await syncCompatMode();
+  await remoteControlVerify();
+}
+
+async function remoteControlVerify() {
+  const entry = detectHostsCompat();
+  const health = await fetchShimHealth();
+  const dnsResult = await lookupCompatHost();
+  const modelCount = health ? health.models : 0;
+  log(`DNS/hosts mapping: ${dnsResult ? `${dnsResult.address} (IPv${dnsResult.family})` : 'FAILED'}`);
+  log(`hosts entry: ${entry ? entry.line : 'MISSING'}`);
+  log(`port ${COMPAT_PORT}: ${health && health.compat.port80Bound ? 'bound' : 'unavailable'}`);
+  log(`shim health: ${health && health.ok ? 'healthy' : 'DOWN'}`);
+  log(`Codex discovery: ${modelCount ? `${modelCount} models` : 'unavailable'}`);
+  log(`Remote Control eligibility: ${entry && health && health.compat.port80Bound ? `ready after Claude Code restarts with ${COMPAT_BASE_URL}` : 'not ready'}`);
+}
+
+// Read-only: codex-gateway never writes to the hosts file. Returns
+// { ip, line } when the user has added the exact managed entry, else null.
+function detectHostsCompat() {
+  let text;
+  try { text = fs.readFileSync(hostsFilePath(), 'utf8'); } catch { return null; }
+  return parseHostsCompatEntry(text);
 }
 
 // codex-gateway is inherently a USER-SCOPE tool: it wires a GLOBAL env var
@@ -282,8 +514,18 @@ async function setup() {
     return;
   }
   log('ChatGPT auth: valid');
-  if (isWired()) { log('already wired; restart Claude Code and open /model'); return; }
-  writeEnv('user', false);
+  const { mode } = await resolveIntendedMode();
+  if (isWired()) {
+    const current = wiredMode();
+    if (current && current.mode !== mode) {
+      writeEnv(current.scope, false, { mode, quiet: true });
+      log(`codex-gateway: hosts compatibility state changed since last wired; switched ${current.scope} settings to ${mode} mode. Restart Claude Code.`);
+    } else {
+      log('already wired; restart Claude Code and open /model');
+    }
+    return;
+  }
+  writeEnv('user', false, { mode });
 }
 
 // ------------------------------------------------------- process management
@@ -313,17 +555,43 @@ async function startAll({ quiet = false } = {}) {
   return { ok: false, reason: `not healthy after 12s (check logs in ${LOGS})` };
 }
 
+async function fetchShimHealth() {
+  try {
+    const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout: 2000 });
+    return JSON.parse(r.body.toString());
+  } catch { return null; }
+}
+
+// What mode the running shim actually achieved this session: compat only if
+// the user's hosts entry is present AND the shim actually managed to bind
+// loopback:COMPAT_PORT (never trust the hosts file alone — a bind failure,
+// e.g. no permission or something else already on :80, must fall back).
+async function resolveIntendedMode() {
+  const health = await fetchShimHealth();
+  const compat = (health && health.compat) || { hostsDetected: false, port80Bound: false };
+  return { mode: compat.hostsDetected && compat.port80Bound ? 'compat' : 'default', compat };
+}
+
 async function statusReport() {
   const proxyUp = await portListening(PROXY_PORT);
   const shimUp = await shimHealthy();
   log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${proxyUp ? 'running' : 'DOWN'}`);
   log(`shim (model router) on :${SHIM_PORT}: ${shimUp ? 'running' : 'DOWN'}`);
+  let health = null;
   if (shimUp) {
+    health = await fetchShimHealth();
     try {
       const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
       const n = (JSON.parse(r.body.toString()).data || []).length;
       log(`models advertised to Claude Code: ${n}`);
     } catch { log('models advertised to Claude Code: (unavailable)'); }
+  }
+  const compat = health && health.compat;
+  if (compat && compat.hostsDetected) {
+    log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
+    log(`  127.0.0.1:${COMPAT_PORT} bound: ${compat.port80Bound ? 'yes' : `no${compat.reason ? ` (${compat.reason})` : ''}`}`);
+  } else if (compat) {
+    log('RC-compatibility hosts entry: not present (default gateway mode)');
   }
   return proxyUp && shimUp;
 }
@@ -335,25 +603,31 @@ function envCommand() {
   const scope = flag('--write-project') ? 'project' : flag('--write-user') ? 'user' : null;
   if (!scope) {
     log('add this to the "env" block of your Claude Code settings.json:');
-    log(JSON.stringify({ env: ENV_BLOCK }, null, 2));
+    log(JSON.stringify({ env: envBlockFor('default') }, null, 2));
     log('\nor run: env --write-user   (global) / --write-project (this repo)');
+    log('\nRC-compatibility mode (restores /remote-control) is opt-in and automatic once you add the');
+    log('hosts entry yourself; see the RC-compatibility mode section of the README.');
     return;
   }
   writeEnv(scope, remove);
 }
 
-function writeEnv(scope, remove) {
+// mode only matters when writing (not removing); quiet suppresses this
+// function's own logging so a caller doing an automatic mode switch can print
+// its own single, more specific line instead.
+function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   const file = settingsPath(scope);
   let settings = {};
   try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* new file */ }
   settings.env = settings.env || {};
   if (remove) {
-    for (const [k, v] of Object.entries({ ...ENV_BLOCK, ...LEGACY_ENV_BLOCK })) {
+    if (ourBaseUrls().includes(settings.env.ANTHROPIC_BASE_URL)) delete settings.env.ANTHROPIC_BASE_URL;
+    for (const [k, v] of Object.entries({ ...STATIC_ENV_BLOCK, ...LEGACY_ENV_BLOCK })) {
       if (String(settings.env[k]) === String(v)) delete settings.env[k];
     }
     if (!Object.keys(settings.env).length) delete settings.env;
   } else {
-    Object.assign(settings.env, ENV_BLOCK);
+    Object.assign(settings.env, envBlockFor(mode));
     for (const [k, v] of Object.entries(LEGACY_ENV_BLOCK)) {
       if (String(settings.env[k]) === String(v)) delete settings.env[k];
     }
@@ -361,10 +635,33 @@ function writeEnv(scope, remove) {
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  if (quiet) return;
   log(`${remove ? 'removed from' : 'written to'} ${file}`);
   if (!remove) {
     log('every new Claude Code session now routes through the shim; the SessionStart');
     log('hook keeps it alive. Restart Claude Code, then open /model to see the Codex rows.');
+  }
+}
+
+// Called once per session (from `ensure`, after the shim is confirmed
+// running) to keep the wired env in sync with the hosts file: promotes to
+// compat mode when the entry appears and the shim actually bound :80, reverts
+// to default the moment either condition stops holding (entry removed, or
+// the port became unavailable). Exactly one log line when something changes;
+// silent otherwise. Never touches settings this plugin didn't wire itself.
+async function syncCompatMode() {
+  const current = wiredMode();
+  if (!current) return;
+  const { mode, compat } = await resolveIntendedMode();
+  if (mode === current.mode) return;
+  writeEnv(current.scope, false, { mode, quiet: true });
+  if (mode === 'compat') {
+    log(`codex-gateway: hosts entry mapping ${COMPAT_HOST} to loopback detected (${compat.hostsLine}); switched to RC-compatibility mode (http://${COMPAT_HOST} via 127.0.0.1:${COMPAT_PORT}). Restart Claude Code to enable /remote-control.`);
+  } else {
+    const why = compat.hostsDetected
+      ? `127.0.0.1:${COMPAT_PORT} is unavailable${compat.reason ? ` (${compat.reason})` : ''}`
+      : `the hosts entry mapping ${COMPAT_HOST} to loopback was removed`;
+    log(`codex-gateway: reverted to default gateway mode (${why}). Restart Claude Code.`);
   }
 }
 
@@ -386,8 +683,10 @@ async function doctor() {
   for (const scope of ['user', 'project']) {
     try {
       const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
-      const wired = s.env && s.env.ANTHROPIC_BASE_URL === ENV_BLOCK.ANTHROPIC_BASE_URL;
-      log(`${scope} settings: ${wired ? 'wired' : 'not wired'} (${settingsPath(scope)})`);
+      const base = s.env && s.env.ANTHROPIC_BASE_URL;
+      const wired = ourBaseUrls().includes(base);
+      const modeLabel = base === COMPAT_BASE_URL ? ' [RC-compatibility mode]' : base === DEFAULT_BASE_URL ? ' [default mode]' : '';
+      log(`${scope} settings: ${wired ? 'wired' + modeLabel : 'not wired'} (${settingsPath(scope)})`);
     } catch { log(`${scope} settings: not wired`); }
   }
   const scope = installScope();
@@ -539,6 +838,47 @@ async function catalogCommand() {
   else log(JSON.stringify(catalog, null, 2));
 }
 
+// dns.resolve4()/resolve6() query DNS directly and, unlike dns.lookup() (what
+// http/https use by default), never consult the OS hosts file. That's exactly
+// why this exists: RC-compatibility mode only works because the user's hosts
+// file maps COMPAT_HOST to loopback, but that same mapping would make the
+// shim's own "everything else -> real Anthropic" forward resolve right back
+// to itself if it used the default resolver — infinite self-forwarding. A
+// factory (not a module singleton) so tests can inject fake resolvers and get
+// an isolated cache. On resolution failure this errors closed rather than
+// falling back to dns.lookup(), which would silently recreate the recursion.
+function createHostsBypassResolver({ resolve4, resolve6, ttlMs = 5 * 60 * 1000 } = {}) {
+  const doResolve4 = resolve4 || dns.promises.resolve4;
+  const doResolve6 = resolve6 || dns.promises.resolve6;
+  let cache = { at: 0, value: null };
+  async function resolve(hostname) {
+    const now = Date.now();
+    if (cache.value && now - cache.at < ttlMs) return cache.value;
+    let result = null;
+    try {
+      const addrs = await doResolve4(hostname);
+      if (addrs && addrs.length) result = { address: addrs[0], family: 4 };
+    } catch { /* try AAAA below */ }
+    if (!result) {
+      try {
+        const addrs = await doResolve6(hostname);
+        if (addrs && addrs.length) result = { address: addrs[0], family: 6 };
+      } catch { /* both failed */ }
+    }
+    if (result) { cache = { at: now, value: result }; return result; }
+    return cache.value || null; // serve stale on a transient DNS blip rather than recurse
+  }
+  function lookup(hostname, options, callback) {
+    resolve(hostname).then(
+      (r) => (r
+        ? callback(null, r.address, r.family)
+        : callback(new Error(`codex-gateway: could not resolve ${hostname} via DNS to bypass the hosts compatibility entry`))),
+      callback,
+    );
+  }
+  return { lookup, resolve };
+}
+
 function runShim() {
   let modelCache = {
     at: 0,
@@ -549,6 +889,11 @@ function runShim() {
     })),
   };
   const counters = { models: 0, codex: 0, anthropic: 0 };
+  // hostsDetected drives the DNS-bypass decision below regardless of whether
+  // this process itself managed to bind the compat port; the OS hosts file is
+  // machine-wide and would misdirect the passthrough forward either way.
+  const compatState = { hostsDetected: false, hostsLine: null, port80Bound: false, reason: null };
+  const anthropicBypass = createHostsBypassResolver();
 
   async function refreshModels() {
     let ids = null;
@@ -583,11 +928,17 @@ function runShim() {
     const headers = { ...clientReq.headers };
     for (const h of ['host', 'connection', 'content-length', 'keep-alive', ...extraHeaderDrop]) delete headers[h];
     if (body != null) headers['content-length'] = Buffer.byteLength(body);
-    const upReq = (isHttps ? https : http).request(url, {
+    const reqOptions = {
       method: clientReq.method,
       headers,
       agent: isHttps ? httpsAgent : httpAgent,
-    }, (upRes) => {
+    };
+    // Only the real-Anthropic passthrough target can recurse into this shim
+    // (the proxy target is always a bare 127.0.0.1 address, never affected).
+    if (compatState.hostsDetected && url.hostname.toLowerCase() === COMPAT_HOST) {
+      reqOptions.lookup = anthropicBypass.lookup;
+    }
+    const upReq = (isHttps ? https : http).request(url, reqOptions, (upRes) => {
       const resHeaders = { ...upRes.headers };
       for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
       if (normalizeContextErrors && upRes.statusCode >= 400) {
@@ -644,12 +995,17 @@ function runShim() {
     else clientReq.pipe(upReq);
   }
 
-  const server = http.createServer((req, res) => {
+  function handleRequest(req, res) {
     const pathOnly = req.url.split('?')[0];
 
     if (pathOnly === '/healthz') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, models: modelCache.data.length, served: counters }));
+      return res.end(JSON.stringify({
+        ok: true,
+        models: modelCache.data.length,
+        served: counters,
+        compat: { ...compatState },
+      }));
     }
 
     if (req.method === 'GET' && pathOnly === '/v1/models') {
@@ -692,17 +1048,47 @@ function runShim() {
       counters.anthropic++;
       forward(req, res, ANTHROPIC_UPSTREAM, raw);
     });
-  });
-  server.requestTimeout = 0;
-  server.headersTimeout = 120000;
-  server.keepAliveTimeout = 75000;
-  server.listen(SHIM_PORT, '127.0.0.1', () => {
+  }
+
+  function makeServer() {
+    const server = http.createServer(handleRequest);
+    server.requestTimeout = 0;
+    server.headersTimeout = 120000;
+    server.keepAliveTimeout = 75000;
+    return server;
+  }
+
+  makeServer().listen(SHIM_PORT, '127.0.0.1', () => {
     console.log(`codex-gateway shim listening on 127.0.0.1:${SHIM_PORT} (proxy :${PROXY_PORT}, anthropic ${ANTHROPIC_UPSTREAM})`);
   });
+
+  // RC-compatibility: only attempted when the user has added the exact hosts
+  // entry themselves (never written by this plugin). A second, independent
+  // listener bound to whichever loopback address that entry named, on
+  // COMPAT_PORT (80 by default) — same handler, same routing. If the bind
+  // fails (no permission, or something else already owns the port) this logs
+  // why and simply doesn't add the listener; the main port above keeps
+  // running normally and codex-gateway stays in default mode this session.
+  const hostsEntry = detectHostsCompat();
+  compatState.hostsDetected = !!hostsEntry;
+  compatState.hostsLine = hostsEntry ? hostsEntry.line : null;
+  if (hostsEntry) {
+    const compatServer = makeServer();
+    compatServer.once('error', (e) => {
+      compatState.port80Bound = false;
+      compatState.reason = e.code || e.message;
+      console.error(`codex-gateway: hosts RC-compatibility entry found (${hostsEntry.line}) but could not bind ${hostsEntry.ip}:${COMPAT_PORT}: ${e.code || e.message}. Staying on default gateway mode this session.`);
+    });
+    compatServer.listen(COMPAT_PORT, hostsEntry.ip, () => {
+      compatState.port80Bound = true;
+      console.log(`codex-gateway RC-compatibility listener on ${hostsEntry.ip}:${COMPAT_PORT} (hosts: ${hostsEntry.line})`);
+    });
+  }
 }
 
 // -------------------------------------------------------------------- main
 
+if (require.main === module) {
 (async () => {
   switch (cmd) {
     case 'setup': await setup(); break;
@@ -747,10 +1133,16 @@ function runShim() {
         log(isAuthed()
           ? 'codex-gateway is running but Claude Code is not wired to it. Offer to run its env --write-user (see the codex-gateway skill), then restart.'
           : 'codex-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the codex-gateway skill.');
-      } else if (installScope() === 'project-only') {
-        // wired (global env) but the keepalive hook only runs in the project it's
-        // installed in — every other project points at a shim nothing restarts.
-        log('codex-gateway is installed PROJECT-ONLY but wires a global env var, so other projects route through a shim its hook won\'t keep alive. Offer to reinstall it at user scope: claude plugin install codex-gateway@eigenwise-toolshed --scope user');
+      } else {
+        if (installScope() === 'project-only') {
+          // wired (global env) but the keepalive hook only runs in the project it's
+          // installed in — every other project points at a shim nothing restarts.
+          log('codex-gateway is installed PROJECT-ONLY but wires a global env var, so other projects route through a shim its hook won\'t keep alive. Offer to reinstall it at user scope: claude plugin install codex-gateway@eigenwise-toolshed --scope user');
+        }
+        // Keep the wired env in sync with the hosts file every session: promote
+        // to RC-compatibility mode once the entry appears (and :80 actually
+        // bound), revert the moment either stops being true.
+        await syncCompatMode();
       }
       if (!quiet) await statusReport();
       break;
@@ -765,9 +1157,35 @@ function runShim() {
     case 'catalog': await catalogCommand(); break;
     case 'env': envCommand(); break;
     case 'doctor': await doctor(); break;
+    case 'remote-control': await remoteControlCommand(); break;
     case 'serve-shim': runShim(); break;
     default:
       log(USAGE);
       process.exit(cmd ? 1 : 0);
   }
 })().catch((e) => die(e.message));
+}
+
+// Exported for unit tests only (require()'d directly, never run as a CLI in
+// that mode). The CLI entry point above is guarded by require.main so this
+// export has no effect on normal `node codex-gateway.js <command>` usage.
+module.exports = {
+  parseHostsCompatEntry,
+  parseHostsCompatBlock,
+  addManagedHostsBlock,
+  removeManagedHostsBlock,
+  findConflictingHostsMappings,
+  managedHostsBlock,
+  detectHostsCompat,
+  hostsFilePath,
+  envBlockFor,
+  ourBaseUrls,
+  wiredMode,
+  writeEnv,
+  settingsPath,
+  createHostsBypassResolver,
+  COMPAT_HOST,
+  COMPAT_PORT,
+  DEFAULT_BASE_URL,
+  COMPAT_BASE_URL,
+};
