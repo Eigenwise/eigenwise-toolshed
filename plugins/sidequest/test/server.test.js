@@ -113,12 +113,14 @@ test('findNewerInstall: repo-source checkout (non-semver dir name) never self-re
   }
 });
 
-test('dashboard presents execution profiles before advanced ladder controls', () => {
+test('dashboard presents the grade cards, then effort/ladder controls in one panel', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
   assert.match(html, /id="routingProfiles"/);
   assert.doesNotMatch(html, /id="editPlanBtn"/);
+  // The routing controls are one flat panel now — no collapsed "Advanced routing"
+  // section, and the exact ladder lives inline with the effort/bias controls.
+  assert.doesNotMatch(html, /advanced-routing/);
   assert.match(html, /routing-direct-controls/);
-  assert.match(html, /<details class="advanced-routing"/);
   assert.ok(html.indexOf('id="routingProfiles"') < html.indexOf('id="ladderView"'));
   assert.match(html, /var gradesView = modelPrefs\.profiles \|\| \{\}/);
   assert.match(html, /p\.complexities \|\| \[\]/);

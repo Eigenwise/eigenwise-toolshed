@@ -208,9 +208,12 @@
   .routing-head p { margin: 3px 0 0; color: var(--text-faint); font-size: 11.5px; }
   .routing-toggle { margin-left: auto; }
   .routing-profiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line-soft); }
-  .profile-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 62px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
+  .profile-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 62px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
   .profile-row:nth-child(odd) { border-right: 1px solid var(--line-soft); }
   .profile-row:nth-last-child(-n+2) { border-bottom: 0; }
+  .profile-row.muted .profile-name { color: var(--text-faint); }
+  .profile-toggle { display: grid; grid-template-columns: 15px 8px minmax(0, 1fr); align-items: center; gap: 9px; min-width: 0; cursor: pointer; }
+  .profile-toggle input { accent-color: var(--gold); width: 15px; height: 15px; flex: none; margin: 0; }
   .profile-dot { width: 8px; height: 8px; border-radius: 50%; }
   .profile-name { display: block; font-size: 13px; font-weight: 650; color: var(--text); }
   .profile-band { display: block; margin-top: 3px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
@@ -219,18 +222,11 @@
   .routing-direct-controls { margin-top: 14px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
   .routing-direct-controls .pop-head { padding-left: 0; }
   .routing-direct-controls .model-pref-list { margin-bottom: 10px; }
-  .advanced-routing summary { border: 1px solid var(--line); background: var(--card); color: var(--text-dim); border-radius: var(--radius-sm); font: 600 11.5px var(--sans); cursor: pointer; }
-  .advanced-routing { grid-column: 1 / -1; border-top: 1px solid var(--line-soft); }
-  .advanced-routing summary { list-style: none; margin: 10px 18px; padding: 7px 10px; width: fit-content; }
-  .advanced-routing summary::before { content: "+"; margin-right: 7px; color: var(--gold); }
-  .advanced-routing[open] summary::before { content: "−"; }
-  .advanced-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line-soft); }
   @media (max-width: 880px) {
     .routing-panel { grid-column: auto; border-right: 0; }
     .routing-profiles { grid-template-columns: 1fr; }
     .profile-row:nth-child(odd) { border-right: 0; }
     .profile-row:nth-last-child(2) { border-bottom: 1px solid var(--line-soft); }
-    .advanced-grid { grid-template-columns: 1fr; }
   }
   .sp-src { margin-left: auto; font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
   /* A model tier row: the enable toggle + name on the left, and (when a Codex
@@ -748,7 +744,7 @@
                 <label class="pop-row routing-toggle"><input type="checkbox" id="routingEnabled" /><span>Automatic</span></label>
               </div>
               <div class="routing-profiles" id="routingProfiles"></div>
-              <div class="routing-direct-controls"><div class="pop-head">Effort controls</div><div class="model-pref-list" id="modelPrefList"></div><div class="pop-head">Band preference</div><div class="bias-view" id="biasView"></div><div class="backend-warn" id="tierBackendWarn"></div></div>
+              <div class="routing-direct-controls"><div class="pop-head">Effort levels</div><div class="model-pref-list" id="modelPrefList"></div><div class="pop-head">Band preference</div><div class="bias-view" id="biasView"></div><div class="pop-head">Exact C1–C10 ladder</div><div class="ladder-view" id="ladderView"></div><div class="backend-warn" id="tierBackendWarn"></div></div>
             </section>
             <div class="sp-col">
               <div class="pop-head">Desktop notifications</div>
@@ -766,15 +762,6 @@
               <div class="pop-head">Per-project<span id="projNotifyHint" style="margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text-faint)"></span></div>
               <div class="proj-notify-list" id="projNotifyList"></div>
             </div>
-            <details class="advanced-routing" id="advancedRouting">
-              <summary>Advanced routing</summary>
-              <div class="advanced-grid">
-                <div class="sp-col">
-                  <div class="pop-head">Exact C1–C10 ladder</div>
-                  <div class="ladder-view" id="ladderView"></div>
-                </div>
-              </div>
-            </details>
           </div>
           <div class="pop-foot">Notification kinds apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
         </div>
@@ -1650,59 +1637,13 @@
     var box = $("modelPrefList"); if (!box) return;
     box.innerHTML = "";
     renderRoutingPlan();
-    var routingOn = modelPrefs.routing !== false;
-    var routeRow = el("label", "pop-row");
-    routeRow.innerHTML = '<input type="checkbox"' + (routingOn ? " checked" : "") + ' /><span>Route tickets to executor subagents<em>off = Claude may work any ticket itself; ⚙tags become informational</em></span>';
-    var routeCb = routeRow.querySelector("input");
-    routeCb.addEventListener("change", function () {
-      modelPrefs.routing = routeCb.checked;
-      pushModelPrefs();
-      toast(routeCb.checked ? "Routing on — tickets go to executor subagents" : "Routing off — Claude may work any ticket itself");
-    });
-    box.appendChild(routeRow);
-    MODELS.forEach(function (m) {
-      var on = modelEnabled(m.k);
-      var row = el("div", "tier-row" + (on ? "" : " muted"));
-      // enable checkbox + tier name (label wraps just those, so the dropdown
-      // beside it doesn't toggle the tier)
-      var lab = el("label", "tier-toggle");
-      lab.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' /><span class="sw" style="display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;background:' + modelColor(m.k) + '"></span><span class="pn-name">' + esc(m.label) + '</span>';
-      var cb = lab.querySelector("input");
-      cb.addEventListener("change", function () {
-        var enabledCount = MODELS.filter(function (x) { return modelEnabled(x.k); }).length;
-        if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one model tier must stay enabled"); return; }
-        modelPrefs[m.k] = cb.checked;
-        renderModelPrefSettings();
-        pushModelPrefs();
-        refreshLadder();
-        toast(cb.checked ? m.label + " enabled" : m.label + " hidden from the picker");
-      });
-      row.appendChild(lab);
-      // per-tier backend dropdown: Claude (default) or a discovered Codex model.
-      // Only rendered when codex-gateway has published a catalog.
-      var det = modelPrefs.discovered || [];
-      if (det.length) row.appendChild(backendSelect(m.k, det));
-      box.appendChild(row);
-    });
-    // When no Codex catalog is detected, a subtle hint that the per-tier backend
-    // picker exists once codex-gateway is installed (at user scope). Absent
-    // entirely if the user has no interest — just one dim line, no error styling.
-    if (!(modelPrefs.discovered || []).length) {
-      var hint = el("div", "backend-hint");
-      hint.innerHTML = 'Install <b>codex-gateway</b> (at user scope) to run any tier on a Codex model.';
-      box.appendChild(hint);
-    }
-    // Effort levels are a per-model matrix now (SQ-129: store.getModelPrefs's
-    // `efforts` object), not one global row — opus·medium can be off while
-    // sonnet·medium stays on. Rows are the non-haiku tiers in MODELS order;
-    // haiku has no effort axis so it never gets a row. A tier hidden from the
-    // picker above dims its row here (its saved effort picks aren't lost,
-    // just deemphasized) rather than disappearing, so re-enabling the tier
-    // doesn't reset anything.
-    var effHead = el("div", "pop-row");
-    effHead.style.cssText = "font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;margin-top:6px";
-    effHead.textContent = "Effort levels";
-    box.appendChild(effHead);
+    // Effort levels are a per-grade matrix (SQ-129: store.getModelPrefs's
+    // `efforts` object) — grade-3·medium can be off while grade-2·medium stays
+    // on. Rows are the non-grade-1 grades in MODELS order; grade-1 has no effort
+    // axis so it never gets a row. A grade whose runtime is disabled on its card
+    // dims here (its saved effort picks aren't lost, just deemphasized) rather
+    // than disappearing, so re-enabling the grade doesn't reset anything. The
+    // grade enable + runtime dropdown live on the routing cards above, not here.
     var grid = el("div", "effort-grid");
     var headRow = el("div", "eg-row eg-headrow");
     headRow.appendChild(el("span", "eg-label"));
@@ -1764,11 +1705,27 @@
     var grades = MODELS.map(function (m) { return gradesView[m.k]; }).filter(Boolean);
     box.innerHTML = "";
     grades.forEach(function (p) {
-      var row = el("div", "profile-row" + (p.enabled === false ? " muted" : ""));
+      var on = p.enabled !== false;
+      var row = el("div", "profile-row" + (on ? "" : " muted"));
       var cs = (p.complexities || []).map(function (n) { return "C" + n; }).join(", ") || "No active scores";
-      row.innerHTML = '<span class="profile-dot" style="background:' + modelColor(p.grade) + '"></span>' +
-        '<span><span class="profile-name">' + esc(p.label || p.grade) + '</span><span class="profile-band">' + esc(cs) + '</span></span>' +
-        '<span class="profile-runtime"><b>' + esc(p.runsLabel || p.runsModel) + '</b>' + esc(p.backend === "codex" ? "Codex runtime" : "Claude runtime") + '</span>';
+      // The grade toggle wraps only the dot + name/band, so clicking the runtime
+      // dropdown beside it doesn't flip the grade on/off.
+      var lab = el("label", "profile-toggle");
+      lab.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' aria-label="' + esc((p.label || p.grade) + " enabled") + '" />' +
+        '<span class="profile-dot" style="background:' + modelColor(p.grade) + '"></span>' +
+        '<span><span class="profile-name">' + esc(p.label || p.grade) + '</span><span class="profile-band">' + esc(cs) + '</span></span>';
+      var cb = lab.querySelector("input");
+      cb.addEventListener("change", function () {
+        var enabledCount = grades.filter(function (x) { return x.enabled !== false; }).length;
+        if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one grade must stay enabled"); return; }
+        modelPrefs[p.grade] = cb.checked;
+        pushModelPrefs().then(function () { refreshLadder(); });
+        toast(cb.checked ? (p.label || p.grade) + " enabled" : (p.label || p.grade) + " off — its work reroutes to the nearest grade");
+      });
+      row.appendChild(lab);
+      var runtime = el("span", "profile-runtime");
+      runtime.innerHTML = '<b>' + esc(p.runsLabel || p.runsModel) + '</b>' + esc(p.backend === "codex" ? "Codex runtime" : "Claude runtime");
+      row.appendChild(runtime);
       var det = modelPrefs.discovered || [];
       if (det.length) row.appendChild(backendSelect(p.grade, det));
       box.appendChild(row);
