@@ -43,7 +43,7 @@ const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 // growing back to its old ~2.5KB size, not byte-exact accounting.
 const BUDGET = {
   standing: 400, // the every-prompt line — keep this one genuinely tiny
-  session: 1900, // once per session start
+  session: 2200, // once per session start
   compact: 600, // once per compact/resume
   capture: 1500, // marker-gated
   mgmt: 1600, // marker-gated
@@ -142,6 +142,14 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
     ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'),
     'must push the MCP tools as the first-choice board interface (models default to the CLI out of habit)'
   );
+});
+
+test('session-start: carries runtime resource and worker reporting coordination', () => {
+  const ctx = runHook(SESSION, { session_id: 'test' });
+  assert.match(ctx, /Before each wave, assess shared runtime resources/, 'must require pre-wave assessment');
+  assert.match(ctx, /fixed ports, domains, shared DBs, servers, and files outside declared scope/, 'must name runtime collisions');
+  assert.match(ctx, /Serialize tickets that touch the same resource even across worktrees/, 'worktrees cannot make shared runtime resources parallel-safe');
+  assert.match(ctx, /Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup/, 'must define worker reporting and ownership');
 });
 
 test('session-start: says sidequest coexists with an external tracker (Jira)', () => {

@@ -22,7 +22,14 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   genuinely random per session (not the ticket ref, not a fixed label): a second session fanning out
   over the same board would derive the identical value and silently coexist as the same worker.
 - **One wave at a time.** `ready --json --brief` partitions the set into parallel-safe waves by
-  declared file scope — no two tickets in a wave overlap. Spawn wave 1, wait, re-run `ready`, repeat.
+  declared file scope — no two tickets in a wave overlap. Before spawning a wave, assess the runtime
+  resources each ticket needs: fixed ports, domains, shared databases, existing servers, and files
+  outside the declared scopes. Worktrees isolate files, not those resources. Serialize tickets that
+  share one, and name the orchestrator/worker ownership before launch. Spawn wave 1, wait, re-run
+  `ready`, repeat.
+- **Workers report operational state.** The orchestrator owns wave admission and shared-resource
+  coordination; each worker owns its ticket. Worker reports must say conflicts found, server lifecycle
+  (started, reused, or stopped), files changed, blockers, cleanup performed, and verification output.
   Tickets with no declared scope never mechanically conflict, so eyeball whether they'd edit the same
   files before parallelizing them.
 - **Executor prompts stay lean**: the ref, the claim/done commands with the worker id, the stamped

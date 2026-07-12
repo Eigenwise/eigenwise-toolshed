@@ -119,9 +119,9 @@ function main() {
       'scope the spawn prompt; executors bounce back fast (release + report) instead of wandering. Many ' +
       'short orchestrator↔executor round-trips beat one long autonomous run. Verify reports by artifact ' +
       '(test output/diff), not by claim.\n' +
-      '• Batch several small SAME-tier tickets into ONE executor (sequential inside); independent tickets ' +
-      'big enough for a spawn each run as a PARALLEL wave (`ready --json --brief`, one executor per ' +
-      'ticket, one message).\n' +
+      '• Batch several small SAME-tier tickets into ONE executor (sequential inside). For a parallel wave, use only independent tickets with no shared runtime resource.\n' +
+      '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees; parallelize only when ownership is clear.\n' +
+      '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup with verification output.\n' +
       'Capture side issues the user mentions as tickets (background `ticket-filer`) without derailing ' +
       'the current task.\n' +
       'Board actions (add/list/ready/claim/done/comment/...) go through the ' +

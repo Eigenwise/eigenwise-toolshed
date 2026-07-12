@@ -235,7 +235,12 @@ re-verifying the world. You prevent it from the spawn side:
 
 A ticket is **ready** when it's unclaimed, unblocked, not done, not archived — `sidequest ready
 --json --brief` lists exactly this set, partitioned into **parallel-safe waves** by declared file
-scope. Fan out one wave at a time: read the wave, spawn, wait, re-run `ready`, repeat. Before a large
+scope. Fan out one wave at a time: read the wave, assess fixed ports, domains, shared databases, existing
+servers, and files outside the declared scopes, then spawn only tickets with no shared runtime resource.
+Worktrees isolate files, not those resources, so serialize collisions even when `ready` puts them in the
+same wave. State who owns coordination and each worker's ticket before launch. Workers report conflicts,
+server lifecycle, files changed, blockers, cleanup, and verification output. Wait, re-run `ready`, repeat.
+Before a large
 fan-out, check `sidequest list --status doing --brief --json` — claims under a `--by` you don't
 recognize mean another session may be working the board; flag it to the user first.
 
