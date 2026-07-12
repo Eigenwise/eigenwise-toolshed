@@ -85,7 +85,8 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote }) {
 // forwards to the Codex backend's reasoning.effort — so unlike an earlier read,
 // effort DOES reach the model. The note records which real model runs.
 function backendNote(slug, id) {
-  return `\n\n_This agent backs the \`${slug}\` tier and runs on \`${id}\` through codex-gateway. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
+  const runtime = id || slug;
+  return `\n\n_This agent is the authoritative Sidequest executor for the \`${slug}\` runtime and runs on \`${runtime}\` through codex-gateway. Claude Code's native suffix is external metadata; the Sidequest route line and this backend-specific executor name are authoritative. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
 }
 
 function renderBackendAgent(slug, id, effort) {

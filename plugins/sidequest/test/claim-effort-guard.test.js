@@ -60,6 +60,23 @@ function seed(why) {
   return added.ticket.ref;
 }
 
+test('Codex routes reject a generic executor even when its effort matches', () => {
+  const original = store.getModelPrefs();
+  store.setModelPrefs({ routing: true, tierBackend: { sonnet: 'codex-gpt-5-6-terra' } });
+  try {
+    const ref = seed('seed a Codex-routed ticket to reject a generic executor with matching effort');
+    const derived = derivedOf(ref);
+    const expected = `sidequest-exec-codex-gpt-5-6-terra-${derived.effort}`;
+    const rejected = runCli(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', `sidequest-exec-${derived.effort}`]);
+    assert.notStrictEqual(rejected.status, 0, 'generic executor must not claim a Codex route');
+    assert.match(rejected.stdout + rejected.stderr, new RegExp(expected), 'refusal names the authoritative generated executor');
+    assert.strictEqual(derivedOf(ref).status, 'todo', 'rejection must leave the ticket free');
+    const accepted = cliJson(['claim', ref, '--by', 'w2', '--effort', derived.effort, '--executor', expected]);
+    assert.strictEqual(accepted.ok, true);
+  } finally {
+    store.setModelPrefs({ routing: original.routing, tierBackend: original.tierBackend });
+  }
+});
 test('routing on: a mismatched --effort is refused and does NOT claim the ticket', () => {
   store.setModelPrefs({ routing: true });
   const ref = seed('seed a ticket whose derived effort the guard will check against a wrong claim');

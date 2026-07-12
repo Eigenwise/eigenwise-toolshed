@@ -153,13 +153,19 @@ function resolveProject(opts) {
 
 const PRIORITY_MARK = { urgent: '!!', high: '!', normal: '', low: '·' };
 
-// Routing marker for a ticket. New tickets carry a complexity score and render
-// "⚙C<n>→tier·effort" (routing derived from the score). Legacy tickets (no
-// complexity, but a stored model/effort) keep the old "⚙tier·effort" form.
+// The human CLI mark names the task's neutral profile and the exact runtime
+// Sidequest resolved for it. Claude Code may append its own native model suffix;
+// that suffix is external metadata. The Sidequest route line and its generated
+// backend-specific executor name are the authoritative runtime contract.
 function modelMark(t) {
-  if (t.complexity) return `  ⚙C${t.complexity}→${t.model}${t.effort ? '·' + t.effort : ''}`;
   if (!t.model && !t.effort) return '';
-  return `  ⚙${t.model || 'any'}${t.effort ? '·' + t.effort : ''}`;
+  const score = t.complexity ? `C${t.complexity}` : 'legacy';
+  const profile = t.profile || t.model || 'any';
+  const ex = t.exec || {};
+  const runtime = ex.runsLabel || ex.runsModel || t.model || 'any';
+  const backend = ex.backend || 'claude';
+  const effort = t.effort ? ` · ${t.effort}` : '';
+  return `  ⚙${score} · ${profile} · ${runtime} · ${backend}${effort}`;
 }
 
 // Routing is derived from a task-complexity score (1..10) plus a written
@@ -405,13 +411,38 @@ function validateModelFilter(action, opts) {
   return false;
 }
 
+function executorDriftReason(slug, idOrRef, claimedEffort, executorName) {
+  const effortDrift = effortDriftReason(slug, idOrRef, claimedEffort);
+  if (effortDrift) return effortDrift;
+  if (!executorName) return null;
+  const prefs = store.getModelPrefs();
+  if (prefs.routing === false) return null;
+  const t = store.getTicket(slug, idOrRef);
+  if (!t || !t.complexity || !t.exec || t.exec.backend !== 'codex') return null;
+  const expected = t.exec.agent;
+  if (executorName === expected) return null;
+  return {
+    ref: t.ref,
+    profile: t.profile,
+    derivedModel: t.model,
+    derivedEffort: t.effort,
+    backend: t.exec.backend,
+    runsLabel: t.exec.runsLabel,
+    executor: executorName,
+    expectedExecutor: expected,
+    message:
+      `${t.ref} resolves to ${t.profile} · ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. ` +
+      `Spawn ${expected} or use sidequest dispatch instead. Not claimed: the ticket stays free for the authoritative runtime.`,
+  };
+}
+
 function cmdClaim(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('claim: pass a ticket id or ref, e.g. sidequest claim SQ-3 --by me');
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
   // Guard before claiming so a wrong-tier claim leaves the ticket untouched.
-  const drift = effortDriftReason(slug, idOrRef, opts.effort);
+  const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor);
   if (drift) {
     process.exitCode = 1;
     if (opts.json) {

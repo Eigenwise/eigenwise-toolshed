@@ -144,8 +144,24 @@ test('claim requires a worker id (no shared-identity default)', () => {
   assert.match(res.content[0].text, /by.*required/i);
 });
 
+test('MCP claim rejects a generic executor for a Codex route', () => {
+  const dir = seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
+  try {
+    store.setModelPrefs({ routing: true, tierBackend: { sonnet: 'codex-gpt-5-6-terra' } });
+    const added = callTool('add', { title: 'Codex executor guard', complexity: 5, why: 'exercise MCP refusal when a generic executor claims a Codex-backed route' });
+    const ticket = store.getTicket(store.ensureProject(PROJ).slug, added.ticket.ref);
+    const rejected = callTool('claim', { ref: added.ticket.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}` });
+    assert.strictEqual(rejected.ok, false);
+    assert.strictEqual(rejected.reason, 'executor_mismatch');
+    assert.strictEqual(rejected.expectedExecutor, ticket.exec.agent);
+  } finally {
+    clearCatalog();
+    seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
+    store.setModelPrefs({ routing: true, tierBackend: { sonnet: 'claude', opus: 'claude' } });
+  }
+});
+
 test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', () => {
-  const store = require('../lib/store.js');
   store.setModelPrefs({ routing: true });
   const added = callTool('add', { title: 'effort guard', complexity: 5, why: 'seed a ticket whose derived effort the MCP claim guard checks' });
   const ref = added.ticket.ref;

@@ -202,6 +202,36 @@
     .settings-panel .sp-col { border-right: 0; border-bottom: 1px solid var(--line-soft); }
     .settings-panel .sp-col:last-child { border-bottom: 0; }
   }
+  .routing-panel { grid-column: span 2; padding: 14px 18px 18px; border-right: 1px solid var(--line-soft); }
+  .routing-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+  .routing-head h3 { margin: 0; font-family: var(--serif); font-size: 19px; font-weight: 500; }
+  .routing-head p { margin: 3px 0 0; color: var(--text-faint); font-size: 11.5px; }
+  .routing-toggle { margin-left: auto; }
+  .routing-profiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line-soft); }
+  .profile-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 62px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
+  .profile-row:nth-child(odd) { border-right: 1px solid var(--line-soft); }
+  .profile-row:nth-last-child(-n+2) { border-bottom: 0; }
+  .profile-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .profile-name { display: block; font-size: 13px; font-weight: 650; color: var(--text); }
+  .profile-band { display: block; margin-top: 3px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+  .profile-runtime { text-align: right; font-size: 11.5px; color: var(--text-dim); }
+  .profile-runtime b { display: block; color: var(--text); font-weight: 600; }
+  .edit-plan { margin-top: 10px; display: flex; justify-content: flex-end; }
+  .edit-plan button, .advanced-routing summary { border: 1px solid var(--line); background: var(--card); color: var(--text-dim); border-radius: var(--radius-sm); font: 600 11.5px var(--sans); cursor: pointer; }
+  .edit-plan button { padding: 6px 10px; }
+  .advanced-routing { grid-column: 1 / -1; border-top: 1px solid var(--line-soft); }
+  .advanced-routing summary { list-style: none; margin: 10px 18px; padding: 7px 10px; width: fit-content; }
+  .advanced-routing summary::-webkit-details-marker { display: none; }
+  .advanced-routing summary::before { content: "+"; margin-right: 7px; color: var(--gold); }
+  .advanced-routing[open] summary::before { content: "−"; }
+  .advanced-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line-soft); }
+  @media (max-width: 880px) {
+    .routing-panel { grid-column: auto; border-right: 0; }
+    .routing-profiles { grid-template-columns: 1fr; }
+    .profile-row:nth-child(odd) { border-right: 0; }
+    .profile-row:nth-last-child(2) { border-bottom: 1px solid var(--line-soft); }
+    .advanced-grid { grid-template-columns: 1fr; }
+  }
   .sp-src { margin-left: auto; font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
   /* A model tier row: the enable toggle + name on the left, and (when a Codex
      catalog is detected) a backend dropdown on the right choosing which model
@@ -709,9 +739,17 @@
         <div class="popover settings-panel" id="settingsPop" role="menu" aria-label="Settings">
           <div class="sp-head">
             <span class="sp-title">Settings</span>
-            <span class="sp-title-sub">notifications, routing &amp; models</span>
+            <span class="sp-title-sub">notifications &amp; execution plan</span>
           </div>
           <div class="sp-grid">
+            <section class="routing-panel" aria-labelledby="routingTitle">
+              <div class="routing-head">
+                <div><h3 id="routingTitle">Routing</h3><p>Choose how much capacity each kind of work gets.</p></div>
+                <label class="pop-row routing-toggle"><input type="checkbox" id="routingEnabled" /><span>Automatic</span></label>
+              </div>
+              <div class="routing-profiles" id="routingProfiles"></div>
+              <div class="edit-plan"><button type="button" id="editPlanBtn">Edit plan</button></div>
+            </section>
             <div class="sp-col">
               <div class="pop-head">Desktop notifications</div>
               <div class="pop-row" id="desktopNotifRow" role="button" tabindex="0">
@@ -728,17 +766,24 @@
               <div class="pop-head">Per-project<span id="projNotifyHint" style="margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text-faint)"></span></div>
               <div class="proj-notify-list" id="projNotifyList"></div>
             </div>
-            <div class="sp-col">
-              <div class="pop-head">Available models</div>
-              <div class="model-pref-list" id="modelPrefList"></div>
-              <div class="backend-warn" id="tierBackendWarn"></div>
-            </div>
-            <div class="sp-col">
-              <div class="pop-head">Routing bias</div>
-              <div class="bias-view" id="biasView"></div>
-              <div class="pop-head">Routing ladder</div>
-              <div class="ladder-view" id="ladderView"></div>
-            </div>
+            <details class="advanced-routing" id="advancedRouting">
+              <summary>Advanced routing</summary>
+              <div class="advanced-grid">
+                <div class="sp-col">
+                  <div class="pop-head">Runtimes &amp; effort</div>
+                  <div class="model-pref-list" id="modelPrefList"></div>
+                  <div class="backend-warn" id="tierBackendWarn"></div>
+                </div>
+                <div class="sp-col">
+                  <div class="pop-head">Band preference</div>
+                  <div class="bias-view" id="biasView"></div>
+                </div>
+                <div class="sp-col">
+                  <div class="pop-head">Exact C1–C10 ladder</div>
+                  <div class="ladder-view" id="ladderView"></div>
+                </div>
+              </div>
+            </details>
           </div>
           <div class="pop-foot">Notification kinds apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
         </div>
@@ -1602,6 +1647,7 @@
   function renderModelPrefSettings() {
     var box = $("modelPrefList"); if (!box) return;
     box.innerHTML = "";
+    renderRoutingPlan();
     var routingOn = modelPrefs.routing !== false;
     var routeRow = el("label", "pop-row");
     routeRow.innerHTML = '<input type="checkbox"' + (routingOn ? " checked" : "") + ' /><span>Route tickets to executor subagents<em>off = Claude may work any ticket itself; ⚙tags become informational</em></span>';
@@ -1705,6 +1751,29 @@
       });
     }
   }
+  function renderRoutingPlan() {
+    var box = $("routingProfiles"); if (!box) return;
+    var toggle = $("routingEnabled");
+    if (toggle) {
+      toggle.checked = modelPrefs.routing !== false;
+      toggle.onchange = function () { modelPrefs.routing = toggle.checked; pushModelPrefs(); };
+    }
+    var profilesView = modelPrefs.profiles || {};
+    var profiles = Array.isArray(profilesView) ? profilesView : ["routine", "everyday", "complex", "frontier"].map(function (k) { return profilesView[k]; }).filter(Boolean);
+    box.innerHTML = "";
+    profiles.forEach(function (p) {
+      var row = el("div", "profile-row" + (p.enabled === false ? " muted" : ""));
+      var cs = (p.complexities || []).map(function (n) { return "C" + n; }).join(", ") || "No active scores";
+      row.innerHTML = '<span class="profile-dot" style="background:' + modelColor(p.tier) + '"></span>' +
+        '<span><span class="profile-name">' + esc(p.profile[0].toUpperCase() + p.profile.slice(1)) + '</span><span class="profile-band">' + esc(cs) + '</span></span>' +
+        '<span class="profile-runtime"><b>' + esc(p.runsLabel || p.runsModel || p.tier) + '</b>' + esc(p.backend === "codex" ? "Codex runtime" : "Claude runtime") + '</span>';
+      box.appendChild(row);
+    });
+    if (!profiles.length) box.innerHTML = '<div class="ladder-empty">Loading execution plan…</div>';
+    var edit = $("editPlanBtn");
+    if (edit) edit.onclick = function () { var a = $("advancedRouting"); if (a) { a.open = true; a.scrollIntoView({ block: "nearest" }); } };
+  }
+
   // Per-tier backend (1.36.0): each tier runs on its Claude model by default, or
   // a discovered Codex model the user picks. This <select> is the picker; it
   // writes modelPrefs.tierBackend[tier] and PUTs, which regenerates that tier's

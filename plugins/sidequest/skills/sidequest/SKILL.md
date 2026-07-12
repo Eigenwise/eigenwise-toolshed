@@ -284,7 +284,7 @@ the tighter spec — a well-specified ticket drops a band; a vague one climbs.
    own tier if the ladder tops out above you (`fable > opus > sonnet > haiku`); only spawn models that
    exist in your environment.
 3. **The ticket read tells you exactly what to spawn.** Each ticket carries a resolved
-   `exec: { agent, model, spawnId, backend }` from a fresh `ready`/`list --json --brief` read for that
+   `profile`, `runsLabel`, `backend`, `effort`, and exact `executor` from a fresh `ready`/`list --json --brief` read. Before every spawn, print `SQ-n · Cn · Profile · Actual Model · effort`. Claude Code's native suffix is external metadata; the Sidequest route line and executor name are authoritative. Codex routes must use Sidequest dispatch or their exact generated backend-specific executor, never a generic `sidequest-exec-*` agent.
    wave. Two paths:
    - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with
      `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are
