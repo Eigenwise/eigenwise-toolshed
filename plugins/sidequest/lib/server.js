@@ -14,6 +14,7 @@
 
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const url = require('url');
 const { spawn, spawnSync } = require('child_process');
@@ -789,6 +790,7 @@ function startVersionWatch(server, ownPort, reminderTimer) {
       let child;
       try {
         child = spawn(process.execPath, [targetBin, 'serve', '--port', String(ownPort), '--handoff-pid', String(process.pid)], {
+          cwd: os.homedir(),
           detached: true,
           stdio: 'ignore',
           windowsHide: true,

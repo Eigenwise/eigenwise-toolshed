@@ -1380,7 +1380,7 @@ async function ensureServer(requestedPort) {
   const port = requestedPort || (running && running.existing && running.existing.port) || undefined;
   const args = [path.join(__dirname, 'sidequest.js'), 'serve'];
   if (port) args.push('--port', String(port));
-  const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', windowsHide: true });
+  const child = spawn(process.execPath, args, { cwd: os.homedir(), detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
 
   // Wait for it to record itself and answer health.

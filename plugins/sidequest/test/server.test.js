@@ -11,6 +11,8 @@ const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
 
+const DASHBOARD_BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
+const HOME_DIR = os.homedir();
 // Point the store at a throwaway home so any incidental store reads/writes
 // (findNewerInstall never touches it, but requiring server.js pulls in
 // store.js) never touch the real one. Also opt this whole process out of the
@@ -128,6 +130,36 @@ test('dashboard presents the grade cards, then effort/ladder controls in one pan
 
 test('findNewerInstall: never throws even with guards disabled', () => {
   assert.doesNotThrow(() => findNewerInstall());
+});
+
+test('detached dashboard spawn options use a stable cwd and preserve lifecycle flags', () => {
+  const cli = fs.readFileSync(DASHBOARD_BIN, 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
+  assert.match(cli, /spawn\(process\.execPath, args, \{ cwd: os\.homedir\(\), detached: true, stdio: 'ignore', windowsHide: true \}\)/);
+  assert.match(server, /spawn\(process\.execPath, \[targetBin, 'serve', '--port', String\(ownPort\), '--handoff-pid', String\(process\.pid\)\], \{\s*cwd: os\.homedir\(\),\s*detached: true,\s*stdio: 'ignore',\s*windowsHide: true,\s*\}\)/);
+});
+
+test('stable cwd lets a detached child outlive a removed worktree-like cwd', { timeout: 10000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-detached-cwd-'));
+  const worktree = path.join(root, 'worktree');
+  fs.mkdirSync(worktree);
+  const marker = path.join(root, 'marker.txt');
+  const child = spawn(process.execPath, ['-e', `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(marker)}, 'ready'), 200)`], {
+    cwd: HOME_DIR,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  fs.rmSync(worktree, { recursive: true, force: true });
+  t.after(() => {
+    if (child.pid && isAlive(child.pid)) {
+      try { process.kill(child.pid); } catch (_) {}
+    }
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+  });
+  await waitFor(() => fs.existsSync(marker), 5000, 'detached child marker');
+  assert.strictEqual(fs.readFileSync(marker, 'utf8'), 'ready');
 });
 
 function copyPlugin(from, to, version) {
