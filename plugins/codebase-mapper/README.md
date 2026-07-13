@@ -108,8 +108,13 @@ changed since the last map.
 
 A bundled, Node-based `SessionStart` hook injects `INDEX.md` at the start of each session when a map
 exists, so Claude starts oriented and keeps consulting and updating it as you work. SessionStart also
-fires on resume and after a compaction, so the map comes back once context has been trimmed. It is
-silent in projects that have no map, and it never touches your `CLAUDE.md`.
+fires on resume and after a compaction, so the map comes back once context has been trimmed.
+
+Because a once-per-session inject would fade as the conversation grows, the injected instruction tells
+Claude to end every response with a short `[codebase-map]` acknowledgment line. Claude's own output
+then keeps the protocol in recent context turn after turn, so the map stays salient without the hook
+re-firing on every prompt. It is silent in projects that have no map, and it never touches your
+`CLAUDE.md`.
 
 Commit `.claude/.codebase-info/` so the whole team and every future session share the map.
 
