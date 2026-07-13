@@ -172,8 +172,10 @@ note for the routing side.
   and use it only for genuine Claude models. Claude models (opus/sonnet/fable, with or without
   `[1m]`) keep their OWN separate native windows and compaction limits; the shim forwards them
   byte-identically to Anthropic and never applies Codex window advertisement or error rewriting to
-  them. The env block pins the real aliases to `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]`
-  and `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`, preserving their 1M passthrough. On
+  them. The env block pins the real 1M aliases (`ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]`,
+  `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`, `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5[1m]`)
+  so a gateway session on any of them gets its true 1M window instead of Claude Code's 200k gateway
+  default; haiku stays unpinned (it's 200k). On
   context overflow the shim emits HTTP 413 `request_too_large` (matching claude-code-proxy 0.1.14+,
   which first shipped that mapping) so Claude Code runs its built-in compact-and-retry path instead
   of stopping on the proxy's raw 5xx; an upstream 413 passes through untouched, and an older proxy's

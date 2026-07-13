@@ -81,11 +81,14 @@ const STATIC_ENV_BLOCK = {
   CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
   // Gateway discovery only identifies models. Claude Code cannot verify a
   // third-party model's capacity from it, so ordinary gateway models use its
-  // conservative 200k context budget. Pin only the real Claude 1M models to
-  // their [1m] ids. Codex models must stay unsuffixed: [1m] is a local Claude
-  // Code override that delays compaction until far beyond Codex's 272k limit.
+  // conservative 200k context budget. Pin the real Claude 1M models (opus,
+  // sonnet, fable) to their [1m] ids so a session on one gets its true 1M
+  // window instead of the 200k gateway default. Haiku is 200k, leave it
+  // unpinned. Codex models must stay unsuffixed: [1m] is a local Claude Code
+  // override that delays compaction until far beyond Codex's 272k limit.
   ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
   ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
+  ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5[1m]',
 };
 
 // The only plugin-owned setting that differs between default and

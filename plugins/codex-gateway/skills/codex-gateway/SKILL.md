@@ -52,8 +52,9 @@ and fails silently if the shim answers slowly; `models` shows exactly what's adv
   the unsuffixed picker row and restart Claude Code after upgrading from 0.4.1.
 - Claude models (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows
   and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
-  applies Codex window advertisement or error rewriting to them. The env block pins the real
-  Opus/Sonnet aliases to their `[1m]` ids so their genuine 1M windows still work. Do NOT set a
+  applies Codex window advertisement or error rewriting to them. The env block pins the real 1M
+  aliases (Opus, Sonnet, Fable) to their `[1m]` ids so a gateway session on one gets its full 1M
+  window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). Do NOT set a
   global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex
   `/compact` fail after history already exceeds the Codex limit.
 - Caution: loading a huge reference skill (e.g. `claude-api`, ~800k chars) in a single turn can

@@ -362,8 +362,17 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
   assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
   assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+  // Fable is a 1M Claude model too; pin it so a gateway session gets its full
+  // window instead of Claude Code's 200k gateway default.
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5[1m]');
   assert.equal(settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
+
+  const removed = spawnSync(process.execPath, [CLI, 'env', '--write-project', '--remove'], { cwd, encoding: 'utf8' });
+  assert.equal(removed.status, 0, removed.stderr);
+  const after = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(after.env?.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
+  assert.equal(after.env?.USER_SETTING, 'keep-me');
 });
 
 test('claude-* passthrough is byte-identical and never subjected to Codex window/error rewriting', async (t) => {
