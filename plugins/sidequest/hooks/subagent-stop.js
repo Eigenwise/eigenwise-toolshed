@@ -80,7 +80,8 @@ function main() {
   const now = Date.now();
   let worst = null; // the longest-running over-threshold claim
   for (const c of claims) {
-    const started = c && c.at ? Date.parse(c.at) : NaN;
+    if (!c || !c.held || c.status === 'done') continue;
+    const started = c.at ? Date.parse(c.at) : NaN;
     if (!Number.isFinite(started)) continue;
     const elapsed = now - started;
     if (elapsed <= cutoff) continue;

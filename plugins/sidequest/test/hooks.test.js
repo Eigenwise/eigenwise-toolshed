@@ -430,6 +430,26 @@ test('subagent-stop: a fresh (under-threshold) claim stays silent', () => {
   assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', 'a fresh claim must not fire');
 });
 
+test('subagent-stop: a completed executor is silent even when its registry entry lingers', () => {
+  const sess = `sess-completed-${++sqSeq}`;
+  const t = addTicket('completed ticket with stale worker entry');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-completed', { sessionId: sess }).ok, true);
+  backdateSessionClaims(sess, 28);
+  assert.strictEqual(store.completeTicket(slug, t.ref, 'worker-completed', {}).ok, true);
+
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', 'a terminal ticket must not wake its finished executor');
+});
+
+test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
+  const sess = `sess-prior-owner-${++sqSeq}`;
+  const t = addTicket('reclaimed ticket with stale prior owner entry');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-prior', { sessionId: sess }).ok, true);
+  backdateSessionClaims(sess, 28);
+  assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-prior', {}).ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-current', { sessionId: `sess-current-${sqSeq}` }).ok, true);
+
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', 'a prior owner must not be warned about another worker\'s live claim');
+});
 test('subagent-stop: a session with no attributable claim stays silent', () => {
   assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: 'sess-nobody-here' }), '', 'unknown session must be silent');
   assert.strictEqual(runHook(SUBAGENT_STOP, {}), '', 'a bare payload with no session id must be silent');
