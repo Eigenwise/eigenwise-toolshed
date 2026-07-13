@@ -787,14 +787,27 @@ const DEFAULT_MODELS = [
   'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
 
-// Advertised to Claude Code as max_input_tokens for Codex models. Deliberately
-// BELOW the real 272k ChatGPT Codex product window: a smaller reported window
-// makes Claude Code auto-compact earlier, leaving ~27k of real headroom so the
-// compaction summary and long turns finish before the backend hits its true
-// 272k limit and 413s. Override per-machine with CODEX_GATEWAY_CONTEXT_WINDOW
-// to tune compaction timing without a republish. Never set a global
-// CLAUDE_CODE_AUTO_COMPACT_WINDOW to influence this: that also hits Claude
-// passthrough models.
+// Advertised to Claude Code as max_input_tokens for Codex models.
+//
+// IMPORTANT: as of Claude Code 2.1.207 this value is INERT for compaction. The
+// context-window resolver (eyc/sT in claude.exe) never reads a discovered
+// model's max_input_tokens for a `claude-`prefixed id — it hardwires 200000
+// (PPr). The CLAUDE_CODE_MAX_CONTEXT_TOKENS escape hatch is gated behind
+// `!startsWith("claude-")`, and our ids are `claude-codex-*` (discovery drops
+// non-claude ids, so we can't drop the prefix). Net: Claude Code uses a 200k
+// window for every Codex model no matter what we advertise, proactive
+// auto-compaction is OFF (window source is "auto"), and the only recovery is
+// reactive — triggered when the BACKEND returns a context-overflow error (see
+// the 413 normalize path in forward()). So this number does NOT "make Claude
+// Code compact earlier"; the earlier 272k/245k-headroom rationale was wrong.
+//
+// It is still advertised (a) for honesty in /v1/models and (b) to future-proof
+// a Claude Code version that does consult it. The real GPT-5.6 backend window
+// is much larger than 272k (observed: a session accepted ~673k reported tokens
+// at 200 OK, though 0.1.x proxy usage accounting may inflate that — re-measure
+// with proxy >=0.1.17's subtract-cached mapping). Override per-machine with
+// CODEX_GATEWAY_CONTEXT_WINDOW. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW
+// to influence this: that also hits Claude passthrough models.
 const CODEX_COMPACT_CONTEXT_WINDOW = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW) || 245000;
 
 function gatewayModel(id) {

@@ -86,7 +86,10 @@ test('Codex discovery advertises context metadata but keeps the local model id u
     { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 245000 },
     { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 245000 },
   ]);
-  // 245000 = the advertised compaction budget, deliberately below the real 272k Codex window (see CODEX_COMPACT_CONTEXT_WINDOW).
+  // 245000 = the advertised max_input_tokens. NOTE: inert for compaction as of
+  // Claude Code 2.1.207 (it hardwires a 200k window for claude-codex-* ids and
+  // ignores this) — advertised only for honesty/future-proofing. See
+  // CODEX_COMPACT_CONTEXT_WINDOW.
   assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 245000), true);
   assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
 
