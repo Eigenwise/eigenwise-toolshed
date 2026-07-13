@@ -5,6 +5,7 @@ description: >-
   lowercase-hyphen name and the tickets' model; pass the ref(s) — all stamped high — the
   sidequest command, a unique --by id, and the task(s). Claims each first, works it, verifies, dones.
 effort: high
+maxTurns: 60
 permissionMode: bypassPermissions
 ---
 

@@ -137,6 +137,72 @@ test('pre-tool hook keeps built-in executor model but removes overrides for pinn
   assert.equal(builtIn.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
 });
 
+/* ------------------------------------------------------------------ *
+ *  Builtin executors spawned WITHOUT a model must not silently inherit
+ *  the session model — resolve the stamped tier from a ref in the prompt,
+ *  or deny the spawn when it can't be resolved unambiguously (SQ-232).
+ * ------------------------------------------------------------------ */
+
+function fixtureTicket(title, model, effort) {
+  return store.createTicket(slug, { title, model, effort, source: 'cli' });
+}
+
+test('pre-tool hook: builtin exec without a model injects the stamped tier from a prompt ref', () => {
+  const t = fixtureTicket('SQ-232 inject fixture', 'grade-2', 'high');
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-high', name: 'w-inject', prompt: `work ${t.ref} --project "${slug}"` },
+  });
+  assert.equal(out.hookSpecificOutput.updatedInput.model, 'sonnet');
+  assert.equal(out.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  assert.ok(!out.hookSpecificOutput.permissionDecision, 'a resolvable spawn must not be denied');
+  assert.match(out.systemMessage, /injected "sonnet"/);
+  assert.ok(out.systemMessage.includes(t.ref), 'systemMessage must name the ref it resolved from');
+});
+
+test('pre-tool hook: builtin exec without a model and no ticket ref in the prompt is denied', () => {
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-high', name: 'w-norefs', prompt: 'go fix the reporter, no ticket named here' },
+  });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /ready --brief/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /model: exec\.model/);
+});
+
+test('pre-tool hook: builtin exec without a model and conflicting stamped tiers across refs is denied', () => {
+  const a = fixtureTicket('SQ-232 conflict fixture A', 'grade-2', 'high');
+  const b = fixtureTicket('SQ-232 conflict fixture B', 'grade-4', 'high');
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-high', name: 'w-conflict', prompt: `batch ${a.ref} and ${b.ref} --project "${slug}"` },
+  });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /conflicting stamped tiers/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /split it per tier/);
+});
+
+test('pre-tool hook: builtin exec spawned WITH a model that mismatches the stamp keeps the caller value and warns', () => {
+  const t = fixtureTicket('SQ-232 mismatch fixture', 'grade-2', 'high');
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-high', name: 'w-mismatch', model: 'opus', prompt: `work ${t.ref} --project "${slug}"` },
+  });
+  assert.equal(out.hookSpecificOutput.updatedInput.model, 'opus', 'a deliberate cap must be kept, not overwritten');
+  assert.match(out.systemMessage, /model "opus" but .* stamp "sonnet"/);
+});
+
+test('pre-tool hook: pinned Codex-style executor still strips model even when a ref resolves', () => {
+  const t = fixtureTicket('SQ-232 pinned-passthrough fixture', 'grade-3', 'high');
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', model: 'fable', name: 'w-pinned', prompt: `work ${t.ref} --project "${slug}"` },
+  });
+  assert.equal(out.hookSpecificOutput.updatedInput.model, undefined);
+  assert.equal(out.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  assert.match(out.systemMessage, /removed the Agent model override/);
+});
+
 
 test('session-start: carries the route-down + tight-loop doctrine', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });

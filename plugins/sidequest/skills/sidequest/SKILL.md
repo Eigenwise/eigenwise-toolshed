@@ -283,6 +283,9 @@ the tighter spec — a well-specified ticket drops a band; a vague one climbs.
    - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with
      `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are
      unattended workers; never omit bypass or their ordinary Bash calls prompt into the lead session.
+     **Never spawn a Claude-route executor without `model:`** — an omitted model inherits the session
+     model (usually the priciest tier), silently defeating routing; the bundled PreToolUse hook
+     injects or blocks as a backstop, but the spawn call must carry it.
    - **Codex (`exec.model` null):** spawn the EXACT generated backend-specific executor named by
      `exec.agent` (e.g. `sidequest-exec-codex-gpt-5-6-terra-high`) through the Agent tool with
      `mode: "bypassPermissions"`, a unique `name`, and **the `model` parameter OMITTED entirely** —

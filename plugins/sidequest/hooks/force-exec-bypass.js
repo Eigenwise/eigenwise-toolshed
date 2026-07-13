@@ -6,9 +6,16 @@
  * the subagent/worktree. Codex-backed and temporary native executors also pin
  * their real model in frontmatter. An Agent `model` field overrides that pin,
  * so remove it here before a caller can accidentally spend Claude usage.
+ *
+ * A BUILTIN executor (sidequest-exec-low|medium|high|xhigh|max) has no pin — an
+ * omitted `model` silently inherits the expensive session model instead of the
+ * ticket's stamped tier, defeating routing. This hook resolves the ticket
+ * ref(s) named in the prompt and injects the stamped model, or denies the spawn
+ * when it can't be resolved unambiguously.
  */
 
 const fs = require('fs');
+const path = require('path');
 
 const BUILTIN_EXECUTORS = new Set([
   'sidequest-exec-low', 'sidequest-exec-medium', 'sidequest-exec-high',
@@ -18,6 +25,85 @@ const BUILTIN_EXECUTORS = new Set([
 function isPinnedSidequestExecutor(type) {
   return type.startsWith('sidequest-native-')
     || (type.startsWith('sidequest-exec-') && !BUILTIN_EXECUTORS.has(type));
+}
+
+const REF_RE = /\bSQ-\d+\b/gi;
+
+function extractRefs(prompt) {
+  if (typeof prompt !== 'string' || !prompt) return [];
+  const seen = new Set();
+  const out = [];
+  for (const m of prompt.match(REF_RE) || []) {
+    const ref = m.toUpperCase();
+    if (!seen.has(ref)) {
+      seen.add(ref);
+      out.push(ref);
+    }
+  }
+  return out;
+}
+
+function extractProjectArg(prompt) {
+  if (typeof prompt !== 'string' || !prompt) return null;
+  const m = prompt.match(/--project\s+"([^"]+)"|--project[=\s]+(\S+)/);
+  return m ? (m[1] || m[2] || null) : null;
+}
+
+function pluginRoot() {
+  return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
+}
+
+// Resolve the ticket ref(s) named in a builtin executor's prompt to the single
+// model their stamped tier resolves to. lib/store.js is lazy-required here (not
+// at module scope) so the hook's dominant traffic — non-sidequest agents, and
+// any exec prompt with no SQ-ref to resolve — never pays for it.
+function resolveStampedModel(input) {
+  const prompt = input && input.tool_input && input.tool_input.prompt;
+  const refs = extractRefs(prompt);
+  if (!refs.length) return { status: 'no-refs', refs };
+
+  let store;
+  try {
+    store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+  } catch (_) {
+    return { status: 'error', refs };
+  }
+
+  const projectArg = extractProjectArg(prompt) || input.cwd || process.env.CLAUDE_PROJECT_DIR;
+  const found = projectArg ? store.findProject(projectArg) : { ok: false };
+  if (!found.ok) return { status: 'no-project', refs };
+
+  const models = new Set();
+  for (const ref of refs) {
+    const ticket = store.getTicket(found.slug, ref);
+    if (!ticket) return { status: 'ticket-not-found', refs, missing: ref };
+    const ex = store.resolveExec(ticket.model, ticket.effort || null);
+    // A null resolved model means the ref's ticket is Codex-backed (out of
+    // scope here — it routes through its own pinned executor, never a builtin).
+    if (!ex || !ex.model) return { status: 'ticket-not-builtin', refs, ref };
+    models.add(ex.model);
+  }
+  if (models.size !== 1) return { status: 'conflicting', refs, models: [...models] };
+  return { status: 'ok', refs, model: [...models][0] };
+}
+
+function denyReason(res, type) {
+  const retry = 'Re-read the wave (`ready --brief`) and re-spawn with `model: exec.model`.';
+  const base = `sidequest: ${type} was spawned without \`model\` and it couldn't be resolved`;
+  switch (res.status) {
+    case 'no-refs':
+      return `${base} — no SQ-\\d+ ticket ref was found in the prompt. ${retry}`;
+    case 'no-project':
+      return `${base} — the board for ${res.refs.join(', ')} couldn't be determined (no --project, cwd, or CLAUDE_PROJECT_DIR resolved to a registered board). ${retry}`;
+    case 'ticket-not-found':
+      return `${base} — ${res.missing} wasn't found on the resolved board. ${retry}`;
+    case 'ticket-not-builtin':
+      return `${base} — ${res.ref} is stamped to a Codex-backed tier, which spawns its own pinned executor, not a builtin. Re-read the wave (\`ready --brief\`) and spawn its \`exec.agent\` instead.`;
+    case 'conflicting':
+      return `${base} — ${res.refs.join(', ')} resolve to conflicting stamped tiers (${res.models.join(', ')}). That's an illegal mixed-tier batch: split it per tier and re-spawn each with its own \`model: exec.model\`.`;
+    default:
+      return `${base}. ${retry}`;
+  }
 }
 
 function main() {
@@ -31,16 +117,54 @@ function main() {
   if (!isExec) return;
 
   const updatedInput = { ...toolInput, mode: 'bypassPermissions' };
-  const pinned = isPinnedSidequestExecutor(type);
-  if (pinned) delete updatedInput.model;
+
+  if (isPinnedSidequestExecutor(type)) {
+    const hadModel = Object.prototype.hasOwnProperty.call(toolInput, 'model');
+    if (hadModel) delete updatedInput.model;
+    process.stdout.write(JSON.stringify({
+      ...(hadModel
+        ? { systemMessage: `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` }
+        : {}),
+      hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
+    }));
+    return;
+  }
+
+  const hasModel = Object.prototype.hasOwnProperty.call(toolInput, 'model')
+    && toolInput.model != null && toolInput.model !== '';
+
+  if (!hasModel) {
+    const res = resolveStampedModel(input);
+    if (res.status === 'ok') {
+      updatedInput.model = res.model;
+      process.stdout.write(JSON.stringify({
+        systemMessage: `sidequest: ${type} spawned without a model — injected "${res.model}" from ${res.refs.join(', ')}'s stamped tier. Always pass model: exec.model on Claude routes.`,
+        hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
+      }));
+      return;
+    }
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: denyReason(res, type),
+      },
+    }));
+    return;
+  }
+
+  // Caller passed a model — deliberate capping is legit, so keep it. Still flag
+  // an unnoticed divergence from what the named ticket(s) actually stamp.
+  const res = resolveStampedModel(input);
+  if (res.status === 'ok' && res.model !== toolInput.model) {
+    process.stdout.write(JSON.stringify({
+      systemMessage: `sidequest: ${type} was spawned with model "${toolInput.model}" but ${res.refs.join(', ')} stamp "${res.model}" — kept the caller's value; confirm the cap is deliberate.`,
+      hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
+    }));
+    return;
+  }
   process.stdout.write(JSON.stringify({
-    ...(pinned && Object.prototype.hasOwnProperty.call(toolInput, 'model')
-      ? { systemMessage: `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` }
-      : {}),
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      updatedInput,
-    },
+    hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
   }));
 }
 

@@ -58,6 +58,27 @@ const TEMP_PREFIX = 'sidequest-native-';
 // agents, is never carried by an auto-generated exec agent.
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 
+// Effort-scaled hard caps stamped into every executor definition's `maxTurns`
+// frontmatter — the one FIRST-CLASS harness-enforced limit on a subagent run
+// ("maximum number of agentic turns before the subagent stops"). Generous
+// enough that a legitimately-scoped atomic ticket never hits the cap, tight
+// enough that an unbounded wander does. Complements (does not replace) the
+// SubagentStop wall-clock tripwire: maxTurns bounds turns, not minutes.
+const EXEC_MAX_TURNS = { low: 25, medium: 40, high: 60, xhigh: 80, max: 80 };
+
+// The cap for one effort tier. SIDEQUEST_EXEC_MAX_TURNS, when set to a positive
+// integer, overrides ALL tiers; garbage or non-positive values are ignored and
+// the effort default applies. Read at render time so a sync pass sees the
+// current environment.
+function execMaxTurns(effort) {
+  const raw = process.env.SIDEQUEST_EXEC_MAX_TURNS;
+  if (raw != null && String(raw).trim() !== '') {
+    const n = Number(String(raw).trim());
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  return EXEC_MAX_TURNS[effort] || EXEC_MAX_TURNS.medium;
+}
+
 // Where generated exec agents go. In production that's the user's live
 // ~/.claude/agents (Claude Code loads them from there). But a test or isolated
 // server sets SIDEQUEST_HOME to a throwaway dir, and it must NOT pollute the
@@ -87,6 +108,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote }) {
     .split('{{NAME}}').join(String(name))
     .split('{{EFFORT}}').join(String(effort))
     .split('{{MODEL_FRONTMATTER}}').join(modelId ? `\nmodel: ${modelId}` : '')
+    .split('{{MAX_TURNS}}').join(String(execMaxTurns(String(effort))))
     .split('{{MARKER}}').join(marker || '')
     .split('{{EXTRA_NOTE}}').join(extraNote || '');
 }
@@ -380,6 +402,8 @@ module.exports = {
   TEMP_MARKER,
   TEMP_PREFIX,
   NON_MAX_EFFORTS,
+  EXEC_MAX_TURNS,
+  execMaxTurns,
   agentFileName,
   renderExecAgent,
   createNativeAgent,

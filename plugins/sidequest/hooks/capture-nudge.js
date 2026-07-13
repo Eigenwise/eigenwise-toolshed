@@ -156,9 +156,9 @@ function emit(context) {
 // SessionStart hook and the skill.
 function disciplineFooter() {
   return (
-    '\n— sidequest: plan multi-part work as tickets first; route execution to each ticket\'s stamped ' +
-    '(cheap) tier as short, bounded executor runs — batch small same-tier tickets, parallelize ' +
-    'independent ones; inline only trivial one-steps.'
+    '\n— sidequest: plan multi-part work as tickets first; spawn each ticket\'s `exec.agent` with ' +
+    '`model: exec.model` (required on Claude routes, omit on Codex) as short, bounded executor runs — ' +
+    'batch small same-tier tickets, parallelize independent ones; inline only trivial one-steps.'
   );
 }
 

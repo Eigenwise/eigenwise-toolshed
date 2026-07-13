@@ -100,7 +100,7 @@ function main() {
     emit(
       '=== sidequest (active — context restored) ===\n' +
         'Context was just compacted/resumed — RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
-        'Discipline: plan multi-part work as tickets; route execution to the ticket\'s already-registered `exec.agent` as short, bounded executor runs — batch small same-tier tickets; inline only trivial one-steps.'
+        'Discipline: plan multi-part work as tickets; spawn the ticket\'s `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, omit on Codex routes) as short, bounded executor runs — batch small same-tier tickets; inline only trivial one-steps.'
     );
     process.exit(0);
   }
@@ -108,19 +108,18 @@ function main() {
   emit(
     '=== sidequest (active) ===\n' +
       'This project tracks work on the sidequest board — plan any multi-part request as independently checkable ATOMIC ' +
-      'tickets BEFORE implementing (each needs --complexity 1-10 + --why; model×effort routing is ' +
-      'derived from the score). Atomic = one piece a single agent finishes and checks itself — a change, or an investigation, spike, or review. ' +
+      'tickets BEFORE implementing (scored 1-10 + why; model×effort routing follows). ' +
+      'Atomic = one piece a single agent finishes and checks itself — a change, or an investigation, spike, or review. ' +
       'Split for parallelism: independent tickets fan out to sub-agents; keep tightly coupled work together. ' +
-      'One ticket OWNING several deliverables (CLI + wiring + script + state + tests) is a smell: prefer a cheap read-only scout that pins the shared contract, then a wave fanning the pieces out, unless they can\'t verify apart. ' +
+      'One ticket OWNING several deliverables (CLI + wiring + script + state + tests) is a smell: prefer a cheap read-only scout that pins the shared contract, then a wave fanning the pieces out. ' +
       'The spec carries exact anchors, contract or question, bounds/non-goals, dependencies/decisions, and how done is checked (verify command, or the artifact/answer for a spike). Even with an external tracker ' +
       '(Jira), that owns the deliverable — sidequest is the local execution layer; ' +
       'use both.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
-      '• Route real execution DOWN: pass the ticket\'s `exec.agent` to Agent as `subagent_type`, with a unique name + `bypassPermissions`. It is already-registered. Do not use `native_agent` for ticket execution. Inline only trivial one-steps.\n' +
+      '• Route real execution DOWN: spawn `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes — omitting it inherits the SESSION model, defeating routing; Codex routes: `exec.model` is null, omit model). It is already-registered — unique name + `bypassPermissions`. Do not use `native_agent` for ticket execution. Inline only trivial one-steps.\n' +
       '• Keep executor runs SHORT and bounded — the ticket is the spec (exact anchors + verify command); ' +
-      'scope the spawn prompt; executors bounce back fast (release + report). Verify reports by artifact ' +
-      '(test output/diff), not by claim.\n' +
-      '• Batch several small SAME-tier tickets into ONE executor (sequential inside). For a parallel wave, use only independent tickets with no shared runtime resource.\n' +
+      'scope the spawn prompt; executors bounce back fast (release + report), verified by artifact (test/diff) not claim.\n' +
+      '• Batch small SAME-tier tickets into ONE executor (sequential inside); parallel-wave only independent tickets with no shared runtime resource.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +
       '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup with verification output.\n' +
       'Capture side issues as tickets (background `ticket-filer`) without derailing the current task.\n' +

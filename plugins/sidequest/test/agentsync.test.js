@@ -77,6 +77,7 @@ test('one file per discovered model x every non-max effort, correct frontmatter'
   // OMITTED, so the pinned model + bypass below are what actually runs.
   assert.match(frontmatter, /^name: sidequest-exec-codex-gpt-5-6-terra-high$/m);
   assert.match(frontmatter, /^effort: high$/m);
+  assert.match(frontmatter, /^maxTurns: 60$/m);
   assert.match(frontmatter, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
   assert.strictEqual((frontmatter.match(/^model:/gm) || []).length, 1, 'exactly one model pin');
   assert.match(frontmatter, /^permissionMode: bypassPermissions$/m);
@@ -124,6 +125,59 @@ test('empty catalog still mirrors five built-in executors with bypass permission
   assert.deepStrictEqual(readDir(dir), builtInFiles());
   for (const file of builtInFiles()) {
     assert.match(fs.readFileSync(path.join(dir, file), 'utf8'), /^permissionMode: bypassPermissions$/m);
+  }
+});
+
+/* -------------------------------------------------------------- *
+ *  maxTurns hard cap (SQ-231)
+ * -------------------------------------------------------------- */
+
+test('every generated file carries the effort-scaled maxTurns cap', () => {
+  seedCatalog([TERRA]);
+  const dir = tmpDir();
+  agentsync.syncExecAgents({}, { dir });
+  const caps = { low: 25, medium: 40, high: 60, xhigh: 80, max: 80 };
+  // built-in mirrors (including max)
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    const src = fs.readFileSync(path.join(dir, `sidequest-exec-${effort}.md`), 'utf8');
+    assert.match(src, new RegExp(`^maxTurns: ${caps[effort]}$`, 'm'), `built-in ${effort}`);
+  }
+  // discovered-model files (non-max only)
+  for (const effort of ['low', 'medium', 'high', 'xhigh']) {
+    const src = fs.readFileSync(path.join(dir, `sidequest-exec-codex-gpt-5-6-terra-${effort}.md`), 'utf8');
+    assert.match(src, new RegExp(`^maxTurns: ${caps[effort]}$`, 'm'), `custom ${effort}`);
+  }
+});
+
+test('SIDEQUEST_EXEC_MAX_TURNS overrides all tiers; garbage/non-positive is ignored', () => {
+  seedCatalog([TERRA]);
+  const saved = process.env.SIDEQUEST_EXEC_MAX_TURNS;
+  try {
+    process.env.SIDEQUEST_EXEC_MAX_TURNS = '15';
+    let dir = tmpDir();
+    agentsync.syncExecAgents({}, { dir });
+    for (const file of readDir(dir)) {
+      assert.match(fs.readFileSync(path.join(dir, file), 'utf8'), /^maxTurns: 15$/m, file);
+    }
+    // garbage and non-positive values fall back to the effort defaults
+    for (const bad of ['banana', '0', '-3', '2.5', '']) {
+      process.env.SIDEQUEST_EXEC_MAX_TURNS = bad;
+      dir = tmpDir();
+      agentsync.syncExecAgents({}, { dir });
+      assert.match(fs.readFileSync(path.join(dir, 'sidequest-exec-medium.md'), 'utf8'), /^maxTurns: 40$/m, `bad value ${JSON.stringify(bad)}`);
+      assert.match(fs.readFileSync(path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-xhigh.md'), 'utf8'), /^maxTurns: 80$/m, `bad value ${JSON.stringify(bad)}`);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.SIDEQUEST_EXEC_MAX_TURNS; else process.env.SIDEQUEST_EXEC_MAX_TURNS = saved;
+  }
+});
+
+test('the shipped static agents/*.md carry the same effort-scaled caps', () => {
+  const caps = { low: 25, medium: 40, high: 60, xhigh: 80, max: 80 };
+  const staticDir = path.join(__dirname, '..', 'agents');
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    const src = fs.readFileSync(path.join(staticDir, `sidequest-exec-${effort}.md`), 'utf8');
+    assert.match(src, new RegExp(`^maxTurns: ${caps[effort]}$`, 'm'), `static ${effort}`);
   }
 });
 
