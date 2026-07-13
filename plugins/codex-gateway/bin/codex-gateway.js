@@ -28,6 +28,7 @@
  */
 
 const { spawn, spawnSync } = require('node:child_process');
+const { StringDecoder } = require('node:string_decoder');
 const crypto = require('node:crypto');
 const dns = require('node:dns');
 const fs = require('node:fs');
@@ -972,7 +973,78 @@ function runShim() {
   const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
   const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false) {
+  function filterPlanToolBlock(block) {
+    return block && block.type === 'tool_use' && PLAN_TOOLS.includes(block.name);
+  }
+
+  function filterPlanToolJson(body) {
+    let parsed;
+    try { parsed = JSON.parse(body.toString()); } catch { return body; }
+    if (!Array.isArray(parsed.content)) return body;
+    const content = parsed.content.filter((block) => !filterPlanToolBlock(block));
+    if (content.length === parsed.content.length) return body;
+    parsed.content = content;
+    if (parsed.stop_reason === 'tool_use' && !content.some((block) => block && block.type === 'tool_use')) {
+      parsed.stop_reason = 'end_turn';
+    }
+    return Buffer.from(JSON.stringify(parsed));
+  }
+
+  function createPlanToolSseFilter(write) {
+    const decoder = new StringDecoder('utf8');
+    let pending = '';
+    const dropped = new Set();
+    let droppedCount = 0;
+    let keptToolUse = false;
+
+    function transformFrame(frame, separator) {
+      const lines = frame.split(/\r?\n/);
+      const dataLine = lines.findIndex((line) => line.startsWith('data:'));
+      if (dataLine < 0) return write(frame + separator);
+      const raw = lines[dataLine].slice(5).trimStart();
+      if (!raw || raw === '[DONE]') return write(frame + separator);
+      let event;
+      try { event = JSON.parse(raw); } catch { return write(frame + separator); }
+
+      const originalIndex = Number.isInteger(event.index) ? event.index : null;
+      if (event.type === 'content_block_start' && originalIndex != null) {
+        if (filterPlanToolBlock(event.content_block)) {
+          dropped.add(originalIndex);
+          droppedCount++;
+          return;
+        }
+        if (event.content_block && event.content_block.type === 'tool_use') keptToolUse = true;
+      }
+      if (originalIndex != null && dropped.has(originalIndex)) return;
+      if (originalIndex != null) event.index = originalIndex - droppedCount;
+      if (event.type === 'message_delta' && event.delta && event.delta.stop_reason === 'tool_use'
+          && droppedCount > 0 && !keptToolUse) {
+        event.delta.stop_reason = 'end_turn';
+      }
+      lines[dataLine] = `data: ${JSON.stringify(event)}`;
+      write(lines.join('\n') + separator);
+    }
+
+    return {
+      write(chunk) {
+        pending += decoder.write(chunk);
+        for (;;) {
+          const match = /\r?\n\r?\n/.exec(pending);
+          if (!match) break;
+          const frame = pending.slice(0, match.index);
+          const separator = match[0];
+          pending = pending.slice(match.index + separator.length);
+          transformFrame(frame, separator);
+        }
+      },
+      end() {
+        pending += decoder.end();
+        if (pending) transformFrame(pending, '');
+      },
+    };
+  }
+
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false) {
     const url = new URL(clientReq.url, target);
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
@@ -1026,6 +1098,30 @@ function runShim() {
           resHeaders['content-length'] = upstreamBody.length;
           clientRes.writeHead(upRes.statusCode, resHeaders);
           clientRes.end(upstreamBody);
+        });
+        return;
+      }
+      if (filterPlanTools && upRes.statusCode >= 200 && upRes.statusCode < 300) {
+        const contentType = String(upRes.headers['content-type'] || '').toLowerCase();
+        delete resHeaders['content-length'];
+        if (contentType.includes('text/event-stream')) {
+          clientRes.writeHead(upRes.statusCode, resHeaders);
+          const filter = createPlanToolSseFilter((chunk) => clientRes.write(chunk));
+          upRes.on('data', (chunk) => filter.write(chunk));
+          upRes.on('end', () => { filter.end(); clientRes.end(); });
+          upRes.on('error', () => clientRes.destroy());
+          upRes.on('aborted', () => clientRes.destroy());
+          return;
+        }
+        const chunks = [];
+        upRes.on('data', (chunk) => chunks.push(chunk));
+        upRes.on('error', () => clientRes.destroy());
+        upRes.on('aborted', () => clientRes.destroy());
+        upRes.on('end', () => {
+          const filtered = filterPlanToolJson(Buffer.concat(chunks));
+          resHeaders['content-length'] = filtered.length;
+          clientRes.writeHead(upRes.statusCode, resHeaders);
+          clientRes.end(filtered);
         });
         return;
       }
@@ -1087,14 +1183,15 @@ function runShim() {
             // to acceptEdits instead of restoring it (anthropics/claude-code
             // #39973). Hide those tools from Codex models; Claude models are
             // untouched. Escape hatch: CODEX_GATEWAY_KEEP_PLAN_TOOLS=1.
-            if (Array.isArray(parsed.tools) && process.env.CODEX_GATEWAY_KEEP_PLAN_TOOLS !== '1') {
+            const keepPlanTools = process.env.CODEX_GATEWAY_KEEP_PLAN_TOOLS === '1';
+            if (Array.isArray(parsed.tools) && !keepPlanTools) {
               parsed.tools = parsed.tools.filter((t) => !PLAN_TOOLS.includes(t && t.name));
             }
             counters.codex++;
             requestRouteLog(req, 'codex', requestedModel, pathOnly);
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              JSON.stringify(parsed), ['authorization', 'x-api-key'], true);
+              JSON.stringify(parsed), ['authorization', 'x-api-key'], true, !keepPlanTools);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }

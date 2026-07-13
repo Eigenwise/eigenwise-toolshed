@@ -174,6 +174,78 @@ test('Codex context errors use Claude Code compact-and-retry wording', async (t)
   });
 });
 
+test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', async (t) => {
+  let useSse = false;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    if (!useSse) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        type: 'message',
+        stop_reason: 'tool_use',
+        content: [
+          { type: 'text', text: 'keep' },
+          { type: 'tool_use', id: 'plan', name: 'ExitPlanMode', input: {} },
+        ],
+      }));
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const events = [
+      { type: 'message_start', message: { id: 'm1' } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'keep' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'plan', name: 'EnterPlanMode', input: {} } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'bash', name: 'Bash', input: {} } },
+      { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"command":"pwd"}' } },
+      { type: 'content_block_stop', index: 2 },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use' } },
+      { type: 'message_stop' },
+    ];
+    const payload = events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('')
+      .replace('keep', 'keep 🎵');
+    const encoded = Buffer.from(payload);
+    const split = encoded.indexOf(Buffer.from('🎵')) + 2;
+    res.write(encoded.subarray(0, split));
+    res.end(encoded.subarray(split));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort) },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const body = JSON.stringify({ model: 'claude-codex-gpt-5.6-sol', max_tokens: 1, messages: [] });
+  const jsonResponse = await request(shimPort, 'POST', '/v1/messages', body);
+  const json = JSON.parse(jsonResponse.body);
+  assert.deepEqual(json.content, [{ type: 'text', text: 'keep' }]);
+  assert.equal(json.stop_reason, 'end_turn');
+
+  useSse = true;
+  const sseResponse = await request(shimPort, 'POST', '/v1/messages', body, { accept: 'text/event-stream' });
+  assert.equal(sseResponse.body.includes('EnterPlanMode'), false);
+  assert.equal(sseResponse.body.includes('keep 🎵'), true);
+  assert.equal(sseResponse.body.includes('"name":"Bash"'), true);
+  const data = sseResponse.body.split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)));
+  const bashStart = data.find((event) => event.type === 'content_block_start' && event.content_block?.name === 'Bash');
+  assert.equal(bashStart.index, 1);
+  assert.equal(data.find((event) => event.type === 'content_block_delta' && event.delta?.partial_json)?.index, 1);
+});
+
 test('SessionStart cleanup migrates an already-wired install', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-home-'));
   const claudeDir = path.join(home, '.claude');
