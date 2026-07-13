@@ -78,12 +78,12 @@ test('Codex discovery advertises context metadata but keeps the local model id u
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   assert.deepEqual(models.data.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
-    { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 272000 },
-    { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 272000 },
-    { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 272000 },
+    { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 180000 },
+    { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 180000 },
+    { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 180000 },
   ]);
-  // 272000 = the real GPT-5.6 window in the ChatGPT Codex product this gateway routes to.
-  assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 272000), true);
+  // 180000 = the advertised compaction budget, deliberately below the real 272k Codex window (see CODEX_COMPACT_CONTEXT_WINDOW).
+  assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 180000), true);
   assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
@@ -365,6 +365,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   // Fable is a 1M Claude model too; pin it so a gateway session gets its full
   // window instead of Claude Code's 200k gateway default.
   assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5[1m]');
+  assert.equal(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '64000');
   assert.equal(settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
 
@@ -372,6 +373,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(removed.status, 0, removed.stderr);
   const after = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
   assert.equal(after.env?.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
+  assert.equal(after.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
   assert.equal(after.env?.USER_SETTING, 'keep-me');
 });
 

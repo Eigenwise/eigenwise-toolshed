@@ -44,7 +44,7 @@ and fails silently if the shim answers slowly; `models` shows exactly what's adv
 - `/model` picker: rows like "GPT-5.6-sol (Codex)".
 - Typed: `/model claude-codex-gpt-5.6-sol` (any string passes through on a custom base URL).
 - Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to,
-  not the pay-per-token API) has a 272k window, advertised as `max_input_tokens` on every Codex row;
+  not the pay-per-token API) has a real 272k window, but the gateway advertises a reduced 180k compaction budget as `max_input_tokens`;
   their ids stay unsuffixed. `[1m]` is only a local Claude Code promise, not provider capacity
   metadata. On context overflow the shim emits HTTP 413 `request_too_large` (matching
   claude-code-proxy 0.1.14+), which triggers Claude Code's compact-and-retry. Legacy typed Codex ids

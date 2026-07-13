@@ -89,6 +89,12 @@ const STATIC_ENV_BLOCK = {
   ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
   ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
   ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5[1m]',
+  // Lift the per-response output cap above Claude Code's 32k gateway default so
+  // long Codex turns and the auto-compaction summary don't trip "response
+  // exceeded the 32000 output token maximum". No per-model output override
+  // exists, so this is global and also applies to Claude passthrough; lower it
+  // if any backend rejects a 64k max_tokens request.
+  CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
 };
 
 // The only plugin-owned setting that differs between default and
@@ -781,10 +787,13 @@ const DEFAULT_MODELS = [
   'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
 
-// 272k is the ChatGPT Codex product window (the subscription login this gateway
-// routes to), not the pay-per-token API. Never set a global
-// CLAUDE_CODE_AUTO_COMPACT_WINDOW to influence it: that also hits Claude passthrough models.
-const CODEX_COMPACT_CONTEXT_WINDOW = 272000;
+// Advertised to Claude Code as max_input_tokens for Codex models. Deliberately
+// BELOW the real 272k ChatGPT Codex product window: a smaller reported window
+// makes Claude Code auto-compact earlier, leaving ~90k of real headroom so the
+// compaction summary and long turns finish before the backend hits its true
+// 272k limit and 413s. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW to
+// influence this: that also hits Claude passthrough models.
+const CODEX_COMPACT_CONTEXT_WINDOW = 180000;
 
 function gatewayModel(id) {
   return {
