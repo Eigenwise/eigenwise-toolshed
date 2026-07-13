@@ -42,15 +42,7 @@ code**:
    into several tickets sharing a goal → create a **story** first (`sidequest story add -t "..."`),
    then file each piece into it with `--story US-n`. Infer this yourself; the user shouldn't have to
    say "make a story". (Story commands: [references/board-features.md](references/board-features.md).)
-1. **Decompose into ATOMIC tickets** (`sidequest add ...`). One ticket = one concrete change — one
-   function, one file, one behavior — that its executor can finish **without discovering anything**.
-   The test: if completing the ticket would require investigation its description doesn't carry, it
-   isn't atomic yet — split it further, or investigate first yourself and put what you learned in the
-   spec. This is the top cause of stuck executors: a weaker model handed too much scope with too
-   little context. Cut along file/module boundaries (not conceptual halves), declare each piece's
-   scope with `--file` (repeatable; a dir prefix covers everything under it), and shrink until the
-   complexity drops — a piece still scoring 7+ is usually a small design ticket plus a mechanical
-   application ticket.
+1. **Decompose into executor-sized, independently verifiable tickets** (`sidequest add ...`). One ticket = one concrete change an executor can finish in a short bounded run, with one exact verification target. Split work that has multiple independently verifiable changes or would make an executor broadly rediscover the codebase. Keep tightly coupled edits that must land and verify together in one ticket; atomic does not mean artificially tiny. Each ticket carries the execution context the executor needs: exact anchors (files, symbols, lines where known), the behavioral contract, bounds/non-goals, dependencies or settled decisions, and the exact verify command. The test: if completing the ticket would require investigation its description does not carry, investigate first and put what you learned in the spec, or split it further. Cut along file/module boundaries (not conceptual halves), declare each piece's scope with `--file` (repeatable; a dir prefix covers everything under it), and shrink until the complexity drops — a piece still scoring 7+ is usually a small design ticket plus a mechanical application ticket.
 2. **Link dependencies**: `sidequest link SQ-4 depends-on SQ-3`. Shape a story as design → wave(s) →
    integrate, so `ready` naturally serializes the phases.
 3. **Execute proportionally** — see "Execute proportionally" below. The board stays the source of
@@ -117,17 +109,7 @@ sidequest add -t "Contact form does not send" -d "Submit does nothing; no email 
   Keep anchors under 4k chars, verify under 1k, and the assembled prompt under 7.6k so Windows'
   8191-character command limit stays safe.
 
-**Descriptions are developer-to-developer specs, never a PM summary.** A ticket says *which* files and
-functions (**Where**), *what* changes at a code level — inputs → outputs, edge cases, error behavior
-(**Contract**), what's out of scope or must not change (**Bounds**), and the command/test/reproduction
-that proves it done (**Verify**). Bugs additionally carry the reproduction; spikes state what's
-actually unknown and why it matters. **Scale the spec inversely to the executor's tier**: work routed
-to a cheap tier needs a near-patch-level spec — exact anchors, expected strings, precise verification
-commands — because the spec substitutes for judgment. **Everything you already know goes in the
-description**: a weaker executor fails on missing context, not on the work itself, so front-load
-what your investigation found (paths, the surrounding contract, the gotcha you spotted) instead of
-letting the executor re-derive it. Too little detail to write that? Investigate until you have it, or
-ask a quick clarifying question — never file a vague ticket.
+**Descriptions are developer-to-developer specs, never a PM summary.** For non-trivial work, make the description an executor-ready brief: **Where** gives exact anchors (files, symbols, lines where known); **Contract** states the intended behavior, inputs/outputs, edge cases, and error behavior; **Bounds** names non-goals; **Dependencies/decisions** records prerequisites and choices already settled; **Verify** gives the exact command/test/reproduction that proves it done. Bugs additionally carry the reproduction; spikes state what's actually unknown and why it matters. Trivial tickets only need the fields that add information, never boilerplate. **Scale the spec inversely to the executor's tier**: work routed to a cheap tier needs a near-patch-level spec — exact anchors, expected strings, precise verification commands — because the spec substitutes for judgment. **Everything you already know goes in the description**: a weaker executor fails on missing context, not on the work itself, so front-load what your investigation found (paths, the surrounding contract, the gotcha you spotted) instead of letting the executor re-derive it. Too little detail to write that? Investigate until you have it, or ask a quick clarifying question — never file a vague ticket.
 
 Descriptions and comments render **full markdown** in the dashboard — use headings/lists/fenced blocks
 when the spec needs structure. **CRITICAL: use real newlines, never a literal `\n`** — the two

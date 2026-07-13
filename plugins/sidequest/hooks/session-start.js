@@ -107,10 +107,11 @@ function main() {
 
   emit(
     '=== sidequest (active) ===\n' +
-      'This project tracks work on the sidequest board — plan any multi-part request as small ATOMIC ' +
+      'This project tracks work on the sidequest board — plan any multi-part request as executor-sized, independently verifiable ATOMIC ' +
       'tickets BEFORE implementing (each needs --complexity 1-10 + --why; model×effort routing is ' +
-      'derived from the score). Atomic = one concrete change the executor can finish without ' +
-      'discovering anything; the spec carries the context. Even if the repo uses an external tracker ' +
+      'derived from the score). Atomic = one concrete change the executor can finish in a short bounded run ' +
+      'without broad rediscovery; split independently verifiable changes, but keep tightly coupled work together. ' +
+      'The spec carries exact anchors, contract, bounds/non-goals, settled dependencies/decisions, and an exact verify command. Even if the repo uses an external tracker ' +
       '(Jira/Linear/GitHub Issues), that owns the deliverable — sidequest is the local execution layer; ' +
       'use both.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +

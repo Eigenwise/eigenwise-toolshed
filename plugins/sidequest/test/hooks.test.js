@@ -43,7 +43,7 @@ const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 // growing back to its old ~2.5KB size, not byte-exact accounting.
 const BUDGET = {
   standing: 400, // the every-prompt line — keep this one genuinely tiny
-  session: 2200, // once per session start
+  session: 2450, // once per session start
   compact: 600, // once per compact/resume
   capture: 1500, // marker-gated
   mgmt: 1600, // marker-gated
@@ -129,6 +129,11 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.match(ctx, /sidequest \(active\)/);
   assert.ok(ctx.includes('ATOMIC'), 'must demand atomic tickets (stuck executors come from oversized scope)');
+  assert.match(ctx, /independently verifiable/, 'must split independently verifiable changes');
+  assert.match(ctx, /tightly coupled work together/, 'must keep coupled work in one ticket');
+  for (const field of ['exact anchors', 'contract', 'bounds/non-goals', 'dependencies/decisions', 'exact verify command']) {
+    assert.ok(ctx.includes(field), `must require ${field} in the ticket spec`);
+  }
   assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the stamped tier');
   assert.ok(ctx.includes('exec.agent'), 'must use the ticket-provided persistent executor');
   assert.ok(ctx.includes('already-registered'), 'must explain why it must not create a temporary agent at dispatch time');
