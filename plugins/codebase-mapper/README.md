@@ -10,12 +10,12 @@
 *Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
 
 A self-maintaining **codebase map** for Claude Code: small Markdown docs under
-`.claude/.codebase-info/` that describe how your project is built, re-injected into context on every
-prompt so Claude starts each session already knowing the layout instead of grepping around blind.
+`.claude/.codebase-info/` that describe how your project is built, injected into context at the start
+of each session so Claude starts already knowing the layout instead of grepping around blind.
 
 You install one plugin, run one skill, and get a map generated from your actual code: a compact
-`INDEX.md` hub plus the detailed docs your project warrants. A bundled hook keeps that hub in front of
-Claude on every prompt, and a second skill keeps the docs current as the code changes. So every
+`INDEX.md` hub plus the detailed docs your project warrants. A bundled hook puts that hub in front of
+Claude when a session starts, and a second skill keeps the docs current as the code changes. So every
 session starts oriented, and **the map maintains itself** instead of going stale the week after you
 write it.
 
@@ -66,8 +66,8 @@ skills that build and maintain the map for you:
   `map-codebase` skill).
 - **Keeps it current** as the code changes, adding and pruning docs as the project grows (the
   `update-codebase-map` skill).
-- **Loads it on every prompt** through its own bundled hook, so you do not need live-rules installed at
-  all.
+- **Loads it at the start of each session** through its own bundled hook, so you do not need live-rules
+  installed at all.
 
 So the choice is about reuse. For one repo where you will maintain the docs yourself, use live-rules
 and the rule above. When you want the map generated for you, kept in sync automatically, and the same
@@ -102,13 +102,14 @@ The usual set is `INDEX.md`, `architecture.md`, `tech-landscape.md`, `directory-
 own (say `ml-pipeline.md`). There is also a `.map-state.json` the update skill uses to detect what
 changed since the last map.
 
-`INDEX.md` is the compact hub that gets injected every prompt; the detailed docs are read on demand.
+`INDEX.md` is the compact hub that gets injected at session start; the detailed docs are read on demand.
 
 ## Auto-loading
 
-A bundled, Node-based `UserPromptSubmit` hook re-injects `INDEX.md` on every prompt when a map exists,
-so it stays salient deep into a long session and Claude keeps consulting and updating it as you work.
-It is silent in projects that have no map, and it never touches your `CLAUDE.md`.
+A bundled, Node-based `SessionStart` hook injects `INDEX.md` at the start of each session when a map
+exists, so Claude starts oriented and keeps consulting and updating it as you work. SessionStart also
+fires on resume and after a compaction, so the map comes back once context has been trimmed. It is
+silent in projects that have no map, and it never touches your `CLAUDE.md`.
 
 Commit `.claude/.codebase-info/` so the whole team and every future session share the map.
 

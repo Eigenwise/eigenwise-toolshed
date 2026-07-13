@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "2.48.9",
+  "version": "2.49.0",
   "plugins": [
     {
       "name": "codex-gateway",
@@ -81,8 +81,8 @@
     {
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
-      "description": "A self-maintaining codebase map: atomic docs that Claude re-injects on every prompt and keeps in sync as the code changes. Any stack; greenfield or existing.",
-      "version": "2.4.0",
+      "description": "A self-maintaining codebase map: atomic docs Claude loads at the start of each session and keeps in sync as the code changes. Any stack; greenfield or existing.",
+      "version": "2.5.0",
       "author": {
         "name": "Eigenwise"
       },

@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 /**
- * codebase-mapper - UserPromptSubmit context hook
+ * codebase-mapper - SessionStart context hook
  *
- * Re-injects the project's codebase map on every user prompt, when a map exists.
+ * Injects the project's codebase map once at the start of a session, when a map
+ * exists. SessionStart also fires on resume, clear, and compact, so the map is
+ * re-injected after a compaction wipes it from context rather than only on the
+ * very first startup.
  *
- * This runs on UserPromptSubmit (not SessionStart) on purpose. A once-per-session
- * injection gets buried as the conversation grows, and Claude stops consulting the
- * map. Re-injecting on every prompt keeps it salient, so Claude actually reads the
- * relevant docs before working and refreshes them afterward.
- *
- * Each prompt it injects a forceful MANDATORY_INSTRUCTION block plus INDEX.md (the
- * compact hub). The block requires Claude to state which docs it will consult and
+ * It injects a MANDATORY_INSTRUCTION block plus INDEX.md (the compact hub). The
+ * block sets standing rules for the session: state which docs you will consult and
  * read them before exploring, then run a documentation check after code changes.
  * The detailed atomic docs are read on demand. It does not touch CLAUDE.md.
  *
@@ -80,7 +78,7 @@ function main() {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
-        hookEventName: 'UserPromptSubmit',
+        hookEventName: 'SessionStart',
         additionalContext: context,
       },
     })

@@ -8,7 +8,7 @@ sections that don't apply, add project-specific ones that do. Use the real curre
 
 ## INDEX.md
 
-This is the most important file: the plugin's hook injects it into context on every prompt, so keep it
+This is the most important file: the plugin's hook injects it into context at the start of each session, so keep it
 **compact**. Summarize in a few lines and link out to the detailed docs (which are read on demand).
 
 ~~~markdown

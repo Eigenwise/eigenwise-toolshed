@@ -17,16 +17,16 @@ document covers one aspect of the project, so the map stays easy to read, update
 map is written for the next Claude session (and the next human): it is grounding context, not
 marketing.
 
-Loading is automatic and you don't have to wire anything up: this plugin ships a `UserPromptSubmit`
-hook that re-injects the map on every prompt, so Claude keeps consulting and updating it as work
-goes on. **Never edit `CLAUDE.md`.** The hook is the only loading mechanism; leave `CLAUDE.md`
-alone. Your job is just to write the docs in `.claude/.codebase-info/`.
+Loading is automatic and you don't have to wire anything up: this plugin ships a `SessionStart`
+hook that injects the map at the start of each session, so Claude starts oriented and keeps
+consulting and updating it as work goes on. **Never edit `CLAUDE.md`.** The hook is the only loading
+mechanism; leave `CLAUDE.md` alone. Your job is just to write the docs in `.claude/.codebase-info/`.
 
 ## Output
 
 ```
 .claude/.codebase-info/
-├── INDEX.md                # Navigation hub + how-to-use; the hook injects this every prompt
+├── INDEX.md                # Navigation hub + how-to-use; the hook injects this at session start
 ├── architecture.md         # System overview, components, boundaries, data flow
 ├── tech-landscape.md       # Languages, frameworks, runtimes, infra, source-of-truth files
 ├── directory-structure.md  # Annotated folder tree
@@ -130,7 +130,7 @@ paths, tables/diagrams where they help). For each document:
 - Use concrete file paths (`src/auth/guard.ts`), not vague descriptions.
 - Prefer tables for structured data (routes, modules, deps) and ASCII/Mermaid for architecture.
 - Keep each doc self-contained but cross-link related docs.
-- **Keep `INDEX.md` compact.** The hook injects it into context on every prompt, so it should
+- **Keep `INDEX.md` compact.** The hook injects it into context at the start of each session, so it should
   summarize the project in a few lines and link out to the detailed docs, which Claude reads on
   demand. Include the short "How to use / How to maintain this map" section from the template.
 
