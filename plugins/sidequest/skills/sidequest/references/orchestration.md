@@ -53,16 +53,17 @@ ticket, and its findings get commented back (see the main skill).
 ## Workflows (opt-in — you propose, the user approves)
 
 The default parallelizer is named-subagent fan-out — always available, turn-by-turn, supervised. A
-**WORKFLOW** (`agent()`/`parallel()`/`pipeline()`) is the heavier tool for a larger, repeatable, or
-deterministic run: results stay in script variables, only the final output returns.
+**Claude Code Workflow** built with `agent()` and `pipeline()` is the heavier tool for a larger,
+repeatable, or deterministic run: results stay in script variables, only the final output returns.
 
 - **Sizing** (by the story's complexity): small <5 · medium <15 · large <50, within the runtime cap
   of 16 concurrent / 1000 total per run.
 - **Gated**: you don't launch one on your own — the user opts in (an "ultracode" prompt, or an
   explicit ask). But you usually judge better than the user when one would genuinely help, so **when
-  it would, SUGGEST it** via `AskUserQuestion`: why it fits, the rough scale, the token cost. Raising
-  the option is how the opt-in happens; staying silent when a workflow would clearly help is the
-  mistake.
+  it would, SUGGEST it** via `AskUserQuestion`: why it fits, the rough scale, the token cost, and a
+  script shape such as `pipeline(tickets, ticket => agent(ticket.prompt, { label: ticket.ref }))`.
+  Raising the option is how the opt-in happens; staying silent when a workflow would clearly help is
+  the mistake.
 - Typical fits: a wave of 6+ same-shaped executor tickets, a repeatable migrate/verify sweep, a
   find→verify review structure.
 
