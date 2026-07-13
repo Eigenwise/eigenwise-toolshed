@@ -12,10 +12,21 @@
  * it emits ONE short line back to the parent naming the ticket + elapsed and asking
  * whether it was really atomic.
  *
+ * Attribution is shared-session, and every child of a session shares the parent's
+ * session id, so three stdin-driven guards keep this from nagging the wrong child
+ * (the Contractify loop: a reviewer scoped to one file got re-woken ~6x by an
+ * unrelated executor's SQ-70 note):
+ *   - stop_hook_active -> exit. This fire is our OWN additionalContext continuation;
+ *     driving it again is the loop. Bail before doing anything.
+ *   - agent_type not a `sidequest-` executor -> exit. Only an executor/native child
+ *     ever held the claim; a reviewer/explorer/teammate shares the id, not the run.
+ *   - already flagged this exact claim -> exit. store.markLongRunFlagged surfaces a
+ *     given long run ONCE; a repeat SubagentStop won't re-inject it.
+ *
  * The elapsed is computed from the claim `at` the store already records (the worker
- * registry ties a claim to its session) — NOT from the SubagentStop stdin, which we
- * treat as possibly bare (no token counts, no duration). Under threshold, no
- * attributable claim, or any error -> silent, exit 0.
+ * registry ties a claim to its session) — NOT from the SubagentStop stdin, which
+ * carries no token counts or duration. Under threshold, no attributable claim, or
+ * any error -> silent, exit 0.
  *
  * Design constraints (shared with the rest of the toolshed):
  *   - Node stdlib only, cross-platform.
@@ -58,6 +69,18 @@ function emit(context) {
 function main() {
   const data = readStdin();
   if (!data) process.exit(0);
+
+  // Our own additionalContext re-fires SubagentStop with this set. Never drive our
+  // continuation — that recursion is the nag loop. Bail before touching the store.
+  if (data.stop_hook_active) process.exit(0);
+
+  // The runaway note is about an EXECUTOR's claim. A non-executor child (reviewer,
+  // explorer, plain teammate) shares the parent session id but never held it, so
+  // attributing a session claim to it is noise. An absent type stays permissive so
+  // older Claude Code payloads (session id only) behave as before.
+  const agentType = String(data.agent_type || data.agentType || '');
+  if (agentType && !agentType.startsWith('sidequest-')) process.exit(0);
+
   const sessionId = data.session_id || data.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
   if (!sessionId) process.exit(0); // nothing to attribute a claim to
 
@@ -85,9 +108,15 @@ function main() {
     if (!Number.isFinite(started)) continue;
     const elapsed = now - started;
     if (elapsed <= cutoff) continue;
-    if (!worst || elapsed > worst.elapsed) worst = { elapsed, ref: c.ref, ticketId: c.ticketId };
+    if (!worst || elapsed > worst.elapsed) worst = { elapsed, ref: c.ref, ticketId: c.ticketId, slug: c.slug, at: c.at };
   }
   if (!worst) process.exit(0); // every claim is within budget
+
+  // Surface this exact long run at most once for the session. A repeat SubagentStop
+  // (another child ending, or a resume replaying the same registry) stays silent.
+  if (!store.markLongRunFlagged(String(sessionId), worst.slug, worst.ticketId, worst.at)) {
+    process.exit(0);
+  }
 
   const mins = Math.max(1, Math.round(worst.elapsed / 60000));
   const label = worst.ref || worst.ticketId || 'a claimed ticket';

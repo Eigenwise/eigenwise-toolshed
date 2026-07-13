@@ -116,6 +116,27 @@ function main() {
   const isExec = type.startsWith('sidequest-exec-') || type.startsWith('sidequest-native-');
   if (!isExec) return;
 
+  // CLAUDE_CODE_SUBAGENT_MODEL overrides BOTH a per-invocation model AND the agent's
+  // frontmatter pin (docs: model-config). Nothing this hook can edit wins over it:
+  // for a pinned Codex/native executor it silently reroutes the ticket onto a Claude
+  // model (wrong backend + Claude spend); for a builtin it collapses every tier to
+  // one model. Either way it defeats routing, so refuse the spawn rather than run it
+  // on the wrong model.
+  const subagentOverride = String(process.env.CLAUDE_CODE_SUBAGENT_MODEL || '').trim();
+  if (subagentOverride) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason:
+          `sidequest: CLAUDE_CODE_SUBAGENT_MODEL="${subagentOverride}" is set — it overrides every sidequest ` +
+          `executor's routed model (a Codex route would silently run on a Claude model; builtins collapse to one ` +
+          `tier), defeating routing. Unset it before spawning sidequest executors.`,
+      },
+    }));
+    return;
+  }
+
   const updatedInput = { ...toolInput, mode: 'bypassPermissions' };
 
   if (isPinnedSidequestExecutor(type)) {

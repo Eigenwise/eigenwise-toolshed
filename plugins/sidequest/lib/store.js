@@ -2979,6 +2979,37 @@ function unregisterClaim(sessionId, slug, ticketId) {
   }
 }
 
+// Record that the SubagentStop hook already surfaced a runaway note for this exact
+// claim, keyed on the claim's OWN start time so a later re-claim of the same ticket
+// counts as a fresh flaggable run. Returns true the FIRST time and false on every
+// repeat. Without this, each subsequent SubagentStop in the session re-emitted the
+// same note as additionalContext — which re-woke the stopping child and turned one
+// long run into a nag loop. Fail-open (returns true) if the registry can't be read:
+// better a rare duplicate note than a swallowed real one.
+function markLongRunFlagged(sessionId, slug, ticketId, claimAt) {
+  if (!sessionId || !slug || !ticketId) return true;
+  let first = true;
+  try {
+    withWorkersLock(() => {
+      const w = readWorkers();
+      const s = w.sessions[sessionId];
+      if (!s) return; // no registered claims here — nothing to dedupe against
+      const key = `${slug} ${ticketId} ${claimAt || ''}`;
+      if (!Array.isArray(s.flagged)) s.flagged = [];
+      if (s.flagged.indexOf(key) !== -1) {
+        first = false;
+        return;
+      }
+      s.flagged.push(key);
+      s.updatedAt = new Date().toISOString();
+      writeWorkers(w);
+    });
+  } catch (_) {
+    return true;
+  }
+  return first;
+}
+
 // Release every claim registered to `sessionId` that is still genuinely held by
 // that session's worker and not finished — moving each ticket back to `todo` and
 // leaving a note. This is what the SessionEnd hook calls. Safe by construction:
@@ -3201,6 +3232,7 @@ module.exports = {
   clearServerInfo,
   registerWorker,
   unregisterClaim,
+  markLongRunFlagged,
   reconcileSession,
   sessionClaims,
 };

@@ -49,6 +49,7 @@ const CAPTURE = path.join(HOOKS, 'capture-nudge.js');
 const SESSION = path.join(HOOKS, 'session-start.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
+const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 
 // Byte budgets (chars ≈ tokens × ~4). CLI paths inside the blocks vary by
 // machine, so these have headroom — the point is catching a doctrine block
@@ -203,6 +204,87 @@ test('pre-tool hook: pinned Codex-style executor still strips model even when a 
   assert.match(out.systemMessage, /removed the Agent model override/);
 });
 
+
+/* ------------------------------------------------------------------ *
+ *  CLAUDE_CODE_SUBAGENT_MODEL defeats routing (it overrides both the Agent
+ *  model and the frontmatter pin) — so a sidequest executor spawn must be
+ *  denied while it's set, not run on the wrong model.
+ * ------------------------------------------------------------------ */
+
+function runForceBypassWithEnv(toolInput, envOverrides) {
+  const out = execFileSync(process.execPath, [FORCE_BYPASS], {
+    input: JSON.stringify({ tool_name: 'Agent', tool_input: toolInput }),
+    encoding: 'utf8',
+    env: { ...process.env, ...envOverrides },
+  });
+  return out.trim() ? JSON.parse(out) : null;
+}
+
+test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a pinned Codex executor spawn', () => {
+  const out = runForceBypassWithEnv(
+    { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', name: 'sq-env-codex', prompt: 'work SQ-1' },
+    { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }
+  );
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /CLAUDE_CODE_SUBAGENT_MODEL/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /defeat(s|ing) routing/);
+});
+
+test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a builtin executor spawn too', () => {
+  const out = runForceBypassWithEnv(
+    { subagent_type: 'sidequest-exec-high', name: 'sq-env-builtin', prompt: 'work SQ-1' },
+    { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' }
+  );
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Unset it/);
+});
+
+test('pre-tool hook: an unset CLAUDE_CODE_SUBAGENT_MODEL leaves the spawn alone', () => {
+  const out = runForceBypassWithEnv(
+    { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', model: 'fable', name: 'sq-env-off', prompt: 'work SQ-1' },
+    { CLAUDE_CODE_SUBAGENT_MODEL: '' }
+  );
+  assert.ok(!out.hookSpecificOutput.permissionDecision, 'no override -> no deny');
+  assert.equal(out.hookSpecificOutput.updatedInput.model, undefined, 'the pin still wins by stripping the Agent model');
+});
+
+/* ------------------------------------------------------------------ *
+ *  Peer-message guard — an executor reports UP (final message + its own
+ *  ticket comments), never sideways to a peer. This is the other half of
+ *  the Contractify loop.
+ * ------------------------------------------------------------------ */
+
+function runGuardPeer(payload) {
+  const out = execFileSync(process.execPath, [GUARD_PEER], {
+    input: JSON.stringify({ tool_name: 'SendMessage', ...payload }),
+    encoding: 'utf8',
+  });
+  return out.trim() ? JSON.parse(out) : null;
+}
+
+test('peer-guard: an executor messaging a peer is denied', () => {
+  const out = runGuardPeer({ agent_type: 'sidequest-exec-high', tool_input: { to: 'reviewer', message: 'look at SQ-70' } });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /report UP/i);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /reviewer/);
+});
+
+test('peer-guard: a Codex executor messaging a peer is denied', () => {
+  const out = runGuardPeer({ agent_type: 'sidequest-exec-codex-gpt-5-6-luna-medium', tool_input: { to: 'other-worker', message: 'hi' } });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('peer-guard: an executor reporting to main is allowed', () => {
+  assert.strictEqual(runGuardPeer({ agent_type: 'sidequest-exec-high', tool_input: { to: 'main', message: 'done' } }), null);
+});
+
+test('peer-guard: a main-thread SendMessage (no agent_type) is allowed', () => {
+  assert.strictEqual(runGuardPeer({ tool_input: { to: 'reviewer', message: 'assign' } }), null);
+});
+
+test('peer-guard: a non-sidequest subagent messaging a peer is allowed', () => {
+  assert.strictEqual(runGuardPeer({ agent_type: 'code-reviewer', tool_input: { to: 'researcher', message: 'hi' } }), null);
+});
 
 test('session-start: carries the route-down + tight-loop doctrine', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
@@ -420,6 +502,44 @@ test('subagent-stop: an over-threshold claim emits a one-line runaway note', () 
   assert.match(ctx, /atomic/i, 'the note must ask whether the ticket was atomic');
   assert.ok(ctx.length <= BUDGET.longrun, `runaway note is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
   assert.ok(ctx.indexOf('\n') === -1, 'the note must stay ONE line');
+});
+
+test('subagent-stop: stop_hook_active suppresses the note (no self-continuation loop)', () => {
+  const sess = `sess-active-${++sqSeq}`;
+  const t = addTicket('over-threshold ticket, but re-entrant fire');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-active', { sessionId: sess }).ok, true);
+  backdateSessionClaims(sess, 28);
+  assert.strictEqual(
+    runHook(SUBAGENT_STOP, { session_id: sess, stop_hook_active: true }),
+    '',
+    'a fire carrying stop_hook_active is our own continuation and must never re-emit'
+  );
+});
+
+test('subagent-stop: a non-executor child (reviewer) is not nagged about a session claim', () => {
+  const sess = `sess-reviewer-${++sqSeq}`;
+  const t = addTicket('over-threshold executor claim, unrelated reviewer stops');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-rev', { sessionId: sess }).ok, true);
+  backdateSessionClaims(sess, 28);
+  assert.strictEqual(
+    runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'code-reviewer' }),
+    '',
+    'a reviewer shares the session id but never held the claim — it must stay silent'
+  );
+  // The same over-threshold claim still surfaces for the actual executor child.
+  const ctx = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
+  assert.ok(ctx.includes(t.ref), 'a sidequest executor child must still get the note');
+});
+
+test('subagent-stop: the same long run is flagged once, not on every child stop', () => {
+  const sess = `sess-dedupe-${++sqSeq}`;
+  const t = addTicket('over-threshold claim flagged exactly once');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-dedupe', { sessionId: sess }).ok, true);
+  backdateSessionClaims(sess, 28);
+  const first = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
+  assert.ok(first.includes(t.ref), 'the first stop must surface the runaway note');
+  const second = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
+  assert.strictEqual(second, '', 'a second stop for the same claim must not re-inject the note');
 });
 
 test('subagent-stop: a fresh (under-threshold) claim stays silent', () => {
