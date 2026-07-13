@@ -789,11 +789,11 @@ const DEFAULT_MODELS = [
 
 // Advertised to Claude Code as max_input_tokens for Codex models. Deliberately
 // BELOW the real 272k ChatGPT Codex product window: a smaller reported window
-// makes Claude Code auto-compact earlier, leaving ~90k of real headroom so the
+// makes Claude Code auto-compact earlier, leaving ~27k of real headroom so the
 // compaction summary and long turns finish before the backend hits its true
 // 272k limit and 413s. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW to
 // influence this: that also hits Claude passthrough models.
-const CODEX_COMPACT_CONTEXT_WINDOW = 180000;
+const CODEX_COMPACT_CONTEXT_WINDOW = 245000;
 
 function gatewayModel(id) {
   return {

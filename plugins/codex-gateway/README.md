@@ -166,7 +166,7 @@ note for the routing side.
 
 - **Context windows**: Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this
   gateway routes to, not the pay-per-token API) has a real 272k window, but the gateway advertises a reduced
-  180k as `max_input_tokens` so Claude Code auto-compacts with headroom before the real limit. Those ids deliberately have no `[1m]` suffix. `[1m]` is a
+  245k as `max_input_tokens` so Claude Code auto-compacts with headroom before the real limit. Those ids deliberately have no `[1m]` suffix. `[1m]` is a
   local Claude Code promise that delays compaction to roughly 1M tokens; the shim strips it before
   forwarding, so keep it off every selected Codex model, including the top-level `model` setting,
   and use it only for genuine Claude models. Claude models (opus/sonnet/fable, with or without
