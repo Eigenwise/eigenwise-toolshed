@@ -164,24 +164,29 @@ note for the routing side.
 
 ## The fine print
 
-- **Context windows**: Codex GPT-5.6 models currently have a 372k-token backend limit. Their
-  advertised ids deliberately have no `[1m]` suffix. Claude Code does not use a gateway model's
-  `max_input_tokens` field for context or auto-compaction, so it keeps a conservative 200k
-  gateway budget for the unsuffixed Codex rows and compacts safely before the backend ceiling.
-  `[1m]` is a local Claude Code promise, not a provider request parameter: it delays compaction
-  to roughly 1M tokens even though the shim strips it before forwarding. Remove `[1m]` from every
-  selected Codex model, including the top-level `model` setting. Keep it only for genuine Claude
-  models. The env block pins those real aliases to
-  `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]` and
-  `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`, preserving their genuine 1M passthrough
-  behavior. The shim translates an upstream Codex context-limit response to Anthropic's
-  `prompt is too long` error so Claude Code runs its built-in compact-and-retry path instead of
-  stopping on the proxy's raw 502. Version 0.4.4 rewrites stale pre-0.4.2 `[1m]` Codex rows
-  in Claude Code's gateway-model cache in place and serves the built-in rows immediately during
-  shim startup, so the model picker always has a valid fallback. Restart Claude Code once after
-  upgrading so an already-open session reloads its picker. Version 0.4.2 removes the old global
-  `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` override when it rewrites settings. Legacy typed Codex
-  ids ending in `[1m]` still route, but new sessions should select the unsuffixed picker rows.
+- **Context windows**: Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this
+  gateway routes to, not the pay-per-token API) has a 272k-token window, advertised as
+  `max_input_tokens` on every Codex row. Those ids deliberately have no `[1m]` suffix. `[1m]` is a
+  local Claude Code promise that delays compaction to roughly 1M tokens; the shim strips it before
+  forwarding, so keep it off every selected Codex model, including the top-level `model` setting,
+  and use it only for genuine Claude models. Claude models (opus/sonnet/fable, with or without
+  `[1m]`) keep their OWN separate native windows and compaction limits; the shim forwards them
+  byte-identically to Anthropic and never applies Codex window advertisement or error rewriting to
+  them. The env block pins the real aliases to `ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]`
+  and `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`, preserving their 1M passthrough. On
+  context overflow the shim emits HTTP 413 `request_too_large` (matching claude-code-proxy 0.1.14+,
+  which first shipped that mapping) so Claude Code runs its built-in compact-and-retry path instead
+  of stopping on the proxy's raw 5xx; an upstream 413 passes through untouched, and an older proxy's
+  differently-shaped context error is normalized to the same 413. Do NOT set a global
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to Claude passthrough models too. Version 0.4.4
+  rewrites stale pre-0.4.2 `[1m]` Codex rows in Claude Code's gateway-model cache in place and
+  serves the built-in rows immediately during shim startup, so the model picker always has a valid
+  fallback. Restart Claude Code once after upgrading so an already-open session reloads its picker.
+  Version 0.4.2 removes the old global `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` override when it
+  rewrites settings. Legacy typed Codex ids ending in `[1m]` still route, but new sessions should
+  select the unsuffixed picker rows. Loading a huge reference skill (e.g. `claude-api`, ~800k chars)
+  in a single turn can spike Codex context past the point compaction can recover from, so pull large
+  references incrementally on Codex models.
 - **Model quality of life**: typed selection works too: `/model claude-codex-gpt-5.4`, any string
   passes through on a custom base URL. The advertised list itself is yours to edit:
   `~/.claude/codex-gateway/models.json`, one id per array entry (claude-code-proxy v0.1.10 has no

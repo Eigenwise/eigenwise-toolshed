@@ -47,6 +47,13 @@ const SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
 const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
 const PREFIX = 'claude-codex-';
 const REPO = 'raine/claude-code-proxy';
+// Earliest claude-code-proxy release that maps a context overflow to HTTP 413
+// request_too_large (commit 968cbe2, first tagged in v0.1.14; v0.1.13 has none).
+// Below this the proxy signals overflow with an older, differently-shaped error;
+// `ensure` nudges the user (once, fail-soft) to re-run setup, which fetches latest.
+// Compared numerically (see semverLt); a string compare would read '0.1.9' as
+// newer than '0.1.14'.
+const MIN_PROXY_VERSION = '0.1.14';
 const ANTHROPIC_UPSTREAM = process.env.CODEX_GATEWAY_ANTHROPIC_UPSTREAM || 'https://api.anthropic.com';
 // Disabled unless explicitly requested. Route logs are metadata-only: never write
 // prompts, tool payloads, auth, or arbitrary headers. Set to `1` while tracing
@@ -76,7 +83,7 @@ const STATIC_ENV_BLOCK = {
   // third-party model's capacity from it, so ordinary gateway models use its
   // conservative 200k context budget. Pin only the real Claude 1M models to
   // their [1m] ids. Codex models must stay unsuffixed: [1m] is a local Claude
-  // Code override that delays compaction until far beyond Codex's 372k limit.
+  // Code override that delays compaction until far beyond Codex's 272k limit.
   ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
   ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
 };
@@ -541,6 +548,37 @@ async function setup() {
 
 // ------------------------------------------------------- process management
 
+// Parse the first "x.y.z" out of a --version line into [major, minor, patch]
+// ints, ignoring a leading 'v' or any pre-release/build suffix. null when none.
+function parseSemver(text) {
+  const m = String(text || '').match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+// true when semver a is strictly less than b, comparing major/minor/patch as
+// ints (never lexicographically: '0.1.9' must read as older than '0.1.14').
+function semverLt(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] < b[i];
+  }
+  return false;
+}
+
+// Fail-soft: read the running proxy's --version and, if it's below
+// MIN_PROXY_VERSION, print exactly one stderr nudge. Never throws and never
+// blocks the session; a version we can't read/parse is treated as "don't nag".
+// Does NOT auto-download; that belongs in `setup`, not the 30s keepalive hook.
+function warnIfProxyOutdated() {
+  try {
+    const floor = parseSemver(MIN_PROXY_VERSION);
+    const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000 });
+    const got = parseSemver((v.stdout || '') + (v.stderr || ''));
+    if (got && floor && semverLt(got, floor)) {
+      console.error(`codex-gateway: claude-code-proxy ${got.join('.')} is older than ${MIN_PROXY_VERSION}; Codex context-overflow recovery needs the newer proxy. Run the codex-gateway skill setup to update (it downloads the latest).`);
+    }
+  } catch { /* fail-soft: a version check must never break the session */ }
+}
+
 async function startAll({ quiet = false } = {}) {
   if (!fs.existsSync(PROXY_BIN)) return { ok: false, reason: 'proxy binary missing (run setup)' };
   mkdirs();
@@ -740,9 +778,10 @@ const DEFAULT_MODELS = [
   'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
 
-// All current Codex models share the same real ~372k context window. Revisit this
-// constant if a future model advertises a different window.
-const CODEX_COMPACT_CONTEXT_WINDOW = 316200;
+// 272k is the ChatGPT Codex product window (the subscription login this gateway
+// routes to), not the pay-per-token API. Never set a global
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW to influence it: that also hits Claude passthrough models.
+const CODEX_COMPACT_CONTEXT_WINDOW = 272000;
 
 function gatewayModel(id) {
   return {
@@ -1063,7 +1102,14 @@ function runShim() {
     const upReq = (isHttps ? https : http).request(url, reqOptions, (upRes) => {
       const resHeaders = { ...upRes.headers };
       for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
-      if (normalizeContextErrors && upRes.statusCode >= 400) {
+      // Codex path only (normalizeContextErrors). claude-code-proxy >=0.1.14 already
+      // maps a context overflow to HTTP 413 request_too_large, the exact shape
+      // Claude Code recognizes, so a 413 is passed through byte-identically via the
+      // pipe below (we don't enter this branch for it). We only buffer OTHER >=400
+      // responses to catch an OLD proxy (<=0.1.13) that signals overflow with a
+      // differently-shaped 4xx/5xx, and normalize THOSE to the same 413
+      // request_too_large. Non-overflow errors pass through with their status intact.
+      if (normalizeContextErrors && upRes.statusCode >= 400 && upRes.statusCode !== 413) {
         const chunks = [];
         let settled = false;
         const failBufferedResponse = () => {
@@ -1086,9 +1132,9 @@ function runShim() {
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
             const normalized = JSON.stringify({
               type: 'error',
-              error: { type: 'invalid_request_error', message: 'prompt is too long' },
+              error: { type: 'request_too_large', message: 'Input exceeds the model context window; compact and retry.' },
             });
-            clientRes.writeHead(400, {
+            clientRes.writeHead(413, {
               'content-type': 'application/json',
               'content-length': Buffer.byteLength(normalized),
               'x-codex-gateway-upstream-status': String(upRes.statusCode),
@@ -1280,6 +1326,9 @@ if (require.main === module) {
       }
       const r = await startAll({ quiet });
       if (!r.ok) { console.error('codex-gateway: ' + r.reason); process.exit(1); }
+      // Proxy is confirmed running; one fail-soft nudge if it predates the 413
+      // overflow fix. No auto-download inside the keepalive hook.
+      warnIfProxyOutdated();
       if (!wired) {
         log(isAuthed()
           ? 'codex-gateway is running but Claude Code is not wired to it. Offer to run its env --write-user (see the codex-gateway skill), then restart.'
@@ -1339,4 +1388,7 @@ module.exports = {
   COMPAT_PORT,
   DEFAULT_BASE_URL,
   COMPAT_BASE_URL,
+  parseSemver,
+  semverLt,
+  MIN_PROXY_VERSION,
 };

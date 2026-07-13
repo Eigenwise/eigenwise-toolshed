@@ -78,10 +78,12 @@ test('Codex discovery advertises context metadata but keeps the local model id u
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   assert.deepEqual(models.data.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
-    { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 316200 },
-    { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 316200 },
-    { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 316200 },
+    { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 272000 },
+    { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 272000 },
+    { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 272000 },
   ]);
+  // 272000 = the real GPT-5.6 window in the ChatGPT Codex product this gateway routes to.
+  assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 272000), true);
   assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
@@ -136,7 +138,9 @@ test('opt-in request route logging records Fable metadata but never prompt data'
   }]);
 });
 
-test('Codex context errors use Claude Code compact-and-retry wording', async (t) => {
+test('an old-proxy context error is normalized to HTTP 413 request_too_large', async (t) => {
+  // claude-code-proxy <=0.1.13 signalled overflow with a 5xx of its own shape; the
+  // shim must normalize that to the same 413 request_too_large the new proxy emits.
   const proxy = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -167,11 +171,53 @@ test('Codex context errors use Claude Code compact-and-retry wording', async (t)
     max_tokens: 1,
     messages: [{ role: 'user', content: 'oversized' }],
   }));
-  assert.equal(response.status, 400);
-  assert.deepEqual(JSON.parse(response.body), {
+  assert.equal(response.status, 413);
+  const parsed = JSON.parse(response.body);
+  assert.equal(parsed.type, 'error');
+  assert.equal(parsed.error.type, 'request_too_large');
+});
+
+test('an upstream 413 request_too_large passes through untouched', async (t) => {
+  // claude-code-proxy >=0.1.14 already emits the recognized shape. The shim must
+  // not rewrite it; status and body pass through byte-for-byte.
+  const upstreamBody = JSON.stringify({
     type: 'error',
-    error: { type: 'invalid_request_error', message: 'prompt is too long' },
+    error: { type: 'request_too_large', message: 'input is too large for the model context window' },
   });
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    res.writeHead(413, { 'content-type': 'application/json' });
+    res.end(upstreamBody);
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const response = await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
+    model: 'claude-codex-gpt-5.6-sol',
+    max_tokens: 1,
+    messages: [{ role: 'user', content: 'oversized' }],
+  }));
+  assert.equal(response.status, 413);
+  assert.equal(response.body, upstreamBody);
+  const parsed = JSON.parse(response.body);
+  assert.equal(parsed.error.type, 'request_too_large');
 });
 
 test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', async (t) => {
@@ -318,4 +364,102 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
   assert.equal(settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
+});
+
+test('claude-* passthrough is byte-identical and never subjected to Codex window/error rewriting', async (t) => {
+  // The Anthropic path returns a context-overflow-shaped 400. A claude model must
+  // see it UNCHANGED (no 413 normalization, no 'prompt is too long' rewrite) and
+  // the body forwarded upstream must be the exact bytes the client sent (prompt
+  // caching keys on them).
+  const overflowBody = JSON.stringify({ error: { message: 'input exceeds the context window of this model' } });
+  let forwardedRaw;
+  const anthropic = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      forwardedRaw = Buffer.concat(chunks).toString();
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(overflowBody);
+    });
+  });
+  const anthropicPort = await listen(anthropic);
+  t.after(() => anthropic.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(shimPort + 1),
+      CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const sent = JSON.stringify({
+    model: 'claude-opus-4-8[1m]',
+    max_tokens: 1,
+    messages: [{ role: 'user', content: 'huge history' }],
+  });
+  const response = await request(shimPort, 'POST', '/v1/messages', sent);
+  // forwarded bytes untouched (including the [1m] suffix on a real Claude model)
+  assert.equal(forwardedRaw, sent);
+  // upstream error passed through verbatim: not rewritten to 413 request_too_large
+  // and not rewritten to the old 400 'prompt is too long'
+  assert.equal(response.status, 400);
+  assert.equal(response.body, overflowBody);
+});
+
+test('count_tokens for a Codex model still routes to the proxy', async (t) => {
+  let countTokensPath;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      countTokensPath = req.url;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 42 }));
+    });
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort) },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const response = await request(shimPort, 'POST', '/v1/messages/count_tokens', JSON.stringify({
+    model: 'claude-codex-gpt-5.6-sol',
+    messages: [{ role: 'user', content: 'count me' }],
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(countTokensPath, '/v1/messages/count_tokens');
+  assert.equal(JSON.parse(response.body).input_tokens, 42);
+});
+
+test('proxy version floor uses a numeric semver compare, not a string compare', () => {
+  const gw = require(CLI);
+  assert.equal(gw.MIN_PROXY_VERSION, '0.1.14');
+  const floor = gw.parseSemver(gw.MIN_PROXY_VERSION);
+  // string compare would read '0.1.9' as >= '0.1.14'; numeric must read it as older
+  assert.equal(gw.semverLt(gw.parseSemver('0.1.9'), floor), true);
+  assert.equal(gw.semverLt(gw.parseSemver('0.1.13'), floor), true);
+  assert.equal(gw.semverLt(gw.parseSemver('0.1.14'), floor), false);
+  assert.equal(gw.semverLt(gw.parseSemver('0.1.15'), floor), false);
+  assert.equal(gw.semverLt(gw.parseSemver('v0.2.0'), floor), false);
+  assert.equal(gw.parseSemver('not a version'), null);
 });

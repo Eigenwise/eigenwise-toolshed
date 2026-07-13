@@ -43,16 +43,22 @@ and fails silently if the shim answers slowly; `models` shows exactly what's adv
 
 - `/model` picker: rows like "GPT-5.6-sol (Codex)".
 - Typed: `/model claude-codex-gpt-5.6-sol` (any string passes through on a custom base URL).
-- Codex GPT-5.6 models have a 372k backend window. Their advertised ids stay unsuffixed so Claude
-  Code uses its conservative gateway budget and compacts before that limit. `[1m]` is only a local
-  Claude Code promise, not provider capacity metadata; discovery and `count_tokens` don't report
-  the backend limit. The shim rewrites upstream context-limit errors to Claude Code's recognized
-  `prompt is too long` shape, which triggers compact-and-retry. Legacy typed Codex ids ending in
-  `[1m]` still route, but they retain a 1M client budget for that open session: switch to the
-  unsuffixed picker row and restart Claude Code after upgrading from 0.4.1.
-- Real Claude Opus/Sonnet passthrough aliases remain pinned to their `[1m]` ids, so their genuine
-  1M windows still work. Do not set a global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both
-  providers and can make Codex `/compact` fail after history already exceeds 372k.
+- Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to,
+  not the pay-per-token API) has a 272k window, advertised as `max_input_tokens` on every Codex row;
+  their ids stay unsuffixed. `[1m]` is only a local Claude Code promise, not provider capacity
+  metadata. On context overflow the shim emits HTTP 413 `request_too_large` (matching
+  claude-code-proxy 0.1.14+), which triggers Claude Code's compact-and-retry. Legacy typed Codex ids
+  ending in `[1m]` still route, but they retain a 1M client budget for that open session: switch to
+  the unsuffixed picker row and restart Claude Code after upgrading from 0.4.1.
+- Claude models (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows
+  and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
+  applies Codex window advertisement or error rewriting to them. The env block pins the real
+  Opus/Sonnet aliases to their `[1m]` ids so their genuine 1M windows still work. Do NOT set a
+  global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex
+  `/compact` fail after history already exceeds the Codex limit.
+- Caution: loading a huge reference skill (e.g. `claude-api`, ~800k chars) in a single turn can
+  spike Codex context past the point proactive compaction can recover from. Prefer pulling large
+  references incrementally on Codex models.
 - The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models); override it in
   `~/.claude/codex-gateway/models.json` (JSON array of ids).
 - Claude models keep working normally at the same time (passthrough path); subagents can mix
