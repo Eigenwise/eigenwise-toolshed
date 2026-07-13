@@ -2188,9 +2188,64 @@ function briefTicket(slug, t, opts) {
   };
 }
 
+// A list cursor is just the next row offset, carried as an opaque decimal
+// string. Kept transparent (not base64) so `--cursor 150` is usable by hand and
+// a script can pipe nextCursor straight back. Garbage or a negative decodes to
+// the first page rather than throwing.
+function decodeListCursor(cursor) {
+  if (cursor == null || cursor === '') return 0;
+  const n = Math.floor(Number(cursor));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// Slice one page out of the filtered tickets and report where the next page
+// starts. Three page modes, in precedence order:
+//   - all: the whole set from the cursor, no cap (the escape hatch).
+//   - limit: an exact page size (start .. start+limit).
+//   - maxChars: a size-budgeted page — accumulate rows until the serialized
+//     cost would cross the budget (always keep at least one, so a lone fat row
+//     still advances the cursor and iteration can't stall).
+//   - none of the above: the whole set from the cursor (CLI default / small
+//     board — one call returns everything, backward compatible).
+// nextCursor is the next offset as a string, or null when the page reaches the
+// end. Because each page is a contiguous slice and the next cursor is exactly
+// where it stopped, following nextCursor to exhaustion yields every ticket once.
+function pageTickets(tickets, opts) {
+  const total = tickets.length;
+  const start = Math.min(decodeListCursor(opts.cursor), total);
+  const limit = opts.limit != null ? Math.max(0, Math.floor(Number(opts.limit)) || 0) : null;
+  const budget = opts.maxChars != null && Number(opts.maxChars) > 0 ? Number(opts.maxChars) : null;
+
+  let end;
+  if (opts.all) {
+    end = total;
+  } else if (limit != null) {
+    end = Math.min(start + limit, total);
+  } else if (budget != null) {
+    let size = 0;
+    end = start;
+    while (end < total) {
+      // Size against the SAME pretty serialization the transports emit
+      // (JSON.stringify(payload, null, 2)), so the budget is in real output
+      // chars. +8 covers the array indent / comma-newline overhead per row.
+      const cost = JSON.stringify(tickets[end], null, 2).length + 8;
+      if (end > start && size + cost > budget) break;
+      size += cost;
+      end++;
+    }
+  } else {
+    end = total;
+  }
+
+  const page = tickets.slice(start, end);
+  const nextCursor = end < total ? String(end) : null;
+  return { tickets: page, total, returned: page.length, nextCursor };
+}
+
 // The one board-read payload both transports (CLI --json and MCP) serve, so
-// their shapes cannot drift: filtering, the brief projection, and the blocker
-// index live here and nowhere else.
+// their shapes cannot drift: filtering, the brief projection, the blocker
+// index, and paging (limit/cursor/maxChars -> total/returned/nextCursor) all
+// live here and nowhere else.
 function listPayload(slug, opts) {
   opts = opts || {};
   const all = listTickets(slug);
@@ -2204,7 +2259,7 @@ function listPayload(slug, opts) {
     const index = new Map(all.map((t) => [String(t.ref).toUpperCase(), t]));
     tickets = tickets.map((t) => briefTicket(slug, t, { index }));
   }
-  return { tickets };
+  return pageTickets(tickets, opts);
 }
 
 // Same for the ready read. Waves are ALWAYS arrays of refs (both transports,

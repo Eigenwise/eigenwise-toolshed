@@ -233,8 +233,14 @@ function cmdAdd(opts) {
 function cmdList(opts) {
   const { slug, meta } = resolveProject(opts);
   // --brief is a JSON shape, so it implies --json rather than silently no-oping.
+  // Paging (--limit/--cursor/--all) rides the same store.listPayload as MCP, so
+  // the shape can't drift. No paging flag = the whole set in one call (unchanged
+  // full dump); --limit N + --cursor <nextCursor> walks a big board page by page.
   if (opts.json || opts.brief) {
-    const payload = store.listPayload(slug, { status: opts.status, archived: opts.archived, brief: opts.brief });
+    const payload = store.listPayload(slug, {
+      status: opts.status, archived: opts.archived, brief: opts.brief,
+      cursor: opts.cursor, limit: opts.limit, all: opts.all,
+    });
     process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + '\n');
     return;
   }
@@ -1493,7 +1499,7 @@ function help() {
 
 Usage:
   sidequest add -t "title" --complexity 1-10 --why "<motivation>" [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
-  sidequest list [--status todo|doing|done] [--json] [--brief]   (--brief: compact JSON, no bodies; implies --json)
+  sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--complexity 1-10 --why "<motivation>"]
   sidequest rm <id|SQ-n>
   sidequest projects [--archived] [--json]

@@ -173,10 +173,36 @@ function requireKnownModel(action, value, prefs) {
 
 const PROJECT_PROP = { type: 'string', description: 'Board to target (a registered slug, display name, or absolute path). Omit for the current project.' };
 
+/* ------------------------------------------------------------------ *
+ *  List paging
+ *
+ *  The MCP tool-result token ceiling means an unbounded board read can overflow
+ *  even in the compact brief shape once a single column holds a few hundred
+ *  tickets. SQ-220 made each ROW compact, not the row COUNT, so a large board
+ *  still tripped the cap (98k chars observed live). The fix is real pagination:
+ *  store.listPayload returns a bounded page plus total/returned/nextCursor, and
+ *  the caller follows nextCursor to walk the whole board one safe page at a time.
+ *
+ *  The paging mechanics (offset/limit/size-budget slice, cursor encode/decode)
+ *  live in store.listPayload so the CLI (--limit/--cursor) and MCP serve the
+ *  exact same shape — that's the parity. What differs is only the DEFAULT: over
+ *  MCP we pass a char budget so the first page is auto-bounded to fit the
+ *  tool-result cap; the CLI, writing to a terminal or file with no such ceiling,
+ *  keeps returning everything in one call unless --limit/--cursor is given
+ *  (backward compatible). --brief row shape is untouched — this is row COUNT.
+ * ------------------------------------------------------------------ */
+
+// The per-page char budget for the DEFAULT (un-limited) MCP list. The store
+// sizes a page against the same pretty JSON.stringify the transports emit, so
+// this is in real output chars: ~55k leaves a comfortable margin under the
+// tool-result ceiling (the live overflow was ~98k / 100k) once the response
+// envelope and array indentation are added.
+const LIST_CHAR_BUDGET = 55000;
+
 const TOOLS = [
   {
     name: 'list',
-    description: 'List tickets on a board. status filters one column; archived:true shows archived. brief:true returns the compact shape (no bodies or threads) — default to it for routine orchestration reads.',
+    description: 'List tickets on a board, PAGED so a large board never overflows the tool-result cap. status filters one column; archived:true shows archived. brief:true returns the compact shape (no bodies or threads) — default to it for routine orchestration reads. Returns tickets + total + returned + nextCursor. When nextCursor is non-null there are more: call again with cursor set to it to fetch the next page; iterate until nextCursor is null to see every ticket. limit:N sets an exact page size; all:true returns the whole column in one call (may overflow on a big board).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -184,6 +210,9 @@ const TOOLS = [
         status: { type: 'string', enum: ['todo', 'doing', 'done'] },
         archived: { type: 'boolean' },
         brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies.' },
+        cursor: { type: 'string', description: 'Page cursor from a previous response\'s nextCursor. Omit for the first page.' },
+        limit: { type: 'integer', minimum: 0, description: 'Exact page size (max tickets per page). Omit for the automatic token-safe page.' },
+        all: { type: 'boolean', description: 'Return every matching ticket in one call, bypassing paging. Use only when you truly need the whole column — a big board can overflow the tool-result limit.' },
       },
     },
     handler(args) {
@@ -192,8 +221,19 @@ const TOOLS = [
       // and ticket bodies unless the caller explicitly asks for either.
       const status = args.status == null ? ['todo', 'doing'] : args.status;
       const brief = args.brief == null ? true : args.brief;
-      const payload = store.listPayload(slug, { status, archived: args.archived, brief });
-      return Object.assign({ project: slug, projectName: meta.name }, payload);
+      // Bound the DEFAULT page so a few-hundred-ticket column can't overflow the
+      // tool-result token ceiling. A caller that passes limit or all opts out of
+      // the auto budget and takes responsibility for the page size.
+      const maxChars = (args.limit == null && !args.all) ? LIST_CHAR_BUDGET : null;
+      const payload = store.listPayload(slug, {
+        status, archived: args.archived, brief,
+        cursor: args.cursor, limit: args.limit, all: args.all, maxChars,
+      });
+      const out = Object.assign({ project: slug, projectName: meta.name }, payload);
+      if (payload.nextCursor) {
+        out.hint = `Page shows ${payload.returned} of ${payload.total} tickets. Fetch the next page with cursor:"${payload.nextCursor}"; keep following nextCursor until it is null. Or narrow with status/the ready tool, or pass all:true (may overflow on a big board).`;
+      }
+      return out;
     },
   },
   {

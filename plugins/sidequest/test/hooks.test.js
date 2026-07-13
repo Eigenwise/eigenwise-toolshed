@@ -160,6 +160,13 @@ test('session-start: carries runtime resource and worker reporting coordination'
   assert.match(ctx, /Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup/, 'must define worker reporting and ownership');
 });
 
+test('session-start: flags enumerated deliverables as a decomposition smell (design→wave)', () => {
+  const ctx = runHook(SESSION, { session_id: 'test' });
+  assert.match(ctx, /several deliverables .* is a smell/, 'a ticket owning several enumerated deliverables must read as a smell');
+  assert.match(ctx, /scout that pins the shared contract/, 'must prefer a cheap scout that pins the shared contract');
+  assert.match(ctx, /wave fanning the pieces out/, 'then a wave that fans the deliverables out to parallel sub-agents');
+});
+
 test('session-start: says sidequest coexists with an external tracker (Jira)', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.ok(ctx.includes('external tracker'), 'must address the external-tracker case');

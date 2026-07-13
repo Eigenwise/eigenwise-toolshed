@@ -360,3 +360,95 @@ test('claim guard refusal names the Codex-backed executor for a Codex-mapped tie
     clearCatalog();
   }
 });
+
+/* ------------------------------------------------------------------ *
+ *  SQ-228: the default MCP `list` is PAGED so a large board cannot
+ *  overflow the tool-result token cap. SQ-220 made each ROW compact but
+ *  not the row COUNT, so a few-hundred-ticket column still overflowed
+ *  (98k chars observed live). Now each call returns a bounded page +
+ *  total + returned + nextCursor; following nextCursor walks the whole
+ *  board one safe page at a time. all:true / limit:N are the escapes.
+ * ------------------------------------------------------------------ */
+
+// The pretty serialization the RPC layer emits for a tool result — the exact
+// string that hits the tool-result cap, so it's what a page is proven against.
+function resultChars(name, args) {
+  const resp = mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
+  return resp.result.content[0].text.length;
+}
+
+test('SQ-228: a large board pages under the cap; cursors iterate the full set exactly once', () => {
+  // A dedicated board so seeding 500 tickets can't perturb the shared-board
+  // tests above. Every call passes project explicitly.
+  const big = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-bigboard-228'), 'SQ-228 Big Board');
+  const N = 500;
+  for (let i = 0; i < N; i++) {
+    store.createTicket(big.slug, { title: `bulk todo ticket number ${i} on the oversized board`, files: [`lib/mod-${i}.js`] });
+  }
+
+  // all:true is the escape hatch — the whole column in one call, and (this is the
+  // bug) it serializes far past the tool-result ceiling. total/returned agree.
+  const allRes = callTool('list', { project: big.slug, all: true });
+  assert.strictEqual(allRes.total, N, 'all:true reports the true total');
+  assert.strictEqual(allRes.returned, N, 'all:true returns every ticket');
+  assert.strictEqual(allRes.tickets.length, N, 'all 500 present under all:true');
+  assert.strictEqual(allRes.nextCursor, null, 'all:true has no next page');
+  const allChars = resultChars('list', { project: big.slug, all: true });
+  assert.ok(allChars > 100000, `unbounded all:true overflows (${allChars} chars) — reproduces the bug`);
+
+  // Page 1 (default): bounded well under the ceiling, reports the true total, and
+  // hands back a cursor because there's more.
+  const p1 = callTool('list', { project: big.slug });
+  assert.strictEqual(p1.total, N, 'page 1 reports the true total');
+  assert.ok(p1.returned > 0 && p1.returned < N, 'page 1 is a partial page');
+  assert.strictEqual(p1.tickets.length, p1.returned, 'returned matches the array length');
+  assert.ok(p1.nextCursor, 'page 1 hands back a cursor');
+  assert.match(p1.hint, /cursor/, 'the hint tells the caller to follow the cursor');
+  const p1Chars = resultChars('list', { project: big.slug });
+  assert.ok(p1Chars < 90000, `page 1 stays under the ceiling (${p1Chars} chars vs unbounded ${allChars})`);
+
+  // Iterate the cursor to exhaustion: collect every ref, assert we saw all 500
+  // exactly once, every page fit under the ceiling, and paging terminates.
+  const seen = [];
+  let cursor = undefined;
+  let pages = 0;
+  let maxPageChars = 0;
+  do {
+    const args = cursor === undefined ? { project: big.slug } : { project: big.slug, cursor };
+    maxPageChars = Math.max(maxPageChars, resultChars('list', args));
+    const page = callTool('list', args);
+    for (const t of page.tickets) seen.push(t.ref);
+    cursor = page.nextCursor;
+    pages++;
+    assert.ok(pages <= N + 5, 'paging terminates (no runaway loop)');
+  } while (cursor);
+
+  assert.ok(maxPageChars < 90000, `every page stayed under the ceiling (max ${maxPageChars} chars)`);
+  assert.strictEqual(seen.length, N, 'iterating cursors yielded exactly N rows');
+  assert.strictEqual(new Set(seen).size, N, 'every ticket appears exactly once (no dupes, no gaps)');
+  assert.ok(pages >= 2, `a 500-ticket board takes several pages (took ${pages})`);
+
+  // limit:N is an exact page size and its own cursor advances correctly.
+  const capped = callTool('list', { project: big.slug, limit: 10 });
+  assert.strictEqual(capped.returned, 10, 'limit:N returns exactly N');
+  assert.strictEqual(capped.tickets.length, 10, 'exactly N rows');
+  assert.strictEqual(capped.total, N, 'the true total rides alongside the page');
+  assert.strictEqual(capped.nextCursor, '10', 'the cursor is the next offset');
+  const capped2 = callTool('list', { project: big.slug, limit: 10, cursor: capped.nextCursor });
+  assert.strictEqual(capped2.returned, 10, 'page 2 is also exactly N');
+  assert.strictEqual(capped2.nextCursor, '20', 'page 2 advances the cursor to offset 20');
+  assert.notStrictEqual(capped2.tickets[0].ref, capped.tickets[0].ref, 'page 2 starts past page 1');
+  // The two limit-pages are disjoint and contiguous (no overlap, no gap).
+  const p1Refs = new Set(capped.tickets.map((t) => t.ref));
+  assert.ok(!capped2.tickets.some((t) => p1Refs.has(t.ref)), 'limit pages do not overlap');
+
+  // A small board is a single call: no cursor, everything returned (backward
+  // compatible). Brief row shape is untouched (SQ-220 parity).
+  const small = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-smallboard-228'), 'SQ-228 Small Board');
+  store.createTicket(small.slug, { title: 'the only ticket' });
+  const smallList = callTool('list', { project: small.slug });
+  assert.strictEqual(smallList.nextCursor, null, 'a small board fits in one page');
+  assert.strictEqual(smallList.returned, smallList.tickets.length);
+  assert.strictEqual(smallList.total, smallList.tickets.length);
+  assert.strictEqual(smallList.hint, undefined, 'no paging hint when there is no next page');
+});
