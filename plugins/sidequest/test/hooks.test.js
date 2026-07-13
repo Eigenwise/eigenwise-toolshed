@@ -30,13 +30,25 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const os = require('os');
+const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('node:child_process');
+
+// A throwaway store home so the SubagentStop hook (which loads lib/store.js as a
+// subprocess and inherits this env) reads a fixture board, never the real one. The
+// other hooks in this file don't touch the store, so this redirect is harmless to
+// them. Set BEFORE requiring store so its lazy home resolution picks it up.
+const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-test-'));
+process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
+const store = require('../lib/store.js');
+const { slug } = store.ensureProject(path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board'));
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const CAPTURE = path.join(HOOKS, 'capture-nudge.js');
 const SESSION = path.join(HOOKS, 'session-start.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
+const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 
 // Byte budgets (chars ≈ tokens × ~4). CLI paths inside the blocks vary by
 // machine, so these have headroom — the point is catching a doctrine block
@@ -47,6 +59,7 @@ const BUDGET = {
   compact: 600, // once per compact/resume
   capture: 1500, // marker-gated
   mgmt: 1600, // marker-gated
+  longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
 
 // Run a hook with the given stdin payload and return the injected
@@ -293,4 +306,85 @@ test('genuine defect words still trip capture', () => {
   // 'crash' is deliberately kept — a real "X crashed" report should still file.
   assert.ok(capture('the exporter crashes on empty input').includes('capture the side quest'));
   assert.ok(capture('oh and the contact form is broken').includes('capture the side quest'));
+});
+
+/* ------------------------------------------------------------------ *
+ *  SubagentStop — flag a runaway (likely non-atomic) executor run post-hoc.
+ *
+ *  The hook can't stop a running subagent; it turns a long claim into ONE visible
+ *  line so the orchestrator notices the ticket wasn't atomic. Elapsed comes from
+ *  the claim's OWN start `at` in the worker registry (store already records it),
+ *  NOT from the SubagentStop stdin — which we pass BARE here to prove that. We
+ *  simulate a 28-min run by backdating the registry claim, then run the hook.
+ * ------------------------------------------------------------------ */
+
+let sqSeq = 0;
+function addTicket(title) {
+  return store.createTicket(slug, {
+    title,
+    complexity: 3,
+    complexityWhy: 'fixture for the SubagentStop runaway-flag hook, single mechanical claim',
+    source: 'cli',
+  });
+}
+
+// Backdate every claim the registry attributes to `sessionId` by `minutesAgo`, so
+// the claim's `at` reads as an old, long-running run without waiting real time.
+function backdateSessionClaims(sessionId, minutesAgo) {
+  const wf = path.join(SIDEQUEST_HOME, 'projects', 'workers.json');
+  const w = JSON.parse(fs.readFileSync(wf, 'utf8'));
+  const at = new Date(Date.now() - minutesAgo * 60 * 1000).toISOString();
+  for (const c of w.sessions[sessionId].claims) c.at = at;
+  w.sessions[sessionId].updatedAt = at;
+  fs.writeFileSync(wf, JSON.stringify(w));
+}
+
+test('subagent-stop: an over-threshold claim emits a one-line runaway note', () => {
+  const sess = `sess-long-${++sqSeq}`;
+  const t = addTicket('runaway 28-min ticket');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-long', { sessionId: sess }).ok, true);
+  backdateSessionClaims(sess, 28); // default threshold is 15m
+
+  // Payload is deliberately BARE (no duration/tokens) — the hook must derive
+  // elapsed from the store, not from stdin.
+  const ctx = runHook(SUBAGENT_STOP, { session_id: sess });
+  assert.ok(ctx, 'an over-threshold claim must produce a note');
+  assert.ok(ctx.includes(t.ref), `the note must name the ticket ref (${t.ref})`);
+  assert.match(ctx, /~\d+m/, 'the note must state the elapsed minutes');
+  assert.match(ctx, /atomic/i, 'the note must ask whether the ticket was atomic');
+  assert.ok(ctx.length <= BUDGET.longrun, `runaway note is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
+  assert.ok(ctx.indexOf('\n') === -1, 'the note must stay ONE line');
+});
+
+test('subagent-stop: a fresh (under-threshold) claim stays silent', () => {
+  const sess = `sess-fresh-${++sqSeq}`;
+  const t = addTicket('quick ticket, just claimed');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-fresh', { sessionId: sess }).ok, true);
+  // No backdating: the claim `at` is ~now, well under the 15m default.
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', 'a fresh claim must not fire');
+});
+
+test('subagent-stop: a session with no attributable claim stays silent', () => {
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: 'sess-nobody-here' }), '', 'unknown session must be silent');
+  assert.strictEqual(runHook(SUBAGENT_STOP, {}), '', 'a bare payload with no session id must be silent');
+});
+
+test('subagent-stop: SIDEQUEST_LONG_RUN_MIN lowers the threshold', () => {
+  const sess = `sess-tuned-${++sqSeq}`;
+  const t = addTicket('5-min run, flagged only under a tighter threshold');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-tuned', { sessionId: sess }).ok, true);
+  backdateSessionClaims(sess, 5);
+
+  // Default 15m: silent.
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', '5m is under the 15m default');
+  // Override to 2m: now it fires.
+  const out = execFileSync(process.execPath, [SUBAGENT_STOP], {
+    input: JSON.stringify({ session_id: sess }),
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_LONG_RUN_MIN: '2' },
+  });
+  const parsed = out.trim() ? JSON.parse(out) : null;
+  const ctx = parsed ? parsed.hookSpecificOutput.additionalContext : '';
+  assert.ok(ctx.includes(t.ref), 'with a 2m threshold a 5m run must be flagged');
+  assert.match(ctx, /over the 2m/, 'the note must reflect the overridden threshold');
 });

@@ -3042,6 +3042,46 @@ function reconcileSession(sessionId, opts) {
   return { ok: true, released };
 }
 
+// Read-only view of the claims the registry attributes to `sessionId`, each with
+// the claim's OWN start `at` timestamp — the raw material a SubagentStop hook uses
+// to spot a runaway (long-running) executor post-hoc. Unlike reconcileSession this
+// mutates NOTHING: it snapshots the registry entry and resolves each claim's ticket
+// ref/status for naming, skipping tickets that have since vanished. Returns [] for
+// an unknown/absent session. Fail-soft: any hiccup degrades to []. Like the rest of
+// the registry it is a convenience over the TTL, never a source of truth about
+// whether a claim is valid. Shape: [{ slug, ticketId, ref, by, at, status, held }].
+function sessionClaims(sessionId) {
+  const out = [];
+  if (!sessionId) return out;
+  let claims = [];
+  try {
+    withWorkersLock(() => {
+      const w = readWorkers();
+      const s = w.sessions[String(sessionId)];
+      claims = s && Array.isArray(s.claims) ? s.claims.slice() : [];
+    });
+  } catch (_) {
+    return out;
+  }
+  for (const c of claims) {
+    let ref = null;
+    let status = null;
+    let held = false;
+    try {
+      const t = getTicket(c.slug, c.ticketId);
+      if (t) {
+        ref = t.ref;
+        status = t.status;
+        held = !!(t.claim && t.claim.by && (!c.by || t.claim.by === c.by));
+      }
+    } catch (_) {
+      /* a bad ticket read just yields a bare entry — the `at` still stands */
+    }
+    out.push({ slug: c.slug, ticketId: c.ticketId, ref, by: c.by || null, at: c.at || null, status, held });
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ *
  *  Server lockfile (used by CLI + server to find/reuse a running dashboard)
  * ------------------------------------------------------------------ */
@@ -3162,4 +3202,5 @@ module.exports = {
   registerWorker,
   unregisterClaim,
   reconcileSession,
+  sessionClaims,
 };
