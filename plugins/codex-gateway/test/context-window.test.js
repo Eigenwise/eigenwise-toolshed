@@ -10,6 +10,10 @@ const test = require('node:test');
 
 const CLI = path.join(__dirname, '..', 'bin', 'codex-gateway.js');
 
+// Neutralize a machine-set override so the default-window assertions are
+// deterministic; the override test sets it explicitly in its own child env.
+delete process.env.CODEX_GATEWAY_CONTEXT_WINDOW;
+
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 }
@@ -92,6 +96,38 @@ test('Codex discovery advertises context metadata but keeps the local model id u
     messages: [{ role: 'user', content: 'legacy session' }],
   }));
   assert.equal(forwarded.model, 'gpt-5.6-sol');
+});
+
+test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', async (t) => {
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_CONTEXT_WINDOW: '200000',
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
+  assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 200000), true);
 });
 
 test('opt-in request route logging records Fable metadata but never prompt data', async (t) => {

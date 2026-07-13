@@ -791,9 +791,11 @@ const DEFAULT_MODELS = [
 // BELOW the real 272k ChatGPT Codex product window: a smaller reported window
 // makes Claude Code auto-compact earlier, leaving ~27k of real headroom so the
 // compaction summary and long turns finish before the backend hits its true
-// 272k limit and 413s. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW to
-// influence this: that also hits Claude passthrough models.
-const CODEX_COMPACT_CONTEXT_WINDOW = 245000;
+// 272k limit and 413s. Override per-machine with CODEX_GATEWAY_CONTEXT_WINDOW
+// to tune compaction timing without a republish. Never set a global
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW to influence this: that also hits Claude
+// passthrough models.
+const CODEX_COMPACT_CONTEXT_WINDOW = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW) || 245000;
 
 function gatewayModel(id) {
   return {
