@@ -628,7 +628,7 @@ async function handle(req, res) {
       agentSync = agentsync.syncExecAgents(prefs);
       const changed = agentSync.written + agentSync.removed;
       if (changed > 0) {
-        message = `${changed} exec agent file(s) changed (${agentSync.written} written, ${agentSync.removed} removed) — restart your session or run /reload-plugins to pick up new/removed agents.`;
+        message = `${changed} exec agent file(s) changed (${agentSync.written} written, ${agentSync.removed} removed) — ${agentsync.RESTART_NOTICE}`;
       }
     } catch (e) {
       agentSync = { error: (e && e.message) || String(e) };

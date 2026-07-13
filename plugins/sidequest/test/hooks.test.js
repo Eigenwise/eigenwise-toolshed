@@ -79,6 +79,20 @@ function runHook(script, payload) {
   return (parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext) || '';
 }
 
+function runSessionWithHome(home, envOverrides) {
+  return execFileSync(process.execPath, [SESSION], {
+    input: JSON.stringify({ session_id: 'bootstrap-test' }),
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME: home, ...(envOverrides || {}) },
+  });
+}
+
+function writeModelPrefs(home, prefs) {
+  const projects = path.join(home, 'projects');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(projects, 'model-prefs.json'), JSON.stringify(prefs));
+}
+
 const capture = (prompt) => runHook(CAPTURE, { prompt });
 
 const FOOTER_MARK = '— sidequest:';
@@ -343,6 +357,45 @@ test('session-start: stays inside its byte budget and off the retired doctrine',
   assertNoRetiredDoctrine(ctx, 'session-start');
 });
 
+test('session-start: reports newly provisioned executors once, then stays quiet', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-agents-'));
+  writeModelPrefs(home, {});
+  const first = JSON.parse(runSessionWithHome(home));
+  const firstContext = first.hookSpecificOutput.additionalContext;
+  assert.match(firstContext, /Executor definitions were just \(re\)provisioned/);
+  assert.match(firstContext, /restart clears this/);
+
+  const second = JSON.parse(runSessionWithHome(home));
+  const secondContext = second.hookSpecificOutput.additionalContext;
+  assert.doesNotMatch(secondContext, /Executor definitions were just \(re\)provisioned/);
+});
+test('session-start: preserves reachable Codex executors when syncing with prefs', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-codex-'));
+  const agents = path.join(home, 'agents');
+  fs.mkdirSync(agents, { recursive: true });
+  const codexFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
+  fs.writeFileSync(codexFile, '<!-- generated-by: sidequest-agentsync -->\nold');
+  writeModelPrefs(home, { tierBackend: { opus: 'codex-gpt-5-6-terra' } });
+  const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
+  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({ source: 'codex-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
+  runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
+  assert.ok(fs.existsSync(codexFile), 'reachable marked Codex executor must survive session sync');
+});
+
+test('session-start: skips sync when prefs are unreadable', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-unreadable-'));
+  const agents = path.join(home, 'agents');
+  fs.mkdirSync(agents, { recursive: true });
+  const codexFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
+  const original = '<!-- generated-by: sidequest-agentsync -->\nkeep';
+  fs.writeFileSync(codexFile, original);
+  const projects = path.join(home, 'projects');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(projects, 'model-prefs.json'), '{');
+  runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents });
+  assert.strictEqual(fs.readFileSync(codexFile, 'utf8'), original, 'unreadable prefs must leave marked files untouched');
+});
 test('session-start: source=compact gets the terse re-grounding block, not the full nudge', () => {
   const ctx = runHook(SESSION, { session_id: 't', source: 'compact' });
   assert.match(ctx, /sidequest \(active — context restored\)/);

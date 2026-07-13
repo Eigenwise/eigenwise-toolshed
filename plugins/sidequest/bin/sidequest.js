@@ -933,14 +933,13 @@ function cmdNativeAgent(opts, positional) {
 function cmdModelsSyncAgents(opts) {
   const prefs = store.getModelPrefs();
   const res = agentsync.syncExecAgents(prefs, opts.dir ? { dir: opts.dir } : undefined);
+  const RESTART_NOTICE = agentsync.RESTART_NOTICE;
   if (opts.json) {
-    process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    process.stdout.write(JSON.stringify(Object.assign({}, res, res.written > 0 ? { message: RESTART_NOTICE } : {}), null, 2) + '\n');
     return;
   }
   console.log(`✓ exec agents synced: ${res.written} written, ${res.removed} removed, ${res.unchanged} unchanged`);
-  if (res.written > 0 || res.removed > 0) {
-    console.log('  restart your session or run /reload-plugins to pick up new/removed agents.');
-  }
+  if (res.written > 0) console.log(`  ${agentsync.RESTART_NOTICE}`);
 }
 
 // The model tiers the user allows (dashboard settings), plus the valid effort

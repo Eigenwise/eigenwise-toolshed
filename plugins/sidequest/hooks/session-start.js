@@ -48,21 +48,26 @@ function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
 }
 
-// Auto-provision the runtime Codex exec agents (sidequest-exec-<slug>-<effort>.md)
-// so a ladder tier pointed at a discovered Codex model spawns without any manual
-// `models sync-agents` step. syncExecAgents writes one file per discovered model x
-// non-max effort into the live ~/.claude/agents dir; because those files are
-// persistent, once a model has been discovered in any prior session its agents are
-// already registered and mapping a tier to it needs no restart. Fail-soft and
-// silent: any error (no catalog, unwritable dir, partial install) is swallowed so
-// a sync problem can NEVER break session start. Empty catalog -> no-op.
+// Keep the generated executor files aligned with the current routing preferences.
+// The sync target is the reachable executor image for those prefs, so session start
+// must load prefs before syncing; a prefs read failure skips the sync to protect the
+// existing agent files. Errors remain fail-soft because provisioning never blocks a session.
 function provisionExecAgents() {
   try {
     const sync = require(path.join(pluginRoot(), 'lib', 'agentsync.js'));
+    const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+    const fs = require('fs');
+    const home = process.env.SIDEQUEST_HOME;
+    const prefsFile = home ? path.join(path.resolve(home), 'projects', 'model-prefs.json') : path.join(require('os').homedir(), '.claude', 'sidequest', 'projects', 'model-prefs.json');
+    if (!fs.existsSync(prefsFile)) return null;
+    JSON.parse(fs.readFileSync(prefsFile, 'utf8'));
+    const prefs = store.getModelPrefs();
+    if (!prefs || typeof prefs !== 'object') return null;
     sync.cleanupNativeAgents({ staleBefore: Date.now() - 6 * 60 * 60 * 1000 });
-    sync.syncExecAgents();
+    return sync.syncExecAgents(prefs);
   } catch (_) {
     /* best effort — never break the session over agent provisioning */
+    return null;
   }
 }
 
@@ -72,9 +77,9 @@ function nudgeOff() {
   return v === 'off' || v === '0' || v === 'false' || v === 'no';
 }
 
-function emit(context) {
+function emit(context, notice) {
   process.stdout.write(
-    JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } })
+    JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: notice ? context + '\n' + notice : context } })
   );
 }
 
@@ -84,7 +89,10 @@ function main() {
 
   // Keep the runtime Codex exec agents in sync on every real session start. This
   // runs regardless of SIDEQUEST_NUDGE (it's provisioning, not a nudge).
-  provisionExecAgents();
+  const syncResult = provisionExecAgents();
+  const restartNotice = syncResult && syncResult.written > 0
+    ? require(path.join(pluginRoot(), 'lib', 'agentsync.js')).RESTART_NOTICE
+    : '';
 
   if (nudgeOff()) process.exit(0);
 
@@ -100,7 +108,8 @@ function main() {
     emit(
       '=== sidequest (active — context restored) ===\n' +
         'Context was just compacted/resumed — RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
-        'Discipline: plan multi-part work as tickets; spawn the ticket\'s `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, omit on Codex routes) as short, bounded executor runs — batch small same-tier tickets; inline only trivial one-steps.'
+        'Discipline: plan multi-part work as tickets; spawn the ticket\'s `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, omit on Codex routes) as short, bounded executor runs — batch small same-tier tickets; inline only trivial one-steps.',
+      restartNotice
     );
     process.exit(0);
   }
@@ -126,7 +135,8 @@ function main() {
       'Board actions go through the ' +
       'mcp__plugin_sidequest_board__* MCP tools whenever they are in your toolset — reach for them ' +
       'FIRST; Bash+CLI is the fallback and the only route to serve/work. Open the board: `' +
-      cli + ' dashboard`.'
+      cli + ' dashboard`.',
+    restartNotice
   );
   process.exit(0);
 }

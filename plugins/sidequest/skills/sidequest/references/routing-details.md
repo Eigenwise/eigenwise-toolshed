@@ -36,11 +36,11 @@ bias.
 
 ## Worked example
 
-Main session = fable, haiku disabled; ticket `SQ-12 ⚙C3→sonnet·max` (an odd ladder — only two tiers
+Main session = fable, haiku disabled; ticket `SQ-12 ⚙C3→sonnet·low` (an odd ladder — only two tiers
 enabled — but it's what the stamps say):
 
 ```
-Agent(subagent_type: "sidequest-exec-max", model: "sonnet", name: "exec-sq12",
+Agent(subagent_type: "sidequest-exec-low", model: "sonnet", name: "exec-sq12",
       prompt: claim SQ-12 → fix → verify → done)
 ```
 
@@ -65,14 +65,7 @@ tier from a dropdown. The mapping lives in `tierBackend` in `model-prefs.json` (
 each tier `"claude"` or a slug). A tier mapped to a model that isn't in the catalog anymore (gateway
 uninstalled) **falls back to its Claude model with a warning**, so routing can't break.
 
-The executor agents are provisioned **automatically** — you never run a sync step. sidequest's
-SessionStart hook writes `sidequest-exec-<slug>-<effort>.md` under `~/.claude/agents/`, one per
-**discovered** model × non-max effort, each pinning the real model id (e.g.
-`claude-codex-gpt-5.6-terra[1m]`) in frontmatter. The set is keyed by model, not by mapping, and the
-files are persistent, so they already exist on disk before you point any tier at any model — mapping
-a tier is then instant, with no manual sync and no restart. (A model that appears in the catalog for
-the very first time registers on the next session start; after that it's always ready.) `sidequest
-models sync-agents` and a dashboard save run the same sync on demand if you want it immediately.
+The executor definitions are generated into `~/.claude/agents` from the current routing preferences. The wanted set is the deduplicated, ladder-reachable `resolveExec` image, including a reachable max rung, rather than every discovered backend model. Missing preferences or routing disabled retain the five generic effort executors. A remap or fresh install that writes definitions needs a session restart before the new executor type is spawnable; the sync surfaces this restart notice. If Agent rejects a newly provisioned type before restart, dispatch inline for the current session. `sidequest models sync-agents` and a dashboard save run the same sync on demand.
 Routed execution returns the already-registered native Agent executor, so the current conversation invokes the
 resolved backend with its pinned effort. The codex-gateway shim maps Claude Code's effort to the Codex
 backend's `reasoning.effort`, so a tier·effort rung means the same thing on a Codex model as on a Claude one.

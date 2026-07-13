@@ -178,16 +178,16 @@ slider): `-5` Frugal … `0` neutral (default) … `+5` Generous. It gamma-curve
 invariant: complexity 1 always lands the cheapest rung and 10 the top rung at any bias.
 
 sidequest doesn't *force* a model (nothing can make a running model swap itself mid-task); the bundled
-skill enforces the flow on Claude: derived routing is honored via executor agents
-(`sidequest-exec-low` … `-max`) mirrored into `~/.claude/agents` with
-`permissionMode: bypassPermissions`. Claude Code ignores that field on plugin-scoped agents, so the
-user-scoped copies are required to keep unattended Bash calls from prompting into the lead session.
+skill enforces the flow on Claude: derived routing is honored via executor agents generated into
+`~/.claude/agents` with `permissionMode: bypassPermissions`. Claude Code ignores that field on
+plugin-scoped agents, so the user-scoped copies are required to keep unattended Bash calls from prompting into the lead session.
 They spawn with the derived tier; effort lives in the agent definition,
 model in the spawn, so the two compose. (Haiku has no effort support; haiku-derived work uses a plain
-agent.) Those five files are generated from one source, `agents/_exec-template.md`, since the Agent
-tool can only pin per-spawn reasoning effort via a definition's `effort:` frontmatter (unlike `model`,
-which is a spawn-time argument) — run `node plugins/sidequest/scripts/gen-exec-agents.js` to
-regenerate them after editing the template, rather than hand-editing the five copies. The same
+agent.) The generated set comes from current routing preferences only: it is the deduplicated,
+ladder-reachable `resolveExec` image, including a reachable max rung. Missing preferences or routing
+disabled retain the five generic effort executors. A remap or fresh install that writes definitions
+needs a session restart before the new executor is spawnable; the sync surfaces a restart notice.
+If Agent rejects a newly provisioned type before restart, dispatch inline for the current session. The same
 *Available models* section has a master switch to turn routing off entirely — then
 Claude may work any ticket itself and the chips become purely informational. Effort exclusion lives
 in that same section too, but it's per model, not global: a model×effort grid lets you turn off, say,

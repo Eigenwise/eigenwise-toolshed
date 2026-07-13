@@ -43,7 +43,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const discovery = require('./discovery.js');
+const store = require('./store.js');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md');
 
@@ -57,6 +57,7 @@ const TEMP_PREFIX = 'sidequest-native-';
 // sparing top rung (see store.js's routingLadder) and, like the five shipped
 // agents, is never carried by an auto-generated exec agent.
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+const RESTART_NOTICE = 'Executor definitions were just (re)provisioned and may not be spawnable until next session; if Agent rejects a sidequest-exec-* type, dispatch inline this session; restart clears this.';
 
 // Effort-scaled hard caps stamped into every executor definition's `maxTurns`
 // frontmatter — the one FIRST-CLASS harness-enforced limit on a subagent run
@@ -299,48 +300,32 @@ function cleanupNativeAgents(opts) {
   return { removed };
 }
 
-// Regenerate the runtime Codex exec agents. The wanted set is a pure function of
-// the DISCOVERED Codex catalog (discovery.js), NOT of the tier mapping or the
-// effort allowlist: an agent file is keyed by model slug + effort, and any
-// discovered model can be pointed at any tier at any enabled effort at runtime.
-// So we write one file per discovered model x every non-max effort — the files
-// exist on disk BEFORE the user maps anything, which is what lets Claude Code
-// register them at session start and lets a later mapping change spawn an
-// already-present agent with NO manual sync and NO restart. That's why the
-// SessionStart hook calls this on every session: the files are persistent
-// artifacts that outlive a session, so once a model has been discovered in any
-// prior session its agents are already registered.
-//
-// Written into `dir` (default ~/.claude/agents; tests must always override this,
-// never point it at a real home directory). With no catalog (codex-gateway not
-// installed) the wanted set is empty: nothing is written and any stale marked
-// files are removed. Idempotent. `prefs` is accepted for call-site compatibility
-// but no longer affects the output. Returns { written, removed, unchanged }.
+// Sync only the executors the active routing ladder can reach. A missing prefs
+// object (or routing explicitly disabled) retains the generic files for manual
+// dispatch. The MARKER lifecycle below remains responsible for stale cleanup.
 function syncExecAgents(prefs, opts) {
   opts = opts || {};
   const dir = opts.dir || defaultAgentsDir();
+  const wanted = new Map();
 
-  const wanted = new Map(); // filename -> rendered content
-  // Plugin subagents ignore permissionMode frontmatter. Mirror the built-in
-  // executors into the user's agent directory so their bypass policy is active.
-  for (const effort of [...NON_MAX_EFFORTS, 'max']) {
-    wanted.set(`sidequest-exec-${effort}.md`, renderExecAgent({
-      name: `sidequest-exec-${effort}`,
-      effort,
-      marker: MARKER,
-    }));
-  }
-  const models = discovery.discoverExternalModels().filter((m) => m && m.slug && m.id);
-  const duplicateSlugs = new Set();
-  const seenSlugs = new Set();
-  for (const m of models) {
-    if (seenSlugs.has(m.slug)) duplicateSlugs.add(m.slug);
-    seenSlugs.add(m.slug);
-  }
-  for (const m of models) {
-    for (const effort of NON_MAX_EFFORTS) {
-      const namespace = duplicateSlugs.has(m.slug);
-      wanted.set(agentFileName(m.source, m.slug, effort, namespace), renderBackendAgent(m.source, m.slug, m.id, effort, namespace));
+  if (!prefs || prefs.routing === false) {
+    for (const effort of [...NON_MAX_EFFORTS, 'max']) {
+      wanted.set(`sidequest-exec-${effort}.md`, renderExecAgent({
+        name: `sidequest-exec-${effort}`,
+        effort,
+        marker: MARKER,
+      }));
+    }
+  } else {
+    const backends = prefs.tierBackendResolved || store.resolveTierBackends(prefs.tierBackend).byTier;
+    for (const rung of store.routingLadder(prefs)) {
+      const resolved = store.resolveExec(rung.model, rung.effort, prefs);
+      if (!resolved.agent || wanted.has(`${resolved.agent}.md`)) continue;
+      const backend = backends[rung.model];
+      const content = backend && backend.backend === 'codex'
+        ? renderBackendAgent(backend.source, backend.slug, backend.id, rung.effort, backend.agentSlug !== backend.slug)
+        : renderExecAgent({ name: resolved.agent, effort: rung.effort, marker: MARKER });
+      wanted.set(`${resolved.agent}.md`, content);
     }
   }
 
@@ -402,6 +387,7 @@ module.exports = {
   TEMP_MARKER,
   TEMP_PREFIX,
   NON_MAX_EFFORTS,
+  RESTART_NOTICE,
   EXEC_MAX_TURNS,
   execMaxTurns,
   agentFileName,
