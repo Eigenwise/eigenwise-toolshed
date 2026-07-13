@@ -32,10 +32,11 @@ Your task prompt contains some or all of:
    - **description**: written **developer-to-developer** — technical detail the implementer needs,
      not a manager's summary. Include whatever of this the issue text gives you: the file/page/
      function where it happens, the concrete behavior (what happened → what was expected), and how
-     to reproduce or verify. For non-trivial work, carry enough execution context to avoid rediscovery:
-     exact anchors, behavioral contract, bounds/non-goals, dependencies or settled decisions, and an
-     exact verification command. Do not invent missing context or add ceremony when a one-step ticket
-     is already fully specified. Shaped by kind:
+     to reproduce or verify. For non-trivial work, carry enough context that whoever picks it up
+     needn't rediscover it: exact anchors, the contract or the question it answers, bounds/non-goals,
+     dependencies or settled decisions, and how done is checked (a verify command for a change, or the
+     artifact/answer for an investigation). Do not invent missing context or add ceremony when a
+     one-step ticket is already fully specified. Shaped by kind:
      - **bug** → reproduction steps (what happened, what was expected, where in the code/UI)
      - **feature/task** → the requirements at a technical level — what "done" looks like, verifiable
      - **question/spike** → what's actually unknown

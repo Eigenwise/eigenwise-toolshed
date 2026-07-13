@@ -129,11 +129,14 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.match(ctx, /sidequest \(active\)/);
   assert.ok(ctx.includes('ATOMIC'), 'must demand atomic tickets (stuck executors come from oversized scope)');
-  assert.match(ctx, /independently verifiable/, 'must split independently verifiable changes');
+  assert.match(ctx, /independently checkable/, 'must split independently checkable pieces');
+  assert.match(ctx, /investigation, spike, or review/, 'a ticket can be investigation, not only a code change');
+  assert.match(ctx, /Split for parallelism/, 'must frame splitting as parallel fan-out, not only cheap execution');
   assert.match(ctx, /tightly coupled work together/, 'must keep coupled work in one ticket');
-  for (const field of ['exact anchors', 'contract', 'bounds/non-goals', 'dependencies/decisions', 'exact verify command']) {
+  for (const field of ['exact anchors', 'contract', 'bounds/non-goals', 'dependencies/decisions']) {
     assert.ok(ctx.includes(field), `must require ${field} in the ticket spec`);
   }
+  assert.match(ctx, /verify command, or the artifact\/answer/, 'done is a verify command for a change or an artifact/answer for an investigation');
   assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the stamped tier');
   assert.ok(ctx.includes('exec.agent'), 'must use the ticket-provided persistent executor');
   assert.ok(ctx.includes('already-registered'), 'must explain why it must not create a temporary agent at dispatch time');
