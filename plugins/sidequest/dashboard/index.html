@@ -1738,6 +1738,8 @@
     });
     grid.appendChild(headRow);
     MODELS.filter(function (m) {
+      var profile = (modelPrefs.profiles || {})[m.k];
+      if (profile) return profile.efforts !== null;
       var resolved = modelPrefs.tierBackendResolved || {};
       return m.k !== "grade-1" || (resolved[m.k] && resolved[m.k].backend === "codex");
     }).forEach(function (m) {
@@ -1814,49 +1816,57 @@
       runtime.innerHTML = '<b>' + esc(p.runsLabel || p.runsModel) + '</b>' + esc(p.backend === "codex" ? "Codex runtime" : "Claude runtime");
       row.appendChild(runtime);
       var det = modelPrefs.discovered || [];
-      if (det.length) row.appendChild(backendSelect(p.grade, det));
+      row.appendChild(backendSelect(p.grade, det));
       box.appendChild(row);
     });
     if (!grades.length) box.innerHTML = '<div class="ladder-empty">Loading grades…</div>';
   }
 
-  // Per-tier backend (1.36.0): each tier runs on its Claude model by default, or
-  // a discovered Codex model the user picks. This <select> is the picker; it
-  // writes modelPrefs.tierBackend[tier] and PUTs, which regenerates that tier's
-  // executor agents server-side and reshapes nothing on the ladder (the ladder
-  // stays tier-named; only what RUNS each tier changes). Only rendered when
-  // codex-gateway has published a catalog, so a user without it sees the
-  // original tier list.
+  // Per-tier runtime assignment: every dropdown offers all built-in Claude
+  // runtimes and any discovered Codex model. The select stays visible without a
+  // catalog, so saved explicit Claude assignments remain editable.
+  var CLAUDE_RUNTIME_OPTIONS = [
+    { slug: "haiku", label: "Claude Haiku" },
+    { slug: "sonnet", label: "Claude Sonnet" },
+    { slug: "opus", label: "Claude Opus" },
+    { slug: "fable", label: "Claude Fable" }
+  ];
   function currentBackend(tier) {
     var tb = modelPrefs.tierBackend || {};
-    return typeof tb[tier] === "string" && tb[tier] !== "claude" ? tb[tier] : "claude";
+    var backend = typeof tb[tier] === "string" ? tb[tier] : "claude";
+    if (backend !== "claude") return backend;
+    return { "grade-1": "haiku", "grade-2": "sonnet", "grade-3": "opus", "grade-4": "fable" }[tier] || "haiku";
+  }
+  function externalBackendValue(dm) {
+    return dm.source ? dm.source + ":" + dm.slug : dm.slug;
+  }
+  function isClaudeRuntime(value) {
+    return CLAUDE_RUNTIME_OPTIONS.some(function (runtime) { return runtime.slug === value; });
   }
   function backendSelect(tier, det) {
     var wrap = el("span", "tier-backend");
     var sel = document.createElement("select");
     sel.setAttribute("aria-label", tier + " backend model");
     var cur = currentBackend(tier);
-    // The "claude" option names the actual Claude runtime backing this grade —
-    // never the grade itself (grades are neutral IDs, runtimes are models).
-    var claudeRuntime = { "grade-1": "Claude Haiku", "grade-2": "Claude Sonnet", "grade-3": "Claude Opus", "grade-4": "Claude Fable" }[tier] || "Claude";
-    var opts = ['<option value="claude"' + (cur === "claude" ? " selected" : "") + ">" + esc(claudeRuntime) + "</option>"];
+    var opts = CLAUDE_RUNTIME_OPTIONS.map(function (runtime) {
+      return '<option value="' + runtime.slug + '"' + (cur === runtime.slug ? " selected" : "") + ">" + runtime.label + "</option>";
+    });
     det.forEach(function (dm) {
+      var value = externalBackendValue(dm);
       var suggested = dm.suggestedTier === tier ? " (suggested)" : "";
-      opts.push('<option value="' + esc(dm.slug) + '"' + (cur === dm.slug ? " selected" : "") + ">" + esc(dm.label) + suggested + "</option>");
+      opts.push('<option value="' + esc(value) + '"' + (cur === value || (cur === dm.slug && !isClaudeRuntime(dm.slug)) ? " selected" : "") + ">" + esc(dm.label) + suggested + "</option>");
     });
     sel.innerHTML = opts.join("");
-    // a Codex-backed tier gets a small mark so the row reads as "not plain Claude"
-    if (cur !== "claude") wrap.classList.add("on");
+    if (!isClaudeRuntime(cur)) wrap.classList.add("on");
     sel.addEventListener("change", function () {
       if (!modelPrefs.tierBackend) modelPrefs.tierBackend = {};
       modelPrefs.tierBackend[tier] = sel.value;
       renderModelPrefSettings();
       pushModelPrefs().then(function () { refreshLadder(); });
-      var dm = det.filter(function (x) { return x.slug === sel.value; })[0];
+      var dm = det.filter(function (x) { return externalBackendValue(x) === sel.value || (!x.source && x.slug === sel.value); })[0];
+      var claude = CLAUDE_RUNTIME_OPTIONS.filter(function (runtime) { return runtime.slug === sel.value; })[0];
       var gradeLabel = { "grade-1": "Grade 1", "grade-2": "Grade 2", "grade-3": "Grade 3", "grade-4": "Grade 4" }[tier] || tier;
-      toast(sel.value === "claude"
-        ? gradeLabel + " runs on " + claudeRuntime
-        : gradeLabel + " now runs on " + (dm ? dm.label : sel.value) + " — regenerating its executor agents");
+      toast(gradeLabel + " now runs on " + (claude ? claude.label : (dm ? dm.label : sel.value)) + " — regenerating its executor agents");
     });
     wrap.appendChild(sel);
     return wrap;

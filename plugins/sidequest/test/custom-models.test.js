@@ -65,3 +65,48 @@ test('deprecated aliases are accepted but canonical output stays grade-keyed', (
   assert.ok(!('profiles' in raw));
   assert.ok(!('complex' in raw.tierBackend));
 });
+
+test('explicit Claude runtime assignments resolve to the chosen Agent model and effort availability', () => {
+  const saved = store.setModelPrefs({
+    tierBackend: { 'grade-1': 'opus', 'grade-2': 'haiku', 'grade-3': 'fable' },
+  });
+  assert.deepStrictEqual(saved.tierBackend, {
+    'grade-1': 'opus', 'grade-2': 'haiku', 'grade-3': 'fable', 'grade-4': 'claude',
+  });
+  assert.deepStrictEqual(saved.tierBackendWarnings, []);
+
+  const grade1 = store.resolveExec('grade-1', 'high', saved);
+  assert.deepStrictEqual({ model: grade1.model, spawnId: grade1.spawnId, runsModel: grade1.runsModel, runsLabel: grade1.runsLabel }, {
+    model: 'opus', spawnId: 'opus', runsModel: 'opus', runsLabel: 'Claude Opus',
+  });
+  assert.strictEqual(grade1.agent, 'sidequest-exec-high');
+  assert.deepStrictEqual(store.resolveExec('grade-2', 'high', saved), {
+    agent: null, model: 'haiku', spawnId: 'haiku', backend: 'claude', slug: 'haiku', runsModel: 'haiku', runsLabel: 'Claude Haiku', dispatch: 'native-agent',
+  });
+  const grade3 = store.resolveExec('grade-3', 'high', saved);
+  assert.strictEqual(grade3.model, 'fable');
+  assert.strictEqual(grade3.runsLabel, 'Claude Fable');
+
+  const profiles = saved.profiles;
+  assert.ok(profiles['grade-1'].efforts, 'explicit Opus enables Grade 1 effort selection');
+  assert.strictEqual(profiles['grade-2'].efforts, null, 'explicit Haiku has no effort selection');
+  assert.ok(profiles['grade-3'].efforts, 'explicit Fable keeps effort selection');
+});
+
+test('an effort-capable Codex runtime named haiku keeps its effort axis', () => {
+  const catalogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-codex-haiku-'));
+  fs.mkdirSync(path.join(catalogDir, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalogDir, 'codex-gateway', 'catalog.json'), JSON.stringify({
+    schema: 2,
+    source: 'codex-gateway',
+    updatedAt: new Date().toISOString(),
+    models: [{ slug: 'haiku', id: 'claude-codex-haiku', label: 'Codex Haiku' }],
+  }));
+  process.env.SIDEQUEST_DISCOVERY_DIRS = catalogDir;
+
+  const saved = store.setModelPrefs({ tierBackend: { 'grade-2': 'codex-gateway:haiku' } });
+  assert.ok(saved.profiles['grade-2'].efforts, 'Codex runtime retains Grade 2 effort selection');
+  const exec = store.resolveExec('grade-2', 'high', saved);
+  assert.strictEqual(exec.backend, 'codex');
+  assert.strictEqual(exec.agent, 'sidequest-exec-haiku-high');
+});

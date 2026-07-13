@@ -244,9 +244,10 @@ const PROFILE_TIER = {
   haiku: 'grade-1', sonnet: 'grade-2', opus: 'grade-3', fable: 'grade-4',
 };
 const TIER_PROFILE = Object.assign({}, GRADE_TIER);
-const CLAUDE_TIER_LABELS = {
-  'grade-1': 'Claude Haiku', 'grade-2': 'Claude Sonnet',
-  'grade-3': 'Claude Opus', 'grade-4': 'Claude Fable',
+const CLAUDE_RUNTIMES = ['haiku', 'sonnet', 'opus', 'fable'];
+const CLAUDE_RUNTIME_LABELS = {
+  haiku: 'Claude Haiku', sonnet: 'Claude Sonnet',
+  opus: 'Claude Opus', fable: 'Claude Fable',
 };
 
 function tierForProfile(v) {
@@ -337,10 +338,9 @@ function discoveredBySlug() {
 }
 
 // Normalize a raw tierBackend patch/stored value into
-// { tier: "claude"|"source:slug"|legacy-slug }.
-// Each tier defaults to "claude"; a value is kept only if it's "claude" or a
-// syntactically valid slug (existence in the catalog is checked at resolve time,
-// not here — a mapping for a temporarily-absent gateway is preserved, not lost).
+// { tier: "claude"|"haiku"|"sonnet"|"opus"|"fable"|"source:slug"|legacy-slug }.
+// Each tier defaults to "claude"; an explicit Claude runtime is kept, while a
+// discovered-model mapping is preserved even when its catalog entry is absent.
 function normalizeTierBackend(raw) {
   const out = {};
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -349,8 +349,8 @@ function normalizeTierBackend(raw) {
     const v = src[grade] !== undefined ? src[grade] : src[legacy];
     if (typeof v === 'string') {
       const s = v.trim().toLowerCase();
-      if (s === 'claude' || s === '' || s === legacy) out[grade] = 'claude';
-      else if (BACKEND_SLUG_RE.test(s) || BACKEND_KEY_RE.test(s)) out[grade] = s;
+      if (s === 'claude' || s === '') out[grade] = 'claude';
+      else if (CLAUDE_RUNTIMES.includes(s) || BACKEND_SLUG_RE.test(s) || BACKEND_KEY_RE.test(s)) out[grade] = s;
       else out[grade] = 'claude';
     } else {
       out[grade] = 'claude';
@@ -359,13 +359,13 @@ function normalizeTierBackend(raw) {
   return out;
 }
 
-// Resolve, for the current prefs, what actually runs each tier: the mapped Codex
-// model when the tier points at one that's still in the catalog, else the tier's
-// own Claude model. Source-qualified values resolve exactly; legacy bare slugs
-// preserve the previous first-discovered match. Returns
+// Resolve, for the current prefs, what actually runs each tier: an explicitly
+// selected Claude runtime, a mapped Codex model, or the tier's default Claude
+// runtime. Source-qualified values resolve exactly; legacy bare slugs preserve
+// the previous first-discovered match. Returns
 // { byTier: {tier: {backend, source, slug, id, label}}, warnings } where backend
-// is "claude" or "codex". A mapping to a now-absent model degrades to claude and
-// adds a warning (surfaced in getModelPrefs.tierBackendWarnings).
+// is "claude" or "codex". A mapping to a now-absent model degrades to the
+// tier's default Claude runtime and adds a warning.
 function resolveTierBackends(tierBackend) {
   const map = normalizeTierBackend(tierBackend);
   const catalog = discoveredByKey();
@@ -375,29 +375,32 @@ function resolveTierBackends(tierBackend) {
   for (const grade of VALID_MODELS) {
     const v = map[grade];
     const legacy = GRADE_TIER[grade];
-    const d = v === 'claude' ? null : (catalog[v] || discovered.find((entry) => entry.slug === v));
+    if (v === 'claude' || CLAUDE_RUNTIMES.includes(v)) {
+      const runtime = v === 'claude' ? legacy : v;
+      byTier[grade] = { backend: 'claude', source: null, slug: runtime, id: runtime, label: CLAUDE_RUNTIME_LABELS[runtime] };
+      continue;
+    }
+    const d = catalog[v] || discovered.find((entry) => entry.slug === v);
     if (d) {
       const agentSlug = discovered.filter((entry) => entry.slug === d.slug).length > 1
         ? `${d.source}-${d.slug}`
         : d.slug;
       byTier[grade] = { backend: 'codex', source: d.source, slug: d.slug, agentSlug, id: d.id, label: d.label };
     } else {
-      if (v !== 'claude') {
-        warnings.push(`${GRADE_LABELS[grade]} is mapped to "${v}", which isn't currently available — falling back to Claude ${legacy}`);
-      }
-      byTier[grade] = { backend: 'claude', source: null, slug: null, id: null, label: null };
+      warnings.push(`${GRADE_LABELS[grade]} is mapped to "${v}", which isn't currently available — falling back to Claude ${legacy}`);
+      byTier[grade] = { backend: 'claude', source: null, slug: legacy, id: legacy, label: CLAUDE_RUNTIME_LABELS[legacy] };
     }
   }
   return { byTier, warnings };
 }
 
 // Return true when this grade's resolved runtime accepts an effort level.
-// Grade 1 is Claude Haiku by default, but gets the same real effort axis as every
-// other grade when its runtime is remapped to Codex.
+// Claude Haiku has no effort axis, while every other Claude runtime and all
+// Codex runtimes do.
 function gradeHasEffort(grade, prefs) {
   const byTier = prefs && (prefs.tierBackendResolved || resolveTierBackends(prefs.tierBackend).byTier);
   const backend = byTier && byTier[grade];
-  return grade !== 'grade-1' || !!(backend && backend.backend === 'codex');
+  return !!backend && (backend.backend !== 'claude' || backend.slug !== 'haiku');
 }
 
 // The single spawn seam: given a stamped (tier, effort), return exactly how to
@@ -407,28 +410,25 @@ function gradeHasEffort(grade, prefs) {
 //     (haiku has no effort → agent null, caller spawns a plain agent with model haiku)
 //   - Codex-backed tier:  { agent: "sidequest-exec-<slug>-<effort>", model: null, ... }
 // The agent name is what the orchestrator spawns; `model` is the Agent-tool
-// model param — null for Codex means OMIT the param entirely: the real id is
-// pinned in the generated agent's frontmatter and runs for real when the param
-// is left out, while any explicit Agent `model` value overrides that pin and
-// silently runs Anthropic. spawnId is the resolved runtime model id, kept for
-// non-dispatch callers that need model identity (native-agent frontmatter
-// pinning, ladder runtime ids). effort is the ticket's stamped effort (null
-// only for a Claude haiku tier; a Codex-backed haiku uses HAIKU_BACKEND_EFFORT
-// for its agent).
+// model parameter. Codex routes omit it because their generated agent pins the
+// real model; Claude routes pass the selected runtime directly. spawnId is the
+// resolved runtime model id, kept for non-dispatch callers that need runtime
+// identity. effort is null only for a Claude Haiku runtime; a Codex-backed Haiku
+// uses HAIKU_BACKEND_EFFORT for its agent.
 function resolveExec(grade, effort, prefs) {
   grade = coerceModel(grade);
   prefs = prefs || getModelPrefs();
   const { byTier } = resolveTierBackends(prefs.tierBackend);
-  const legacy = GRADE_TIER[grade];
-  const b = byTier[grade] || { backend: 'claude', source: null, slug: null, id: null };
+  const b = byTier[grade] || { backend: 'claude', slug: GRADE_TIER[grade], id: GRADE_TIER[grade], label: null };
   if (b.backend === 'codex') {
     const eff = effort || HAIKU_BACKEND_EFFORT;
     return { agent: `sidequest-exec-${b.agentSlug || b.slug}-${eff}`, model: null, spawnId: b.id, backend: 'codex', source: b.source, slug: b.slug, runsModel: b.slug, runsLabel: b.label || b.slug, dispatch: 'native-agent' };
   }
-  if (grade === 'grade-1' || !effort) {
-    return { agent: null, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy, dispatch: 'native-agent' };
+  const runtime = b.slug;
+  if (runtime === 'haiku' || !effort) {
+    return { agent: null, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, runsLabel: b.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
   }
-  return { agent: `sidequest-exec-${effort}`, model: legacy, spawnId: legacy, backend: 'claude', slug: null, runsModel: legacy, runsLabel: legacy, dispatch: 'native-agent' };
+  return { agent: `sidequest-exec-${effort}`, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, runsLabel: b.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
 }
 
 // Resolve a stamped model name to the real string handed to Claude Code at spawn
@@ -617,7 +617,7 @@ function routingLadder(prefs) {
   const seq = [];
   for (const tier of runtimeGroups) {
     if (tier.haiku) {
-      seq.push({ model: 'grade-1', effort: null, tierRank: tier.tierRank, score: tier.base });
+      seq.push({ model: tier.model, effort: null, tierRank: tier.tierRank, score: tier.base });
       continue;
     }
     let tierEfforts = seqEffortsOf(tier.row);
@@ -2401,15 +2401,16 @@ function deriveProfilesView(prefs) {
   const ladder = routingLadder(prefs);
   const out = {};
   for (const grade of VALID_MODELS) {
-    const b = byTier[grade] || { backend: 'claude', slug: null, id: null, label: null };
+    const b = byTier[grade] || { backend: 'claude', slug: GRADE_TIER[grade], id: GRADE_TIER[grade], label: null };
+    const runtime = b.slug || GRADE_TIER[grade];
     const complexities = ladder.filter((r) => r.model === grade).map((r) => r.complexity);
     out[grade] = {
       grade,
       label: GRADE_LABELS[grade],
       enabled: prefs[grade] !== false,
       backend: b.backend,
-      runsModel: b.backend === 'codex' ? b.slug : GRADE_TIER[grade],
-      runsLabel: b.backend === 'codex' ? (b.label || b.slug) : CLAUDE_TIER_LABELS[grade],
+      runsModel: runtime,
+      runsLabel: b.label || CLAUDE_RUNTIME_LABELS[runtime],
       efforts: gradeHasEffort(grade, prefs) ? Object.assign({}, (prefs.efforts && prefs.efforts[grade]) || {}) : null,
       complexities,
       range: complexities.length ? [complexities[0], complexities[complexities.length - 1]] : null,

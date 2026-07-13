@@ -126,6 +126,20 @@ test('dashboard presents the grade cards, then effort/ladder controls in one pan
   assert.ok(html.indexOf('id="routingProfiles"') < html.indexOf('id="ladderView"'));
   assert.match(html, /var gradesView = modelPrefs\.profiles \|\| \{\}/);
   assert.match(html, /p\.complexities \|\| \[\]/);
+  assert.match(html, /CLAUDE_RUNTIME_OPTIONS = \[/);
+  assert.match(html, /\{ slug: "haiku", label: "Claude Haiku" \}/);
+  assert.match(html, /\{ slug: "sonnet", label: "Claude Sonnet" \}/);
+  assert.match(html, /\{ slug: "opus", label: "Claude Opus" \}/);
+  assert.match(html, /\{ slug: "fable", label: "Claude Fable" \}/);
+  assert.match(html, /row\.appendChild\(backendSelect\(p\.grade, det\)\)/);
+  assert.doesNotMatch(html, /if \(det\.length\) row\.appendChild\(backendSelect/);
+  assert.match(html, /if \(backend !== "claude"\) return backend;/);
+  assert.match(html, /"grade-1": "haiku", "grade-2": "sonnet", "grade-3": "opus", "grade-4": "fable"/);
+  assert.match(html, /return dm\.source \? dm\.source \+ ":" \+ dm\.slug : dm\.slug;/);
+  assert.match(html, /var value = externalBackendValue\(dm\);/);
+  assert.match(html, /cur === value \|\| \(cur === dm\.slug && !isClaudeRuntime\(dm\.slug\)\)/);
+  assert.match(html, /externalBackendValue\(x\) === sel\.value/);
+  assert.match(html, /if \(profile\) return profile\.efforts !== null;/);
 });
 
 test('findNewerInstall: never throws even with guards disabled', () => {

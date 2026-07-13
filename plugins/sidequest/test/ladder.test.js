@@ -359,6 +359,18 @@ test('single tier + single effort: constant ladder', () => {
   });
 });
 
+test('explicit Claude Haiku keeps the mapped grade as ladder provenance', () => {
+  const prefs = setModelPrefs({
+    'grade-1': false, 'grade-2': true, 'grade-3': false, 'grade-4': false,
+    tierBackend: { 'grade-2': 'haiku' },
+  });
+  const ladder = routingLadder(prefs);
+  ladder.forEach((r) => {
+    assert.strictEqual(r.model, 'grade-2');
+    assert.strictEqual(r.effort, null);
+  });
+});
+
 test('empty prefs can never yield an empty ladder (defensive fallbacks)', () => {
   const prefs = mkPrefs([], [], 0); // all tiers + efforts false — unreachable via setModelPrefs
   const ladder = routingLadder(prefs);
