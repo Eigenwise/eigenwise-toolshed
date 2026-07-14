@@ -808,6 +808,12 @@ const DEFAULT_MODELS = [
 // CODEX_GATEWAY_CONTEXT_WINDOW. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW
 // to influence this: that also hits Claude passthrough models.
 const CODEX_COMPACT_CONTEXT_WINDOW = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW) || 370000;
+const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
+const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
+const CODEX_COMPACT_TRIGGER = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0
+  ? configuredCompactTrigger
+  : 330000;
+const CODEX_COMPACT_HEADROOM = 40000;
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
@@ -990,6 +996,10 @@ function runShim() {
     data: DEFAULT_MODELS.map(gatewayModel),
   };
   const counters = { models: 0, codex: 0, anthropic: 0 };
+  const sentrySessions = new Map();
+  const compactTriggerIsFixed = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0;
+  let compactTrigger = CODEX_COMPACT_TRIGGER;
+  let observedCeiling = null;
   // hostsDetected drives the DNS-bypass decision below regardless of whether
   // this process itself managed to bind the compat port; the OS hosts file is
   // machine-wide and would misdirect the passthrough forward either way.
@@ -1017,6 +1027,81 @@ function runShim() {
     } catch (error) {
       console.error(`codex-gateway: could not write request route log: ${error.code || error.message}`);
     }
+  }
+
+  function codexSessionId(req) {
+    if (!CODEX_SENTRY_ENABLED) return null;
+    const sessionId = req.headers['x-claude-code-session-id'];
+    return typeof sessionId === 'string' && sessionId ? sessionId : null;
+  }
+
+  function sentrySession(sessionId) {
+    if (!sessionId) return null;
+    let state = sentrySessions.get(sessionId);
+    if (!state) {
+      state = { usage: 0, fired: false };
+      sentrySessions.set(sessionId, state);
+    }
+    return state;
+  }
+
+  function recordSentryUsage(sessionId, event) {
+    if (!sessionId || event.type !== 'message_delta' || !event.usage) return;
+    const usage = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
+      .reduce((total, field) => total + (Number.isFinite(event.usage[field]) ? event.usage[field] : 0), 0);
+    if (usage <= 0) return;
+    const state = sentrySession(sessionId);
+    state.usage = usage;
+    const lowWatermark = compactTrigger - Math.min(CODEX_COMPACT_HEADROOM, compactTrigger * 0.25);
+    if (usage < lowWatermark) state.fired = false;
+  }
+
+  function contextOverflowBody(actualTokens, maxTokens, prefix) {
+    return JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'request_too_large',
+        message: `${prefix} (${actualTokens} tokens > ${maxTokens} tokens)`,
+      },
+    });
+  }
+
+  function fireContextSentry(res, sessionId) {
+    const state = sentrySession(sessionId);
+    if (!state || state.fired || state.usage <= compactTrigger) return false;
+    state.fired = true;
+    const body = contextOverflowBody(state.usage, compactTrigger,
+      'Codex context sentry: input crossed the compaction trigger; compact and retry.');
+    res.writeHead(413, {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(body),
+    });
+    res.end(body);
+    return true;
+  }
+
+  function noteGenuineOverflow(sessionId) {
+    const state = sentrySession(sessionId);
+    const usage = state?.usage || 0;
+    if (state) state.fired = true;
+    if (!compactTriggerIsFixed && usage > CODEX_COMPACT_HEADROOM) {
+      observedCeiling = observedCeiling == null ? usage : Math.min(observedCeiling, usage);
+      compactTrigger = Math.max(1, observedCeiling - CODEX_COMPACT_HEADROOM);
+    }
+    return usage;
+  }
+
+  function normalizeGenuineContextOverflow(body, sessionId) {
+    const text = body.toString();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { return body; }
+    if (parsed?.error?.type !== 'request_too_large' || typeof parsed.error.message !== 'string') return body;
+    const usage = noteGenuineOverflow(sessionId);
+    if (/\d+\s+tokens\s*>\s*\d+\s+tokens/i.test(text)) return body;
+    const maxTokens = CODEX_COMPACT_CONTEXT_WINDOW;
+    const actualTokens = usage || maxTokens + 1;
+    parsed.error.message += ` (${actualTokens} tokens > ${maxTokens} tokens)`;
+    return Buffer.from(JSON.stringify(parsed));
   }
 
   async function refreshModels() {
@@ -1059,7 +1144,7 @@ function runShim() {
     return Buffer.from(JSON.stringify(parsed));
   }
 
-  function createPlanToolSseFilter(write) {
+  function createPlanToolSseFilter(write, observe) {
     const decoder = new StringDecoder('utf8');
     let pending = '';
     const dropped = new Set();
@@ -1074,6 +1159,7 @@ function runShim() {
       if (!raw || raw === '[DONE]') return write(frame + separator);
       let event;
       try { event = JSON.parse(raw); } catch { return write(frame + separator); }
+      if (observe) observe(event);
 
       const originalIndex = Number.isInteger(event.index) ? event.index : null;
       if (event.type === 'content_block_start' && originalIndex != null) {
@@ -1113,6 +1199,35 @@ function runShim() {
     };
   }
 
+  function createSseEventObserver(observe) {
+    const decoder = new StringDecoder('utf8');
+    let pending = '';
+
+    function inspectFrame(frame) {
+      const dataLine = frame.split(/\r?\n/).find((line) => line.startsWith('data:'));
+      if (!dataLine) return;
+      const raw = dataLine.slice(5).trimStart();
+      if (!raw || raw === '[DONE]') return;
+      try { observe(JSON.parse(raw)); } catch { /* pass malformed upstream data through untouched */ }
+    }
+
+    return {
+      write(chunk) {
+        pending += decoder.write(chunk);
+        for (;;) {
+          const match = /\r?\n\r?\n/.exec(pending);
+          if (!match) break;
+          inspectFrame(pending.slice(0, match.index));
+          pending = pending.slice(match.index + match[0].length);
+        }
+      },
+      end() {
+        pending += decoder.end();
+        if (pending) inspectFrame(pending);
+      },
+    };
+  }
+
   function keepSseAlive(upRes, clientRes) {
     if (!SSE_HEARTBEAT_MS) return;
     let timer = null;
@@ -1139,7 +1254,7 @@ function runShim() {
     arm();
   }
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false) {
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null) {
     const url = new URL(clientReq.url, target);
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
@@ -1158,13 +1273,33 @@ function runShim() {
     const upReq = (isHttps ? https : http).request(url, reqOptions, (upRes) => {
       const resHeaders = { ...upRes.headers };
       for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
-      // Codex path only (normalizeContextErrors). claude-code-proxy >=0.1.14 already
-      // maps a context overflow to HTTP 413 request_too_large, the exact shape
-      // Claude Code recognizes, so a 413 is passed through byte-identically via the
-      // pipe below (we don't enter this branch for it). We only buffer OTHER >=400
-      // responses to catch an OLD proxy (<=0.1.13) that signals overflow with a
-      // differently-shaped 4xx/5xx, and normalize THOSE to the same 413
-      // request_too_large. Non-overflow errors pass through with their status intact.
+      if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) {
+        const chunks = [];
+        let settled = false;
+        const failBufferedResponse = () => {
+          if (settled) return;
+          settled = true;
+          if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
+          clientRes.end(JSON.stringify({
+            type: 'error',
+            error: { type: 'api_error', message: 'codex-gateway shim: upstream response ended early' },
+          }));
+        };
+        upRes.on('data', (chunk) => chunks.push(chunk));
+        upRes.on('error', failBufferedResponse);
+        upRes.on('aborted', failBufferedResponse);
+        upRes.on('end', () => {
+          if (settled) return;
+          settled = true;
+          const normalized = normalizeGenuineContextOverflow(Buffer.concat(chunks), sessionId);
+          resHeaders['content-length'] = normalized.length;
+          clientRes.writeHead(413, resHeaders);
+          clientRes.end(normalized);
+        });
+        return;
+      }
+      // Older proxies may signal overflow with a differently-shaped 4xx/5xx.
+      // Buffer only those failures and normalize them to request_too_large.
       if (normalizeContextErrors && upRes.statusCode >= 400 && upRes.statusCode !== 413) {
         const chunks = [];
         let settled = false;
@@ -1186,10 +1321,13 @@ function runShim() {
           const upstreamBody = Buffer.concat(chunks);
           const text = upstreamBody.toString();
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
-            const normalized = JSON.stringify({
-              type: 'error',
-              error: { type: 'request_too_large', message: 'Input exceeds the model context window; compact and retry.' },
-            });
+            const normalized = CODEX_SENTRY_ENABLED
+              ? contextOverflowBody(noteGenuineOverflow(sessionId) || CODEX_COMPACT_CONTEXT_WINDOW + 1,
+                CODEX_COMPACT_CONTEXT_WINDOW, 'Input exceeds the model context window; compact and retry.')
+              : JSON.stringify({
+                type: 'error',
+                error: { type: 'request_too_large', message: 'Input exceeds the model context window; compact and retry.' },
+              });
             clientRes.writeHead(413, {
               'content-type': 'application/json',
               'content-length': Buffer.byteLength(normalized),
@@ -1209,7 +1347,10 @@ function runShim() {
         if (contentType.includes('text/event-stream')) {
           clientRes.writeHead(upRes.statusCode, resHeaders);
           keepSseAlive(upRes, clientRes);
-          const filter = createPlanToolSseFilter((chunk) => clientRes.write(chunk));
+          const filter = createPlanToolSseFilter(
+            (chunk) => clientRes.write(chunk),
+            (event) => recordSentryUsage(sessionId, event),
+          );
           upRes.on('data', (chunk) => filter.write(chunk));
           upRes.on('end', () => { filter.end(); clientRes.end(); });
           upRes.on('error', () => clientRes.destroy());
@@ -1232,6 +1373,11 @@ function runShim() {
       clientRes.writeHead(upRes.statusCode, resHeaders);
       if (normalizeContextErrors && upRes.statusCode >= 200 && upRes.statusCode < 300 && contentType.includes('text/event-stream')) {
         keepSseAlive(upRes, clientRes);
+        if (CODEX_SENTRY_ENABLED && sessionId) {
+          const observer = createSseEventObserver((event) => recordSentryUsage(sessionId, event));
+          upRes.on('data', (chunk) => observer.write(chunk));
+          upRes.on('end', () => observer.end());
+        }
       }
       upRes.pipe(clientRes); // never buffer successful SSE: Claude Code needs the stream live
     });
@@ -1296,9 +1442,11 @@ function runShim() {
             }
             counters.codex++;
             requestRouteLog(req, 'codex', requestedModel, pathOnly);
+            const sessionId = codexSessionId(req);
+            if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId)) return;
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              JSON.stringify(parsed), ['authorization', 'x-api-key'], true, !keepPlanTools);
+              JSON.stringify(parsed), ['authorization', 'x-api-key'], true, !keepPlanTools, sessionId);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }

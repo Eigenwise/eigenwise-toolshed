@@ -56,6 +56,38 @@ async function waitForShim(port) {
   throw new Error('shim did not start');
 }
 
+async function spawnShim(t, proxyPort, extraEnv = {}) {
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+      ...extraEnv,
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+  return shimPort;
+}
+
+function usageSse(usage) {
+  return `event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: {}, usage })}\n\n`
+    + 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+}
+
+const codexBody = JSON.stringify({
+  model: 'claude-codex-gpt-5.6-sol',
+  max_tokens: 1,
+  messages: [{ role: 'user', content: 'test' }],
+});
+
+const sentrySessionHeaders = { 'x-claude-code-session-id': 'sentry-test-session' };
+
 test('Codex discovery advertises context metadata but keeps the local model id unsuffixed', async (t) => {
   let forwarded;
   const proxy = http.createServer((req, res) => {
@@ -87,6 +119,7 @@ test('Codex discovery advertises context metadata but keeps the local model id u
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
       CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
     },
     stdio: 'ignore',
   });
@@ -135,6 +168,7 @@ test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', a
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
       CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
       CODEX_GATEWAY_CONTEXT_WINDOW: '200000',
     },
     stdio: 'ignore',
@@ -190,6 +224,156 @@ test('opt-in request route logging records Fable metadata but never prompt data'
   }]);
 });
 
+test('Codex sentry sums all input usage fields from SSE message_delta frames', async (t) => {
+  let forwarded = 0;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    forwarded++;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(usageSse({ input_tokens: 30, cache_read_input_tokens: 50, cache_creation_input_tokens: 19 }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_TRIGGER: '100' });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  assert.equal(forwarded, 2);
+});
+
+test('Codex sentry returns one synthetic 413 with parseable token counts', async (t) => {
+  let forwarded = 0;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    forwarded++;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(usageSse({ input_tokens: 30, cache_read_input_tokens: 50, cache_creation_input_tokens: 21 }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_TRIGGER: '100' });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  const overflow = await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders);
+  assert.equal(overflow.status, 413);
+  assert.match(JSON.parse(overflow.body).error.message, /101 tokens > 100 tokens/);
+  assert.equal(forwarded, 1);
+});
+
+test('Codex sentry latch lets compaction through and rearms below its low watermark', async (t) => {
+  const usages = [101, 20, 101];
+  let forwarded = 0;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    const usage = usages[Math.min(forwarded++, usages.length - 1)];
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(usageSse({ input_tokens: usage }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_TRIGGER: '100' });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 413);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 413);
+  assert.equal(forwarded, 3);
+});
+
+test('CODEX_GATEWAY_SENTRY=0 disables usage gating and genuine-413 rewriting', async (t) => {
+  let forwarded = 0;
+  const upstreamBody = JSON.stringify({ type: 'error', error: { type: 'request_too_large', message: 'no numbers' } });
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    forwarded++;
+    if (forwarded === 1) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      return res.end(usageSse({ input_tokens: 101 }));
+    }
+    res.writeHead(413, { 'content-type': 'application/json' });
+    res.end(upstreamBody);
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort, {
+    CODEX_GATEWAY_COMPACT_TRIGGER: '100',
+    CODEX_GATEWAY_SENTRY: '0',
+  });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  const response = await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders);
+  assert.equal(response.status, 413);
+  assert.equal(response.body, upstreamBody);
+  assert.equal(forwarded, 2);
+});
+
+test('Codex sentry never gates Claude passthrough requests', async (t) => {
+  let forwarded = 0;
+  const anthropic = http.createServer((req, res) => {
+    forwarded++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  const anthropicPort = await listen(anthropic);
+  t.after(() => anthropic.close());
+  const shimPort = await spawnShim(t, anthropicPort + 1, {
+    CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
+    CODEX_GATEWAY_COMPACT_TRIGGER: '1',
+  });
+  const claudeBody = JSON.stringify({ model: 'claude-opus-4-8[1m]', messages: [] });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', claudeBody, sentrySessionHeaders)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', claudeBody, sentrySessionHeaders)).status, 200);
+  assert.equal(forwarded, 2);
+});
+
+test('genuine no-numbers 413 gets usage numbers appended', async (t) => {
+  let forwarded = 0;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    forwarded++;
+    if (forwarded === 1) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      return res.end(usageSse({ input_tokens: 360000, cache_read_input_tokens: 5000, cache_creation_input_tokens: 1000 }));
+    }
+    res.writeHead(413, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'request_too_large',
+        message: 'Your input exceeds the context window of this model. Please adjust your input and try again.',
+      },
+    }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_TRIGGER: '369000' });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  const response = await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders);
+  assert.equal(response.status, 413);
+  const parsed = JSON.parse(response.body);
+  assert.equal(parsed.type, 'error');
+  assert.equal(parsed.error.type, 'request_too_large');
+  assert.match(parsed.error.message, /366000 tokens > 370000 tokens/);
+});
+
 test('an old-proxy context error is normalized to HTTP 413 request_too_large', async (t) => {
   // claude-code-proxy <=0.1.13 signalled overflow with a 5xx of its own shape; the
   // shim must normalize that to the same 413 request_too_large the new proxy emits.
@@ -212,6 +396,7 @@ test('an old-proxy context error is normalized to HTTP 413 request_too_large', a
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
       CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
     },
     stdio: 'ignore',
   });
@@ -229,12 +414,10 @@ test('an old-proxy context error is normalized to HTTP 413 request_too_large', a
   assert.equal(parsed.error.type, 'request_too_large');
 });
 
-test('an upstream 413 request_too_large passes through untouched', async (t) => {
-  // claude-code-proxy >=0.1.14 already emits the recognized shape. The shim must
-  // not rewrite it; status and body pass through byte-for-byte.
+test('an upstream 413 with parseable token counts passes through untouched', async (t) => {
   const upstreamBody = JSON.stringify({
     type: 'error',
-    error: { type: 'request_too_large', message: 'input is too large for the model context window' },
+    error: { type: 'request_too_large', message: 'input is too large (371882 tokens > 370000 tokens)' },
   });
   const proxy = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
@@ -255,6 +438,7 @@ test('an upstream 413 request_too_large passes through untouched', async (t) => 
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
       CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
     },
     stdio: 'ignore',
   });
@@ -319,7 +503,7 @@ test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', asy
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
   const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort) },
+    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
     stdio: 'ignore',
   });
   t.after(() => child.kill());
@@ -457,6 +641,7 @@ test('claude-* passthrough is byte-identical and never subjected to Codex window
       CODEX_GATEWAY_PORT: String(shimPort),
       CODEX_GATEWAY_PROXY_PORT: String(shimPort + 1),
       CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
+      CODEX_GATEWAY_REQUEST_LOG: '0',
     },
     stdio: 'ignore',
   });
@@ -499,7 +684,7 @@ test('count_tokens for a Codex model still routes to the proxy', async (t) => {
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
   const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort) },
+    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
     stdio: 'ignore',
   });
   t.after(() => child.kill());
@@ -537,6 +722,7 @@ test('Codex SSE sends heartbeat comments while upstream is silent', async (t) =>
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
       CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
       CODEX_GATEWAY_SSE_HEARTBEAT_S: '0.02',
     },
     stdio: 'ignore',
