@@ -3004,7 +3004,7 @@ function markLongRunFlagged(sessionId, slug, ticketId, claimAt) {
       const w = readWorkers();
       const s = w.sessions[sessionId];
       if (!s) return; // no registered claims here — nothing to dedupe against
-      const key = `${slug} ${ticketId} ${claimAt || ''}`;
+      const key = `${slug}\u0000${ticketId}\u0000${claimAt || ''}`;
       if (!Array.isArray(s.flagged)) s.flagged = [];
       if (s.flagged.indexOf(key) !== -1) {
         first = false;
