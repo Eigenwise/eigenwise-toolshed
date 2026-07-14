@@ -1480,8 +1480,7 @@
 
   function deleteProject(project) {
     var count = projectTicketCount(project);
-    var exact = window.prompt('Delete "' + project.name + '" and its ' + count + ' ticket' + (count === 1 ? '' : 's') + ' permanently? Type its exact board slug to continue:\n' + project.slug);
-    if (exact !== project.slug) { if (exact !== null) toast("Delete cancelled: slug did not match"); return; }
+    if (!window.confirm('Delete "' + project.name + '" and its ' + count + ' ticket' + (count === 1 ? '' : 's') + ' permanently? This cannot be undone.')) return;
     mutate("DELETE", "/api/projects/" + encodeURIComponent(project.slug))
       .then(function () { toast('Deleted "' + project.name + '"'); if (state.current === project.slug) state.current = "all"; return refresh(true); })
       .catch(function (e) { toast("Delete failed: " + e.message); refresh(true); });

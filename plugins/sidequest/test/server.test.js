@@ -190,7 +190,7 @@ test('dashboard exposes board archive routes and guarded project controls', () =
   assert.match(html, /and its ' \+ count \+ ' ticket/);
   assert.match(html, /if \(archived\) item\("Restore board"/);
   assert.match(html, /else \{\s*item\("Archive board"[\s\S]*item\("Delete board…"/);
-  assert.match(html, /Type its exact board slug/);
+  assert.match(html, /This cannot be undone/);
   assert.match(html, /Archive failed:/);
   assert.match(html, /Restore failed:/);
 });
