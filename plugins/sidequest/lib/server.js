@@ -346,13 +346,16 @@ async function handle(req, res) {
       complexity: body.complexity,
       complexityWhy: body.complexityWhy,
       files: body.files,
+      executorAnchors: body.executorAnchors,
+      executorVerify: body.executorVerify,
       assignee: body.assignee,
       imagesData: body.imagesData,
       source: 'dashboard',
     });
     // Re-read so the response carries the derived model/effort (derivation is
     // read-time; createTicket returns the raw stored shape).
-    sendJson(res, 201, { ticket: store.getTicket(slug, ticket.id) || ticket });
+    const created = store.getTicket(slug, ticket.id) || ticket;
+    sendJson(res, 201, { ticket: created, warnings: store.ticketPlanningWarnings(created) });
     return;
   }
 
@@ -384,7 +387,7 @@ async function handle(req, res) {
         return;
       }
       updated.reminder = store.getPendingReminder(updated.id);
-      sendJson(res, 200, { ticket: updated });
+      sendJson(res, 200, { ticket: updated, warnings: store.ticketPlanningWarnings(updated) });
       return;
     }
     if (req.method === 'DELETE') {

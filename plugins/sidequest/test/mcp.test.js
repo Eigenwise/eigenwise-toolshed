@@ -133,6 +133,8 @@ test('native_agent carries ticket anchors and verify command through its stable 
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
     assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-codex-gpt-5-6-terra-high');
+    assert.match(native.prompt, /Authoritative ticket contract \(the task prompt may add logistics only; do not narrow this scope\):/);
+    assert.match(native.prompt, /Title: prompt context/);
     assert.match(native.prompt, /Anchors:\nlib\/work\.js:14 executorPrompt/);
     assert.match(native.prompt, /Verify command:\nnode --test plugins\/sidequest\/test\/work\.test\.js/);
   } finally {

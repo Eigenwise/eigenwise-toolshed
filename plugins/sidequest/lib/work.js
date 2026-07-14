@@ -18,7 +18,12 @@ const NATIVE_PROMPT_MAX = 7600;
 function executorPrompt(ticket, taskPrompt) {
   const base = String(taskPrompt || '').trim();
   if (!base) throw new Error('native_agent: prompt is required.');
-  const parts = [base];
+  const contract = [
+    'Authoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):',
+    `Title: ${ticket.title}`,
+    ticket.description || '(No additional description was recorded.)',
+  ].join('\n');
+  const parts = [base, contract];
   if (ticket.executorAnchors) parts.push(`Anchors:\n${ticket.executorAnchors}`);
   if (ticket.executorVerify) parts.push(`Verify command:\n${ticket.executorVerify}`);
   const prompt = parts.join('\n\n');

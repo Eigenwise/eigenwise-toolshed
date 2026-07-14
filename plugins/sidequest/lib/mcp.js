@@ -297,7 +297,7 @@ const TOOLS = [
         source: 'mcp',
       });
       const ticket = store.getTicket(slug, created.ref) || created;
-      return { ok: true, project: slug, projectName: meta.name, ticket };
+      return { ok: true, project: slug, projectName: meta.name, ticket, warnings: store.ticketPlanningWarnings(ticket) };
     },
   },
   {
@@ -338,7 +338,7 @@ const TOOLS = [
       if (args.why !== undefined) patch.complexityWhy = args.why;
       const t = store.updateTicket(slug, args.ref, patch);
       if (!t) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
-      return { ok: true, project: slug, ticket: t };
+      return { ok: true, project: slug, ticket: t, warnings: store.ticketPlanningWarnings(t) };
     },
   },
   {
@@ -363,7 +363,7 @@ const TOOLS = [
       const drift = executorDrift(slug, args.ref, args.effort, args.executor);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, source: 'mcp', sessionId: sessionOf(args) });
-      return Object.assign({ project: slug }, res);
+      return Object.assign({ project: slug }, res, { warnings: res.ok ? store.ticketPlanningWarnings(res.ticket) : [] });
     },
   },
   {

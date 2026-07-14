@@ -215,6 +215,7 @@ function cmdAdd(opts) {
   // Re-read through getTicket so the returned ticket carries its derived
   // model/effort (stamped from complexity at read time) for display/JSON.
   const ticket = store.getTicket(slug, created.ref) || created;
+  warnings.push(...store.ticketPlanningWarnings(ticket));
 
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, ticket, warnings }, null, 2) + '\n');
@@ -304,13 +305,15 @@ function cmdUpdate(opts, positional) {
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
   // Re-read so derived model/effort (stamped from complexity at read time) show.
   const updated = store.getTicket(slug, saved.ref) || saved;
+  const warnings = store.ticketPlanningWarnings(updated);
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ ok: true, ticket: updated }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ ok: true, ticket: updated, warnings }, null, 2) + '\n');
     return;
   }
   const story = updated.storyId ? store.getStory(slug, updated.storyId) : null;
   const st = story ? `  ↳${story.ref}` : '';
   console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]${st}${modelMark(updated)}  "${updated.title}"`);
+  for (const warning of warnings) console.log(`  ! ${warning}`);
 }
 
 function cmdRm(opts, positional) {
@@ -447,6 +450,12 @@ function executorDriftReason(slug, idOrRef, claimedEffort, executorName) {
   };
 }
 
+function claimPlanningWarnings(ticket) {
+  const warnings = store.ticketPlanningWarnings(ticket);
+  if (!warnings.length) return [];
+  return [`Dispatch context warning: ${warnings[0].replace('Planning-depth warning: ', '')}`];
+}
+
 function cmdClaim(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('claim: pass a ticket id or ref, e.g. sidequest claim SQ-3 --by me');
@@ -464,14 +473,16 @@ function cmdClaim(opts, positional) {
     return;
   }
   const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const warnings = res.ok ? claimPlanningWarnings(res.ticket) : [];
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, { warnings }), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
     return;
   }
   if (res.ok) {
     console.log(`✓ claimed ${res.ticket.ref} as "${by}"  [${res.ticket.status}]  — ${meta.name}`);
     console.log(`  "${res.ticket.title}"`);
+    for (const warning of warnings) console.log(`  ! ${warning}`);
   } else {
     reportClaimFailure('claim', idOrRef, res, meta);
   }

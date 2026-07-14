@@ -67,11 +67,19 @@ test('nativeDispatchRequired accepts available tickets only for native Agent dis
   assert.match(checked.message, /Agent tool/);
 });
 
+test('executorPrompt carries the authoritative ticket contract before ticket context', () => {
+  const t = ticket({ title: 'Preserve scope', description: 'Update every lesson route across both commits.' });
+  assert.strictEqual(
+    work.executorPrompt(t, 'Claim SQ-1 as worker-1.'),
+    'Claim SQ-1 as worker-1.\n\nAuthoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):\nTitle: Preserve scope\nUpdate every lesson route across both commits.'
+  );
+});
+
 test('executorPrompt appends ticket anchors and verify command verbatim', () => {
   const t = ticket({ executorAnchors: 'lib/work.js:14 executorPrompt', executorVerify: 'node --test plugins/sidequest/test/work.test.js' });
   assert.strictEqual(
     work.executorPrompt(t, 'Implement the bounded change.'),
-    'Implement the bounded change.\n\nAnchors:\nlib/work.js:14 executorPrompt\n\nVerify command:\nnode --test plugins/sidequest/test/work.test.js'
+    'Implement the bounded change.\n\nAuthoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):\nTitle: fixture\n(No additional description was recorded.)\n\nAnchors:\nlib/work.js:14 executorPrompt\n\nVerify command:\nnode --test plugins/sidequest/test/work.test.js'
   );
 });
 

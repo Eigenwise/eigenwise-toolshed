@@ -51,9 +51,7 @@ code**:
 3. **Execute proportionally** — see "Execute proportionally" below. The board stays the source of
    truth for what's left.
 
-Scout first only when the surface is genuinely unfamiliar AND large — a quick read of the obvious
-files usually beats spawning explorers. Keep any scout proportional: one or two read-only explorers
-for a big unknown subsystem, none for a task whose files you can already name.
+Before filing a **complexity 4+** ticket, make a scout pass first: read the integration surface yourself when it is obvious, or delegate a proportional read-only scout when it is unfamiliar. Pin the resulting file scope, executor anchors, and exact verify command in the ticket before filing. A separate scout ticket is still only for a genuinely unfamiliar and large surface; the requirement is the planning pass and its concrete output, not ceremony.
 
 The point of the board: the plan is visible, survives context loss, and other agents can pick up
 unblocked pieces. For a genuinely trivial one-step change, just do it — no ticket ceremony.
@@ -206,9 +204,7 @@ re-verifying the world. You prevent it from the spawn side:
 - **The ticket is the spec.** File it with exact anchors and the precise verify command (the cheaper
   the tier, the more patch-level the spec — see "File a ticket"). A well-specced ticket leaves the
   executor nothing to wander on.
-- **Scope the spawn prompt**: which files, which verify command, what "done" looks like, and what the
-  executor does NOT need (e.g. "no comment thread exists — skip reading it"; you know the count from
-  the `--brief` read).
+- **Scope the spawn prompt only with logistics**: the ref, worker id and exact claim/done commands, stamped effort/model, and whether a thread is empty. **Carry the ticket contract in full and unnarrowed.** Do not describe a smaller implementation than the ticket specifies, omit deliverables, or reinterpret its bounds. The ticket is authoritative; edit it first if planning changes. **Anti-pattern: dispatch narrower than ticket.** Cantizans SQ-87 required extracting the done block in every lesson route across two commits, while its dispatch prompt limited wiring to intervals as a reference. The executor correctly bounced rather than silently shrinking the contract, costing another round-trip.
 - **Executors bounce back, they don't grind.** An executor that hits ambiguity, growing scope, or two
   failed attempts should release + report fast so you can re-scope or re-route — that's built into
   the executor agents.

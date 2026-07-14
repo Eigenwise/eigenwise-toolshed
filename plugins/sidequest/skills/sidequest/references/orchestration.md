@@ -32,10 +32,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   (started, reused, or stopped), files changed, blockers, cleanup performed, and verification output.
   Tickets with no declared scope never mechanically conflict, so eyeball whether they'd edit the same
   files before parallelizing them.
-- **Executor prompts stay lean**: the ref, the claim/done commands with the worker id, the stamped
-  effort/model, and anything the ticket description doesn't already carry. The ticket IS the spec —
-  don't paste the codebase into the prompt. Ask executors to report tersely (what changed, files/lines,
-  verification output, close confirmation) — data, not prose.
+- **Executor prompts stay lean and cannot narrow the ticket**: add only the ref, worker id, claim/done commands, stamped effort/model, and logistics the ticket does not carry. The ticket contract is authoritative and must travel in full, unchanged scope. If the plan changed, update the ticket before dispatching. **Anti-pattern: dispatch narrower than ticket.** In Cantizans SQ-87, the ticket required extracting the done block across every lesson route and two commits, while the dispatch limited work to intervals as a reference. The executor bounced correctly, then the orchestrator had to re-plan. Never create that contradiction.
+  Ask executors to report tersely (what changed, files/lines, verification output, close confirmation) — data, not prose.
 - Parallelism costs tokens and orchestration overhead — a couple of parallel investigations or an
   executor wave where sizes justify it, not a swarm for everything.
 

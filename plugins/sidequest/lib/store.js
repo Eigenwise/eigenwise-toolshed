@@ -1203,6 +1203,16 @@ function executorText(value, max, label) {
   return text;
 }
 
+function ticketPlanningWarnings(ticket) {
+  if (!ticket || Number(ticket.complexity) < 4) return [];
+  const missing = [];
+  if (!String(ticket.executorAnchors || '').trim()) missing.push('executor anchors');
+  if (!String(ticket.executorVerify || '').trim()) missing.push('verify command');
+  if (!Array.isArray(ticket.files) || !ticket.files.length) missing.push('file scope');
+  if (!missing.length) return [];
+  return [`Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: ${missing.join(', ')}.`];
+}
+
 function createTicket(slug, fields) {
   fields = fields || {};
   const id = newTicketId();
@@ -3138,6 +3148,7 @@ module.exports = {
   VALID_EFFORTS,
   EXECUTOR_ANCHORS_MAX,
   EXECUTOR_VERIFY_MAX,
+  ticketPlanningWarnings,
   MODEL_CAPABILITY_ORDER,
   EXECUTION_PROFILES,
   profileForTier,
