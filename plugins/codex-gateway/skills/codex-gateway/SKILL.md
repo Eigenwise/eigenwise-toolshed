@@ -39,6 +39,13 @@ user wants Codex models in this repo alone. After `env --write-user`, the user r
 the Codex rows appear in `/model` labeled "From gateway". Discovery needs Claude Code v2.1.129+
 and fails silently if the shim answers slowly; `models` shows exactly what's advertised.
 
+That restart is ONLY to surface new model rows in `/model` — model discovery happens once at
+session start. Restoring or refreshing auth on an already-wired install needs no restart: the
+proxy is a separate process, so once `login` + `setup` re-authenticate it, the next request
+routes through cleanly. This matters when an agent is mid-orchestration (e.g. dispatching Codex
+subagents through the gateway) — do not tell the user to restart Claude Code just to bring auth
+back, or you kill the session that was about to use it.
+
 ## Selecting models
 
 - `/model` picker: rows like "GPT-5.6-sol (Codex)".
@@ -113,6 +120,11 @@ agree).
   (`doctor` shows auth), then proxy log. OpenAI gates non-Codex clients by request fingerprint;
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so
   suggest re-running `setup` (it fetches the latest release).
+- **`doctor` shows `Not authenticated` right after an upgrade**: bumping the proxy binary (e.g.
+  0.1.10 → 0.1.17 via `setup`) can invalidate the credential the old version accepted — the new
+  binary reads it as not authenticated and `setup` stops before wiring. Fix: re-run `login`, then
+  `setup` again to finish. Until then every Codex model is down, so any workflow that routes to
+  Codex (a whole sidequest board of Codex-tier tickets, for one) stalls entirely.
 - **No "From gateway" rows in /model**: discovery is off (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`
   missing), Claude Code < v2.1.129, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set (it
   disables discovery), or the shim had no model cache yet; check `models`, restart the session.
