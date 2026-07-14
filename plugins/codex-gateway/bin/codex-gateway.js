@@ -802,13 +802,12 @@ const DEFAULT_MODELS = [
 // Code compact earlier"; the earlier 272k/245k-headroom rationale was wrong.
 //
 // It is still advertised (a) for honesty in /v1/models and (b) to future-proof
-// a Claude Code version that does consult it. The real GPT-5.6 backend window
-// is much larger than 272k (observed: a session accepted ~673k reported tokens
-// at 200 OK, though 0.1.x proxy usage accounting may inflate that — re-measure
-// with proxy >=0.1.17's subtract-cached mapping). Override per-machine with
+// a Claude Code version that does consult it. Proxy 0.1.17 measured the real
+// GPT-5.6 input ceiling at 370000 tokens: 370006 was accepted and 371882 was
+// rejected with native 413 request_too_large. Override per-machine with
 // CODEX_GATEWAY_CONTEXT_WINDOW. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW
 // to influence this: that also hits Claude passthrough models.
-const CODEX_COMPACT_CONTEXT_WINDOW = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW) || 245000;
+const CODEX_COMPACT_CONTEXT_WINDOW = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW) || 370000;
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000

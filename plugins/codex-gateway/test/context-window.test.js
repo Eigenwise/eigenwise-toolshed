@@ -95,15 +95,15 @@ test('Codex discovery advertises context metadata but keeps the local model id u
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   assert.deepEqual(models.data.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
-    { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 245000 },
-    { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 245000 },
-    { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 245000 },
+    { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 370000 },
+    { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 370000 },
+    { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 370000 },
   ]);
-  // 245000 = the advertised max_input_tokens. NOTE: inert for compaction as of
-  // Claude Code 2.1.207 (it hardwires a 200k window for claude-codex-* ids and
-  // ignores this) — advertised only for honesty/future-proofing. See
+  // 370000 = the measured backend input ceiling. Claude Code 2.1.207 still
+  // hardwires 200k for claude-codex-* ids, so this value is inert for
+  // compaction and advertised only for honesty/future-proofing. See
   // CODEX_COMPACT_CONTEXT_WINDOW.
-  assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 245000), true);
+  assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 370000), true);
   assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
