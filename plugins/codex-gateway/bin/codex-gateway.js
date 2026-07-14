@@ -809,6 +809,10 @@ const DEFAULT_MODELS = [
 // CODEX_GATEWAY_CONTEXT_WINDOW. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW
 // to influence this: that also hits Claude passthrough models.
 const CODEX_COMPACT_CONTEXT_WINDOW = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW) || 245000;
+const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
+const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
+  ? configuredSseHeartbeatSeconds * 1000
+  : 20000;
 
 function gatewayModel(id) {
   return {
@@ -1110,6 +1114,32 @@ function runShim() {
     };
   }
 
+  function keepSseAlive(upRes, clientRes) {
+    if (!SSE_HEARTBEAT_MS) return;
+    let timer = null;
+    let stopped = false;
+    const stop = () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    const arm = () => {
+      if (stopped) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (clientRes.destroyed || !clientRes.writable) return stop();
+        clientRes.write(': ping\n\n');
+        arm();
+      }, SSE_HEARTBEAT_MS);
+    };
+    upRes.on('data', arm);
+    upRes.once('end', stop);
+    upRes.once('error', stop);
+    upRes.once('aborted', stop);
+    clientRes.once('close', stop);
+    arm();
+  }
+
   function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false) {
     const url = new URL(clientReq.url, target);
     const isHttps = url.protocol === 'https:';
@@ -1179,6 +1209,7 @@ function runShim() {
         delete resHeaders['content-length'];
         if (contentType.includes('text/event-stream')) {
           clientRes.writeHead(upRes.statusCode, resHeaders);
+          keepSseAlive(upRes, clientRes);
           const filter = createPlanToolSseFilter((chunk) => clientRes.write(chunk));
           upRes.on('data', (chunk) => filter.write(chunk));
           upRes.on('end', () => { filter.end(); clientRes.end(); });
@@ -1198,7 +1229,11 @@ function runShim() {
         });
         return;
       }
+      const contentType = String(upRes.headers['content-type'] || '').toLowerCase();
       clientRes.writeHead(upRes.statusCode, resHeaders);
+      if (normalizeContextErrors && upRes.statusCode >= 200 && upRes.statusCode < 300 && contentType.includes('text/event-stream')) {
+        keepSseAlive(upRes, clientRes);
+      }
       upRes.pipe(clientRes); // never buffer successful SSE: Claude Code needs the stream live
     });
     upReq.setTimeout(3600000, () => upReq.destroy(new Error('upstream timeout')));

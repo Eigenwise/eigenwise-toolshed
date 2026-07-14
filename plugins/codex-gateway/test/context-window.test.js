@@ -31,6 +31,19 @@ function request(port, method, pathname, body, extraHeaders = {}) {
   });
 }
 
+function requestStream(port, body) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
 async function waitForShim(port) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -499,6 +512,46 @@ test('count_tokens for a Codex model still routes to the proxy', async (t) => {
   assert.equal(response.status, 200);
   assert.equal(countTokensPath, '/v1/messages/count_tokens');
   assert.equal(JSON.parse(response.body).input_tokens, 42);
+});
+
+test('Codex SSE sends heartbeat comments while upstream is silent', async (t) => {
+  const firstEvent = 'event: message\ndata: {"type":"message_start"}\n\n';
+  const secondEvent = 'event: message\ndata: {"type":"message_stop"}\n\n';
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(firstEvent);
+    setTimeout(() => res.end(secondEvent), 75);
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_SSE_HEARTBEAT_S: '0.02',
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const response = await requestStream(shimPort, JSON.stringify({
+    model: 'claude-codex-gpt-5.6-terra',
+    max_tokens: 1,
+    messages: [{ role: 'user', content: 'stream' }],
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(response.body.replace(/: ping\n\n/g, ''), firstEvent + secondEvent);
+  assert.match(response.body, /: ping\n\n/);
 });
 
 test('proxy version floor uses a numeric semver compare, not a string compare', () => {
