@@ -59,7 +59,12 @@ the frontier rate landing on the second kind, not the first. Three levers keep i
   rule above is "spawn wave, wait, re-run `ready`, repeat," and why Anthropic runs its own research
   lead synchronously ([multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)).
   Background fan-out is for fire-and-forget work you will not re-plan against mid-flight, not for a
-  supervised wave you are actively steering.
+  supervised wave you are actively steering. **Caveat with agent teams on** (see below): a spawn
+  becomes a background teammate regardless of `run_in_background: false`, so you do not get the
+  single-resumption behavior — each teammate's completion still wakes the lead. The lever that
+  actually restores synchronous batching is running the wave with teams off. With teams on, you can
+  only soften the cost: spawn the whole wave in one message so completions cluster instead of
+  dribbling across the whole round, and lean hard on the other two levers below.
 - **Keep the lead context lean.** The executor already returns a terse summary and writes its full
   work to the ticket comment or a notes file (the executor protocol). Do not pull those full reports
   or notes back into the planning thread unless a synthesis step genuinely needs them: read them by
