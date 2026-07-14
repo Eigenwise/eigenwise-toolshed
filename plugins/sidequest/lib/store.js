@@ -1185,6 +1185,14 @@ function coerceStatus(s, fallback) {
   s = String(s || '').toLowerCase();
   return VALID_STATUS.includes(s) ? s : fallback;
 }
+
+function requireStatus(s) {
+  const status = String(s).toLowerCase();
+  if (!VALID_STATUS.includes(status)) {
+    throw new Error(`Invalid status "${s}". Valid statuses: ${VALID_STATUS.join(', ')}. Deletion is not a status; use the MCP remove tool or CLI rm.`);
+  }
+  return status;
+}
 function coercePriority(p, fallback) {
   p = String(p || '').toLowerCase();
   return VALID_PRIORITY.includes(p) ? p : fallback;
@@ -1215,6 +1223,7 @@ function ticketPlanningWarnings(ticket) {
 
 function createTicket(slug, fields) {
   fields = fields || {};
+  const status = fields.status === undefined ? 'todo' : requireStatus(fields.status);
   const id = newTicketId();
   const seq = nextSeq(slug);
   const now = new Date().toISOString();
@@ -1242,7 +1251,7 @@ function createTicket(slug, fields) {
     ref: `SQ-${seq}`,
     title: String(fields.title || 'Untitled').trim().slice(0, 300) || 'Untitled',
     description: String(fields.description || '').trim(),
-    status: coerceStatus(fields.status, 'todo'),
+    status,
     priority: coercePriority(fields.priority, 'normal'),
     labels: normalizeLabels(fields.labels),
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
@@ -1383,7 +1392,7 @@ function updateTicket(slug, idOrRef, patch) {
     const prevStatus = t.status;
     if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
     if (patch.description != null) t.description = String(patch.description).trim();
-    if (patch.status != null) t.status = coerceStatus(patch.status, t.status);
+    if (patch.status != null) t.status = requireStatus(patch.status);
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);

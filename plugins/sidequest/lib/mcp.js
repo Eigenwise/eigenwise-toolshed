@@ -302,7 +302,7 @@ const TOOLS = [
   },
   {
     name: 'update',
-    description: 'Edit a ticket by ref. Any omitted field is left unchanged. Re-scoring needs both complexity and a fresh why. Set story to "none" to detach. model/effort are not accepted.',
+    description: 'Edit a ticket by ref. Any omitted field is left unchanged. Re-scoring needs both complexity and a fresh why. Set story to "none" to detach. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -339,6 +339,32 @@ const TOOLS = [
       const t = store.updateTicket(slug, args.ref, patch);
       if (!t) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       return { ok: true, project: slug, ticket: t, warnings: store.ticketPlanningWarnings(t) };
+    },
+  },
+  {
+    name: 'remove',
+    description: 'Permanently and irreversibly delete a ticket by ref. Refuses a live claim unless force:true is passed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        force: { type: 'boolean', description: 'Permanently remove a ticket with a live claim. Use only when certain.' },
+      },
+      required: ['ref'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const ticket = store.getTicket(slug, args.ref);
+      if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
+      if (ticket.claim && ticket.claim.by && !store.isClaimStale(ticket.claim) && !args.force) {
+        return { ok: false, project: slug, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
+      }
+      const removed = { ref: ticket.ref, title: ticket.title };
+      if (!store.deleteTicket(slug, ticket.id)) {
+        throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
+      }
+      return { ok: true, project: slug, removed, ref: removed.ref, title: removed.title };
     },
   },
   {

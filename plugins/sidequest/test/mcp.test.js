@@ -77,7 +77,7 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'claim', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'archive_board', 'unarchive_board']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'claim', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'archive_board', 'unarchive_board']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const t of resp.result.tools) {
@@ -159,6 +159,33 @@ test('add enforces complexity + why and rejects direct model/effort', () => {
   assert.match(out.ticket.ref, /^SQ-\d+$/);
   assert.strictEqual(out.ticket.complexity, 3);
   assert.ok(out.ticket.model, 'routing is derived and stamped');
+});
+
+test('status validation fails loudly and directs deletion to remove', () => {
+  const added = callTool('add', { title: 'strict status', complexity: 1, why: 'exercise loud validation for invalid MCP status values' });
+  const invalid = callToolRaw('update', { ref: added.ticket.ref, status: 'deleted' });
+  assert.ok(invalid.isError);
+  assert.match(invalid.content[0].text, /Valid statuses: todo, doing, done/);
+  assert.match(invalid.content[0].text, /remove tool/i);
+  assert.throws(() => store.updateTicket(store.ensureProject(PROJ).slug, added.ticket.ref, { status: 'deleted' }), /remove tool/i);
+  assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
+});
+
+test('remove permanently deletes tickets and protects live claims without force', () => {
+  const added = callTool('add', { title: 'remove me', complexity: 1, why: 'exercise permanent MCP ticket removal and list disappearance' });
+  const removed = callTool('remove', { ref: added.ticket.ref });
+  assert.strictEqual(removed.ok, true);
+  assert.deepStrictEqual(removed.removed, { ref: added.ticket.ref, title: 'remove me' });
+  assert.ok(!callTool('list', {}).tickets.some((ticket) => ticket.ref === added.ticket.ref));
+
+  const claimed = callTool('add', { title: 'claimed remove', complexity: 1, why: 'exercise refusal when a ticket has a live executor claim' });
+  const claim = callTool('claim', { ref: claimed.ticket.ref, by: 'mcp-remove-worker' });
+  assert.strictEqual(claim.ok, true);
+  const refused = callTool('remove', { ref: claimed.ticket.ref });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'claimed');
+  const forced = callTool('remove', { ref: claimed.ticket.ref, force: true });
+  assert.strictEqual(forced.ok, true);
 });
 
 test('claim -> comment -> done round-trips over the same store, tagged source mcp', () => {
