@@ -529,6 +529,14 @@ function addTicket(title) {
   });
 }
 
+function addEffortTicket(title, effort) {
+  return store.createTicket(slug, {
+    title,
+    effort,
+    source: 'cli',
+  });
+}
+
 // Backdate every claim the registry attributes to `sessionId` by `minutesAgo`, so
 // the claim's `at` reads as an old, long-running run without waiting real time.
 function backdateSessionClaims(sessionId, minutesAgo) {
@@ -555,6 +563,35 @@ test('subagent-stop: an over-threshold claim emits a one-line runaway note', () 
   assert.match(ctx, /atomic/i, 'the note must ask whether the ticket was atomic');
   assert.ok(ctx.length <= BUDGET.longrun, `runaway note is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
   assert.ok(ctx.indexOf('\n') === -1, 'the note must stay ONE line');
+});
+
+test('subagent-stop: the long-run threshold scales by claimed effort', () => {
+  const tiers = [
+    ['low', 10],
+    ['medium', 15],
+    ['high', 25],
+    ['xhigh', 40],
+  ];
+
+  for (const [effort, threshold] of tiers) {
+    const quietSession = `sess-${effort}-quiet-${++sqSeq}`;
+    const quietTicket = addEffortTicket(`${effort} run under budget`, effort);
+    assert.strictEqual(store.claimTicket(slug, quietTicket.ref, `worker-${effort}-quiet`, { sessionId: quietSession }).ok, true);
+    backdateSessionClaims(quietSession, threshold - 1);
+    assert.strictEqual(
+      runHook(SUBAGENT_STOP, { session_id: quietSession }),
+      '',
+      `${effort} run under ${threshold}m must stay silent`
+    );
+
+    const loudSession = `sess-${effort}-loud-${++sqSeq}`;
+    const loudTicket = addEffortTicket(`${effort} run over budget`, effort);
+    assert.strictEqual(store.claimTicket(slug, loudTicket.ref, `worker-${effort}-loud`, { sessionId: loudSession }).ok, true);
+    backdateSessionClaims(loudSession, threshold + 1);
+    const ctx = runHook(SUBAGENT_STOP, { session_id: loudSession });
+    assert.ok(ctx.includes(loudTicket.ref), `${effort} run over ${threshold}m must be flagged`);
+    assert.match(ctx, new RegExp(`over the ${threshold}m`), `${effort} note must name its threshold`);
+  }
 });
 
 test('subagent-stop: stop_hook_active suppresses the note (no self-continuation loop)', () => {
@@ -628,14 +665,14 @@ test('subagent-stop: a session with no attributable claim stays silent', () => {
   assert.strictEqual(runHook(SUBAGENT_STOP, {}), '', 'a bare payload with no session id must be silent');
 });
 
-test('subagent-stop: SIDEQUEST_LONG_RUN_MIN lowers the threshold', () => {
+test('subagent-stop: SIDEQUEST_LONG_RUN_MIN overrides the effort-scaled threshold', () => {
   const sess = `sess-tuned-${++sqSeq}`;
-  const t = addTicket('5-min run, flagged only under a tighter threshold');
+  const t = addEffortTicket('5-min high-effort run, flagged only under a tighter threshold', 'high');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-tuned', { sessionId: sess }).ok, true);
   backdateSessionClaims(sess, 5);
 
-  // Default 15m: silent.
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', '5m is under the 15m default');
+  // Default high-effort threshold is 25m: silent.
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', '5m is under the high-effort default');
   // Override to 2m: now it fires.
   const out = execFileSync(process.execPath, [SUBAGENT_STOP], {
     input: JSON.stringify({ session_id: sess }),

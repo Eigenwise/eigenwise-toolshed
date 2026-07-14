@@ -52,11 +52,13 @@ function pluginRoot() {
 }
 
 // Minutes over which a single claimed run is worth flagging. Env-overridable;
-// a missing/garbage/non-positive value falls back to the 15-minute default.
-function thresholdMs() {
+// a missing/garbage/non-positive value falls back to the effort-scaled default.
+function thresholdMs(effort) {
   const raw = process.env.SIDEQUEST_LONG_RUN_MIN;
   const n = raw != null && String(raw).trim() !== '' ? Number(raw) : NaN;
-  const min = Number.isFinite(n) && n > 0 ? n : 15;
+  const min = Number.isFinite(n) && n > 0
+    ? n
+    : ({ low: 10, medium: 15, high: 25, xhigh: 40 }[String(effort || '').trim().toLowerCase()] || 15);
   return min * 60 * 1000;
 }
 
@@ -99,16 +101,23 @@ function main() {
   }
   if (!Array.isArray(claims) || !claims.length) process.exit(0);
 
-  const cutoff = thresholdMs();
   const now = Date.now();
   let worst = null; // the longest-running over-threshold claim
   for (const c of claims) {
     if (!c || !c.held || c.status === 'done') continue;
     const started = c.at ? Date.parse(c.at) : NaN;
     if (!Number.isFinite(started)) continue;
+    let effort = null;
+    try {
+      const ticket = store.getTicket(c.slug, c.ticketId);
+      effort = ticket && ticket.effort;
+    } catch (_) {
+      // Unknown or unreadable ticket effort keeps the default threshold.
+    }
+    const cutoff = thresholdMs(effort);
     const elapsed = now - started;
     if (elapsed <= cutoff) continue;
-    if (!worst || elapsed > worst.elapsed) worst = { elapsed, ref: c.ref, ticketId: c.ticketId, slug: c.slug, at: c.at };
+    if (!worst || elapsed > worst.elapsed) worst = { elapsed, cutoff, ref: c.ref, ticketId: c.ticketId, slug: c.slug, at: c.at };
   }
   if (!worst) process.exit(0); // every claim is within budget
 
@@ -120,7 +129,7 @@ function main() {
 
   const mins = Math.max(1, Math.round(worst.elapsed / 60000));
   const label = worst.ref || worst.ticketId || 'a claimed ticket';
-  const budgetMin = Math.round(cutoff / 60000);
+  const budgetMin = Math.round(worst.cutoff / 60000);
   emit(
     `⚠️ sidequest: the executor for ${label} held its claim ~${mins}m (over the ${budgetMin}m long-run mark). ` +
       `Was that ticket really atomic, or should it have been split? Check its diff/report before trusting the result.`
