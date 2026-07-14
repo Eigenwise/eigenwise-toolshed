@@ -55,10 +55,10 @@ const REPO = 'raine/claude-code-proxy';
 // newer than '0.1.14'.
 const MIN_PROXY_VERSION = '0.1.14';
 const ANTHROPIC_UPSTREAM = process.env.CODEX_GATEWAY_ANTHROPIC_UPSTREAM || 'https://api.anthropic.com';
-// Disabled unless explicitly requested. Route logs are metadata-only: never write
-// prompts, tool payloads, auth, or arbitrary headers. Set to `1` while tracing
-// unexpected model usage; see requestRouteLog below.
-const REQUEST_ROUTE_LOG = process.env.CODEX_GATEWAY_REQUEST_LOG === '1';
+// Enabled by default because route logs are metadata-only: never write prompts,
+// tool payloads, auth, or arbitrary headers. Set to `0` to opt out; a running shim
+// picks this up at its next natural restart. See requestRouteLog below.
+const REQUEST_ROUTE_LOG = process.env.CODEX_GATEWAY_REQUEST_LOG !== '0';
 const REQUEST_ROUTE_LOG_PATH = process.env.CODEX_GATEWAY_REQUEST_LOG_PATH || path.join(LOGS, 'request-routes.jsonl');
 
 // ---------------------------------------------------- RC-compatibility mode
@@ -127,8 +127,8 @@ const USAGE = `usage: codex-gateway.js <command>
                    manage the opt-in hosts-file compatibility mode
   serve-shim       (internal) run the router in the foreground
 
-  Request route logging (off by default):
-    CODEX_GATEWAY_REQUEST_LOG=1
+  Request route logging (on by default; set CODEX_GATEWAY_REQUEST_LOG=0 to opt out):
+    CODEX_GATEWAY_REQUEST_LOG=0
     Writes JSONL route metadata to ${REQUEST_ROUTE_LOG_PATH}. Override the path with
     CODEX_GATEWAY_REQUEST_LOG_PATH. It records no request bodies, prompts, tools, or auth.`;
 

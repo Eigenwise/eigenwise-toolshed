@@ -180,7 +180,7 @@ test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', a
   assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 200000), true);
 });
 
-test('opt-in request route logging records Fable metadata but never prompt data', async (t) => {
+test('default request route logging records Fable metadata but never prompt data', async (t) => {
   const logFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-routes-')), 'routes.jsonl');
   const anthropic = http.createServer((req, res) => {
     const chunks = [];
@@ -193,13 +193,14 @@ test('opt-in request route logging records Fable metadata but never prompt data'
   const shimProbe = http.createServer();
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
+  const testEnv = { ...process.env };
+  delete testEnv.CODEX_GATEWAY_REQUEST_LOG;
   const child = spawn(process.execPath, [CLI, 'serve-shim'], {
     env: {
-      ...process.env,
+      ...testEnv,
       CODEX_GATEWAY_PORT: String(shimPort),
       CODEX_GATEWAY_PROXY_PORT: String(shimPort + 1),
       CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
-      CODEX_GATEWAY_REQUEST_LOG: '1',
       CODEX_GATEWAY_REQUEST_LOG_PATH: logFile,
     },
     stdio: 'ignore',
@@ -223,6 +224,40 @@ test('opt-in request route logging records Fable metadata but never prompt data'
     sessionId: 'session-safe-id',
   }]);
 });
+
+test('CODEX_GATEWAY_REQUEST_LOG=0 disables request route logging', async (t) => {
+  const logFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-routes-disabled-')), 'routes.jsonl');
+  const anthropic = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true })); });
+  });
+  const anthropicPort = await listen(anthropic);
+  t.after(() => anthropic.close());
+
+  const shimProbe = http.createServer();
+  const shimPort = await listen(shimProbe);
+  await new Promise((resolve) => shimProbe.close(resolve));
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(shimPort + 1),
+      CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+      CODEX_GATEWAY_REQUEST_LOG_PATH: logFile,
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForShim(shimPort);
+
+  const response = await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
+    model: 'claude-fable-5', max_tokens: 1, messages: [{ role: 'user', content: 'disabled logging' }],
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(fs.existsSync(logFile), false);
+});
+
 
 test('Codex sentry sums all input usage fields from SSE message_delta frames', async (t) => {
   let forwarded = 0;
