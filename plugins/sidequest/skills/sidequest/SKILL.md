@@ -21,8 +21,9 @@ once. Everything is driven by one CLI (`bin/sidequest.js`) or the matching MCP t
 Detail that used to live inline here is split into reference files — **read them only when the
 situation calls for it**:
 
-- [references/orchestration.md](references/orchestration.md) — fan-out waves, workflows (opt-in,
-  sizing), agent-teams caveats, spike tickets, native Agent dispatch.
+- [references/orchestration.md](references/orchestration.md) — fan-out waves, orchestration cost
+  (keeping the lead cheap to wake), workflows (opt-in, sizing), agent-teams caveats, spike tickets,
+  native Agent dispatch.
 - [references/routing-details.md](references/routing-details.md) — how the capability ladder is built,
   bias, the effort grid, a worked routing example.
 - [references/routing-guide.md](references/routing-guide.md) — the official Anthropic grounding for

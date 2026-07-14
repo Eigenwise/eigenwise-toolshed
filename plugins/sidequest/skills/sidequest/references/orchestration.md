@@ -37,6 +37,39 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - Parallelism costs tokens and orchestration overhead — a couple of parallel investigations or an
   executor wave where sizes justify it, not a swarm for everything.
 
+## Orchestration cost: keep the lead cheap to wake
+
+The lead's own bill is roughly `wakeups × lead-context-size × lead-model-price`. Each time a worker
+finishes and hands control back, the lead resumes and re-reads its whole context to react. That
+context is often large (a planning thread sits at 300k+ tokens easily), and the lead runs on your
+session model, which may be your priciest one. So the cost that surprises people is not the
+executors, which route down to cheap tiers by design; it's the lead being woken over and over at
+full context to do almost nothing. Prompt caching softens the per-token price of those re-reads but
+does not remove them: reading a 300k context 40 times is still 40 reads.
+
+The lead really has two kinds of turn: cheap routing/ack ("worker 3 done, spawn the next") and
+expensive plan/synthesis (decompose, weigh conflicting reports, write the spec, integrate). You want
+the frontier rate landing on the second kind, not the first. Three levers keep it there:
+
+- **Prefer a synchronous batched wave over background teammates for orchestration-heavy rounds.** A
+  background (`in_process_teammate`) executor that finishes pings the lead, waking it to re-read the
+  full context just to acknowledge "done." N background workers over a long round is N full-context
+  re-reads. Spawning the wave with `run_in_background: false`, blocking until every worker returns,
+  and processing the batch once collapses that to a single resumption. This is exactly why the wave
+  rule above is "spawn wave, wait, re-run `ready`, repeat," and why Anthropic runs its own research
+  lead synchronously ([multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)).
+  Background fan-out is for fire-and-forget work you will not re-plan against mid-flight, not for a
+  supervised wave you are actively steering.
+- **Keep the lead context lean.** The executor already returns a terse summary and writes its full
+  work to the ticket comment or a notes file (the executor protocol). Do not pull those full reports
+  or notes back into the planning thread unless a synthesis step genuinely needs them: read them by
+  reference (open the file or comment at the moment you need it), so raw executor output never becomes
+  permanent weight the lead re-reads on every later wake.
+- **Match the lead model to the round.** The strongest model as lead is right when the round is plan-
+  and synthesis-heavy: Anthropic's Opus lead with Sonnet workers beat a solo Opus by 90.2%. A round
+  that is mostly ack turns pays that premium on every wakeup for little return. If your session model
+  sits above Opus, an orchestration-heavy round is the case to notice it.
+
 ## Scouting
 
 Scout before decomposing only when the surface is genuinely unfamiliar AND large: one or two
