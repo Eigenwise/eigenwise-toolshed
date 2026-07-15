@@ -194,25 +194,17 @@
   .pop-row em { font-style: normal; font-size: 11px; color: var(--text-faint); }
   .pop-foot { font-size: 10.5px; color: var(--text-faint); padding: 8px; line-height: 1.45; border-top: 1px solid var(--line-soft); margin-top: 4px; }
 
-  /* Settings is a wide, white, multi-column sheet (not the thin strip the
-     other popovers use): notifications | routing & models | the live ladder,
-     three hairline-divided columns on one card. Anchored top-right like its
-     siblings; collapses to a single column when the window is narrow. */
+  /* Settings is a wide planning sheet: ticket categories define the routing
+     work, grade cards define the available model tiers, and old score controls
+     stay reachable without competing for the page's attention. */
   .popover.settings-panel { width: min(1180px, 97vw); padding: 0; background: var(--card); }
   .settings-panel .sp-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px 12px; border-bottom: 1px solid var(--line-soft); }
   .settings-panel .sp-title { font-family: var(--sans); font-weight: 700; font-size: 14.5px; letter-spacing: .01em; color: var(--text); }
   .settings-panel .sp-title-sub { font-size: 11.5px; font-weight: 400; color: var(--text-faint); }
-  .settings-panel .sp-grid { display: grid; grid-template-columns: minmax(280px, 1.1fr) minmax(280px, 1fr) minmax(230px, .85fr); max-height: min(74vh, 660px); overflow-y: auto; }
-  .settings-panel .sp-col { padding: 8px 15px 18px; border-right: 1px solid var(--line-soft); min-width: 0; }
-  .settings-panel .sp-col + .sp-col { border-left: 0; }
-  .settings-panel .sp-col:last-child { border-right: 0; }
+  .settings-panel .sp-grid { display: grid; grid-template-columns: minmax(360px, 1.18fr) minmax(320px, 1fr) minmax(230px, .82fr); max-height: min(74vh, 660px); overflow-y: auto; }
+  .settings-panel .sp-col { grid-column: 3; grid-row: 1 / span 2; padding: 8px 15px 18px; min-width: 0; border-left: 1px solid var(--line-soft); }
   .settings-panel .sp-col .pop-head:first-child { padding-top: 10px; }
-  @media (max-width: 880px) {
-    .settings-panel .sp-grid { grid-template-columns: 1fr; }
-    .settings-panel .sp-col { border-right: 0; border-bottom: 1px solid var(--line-soft); }
-    .settings-panel .sp-col:last-child { border-bottom: 0; }
-  }
-  .routing-panel { grid-column: span 2; padding: 14px 18px 18px; border-right: 1px solid var(--line-soft); }
+  .routing-panel { grid-column: 1 / 3; grid-row: 2; padding: 14px 18px 18px; border-top: 1px solid var(--line-soft); }
   .routing-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
   .routing-head h3 { margin: 0; font-family: var(--serif); font-size: 19px; font-weight: 500; }
   .routing-head p { margin: 3px 0 0; color: var(--text-faint); font-size: 11.5px; }
@@ -226,14 +218,27 @@
   .profile-toggle input { accent-color: var(--gold); width: 15px; height: 15px; flex: none; margin: 0; }
   .profile-dot { width: 8px; height: 8px; border-radius: 50%; }
   .profile-name { display: block; font-size: 13px; font-weight: 650; color: var(--text); }
-  .profile-band { display: block; margin-top: 3px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+  .profile-band { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; min-height: 17px; }
+  .profile-category { max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 9.5px; line-height: 15px; color: var(--indigo); background: rgba(64,70,131,.08); border: 1px solid rgba(64,70,131,.22); border-radius: 999px; padding: 0 6px; }
+  .profile-category.more { color: var(--text-faint); background: var(--panel); border-color: var(--line-soft); }
   .profile-runtime { text-align: right; font-size: 11.5px; color: var(--text-dim); }
   .profile-runtime b { display: block; color: var(--text); font-weight: 600; }
-  .routing-direct-controls { margin-top: 14px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
-  .routing-direct-controls .pop-head { padding-left: 0; }
-  .routing-direct-controls .model-pref-list { margin-bottom: 10px; }
+  .routing-direct-controls { margin-top: 14px; }
+  .legacy-routing { border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+  .legacy-routing summary { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px 12px; color: var(--text-dim); list-style: none; }
+  .legacy-routing summary::-webkit-details-marker { display: none; }
+  .legacy-routing summary::before { content: "+"; width: 15px; font-family: var(--mono); color: var(--text-faint); text-align: center; }
+  .legacy-routing[open] summary::before { content: "−"; }
+  .legacy-routing summary strong { font-size: 11.5px; color: var(--text); }
+  .legacy-routing summary span { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); }
+  .legacy-routing-copy { margin: 0; padding: 0 12px 9px 35px; font-size: 11px; line-height: 1.45; color: var(--text-faint); }
+  .legacy-routing-body { padding: 8px 12px 12px; border-top: 1px dashed var(--line-soft); }
+  .legacy-routing-body .pop-head { padding-left: 0; }
+  .legacy-routing-body .model-pref-list { margin-bottom: 10px; }
   @media (max-width: 880px) {
-    .routing-panel { grid-column: auto; border-right: 0; }
+    .settings-panel .sp-grid { grid-template-columns: 1fr; }
+    .category-settings, .routing-panel, .settings-panel .sp-col { grid-column: auto; grid-row: auto; border-left: 0; }
+    .routing-panel, .settings-panel .sp-col { border-top: 1px solid var(--line-soft); }
     .routing-profiles { grid-template-columns: 1fr; }
     .profile-row:nth-child(odd) { border-right: 0; }
     .profile-row:nth-last-child(2) { border-bottom: 1px solid var(--line-soft); }
@@ -475,7 +480,7 @@
   .modelchip svg { flex: none; opacity: .9; }
   .categorychip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); color: var(--indigo); background: rgba(64,70,131,.08); border: 1px solid rgba(64,70,131,.28); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .categorychip::before { content: "◇"; color: var(--gold); font-size: 12px; line-height: 1; }
-  .category-settings { display: flex; flex-direction: column; min-height: 0; }
+  .category-settings { grid-column: 1 / 3; display: flex; flex-direction: column; min-height: 0; background: linear-gradient(90deg, var(--gold-soft), transparent 45%); }
   .category-settings .cat-head { padding: 18px 15px 10px; border-bottom: 1px solid var(--line-soft); }
   .category-settings h3 { margin: 0; font-family: var(--serif); font-size: 17px; font-weight: 500; color: var(--text); }
   .category-settings p { margin: 4px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--text-faint); }
@@ -775,17 +780,17 @@
             <span class="sp-title-sub">notifications &amp; execution plan</span>
           </div>
           <div class="sp-grid">
+            <section class="category-settings" aria-labelledby="categoriesTitle">
+              <div class="cat-head"><h3 id="categoriesTitle">Categories</h3><p>Categories choose the route. Tickets follow their category on the next read.</p></div>
+              <div class="category-list" id="categoryList"></div>
+            </section>
             <section class="routing-panel" aria-labelledby="routingTitle">
               <div class="routing-head">
-                <div><h3 id="routingTitle">Routing</h3><p>Choose how much capacity each kind of work gets.</p></div>
+                <div><h3 id="routingTitle">Model tiers</h3><p>Choose which model serves each tier.</p></div>
                 <label class="pop-row routing-toggle"><input type="checkbox" id="routingEnabled" /><span>Automatic</span></label>
               </div>
               <div class="routing-profiles" id="routingProfiles"></div>
-              <div class="routing-direct-controls"><div class="pop-head">Effort levels</div><div class="model-pref-list" id="modelPrefList"></div><div class="pop-head">Band preference</div><div class="bias-view" id="biasView"></div><div class="pop-head">Exact C1–C10 ladder</div><div class="ladder-view" id="ladderView"></div><div class="backend-warn" id="tierBackendWarn"></div></div>
-            </section>
-            <section class="category-settings" aria-labelledby="categoriesTitle">
-              <div class="cat-head"><h3 id="categoriesTitle">Categories</h3><p>Set the route once. Every ticket using it follows on its next read.</p></div>
-              <div class="category-list" id="categoryList"></div>
+              <div class="routing-direct-controls"><details class="legacy-routing"><summary><strong>Legacy complexity routing</strong><span>Fallback controls</span></summary><p class="legacy-routing-copy">Only complexity-scored tickets use these controls when they do not have a category.</p><div class="legacy-routing-body"><div class="pop-head">Effort levels</div><div class="model-pref-list" id="modelPrefList"></div><div class="pop-head">Band preference</div><div class="bias-view" id="biasView"></div><div class="pop-head">Exact C1–C10 ladder</div><div class="ladder-view" id="ladderView"></div><div class="backend-warn" id="tierBackendWarn"></div></div></details></div>
             </section>
             <div class="sp-col">
               <div class="pop-head">Desktop notifications</div>
@@ -1827,6 +1832,16 @@
       });
     }
   }
+  function categoryChipsForGrade(grade) {
+    var matches = state.categories.filter(function (category) {
+      return category.enabled !== false && category.route && category.route.model === grade;
+    });
+    var visible = matches.slice(0, 3).map(function (category) {
+      return '<span class="profile-category" title="' + esc(category.name) + '">' + esc(category.name) + '</span>';
+    });
+    if (matches.length > visible.length) visible.push('<span class="profile-category more">+' + (matches.length - visible.length) + '</span>');
+    return visible.join("") || '<span class="profile-category more">No categories</span>';
+  }
   function renderRoutingPlan() {
     var box = $("routingProfiles"); if (!box) return;
     var toggle = $("routingEnabled");
@@ -1840,13 +1855,13 @@
     grades.forEach(function (p) {
       var on = p.enabled !== false;
       var row = el("div", "profile-row" + (on ? "" : " muted"));
-      var cs = (p.complexities || []).map(function (n) { return "C" + n; }).join(", ") || "No active scores";
+      var categoryChips = categoryChipsForGrade(p.grade);
       // The grade toggle wraps only the dot + name/band, so clicking the runtime
       // dropdown beside it doesn't flip the grade on/off.
       var lab = el("label", "profile-toggle");
       lab.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' aria-label="' + esc((p.label || p.grade) + " enabled") + '" />' +
         '<span class="profile-dot" style="background:' + modelColor(p.grade) + '"></span>' +
-        '<span><span class="profile-name">' + esc(p.label || p.grade) + '</span><span class="profile-band">' + esc(cs) + '</span></span>';
+        '<span><span class="profile-name">' + esc(p.label || p.grade) + '</span><span class="profile-band">' + categoryChips + '</span></span>';
       var cb = lab.querySelector("input");
       cb.addEventListener("change", function () {
         var enabledCount = grades.filter(function (x) { return x.enabled !== false; }).length;
@@ -2125,7 +2140,7 @@
       });
       var remove = row.querySelector('[data-delete-category]');
       if (remove) remove.addEventListener("click", function () {
-        mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id)).then(function () { toast(category.name + " deleted"); return loadCategories(); }).then(renderCategorySettings).catch(function (e) { toast("Delete failed: " + e.message); });
+        mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id)).then(function () { toast(category.name + " deleted"); return loadCategories(); }).then(function () { renderCategorySettings(); renderRoutingPlan(); }).catch(function (e) { toast("Delete failed: " + e.message); });
       });
       box.appendChild(row);
     });
@@ -2141,7 +2156,7 @@
       var payload = categoryPayload(form);
       if (!payload.name || (!id && !payload.id)) { toast("A category id and name are required"); return; }
       var path = id ? "/api/categories/" + encodeURIComponent(id) : "/api/categories";
-      mutate(id ? "PATCH" : "POST", path, payload).then(function () { toast(id ? "Category saved" : "Category added"); return loadCategories(); }).then(function () { renderCategorySettings(); populateCategorySelect(); }).catch(function (e) { toast("Category failed: " + e.message); });
+      mutate(id ? "PATCH" : "POST", path, payload).then(function () { toast(id ? "Category saved" : "Category added"); return loadCategories(); }).then(function () { renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }).catch(function (e) { toast("Category failed: " + e.message); });
     });
   }
   function populateCategorySelect() {

@@ -115,17 +115,18 @@ test('findNewerInstall: repo-source checkout (non-semver dir name) never self-re
   }
 });
 
-test('dashboard presents the grade cards, then effort/ladder controls in one panel', () => {
+test('dashboard makes categories primary and keeps legacy complexity routing collapsed', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  assert.match(html, /id="categoryList"/);
   assert.match(html, /id="routingProfiles"/);
   assert.doesNotMatch(html, /id="editPlanBtn"/);
-  // The routing controls are one flat panel now — no collapsed "Advanced routing"
-  // section, and the exact ladder lives inline with the effort/bias controls.
-  assert.doesNotMatch(html, /advanced-routing/);
-  assert.match(html, /routing-direct-controls/);
+  assert.match(html, /<details class="legacy-routing">/);
+  assert.match(html, /Legacy complexity routing/);
+  assert.ok(html.indexOf('id="categoryList"') < html.indexOf('id="routingProfiles"'));
   assert.ok(html.indexOf('id="routingProfiles"') < html.indexOf('id="ladderView"'));
   assert.match(html, /var gradesView = modelPrefs\.profiles \|\| \{\}/);
-  assert.match(html, /p\.complexities \|\| \[\]/);
+  assert.match(html, /function categoryChipsForGrade\(grade\)/);
+  assert.match(html, /category\.route\.model === grade/);
   assert.match(html, /CLAUDE_RUNTIME_OPTIONS = \[/);
   assert.match(html, /\{ slug: "haiku", label: "Claude Haiku" \}/);
   assert.match(html, /\{ slug: "sonnet", label: "Claude Sonnet" \}/);
