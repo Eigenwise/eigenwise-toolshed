@@ -3096,9 +3096,10 @@
       $("settingsBtn").classList.toggle("on", opening);
       if (opening) { renderProjectNotifySettings(); renderGlobalFallback(); renderCategorySettings(); }
     });
+    settingsPop.addEventListener("click", function (e) { e.stopPropagation(); });
     document.addEventListener("click", function (e) {
       if (!e.target.closest(".project-menu")) closeProjectMenu();
-      if (e.target.closest(".popwrap")) return;
+      if (e.target.closest(".popwrap, #settingsPop")) return;
       closeSettings(); closeSort(); closeAssign(); closeStory(); closeInbox();
     });
 
