@@ -121,21 +121,21 @@ function main() {
       'tickets BEFORE implementing (scored 1-10 + why; model×effort routing follows). ' +
       'Atomic = one piece a single agent finishes and checks itself — a change, or an investigation, spike, or review. ' +
       'Split for parallelism: independent tickets fan out to sub-agents; keep tightly coupled work together. ' +
-      'One ticket OWNING several deliverables (CLI + wiring + script + state + tests) is a smell: prefer a cheap read-only scout that pins the shared contract, then a wave fanning the pieces out. ' +
+      'One ticket OWNING several deliverables (CLI + wiring + tests) is a smell: prefer a cheap read-only scout that pins the shared contract, then a wave fanning the pieces out. ' +
       'The spec carries exact anchors, contract or question, bounds/non-goals, dependencies/decisions, and how done is checked (verify command, or the artifact/answer for a spike). Even with an external tracker ' +
       '(Jira), that owns the deliverable — sidequest is the local execution layer; ' +
       'use both.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
-      '• Route real execution DOWN: spawn `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes — omitting it inherits the SESSION model, defeating routing; Codex routes: `exec.model` is null, omit model). It is already-registered — unique name + `bypassPermissions`. Do not use `native_agent` for ticket execution. Inline only trivial one-steps.\n' +
+      '• Route real execution DOWN: spawn `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, else it inherits the SESSION model and defeats routing; Codex routes: `exec.model` null, omit model). It is already-registered — unique name + `bypassPermissions`. Do not use `native_agent` for ticket execution. Inline only trivial one-steps; never pull substantial or parallel work inline to save wakeups.\n' +
       '• Keep executor runs SHORT and bounded — the ticket is the spec (exact anchors + verify command); ' +
       'scope the spawn prompt; executors bounce back fast (release + report), verified by artifact (test/diff) not claim.\n' +
       '• Batch small SAME-tier tickets into ONE executor (sequential inside); parallel-wave only independent tickets with no shared runtime resource.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +
-      '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup with verification output.\n' +
+      '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\n' +
       'Capture side issues as tickets (background `ticket-filer`) without derailing the current task.\n' +
       'Board actions go through the ' +
       'mcp__plugin_sidequest_board__* MCP tools whenever they are in your toolset — reach for them ' +
-      'FIRST; Bash+CLI is the fallback and the only route to serve/work. Open the board: `' +
+      'FIRST; Bash+CLI is the fallback. Open the board: `' +
       cli + ' dashboard`.',
     restartNotice
   );

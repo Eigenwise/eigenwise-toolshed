@@ -183,7 +183,9 @@ Every ticket is scored and routed to a model×effort tier (below), and the econo
 tiers are cheaper.** Executing ticket labor inline pays orchestrator prices for laborer work and
 drags tool output into the planning context — so **route essentially all real execution to each
 ticket's stamped tier**. Inline only a genuinely trivial one-step change (a one-liner, a rename)
-where the spawn round-trip costs more than the work itself.
+where the spawn round-trip costs more than the work itself. Never pull substantial or parallel work
+inline to save orchestration cost: that just moves the whole execution onto this expensive thread at
+full context, which costs more than the wakeups it was meant to save.
 
 **The orchestrator keeps the thinking; each executor owns its ticket.** Decision-level investigation
 — root-causing across findings, deciding the decomposition, writing the specs, reviewing and

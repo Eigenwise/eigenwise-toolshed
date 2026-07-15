@@ -39,21 +39,29 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 
 ## Orchestration cost: keep the lead cheap to wake
 
-The lead's own bill is roughly `wakeups × lead-context-size × lead-model-price`. Each time a worker
-finishes and hands control back, the lead resumes and re-reads its whole context to react. That
-context is often large (a planning thread sits at 300k+ tokens easily), and the lead runs on your
-session model, which may be your priciest one. So the cost that surprises people is not the
-executors, which route down to cheap tiers by design; it's the lead being woken over and over at
-full context to do almost nothing. Prompt caching softens the per-token price of those re-reads but
-does not remove them: reading a 300k context 40 times is still 40 reads.
+Delegation stays the default. Routing execution down to cheap tiers is the whole design, and the fix
+for its cost is never to stop delegating. Rule out the wrong turn first: pulling the work back inline
+onto the lead to dodge the wakeups. That does not save the bill, it relocates the entire execution
+onto your priciest model at full context, which is strictly worse than the wakeups it was meant to
+avoid. The wakeup tax is a reason to run leaner and more synchronous waves, never a reason to work
+inline. Inline is for genuinely small one-steps you already hold in context, not for substantial or
+parallel work you are trying to keep cheap.
+
+So the cost to manage is the lead's own bill, roughly `wakeups × lead-context-size × lead-model-price`.
+Each time a worker finishes and hands control back, the lead resumes and re-reads its whole context to
+react. That context is often large (a planning thread sits at 300k+ tokens easily), and the lead runs
+on your session model, which may be your priciest one. The part that surprises people is not the
+executors, which route down to cheap tiers by design; it is the lead being woken over and over at full
+context to do almost nothing. Prompt caching softens the per-token price of those re-reads but does not
+remove them: reading a 300k context 40 times is still 40 reads.
 
 The lead really has two kinds of turn: cheap routing/ack ("worker 3 done, spawn the next") and
 expensive plan/synthesis (decompose, weigh conflicting reports, write the spec, integrate). You want
 the frontier rate landing on the second kind, not the first. **You can cut this cost without giving up
-steering** — reach for the first two levers, which cost nothing in control, before the third, which
+steering**: reach for the first two levers, which cost nothing in control, before the third, which
 trades control for cost and is optional. Keeping every worker background and steerable and simply
 paying the wakeups is a legitimate default; the first two levers are what make it affordable. Do not
-reflexively go synchronous to save money.
+reflexively go synchronous to save money, and do not answer the wakeup cost by working inline.
 
 - **Keep the lead context lean.** The executor already returns a terse summary and writes its full
   work to the ticket comment or a notes file (the executor protocol). Do not pull those full reports
