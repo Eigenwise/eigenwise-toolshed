@@ -110,11 +110,10 @@ A bundled, Node-based `SessionStart` hook injects `INDEX.md` at the start of eac
 exists, so Claude starts oriented and keeps consulting and updating it as you work. SessionStart also
 fires on resume and after a compaction, so the map comes back once context has been trimmed.
 
-Because a once-per-session inject would fade as the conversation grows, the injected instruction tells
-Claude to end every response with a short `[codebase-map]` acknowledgment line. Claude's own output
-then keeps the protocol in recent context turn after turn, so the map stays salient without the hook
-re-firing on every prompt. It is silent in projects that have no map, and it never touches your
-`CLAUDE.md`.
+Because a once-per-session inject would fade as the conversation grows, a companion `UserPromptSubmit`
+hook re-surfaces a short reminder every few prompts (not every message), so the map stays salient
+without repeating the full instruction each turn. Both hooks are silent in projects that have no map,
+and neither touches your `CLAUDE.md`.
 
 Commit `.claude/.codebase-info/` so the whole team and every future session share the map.
 

@@ -12,11 +12,8 @@
  * read them before exploring, then run a documentation check after code changes.
  * The detailed atomic docs are read on demand. It does not touch CLAUDE.md.
  *
- * A single SessionStart injection would fade as the conversation grows, so the
- * block also requires Claude to end EVERY response with a fixed acknowledgment
- * line. Claude's own output then keeps that line (and the protocol it names) in
- * recent context turn after turn: the map self-reinforces without the hook having
- * to re-fire on every prompt.
+ * A companion UserPromptSubmit hook (remind.js) re-surfaces a short reminder every
+ * few prompts so the rules stay salient without repeating this block each turn.
  *
  * Design constraints:
  *   - No external dependencies (Node stdlib only).
@@ -76,15 +73,7 @@ function main() {
     'documentation." and then INVOKE the skill, OR\n' +
     '   - "No documentation updates needed because [reason]"\n\n' +
     'If no code was modified, end with: "No code changes were made, so ' +
-    'documentation review is not applicable."\n\n' +
-    'STANDING RULE, applies to EVERY response for the rest of this session, ' +
-    'whether or not the turn touched code: end the response with this exact ' +
-    'acknowledgment line so this protocol stays in effect as the conversation ' +
-    'grows and this instruction scrolls out of view:\n' +
-    '"[codebase-map] Active: I consult .claude/.codebase-info/ before exploring ' +
-    'this repo and update it after code changes."\n' +
-    'Re-emitting the line each turn is what keeps the map salient; do not drop ' +
-    'it just because the task was small.\n' +
+    'documentation review is not applicable."\n' +
     '</MANDATORY_INSTRUCTION>\n\n' +
     '=== CODEBASE DOCUMENTATION ===\n\n' +
     '--- ' + INDEX_REL + ' ---\n' + indexContent.trim() + '\n';
