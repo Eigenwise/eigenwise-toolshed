@@ -32,9 +32,10 @@ function call(mcp, name, args) {
 }
 
 test('CLI category CRUD reports usage and category ticket stamping', () => {
-  let run = cli('category', 'add', 'release-check', '--name', 'Release checks', '--description', 'A focused release task', '--contract', 'Run the release check.', '--route-model', 'grade-2', '--route-effort', 'medium');
+  let run = cli('category', 'add', 'release-check', '--name', 'Release checks', '--description', 'A focused release task', '--contract', 'Run the release check.', '--route-model', 'sonnet', '--route-effort', 'medium', '--fallback-model', 'opus', '--fallback-effort', 'high');
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.category.id, 'release-check');
+  assert.deepEqual(run.body.category.fallback, { model: 'opus', effort: 'high' });
 
   run = cli('add', '--title', 'Run release checks', '--category', 'release-check');
   assert.equal(run.result.status, 0, run.result.stderr);
@@ -44,9 +45,10 @@ test('CLI category CRUD reports usage and category ticket stamping', () => {
   const category = run.body.categories.find((entry) => entry.id === 'release-check');
   assert.equal(category.ticketCount, 1);
 
-  run = cli('category', 'edit', 'release-check', '--name', 'Release verification');
+  run = cli('category', 'edit', 'release-check', '--name', 'Release verification', '--fallback-effort', 'xhigh');
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.category.name, 'Release verification');
+  assert.deepEqual(run.body.category.fallback, { model: 'opus', effort: 'xhigh' });
 
   run = cli('category', 'rm', 'release-check');
   assert.equal(run.result.status, 0, run.result.stderr);
@@ -62,6 +64,40 @@ test('CLI rejects unknown category ids with valid choices', () => {
   assert.notEqual(run.result.status, 0);
   assert.match(run.result.stderr, /unknown category.*valid:/i);
   assert.match(run.result.stderr, /general/);
+});
+
+test('CLI global fallback reads and updates routing policy', () => {
+  let run = cli('global-fallback');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.deepEqual(run.body.fallback, { model: 'sonnet', effort: 'high' });
+
+  run = cli('global-fallback', '--model', 'opus', '--effort', 'xhigh');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.deepEqual(run.body.fallback, { model: 'opus', effort: 'xhigh' });
+
+  run = cli('models');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.deepEqual(run.body.globalFallback, { model: 'opus', effort: 'xhigh' });
+  assert.ok(!JSON.stringify(run.body).includes('grade-'));
+});
+
+test('MCP global fallback and category fallback routes round-trip', () => {
+  const mcp = freshMcp();
+  const created = call(mcp, 'category_add', {
+    id: 'fallback-test', name: 'Fallback test', routeModel: 'sonnet', routeEffort: 'high',
+    fallbackModel: 'opus', fallbackEffort: 'xhigh',
+  });
+  assert.deepEqual(created.category.fallback, { model: 'opus', effort: 'xhigh' });
+
+  const updated = call(mcp, 'category_edit', { id: 'fallback-test', fallbackEffort: 'medium' });
+  assert.deepEqual(updated.category.fallback, { model: 'opus', effort: 'medium' });
+
+  assert.deepEqual(call(mcp, 'global_fallback', {}).fallback, { model: 'sonnet', effort: 'high' });
+  assert.deepEqual(call(mcp, 'global_fallback', { model: 'fable', effort: 'high' }).fallback, { model: 'fable', effort: 'high' });
+
+  const models = call(mcp, 'models', {});
+  assert.deepEqual(models.globalFallback, { model: 'fable', effort: 'high' });
+  assert.ok(!JSON.stringify(models).includes('grade-'));
 });
 
 test('MCP category tools stamp tickets and reject unknown categories', () => {

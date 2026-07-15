@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { DEFAULT_CATEGORIES } = require('./category-defaults.js');
+const { discoverExternalModels } = require('./discovery.js');
 
 const originalEmitWarning = process.emitWarning;
 process.emitWarning = function emitWarningWithoutSqliteExperimentalWarning(warning, ...args) {
@@ -19,7 +20,9 @@ try {
   process.emitWarning = originalEmitWarning;
 }
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
+const LEGACY_RUNTIME = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus', 'grade-4': 'fable', haiku: 'haiku', sonnet: 'sonnet', opus: 'opus', fable: 'fable' };
+const ROUTING_FALLBACK_DEFAULT = { model: 'sonnet', effort: 'high' };
 
 const TABLES = {
   projects: { key: 'slug', columns: ['slug', 'data'] },
@@ -97,6 +100,45 @@ function openDb(homeRoot) {
   if (schemaVersion > CURRENT_SCHEMA_VERSION) {
     throw new Error(`Sidequest database schema ${schemaVersion} is newer than supported schema ${CURRENT_SCHEMA_VERSION}.`);
   }
+  if (schemaVersion < 3) {
+    txn(db, () => {
+      const prefsRow = db.prepare("SELECT data FROM globals WHERE key = 'model-prefs'").get();
+      let prefs = {};
+      try { prefs = prefsRow ? JSON.parse(prefsRow.data) : {}; } catch (_) { prefs = {}; }
+      const discovered = discoverExternalModels();
+      const byKey = new Map(discovered.map((entry) => [`${entry.source}:${entry.slug}`, entry]));
+      const bySlug = new Map(discovered.map((entry) => [entry.slug, entry]));
+      const rows = db.prepare('SELECT id, data FROM categories').all();
+      for (const row of rows) {
+        let category;
+        try { category = JSON.parse(row.data); } catch (_) { continue; }
+        const oldModel = category && category.route && String(category.route.model || '').trim().toLowerCase();
+        const runtime = LEGACY_RUNTIME[oldModel];
+        if (!runtime) continue;
+        const configured = prefs.tierBackend && (prefs.tierBackend[oldModel] || prefs.tierBackend[runtime]);
+        const selected = typeof configured === 'string' ? configured.trim().toLowerCase() : 'claude';
+        const entry = byKey.get(selected) || bySlug.get(selected);
+        const model = selected !== 'claude' && !LEGACY_RUNTIME[selected] && entry ? entry.slug : runtime;
+        const effort = category.route.effort;
+        category.route = { model, effort };
+        category.fallback = { model: runtime, effort };
+        db.prepare('UPDATE categories SET data = ? WHERE id = ?').run(JSON.stringify(category), row.id);
+      }
+      db.prepare("DELETE FROM globals WHERE key = 'model-prefs'").run();
+      const fallbackRow = db.prepare("SELECT data FROM globals WHERE key = 'routing-fallback'").get();
+      let validFallback = false;
+      try {
+        const fallback = fallbackRow && JSON.parse(fallbackRow.data);
+        validFallback = fallback && typeof fallback.model === 'string' && typeof fallback.effort === 'string';
+      } catch (_) {}
+      if (!validFallback) {
+        db.prepare("INSERT INTO globals (key, data) VALUES ('routing-fallback', ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data").run(JSON.stringify(ROUTING_FALLBACK_DEFAULT));
+      }
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(3));
+    });
+    schemaVersion = 3;
+  }
+  db.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;
   return db;
 }
 
@@ -107,7 +149,16 @@ function getRow(db, table, key) {
   return row ? JSON.parse(row[payloadColumn]) : null;
 }
 
+function assertWritable(db) {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+  const version = Number(row && JSON.parse(row.value));
+  if (version > CURRENT_SCHEMA_VERSION) {
+    throw new Error(`Sidequest database schema ${version} is newer than supported schema ${CURRENT_SCHEMA_VERSION}; refusing write.`);
+  }
+}
+
 function putRow(db, table, rowObj) {
+  assertWritable(db);
   const spec = tableSpec(table);
   const values = spec.columns.map((column) => {
     const value = rowObj[column];
@@ -126,6 +177,7 @@ function putRow(db, table, rowObj) {
 }
 
 function deleteRow(db, table, key) {
+  assertWritable(db);
   const spec = tableSpec(table);
   return db.prepare(`DELETE FROM ${table} WHERE ${spec.key} = ?`).run(key).changes > 0;
 }
@@ -151,6 +203,8 @@ function hasRow(db, table, key) {
 }
 
 function txn(db, fn) {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+  if (row) assertWritable(db);
   // IMMEDIATE takes the write lock at BEGIN so concurrent writers queue on
   // busy_timeout instead of both grabbing a read lock and deadlocking on the
   // upgrade (SQLITE_BUSY isn't retryable once two txns hold the shared lock).

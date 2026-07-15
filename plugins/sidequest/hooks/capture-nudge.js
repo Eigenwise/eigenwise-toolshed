@@ -159,7 +159,7 @@ function disciplineFooter() {
     '\n— sidequest: classify tickets from the live taxonomy and stamp an unlabeled ticket before claim; ' +
     'spawn each ticket\'s `exec.agent` with ' +
     '`model: exec.model` (required on Claude routes, omit on Codex) as short, bounded executor runs; ' +
-    'batch small same-tier tickets, parallelize independent ones. Delegate substantial or parallel work; ' +
+    'batch small same-model tickets, parallelize independent ones. Delegate substantial or parallel work; ' +
     'inline only trivial one-steps, never big work pulled inline to save wakeups.'
   );
 }

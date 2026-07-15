@@ -160,13 +160,11 @@ const PRIORITY_MARK = { urgent: '!!', high: '!', normal: '', low: '·' };
 // backend-specific executor name are the authoritative runtime contract.
 function modelMark(t) {
   if (!t.model && !t.effort) return '';
-  const score = t.complexity ? `C${t.complexity}` : 'legacy';
-  const profile = t.profile || t.model || 'any';
   const ex = t.exec || {};
   const runtime = ex.runsLabel || ex.runsModel || t.model || 'any';
   const backend = ex.backend || 'claude';
   const effort = t.effort ? ` · ${t.effort}` : '';
-  return `  ⚙${score} · ${profile} · ${runtime} · ${backend}${effort}`;
+  return `  ⚙${runtime} · ${backend}${effort}`;
 }
 
 // Routing is derived from a task-complexity score (1..10) plus a written
@@ -338,9 +336,19 @@ function cmdCategory(opts, positional) {
   };
 
   if (action === 'list' || action === 'ls') {
-    const categories = store.getCategories().map((category) => Object.assign({}, category, { ticketCount: usage(category.id) }));
+    const categories = store.getCategories().map((category) => {
+      const resolved = store.resolveCategoryRoute(category);
+      return Object.assign({}, category, {
+        ticketCount: usage(category.id),
+        resolved: { model: resolved.model, effort: resolved.effort, exec: resolved.exec },
+        warnings: resolved.warnings,
+      });
+    });
     if (opts.json) return output({ categories });
-    for (const category of categories) console.log(`${category.id}  ${category.name}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})${category.enabled ? '' : '  disabled'}`);
+    for (const category of categories) {
+      console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})${category.enabled ? '' : '  disabled'}`);
+      for (const warning of category.warnings) console.log(`  ! ${warning}`);
+    }
     return;
   }
   if (!id) fail(`category ${action || '<action>'}: pass a category id`);
@@ -351,6 +359,9 @@ function cmdCategory(opts, positional) {
       name: opts.name || opts.title || id,
       description: opts.desc != null ? opts.desc : opts.description || '',
       route: { model: opts['route-model'] || opts.model, effort: opts['route-effort'] || opts.effort },
+      fallback: opts['fallback-model'] != null || opts['fallback-effort'] != null
+        ? { model: opts['fallback-model'], effort: opts['fallback-effort'] }
+        : null,
       contract: opts.contract || '',
       enabled: !opts.disabled,
     };
@@ -367,6 +378,12 @@ function cmdCategory(opts, positional) {
     if (opts['route-model'] != null) route.model = opts['route-model'];
     if (opts['route-effort'] != null) route.effort = opts['route-effort'];
     const patch = { route };
+    if (opts['fallback-model'] != null || opts['fallback-effort'] != null) {
+      const fallback = Object.assign({}, existing.fallback || {});
+      if (opts['fallback-model'] != null) fallback.model = opts['fallback-model'];
+      if (opts['fallback-effort'] != null) fallback.effort = opts['fallback-effort'];
+      patch.fallback = fallback;
+    }
     if (opts.name != null || opts.title != null) patch.name = opts.name != null ? opts.name : opts.title;
     if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
     if (opts.contract != null) patch.contract = opts.contract;
@@ -387,6 +404,29 @@ function cmdCategory(opts, positional) {
     return;
   }
   fail(`category: unknown action "${action}". Use list | add | edit | rm.`);
+}
+
+function cmdGlobalFallback(opts) {
+  const { slug, meta } = resolveProject(opts);
+  if (opts.model == null && opts.effort == null) {
+    const fallback = store.getRoutingFallback();
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, fallback }, null, 2) + '\n');
+      return;
+    }
+    console.log(`Global fallback: ${fallback ? `${fallback.model}·${fallback.effort}` : 'missing or invalid'}`);
+    return;
+  }
+  try {
+    const fallback = store.setRoutingFallback({ model: opts.model, effort: opts.effort });
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, fallback }, null, 2) + '\n');
+      return;
+    }
+    console.log(`✓ global fallback set to ${fallback.model}·${fallback.effort}  — ${meta.name}`);
+  } catch (error) {
+    fail(`global-fallback: ${error.message}`);
+  }
 }
 
 function cmdRm(opts, positional) {
@@ -453,15 +493,10 @@ function reportClaimFailure(action, idOrRef, res, meta) {
 // routing off, no complexity (no derived tier), or a haiku ticket (no effort axis).
 function effortDriftReason(slug, idOrRef, claimedEffort) {
   if (claimedEffort == null) return null;
-  const prefs = store.getModelPrefs();
-  if (prefs.routing === false) return null;
-  const t = store.getTicket(slug, idOrRef); // carries derived model/effort at read time
-  if (!t || !t.complexity) return null;
-  if (t.model === 'grade-1' || !t.effort) return null;
+  const t = store.getTicket(slug, idOrRef);
+  if (!t || !t.effort) return null;
   const claimed = String(claimedEffort).toLowerCase();
   if (claimed === t.effort) return null;
-  // The read already resolved which agent to spawn (t.exec.agent): a Claude tier
-  // -> sidequest-exec-<effort>, a Codex-backed tier -> sidequest-exec-<slug>-<effort>.
   const execName = (t.exec && t.exec.agent) || `sidequest-exec-${t.effort}`;
   const modelHint = t.exec && t.exec.model ? ` (model ${t.exec.model})` : '';
   return {
@@ -470,9 +505,8 @@ function effortDriftReason(slug, idOrRef, claimedEffort) {
     derivedEffort: t.effort,
     claimedEffort: claimed,
     message:
-      `${t.ref} derives to ${t.model}·${t.effort}, but you claimed as ${claimed} effort — ` +
-      `the wrong executor was spawned. Spawn ${execName}${modelHint} instead. ` +
-      `Not claimed: the ticket stays free for the correct-tier executor.`,
+      `${t.ref} resolves to ${t.model}·${t.effort}, but you claimed as ${claimed} effort. ` +
+      `Spawn ${execName}${modelHint} instead. Not claimed: the ticket stays free for the matching executor.`,
   };
 }
 
@@ -485,10 +519,9 @@ function effortDriftReason(slug, idOrRef, claimedEffort) {
 // bail without touching the store; true when opts.model is fine to pass on.
 function validateModelFilter(action, opts) {
   if (opts.model == null) return true;
-  const prefs = store.getModelPrefs();
-  const cls = store.classifyModelFilter(opts.model, prefs);
+  const cls = store.classifyModelFilter(opts.model);
   if (cls !== 'unknown') return true;
-  const message = `unknown model "${opts.model}" — known: ${store.getModelVocab(prefs).models.join(', ')}`;
+  const message = `unknown model "${opts.model}" — known: ${store.getModelVocab().models.join(', ')}`;
   process.exitCode = 1;
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: false, reason: 'unknown_model', message }, null, 2) + '\n');
@@ -502,15 +535,12 @@ function executorDriftReason(slug, idOrRef, claimedEffort, executorName) {
   const effortDrift = effortDriftReason(slug, idOrRef, claimedEffort);
   if (effortDrift) return effortDrift;
   if (!executorName) return null;
-  const prefs = store.getModelPrefs();
-  if (prefs.routing === false) return null;
   const t = store.getTicket(slug, idOrRef);
-  if (!t || !t.complexity || !t.exec || t.exec.backend !== 'codex') return null;
+  if (!t || !t.exec || t.exec.backend !== 'codex') return null;
   const expected = t.exec.agent;
   if (executorName === expected) return null;
   return {
     ref: t.ref,
-    profile: t.profile,
     derivedModel: t.model,
     derivedEffort: t.effort,
     backend: t.exec.backend,
@@ -518,7 +548,7 @@ function executorDriftReason(slug, idOrRef, claimedEffort, executorName) {
     executor: executorName,
     expectedExecutor: expected,
     message:
-      `${t.ref} resolves to ${t.profile} · ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. ` +
+      `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. ` +
       `Spawn ${expected} or use sidequest dispatch instead. Not claimed: the ticket stays free for the authoritative runtime.`,
   };
 }
@@ -608,7 +638,7 @@ function cmdNext(opts) {
   const { slug, meta } = resolveProject(opts);
   if (!validateModelFilter('next', opts)) return;
   const by = workerId(opts);
-  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, source: opts.source || 'cli', sessionId: sessionId(opts) });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -900,12 +930,12 @@ function cmdReady(opts) {
   if (!validateModelFilter('ready', opts)) return;
   // --brief is a JSON shape, so it implies --json rather than silently no-oping.
   if (opts.json || opts.brief) {
-    const payload = store.readyPayload(slug, { model: opts.model, brief: opts.brief });
+    const payload = store.readyPayload(slug, { model: opts.model, category: opts.category, brief: opts.brief });
     process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + '\n');
     return;
   }
-  const tickets = store.readyTickets(slug, { model: opts.model });
-  const waves = store.readyWaves(slug, { model: opts.model });
+  const tickets = store.readyTickets(slug, { model: opts.model, category: opts.category });
+  const waves = store.readyWaves(slug, { model: opts.model, category: opts.category });
   if (!tickets.length) {
     console.log(`Nothing ready to work in ${meta.name}.`);
     return;
@@ -995,14 +1025,13 @@ function cmdNativeAgent(opts, positional) {
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`native-agent: no ticket "${idOrRef}".`);
   if (!ticket.model || !ticket.effort) fail(`native-agent: ${ticket.ref} has no routable model and effort.`);
-  const resolved = store.resolveExec(ticket.model, ticket.effort, store.getModelPrefs());
+  const resolved = store.resolveExec(ticket.model, ticket.effort);
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   const created = agentsync.createNativeAgent({
     ref: ticket.ref,
     agentType: resolved.agent || `sidequest-exec-${ticket.effort || 'low'}`,
     spawnModel: resolved.model,
     effort: ticket.effort,
-    grade: ticket.model,
     runtime: resolved.runsModel,
     sessionId,
   });
@@ -1015,143 +1044,34 @@ function cmdNativeAgent(opts, positional) {
 // touching the dashboard (which triggers the same sync on save). Useful after
 // changing a tier's backend some other way, or to clean up stale files.
 function cmdModelsSyncAgents(opts) {
-  const prefs = store.getModelPrefs();
-  const res = agentsync.syncExecAgents(prefs, opts.dir ? { dir: opts.dir } : undefined);
-  const RESTART_NOTICE = agentsync.RESTART_NOTICE;
+  const res = agentsync.syncExecAgents(undefined, opts.dir ? { dir: opts.dir } : undefined);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({}, res, res.written > 0 ? { message: RESTART_NOTICE } : {}), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(Object.assign({}, res, res.written > 0 ? { message: agentsync.RESTART_NOTICE } : {}), null, 2) + '\n');
     return;
   }
   console.log(`✓ exec agents synced: ${res.written} written, ${res.removed} removed, ${res.unchanged} unchanged`);
   if (res.written > 0) console.log(`  ${agentsync.RESTART_NOTICE}`);
 }
 
-// The model tiers the user allows (dashboard settings), plus the valid effort
-// levels — the orchestrator reads this (--json) before choosing an executor.
 function cmdModels(opts, positional) {
   if (positional && positional[0] === 'sync-agents') {
     cmdModelsSyncAgents(opts);
     return;
   }
-  const prefs = store.getModelPrefs();
-  const routing = prefs.routing !== false;
-  const ladder = store.routingLadder(prefs);
-  const categories = store.getCategories().map((category) => {
-    const sample = store.applyDerivedRouting({ category: category.id }, prefs);
-    return Object.assign({}, category, { resolved: { model: sample.model, effort: sample.effort, exec: sample.exec }, warnings: sample.warnings || [] });
-  });
-  // Effort is a per-model matrix now (prefs.efforts[model] = {low..max}); haiku
-  // carries no row at all (no effort axis). Build the per-model enabled list
-  // straight from whichever tiers the store actually gave a row to, rather than
-  // hardcoding "not haiku" here.
-  const enabledEfforts = {};
-  for (const m of Object.keys(prefs.efforts)) {
-    enabledEfforts[m] = store.VALID_EFFORTS.filter((e) => prefs.efforts[m][e]);
-  }
-  // Per-tier backend: which tiers run on a Codex model vs their Claude default,
-  // plus any stale-mapping warnings (a tier pointed at a now-absent model).
-  const backend = prefs.tierBackendResolved || {};
-  const codexTiers = store.VALID_MODELS.filter((m) => backend[m] && backend[m].backend === 'codex');
+  const payload = store.modelsPayload();
   if (opts.json) {
-    process.stdout.write(
-      JSON.stringify({
-        routing,
-        bias: prefs.routingBias,
-        models: prefs,
-        enabled: store.VALID_MODELS.filter((m) => prefs[m]),
-        tierBackend: prefs.tierBackend,
-        tierBackendResolved: prefs.tierBackendResolved,
-        tierBackendWarnings: prefs.tierBackendWarnings,
-        discovered: prefs.discovered,
-        efforts: store.VALID_EFFORTS,
-        enabledEfforts,
-        ladder,
-        categories,
-      }, null, 2) + '\n'
-    );
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return;
   }
-  console.log(`Routing: ${routing ? 'on' : 'off'}`);
-  console.log(`Bias: ${prefs.routingBias}  (${biasLabel(prefs.routingBias)} — see "sidequest bias")`);
-  console.log('Model tiers (toggle in the dashboard settings):');
-  for (const m of store.VALID_MODELS) {
-    const b = backend[m];
-    const backendLabel = b && b.backend === 'codex' ? `  → ${b.label || b.slug} (codex)` : '';
-    console.log(`  ${prefs[m] ? '✓' : '✗'} ${m}${prefs[m] ? '' : '  (disabled by user)'}${backendLabel}`);
-  }
-  if ((prefs.discovered || []).length) {
-    const mapped = new Set(codexTiers.map((m) => backend[m].slug));
-    const unmapped = prefs.discovered.filter((d) => !mapped.has(d.slug));
-    if (unmapped.length) {
-      console.log(`  Detected Codex models (map a tier to one in the dashboard): ${unmapped.map((d) => `${d.label || d.slug}${d.suggestedTier ? ` (~${d.suggestedTier})` : ''}`).join(', ')}`);
-    }
-  }
-  for (const w of (prefs.tierBackendWarnings || [])) console.log(`  ! ${w}`);
-  console.log('Effort levels (toggle in the dashboard settings, per model):');
-  for (const m of store.VALID_MODELS) {
-    if (!prefs.efforts[m]) {
-      console.log(`  · ${m.padEnd(10)}(no effort axis — haiku ignores effort)`);
-      continue;
-    }
-    console.log(`  ✓ ${m.padEnd(10)}${enabledEfforts[m].join(', ')}`);
-  }
-  printLadder(ladder);
+  console.log('Available models:');
+  console.log(`  ${payload.models.join(', ')}`);
+  console.log(`Global fallback: ${payload.globalFallback ? `${payload.globalFallback.model}·${payload.globalFallback.effort}` : 'missing or invalid'}`);
   console.log('Categories:');
-  for (const category of categories) console.log(`  ${category.id}  ${category.name} → ${category.resolved.model}·${category.resolved.effort}`);
-}
-
-// Shared with cmdBias so "models" and "bias" render the ladder identically.
-function printLadder(ladder) {
-  console.log('Complexity ladder (score → derived routing):');
-  for (const rung of ladder) {
-    const label = `C${rung.complexity}`.padEnd(3);
-    console.log(`  ${label}  ${rung.model}${rung.effort ? '·' + rung.effort : ''}`);
+  for (const category of payload.categories) {
+    const fallback = category.fallback ? `; fallback ${category.fallback.model}·${category.fallback.effort}` : '';
+    console.log(`  ${category.id}  ${category.name}  route ${category.route.model}·${category.route.effort}${fallback}  → ${category.resolved.model}·${category.resolved.effort}`);
+    for (const warning of category.warnings) console.log(`    ! ${warning}`);
   }
-}
-
-// -5..+5, mirrors store.js's ROUTING_BIAS_MIN/MAX (not exported — the CLI's
-// own range check, kept in sync by the comment above coerceRoutingBias there).
-const BIAS_MIN = -5;
-const BIAS_MAX = 5;
-function biasLabel(n) {
-  if (n === 0) return 'neutral';
-  return n < 0 ? 'frugal' : 'generous';
-}
-
-// `sidequest bias [<int>]` — read or set the routingBias dial, then print the
-// ladder it shapes (same presentation as `models`). Takes rawArgs straight
-// from argv (see main()) because a negative value like "-5" would otherwise
-// be swallowed by the generic --flag parser.
-function cmdBias(rawArgs) {
-  const json = rawArgs.includes('--json');
-  const valueArgs = rawArgs.filter((a) => a !== '--json');
-
-  if (valueArgs.length === 0) {
-    const prefs = store.getModelPrefs();
-    const ladder = store.routingLadder(prefs);
-    if (json) {
-      process.stdout.write(JSON.stringify({ bias: prefs.routingBias, ladder }, null, 2) + '\n');
-      return;
-    }
-    console.log(`Bias: ${prefs.routingBias}  (${biasLabel(prefs.routingBias)})`);
-    printLadder(ladder);
-    return;
-  }
-
-  if (valueArgs.length > 1) fail(`bias: pass a single integer ${BIAS_MIN}..${BIAS_MAX}, e.g. sidequest bias 3 (got: ${valueArgs.join(' ')})`);
-  const raw = valueArgs[0];
-  if (!/^-?\d+$/.test(raw)) fail(`bias: "${raw}" is not an integer — pass a whole number ${BIAS_MIN}..${BIAS_MAX}, e.g. sidequest bias -2`);
-  const n = parseInt(raw, 10);
-  if (n < BIAS_MIN || n > BIAS_MAX) fail(`bias: ${n} is out of range — must be an integer ${BIAS_MIN}..${BIAS_MAX} (negative = frugal, positive = generous, 0 = neutral)`);
-
-  const prefs = store.setModelPrefs({ routingBias: n });
-  const ladder = store.routingLadder(prefs);
-  if (json) {
-    process.stdout.write(JSON.stringify({ bias: prefs.routingBias, ladder }, null, 2) + '\n');
-    return;
-  }
-  console.log(`✓ Bias set to ${prefs.routingBias}  (${biasLabel(prefs.routingBias)})`);
-  printLadder(ladder);
 }
 
 function cmdProjects(opts) {
@@ -1591,7 +1511,8 @@ Usage:
   sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
-  sidequest category list|add|edit|rm <id> [--json]
+  sidequest category list|add|edit|rm <id> [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>] [--json]
+  sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n>
   sidequest projects [--archived] [--json]
   sidequest archive-board <board-ref>                  archive a board
@@ -1604,9 +1525,9 @@ Usage:
     code) — use real newlines in the value (heredoc or $'...\\n...'), never a literal backslash-n.
 
 Working the board safely (multi-agent):
-  sidequest ready [--model tier] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
-  sidequest claim <id|SQ-n> [--by who] [--force] [--effort level]   atomically take a ticket (fails if gone/done/claimed; --effort must match the derived tier or the claim is refused as wrong-executor)
-  sidequest next [--by who] [-p priority] [--model tier]   claim the best available ticket (highest priority first)
+  sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
+  sidequest claim <id|SQ-n> [--by who] [--force] [--effort level]   atomically take a ticket (fails if gone/done/claimed; --effort must match the resolved route or the claim is refused as wrong-executor)
+  sidequest next [--by who] [-p priority] [--model <model>] [--category <id>]   claim the best available ticket (highest priority first)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
@@ -1618,21 +1539,14 @@ Working the board safely (multi-agent):
     seed a bounded executor with scout findings and its exact check. Anchors (4k), verify (1k), and the
     final prompt (7.6k) stay below the Windows command-line ceiling; values are preserved verbatim.
 
-Complexity → routing (score the task; model + effort are derived, never tagged directly):
-  sidequest add ... --complexity <1-10> --why "<motivation>"
-    BOTH are REQUIRED on add. Score by TASK SHAPE: 1-2 = subagent-shaped (spec says everything),
-    3-5 = daily-coding-shaped (one area, known pattern), 6-7 = complex-agentic-shaped (multi-file,
-    shared contract), 8-10 = larger-than-a-sitting/research-grade (9-10 rare by design; normal
-    coding lands ~1-7). --why motivates it (min 20 chars). Routing (model+effort) is derived from the
-    score — see "sidequest models" for the current ladder.
-  sidequest update <id|SQ-n> --complexity <1-10> --why "<motivation>"   re-score (a changed score needs a fresh --why)
-  --model / --effort are no longer accepted — routing comes from the complexity score.
-  sidequest ready --model <tier>  ·  sidequest next --model <tier>   FILTER by the derived tier (still valid)
-  sidequest models [--json]                        which tiers + effort levels the user allows + the live complexity ladder
-  sidequest bias [<int>] [--json]                  read (no arg) or set (-5..5) the routing bias dial, then
-    print the reshaped ladder; negative = frugal (escalate tier later), positive = generous (escalate sooner)
-  Sidequest can't force a model or effort — it records the score and derives the tag (⚙C<n>→tier·effort on
-  list/ready); the orchestrator routes by reading it. Haiku rungs have no effort.
+Complexity is legacy input. Category routing chooses the concrete model and effort:
+  sidequest add ... --category <id>
+  sidequest update <id|SQ-n> --category <id|none>
+  sidequest ready --model <model> --category <id>  ·  sidequest next --model <model> --category <id>
+  sidequest models [--json]                        available models, global fallback, and category routes
+  sidequest global-fallback [--model <model> --effort <effort>] [--json]
+  Legacy --complexity + --why remains supported for existing intake and maps to a category at read time.
+  Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
   sidequest native-agent <SQ-n> [--prompt "task"] [--json]  return an already-registered native Agent spawn spec + bounded prompt
@@ -1709,14 +1623,6 @@ async function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
 
-  // `bias` takes a signed integer positional (e.g. "-5"), which the generic
-  // --flag parser below would mistake for a flag — handle its raw args
-  // directly, before anything routes through parseArgs.
-  if (cmd === 'bias') {
-    cmdBias(argv.slice(1));
-    return;
-  }
-
   const { opts, positional } = parseArgs(argv.slice(1));
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || opts.help) {
@@ -1747,6 +1653,10 @@ async function main() {
     case 'category':
     case 'categories':
       cmdCategory(opts, positional);
+      break;
+    case 'global-fallback':
+    case 'global_fallback':
+      cmdGlobalFallback(opts);
       break;
     case 'claim':
     case 'take':

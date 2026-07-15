@@ -19,7 +19,6 @@ const path = require('path');
 const url = require('url');
 const { spawn, spawnSync } = require('child_process');
 const store = require('./store');
-const agentsync = require('./agentsync');
 
 const DASHBOARD_HTML = path.join(__dirname, '..', 'dashboard', 'index.html');
 
@@ -123,7 +122,14 @@ function categoryUsageCounts(project) {
 
 function categoriesPayload(project) {
   const usage = categoryUsageCounts(project);
-  return store.getCategories().map((category) => Object.assign({}, category, { usageCount: usage[category.id] || 0 }));
+  return store.getCategories().map((category) => {
+    const resolved = store.resolveCategoryRoute(category);
+    return Object.assign({}, category, {
+      usageCount: usage[category.id] || 0,
+      resolved: { model: resolved.model, effort: resolved.effort },
+      warnings: resolved.warnings,
+    });
+  });
 }
 
 // Stories for one project, each annotated with how many (non-archived) tickets
@@ -327,6 +333,7 @@ async function handle(req, res) {
         name: body.name,
         description: body.description,
         route: body.route,
+        fallback: body.fallback,
         contract: body.contract,
         enabled: body.enabled,
       });
@@ -373,7 +380,29 @@ async function handle(req, res) {
     }
   }
 
-  // --- Tickets: list ---
+  // --- Routing fallback: global final policy for unavailable category routes ---
+  if (req.method === 'GET' && pathname === '/api/routing-fallback') {
+    sendJson(res, 200, { fallback: store.getRoutingFallback(), catalog: store.routingModels() });
+    return;
+  }
+  if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/routing-fallback') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+      const fallback = store.setRoutingFallback(body.fallback || body);
+      sendJson(res, 200, { fallback, catalog: store.routingModels() });
+    } catch (e) {
+      sendJson(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // --- Routing catalog: models available to category and fallback controls ---
+  if (req.method === 'GET' && pathname === '/api/routing-models') {
+    sendJson(res, 200, store.modelsPayload());
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/tickets') {
     const project = q.project ? String(q.project) : 'all';
     // Board shows active tickets; ?archived=1 returns the archive instead.
@@ -688,48 +717,6 @@ async function handle(req, res) {
       return;
     }
     sendJson(res, 200, { prefs: store.setNotifyPrefs(body) });
-    return;
-  }
-
-  // --- Model prefs: which agent tiers the user wants offered (allowlist over
-  // opus/sonnet/haiku/fable). Read by the dashboard's Model picker and by the
-  // orchestrator (via the CLI) when choosing an executor tier. ---
-  if (req.method === 'GET' && pathname === '/api/model-prefs') {
-    sendJson(res, 200, { prefs: store.getModelPrefs() });
-    return;
-  }
-
-  // --- Routing ladder: the live complexity(1-10) -> model·effort mapping,
-  // derived from the enabled tiers. The dashboard renders it in the ticket
-  // editor (derived-routing line) and the settings popover. ---
-  if (req.method === 'GET' && pathname === '/api/routing-ladder') {
-    sendJson(res, 200, { ladder: store.routingLadder(), prefs: store.getModelPrefs() });
-    return;
-  }
-  if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/model-prefs') {
-    let body;
-    try {
-      body = await readJsonBody(req);
-    } catch (e) {
-      sendJson(res, 400, { error: 'bad JSON body' });
-      return;
-    }
-    const prefs = store.setModelPrefs(body);
-    // Keep the runtime sidequest-exec-<slug>-<effort>.md agent files (SQ-158)
-    // in sync with whatever custom models are now enabled. Fail-soft: a sync
-    // problem (e.g. an unwritable agents dir) must never block saving prefs.
-    let agentSync = null;
-    let message;
-    try {
-      agentSync = agentsync.syncExecAgents(prefs);
-      const changed = agentSync.written + agentSync.removed;
-      if (changed > 0) {
-        message = `${changed} exec agent file(s) changed (${agentSync.written} written, ${agentSync.removed} removed) — ${agentsync.RESTART_NOTICE}`;
-      }
-    } catch (e) {
-      agentSync = { error: (e && e.message) || String(e) };
-    }
-    sendJson(res, 200, Object.assign({ prefs, agentSync }, message ? { message } : {}));
     return;
   }
 

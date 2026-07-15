@@ -194,81 +194,28 @@
   .pop-row em { font-style: normal; font-size: 11px; color: var(--text-faint); }
   .pop-foot { font-size: 10.5px; color: var(--text-faint); padding: 8px; line-height: 1.45; border-top: 1px solid var(--line-soft); margin-top: 4px; }
 
-  /* Settings is a wide planning sheet: ticket categories define the routing
-     work, grade cards define the available model tiers, and old score controls
-     stay reachable without competing for the page's attention. */
-  .popover.settings-panel { width: min(1180px, 97vw); padding: 0; background: var(--card); }
+  .popover.settings-panel { width: min(1060px, 97vw); padding: 0; background: var(--card); }
   .settings-panel .sp-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px 12px; border-bottom: 1px solid var(--line-soft); }
   .settings-panel .sp-title { font-family: var(--sans); font-weight: 700; font-size: 14.5px; letter-spacing: .01em; color: var(--text); }
   .settings-panel .sp-title-sub { font-size: 11.5px; font-weight: 400; color: var(--text-faint); }
-  .settings-panel .sp-grid { display: grid; grid-template-columns: minmax(360px, 1.18fr) minmax(320px, 1fr) minmax(230px, .82fr); max-height: min(74vh, 660px); overflow-y: auto; }
-  .settings-panel .sp-col { grid-column: 3; grid-row: 1 / span 2; padding: 8px 15px 18px; min-width: 0; border-left: 1px solid var(--line-soft); }
+  .settings-panel .sp-grid { display: grid; grid-template-columns: minmax(440px, 1.5fr) minmax(230px, .8fr); max-height: min(74vh, 660px); overflow-y: auto; }
+  .settings-panel .sp-col { padding: 8px 15px 18px; min-width: 0; border-left: 1px solid var(--line-soft); }
   .settings-panel .sp-col .pop-head:first-child { padding-top: 10px; }
-  .routing-panel { grid-column: 1 / 3; grid-row: 2; padding: 14px 18px 18px; border-top: 1px solid var(--line-soft); }
-  .routing-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+  .routing-panel { padding: 16px 18px 14px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(90deg, var(--gold-soft), transparent 62%); }
+  .routing-head { display: flex; align-items: flex-start; gap: 16px; }
   .routing-head h3 { margin: 0; font-family: var(--serif); font-size: 19px; font-weight: 500; }
   .routing-head p { margin: 3px 0 0; color: var(--text-faint); font-size: 11.5px; }
-  .routing-toggle { margin-left: auto; }
-  .routing-profiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line-soft); }
-  .profile-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 62px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
-  .profile-row:nth-child(odd) { border-right: 1px solid var(--line-soft); }
-  .profile-row:nth-last-child(-n+2) { border-bottom: 0; }
-  .profile-row.muted .profile-name { color: var(--text-faint); }
-  .profile-toggle { display: grid; grid-template-columns: 15px 8px minmax(0, 1fr); align-items: center; gap: 9px; min-width: 0; cursor: pointer; }
-  .profile-toggle input { accent-color: var(--gold); width: 15px; height: 15px; flex: none; margin: 0; }
-  .profile-dot { width: 8px; height: 8px; border-radius: 50%; }
-  .profile-name { display: block; font-size: 13px; font-weight: 650; color: var(--text); }
-  .profile-band { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; min-height: 17px; }
-  .profile-category { max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 9.5px; line-height: 15px; color: var(--indigo); background: rgba(64,70,131,.08); border: 1px solid rgba(64,70,131,.22); border-radius: 999px; padding: 0 6px; }
-  .profile-category.more { color: var(--text-faint); background: var(--panel); border-color: var(--line-soft); }
-  .profile-runtime { text-align: right; font-size: 11.5px; color: var(--text-dim); }
-  .profile-runtime b { display: block; color: var(--text); font-weight: 600; }
-  .routing-direct-controls { margin-top: 14px; }
-  .legacy-routing { border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--panel); }
-  .legacy-routing summary { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px 12px; color: var(--text-dim); list-style: none; }
-  .legacy-routing summary::-webkit-details-marker { display: none; }
-  .legacy-routing summary::before { content: "+"; width: 15px; font-family: var(--mono); color: var(--text-faint); text-align: center; }
-  .legacy-routing[open] summary::before { content: "−"; }
-  .legacy-routing summary strong { font-size: 11.5px; color: var(--text); }
-  .legacy-routing summary span { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); }
-  .legacy-routing-copy { margin: 0; padding: 0 12px 9px 35px; font-size: 11px; line-height: 1.45; color: var(--text-faint); }
-  .legacy-routing-body { padding: 8px 12px 12px; border-top: 1px dashed var(--line-soft); }
-  .legacy-routing-body .pop-head { padding-left: 0; }
-  .legacy-routing-body .model-pref-list { margin-bottom: 10px; }
+  .fallback-control { display: grid; grid-template-columns: auto minmax(170px, 1fr) 100px; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 10px; border: 1px solid var(--gold-line); background: var(--card); }
+  .fallback-control label { font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--gold-bright); }
+  .fallback-control select { min-width: 0; }
+  .fallback-note { grid-column: 2 / -1; color: var(--text-faint); font-size: 10.5px; }
   @media (max-width: 880px) {
     .settings-panel .sp-grid { grid-template-columns: 1fr; }
-    .category-settings, .routing-panel, .settings-panel .sp-col { grid-column: auto; grid-row: auto; border-left: 0; }
-    .routing-panel, .settings-panel .sp-col { border-top: 1px solid var(--line-soft); }
-    .routing-profiles { grid-template-columns: 1fr; }
-    .profile-row:nth-child(odd) { border-right: 0; }
-    .profile-row:nth-last-child(2) { border-bottom: 1px solid var(--line-soft); }
+    .settings-panel .sp-col { border-left: 0; border-top: 1px solid var(--line-soft); }
+    .fallback-control { grid-template-columns: 1fr 100px; }
+    .fallback-control label, .fallback-note { grid-column: 1 / -1; }
   }
   .sp-src { margin-left: auto; font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
-  /* A model tier row: the enable toggle + name on the left, and (when a Codex
-     catalog is detected) a backend dropdown on the right choosing which model
-     actually runs that tier. */
-  .tier-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius-sm); }
-  .tier-row.muted .pn-name { color: var(--text-faint); }
-  .tier-toggle { display: flex; align-items: center; gap: 9px; flex: 1 1 auto; min-width: 0; cursor: pointer; }
-  .tier-toggle input { accent-color: var(--gold); width: 15px; height: 15px; flex: none; }
-  .tier-toggle .pn-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* Backend dropdown: hairline, flat, matches the panel. A Codex-backed tier
-     (.on) tints its border so the row reads as "not plain Claude" at a glance. */
-  .tier-backend { flex: none; }
-  .tier-backend select {
-    font-family: var(--sans); font-size: 11.5px; color: var(--text-dim);
-    background: var(--card); border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
-    padding: 3px 6px; max-width: 150px; cursor: pointer; transition: border-color .12s, color .12s;
-  }
-  .tier-backend select:hover { border-color: var(--gold-line); }
-  .tier-backend.on select { color: var(--gold-bright); border-color: var(--gold-line); background: var(--gold-soft); }
-  /* Stale-mapping fallback warnings under the tier list. */
-  .backend-warn { padding: 0 8px; }
-  .backend-warn-row { font-size: 10.5px; line-height: 1.4; color: var(--high); padding: 3px 0; }
-  /* Subtle hint shown when no Codex catalog is detected. */
-  .backend-hint { font-size: 10.5px; line-height: 1.45; color: var(--text-faint); padding: 4px 8px 2px; }
-  .backend-hint b { font-weight: 600; color: var(--text-dim); }
-
   /* Notification inbox */
   #inboxPop { width: 328px; }
   .inbox-list { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
@@ -475,11 +422,6 @@
   .card .story-top { position: absolute; left: 0; right: 0; top: 0; height: 3px; }
   .storychip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-  /* Target-model tier chip: which agent tier should work the ticket. */
-  .modelchip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; text-transform: lowercase; }
-  .modelchip svg { flex: none; opacity: .9; }
-  .categorychip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); color: var(--indigo); background: rgba(64,70,131,.08); border: 1px solid rgba(64,70,131,.28); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .categorychip::before { content: "◇"; color: var(--gold); font-size: 12px; line-height: 1; }
   .category-settings { grid-column: 1 / 3; display: flex; flex-direction: column; min-height: 0; background: linear-gradient(90deg, var(--gold-soft), transparent 45%); }
   .category-settings .cat-head { padding: 18px 15px 10px; border-bottom: 1px solid var(--line-soft); }
   .category-settings h3 { margin: 0; font-family: var(--serif); font-size: 17px; font-weight: 500; color: var(--text); }
@@ -505,52 +447,6 @@
   .category-switch input { accent-color: var(--gold); }
   .category-add { padding: 9px; border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--bg); display: grid; gap: 6px; }
   .category-add summary { cursor: pointer; font-size: 11.5px; color: var(--text-dim); }
-  /* Codex-backed tier mark on a card chip: the model name in a filled pill, so a
-     Codex-run ticket is obvious at a glance while the tier name stays primary. */
-  .codex-mark { font-family: var(--mono); font-size: 8.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; margin-left: 3px; padding: 0 4px; border-radius: 2px; background: currentColor; color: var(--card); }
-  /* Ladder-view: the model a Codex-backed rung actually runs on. */
-  .ladder-row .lruns { color: var(--indigo); font-weight: 600; }
-  /* Per-model effort matrix in the settings popover (SQ-129/SQ-130): a compact
-     grid, not a bolted-on table — hairline rows, no cell borders, the model's
-     own accent dot carries the row identity the same way the tier list above
-     it does. A tier hidden from the picker dims (not hides) its row so the
-     saved picks are still visible/editable underneath. */
-  .effort-grid { display: flex; flex-direction: column; padding: 2px 4px 4px; }
-  .eg-row { display: grid; grid-template-columns: 62px repeat(5, 1fr); align-items: center; gap: 2px; border-radius: var(--radius-sm); }
-  .eg-row:not(.eg-headrow):hover { background: var(--panel); }
-  .eg-headrow { margin-bottom: 1px; }
-  .eg-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); padding: 4px 4px 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .eg-row.dim .eg-label { color: var(--text-faint); }
-  .eg-row.dim .eg-label .sw { opacity: .45; }
-  .eg-h { font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--text-faint); text-align: center; }
-  .eg-cell { display: flex; align-items: center; justify-content: center; padding: 5px 0; cursor: pointer; }
-  .eg-cell input { accent-color: var(--gold); width: 14px; height: 14px; cursor: pointer; }
-  .eg-row.dim .eg-cell input { opacity: .55; }
-  /* Live routing ladder in the settings popover: one compact row per rung, so a
-     tier toggle visibly reshapes the complexity -> model·effort mapping. */
-  .ladder-view { display: flex; flex-direction: column; gap: 1px; padding: 2px 4px 4px; }
-  .ladder-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: var(--radius-sm); font-family: var(--mono); font-size: 11px; }
-  .ladder-row:hover { background: var(--panel); }
-  .ladder-row .lc { color: var(--text-faint); width: 24px; flex: none; }
-  .ladder-row .ldot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-  .ladder-row .lr { color: var(--text-dim); }
-  .ladder-empty { font-size: 11.5px; color: var(--text-faint); padding: 4px 6px; }
-  /* Routing-bias dial in the settings popover: slide toward Frugal (cheaper
-     rungs) or Generous (roomier rungs) and the ladder above/below reshapes live.
-     Flat + hairline like the rest of the control cluster; the thumb borrows the
-     ring language of the story swatches. */
-  .bias-view { display: flex; flex-direction: column; gap: 6px; padding: 4px 8px 6px; }
-  .bias-top { display: flex; align-items: baseline; gap: 8px; }
-  .bias-name { font-family: var(--sans); font-size: 12.5px; font-weight: 600; color: var(--text); }
-  .bias-val { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--gold); }
-  .bias-range { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; margin: 3px 0; background: var(--line-soft); border-radius: 2px; outline: none; cursor: pointer; }
-  .bias-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 15px; height: 15px; border-radius: 50%; background: var(--gold); border: 2px solid var(--card); box-shadow: 0 0 0 1px var(--gold-line); cursor: pointer; transition: transform .1s; }
-  .bias-range::-webkit-slider-thumb:hover { transform: scale(1.12); }
-  .bias-range::-webkit-slider-thumb:active { transform: scale(1.12); background: var(--gold-bright); }
-  .bias-range::-moz-range-thumb { width: 15px; height: 15px; border-radius: 50%; background: var(--gold); border: 2px solid var(--card); box-shadow: 0 0 0 1px var(--gold-line); cursor: pointer; }
-  .bias-range::-moz-range-track { height: 4px; background: var(--line-soft); border-radius: 2px; }
-  .bias-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 1px var(--gold-line), 0 0 0 3px var(--gold-soft); }
-  .bias-ends { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); }
   /* Story field in the ticket editor: a swatch beside the select, and the
      inline "new story" panel with a palette picker. */
   .story-select-row { display: flex; align-items: center; gap: 9px; }
@@ -780,18 +676,16 @@
             <span class="sp-title-sub">notifications &amp; execution plan</span>
           </div>
           <div class="sp-grid">
-            <section class="category-settings" aria-labelledby="categoriesTitle">
-              <div class="cat-head"><h3 id="categoriesTitle">Categories</h3><p>Categories choose the route. Tickets follow their category on the next read.</p></div>
-              <div class="category-list" id="categoryList"></div>
-            </section>
-            <section class="routing-panel" aria-labelledby="routingTitle">
-              <div class="routing-head">
-                <div><h3 id="routingTitle">Model tiers</h3><p>Choose which model serves each tier.</p></div>
-                <label class="pop-row routing-toggle"><input type="checkbox" id="routingEnabled" /><span>Automatic</span></label>
-              </div>
-              <div class="routing-profiles" id="routingProfiles"></div>
-              <div class="routing-direct-controls"><details class="legacy-routing"><summary><strong>Legacy complexity routing</strong><span>Fallback controls</span></summary><p class="legacy-routing-copy">Only complexity-scored tickets use these controls when they do not have a category.</p><div class="legacy-routing-body"><div class="pop-head">Effort levels</div><div class="model-pref-list" id="modelPrefList"></div><div class="pop-head">Band preference</div><div class="bias-view" id="biasView"></div><div class="pop-head">Exact C1–C10 ladder</div><div class="ladder-view" id="ladderView"></div><div class="backend-warn" id="tierBackendWarn"></div></div></details></div>
-            </section>
+            <div>
+              <section class="routing-panel" aria-labelledby="routingTitle">
+                <div class="routing-head"><div><h3 id="routingTitle">Global fallback</h3><p>Used only when a category route cannot run.</p></div></div>
+                <div class="fallback-control" id="globalFallbackControl"></div>
+              </section>
+              <section class="category-settings" aria-labelledby="categoriesTitle">
+                <div class="cat-head"><h3 id="categoriesTitle">Categories</h3><p>Categories choose the primary route. A category fallback overrides the global one.</p></div>
+                <div class="category-list" id="categoryList"></div>
+              </section>
+            </div>
             <div class="sp-col">
               <div class="pop-head">Desktop notifications</div>
               <div class="pop-row" id="desktopNotifRow" role="button" tabindex="0">
@@ -994,19 +888,12 @@
   // Mirrors store.STORY_PALETTE — the swatches offered when creating a story from
   // the dashboard. The server still auto-assigns when none is picked.
   var STORY_PALETTE = ["#c2683f", "#3f8f8a", "#7a5ba8", "#7d8a3f", "#b45573", "#4a72a8", "#c19a3e", "#4f8f6a"];
-  // Target-model tiers (mirrors store.VALID_MODELS). Mandatory on every ticket
-  // — the filer must pick one; there is no default. Each tier gets a distinct
-  // on-brand accent so the card chip is glanceable.
-  var MODELS = [
-    { k: "grade-1", label: "Grade 1", hint: "small, tightly-scoped work" },
-    { k: "grade-2", label: "Grade 2", hint: "everyday coding work" },
-    { k: "grade-3", label: "Grade 3", hint: "hard multi-file work" },
-    { k: "grade-4", label: "Grade 4", hint: "the hardest work" }
+  var CLAUDE_RUNTIME_OPTIONS = [
+    { slug: "haiku", label: "Claude Haiku" },
+    { slug: "sonnet", label: "Claude Sonnet" },
+    { slug: "opus", label: "Claude Opus" },
+    { slug: "fable", label: "Claude Fable" }
   ];
-  var MODEL_COLORS = { "grade-1": "#a8672e", "grade-2": "#3f8f8a", "grade-3": "#404683", "grade-4": "#7a5ba8" };
-  // A detected (codex-gateway) model can carry its own color; otherwise give it
-  // a stable on-brand hue derived from the slug so its ladder rung and card chip
-  // read the same every time. modelColor() is the single lookup everything uses.
   var CUSTOM_COLORS = {};   // slug -> "#rrggbb", filled from prefs.custom
   var CUSTOM_PALETTE = ["#7a5ba8", "#4c8b6e", "#a8672e", "#3f8f8a", "#8a5a7a", "#5a6a9a", "#9a7a3a"];
   function slugHue(slug) {
@@ -1014,7 +901,6 @@
     return CUSTOM_PALETTE[h % CUSTOM_PALETTE.length];
   }
   function modelColor(k) {
-    if (MODEL_COLORS[k]) return MODEL_COLORS[k];
     if (CUSTOM_COLORS[k]) return CUSTOM_COLORS[k];
     if (k) return slugHue(k);
     return "var(--text-faint)";
@@ -1119,101 +1005,15 @@
     api("/api/notify-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(notifyPrefs) }).catch(function () {});
   }
 
-  // Which model tiers the user wants offered at all (server-side allowlist).
-  // Gates the editor's Model picker and what the orchestrator is told to use;
-  // an already-tagged ticket keeps showing its chip even if its tier is off.
-  // `efforts` mirrors store.getModelPrefs's per-model matrix (SQ-129): one row
-  // per grade, all effort levels on by default. Grade 1 uses its row only while
-  // remapped to an effort-capable runtime, but retaining it makes remaps lossless.
-  function defaultEffortsMatrix() {
-    var out = {};
-    MODELS.forEach(function (m) {
-      var row = {};
-      EFFORTS.forEach(function (ef) { row[ef.k] = true; });
-      out[m.k] = row;
-    });
-    return out;
+  var routingCatalog = { models: CLAUDE_RUNTIME_OPTIONS.map(function (runtime) { return runtime.slug; }), efforts: EFFORTS, discovered: [], globalFallback: { model: "sonnet", effort: "high" } };
+  function syncRoutingCatalog() {
+    return api("/api/routing-models").then(function (data) {
+      if (!data) return;
+      routingCatalog = data;
+      routingCatalog.efforts = (data.efforts || []).map(function (effort) { return typeof effort === "string" ? { k: effort, label: effort } : effort; });
+      state.categories = data.categories || state.categories;
+    }).catch(function () {});
   }
-  var modelPrefs = { "grade-1": true, "grade-2": true, "grade-3": true, "grade-4": true, routing: true, efforts: defaultEffortsMatrix() };
-  function modelEnabled(k) { return modelPrefs[k] !== false; }
-  function effortEnabled(model, k) {
-    var row = modelPrefs.efforts && modelPrefs.efforts[model];
-    return row ? row[k] !== false : true;
-  }
-  function syncModelPrefsFromServer() {
-    return api("/api/model-prefs").then(function (d) {
-      if (d && d.prefs) { modelPrefs = d.prefs; adoptBackendColors(); renderModelPrefSettings(); refreshLadder(); }
-    }).catch(function () { /* older server without this route — offer everything */ });
-  }
-  // A Codex-backed tier keeps its TIER color on the ladder/chips (the ladder is
-  // tier-named), so there's no per-slug color to adopt — kept as a no-op hook in
-  // case a future catalog carries colors.
-  function adoptBackendColors() { CUSTOM_COLORS = {}; }
-  function pushModelPrefs() {
-    return api("/api/model-prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modelPrefs) })
-      .then(function (d) {
-        if (d && d.prefs) {
-          modelPrefs = d.prefs;
-          adoptBackendColors();
-          renderModelPrefSettings();
-        }
-        return d;
-      })
-      .catch(function () {});
-  }
-
-  // Routing-bias dial (-5 frugal .. 0 neutral .. +5 generous). Reflected from the
-  // already-synced modelPrefs on popover open; dragging pushes through the same
-  // model-prefs path (debounced) then refetches the ladder so the curve reshapes
-  // live under the slider.
-  var BIAS_MIN = -5, BIAS_MAX = 5, biasDebounce = null;
-  function coerceBias(n) { n = Math.round(Number(n) || 0); return n < BIAS_MIN ? BIAS_MIN : n > BIAS_MAX ? BIAS_MAX : n; }
-  function biasName(n) { return n === 0 ? "Neutral" : (n < 0 ? "Frugal" : "Generous"); }
-  function updateBiasReadout(v) {
-    var nm = $("biasName"); if (nm) nm.textContent = biasName(v);
-    var vv = $("biasVal"); if (vv) vv.textContent = (v > 0 ? "+" : "") + v;
-  }
-  function renderBiasControl() {
-    var box = $("biasView"); if (!box) return;
-    var bias = coerceBias(modelPrefs.routingBias);
-    box.innerHTML =
-      '<div class="bias-top"><span class="bias-name" id="biasName"></span><span class="bias-val" id="biasVal"></span></div>' +
-      '<input type="range" class="bias-range" id="biasRange" min="' + BIAS_MIN + '" max="' + BIAS_MAX + '" step="1" aria-label="Routing bias (frugal to generous)" />' +
-      '<div class="bias-ends"><span>Frugal</span><span>Generous</span></div>';
-    var range = $("biasRange");
-    range.value = String(bias);
-    updateBiasReadout(bias);
-    range.addEventListener("input", function () {
-      var v = coerceBias(Number(range.value));
-      updateBiasReadout(v);                 // label + value track the drag immediately
-      modelPrefs.routingBias = v;
-      if (biasDebounce) clearTimeout(biasDebounce);
-      biasDebounce = setTimeout(function () {
-        pushModelPrefs().then(function () { refreshLadder(); });  // persist, then reshape the ladder
-      }, 150);
-    });
-  }
-
-  // The live complexity(1..10) -> model·effort ladder, fetched from
-  // /api/routing-ladder. Cached here; the editor's derived line and the settings
-  // popover read it. Refreshed on editor-open and after a tier toggle so both
-  // views reshape the moment the enabled tiers change.
-  var routingLadderCache = null;
-  function fetchRoutingLadder() {
-    return api("/api/routing-ladder").then(function (d) {
-      if (d && d.ladder) routingLadderCache = d.ladder;
-      return routingLadderCache;
-    }).catch(function () { return routingLadderCache; });
-  }
-  // Refetch, then re-render whatever's showing the ladder (settings row + the
-  // open editor's derived line).
-  function refreshLadder() {
-    return fetchRoutingLadder().then(function () {
-      renderLadderView();
-      if (state.editor) { var s = segValue($("mComplexity")); renderDerivedLine(s ? Number(s) : null); }
-    });
-  }
-  function ladderRung(k) { return (routingLadderCache && k) ? (routingLadderCache[k - 1] || null) : null; }
   function routeLabelFor(model, effort) { return (model || "any") + (effort ? "·" + effort : ""); }
 
   // Sort choice is board-wide and persisted across reloads.
@@ -1766,195 +1566,46 @@
       box.appendChild(row);
     });
   }
-  // Which model tiers are offered in the ticket editor (and recommended to the
-  // orchestrator). Personal taste — e.g. turn haiku off — stored server-side so
-  // it holds across tabs/reloads. At least one tier always stays on.
-  function renderModelPrefSettings() {
-    var box = $("modelPrefList"); if (!box) return;
-    box.innerHTML = "";
-    renderRoutingPlan();
-    // Effort levels are a per-grade matrix (SQ-129: store.getModelPrefs's
-    // `efforts` object). Grade 1 gains a real row only while its runtime is
-    // remapped to Codex; Claude Haiku keeps its effort-null behavior. Rows whose
-    // runtime has no effort axis stay hidden without discarding saved choices.
-    var grid = el("div", "effort-grid");
-    var headRow = el("div", "eg-row eg-headrow");
-    headRow.appendChild(el("span", "eg-label"));
-    EFFORTS.forEach(function (ef) {
-      var h = el("span", "eg-h", esc(ef.short));
-      h.title = ef.label + (ef.k === "max" ? " (top rung, C10 only)" : "");
-      headRow.appendChild(h);
+  function externalBackendValue(model) { return model.source ? model.source + ":" + model.slug : model.slug; }
+  function routeOptions(selected) {
+    var known = {};
+    var options = CLAUDE_RUNTIME_OPTIONS.map(function (runtime) { known[runtime.slug] = true; return '<option value="' + runtime.slug + '">' + esc(runtime.label) + '</option>'; });
+    (routingCatalog.discovered || []).forEach(function (model) {
+      var value = externalBackendValue(model);
+      known[value] = true;
+      options.push('<option value="' + esc(value) + '">' + esc(model.label || model.slug) + '</option>');
     });
-    grid.appendChild(headRow);
-    MODELS.filter(function (m) {
-      var profile = (modelPrefs.profiles || {})[m.k];
-      if (profile) return profile.efforts !== null;
-      var resolved = modelPrefs.tierBackendResolved || {};
-      return m.k !== "grade-1" || (resolved[m.k] && resolved[m.k].backend === "codex");
-    }).forEach(function (m) {
-      var tierOn = modelEnabled(m.k);
-      var row = el("div", "eg-row" + (tierOn ? "" : " dim"));
-      var label = el("span", "eg-label");
-      label.innerHTML = '<span class="sw" style="display:inline-block;width:8px;height:8px;border-radius:50%;flex:none;background:' + (MODEL_COLORS[m.k] || "var(--line)") + '"></span>' + esc(m.label);
-      row.appendChild(label);
-      EFFORTS.forEach(function (ef) {
-        var cell = el("label", "eg-cell");
-        var on = effortEnabled(m.k, ef.k);
-        cell.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' aria-label="' + esc(m.label + " " + ef.label) + '" />';
-        cell.title = m.label + " · " + ef.label;
-        var cb = cell.querySelector("input");
-        cb.addEventListener("change", function () {
-          var enabledCount = EFFORTS.filter(function (x) { return effortEnabled(m.k, x.k); }).length;
-          if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one effort level must stay enabled for " + m.label); return; }
-          if (!modelPrefs.efforts) modelPrefs.efforts = {};
-          if (!modelPrefs.efforts[m.k]) modelPrefs.efforts[m.k] = {};
-          modelPrefs.efforts[m.k][ef.k] = cb.checked;
-          pushModelPrefs();
-          refreshLadder();   // the ladder reshapes when a model's enabled efforts change — show it
-          toast(m.label + " " + ef.label + (cb.checked ? " enabled" : " excluded from the ladder"));
-        });
-        row.appendChild(cell);
-      });
-      grid.appendChild(row);
-    });
-    box.appendChild(grid);
-
-    // A tier mapped to a Codex model that isn't available now falls back to
-    // Claude; surface the store's warning so the fallback isn't silent.
-    var warnBox = $("tierBackendWarn");
-    if (warnBox) {
-      var warns = modelPrefs.tierBackendWarnings || [];
-      warnBox.innerHTML = "";
-      warns.forEach(function (w) {
-        var d = el("div", "backend-warn-row");
-        d.textContent = w;
-        warnBox.appendChild(d);
-      });
+    if (selected && !known[selected]) options.unshift('<option value="' + esc(selected) + '">' + esc(selected) + ' (unavailable)</option>');
+    return options.join('');
+  }
+  function effortOptions(selected) {
+    return (routingCatalog.efforts || EFFORTS).map(function (effort) {
+      var value = effort.k || effort;
+      return '<option value="' + esc(value) + '"' + (selected === value ? ' selected' : '') + '>' + esc(effort.label || value) + '</option>';
+    }).join('');
+  }
+  function renderGlobalFallback() {
+    var box = $("globalFallbackControl"); if (!box) return;
+    var fallback = routingCatalog.globalFallback || { model: "sonnet", effort: "high" };
+    box.innerHTML = '<label for="globalFallbackModel">Fallback</label><select id="globalFallbackModel">' + routeOptions(fallback.model) + '</select><select id="globalFallbackEffort">' + effortOptions(fallback.effort) + '</select><span class="fallback-note">Category fallbacks take priority over this route.</span>';
+    $("globalFallbackModel").value = fallback.model;
+    $("globalFallbackEffort").value = fallback.effort;
+    function save() {
+      var next = { model: $("globalFallbackModel").value, effort: $("globalFallbackEffort").value };
+      mutate("PUT", "/api/routing-fallback", { fallback: next }).then(function (data) {
+        routingCatalog.globalFallback = data.fallback;
+        toast("Global fallback saved");
+        return loadCategories();
+      }).then(renderCategorySettings).catch(function (error) { toast("Fallback failed: " + error.message); });
     }
+    $("globalFallbackModel").addEventListener("change", save);
+    $("globalFallbackEffort").addEventListener("change", save);
   }
-  function categoryChipsForGrade(grade) {
-    var matches = state.categories.filter(function (category) {
-      return category.enabled !== false && category.route && category.route.model === grade;
-    });
-    var visible = matches.slice(0, 3).map(function (category) {
-      return '<span class="profile-category" title="' + esc(category.name) + '">' + esc(category.name) + '</span>';
-    });
-    if (matches.length > visible.length) visible.push('<span class="profile-category more">+' + (matches.length - visible.length) + '</span>');
-    return visible.join("") || '<span class="profile-category more">No categories</span>';
-  }
-  function renderRoutingPlan() {
-    var box = $("routingProfiles"); if (!box) return;
-    var toggle = $("routingEnabled");
-    if (toggle) {
-      toggle.checked = modelPrefs.routing !== false;
-      toggle.onchange = function () { modelPrefs.routing = toggle.checked; pushModelPrefs(); };
-    }
-    var gradesView = modelPrefs.profiles || {};
-    var grades = MODELS.map(function (m) { return gradesView[m.k]; }).filter(Boolean);
-    box.innerHTML = "";
-    grades.forEach(function (p) {
-      var on = p.enabled !== false;
-      var row = el("div", "profile-row" + (on ? "" : " muted"));
-      var categoryChips = categoryChipsForGrade(p.grade);
-      // The grade toggle wraps only the dot + name/band, so clicking the runtime
-      // dropdown beside it doesn't flip the grade on/off.
-      var lab = el("label", "profile-toggle");
-      lab.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + ' aria-label="' + esc((p.label || p.grade) + " enabled") + '" />' +
-        '<span class="profile-dot" style="background:' + modelColor(p.grade) + '"></span>' +
-        '<span><span class="profile-name">' + esc(p.label || p.grade) + '</span><span class="profile-band">' + categoryChips + '</span></span>';
-      var cb = lab.querySelector("input");
-      cb.addEventListener("change", function () {
-        var enabledCount = grades.filter(function (x) { return x.enabled !== false; }).length;
-        if (!cb.checked && enabledCount <= 1) { cb.checked = true; toast("At least one grade must stay enabled"); return; }
-        modelPrefs[p.grade] = cb.checked;
-        pushModelPrefs().then(function () { refreshLadder(); });
-        toast(cb.checked ? (p.label || p.grade) + " enabled" : (p.label || p.grade) + " off — its work reroutes to the nearest grade");
-      });
-      row.appendChild(lab);
-      var runtime = el("span", "profile-runtime");
-      runtime.innerHTML = '<b>' + esc(p.runsLabel || p.runsModel) + '</b>' + esc(p.backend === "codex" ? "Codex runtime" : "Claude runtime");
-      row.appendChild(runtime);
-      var det = modelPrefs.discovered || [];
-      row.appendChild(backendSelect(p.grade, det));
-      box.appendChild(row);
-    });
-    if (!grades.length) box.innerHTML = '<div class="ladder-empty">Loading grades…</div>';
-  }
-
-  // Per-tier runtime assignment: every dropdown offers all built-in Claude
-  // runtimes and any discovered Codex model. The select stays visible without a
-  // catalog, so saved explicit Claude assignments remain editable.
-  var CLAUDE_RUNTIME_OPTIONS = [
-    { slug: "haiku", label: "Claude Haiku" },
-    { slug: "sonnet", label: "Claude Sonnet" },
-    { slug: "opus", label: "Claude Opus" },
-    { slug: "fable", label: "Claude Fable" }
-  ];
-  function currentBackend(tier) {
-    var tb = modelPrefs.tierBackend || {};
-    var backend = typeof tb[tier] === "string" ? tb[tier] : "claude";
-    if (backend !== "claude") return backend;
-    return { "grade-1": "haiku", "grade-2": "sonnet", "grade-3": "opus", "grade-4": "fable" }[tier] || "haiku";
-  }
-  function externalBackendValue(dm) {
-    return dm.source ? dm.source + ":" + dm.slug : dm.slug;
-  }
-  function isClaudeRuntime(value) {
-    return CLAUDE_RUNTIME_OPTIONS.some(function (runtime) { return runtime.slug === value; });
-  }
-  function backendSelect(tier, det) {
-    var wrap = el("span", "tier-backend");
-    var sel = document.createElement("select");
-    sel.setAttribute("aria-label", tier + " backend model");
-    var cur = currentBackend(tier);
-    var opts = CLAUDE_RUNTIME_OPTIONS.map(function (runtime) {
-      return '<option value="' + runtime.slug + '"' + (cur === runtime.slug ? " selected" : "") + ">" + runtime.label + "</option>";
-    });
-    det.forEach(function (dm) {
-      var value = externalBackendValue(dm);
-      var suggested = dm.suggestedTier === tier ? " (suggested)" : "";
-      opts.push('<option value="' + esc(value) + '"' + (cur === value || (cur === dm.slug && !isClaudeRuntime(dm.slug)) ? " selected" : "") + ">" + esc(dm.label) + suggested + "</option>");
-    });
-    sel.innerHTML = opts.join("");
-    if (!isClaudeRuntime(cur)) wrap.classList.add("on");
-    sel.addEventListener("change", function () {
-      if (!modelPrefs.tierBackend) modelPrefs.tierBackend = {};
-      modelPrefs.tierBackend[tier] = sel.value;
-      renderModelPrefSettings();
-      pushModelPrefs().then(function () { refreshLadder(); });
-      var dm = det.filter(function (x) { return externalBackendValue(x) === sel.value || (!x.source && x.slug === sel.value); })[0];
-      var claude = CLAUDE_RUNTIME_OPTIONS.filter(function (runtime) { return runtime.slug === sel.value; })[0];
-      var gradeLabel = { "grade-1": "Grade 1", "grade-2": "Grade 2", "grade-3": "Grade 3", "grade-4": "Grade 4" }[tier] || tier;
-      toast(gradeLabel + " now runs on " + (claude ? claude.label : (dm ? dm.label : sel.value)) + " — regenerating its executor agents");
-    });
-    wrap.appendChild(sel);
-    return wrap;
-  }
-  // The live routing ladder, one compact row per rung (C1 sonnet·low …), so a
-  // tier toggle visibly reshapes the complexity -> model·effort mapping.
-  function renderLadderView() {
-    var box = $("ladderView"); if (!box) return;
-    if (!routingLadderCache) {
-      box.innerHTML = '<div class="ladder-empty">Loading ladder…</div>';
-      fetchRoutingLadder().then(function () { if (routingLadderCache) renderLadderView(); });
-      return;
-    }
-    box.innerHTML = "";
-    var resolved = modelPrefs.tierBackendResolved || {};
-    routingLadderCache.forEach(function (r) {
-      var mc = modelColor(r.model);
-      var b = resolved[r.model];
-      // a Codex-backed rung names the model that actually runs it
-      var runs = (b && b.backend === "codex")
-        ? ' <span class="lruns" title="the ' + esc(r.model) + ' tier runs on ' + esc(b.label || b.slug) + ' via codex-gateway">▸ ' + esc(b.label || b.slug) + '</span>'
-        : "";
-      var row = el("div", "ladder-row");
-      row.innerHTML = '<span class="lc">C' + r.complexity + '</span>' +
-        '<span class="ldot" style="background:' + mc + '"></span>' +
-        '<span class="lr">' + esc(r.model + (r.effort ? "·" + r.effort : "")) + runs + '</span>';
-      box.appendChild(row);
-    });
-  }
+  function renderModelPrefSettings() { renderGlobalFallback(); }
+  function renderRoutingPlan() {}
+  function renderBiasControl() {}
+  function renderLadderView() {}
+  function ladderRung() { return null; }
 
   function toggleProjectNotify(slug, on) {
     var p = state.projects.filter(function (x) { return x.slug === slug; })[0];
@@ -2091,32 +1742,32 @@
   }
 
   function categoryRouteOptions(selected) {
-    var grades = MODELS.map(function (model) { return '<option value="' + model.k + '">' + esc(model.label) + '</option>'; });
-    var discovered = (modelPrefs.discovered || []).map(function (model) {
-      var value = externalBackendValue(model);
-      return '<option value="' + esc(value) + '">' + esc(model.label || model.slug) + '</option>';
-    });
-    return grades.concat(discovered).join("");
+    return routeOptions(selected);
   }
   function categoryForm(category, create) {
-    var route = category && category.route || { model: "grade-2", effort: "medium" };
+    var route = category && category.route || { model: "sonnet", effort: "high" };
+    var fallback = category && category.fallback || null;
     var id = category ? category.id : "";
     return '<div class="category-edit">' +
       (create ? '<input data-field="id" placeholder="category id, e.g. research.api" />' : '') +
       '<input data-field="name" placeholder="Name" value="' + esc(category ? category.name : "") + '" />' +
       '<textarea data-field="description" placeholder="What should land here?">' + esc(category ? category.description : "") + '</textarea>' +
-      '<div class="category-route"><select data-field="model">' + categoryRouteOptions(route.model) + '</select><select data-field="effort">' + EFFORTS.map(function (effort) { return '<option value="' + effort.k + '">' + effort.label + '</option>'; }).join("") + '</select></div>' +
+      '<div class="category-route"><select data-field="model">' + categoryRouteOptions(route.model) + '</select><select data-field="effort">' + effortOptions(route.effort) + '</select></div>' +
+      '<label class="category-switch"><input data-field="has-fallback" type="checkbox"' + (fallback ? ' checked' : '') + ' /> Override global fallback</label>' +
+      '<div class="category-route" data-fallback-route' + (fallback ? '' : ' hidden') + '><select data-field="fallback-model">' + categoryRouteOptions(fallback && fallback.model) + '</select><select data-field="fallback-effort">' + effortOptions(fallback && fallback.effort || "high") + '</select></div>' +
       '<textarea data-field="contract" placeholder="Executor contract">' + esc(category ? category.contract : "") + '</textarea>' +
       '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /> Enabled</label>' +
       '<div class="category-actions"><button type="button" data-save-category="' + esc(id) + '">' + (create ? 'Add category' : 'Save') + '</button><button type="button" data-cancel-category>Cancel</button></div>' +
       '</div>';
   }
   function categoryPayload(form) {
+    var hasFallback = form.querySelector('[data-field="has-fallback"]').checked;
     return {
       id: form.querySelector('[data-field="id"]') && form.querySelector('[data-field="id"]').value.trim(),
       name: form.querySelector('[data-field="name"]').value.trim(),
       description: form.querySelector('[data-field="description"]').value.trim(),
       route: { model: form.querySelector('[data-field="model"]').value, effort: form.querySelector('[data-field="effort"]').value },
+      fallback: hasFallback ? { model: form.querySelector('[data-field="fallback-model"]').value, effort: form.querySelector('[data-field="fallback-effort"]').value } : null,
       contract: form.querySelector('[data-field="contract"]').value.trim(),
       enabled: form.querySelector('[data-field="enabled"]').checked
     };
@@ -2127,15 +1778,24 @@
     state.categories.forEach(function (category) {
       var row = el("div", "category-row" + (category.enabled ? "" : " off"));
       row.dataset.id = category.id;
+      var effective = category.resolved || routingCatalog.globalFallback;
+      var degraded = (category.warnings || []).length > 0;
       row.innerHTML = '<div class="category-row-top"><span class="category-row-name">' + esc(category.name) + '</span><span class="category-usage">' + category.usageCount + ' tickets</span></div>' +
         '<div class="category-row-id">' + esc(category.id) + '</div>' +
-        '<div class="category-row-detail"><span>' + esc(category.description || "No classifier description") + '</span><code>' + esc(routeLabelFor(category.route.model, category.route.effort)) + '</code></div>' +
+        '<div class="category-row-detail"><span>' + esc(category.description || "No classifier description") + '</span><code>Primary · ' + esc(routeLabelFor(category.route.model, category.route.effort)) + '</code></div>' +
+        '<div class="category-row-detail"><span>' + (degraded ? '<b style="color:var(--high)">Degraded route</b>' : 'Effective fallback') + '</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
         '<div class="category-actions"><button type="button" data-edit-category>Edit</button>' + (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>') + '</div>';
       row.querySelector('[data-edit-category]').addEventListener("click", function () {
         row.innerHTML = categoryForm(category, false);
         var form = row.querySelector('.category-edit');
         form.querySelector('[data-field="model"]').value = category.route.model;
         form.querySelector('[data-field="effort"]').value = category.route.effort;
+        var fallbackToggle = form.querySelector('[data-field="has-fallback"]');
+        fallbackToggle.addEventListener("change", function () { form.querySelector('[data-fallback-route]').hidden = !fallbackToggle.checked; });
+        if (category.fallback) {
+          form.querySelector('[data-field="fallback-model"]').value = category.fallback.model;
+          form.querySelector('[data-field="fallback-effort"]').value = category.fallback.effort;
+        }
         wireCategoryForm(form, category.id);
       });
       var remove = row.querySelector('[data-delete-category]');
@@ -2412,8 +2072,6 @@
     $("mWhy").value = isEdit && ticket.complexityWhy ? ticket.complexityWhy : "";
     renderDerivedLine(initialC ? Number(initialC) : null);
     populateCategorySelect();
-    // Refresh the ladder once per open, then re-render the derived line off it.
-    refreshLadder();
     // Show any agent claim as a read-only hint (it's a separate axis from assignee).
     var hint = $("mClaimHint");
     if (isEdit && ticket.claim && ticket.claim.by) {
@@ -3389,7 +3047,7 @@
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
-      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderCategorySettings(); renderBiasControl(); renderLadderView(); }
+      if (opening) { renderProjectNotifySettings(); renderGlobalFallback(); renderCategorySettings(); }
     });
     document.addEventListener("click", function (e) {
       if (!e.target.closest(".project-menu")) closeProjectMenu();
@@ -3454,7 +3112,7 @@
   makeIcon();
   initNotifications();
   syncNotifyPrefsFromServer();
-  syncModelPrefsFromServer();
+  syncRoutingCatalog();
   refresh(true).then(function () {
     // Land on the busiest single board if there's exactly one, else keep "All".
     if (state.projects.length === 1) selectProject(state.projects[0].slug);

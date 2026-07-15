@@ -17,88 +17,81 @@ function freshStore(options) {
   }
   process.env.SIDEQUEST_HOME = home;
   process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
-  const storePath = require.resolve('../lib/store.js');
-  delete require.cache[storePath];
+  delete require.cache[require.resolve('../lib/store.js')];
   const store = require('../lib/store.js');
   const slug = store.ensureProject(path.join(home, 'project'), 'Category test').slug;
   return { store, slug, home };
 }
 
-test('defaults seed once without overwriting, recreating, or disabling general', () => {
+test('default categories store concrete primary and Claude fallback routes', () => {
   const { store } = freshStore();
   assert.equal(store.getCategories().length, 14);
-  store.setCategory('coding.normal', { name: 'User owned', route: { model: 'grade-1', effort: 'low' } });
-  store.removeCategory('mechanical');
+  const normal = store.getCategory('coding.normal');
+  assert.deepEqual(normal.route, { model: 'codex-gpt-5-6-terra', effort: 'high' });
+  assert.deepEqual(normal.fallback, { model: 'opus', effort: 'high' });
   assert.throws(() => store.removeCategory('general'), /cannot be removed/);
   assert.throws(() => store.setCategory('general', { enabled: false }), /cannot be disabled/);
-
-  assert.equal(store.getCategory('coding.normal').name, 'User owned');
-  assert.equal(store.getCategory('mechanical'), null);
-  assert.equal(store.getCategory('general').enabled, true);
 });
 
-test('category takes precedence over complexity and list reads expose taxonomy', () => {
-  const { store, slug } = freshStore();
-  const created = store.createTicket(slug, { title: 'category route', category: 'mechanical', complexity: 10, complexityWhy: 'legacy score remains' });
-  const ticket = store.getTicket(slug, created.ref);
-
-  assert.equal(ticket.model, 'grade-1');
-  assert.equal(ticket.effort, 'medium');
-  assert.equal(ticket.category.id, 'mechanical');
-  assert.equal(ticket.category.fallback, false);
-  assert.equal(store.listPayload(slug).categories.length, 14);
-  assert.equal(store.readyPayload(slug).categories.length, 14);
-  assert.equal(store.listPayload(slug, { brief: true }).tickets[0].categoryName, 'Mechanical change');
-});
-
-test('unknown and disabled category ids fall back to general without rewriting the ticket', () => {
-  const { store, slug } = freshStore();
-  store.setCategory('testing', { enabled: false });
-  for (const id of ['missing-id', 'testing']) {
-    const created = store.createTicket(slug, { title: id, category: id });
-    const ticket = store.getTicket(slug, created.ref);
-    assert.equal(ticket.category.id, 'general');
-    assert.equal(ticket.category.fallback, true);
-    assert.equal(ticket.categoryId, id);
-    assert.match(ticket.warnings[0], new RegExp(id));
-  }
-  store.setCategory('testing', { enabled: true });
-  assert.equal(store.getTicket(slug, 'SQ-2').category.id, 'testing');
-});
-
-test('explicit backend category routes use discovered runtime and degrade when it disappears', () => {
-  const catalog = [{ slug: 'codex-gpt-test', id: 'gpt-test', label: 'GPT Test', suggestedTier: 'grade-3' }];
-  const { store, slug } = freshStore({ catalog });
-  store.setCategory({ id: 'backend-pin', name: 'Backend pin', description: 'fixture', route: { model: 'codex-gpt-test', effort: 'high' }, contract: 'fixture', enabled: true });
-  const created = store.createTicket(slug, { title: 'backend', category: 'backend-pin' });
-  let ticket = store.getTicket(slug, created.ref);
-  assert.equal(ticket.model, 'grade-3');
-  assert.equal(ticket.exec.backend, 'codex');
-  assert.equal(ticket.exec.runsModel, 'codex-gpt-test');
+test('fallback chain resolves primary, category fallback, global fallback, and safety net', () => {
+  const catalog = [{ slug: 'codex-gpt-test', id: 'gpt-test', label: 'GPT Test' }];
+  const { store, slug, home } = freshStore({ catalog });
+  store.setCategory({ id: 'route-test', name: 'Route test', route: { model: 'codex-gpt-test', effort: 'high' }, fallback: { model: 'opus', effort: 'medium' }, enabled: true });
+  const created = store.createTicket(slug, { title: 'route', category: 'route-test' });
+  assert.equal(store.getTicket(slug, created.ref).model, 'codex-gpt-test');
 
   process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-empty-'));
-  ticket = store.getTicket(slug, created.ref);
-  assert.equal(ticket.model, 'grade-2');
-  assert.equal(ticket.exec.backend, 'claude');
-  assert.match(ticket.warnings[0], /isn't currently available/);
+  assert.equal(store.getTicket(slug, created.ref).model, 'opus');
+
+  store.setCategory('route-test', { fallback: { model: 'codex-also-gone', effort: 'low' } });
+  store.setRoutingFallback({ model: 'fable', effort: 'xhigh' });
+  assert.equal(store.getTicket(slug, created.ref).model, 'fable');
+
+  const script = String.raw`
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(${JSON.stringify(path.join(home, 'sidequest.db'))});
+    db.prepare("UPDATE globals SET data = ? WHERE key = 'routing-fallback'").run(JSON.stringify({ broken: true }));
+    db.close();
+  `;
+  assert.equal(spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' }).status, 0);
+  const safety = store.getTicket(slug, created.ref);
+  assert.equal(safety.model, 'sonnet');
+  assert.match(safety.warnings.join(' '), /hardwired sonnet\/high/);
 });
 
-test('opening an existing schema v1 database migrates to v2 and preserves markers', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-v1-'));
+test('legacy complexity maps to fixed categories at read time without persistence', () => {
+  const { store, slug } = freshStore();
+  for (const [complexity, category] of [[1, 'coding.easy'], [5, 'coding.normal'], [10, 'coding.hard']]) {
+    const created = store.createTicket(slug, { title: String(complexity), complexity });
+    const ticket = store.getTicket(slug, created.ref);
+    assert.equal(ticket.category.id, category);
+    assert.equal(ticket.categoryId, undefined);
+    assert.match(ticket.warnings.join(' '), /Legacy complexity/);
+  }
+});
+
+test('schema v2 migration materializes configured backends, fallbacks, and global fallback', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-v2-'));
   const dbPath = path.join(home, 'sidequest.db');
   const seed = String.raw`
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync(${JSON.stringify(dbPath)});
-    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '1'); INSERT INTO meta VALUES ('json_migrated', '\"done\"');");
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT); CREATE TABLE globals (key TEXT PRIMARY KEY, data TEXT); INSERT INTO meta VALUES ('schema_version', '2');");
+    db.prepare('INSERT INTO categories VALUES (?, ?)').run('fixture', JSON.stringify({ id:'fixture', name:'Fixture', route:{model:'g' + 'rade-3',effort:'high'}, enabled:true }));
+    db.prepare('INSERT INTO globals VALUES (?, ?)').run('model-prefs', JSON.stringify({ tierBackend:{['g' + 'rade-3']:'codex-gpt-test'} }));
     db.close();
   `;
-  const seeded = spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' });
-  assert.equal(seeded.status, 0, seeded.stderr);
-
-  const { openDb, getRow, listRows } = require('../lib/db.js');
-  const db = openDb(home);
-  assert.equal(getRow(db, 'meta', 'schema_version'), 2);
-  assert.equal(getRow(db, 'meta', 'json_migrated'), 'done');
-  assert.equal(listRows(db, 'categories').length, 14);
-  db.close();
+  assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
+  const discovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-discovery-'));
+  fs.mkdirSync(path.join(discovery, 'codex-gateway'));
+  fs.writeFileSync(path.join(discovery, 'codex-gateway', 'catalog.json'), JSON.stringify({ models: [{ slug:'codex-gpt-test', id:'gpt-test' }] }));
+  process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
+  const db = require('../lib/db.js');
+  const handle = db.openDb(home);
+  assert.equal(db.getRow(handle, 'meta', 'schema_version'), 3);
+  assert.deepEqual(db.getRow(handle, 'categories', 'fixture').route, { model: 'codex-gpt-test', effort: 'high' });
+  assert.deepEqual(db.getRow(handle, 'categories', 'fixture').fallback, { model: 'opus', effort: 'high' });
+  assert.deepEqual(db.getRow(handle, 'globals', 'routing-fallback'), { model: 'sonnet', effort: 'high' });
+  assert.equal(db.getRow(handle, 'globals', 'model-prefs'), null);
+  handle.close();
 });

@@ -115,32 +115,22 @@ test('findNewerInstall: repo-source checkout (non-semver dir name) never self-re
   }
 });
 
-test('dashboard makes categories primary and keeps legacy complexity routing collapsed', () => {
+test('dashboard uses concrete model fallbacks and removes grade routing', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
   assert.match(html, /id="categoryList"/);
-  assert.match(html, /id="routingProfiles"/);
-  assert.doesNotMatch(html, /id="editPlanBtn"/);
-  assert.match(html, /<details class="legacy-routing">/);
-  assert.match(html, /Legacy complexity routing/);
-  assert.ok(html.indexOf('id="categoryList"') < html.indexOf('id="routingProfiles"'));
-  assert.ok(html.indexOf('id="routingProfiles"') < html.indexOf('id="ladderView"'));
-  assert.match(html, /var gradesView = modelPrefs\.profiles \|\| \{\}/);
-  assert.match(html, /function categoryChipsForGrade\(grade\)/);
-  assert.match(html, /category\.route\.model === grade/);
-  assert.match(html, /CLAUDE_RUNTIME_OPTIONS = \[/);
-  assert.match(html, /\{ slug: "haiku", label: "Claude Haiku" \}/);
-  assert.match(html, /\{ slug: "sonnet", label: "Claude Sonnet" \}/);
-  assert.match(html, /\{ slug: "opus", label: "Claude Opus" \}/);
-  assert.match(html, /\{ slug: "fable", label: "Claude Fable" \}/);
-  assert.match(html, /row\.appendChild\(backendSelect\(p\.grade, det\)\)/);
-  assert.doesNotMatch(html, /if \(det\.length\) row\.appendChild\(backendSelect/);
-  assert.match(html, /if \(backend !== "claude"\) return backend;/);
-  assert.match(html, /"grade-1": "haiku", "grade-2": "sonnet", "grade-3": "opus", "grade-4": "fable"/);
-  assert.match(html, /return dm\.source \? dm\.source \+ ":" \+ dm\.slug : dm\.slug;/);
-  assert.match(html, /var value = externalBackendValue\(dm\);/);
-  assert.match(html, /cur === value \|\| \(cur === dm\.slug && !isClaudeRuntime\(dm\.slug\)\)/);
-  assert.match(html, /externalBackendValue\(x\) === sel\.value/);
-  assert.match(html, /if \(profile\) return profile\.efforts !== null;/);
+  assert.match(html, /id="globalFallbackControl"/);
+  assert.match(html, /Override global fallback/);
+  assert.match(html, /Degraded route/);
+  assert.doesNotMatch(html, /id="routingProfiles"/);
+  assert.doesNotMatch(html, /legacy-routing/);
+  assert.doesNotMatch(html, /routing-ladder/);
+  assert.doesNotMatch(html, /model-prefs/);
+  assert.doesNotMatch(html, /grade-1|grade-2|grade-3|grade-4/);
+  assert.match(server, /pathname === '\/api\/routing-fallback'/);
+  assert.match(server, /pathname === '\/api\/routing-models'/);
+  assert.match(server, /fallback: body\.fallback/);
+  assert.doesNotMatch(server, /getModelPrefs|routingLadder|setModelPrefs/);
 });
 
 test('findNewerInstall: never throws even with guards disabled', () => {

@@ -107,14 +107,15 @@ function main() {
     if (!c || !c.held || c.status === 'done') continue;
     const started = c.at ? Date.parse(c.at) : NaN;
     if (!Number.isFinite(started)) continue;
-    let effort = null;
-    try {
-      const ticket = store.getTicket(c.slug, c.ticketId);
-      effort = ticket && ticket.effort;
-    } catch (_) {
-      // Unknown or unreadable ticket effort keeps the default threshold.
+    let ticket = null;
+    if (!c.effort) {
+      try {
+        ticket = store.getTicket(c.slug, c.ticketId);
+      } catch (_) {
+        // A missing ticket leaves the default threshold in place.
+      }
     }
-    const cutoff = thresholdMs(effort);
+    const cutoff = thresholdMs(c.effort || (ticket && ticket.effort));
     const elapsed = now - started;
     if (elapsed <= cutoff) continue;
     if (!worst || elapsed > worst.elapsed) worst = { elapsed, cutoff, ref: c.ref, ticketId: c.ticketId, slug: c.slug, at: c.at };

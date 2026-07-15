@@ -89,6 +89,11 @@ function runSessionWithHome(home, envOverrides) {
   });
 }
 
+function writeCategory(home, category) {
+  const database = db.openDb(home);
+  db.putRow(database, 'categories', { id: category.id, data: category });
+}
+
 function writeModelPrefs(home, prefs) {
   const database = db.openDb(home);
   db.putRow(database, 'globals', { key: 'model-prefs', data: prefs });
@@ -159,12 +164,21 @@ test('pre-tool hook keeps built-in executor model but removes overrides for pinn
  *  or deny the spawn when it can't be resolved unambiguously (SQ-232).
  * ------------------------------------------------------------------ */
 
+let fixtureSeq = 0;
 function fixtureTicket(title, model, effort) {
-  return store.createTicket(slug, { title, model, effort, source: 'cli' });
+  const category = `hooks-route-${++fixtureSeq}`;
+  store.setCategory({
+    id: category,
+    name: category,
+    route: { model, effort },
+    fallback: null,
+    enabled: true,
+  });
+  return store.createTicket(slug, { title, category, source: 'cli' });
 }
 
-test('pre-tool hook: builtin exec without a model injects the stamped tier from a prompt ref', () => {
-  const t = fixtureTicket('SQ-232 inject fixture', 'grade-2', 'high');
+test('pre-tool hook: builtin exec without a model injects the resolved Claude model from a prompt ref', () => {
+  const t = fixtureTicket('SQ-232 inject fixture', 'sonnet', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: { subagent_type: 'sidequest-exec-high', name: 'w-inject', prompt: `work ${t.ref} --project "${slug}"` },
@@ -173,6 +187,7 @@ test('pre-tool hook: builtin exec without a model injects the stamped tier from 
   assert.equal(out.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
   assert.ok(!out.hookSpecificOutput.permissionDecision, 'a resolvable spawn must not be denied');
   assert.match(out.systemMessage, /injected "sonnet"/);
+  assert.match(out.systemMessage, /resolved category route/);
   assert.ok(out.systemMessage.includes(t.ref), 'systemMessage must name the ref it resolved from');
 });
 
@@ -186,30 +201,30 @@ test('pre-tool hook: builtin exec without a model and no ticket ref in the promp
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /model: exec\.model/);
 });
 
-test('pre-tool hook: builtin exec without a model and conflicting stamped tiers across refs is denied', () => {
-  const a = fixtureTicket('SQ-232 conflict fixture A', 'grade-2', 'high');
-  const b = fixtureTicket('SQ-232 conflict fixture B', 'grade-4', 'high');
+test('pre-tool hook: builtin exec without a model and conflicting concrete models across refs is denied', () => {
+  const a = fixtureTicket('SQ-232 conflict fixture A', 'sonnet', 'high');
+  const b = fixtureTicket('SQ-232 conflict fixture B', 'opus', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: { subagent_type: 'sidequest-exec-high', name: 'w-conflict', prompt: `batch ${a.ref} and ${b.ref} --project "${slug}"` },
   });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /conflicting stamped tiers/);
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /split it per tier/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /conflicting concrete models/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /split it per model/);
 });
 
-test('pre-tool hook: builtin exec spawned WITH a model that mismatches the stamp keeps the caller value and warns', () => {
-  const t = fixtureTicket('SQ-232 mismatch fixture', 'grade-2', 'high');
+test('pre-tool hook: builtin exec spawned WITH a model that mismatches the resolved route keeps the caller value and warns', () => {
+  const t = fixtureTicket('SQ-232 mismatch fixture', 'sonnet', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: { subagent_type: 'sidequest-exec-high', name: 'w-mismatch', model: 'opus', prompt: `work ${t.ref} --project "${slug}"` },
   });
   assert.equal(out.hookSpecificOutput.updatedInput.model, 'opus', 'a deliberate cap must be kept, not overwritten');
-  assert.match(out.systemMessage, /model "opus" but .* stamp "sonnet"/);
+  assert.match(out.systemMessage, /model "opus" but .* resolves to "sonnet"/);
 });
 
 test('pre-tool hook: pinned Codex-style executor still strips model even when a ref resolves', () => {
-  const t = fixtureTicket('SQ-232 pinned-passthrough fixture', 'grade-3', 'high');
+  const t = fixtureTicket('SQ-232 pinned-passthrough fixture', 'codex-gpt-5-6-terra', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', model: 'fable', name: 'w-pinned', prompt: `work ${t.ref} --project "${slug}"` },
@@ -360,7 +375,13 @@ test('session-start: stays inside its byte budget and off the retired doctrine',
 
 test('session-start: reports newly provisioned executors once, then stays quiet', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-agents-'));
-  writeModelPrefs(home, {});
+  writeCategory(home, {
+    id: 'hooks-codex',
+    name: 'Hooks Codex',
+    route: { model: 'codex-gpt-5-6-terra', effort: 'high' },
+    fallback: { model: 'sonnet', effort: 'high' },
+    enabled: true,
+  });
   const first = JSON.parse(runSessionWithHome(home));
   const firstContext = first.hookSpecificOutput.additionalContext;
   assert.match(firstContext, /Executor definitions were just \(re\)provisioned/);
@@ -370,13 +391,19 @@ test('session-start: reports newly provisioned executors once, then stays quiet'
   const secondContext = second.hookSpecificOutput.additionalContext;
   assert.doesNotMatch(secondContext, /Executor definitions were just \(re\)provisioned/);
 });
-test('session-start: preserves reachable Codex executors when syncing with prefs', () => {
+test('session-start: preserves reachable Codex executors when syncing category routes', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-codex-'));
+  writeCategory(home, {
+    id: 'hooks-codex',
+    name: 'Hooks Codex',
+    route: { model: 'codex-gpt-5-6-terra', effort: 'high' },
+    fallback: { model: 'sonnet', effort: 'high' },
+    enabled: true,
+  });
   const agents = path.join(home, 'agents');
   fs.mkdirSync(agents, { recursive: true });
   const codexFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
   fs.writeFileSync(codexFile, '<!-- generated-by: sidequest-agentsync -->\nold');
-  writeModelPrefs(home, { tierBackend: { opus: 'codex-gpt-5-6-terra' } });
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
   fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({ source: 'codex-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
@@ -384,19 +411,24 @@ test('session-start: preserves reachable Codex executors when syncing with prefs
   assert.ok(fs.existsSync(codexFile), 'reachable marked Codex executor must survive session sync');
 });
 
-test('session-start: skips sync when prefs are unreadable', () => {
+test('session-start: category-route sync ignores retired prefs data', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-unreadable-'));
   const agents = path.join(home, 'agents');
   fs.mkdirSync(agents, { recursive: true });
   const codexFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
-  const original = '<!-- generated-by: sidequest-agentsync -->\nkeep';
-  fs.writeFileSync(codexFile, original);
-  // Genuinely corrupt: raw invalid JSON straight into the data column. putRow
-  // would JSON-encode the string into a *valid* blob, so write it directly —
-  // getModelPrefs's parse then throws and session-start must skip provisioning.
+  writeCategory(home, {
+    id: 'hooks-codex',
+    name: 'Hooks Codex',
+    route: { model: 'codex-gpt-5-6-terra', effort: 'high' },
+    fallback: { model: 'sonnet', effort: 'high' },
+    enabled: true,
+  });
   db.openDb(home).prepare("INSERT INTO globals (key, data) VALUES ('model-prefs', '{')").run();
-  runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents });
-  assert.strictEqual(fs.readFileSync(codexFile, 'utf8'), original, 'unreadable prefs must leave marked files untouched');
+  const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
+  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({ source: 'codex-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
+  runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
+  assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
 });
 test('session-start: source=compact gets the terse re-grounding block, not the full nudge', () => {
   const ctx = runHook(SESSION, { session_id: 't', source: 'compact' });
@@ -532,19 +564,30 @@ function addTicket(title) {
 }
 
 function addEffortTicket(title, effort) {
+  const category = `hooks-effort-${++fixtureSeq}`;
+  store.setCategory({
+    id: category,
+    name: category,
+    route: { model: 'sonnet', effort },
+    fallback: null,
+    enabled: true,
+  });
   return store.createTicket(slug, {
     title,
-    effort,
+    category,
     source: 'cli',
   });
 }
 
 // Backdate every claim the registry attributes to `sessionId` by `minutesAgo`, so
 // the claim's `at` reads as an old, long-running run without waiting real time.
-function backdateSessionClaims(sessionId, minutesAgo) {
+function backdateSessionClaims(sessionId, minutesAgo, effort) {
   const w = db.getRow(database, 'globals', 'workers');
   const at = new Date(Date.now() - minutesAgo * 60 * 1000).toISOString();
-  for (const c of w.sessions[sessionId].claims) c.at = at;
+  for (const c of w.sessions[sessionId].claims) {
+    c.at = at;
+    if (effort) c.effort = effort;
+  }
   w.sessions[sessionId].updatedAt = at;
   db.putRow(database, 'globals', { key: 'workers', data: w });
 }
@@ -578,7 +621,7 @@ test('subagent-stop: the long-run threshold scales by claimed effort', () => {
     const quietSession = `sess-${effort}-quiet-${++sqSeq}`;
     const quietTicket = addEffortTicket(`${effort} run under budget`, effort);
     assert.strictEqual(store.claimTicket(slug, quietTicket.ref, `worker-${effort}-quiet`, { sessionId: quietSession }).ok, true);
-    backdateSessionClaims(quietSession, threshold - 1);
+    backdateSessionClaims(quietSession, threshold - 1, effort);
     assert.strictEqual(
       runHook(SUBAGENT_STOP, { session_id: quietSession }),
       '',
@@ -588,7 +631,7 @@ test('subagent-stop: the long-run threshold scales by claimed effort', () => {
     const loudSession = `sess-${effort}-loud-${++sqSeq}`;
     const loudTicket = addEffortTicket(`${effort} run over budget`, effort);
     assert.strictEqual(store.claimTicket(slug, loudTicket.ref, `worker-${effort}-loud`, { sessionId: loudSession }).ok, true);
-    backdateSessionClaims(loudSession, threshold + 1);
+    backdateSessionClaims(loudSession, threshold + 1, effort);
     const ctx = runHook(SUBAGENT_STOP, { session_id: loudSession });
     assert.ok(ctx.includes(loudTicket.ref), `${effort} run over ${threshold}m must be flagged`);
     assert.match(ctx, new RegExp(`over the ${threshold}m`), `${effort} note must name its threshold`);

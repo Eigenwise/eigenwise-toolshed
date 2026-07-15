@@ -16,10 +16,10 @@ Claude Code loads marketplace plugins from a versioned local cache rather than i
 | Installed set | What works | What is deliberately absent |
 | --- | --- | --- |
 | `codex-gateway` | Gateway login, model discovery, catalog publication | Routing and board UI |
-| `switchboard` | Provider-neutral grades, complexity/bias routing, user and project routing preferences | Tickets, board workflow, dashboard |
+| `switchboard` | Category-to-model routing, fallback-chain policy, user and project category preferences | Tickets, board workflow, dashboard |
 | `sidequest` | Tickets, claims, comments, storage, dashboard shell | Derived routing and dispatch when switchboard is absent |
-| gateway + switchboard | Switchboard can resolve discovered Codex backends | Board workflow |
-| switchboard + sidequest | Tickets receive resolved grade/effort routes using Claude defaults or configured backends | Codex routes unless a gateway catalog is present |
+| gateway + switchboard | Switchboard can validate discovered Codex backends | Board workflow |
+| switchboard + sidequest | Tickets receive resolved concrete-model/effort routes using category and global fallbacks | Discovered Codex routes unless a gateway catalog is present |
 | all three | Full routing and dashboard experience | Nothing |
 
 Each row is a product, not an error state. The main degradation rule is:
@@ -113,13 +113,13 @@ Sidequest discovers switchboard through the registry breadcrumb, then invokes th
 
 The current copy must be retired:
 
-- `plugins/switchboard/lib/ladder.js` is an explicit copy of the old sidequest routing section. It still uses `haiku`, `sonnet`, `opus`, and `fable` as routing identities.
-- `plugins/sidequest/lib/store.js` has the current provider-neutral grade engine, backend resolution, runtime grouping, and `resolveExec()` seam.
+- `plugins/switchboard/lib/ladder.js` is an explicit copy of the old sidequest routing section. It must be replaced by a category-to-model router.
+- `plugins/sidequest/lib/store.js` has the current capability router, backend resolution, runtime grouping, and `resolveExec()` seam.
 - `plugins/sidequest/lib/discovery.js` reads the Codex catalog directly today. That discovery becomes switchboard input instead.
 
-Move the live routing core from `sidequest/lib/store.js` into switchboard: grades, effort enablement, bias curve, tier/backend pins, runtime grouping, `resolveExec()`, and all routing tests. Move the future category system with it, including category defaults and category-to-grade/effort policy. `plugins/sidequest/docs/category-contract.md` and `category-defaults.md` are design/reference material today, not a shipped category implementation. Sidequest keeps ticket-specific routing application and displays the switchboard result.
+Move the live routing core from `sidequest/lib/store.js` into switchboard: category route validation, concrete-model availability checks, the category fallback chain, global fallback, concrete executor generation, and all routing tests. Move the future category system with it, including category defaults and category-to-model/effort policy. `plugins/sidequest/docs/category-contract.md` and `category-defaults.md` are the design/reference material for that contract. Sidequest keeps ticket-specific routing application and displays the switchboard result.
 
-There is no vendored fallback ladder in sidequest. With a missing or invalid switchboard breadcrumb, sidequest stores and returns tickets but derives `unrouted` rather than silently using old copied logic. That keeps a user from getting two routing answers depending on which plugin happened to load.
+There is no vendored fallback router in sidequest. With a missing or invalid switchboard breadcrumb, sidequest stores and returns tickets but derives `unrouted` rather than silently choosing a model. That keeps a user from getting two routing answers depending on which plugin happened to load.
 
 ## 4. Gateway state contract
 
@@ -134,16 +134,15 @@ There is no vendored fallback ladder in sidequest. With a missing or invalid swi
     {
       "slug": "codex-gpt-5-6-terra",
       "id": "claude-codex-gpt-5.6-terra",
-      "label": "GPT-5.6 Terra",
-      "suggestedGrade": "grade-3"
+      "label": "GPT-5.6 Terra"
     }
   ]
 }
 ```
 
-Switchboard owns validation of this document and maps the discovered runtime to a grade backend. Gateway owns its contents and atomic publication. Neither side loads the other's private storage or source files.
+Switchboard owns validation of this document and uses it only to decide whether a selected concrete model is available. Gateway owns its contents and atomic publication. Category policy chooses the primary route and its fallback, so the catalog must not publish a replacement policy field such as `suggestedFallback`: catalog ordering and labels are enough for a user choosing a route. Neither side loads the other's private storage or source files.
 
-Gateway registration advertises `capabilities: ["model-catalog"]` and a `catalog` descriptor with the document path, schema version, and optional command for explicit refresh. Switchboard rejects an unknown schema, malformed model, or absent catalog and continues with Claude-grade defaults.
+Gateway registration advertises `capabilities: ["model-catalog"]` and a `catalog` descriptor with the document path, schema version, and optional command for explicit refresh. Switchboard rejects an unknown schema, malformed model, or absent catalog and continues through the configured category fallback chain, then its global fallback.
 
 ## 5. Configuration layering
 
@@ -157,12 +156,12 @@ The two middle files are toolshed-owned configuration, not arbitrary Claude Code
 
 | Layer | Location | Holds |
 | --- | --- | --- |
-| Shipped defaults | plugin package | Grade definitions, safe backend defaults, category default policy |
-| User | `~/.claude/toolshed/<plugin>.json` | Personal bias, enabled grades/efforts, backend pins, user category overrides |
-| Project | `.claude/<plugin>.json` | Project bias, permitted grades/efforts, project backend pins, project category overrides |
+| Shipped defaults | plugin package | Category routes, category fallbacks, global fallback default |
+| User | `~/.claude/toolshed/<plugin>.json` | User category overrides and global fallback override |
+| Project | `.claude/<plugin>.json` | Project category overrides and allowed category/model policy |
 | Environment | documented `TOOLSHED_*` variables | CI/test overrides only |
 
-Project-owned values are `bias`, grade/effort enablement, backend pins, and category overrides. Resolve each value by its deepest present layer. Arrays and maps use key-level merge; a scalar replaces the lower value. An environment variable wins only for its named key.
+Project-owned values are category overrides, permitted concrete models, and the global fallback. Resolve each value by its deepest present layer. Arrays and maps use key-level merge; a scalar replaces the lower value. An environment variable wins only for its named key.
 
 Keep project files narrow and explicit. Claude Code permits project-scoped settings but applies trust and component restrictions to repository-provided plugin content. A toolshed project config is data read by the plugin, never executable plugin registration. [Skills-directory plugins](https://code.claude.com/docs/en/plugins-reference#skills-directory-plugins)
 
@@ -219,7 +218,7 @@ Sidequest owns a small dashboard shell. It keeps board navigation, ticket data, 
 
 The shell discovers valid entries, loads only supported panel contracts, and renders unavailable modules as a compact install/repair state. It must not require every panel to exist. The first panels are:
 
-- switchboard: routing ladder, grade/effort settings, backend pin warnings, category policy;
+- switchboard: category route and fallback settings, availability warnings, and category policy;
 - codex-gateway: authentication and discovered model catalog state;
 - sidequest: the existing board, claims, ticket detail, and dispatch status.
 
@@ -232,9 +231,9 @@ Plugin agents cannot ship their own `hooks`, `mcpServers`, or `permissionMode`. 
 1. **Define shared documents.** Add schema definitions and consumer-side fixtures for registry entry, gateway catalog v3, routing request/result, config, and dashboard panel descriptors. No behavior moves yet.
 2. **Add registry writers.** Give gateway, switchboard, and sidequest a fast enabled-only `SessionStart` writer plus a CLI refresh path. Add stale-entry consumer tests.
 3. **Formalize gateway publication.** Make codex-gateway publish catalog v3 with write guards. Add switchboard catalog reader while preserving the current sidequest reader temporarily.
-4. **Lift the live engine.** Move sidequest's grade/backend engine and its tests into switchboard. Replace `switchboard/lib/ladder.js`; preserve existing switchboard preferences through a migration.
-5. **Move category policy.** Implement categories in switchboard from the existing sidequest category contract/defaults, including config layering and schema guards.
-6. **Replace sidequest routing.** Sidequest calls switchboard through the registry breadcrumb and stores only resolved routing output. Delete its direct catalog discovery and copied routing ownership. Missing switchboard yields `unrouted` tickets, never a fallback ladder.
+4. **Lift the live engine.** Move Sidequest's concrete-model route resolver and its tests into switchboard. Replace `switchboard/lib/ladder.js`; migrate existing routing preferences into category routes and fallbacks.
+5. **Move category policy.** Implement category-to-model routing in switchboard from the Sidequest category contract/defaults, including configuration layering and schema guards.
+6. **Replace Sidequest routing.** Sidequest calls switchboard through the registry breadcrumb and stores only resolved routing output. Delete its direct catalog discovery and copied routing ownership. Missing switchboard yields `unrouted` tickets, never an implicit fallback router.
 7. **Add the dashboard shell.** Extract sidequest's existing dashboard frame, mount the sidequest panel first, then switchboard and gateway panels from validated registry entries.
 8. **Remove compatibility paths.** After one supported migration window, remove the old sidequest routing engine, old direct catalog reader, and obsolete schema readers. Keep a clear upgrade diagnostic for stale installations.
 

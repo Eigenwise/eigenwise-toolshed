@@ -1,10 +1,10 @@
-# Routing details: category routes, then the legacy ladder
+# Routing details: category routes and fallback resolution
 
 Read this when you need to explain or debug routing. Category routing is primary: `list` and `ready`
 return the live taxonomy plus each ticket's category projection, route, and resolved `exec` object.
 Classify from the returned taxonomy, stamp the category before claim, then trust the resolved route.
-Complexity-only tickets still use the legacy ladder below. For task-shape grounding and sources, see
-[routing-guide.md](routing-guide.md).
+Complexity-only tickets map to fixed category bands at read time. For model and effort guidance when
+classification is genuinely ambiguous, see [routing-guide.md](routing-guide.md).
 
 ## Category routing
 
@@ -19,73 +19,39 @@ general fallback projection with a warning, without rewriting the ticket. A tick
 must be explicitly classified and updated before claim or dispatch.
 
 The category projection includes its contract text. Inject that text verbatim into the executor prompt
-with the ticket contract. The `exec` object remains the dispatch authority; category routes can resolve
-through the configured backend mapping and degrade to a supported runtime with a warning.
+with the ticket contract. The `exec` object remains the dispatch authority. Resolve the category route
+when its model is available, then its category fallback, then the global fallback, then hardwired
+Sonnet/high. If the read shows a degraded route, do nothing special: trust `exec` from that read.
 
-## Legacy capability ladder
+## Legacy complexity bands
 
-sidequest maps legacy complexity scores onto **one capability-ranked ladder** of model×effort rungs built
-from the tiers the user enabled in the model picker (dashboard gear → Available models). Key
-properties:
+Complexity-only tickets map to categories at read time, without persisting the mapped category:
 
-- **A single merged sequence, not per-tier bands.** Tiers overlap and cross over: `sonnet·xhigh`
-  outranks `opus·low` — capability orders the rungs, not tier. Adjacent scores may share a rung.
-- **Max effort is held out of the normal spread**: only complexity 10 on the top enabled tier gets
-  `·max` (and 9 only at bias +5) — deliberately rare, per Anthropic's guidance to use max effort
-  "sparingly for the hardest tasks".
-- **Live derivation for legacy tickets**: toggling a tier or effort instantly re-routes every open
-  complexity-only ticket. Nothing beyond the score is stored on those tickets; category-routed tickets
-  follow their category route instead.
-- **Effort exclusion is per model×effort pair**, not global — `opus·medium` can be off while
-  `sonnet·medium` stays on. An excluded pair never appears in the ladder.
-- `sidequest models` prints the current ladder; `--json` gives `routing` (the master switch), the
-  enabled grid, and the score→rung map.
+| Complexity | Category |
+| --- | --- |
+| 1–3 | `coding.easy` |
+| 4–6 | `coding.normal` |
+| 7–10 | `coding.hard` |
 
-Tickets show `⚙C<score>→tier·effort` on their cards and in `list`/`ready`.
-
-## Bias (the user's dial, not yours)
-
-`sidequest bias <n>` (or the dashboard slider): `-5` Frugal … `0` neutral … `+5` Generous. Bias
-gamma-curves the score→rung map — it tunes HOW eagerly scores escalate to pricier rungs, never what
-you score. You always score complexity honestly against the task-shape scale in the main
-skill. Extremes stay invariant: complexity 1 always hits the cheapest rung and 10 the top rung at any
-bias.
+The mapped category's route and fallback chain provide the concrete model and effort. A ticket with
+neither category nor complexity remains unclassified and is not dispatchable until classification.
 
 ## Worked example
 
-Main session = fable, haiku disabled; ticket `SQ-12 ⚙C3→sonnet·low` (an odd ladder — only two tiers
-enabled — but it's what the stamps say):
+A fresh read returns this ticket projection:
 
+```json
+{
+  "ref": "SQ-12",
+  "category": { "id": "coding.normal", "route": { "model": "codex-gpt-5-6-terra", "effort": "high" } },
+  "model": "codex-gpt-5-6-terra",
+  "effort": "high",
+  "exec": { "agent": "sidequest-exec-codex-gpt-5-6-terra-high", "model": null, "backend": "codex" }
+}
 ```
-Agent(subagent_type: "sidequest-exec-low", model: "sonnet", name: "exec-sq12",
-      prompt: claim SQ-12 → fix → verify → done)
-```
 
-The user re-enables haiku later → the same open ticket re-reads as `C3→sonnet·low` or lower — which is
-why you always spawn from a **fresh** `ready`/`list --json --brief` read for the wave, never a stale
-one. The executor claims with `--effort <its baked level>` and the board refuses a mismatch, so a
-stale spawn just bounces (a wasted round-trip, not a wrong-tier execution).
-
-## Per-tier model backend (codex-gateway)
-
-If [codex-gateway](../../../codex-gateway) is installed alongside sidequest, you can point any ladder
-tier at one of its GPT-5.x models. This doesn't add rungs or change the ladder's shape: the ladder
-still ranks the four built-in tiers, you still score the **task** on the same absolute task-shape
-scale, and a ticket is still scored and stamped by tier. What changes is which model actually *runs*
-that tier. Map the opus tier to Terra and an "opus·high" ticket runs Terra at high effort; the ladder
-row still reads `opus`.
-
-codex-gateway writes a catalog at `~/.claude/codex-gateway/catalog.json` (the GPT-5.6 family: Sol,
-Terra, Luna); sidequest reads it (`lib/discovery.js`) and offers each as a backend option in the
-dashboard's model settings. Each tier defaults to its own Claude model; you pick a Codex backend per
-tier from a dropdown. The mapping lives in `tierBackend` in `model-prefs.json` (`{ opus: "codex-...", ... }`,
-each tier `"claude"` or a slug). A tier mapped to a model that isn't in the catalog anymore (gateway
-uninstalled) **falls back to its Claude model with a warning**, so routing can't break.
-
-The executor definitions are generated into `~/.claude/agents` from the current routing preferences. The wanted set is the deduplicated, ladder-reachable `resolveExec` image, including a reachable max rung, rather than every discovered backend model. Missing preferences or routing disabled retain the five generic effort executors. A remap or fresh install that writes definitions needs a session restart before the new executor type is spawnable; the sync surfaces this restart notice. If Agent rejects a newly provisioned type before restart, dispatch inline for the current session. `sidequest models sync-agents` and a dashboard save run the same sync on demand.
-Routed execution returns the already-registered native Agent executor, so the current conversation invokes the
-resolved backend with its pinned effort. The codex-gateway shim maps Claude Code's effort to the Codex
-backend's `reasoning.effort`, so a tier·effort rung means the same thing on a Codex model as on a Claude one.
+Spawn the exact `exec.agent` with `model` omitted. A degraded route still uses the same dispatch
+flow because the read's `exec` projection is authoritative.
 
 ## Re-scoring
 

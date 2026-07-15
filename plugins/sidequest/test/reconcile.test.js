@@ -67,7 +67,7 @@ test('a completed ticket is never auto-released, even if still registered', () =
   store.claimTicket(slug, a.ref, 'worker-done', { sessionId: 'sess-done' });
   // Finish WITHOUT passing the sessionId (simulates a done that forgot to thread
   // it) so the registry entry lingers — reconcile must still skip the done ticket.
-  store.completeTicket(slug, a.ref, 'worker-done', { model: 'grade-2', effort: 'high' });
+  store.completeTicket(slug, a.ref, 'worker-done', { model: 'sonnet', effort: 'high' });
   assert.strictEqual(store.getTicket(slug, a.ref).status, 'done');
 
   const res = store.reconcileSession('sess-done', { reason: 'session ended' });
@@ -121,7 +121,7 @@ test('reconciling an unknown session is a harmless no-op', () => {
 test('releaseTicket refuses a done ticket — a reconcile cannot un-complete finished work', () => {
   const a = addTicket('finished, then a stale release arrives');
   store.claimTicket(slug, a.ref, 'worker-r', { sessionId: 'sess-race' });
-  store.completeTicket(slug, a.ref, 'worker-r', { model: 'grade-2', effort: 'high' });
+  store.completeTicket(slug, a.ref, 'worker-r', { model: 'sonnet', effort: 'high' });
   assert.strictEqual(store.getTicket(slug, a.ref).status, 'done');
 
   // The exact call reconcileSession would make against a ticket it believed was

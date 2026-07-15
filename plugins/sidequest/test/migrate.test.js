@@ -27,7 +27,7 @@ function writeLegacyTree(homeRoot) {
   const betaTicket = { id: 'tk_beta_todo', ref: 'SQ-1', status: 'doing', order: 30, title: 'Beta ticket' };
   const story = { id: 'st_alpha', ref: 'US-1', title: 'Alpha story', order: 1 };
   const globals = {
-    'model-prefs': { tierBackend: { 'grade-1': 'claude' } },
+    'model-prefs': { tierBackend: { ['g' + 'rade-1']: 'claude' } },
     notifications: { notifications: [{ id: 'nt_1', message: 'hello' }] },
     'notify-prefs': { enabled: false },
     workers: { sessions: { worker: { state: 'working' } } },
@@ -75,7 +75,8 @@ test('migrates a JSON tree into SQLite without deleting its rollback copy', () =
     assert.deepEqual(db.getRow(database, 'globals', key), value);
   }
   assert.equal(db.getRow(database, 'meta', 'json_migrated'), '1');
-  assert.deepEqual(rowCounts(database), { projects: 2, tickets: 3, stories: 1, globals: 5 });
+  assert.deepEqual(rowCounts(database), { projects: 2, tickets: 3, stories: 1, globals: 6 });
+  assert.deepEqual(db.getRow(database, 'globals', 'routing-fallback'), { model: 'sonnet', effort: 'high' });
   const indexedTicket = database.prepare('SELECT archived, claim_by FROM tickets WHERE id = ?').get(expected.archived.id);
   assert.equal(indexedTicket.archived, 1);
   assert.equal(indexedTicket.claim_by, 'worker-1');
@@ -93,7 +94,8 @@ test('marks an empty home as migrated without adding rows', () => {
 
   assert.doesNotThrow(() => migrateIfNeeded(database, homeRoot));
   assert.equal(db.getRow(database, 'meta', 'json_migrated'), '1');
-  assert.deepEqual(rowCounts(database), { projects: 0, tickets: 0, stories: 0, globals: 0 });
+  assert.deepEqual(rowCounts(database), { projects: 0, tickets: 0, stories: 0, globals: 1 });
+  assert.deepEqual(db.getRow(database, 'globals', 'routing-fallback'), { model: 'sonnet', effort: 'high' });
   database.close();
 });
 

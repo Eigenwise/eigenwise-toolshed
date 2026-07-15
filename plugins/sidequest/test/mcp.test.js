@@ -121,12 +121,11 @@ test('dispatch is disabled and directs callers to native_agent', () => {
 });
 
 test('native_agent carries ticket anchors and verify command through its stable fallback', () => {
-  const catalog = seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
-  const savedPrefs = store.getModelPrefs();
+  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
   try {
-    store.setModelPrefs({ tierBackend: { ...savedPrefs.tierBackend, 'grade-3': 'codex-gpt-5-6-terra' } });
+    store.setCategory({ id: 'native-codex', name: 'Native Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
     const added = callTool('add', {
-      title: 'prompt context', complexity: 6, why: 'exercise the stored executor context passed into a stable native-agent fallback',
+      title: 'prompt context', category: 'native-codex',
       anchors: 'lib/work.js:14 executorPrompt', verify: 'node --test plugins/sidequest/test/work.test.js',
     });
     const native = callTool('native_agent', { ref: added.ticket.ref, prompt: 'Implement exactly this ticket.' });
@@ -138,7 +137,6 @@ test('native_agent carries ticket anchors and verify command through its stable 
     assert.match(native.prompt, /Anchors:\nlib\/work\.js:14 executorPrompt/);
     assert.match(native.prompt, /Verify command:\nnode --test plugins\/sidequest\/test\/work\.test\.js/);
   } finally {
-    store.setModelPrefs(savedPrefs);
     clearCatalog();
   }
 });
@@ -200,7 +198,7 @@ test('claim -> comment -> done round-trips over the same store, tagged source mc
   assert.strictEqual(note.ok, true);
   assert.strictEqual(note.comment.source, 'mcp', 'MCP actions are tagged as background (not dashboard)');
 
-  const done = callTool('done', { ref, by: 'mcp-worker-1', model: 'grade-2', effort: 'high' });
+  const done = callTool('done', { ref, by: 'mcp-worker-1', model: added.ticket.model, effort: added.ticket.effort });
   assert.strictEqual(done.ok, true);
   assert.strictEqual(done.ticket.status, 'done');
 });
@@ -262,10 +260,10 @@ test('claim requires a worker id (no shared-identity default)', () => {
 });
 
 test('MCP claim rejects a generic executor for a Codex route', () => {
-  const dir = seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
+  seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
   try {
-    store.setModelPrefs({ routing: true, tierBackend: { 'grade-2': 'codex-gpt-5-6-terra' } });
-    const added = callTool('add', { title: 'Codex executor guard', complexity: 5, why: 'exercise MCP refusal when a generic executor claims a Codex-backed route' });
+    store.setCategory({ id: 'claim-codex', name: 'Claim Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+    const added = callTool('add', { title: 'Codex executor guard', category: 'claim-codex' });
     const ticket = store.getTicket(store.ensureProject(PROJ).slug, added.ticket.ref);
     const rejected = callTool('claim', { ref: added.ticket.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}` });
     assert.strictEqual(rejected.ok, false);
@@ -273,14 +271,11 @@ test('MCP claim rejects a generic executor for a Codex route', () => {
     assert.strictEqual(rejected.expectedExecutor, ticket.exec.agent);
   } finally {
     clearCatalog();
-    seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
-    store.setModelPrefs({ routing: true, tierBackend: { 'grade-2': 'claude', 'grade-3': 'claude' } });
   }
 });
 
 test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', () => {
-  store.setModelPrefs({ routing: true });
-  const added = callTool('add', { title: 'effort guard', complexity: 5, why: 'seed a ticket whose derived effort the MCP claim guard checks' });
+  const added = callTool('add', { title: 'effort guard', category: 'mechanical' });
   const ref = added.ticket.ref;
   const derived = added.ticket.effort;
   assert.ok(derived, 'routing on -> a derived effort');
@@ -319,41 +314,30 @@ test('the real stdio server frames newline-delimited JSON-RPC', () => {
   assert.ok(!parsed[2].result.isError, 'projects tool call succeeded');
 });
 
-/* ------------------------------------------------------------------ *
- *  SQ-162: MCP surfaces are slug-aware — a discovered+enabled custom
- *  model tier (SQ-157) behaves like a built-in across models/ready/
- *  done/claim, and an unrecognized model value is refused rather than
- *  silently treated as "no filter".
- * ------------------------------------------------------------------ */
-
-test('models tool surfaces the tier-backend map, detected models, and warnings', () => {
-  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra', suggestedTier: 'grade-3' }]);
+test('models reports concrete routes and no grade output', () => {
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra' }]);
   try {
-    store.setModelPrefs({ tierBackend: { 'grade-3': 'codex-terra' } });
+    store.setCategory({ id: 'model-codex', name: 'Model Codex', route: { model: 'codex-terra', effort: 'high' }, fallback: { model: 'opus', effort: 'high' } });
     const out = callTool('models', {});
-    assert.ok(Array.isArray(out.discovered) && out.discovered.some((d) => d.slug === 'codex-terra'), 'discovered surfaces the catalog entry');
-    assert.strictEqual(out.tierBackend['grade-3'], 'codex-terra', 'the tier backend map is reported');
-    assert.strictEqual(out.tierBackendResolved["grade-3"].backend, 'codex', 'the resolved backend says opus runs on Codex');
-    assert.ok(out.ladder.some((r) => r.model === 'grade-3'), 'the ladder still names the built-in tier');
-    assert.deepStrictEqual(out.tierBackendWarnings, [], 'no warnings when the mapping is live');
+    assert.ok(out.models.includes('codex-terra'));
+    assert.ok(out.categories.some((category) => category.id === 'model-codex' && category.resolved.model === 'codex-terra'));
+    assert.ok(!JSON.stringify(out).includes('grade-'));
   } finally {
-    store.setModelPrefs({ tierBackend: { 'grade-3': 'claude' } });
     clearCatalog();
   }
 });
 
-test('done stamps workedBy with a discovered Codex slug (provenance of what actually ran)', () => {
-  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', suggestedTier: 'grade-3' }]);
+test('done stamps workedBy with a discovered Codex slug', () => {
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }]);
   try {
-    store.setModelPrefs({ tierBackend: { 'grade-3': 'codex-terra' } });
-    const added = callTool('add', { title: 'codex provenance', complexity: 2, why: 'exercise done stamping workedBy with a discovered Codex model slug over MCP' });
+    store.setCategory({ id: 'provenance-codex', name: 'Provenance Codex', route: { model: 'codex-terra', effort: 'high' } });
+    const added = callTool('add', { title: 'codex provenance', category: 'provenance-codex' });
     const ref = added.ticket.ref;
     callTool('claim', { ref, by: 'mcp-w-codex' });
     const done = callTool('done', { ref, by: 'mcp-w-codex', model: 'codex-terra', effort: 'high' });
     assert.strictEqual(done.ok, true);
-    assert.strictEqual(done.ticket.workedBy.model, 'codex-terra', 'the stamp records the Codex model that ran');
+    assert.strictEqual(done.ticket.workedBy.model, 'codex-terra');
   } finally {
-    store.setModelPrefs({ tierBackend: { 'grade-3': 'claude' } });
     clearCatalog();
   }
 });
@@ -365,27 +349,17 @@ test('ready with an unrecognized model errors instead of silently meaning "no fi
   assert.match(res.content[0].text, /totally-bogus-tier/, 'names the offending value');
 });
 
-test('claim guard refusal names the Codex-backed executor for a Codex-mapped tier', () => {
-  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', suggestedTier: 'grade-3' }]);
+test('claim guard refusal names the Codex-backed executor for a concrete route', () => {
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }]);
   try {
-    // Point the opus tier at Codex, then file a ticket that derives to opus and
-    // claim it at the wrong effort. The refusal must name the Codex-backed exec.
-    const prefs = store.setModelPrefs({ routing: true, tierBackend: { 'grade-3': 'codex-terra' } });
-    // find a complexity that derives to opus with a non-max effort
-    const rung = store.routingLadder(prefs).find((r) => r.model === 'grade-3' && r.effort && r.effort !== 'max');
-    assert.ok(rung, 'some complexity derives to opus');
-    const added = callTool('add', { title: 'codex guard', complexity: rung.complexity, why: 'seed a ticket that derives to the opus tier so the claim guard refusal names the Codex-backed executor' });
-    const ref = added.ticket.ref;
-    assert.strictEqual(added.ticket.model, 'grade-3', 'the ticket derived to the opus tier');
-    assert.strictEqual(added.ticket.exec.backend, 'codex', 'and its exec is Codex-backed');
-    const derivedEffort = added.ticket.effort;
-    const wrong = store.VALID_EFFORTS.find((e) => e !== derivedEffort && e !== 'max');
-    const res = callTool('claim', { ref, by: 'mcp-w-guard', effort: wrong });
+    store.setCategory({ id: 'guard-codex', name: 'Guard Codex', route: { model: 'codex-terra', effort: 'high' } });
+    const added = callTool('add', { title: 'codex guard', category: 'guard-codex' });
+    const wrong = store.VALID_EFFORTS.find((effort) => effort !== added.ticket.effort);
+    const res = callTool('claim', { ref: added.ticket.ref, by: 'mcp-w-guard', effort: wrong });
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, 'effort_mismatch');
-    assert.match(res.message, new RegExp(`sidequest-exec-codex-terra-${derivedEffort}`), 'names the Codex-backed executor');
+    assert.match(res.message, new RegExp(`sidequest-exec-codex-terra-${added.ticket.effort}`));
   } finally {
-    store.setModelPrefs({ tierBackend: { 'grade-3': 'claude' } });
     clearCatalog();
   }
 });

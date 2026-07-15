@@ -84,9 +84,9 @@ local server (idempotently — it reuses one that's already running) and opens y
 
 It's a self-contained page — no CDN, no fonts, no network calls beyond its own local API.
 
-![A ticket detail modal with priority, status, complexity score, files, and comments](docs/ticket.png)
+![A ticket detail modal with priority, category, files, and comments](docs/ticket.png)
 
-*Click any card to open the ticket: priority, status, assignee, story, a complexity score with its derived model tier, files, comments, reminders, and links.*
+*Click any card to open the ticket: priority, status, assignee, story, category, files, comments, reminders, and links.*
 
 ### Notifications and the bell inbox
 
@@ -140,95 +140,32 @@ story's color as a top rail and a chip, a **Story** filter in the toolbar narrow
 story, and the ticket editor has a **Story** field to pick, clear, or create a story inline. Deleting a
 story keeps its tickets — they're just detached.
 
-## Complexity-driven routing
-
-Agents don't pick models — they **score the task**. Every ticket is filed with a **complexity score
-(1–10)** and a **mandatory motivation** for it (writing the why is what forces an honest look at the
-task), and sidequest **derives** which model tier works the ticket and at what reasoning effort from
-that score. Routing is **one capability-ranked ladder** of model×effort rungs — not per-tier bands —
-so tiers overlap and cross over (`sonnet·xhigh` outranks `opus·low`; capability, not tier, orders the
-rungs). Its philosophy is still **exhaust effort before escalating tier**, since thinking harder on a
-cheap model costs less than renting a bigger one.
-
-```bash
-sidequest add -t "Apply the codemod" --complexity 2 --why "single mechanical transform, node -c verifies"
-sidequest add -t "Design the migration" --complexity 8 --why "reshapes the store contract; all three consumers must stay compatible"
-sidequest update SQ-8 --complexity 5 --why "wider than scored: it also rewires the reader"   # rescoring needs a fresh why
-sidequest models   # the live ladder: which score routes where right now
-```
-
-![The gear menu: notification toggles and per-project mutes beside the model allowlist, per-model effort grid, bias slider, and live routing ladder](docs/settings.png)
-
-*The gear menu, with the live ladder at the bottom right: every complexity score maps to a model and a reasoning-effort rung. Beside it, the model allowlist, the per-model effort grid, and the bias slider; toggle any of them and the ladder reshapes instantly. Left column: notification kinds and per-project mutes.*
-
-Complexity 1..10 maps onto that rung sequence, so adjacent scores may share a rung. **Max effort is
-held out of the normal spread** — only complexity 10 on the top enabled tier gets `·max` (and 9 too,
-only at the most generous bias); it's deliberately rare, in the spirit of Anthropic's "use max
-sparingly for the hardest tasks." **It scales dynamically**: derivation happens at read time, so
-toggling a tier in the gear menu's *Available models* instantly re-routes every open ticket — disable
-fable and your C9s drop onto the next rung down, no migration. Cards show a `⚙C7→opus·high` chip;
-`ready`/`next --model <tier>` filter by the *derived* tier, so an executor never grabs work priced for
-another tier. Direct `--model`/`--effort` tagging is rejected.
-
-**Bias slider.** Agents score complexity honestly against the task-shape scale (anchored to
-Anthropic's own model positioning — see the bundled `references/routing-guide.md`); *you* tune how
-eagerly those scores climb the ladder with a bias dial (`sidequest bias <n>`, or the dashboard
-slider): `-5` Frugal … `0` neutral (default) … `+5` Generous. It gamma-curves the score→rung mapping —
-0 keeps the standard curve, higher biases escalate to pricier rungs sooner — but the extremes are
-invariant: complexity 1 always lands the cheapest rung and 10 the top rung at any bias.
-
-sidequest doesn't *force* a model (nothing can make a running model swap itself mid-task); the bundled
-skill enforces the flow on Claude: derived routing is honored via executor agents generated into
-`~/.claude/agents` with `permissionMode: bypassPermissions`. Claude Code ignores that field on
-plugin-scoped agents, so the user-scoped copies are required to keep unattended Bash calls from prompting into the lead session.
-They spawn with the derived tier; effort lives in the agent definition,
-model in the spawn, so the two compose. (Haiku has no effort support; haiku-derived work uses a plain
-agent.) The generated set comes from current routing preferences only: it is the deduplicated,
-ladder-reachable `resolveExec` image, including a reachable max rung. Missing preferences or routing
-disabled retain the five generic effort executors. A remap or fresh install that writes definitions
-needs a session restart before the new executor is spawnable; the sync surfaces a restart notice.
-If Agent rejects a newly provisioned type before restart, dispatch inline for the current session. The same
-*Available models* section has a master switch to turn routing off entirely — then
-Claude may work any ticket itself and the chips become purely informational. Effort exclusion lives
-in that same section too, but it's per model, not global: a model×effort grid lets you turn off, say,
-opus·medium while sonnet·medium stays on, and that pair just drops out of opus's rungs. The guards:
-at least one tier always stays enabled, and each enabled tier's row always keeps at least one effort on.
-
-**Per-tier Codex backend (via codex-gateway).** If you also install
-[codex-gateway](../codex-gateway) at user scope, each model tier in the gear menu gets a backend
-dropdown: run that tier on its Claude model (the default) or on one of your ChatGPT/Codex subscription
-models. sidequest reads the catalog codex-gateway publishes and offers Sol/Terra/Luna as options, each
-marking its suggested tier. This is a swap, not an extra rung: the ladder keeps its shape and a ticket
-is still scored and stamped by tier (opus·high stays opus·high), you just choose which model *runs* the
-tier. Map the opus tier to Terra and opus-tier tickets use Terra. The executor agents for every discovered
-Codex model are provisioned automatically at session start (persistent files under `~/.claude/agents`).
-Routed work stays in the current Claude Code conversation: Sidequest returns an already-registered native Agent
-executor, then the conversation invokes it through Agent. A card chip shows a small `gpt` mark when
-its tier is Codex-backed.
-
-This ladder engine also ships standalone as the **switchboard** plugin (same rungs, same bias math,
-no ticket board attached). It's shared by copy, not by dependency: each plugin keeps its own tests,
-and a change to the ladder answers to that plugin's own tests, not the other's.
-
 ## Category-based routing
 
-Categories give agents a clearer dispatch input than a bare complexity score. The shipped taxonomy covers
-coding, debugging, reviews, testing, research, docs, UI work, and a required `general` fallback. A ticket's
-category route wins over legacy complexity routing, and editing a category reroutes every ticket using it
-on the next read. Tickets without either field stay unclassified until an agent picks a category from the
-returned taxonomy.
+Categories choose a concrete model and reasoning effort for each ticket. The shipped taxonomy covers
+coding, debugging, reviews, testing, research, docs, UI work, and a required `general` fallback. Routes
+can name Claude runtimes or Codex models discovered through [codex-gateway](../codex-gateway).
 
 ```bash
 sidequest category list
 sidequest add -t "Fix the checkout error" --category debugging
-sidequest category edit coding.normal --route-effort xhigh
+sidequest category edit coding.normal --route-model codex-gpt-5-6-terra --route-effort high
 sidequest category add release-check --name "Release checks" --description "Focused release verification" \
-  --contract "Run the named checks and report failures." --route-model grade-2 --route-effort medium
+  --contract "Run the named checks and report failures." \
+  --route-model sonnet --route-effort medium \
+  --fallback-model haiku --fallback-effort medium
+sidequest global-fallback --model sonnet --effort medium
 ```
 
-Category rows carry classifier text, an executor contract, and a model-plus-effort route. The CLI, MCP
-surfaces, and dashboard expose the same CRUD operations and usage counts. `general` cannot be removed;
-unknown or disabled categories fall back to it with a warning.
+Each category has a primary route and may define its own fallback. If that model is unavailable, sidequest
+tries the category fallback, then the required global fallback, and reports a warning for the route that
+was skipped. The CLI, MCP surfaces, and dashboard expose the same category CRUD operations and usage
+counts. `general` cannot be removed.
+
+Legacy tickets that use `--complexity` and `--why` remain readable and map to a category when they are
+resolved. New tickets should use `--category` so the dispatch intent is explicit. Routed work stays in the
+current Claude Code conversation: sidequest returns an already-registered native Agent executor, then the
+conversation invokes it through Agent.
 
 ## File scopes & parallel waves
 
@@ -236,7 +173,7 @@ Declare which files a ticket will touch and the board can tell you **what's safe
 mechanically, instead of hoping two agents don't collide.
 
 ```bash
-sidequest add -t "CLI part" --file bin/cli.js --file README.md --complexity 3 --why "..."   # --file repeatable; dir prefixes cover subtrees
+sidequest add -t "CLI part" --file bin/cli.js --file README.md --category coding.easy   # --file repeatable; dir prefixes cover subtrees
 sidequest update SQ-7 --file none                                # clear the scope
 sidequest ready                                                  # groups the ready set into waves
 ```
@@ -247,9 +184,9 @@ executor per ticket, one wave at a time. Tickets without a declared scope never 
 Claude falls back to judgment for those. Cards show a small 📁 count, and the ticket editor has a
 comma-separated **Files** field.
 
-This pairs with model/effort routing into a planning doctrine the skill teaches: **cut work along file
-boundaries, shrink pieces until a cheaper tier can execute them, and shape stories as design → parallel
-wave(s) → integrate** — the thinking stays on the top model, the labor gets cheap and wide.
+This pairs with category routing into a planning doctrine the skill teaches: **cut work along file
+boundaries and shape stories as design → parallel wave(s) → integrate** — the thinking stays on the top
+model, the labor gets cheap and wide.
 
 ## Reminders
 
@@ -310,8 +247,8 @@ anyone touches it, and claiming is **atomic**: two workers can never both win th
 
 Because tickets get *executed* by agents (often smaller ones), the skill holds descriptions to a
 **developer-to-developer standard**: exact files and functions, the behavioral contract, bounds, and
-how to verify — never a manager's one-liner. The further down the tier ladder a ticket routes, the more
-complete its spec has to be; precision substitutes for model capability.
+how to verify — never a manager's one-liner. The category route and fallback chain determine which
+executor runs the work, so precision substitutes for model capability.
 
 ```bash
 sidequest next --by <you>          # atomically claim the top-priority available ticket
@@ -328,9 +265,9 @@ sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status tod
 - **`--by`** is your worker id (a session id or a short label); use a stable one so you can finish what
   you claimed. Concurrent workers must use distinct ids.
 - **Expensive orchestrator, cheap executors.** Claude's main thread (usually the priciest model)
-  plans and integrates; the actual work routes down to each ticket's derived tier as **short, bounded
-  executor runs** that report back fast. Several small same-tier tickets batch into one executor,
-  independent tickets run as a parallel wave, and only trivial one-step changes happen inline.
+  plans and integrates; the actual work routes through each category's concrete model and fallback chain as
+  **short, bounded executor runs** that report back fast. Several small same-route tickets batch into one
+  executor, independent tickets run as a parallel wave, and only trivial one-step changes happen inline.
 - **Crash-safe.** A claim left by a worker that crashed or wandered off becomes reclaimable after a
   timeout (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). On the dashboard, a claimed ticket shows a green
   "working" chip with the worker's id (muted once the claim goes stale).
@@ -345,9 +282,9 @@ sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status tod
 Because claiming is atomic, Claude doesn't have to work a backlog one ticket at a time — when several
 tickets are **ready and independent**, it works them **in parallel**, one subagent per ticket.
 
-![Claude filing tickets then launching three parallel executor agents by tier](docs/fan-out.png)
+![Claude filing tickets then launching three parallel executor agents by category route](docs/fan-out.png)
 
-*Claude splits the ready tickets into waves by the files they touch, then launches a wave of executors in parallel, each on the model tier its complexity earned. A ticket that overlaps another waits for the next wave.*
+*Claude splits the ready tickets into waves by the files they touch, then launches a wave of executors in parallel, each on the category route and effort the ticket resolved to. A ticket that overlaps another waits for the next wave.*
 
 ```bash
 sidequest ready [--json] [--brief]   # the fan-out set: unclaimed, unblocked, not done, not archived
@@ -445,16 +382,17 @@ act on the same boards.
 Every action is a thin wrapper over one script, usable directly too:
 
 ```bash
-node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui -i /path/to/shot.png --complexity 4 --why "..."
+node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui -i /path/to/shot.png --category debugging
 node <plugin>/bin/sidequest.js list [--status todo|doing|done] [--json] [--brief]
 node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -i  ·  --story US-1|none
 node <plugin>/bin/sidequest.js rm SQ-3
 node <plugin>/bin/sidequest.js story add -t "Epic" [--color teal]   # group tickets; file into it with --story US-n
 node <plugin>/bin/sidequest.js story list|show US-1|update US-1|rm US-1
-node <plugin>/bin/sidequest.js add -t "Task" --complexity 5 --why "..."   # score 1-10 + motivation — BOTH required; routing derived
-node <plugin>/bin/sidequest.js models                               # the live complexity -> tier·effort ladder
-node <plugin>/bin/sidequest.js next --model sonnet --by <you>       # claim only work whose DERIVED tier is sonnet
-node <plugin>/bin/sidequest.js models [--json]                      # the tiers you allow + each tier's enabled efforts
+node <plugin>/bin/sidequest.js add -t "Task" --category coding.normal
+node <plugin>/bin/sidequest.js category list|add|edit|rm <id>
+node <plugin>/bin/sidequest.js global-fallback --model sonnet --effort medium
+node <plugin>/bin/sidequest.js models                               # categories, routes, and fallback chain
+node <plugin>/bin/sidequest.js next --category coding.normal --by <you>  # claim work by category route
 node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
 node <plugin>/bin/sidequest.js native-agent SQ-3 [--prompt "task"] [--json] # return the registered executor + bounded prompt
 node <plugin>/bin/sidequest.js native-agent cleanup --name <name> # remove a legacy temporary definition

@@ -12,8 +12,8 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
 const agentsync = require('../lib/agentsync.js');
 
-const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', suggestedTier: 'grade-3' };
-const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol', suggestedTier: 'grade-4' };
+const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' };
+const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' };
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function readDir(dir) { return fs.readdirSync(dir).filter((file) => file.endsWith('.md')).sort(); }
@@ -24,95 +24,60 @@ function seedCatalog(models) {
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
 }
 function clearCatalog() { process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR; }
-function terraPrefs(overrides) {
-  return Object.assign({
-    tierBackend: { haiku: 'claude', sonnet: 'claude', opus: 'codex-gpt-5-6-terra', fable: 'claude' },
-  }, overrides);
-}
-function genericFiles(efforts) {
-  return efforts.map((effort) => `sidequest-exec-${effort}.md`);
+function configure(store, id, route, fallback) {
+  store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
-test('sync writes the deduped image of reachable ladder executors', () => {
+test('sync writes generated executors for concrete category routes', () => {
   seedCatalog([TERRA, SOL]);
+  const store = require('../lib/store.js');
+  configure(store, 'sync-terra', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'high' });
   const dir = tmpDir();
-  const prefs = terraPrefs({ efforts: { 'grade-3': { low: false, medium: true, high: true, xhigh: false, max: false } } });
-
-  const result = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(result.written, 6);
-  assert.deepStrictEqual(readDir(dir), [
-    ...genericFiles(['high', 'low', 'max', 'medium', 'xhigh']),
-    'sidequest-exec-codex-gpt-5-6-terra-high.md',
-  ].sort());
-  const source = fs.readFileSync(path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md'), 'utf8');
-  assert.match(source, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
-  assert.match(source, /^permissionMode: bypassPermissions$/m);
-  assert.ok(source.includes(agentsync.MARKER));
+  const result = agentsync.syncExecAgents(null, { dir });
+  assert.ok(result.written > 0);
+  assert.ok(readDir(dir).includes('sidequest-exec-codex-gpt-5-6-terra-high.md'));
+  assert.ok(readDir(dir).includes('sidequest-exec-high.md'));
+  const body = fs.readFileSync(path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md'), 'utf8');
+  assert.match(body, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
+  assert.ok(body.includes(agentsync.MARKER));
 });
 
-test('missing prefs and disabled routing retain five generic executors', () => {
-  seedCatalog([TERRA]);
-  for (const prefs of [undefined, { routing: false }]) {
-    const dir = tmpDir();
-    const result = agentsync.syncExecAgents(prefs, { dir });
-    assert.strictEqual(result.written, 5);
-    assert.deepStrictEqual(readDir(dir), genericFiles(['high', 'low', 'max', 'medium', 'xhigh']).sort());
-  }
-});
-
-test('a max ladder rung generates max only when reachable', () => {
-  seedCatalog([TERRA]);
-  const dir = tmpDir();
-  const prefs = terraPrefs({ efforts: { 'grade-3': { low: false, medium: false, high: false, xhigh: false, max: true } } });
-
-  agentsync.syncExecAgents(prefs, { dir });
-  assert.ok(readDir(dir).includes('sidequest-exec-codex-gpt-5-6-terra-max.md'));
-});
-
-test('a remap removes stale marked agents and keeps unmarked files', () => {
+test('sync removes generated executors no longer reachable from category policy', () => {
   seedCatalog([TERRA, SOL]);
+  const store = require('../lib/store.js');
+  configure(store, 'sync-remap', { model: TERRA.slug, effort: 'medium' });
   const dir = tmpDir();
-  const terra = terraPrefs({ efforts: { 'grade-3': { low: false, medium: true, high: false, xhigh: false, max: false } } });
-  agentsync.syncExecAgents(terra, { dir });
+  agentsync.syncExecAgents(null, { dir });
   const stale = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-medium.md');
-  const foreign = path.join(dir, 'sidequest-exec-user-high.md');
-  fs.writeFileSync(foreign, '---\nname: user\n---\nunmarked\n');
-
-  const sol = {
-    tierBackend: { haiku: 'claude', sonnet: 'claude', opus: 'claude', fable: 'codex-gpt-5-6-sol' },
-    efforts: { 'grade-4': { low: false, medium: false, high: true, xhigh: false, max: false } },
-  };
-  const result = agentsync.syncExecAgents(sol, { dir });
+  assert.ok(fs.existsSync(stale));
+  configure(store, 'sync-remap', { model: SOL.slug, effort: 'xhigh' });
+  const result = agentsync.syncExecAgents(null, { dir });
   assert.ok(result.removed >= 1);
   assert.ok(!fs.existsSync(stale));
-  assert.ok(fs.existsSync(foreign));
-  assert.ok(readDir(dir).includes('sidequest-exec-codex-gpt-5-6-sol-high.md'));
+  assert.ok(readDir(dir).includes('sidequest-exec-codex-gpt-5-6-sol-xhigh.md'));
 });
 
-test('sync is idempotent for unchanged preferences', () => {
+test('sync is idempotent and never overwrites an unmarked collision', () => {
   seedCatalog([TERRA]);
+  const store = require('../lib/store.js');
+  configure(store, 'sync-idempotent', { model: TERRA.slug, effort: 'medium' });
   const dir = tmpDir();
-  const prefs = terraPrefs();
-  agentsync.syncExecAgents(prefs, { dir });
-  const second = agentsync.syncExecAgents(prefs, { dir });
-  assert.strictEqual(second.written, 0);
+  const filePath = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-medium.md');
+  fs.writeFileSync(filePath, 'hand-authored\n');
+  agentsync.syncExecAgents(null, { dir });
+  assert.equal(fs.readFileSync(filePath, 'utf8'), 'hand-authored\n');
+  fs.unlinkSync(filePath);
+  agentsync.syncExecAgents(null, { dir });
+  const second = agentsync.syncExecAgents(null, { dir });
+  assert.equal(second.written, 0);
   assert.ok(second.unchanged > 0);
-});
-
-test('never overwrites an unmarked colliding executor file', () => {
-  seedCatalog([TERRA]);
-  const dir = tmpDir();
-  const file = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-medium.md');
-  fs.writeFileSync(file, '---\nname: hand-authored\n---\n');
-  agentsync.syncExecAgents(terraPrefs(), { dir });
-  assert.strictEqual(fs.readFileSync(file, 'utf8'), '---\nname: hand-authored\n---\n');
 });
 
 test('native dispatch fallback does not write a temporary agent file', () => {
   const dir = tmpDir();
   const created = agentsync.createNativeAgent({
     ref: 'SQ-249', agentType: 'sidequest-exec-codex-gpt-5-6-terra-medium',
-    runtime: 'codex-gpt-5-6-terra', effort: 'medium', grade: 'grade-3', sessionId: 'session-249',
+    runtime: 'codex-gpt-5-6-terra', effort: 'medium', sessionId: 'session-249',
   }, { dir, waitMs: 0 });
   assert.strictEqual(created.fallback, true);
   assert.strictEqual(created.file, null);

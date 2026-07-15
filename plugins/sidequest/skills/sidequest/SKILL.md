@@ -25,10 +25,10 @@ situation calls for it**:
 - [references/orchestration.md](references/orchestration.md) — fan-out waves, orchestration cost
   (keeping the lead cheap to wake), workflows (opt-in, sizing), agent-teams caveats, spike tickets,
   native Agent dispatch.
-- [references/routing-details.md](references/routing-details.md) — how the capability ladder is built,
-  bias, the effort grid, a worked routing example.
-- [references/routing-guide.md](references/routing-guide.md) — the official Anthropic grounding for
-  the task-shape scale: model matrix, per-model effort guidance, quotes and sources.
+- [references/routing-details.md](references/routing-details.md) — category routes, fallback resolution,
+  legacy complexity bands, and a worked dispatch example.
+- [references/routing-guide.md](references/routing-guide.md) — model and effort guidance for choosing
+  a category when the live taxonomy leaves genuine ambiguity.
 - [references/external-trackers.md](references/external-trackers.md) — running sidequest alongside
   Jira / Linear / GitHub Issues.
 - [references/board-features.md](references/board-features.md) — stories, notifications, reminders,
@@ -166,7 +166,7 @@ ticket. **Never start work on a ticket you haven't successfully claimed**, even 
 ```bash
 sidequest next --by <you>              # atomically claim the top-priority available ticket
 sidequest claim SQ-3 --by <you>        # or claim a specific one
-sidequest done SQ-3 --by <you> --model <tier> --effort <level>   # finish + stamp who/what worked it
+sidequest done SQ-3 --by <you> --model <model> --effort <level>   # finish + stamp who/what worked it
 sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --status todo)
 ```
 
@@ -188,7 +188,7 @@ Every ticket is category-routed from the live taxonomy (below), and the economic
 **the orchestrator (this thread) is usually the most expensive model in the session; the stamped
 tiers are cheaper.** Executing ticket labor inline pays orchestrator prices for laborer work and
 drags tool output into the planning context — so **route essentially all real execution to each
-ticket's stamped tier**. Inline only a genuinely trivial one-step change (a one-liner, a rename)
+ticket's stamped model**. Inline only a genuinely trivial one-step change (a one-liner, a rename)
 where the spawn round-trip costs more than the work itself. Never pull substantial or parallel work
 inline to save orchestration cost: that just moves the whole execution onto this expensive thread at
 full context, which costs more than the wakeups it was meant to save.
@@ -217,7 +217,7 @@ re-verifying the world. You prevent it from the spawn side:
 - **Executors bounce back, they don't grind.** An executor that hits ambiguity, growing scope, or two
   failed attempts should release + report fast so you can re-scope or re-route — that's built into
   the executor agents.
-- **Batch small same-tier tickets into ONE executor.** When a wave holds several small tickets all
+- **Batch small same model tickets into ONE executor.** When a wave holds several small tickets all
   stamped with the *same* model+effort, spawn one executor with the whole list of refs; it claims →
   works → dones them in sequence. One spawn's overhead amortized over N tickets. Different stamped
   tiers don't batch — split per tier.
@@ -256,9 +256,9 @@ or route assumptions in prompts.
 
 **Legacy complexity stays available.** Use `--complexity 1-10` with a concrete `--why` only for an
 existing complexity-only ticket or when category classification is genuinely ambiguous after reading
-the taxonomy. The capability ladder, bias, and score mechanics remain documented in
-[references/routing-details.md](references/routing-details.md); task-shape grounding and sources are
-in [references/routing-guide.md](references/routing-guide.md).
+the taxonomy. Read-time mapping sends 1–3 to `coding.easy`, 4–6 to `coding.normal`, and 7–10 to
+`coding.hard`; it does not persist a category. The model and effort come from that category's route
+and fallback chain, documented in [references/routing-details.md](references/routing-details.md).
 
 **Rules for working the board:**
 
@@ -272,11 +272,11 @@ in [references/routing-guide.md](references/routing-guide.md).
    executor spawn prompt alongside the ticket's full contract. Do not narrow, rewrite, or invent
    instructions around it.
 3. **The ticket read tells you exactly what to spawn.** Each ticket carries a resolved `category`,
-   `profile`, `runsLabel`, `backend`, `effort`, and exact `executor` from a fresh
+   `runsLabel`, concrete `model`, `backend`, `effort`, and exact `executor` from a fresh
    `ready`/`list --json --brief` read of the current wave. Before every spawn, print `SQ-n · category ·
-   Profile · Actual Model · effort`. Claude Code's native suffix is external metadata; the Sidequest
-   route line and executor name are authoritative. **All routed work dispatches through the native
-   Agent tool** (`exec.dispatch` is `native-agent` on every route). Two paths:
+   Model · effort`. Claude Code's native suffix is external metadata; the Sidequest route line and
+   executor name are authoritative. **All routed work dispatches through the native Agent tool**
+   (`exec.dispatch` is `native-agent` on every route). Two paths:
    - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with
      `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are
      unattended workers; never omit bypass or their ordinary Bash calls prompt into the lead session.
@@ -296,12 +296,10 @@ in [references/routing-guide.md](references/routing-guide.md).
    better. The executor claims with `--effort <baked level>` and the board **refuses the claim on a
    mismatch**, bouncing the ticket back. A haiku ticket has no effort: `exec.agent` is null, spawn a
    plain Agent with `model: haiku` (still named).
-   **Per-tier Codex backend:** a category route resolves through the user's configured backend mapping,
-   so `exec` already tells you what runs it. Spawn the exact generated executor with `model` omitted.
-   **When `exec.backend` is `"codex"`, say so out loud before you spawn** — name the category route and
-   the model actually running it. Claude Code's own spawn line shows a tier, not the backend, so this is
-   the in-chat signal that the work runs on the user's ChatGPT subscription. Don't skip it on a
-   Codex-backed spawn.
+   **Concrete Codex route:** a category route resolves through its category fallback, then the global
+   fallback, then the hardwired safety net when a selected model is unavailable. `exec` already tells
+   you what runs it. Spawn the exact generated executor with `model` omitted. If reads show a degraded
+   route, do nothing special: trust the `exec` object from the fresh read.
 4. **Claim by resolved route:** `next --model X` / `ready --model X` filter tickets by their resolved
    route, including category-routed tickets.
 

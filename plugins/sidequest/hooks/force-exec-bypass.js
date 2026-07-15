@@ -54,8 +54,8 @@ function pluginRoot() {
 }
 
 // Resolve the ticket ref(s) named in a builtin executor's prompt to the single
-// model their stamped tier resolves to. lib/store.js is lazy-required here (not
-// at module scope) so the hook's dominant traffic — non-sidequest agents, and
+// concrete Claude runtime their category route resolved to. lib/store.js is lazy-required
+// here (not at module scope) so the hook's dominant traffic — non-sidequest agents, and
 // any exec prompt with no SQ-ref to resolve — never pays for it.
 function resolveStampedModel(input) {
   const prompt = input && input.tool_input && input.tool_input.prompt;
@@ -77,11 +77,9 @@ function resolveStampedModel(input) {
   for (const ref of refs) {
     const ticket = store.getTicket(found.slug, ref);
     if (!ticket) return { status: 'ticket-not-found', refs, missing: ref };
-    const ex = store.resolveExec(ticket.model, ticket.effort || null);
-    // A null resolved model means the ref's ticket is Codex-backed (out of
-    // scope here — it routes through its own pinned executor, never a builtin).
-    if (!ex || !ex.model) return { status: 'ticket-not-builtin', refs, ref };
-    models.add(ex.model);
+    const exec = ticket.exec;
+    if (!exec || !exec.model) return { status: 'ticket-not-builtin', refs, ref };
+    models.add(exec.model);
   }
   if (models.size !== 1) return { status: 'conflicting', refs, models: [...models] };
   return { status: 'ok', refs, model: [...models][0] };
@@ -98,9 +96,9 @@ function denyReason(res, type) {
     case 'ticket-not-found':
       return `${base} — ${res.missing} wasn't found on the resolved board. ${retry}`;
     case 'ticket-not-builtin':
-      return `${base} — ${res.ref} is stamped to a Codex-backed tier, which spawns its own pinned executor, not a builtin. Re-read the wave (\`ready --brief\`) and spawn its \`exec.agent\` instead.`;
+      return `${base} — ${res.ref} resolves to a Codex route, which spawns its own pinned executor, not a builtin. Re-read the wave (\`ready --brief\`) and spawn its \`exec.agent\` instead.`;
     case 'conflicting':
-      return `${base} — ${res.refs.join(', ')} resolve to conflicting stamped tiers (${res.models.join(', ')}). That's an illegal mixed-tier batch: split it per tier and re-spawn each with its own \`model: exec.model\`.`;
+      return `${base} — ${res.refs.join(', ')} resolve to conflicting concrete models (${res.models.join(', ')}). That's an illegal mixed-model batch: split it per model and re-spawn each with its own \`model: exec.model\`.`;
     default:
       return `${base}. ${retry}`;
   }
@@ -159,7 +157,7 @@ function main() {
     if (res.status === 'ok') {
       updatedInput.model = res.model;
       process.stdout.write(JSON.stringify({
-        systemMessage: `sidequest: ${type} spawned without a model — injected "${res.model}" from ${res.refs.join(', ')}'s stamped tier. Always pass model: exec.model on Claude routes.`,
+        systemMessage: `sidequest: ${type} spawned without a model — injected "${res.model}" from ${res.refs.join(', ')}'s resolved category route. Always pass model: exec.model on Claude routes.`,
         hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
       }));
       return;
@@ -175,11 +173,11 @@ function main() {
   }
 
   // Caller passed a model — deliberate capping is legit, so keep it. Still flag
-  // an unnoticed divergence from what the named ticket(s) actually stamp.
+  // an unnoticed divergence from the named ticket(s)' resolved concrete model.
   const res = resolveStampedModel(input);
   if (res.status === 'ok' && res.model !== toolInput.model) {
     process.stdout.write(JSON.stringify({
-      systemMessage: `sidequest: ${type} was spawned with model "${toolInput.model}" but ${res.refs.join(', ')} stamp "${res.model}" — kept the caller's value; confirm the cap is deliberate.`,
+      systemMessage: `sidequest: ${type} was spawned with model "${toolInput.model}" but ${res.refs.join(', ')} resolves to "${res.model}" — kept the caller's value; confirm the cap is deliberate.`,
       hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
     }));
     return;

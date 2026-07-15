@@ -4,27 +4,15 @@
  *
  * The five shipped sidequest-exec-<effort>.md agents (scripts/gen-exec-agents.js,
  * build time) give the orchestrator one Task-tool subagent_type per built-in
- * effort level, spawned at a chosen MODEL via the Agent tool's `model` param
+ * effort level, spawned at a chosen model via the Agent tool's `model` param
  * (sonnet|opus|haiku|fable). That param does not accept an arbitrary model
- * string, so a discovered custom model (SQ-156/157, e.g. a codex-gateway tier)
- * has no way to ride it.
+ * string, so a discovered custom model needs a generated executor definition.
  *
- * VERIFIED FACT this module builds on: a registered agent FILE with a
- * `model: <full-id>` frontmatter pin (e.g. "claude-codex-gpt-5.6-terra[1m]")
- * genuinely runs on that model through the codex-gateway shim when spawned via
- * the native Agent tool with the `model` parameter OMITTED — the spawned agent
- * self-reports the GPT backend and the gateway's codex request counter
- * advances. Passing ANY Agent `model` value overrides the pin and silently
- * runs Anthropic instead, so dispatchers must leave the param out for Codex
- * routes (store.resolveExec advertises this as model: null with
- * dispatch: 'native-agent'). So every tier the user has POINTED AT a
- * discovered Codex model (prefs.tierBackend, e.g.
- * opus -> codex-gpt-5-6-terra) gets its own real agent file —
- * sidequest-exec-<source>-<slug>-<effort>.md, one per that tier's enabled
- * non-max effort —
- * with a `model:` frontmatter pin, generated into the user's live agents
- * directory (default ~/.claude/agents) at RUNTIME (the model wasn't known at
- * plugin build time; it's discovered from the user's machine).
+ * A registered agent file with a `model: <full-id>` frontmatter pin genuinely
+ * runs through codex-gateway when spawned with the Agent `model` parameter
+ * omitted. Passing an Agent `model` value overrides the pin, so Codex routes
+ * advertise `model: null`. Every concrete Codex category route therefore gets
+ * sidequest-exec-<source>-<slug>-<effort>.md in the user's live agents directory.
  *
  * Both the build-time generator (scripts/gen-exec-agents.js) and this module's
  * syncExecAgents() render through the SAME scripts/_exec-template.md via
@@ -53,9 +41,6 @@ const MARKER = '<!-- generated-by: sidequest-agentsync -->';
 const TEMP_MARKER = '<!-- generated-by: sidequest-native-agent -->';
 const TEMP_PREFIX = 'sidequest-native-';
 
-// The effort axis a generated agent's frontmatter can pin — `max` is the
-// sparing top rung (see store.js's routingLadder) and, like the five shipped
-// agents, is never carried by an auto-generated exec agent.
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const RESTART_NOTICE = 'Executor definitions were just (re)provisioned and may not be spawnable until next session; if Agent rejects a sidequest-exec-* type, dispatch inline this session; restart clears this.';
 
@@ -178,10 +163,10 @@ function nativeAgentSource(spec) {
   if (!tools.every((tool) => /^[A-Za-z][A-Za-z0-9:_-]*$/.test(String(tool)))) throw new Error('native agent tools must be valid tool names.');
   const model = String(spec.modelId || '').trim();
   const effort = String(spec.effort || '').trim();
-  const grade = String(spec.grade || '').trim();
+  const runtime = String(spec.runtime || spec.runsModel || '').trim();
   if (!model || /[\r\n]/.test(model)) throw new Error('native agent model id is required and must be one line.');
   if (!NON_MAX_EFFORTS.includes(effort)) throw new Error(`native agent effort must be one of: ${NON_MAX_EFFORTS.join(', ')}.`);
-  if (!/^grade-[1-4]$/.test(grade)) throw new Error('native agent grade must be a neutral grade-1 through grade-4 identifier.');
+  if (!runtime || /[\r\n]/.test(runtime)) throw new Error('native agent runtime must be a concrete one-line model identifier.');
   const session = String(spec.sessionId || '').replace(/[\r\n]/g, '');
   return [
     '---',
@@ -194,7 +179,7 @@ function nativeAgentSource(spec) {
     '---',
     TEMP_MARKER,
     `<!-- sidequest-native-session: ${session} -->`,
-    `<!-- sidequest-native-grade: ${grade} -->`,
+    `<!-- sidequest-native-runtime: ${runtime} -->`,
     'You are a temporary Sidequest executor. Follow the exact task prompt from your parent. Stay within its ticket scope, verify the requested behavior, and report concise evidence. The parent owns orchestration. Before ending after success or failure, run the cleanup command supplied in your task prompt.',
     '',
   ].join('\n');
@@ -300,33 +285,28 @@ function cleanupNativeAgents(opts) {
   return { removed };
 }
 
-// Sync only the executors the active routing ladder can reach. A missing prefs
+// Sync executors for each configured concrete category route and fallback. A missing prefs
 // object (or routing explicitly disabled) retains the generic files for manual
 // dispatch. The MARKER lifecycle below remains responsible for stale cleanup.
-function syncExecAgents(prefs, opts) {
+function syncExecAgents(_prefs, opts) {
   opts = opts || {};
   const dir = opts.dir || defaultAgentsDir();
   const wanted = new Map();
-
-  if (!prefs || prefs.routing === false) {
-    for (const effort of [...NON_MAX_EFFORTS, 'max']) {
-      wanted.set(`sidequest-exec-${effort}.md`, renderExecAgent({
-        name: `sidequest-exec-${effort}`,
-        effort,
-        marker: MARKER,
-      }));
-    }
-  } else {
-    const backends = prefs.tierBackendResolved || store.resolveTierBackends(prefs.tierBackend).byTier;
-    for (const rung of store.routingLadder(prefs)) {
-      const resolved = store.resolveExec(rung.model, rung.effort, prefs);
-      if (!resolved.agent || wanted.has(`${resolved.agent}.md`)) continue;
-      const backend = backends[rung.model];
-      const content = backend && backend.backend === 'codex'
-        ? renderBackendAgent(backend.source, backend.slug, backend.id, rung.effort, backend.agentSlug !== backend.slug)
-        : renderExecAgent({ name: resolved.agent, effort: rung.effort, marker: MARKER });
-      wanted.set(`${resolved.agent}.md`, content);
-    }
+  const routes = [];
+  for (const category of store.getCategories()) {
+    routes.push(category.route);
+    if (category.fallback) routes.push(category.fallback);
+  }
+  const globalFallback = store.getRoutingFallback();
+  if (globalFallback) routes.push(globalFallback);
+  for (const route of routes) {
+    if (!route) continue;
+    const resolved = store.resolveExec(route.model, route.effort);
+    if (!resolved || !resolved.agent || wanted.has(`${resolved.agent}.md`)) continue;
+    const content = resolved.backend === 'codex'
+      ? renderBackendAgent(resolved.source, resolved.slug, resolved.spawnId, route.effort, resolved.agent !== `sidequest-exec-${resolved.slug}-${route.effort}`)
+      : renderExecAgent({ name: resolved.agent, effort: route.effort, marker: MARKER });
+    wanted.set(`${resolved.agent}.md`, content);
   }
 
   let existing = [];

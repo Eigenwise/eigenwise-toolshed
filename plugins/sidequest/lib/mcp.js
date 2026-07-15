@@ -93,16 +93,10 @@ function requireBy(args, action) {
 
 function effortDrift(slug, idOrRef, claimedEffort) {
   if (claimedEffort == null) return null;
-  const prefs = store.getModelPrefs();
-  if (prefs.routing === false) return null;
   const t = store.getTicket(slug, idOrRef);
-  if (!t || !t.complexity) return null;
-  if (t.model === 'grade-1' || !t.effort) return null;
+  if (!t || !t.effort) return null;
   const claimed = String(claimedEffort).toLowerCase();
   if (claimed === t.effort) return null;
-  // The ticket read already resolved which agent to spawn (t.exec.agent): a
-  // Claude tier -> sidequest-exec-<effort>, a Codex-backed tier ->
-  // sidequest-exec-<slug>-<effort>. Name that in the refusal.
   const execName = (t.exec && t.exec.agent) || `sidequest-exec-${t.effort}`;
   return {
     reason: 'effort_mismatch',
@@ -110,7 +104,7 @@ function effortDrift(slug, idOrRef, claimedEffort) {
     derivedModel: t.model,
     derivedEffort: t.effort,
     claimedEffort: claimed,
-    message: `${t.ref} derives to ${t.model}·${t.effort} — spawn ${execName}, not an exec-${claimed}. Claim refused.`,
+    message: `${t.ref} resolves to ${t.model}·${t.effort} — spawn ${execName}, not an exec-${claimed}. Claim refused.`,
   };
 }
 
@@ -118,16 +112,14 @@ function executorDrift(slug, idOrRef, claimedEffort, executorName) {
   const effort = effortDrift(slug, idOrRef, claimedEffort);
   if (effort) return effort;
   if (!executorName) return null;
-  const prefs = store.getModelPrefs();
-  if (prefs.routing === false) return null;
   const t = store.getTicket(slug, idOrRef);
-  if (!t || !t.complexity || !t.exec || t.exec.backend !== 'codex') return null;
+  if (!t || !t.exec || t.exec.backend !== 'codex') return null;
   if (executorName === t.exec.agent) return null;
   return {
-    reason: 'executor_mismatch', ref: t.ref, profile: t.profile,
+    reason: 'executor_mismatch', ref: t.ref,
     derivedModel: t.model, derivedEffort: t.effort, backend: t.exec.backend,
     runsLabel: t.exec.runsLabel, executor: executorName, expectedExecutor: t.exec.agent,
-    message: `${t.ref} resolves to ${t.profile} · ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Spawn ${t.exec.agent} or use Sidequest dispatch. Claim refused.`,
+    message: `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Spawn ${t.exec.agent} or use Sidequest dispatch. Claim refused.`,
   };
 }
 
@@ -141,25 +133,18 @@ function executorDrift(slug, idOrRef, claimedEffort, executorName) {
 
 // ready/next: a --model FILTER on a tier. Blank/any/none mean "no filter"; an
 // unrecognized non-empty value is refused instead of silently matching all.
-function requireKnownModelFilter(action, value, prefs) {
+function requireKnownModelFilter(action, value) {
   if (value == null) return;
-  const cls = store.classifyModelFilter(value, prefs);
+  const cls = store.classifyModelFilter(value);
   if (cls === 'unknown') {
-    throw new Error(`${action}: unknown model "${value}" — known: ${store.getModelVocab(prefs).models.join(', ')}`);
+    throw new Error(`${action}: unknown model "${value}" — known: ${store.getModelVocab().models.join(', ')}`);
   }
 }
 
-// done: a provenance STAMP — blank means "no stamp". A built-in tier OR a
-// discovered Codex slug (what actually ran) is valid; only genuine garbage is
-// refused. makeWorkedBy re-validates on write, so this just gives a nice error.
-function requireKnownModel(action, value, prefs) {
+function requireKnownModel(action, value) {
   if (value == null || !String(value).trim()) return;
-  const s = String(value).trim().toLowerCase();
-  const known = store.coerceModel(s) || (prefs.discovered || []).some((d) => d.slug === s);
-  if (!known) {
-    const slugs = (prefs.discovered || []).map((d) => d.slug);
-    const aliases = ['haiku', 'sonnet', 'opus', 'fable'];
-    throw new Error(`${action}: unknown model "${value}" — known: ${store.VALID_MODELS.concat(aliases, slugs).join(', ')}`);
+  if (!store.resolveExec(value, null)) {
+    throw new Error(`${action}: unknown model "${value}" — known: ${store.getModelVocab().models.join(', ')}`);
   }
 }
 
@@ -238,20 +223,20 @@ const TOOLS = [
   },
   {
     name: 'ready',
-    description: 'The workable set: unclaimed, unblocked, not-done tickets, partitioned into parallel-safe waves by declared file scope. waves is always arrays of refs; full/compact tickets ride in tickets. model filters to one derived tier. brief:true returns compact tickets — default to it for orchestration reads.',
+    description: 'The workable set: unclaimed, unblocked, not-done tickets, partitioned into parallel-safe waves by declared file scope. Filter by resolved model or category ID. brief:true returns compact tickets — default to it for orchestration reads.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
-        model: { type: 'string', description: 'Filter to a derived grade (grade-1 through grade-4). Deprecated aliases are accepted as input.' },
+        model: { type: 'string', description: 'Filter to a resolved Claude runtime or discovered Codex model slug.' },
+        category: { type: 'string', description: 'Filter to a category ID.' },
         brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: choose an id from the returned categories, then update before dispatch.' },
       },
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const prefs = store.getModelPrefs();
-      requireKnownModelFilter('ready', args.model, prefs);
-      const payload = store.readyPayload(slug, { model: args.model, brief: args.brief });
+      requireKnownModelFilter('ready', args.model);
+      const payload = store.readyPayload(slug, { model: args.model, category: args.category, brief: args.brief });
       return Object.assign({ project: slug, projectName: meta.name }, payload);
     },
   },
@@ -389,7 +374,7 @@ const TOOLS = [
   },
   {
     name: 'claim',
-    description: 'Atomically claim a ticket before working it (moves it to doing). Fails if gone/done/claimed. For Codex routes, pass executor from the ticket\'s authoritative runtime so generic executors are refused. by must be a UNIQUE per-worker id. Pass effort (the executor\'s baked level) to be refused if it doesn\'t match the derived tier. Never work a ticket whose claim did not return ok:true.',
+    description: 'Atomically claim a ticket before working it (moves it to doing). Fails if gone/done/claimed. For Codex routes, pass executor from the ticket\'s authoritative runtime so generic executors are refused. by must be a UNIQUE per-worker id. Pass effort (the executor\'s baked level) to be refused if it doesn\'t match the resolved route. Never work a ticket whose claim did not return ok:true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -414,13 +399,14 @@ const TOOLS = [
   },
   {
     name: 'next',
-    description: 'Atomically claim the top-priority available ticket. model filters to one derived tier. Returns ok:false reason:empty when nothing is claimable.',
+    description: 'Atomically claim the top-priority available ticket. Filter by resolved model and/or category ID. Returns ok:false reason:empty when nothing is claimable.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         by: { type: 'string' },
-        model: { type: 'string', description: 'Filter to a derived grade (grade-1 through grade-4). Deprecated aliases are accepted as input.' },
+        model: { type: 'string', description: 'Filter to a resolved Claude runtime or discovered Codex model slug.' },
+        category: { type: 'string', description: 'Filter to a category ID.' },
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         session: { type: 'string' },
       },
@@ -429,9 +415,8 @@ const TOOLS = [
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'next');
-      const prefs = store.getModelPrefs();
-      requireKnownModelFilter('next', args.model, prefs);
-      const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, source: 'mcp', sessionId: sessionOf(args) });
+      requireKnownModelFilter('next', args.model);
+      const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, source: 'mcp', sessionId: sessionOf(args) });
       return Object.assign({ project: slug }, res);
     },
   },
@@ -444,7 +429,7 @@ const TOOLS = [
         ref: { type: 'string' },
         project: PROJECT_PROP,
         by: { type: 'string' },
-        model: { type: 'string', description: 'The grade or runtime model that actually worked this ticket (provenance).' },
+        model: { type: 'string', description: 'Concrete runtime model that actually worked this ticket (provenance).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         session: { type: 'string' },
       },
@@ -453,8 +438,7 @@ const TOOLS = [
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'done');
-      const prefs = store.getModelPrefs();
-      requireKnownModel('done', args.model, prefs);
+      requireKnownModel('done', args.model);
       const res = store.completeTicket(slug, args.ref, by, { source: 'mcp', model: args.model, effort: args.effort, sessionId: sessionOf(args) });
       return Object.assign({ project: slug }, res);
     },
@@ -592,13 +576,12 @@ const TOOLS = [
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
       if (!ticket.model || !ticket.effort) throw new Error(`native_agent: ${ticket.ref} has no routable model and effort.`);
-      const resolved = store.resolveExec(ticket.model, ticket.effort, store.getModelPrefs());
+      const resolved = store.resolveExec(ticket.model, ticket.effort);
       const created = agentsync.createNativeAgent({
         ref: ticket.ref,
         agentType: resolved.agent || `sidequest-exec-${ticket.effort || 'low'}`,
         spawnModel: resolved.model,
         effort: ticket.effort,
-        grade: ticket.model,
         runtime: resolved.runsModel,
         sessionId: sessionOf(args),
       });
@@ -650,13 +633,14 @@ const TOOLS = [
   },
   {
     name: 'category_add',
-    description: 'Create a global category. Its id is permanent. routeModel must be a grade or discovered backend slug; routeEffort is a valid effort level.',
+    description: 'Create a global category. Its id is permanent. routeModel must be a Claude runtime or discovered backend slug; routeEffort is a valid effort level. fallbackModel and fallbackEffort optionally set its fallback route.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
-        routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
+        routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
+        fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
       },
       required: ['id', 'name', 'routeModel', 'routeEffort'],
     },
@@ -664,7 +648,12 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const id = String(args.id || '').trim().toLowerCase();
       if (store.getCategory(id)) throw new Error(`category_add: "${id}" already exists.`);
-      const category = store.setCategory({ id, name: args.name, description: args.description || '', contract: args.contract || '', route: { model: args.routeModel, effort: args.routeEffort }, enabled: args.enabled !== false });
+      const category = store.setCategory({
+        id, name: args.name, description: args.description || '', contract: args.contract || '',
+        route: { model: args.routeModel, effort: args.routeEffort },
+        fallback: args.fallbackModel == null && args.fallbackEffort == null ? null : { model: args.fallbackModel, effort: args.fallbackEffort },
+        enabled: args.enabled !== false,
+      });
       return { ok: true, project: slug, projectName: meta.name, category };
     },
   },
@@ -675,7 +664,8 @@ const TOOLS = [
       type: 'object',
       properties: {
         project: PROJECT_PROP, id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
-        routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
+        routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
+        fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
       },
       required: ['id'],
     },
@@ -686,8 +676,33 @@ const TOOLS = [
       const patch = {};
       for (const key of ['name', 'description', 'contract', 'enabled']) if (args[key] !== undefined) patch[key] = args[key];
       if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
+      if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) {
+        patch.fallback = {
+          model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel,
+          effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort,
+        };
+      }
       const category = store.setCategory(existing.id, patch);
       return { ok: true, project: slug, projectName: meta.name, category };
+    },
+  },
+  {
+    name: 'global_fallback',
+    description: 'Read or set the required global routing fallback. Omit model and effort to read it; provide both to set it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP,
+        model: { type: 'string', description: 'Claude runtime or discovered Codex model slug.' },
+        effort: { type: 'string', enum: store.VALID_EFFORTS },
+      },
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      if (args.model === undefined && args.effort === undefined) {
+        return { project: slug, projectName: meta.name, fallback: store.getRoutingFallback() };
+      }
+      return { ok: true, project: slug, projectName: meta.name, fallback: store.setRoutingFallback({ model: args.model, effort: args.effort }) };
     },
   },
   {
@@ -704,24 +719,10 @@ const TOOLS = [
   },
   {
     name: 'models',
-    description: 'The live routing ladder, enabled tiers/efforts, category taxonomy with resolved routes and warnings, per-tier backend map, detected Codex models, routing master switch, and bias.',
+    description: 'Available models, global fallback, and category taxonomy with configured primary/fallback routes, resolved routes, and warnings.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
     handler() {
-      const prefs = store.getModelPrefs();
-      const categories = store.getCategories().map((category) => {
-        const ticket = store.applyDerivedRouting({ category: category.id }, prefs);
-        return Object.assign({}, category, { resolved: { model: ticket.model, effort: ticket.effort, exec: ticket.exec }, warnings: ticket.warnings || [] });
-      });
-      return {
-        prefs,
-        ladder: store.routingLadder(prefs),
-        categories,
-        discovered: prefs.discovered,
-        tierBackend: prefs.tierBackend,
-        tierBackendResolved: prefs.tierBackendResolved,
-        tierBackendWarnings: prefs.tierBackendWarnings,
-        enabled: store.VALID_MODELS.filter((m) => prefs[m]),
-      };
+      return store.modelsPayload();
     },
   },
   {

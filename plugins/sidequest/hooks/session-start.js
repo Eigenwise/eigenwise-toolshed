@@ -6,17 +6,17 @@
  * A fresh chat has no memory of the board, so it's easy to just start typing
  * code instead of planning as tickets. This hook fires once when a session
  * begins and drops a short standing reminder in front of Claude: unless the
- * request is trivial, plan it as sidequest tickets (complexity-scored per the
- * skill) and route execution proportionally. It is a nudge, not a gate — Claude
+ * request is trivial, plan it as sidequest tickets (category-routed from the
+ * live taxonomy) and route execution proportionally. It is a nudge, not a gate — Claude
  * is free to ignore it for small asks.
  *
  * Token diet (2026-07): this block is the ONE place the execution doctrine gets
  * injected (the per-prompt hook only emits a one-liner), so it carries the
  * delegation rules — but tightly. The economy is expensive-orchestrator /
- * cheap-executors: real execution routes DOWN to each ticket's stamped tier
+ * cheap-executors: real execution routes DOWN to each ticket's stamped model
  * (inline only a trivial one-step change), and the cost control is the SHAPE of
  * the runs, not pulling work onto the pricey main thread — short bounded
- * executor runs that bounce back fast, batching small same-tier tickets into
+ * executor runs that bounce back fast, batching small same-model tickets into
  * one spawn, --brief board reads. hooks.test.js enforces a byte budget on this
  * block — don't grow it back.
  *
@@ -48,24 +48,13 @@ function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
 }
 
-// Keep the generated executor files aligned with the current routing preferences.
-// The sync target is the reachable executor image for those prefs, so session start
-// must load prefs before syncing; a prefs read failure skips the sync to protect the
-// existing agent files. Errors remain fail-soft because provisioning never blocks a session.
+// Keep generated executor files aligned with the current category routes. Errors
+// remain fail-soft because provisioning never blocks a session.
 function provisionExecAgents() {
   try {
     const sync = require(path.join(pluginRoot(), 'lib', 'agentsync.js'));
-    const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
-    // Provision only when the user has a persisted prefs record. Post-SQLite
-    // that record lives in the DB (model-prefs.json is a frozen rollback copy),
-    // so check the store, not the file — otherwise prefs set after migration
-    // would never trigger provisioning. A corrupt prefs blob throws in
-    // getModelPrefs below and is caught, leaving marked files untouched.
-    if (!store.hasModelPrefs()) return null;
-    const prefs = store.getModelPrefs();
-    if (!prefs || typeof prefs !== 'object') return null;
     sync.cleanupNativeAgents({ staleBefore: Date.now() - 6 * 60 * 60 * 1000 });
-    return sync.syncExecAgents(prefs);
+    return sync.syncExecAgents();
   } catch (_) {
     /* best effort — never break the session over agent provisioning */
     return null;
@@ -109,7 +98,7 @@ function main() {
     emit(
       '=== sidequest (active — context restored) ===\n' +
         'Context was just compacted/resumed — RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
-        'Discipline: re-read the live taxonomy, classify and stamp any unlabeled ticket before claim; spawn the ticket\'s `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, omit on Codex routes) as short, bounded executor runs — batch small same-tier tickets; inline only trivial one-steps.',
+        'Discipline: re-read the live taxonomy, classify and stamp any unlabeled ticket before claim; spawn the ticket\'s `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, omit on Codex routes) as short, bounded executor runs — batch small same-model tickets; inline only trivial one-steps.',
       restartNotice
     );
     process.exit(0);
@@ -129,7 +118,7 @@ function main() {
       '• Route execution DOWN: stamp an unlabeled ticket before claim, then spawn `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, else it inherits the SESSION model; Codex routes: `exec.model` null, omit model). It is already-registered — unique name + `bypassPermissions`. Do not use `native_agent` for ticket execution. Inline only trivial one-steps; never pull substantial or parallel work inline to save wakeups.\n' +
       '• Keep executor runs SHORT and bounded — the ticket is the spec (exact anchors + verify command); ' +
       'scope the spawn prompt; executors bounce back fast (release + report), verified by artifact (test/diff) not claim.\n' +
-      '• Batch small SAME-tier tickets into ONE executor (sequential inside); parallel-wave only independent tickets with no shared runtime resource.\n' +
+      '• Batch small SAME-model tickets into ONE executor (sequential inside); parallel-wave only independent tickets with no shared runtime resource.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +
       '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\n' +
       'Capture side issues as tickets (background `ticket-filer`) without derailing the current task.\n' +
