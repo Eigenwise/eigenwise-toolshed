@@ -88,10 +88,56 @@ test('schema v2 migration materializes configured backends, fallbacks, and globa
   process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
   const db = require('../lib/db.js');
   const handle = db.openDb(home);
-  assert.equal(db.getRow(handle, 'meta', 'schema_version'), 3);
+  assert.equal(db.getRow(handle, 'meta', 'schema_version'), 4);
   assert.deepEqual(db.getRow(handle, 'categories', 'fixture').route, { model: 'codex-gpt-test', effort: 'high' });
   assert.deepEqual(db.getRow(handle, 'categories', 'fixture').fallback, { model: 'opus', effort: 'high' });
   assert.deepEqual(db.getRow(handle, 'globals', 'routing-fallback'), { model: 'sonnet', effort: 'high' });
   assert.equal(db.getRow(handle, 'globals', 'model-prefs'), null);
   handle.close();
+});
+
+test('project category layers merge ADD, OVERRIDE, and DISABLE without leaking to another project', () => {
+  const { store, slug, home } = freshStore();
+  const other = store.ensureProject(path.join(home, 'other-project'), 'Other project').slug;
+
+  store.setProjectCategory(slug, 'music-analysis', 'ADD', {
+    name: 'Music analysis',
+    description: 'Analyze a score.',
+    contract: 'Read the score first.',
+    route: { model: 'opus', effort: 'high' },
+    fallback: { model: 'sonnet', effort: 'medium' },
+    enabled: true,
+  });
+  store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', {
+    name: 'Local coding',
+    route: { model: 'fable', effort: 'xhigh' },
+  });
+  store.setProjectCategory(slug, 'coding.easy', 'DISABLE');
+
+  const local = store.getCategories({ project: slug });
+  assert.equal(local.find((category) => category.id === 'music-analysis').name, 'Music analysis');
+  assert.equal(local.find((category) => category.id === 'coding.normal').route.model, 'fable');
+  assert.equal(local.some((category) => category.id === 'coding.easy'), false);
+  assert.equal(store.getCategories({ project: other }).some((category) => category.id === 'music-analysis'), false);
+  assert.equal(store.getCategories({ project: other }).find((category) => category.id === 'coding.normal').route.model, 'codex-gpt-5-6-terra');
+
+  const ticket = store.createTicket(slug, { title: 'Analyze song', category: 'music-analysis' });
+  assert.equal(store.getTicket(slug, ticket.ref).category.id, 'music-analysis');
+  assert.equal(store.listPayload(slug, {}).categories.some((category) => category.id === 'music-analysis'), true);
+  assert.equal(store.readyPayload(slug, {}).categories.some((category) => category.id === 'music-analysis'), true);
+  assert.equal(store.modelsPayload({ project: slug }).categories.some((category) => category.id === 'music-analysis'), true);
+});
+
+test('project category layer guards reject invalid local changes and preserve harmless orphans', () => {
+  const { store, slug } = freshStore();
+  assert.throws(() => store.setProjectCategory(slug, 'general', 'DISABLE'), /cannot be disabled/);
+  assert.throws(() => store.setProjectCategory(slug, 'coding.normal', 'ADD', {
+    route: { model: 'opus', effort: 'high' },
+  }), /collides with a global category/);
+  assert.throws(() => store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', { enabled: false }), /cannot patch/);
+
+  store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', { name: 'Local coding' });
+  store.removeCategory('coding.normal');
+  assert.equal(store.getCategories({ project: slug }).some((category) => category.id === 'coding.normal'), false);
+  assert.match(store.getProjectCategories(slug).warnings.join(' '), /orphaned project category layer/);
 });

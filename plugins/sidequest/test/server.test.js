@@ -21,7 +21,8 @@ const HOME_DIR = os.homedir();
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-server-test-'));
 process.env.SIDEQUEST_NO_HOT_RECYCLE = '1';
 
-const { pickNewerInstall, findNewerInstall } = require('../lib/server.js');
+const { start, pickNewerInstall, findNewerInstall } = require('../lib/server.js');
+const store = require('../lib/store.js');
 
 /* ------------------------------------------------------------------ *
  *  pickNewerInstall — pure core
@@ -186,6 +187,33 @@ test('dashboard exposes board archive routes and guarded project controls', () =
   assert.match(html, /Restore failed:/);
 });
 
+test('category endpoints project scope preserves global taxonomy and reports local layers', { concurrency: false }, async (t) => {
+  const one = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'one')).slug;
+  const two = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'two')).slug;
+  store.setCategory({ id: 'general', name: 'General', description: '', contract: '', route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
+  store.setCategory({ id: 'coding', name: 'Coding', description: 'Global coding', contract: '', route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
+  const started = await start(44000 + Math.floor(Math.random() * 1000));
+  t.after(() => started.server.close());
+
+  const local = await requestJson(started.port, 'POST', '/api/categories', { project: one, id: 'music', name: 'Music', description: 'Local', contract: '', route: { model: 'opus', effort: 'high' }, fallback: null, enabled: true });
+  assert.strictEqual(local.status, 201);
+  assert.strictEqual(local.body.category.layer.kind, 'ADD');
+  const override = await requestJson(started.port, 'PATCH', `/api/categories/coding?project=${one}`, { route: { model: 'opus', effort: 'high' } });
+  assert.strictEqual(override.status, 200);
+  assert.strictEqual(override.body.category.layer.kind, 'OVERRIDE');
+  assert.deepStrictEqual(override.body.category.layer.data, { route: { model: 'opus', effort: 'high' } });
+  const disabled = await requestJson(started.port, 'PATCH', `/api/categories/coding?project=${one}`, { disable: true });
+  assert.strictEqual(disabled.status, 200);
+  assert.strictEqual(disabled.body.category.disabled, true);
+  const other = await fetchJson(started.port, `/api/categories?project=${two}`);
+  assert.ok(!other.categories.some((category) => category.id === 'music'));
+  assert.ok(other.categories.some((category) => category.id === 'coding' && !category.disabled));
+  const global = await fetchJson(started.port, '/api/categories?project=all');
+  assert.ok(!global.categories.some((category) => category.id === 'music'));
+  assert.ok(global.categories.some((category) => category.id === 'coding' && !category.disabled));
+  assert.strictEqual((await requestJson(started.port, 'PATCH', `/api/categories/general?project=${one}`, { disable: true })).status, 400);
+});
+
 function copyPlugin(from, to, version) {
   fs.cpSync(from, to, { recursive: true });
   const manifest = path.join(to, '.claude-plugin', 'plugin.json');
@@ -217,6 +245,20 @@ function waitFor(check, timeoutMs, label) {
       }
     };
     tick();
+  });
+}
+
+function requestJson(port, method, endpoint, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body == null ? null : JSON.stringify(body);
+    const req = http.request({ host: '127.0.0.1', port, path: endpoint, method, headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}, timeout: 1000 }, (res) => {
+      let text = '';
+      res.on('data', (chunk) => (text += chunk));
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(text) }));
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
   });
 }
 

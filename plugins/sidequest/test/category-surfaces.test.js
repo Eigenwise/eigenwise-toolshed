@@ -112,3 +112,66 @@ test('MCP category tools stamp tickets and reject unknown categories', () => {
   assert.ok(raw.result.isError);
   assert.match(raw.result.content[0].text, /unknown category.*valid:/i);
 });
+
+test('CLI project category layers stay isolated and expose effective origins', () => {
+  const second = path.join(home, 'second-project');
+  fs.mkdirSync(second, { recursive: true });
+  let run = cli('category', 'add', 'project-only', '--project', project, '--name', 'Project only', '--route-model', 'sonnet', '--route-effort', 'medium');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(run.body.localRow.kind, 'ADD');
+
+  run = cli('category', 'edit', 'general', '--project', project, '--name', 'Local general');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(run.body.localRow.kind, 'OVERRIDE');
+  assert.equal(run.body.effective.name, 'Local general');
+
+  run = cli('category', 'disable', 'mechanical', '--project', project);
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(run.body.localRow.kind, 'DISABLE');
+
+  run = cli('category', 'list', '--project', project);
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(run.body.categories.find((entry) => entry.id === 'project-only').origin, 'project');
+  assert.equal(run.body.categories.find((entry) => entry.id === 'general').origin, 'overridden');
+  assert.equal(run.body.categories.find((entry) => entry.id === 'mechanical').origin, 'disabled');
+
+  run = cli('category', 'list', '--project', second);
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.ok(!run.body.categories.some((entry) => entry.id === 'project-only'));
+  assert.equal(run.body.categories.find((entry) => entry.id === 'general').name, 'General fallback');
+
+  run = cli('add', '--title', 'Wrong category for second project', '--project', second, '--category', 'project-only');
+  assert.notEqual(run.result.status, 0);
+  assert.match(run.result.stderr, /unknown category/i);
+});
+
+test('MCP project category layers add, override, disable, and shape models', () => {
+  const mcp = freshMcp();
+  const first = process.env.CLAUDE_PROJECT_DIR;
+  fs.mkdirSync(first, { recursive: true });
+  const second = path.join(path.dirname(first), 'second-project');
+  fs.mkdirSync(second, { recursive: true });
+  call(mcp, 'category_list', {});
+  let result = call(mcp, 'category_add', { project: first, id: 'project-only', name: 'Project only', routeModel: 'sonnet', routeEffort: 'medium' });
+  assert.equal(result.localRow.kind, 'ADD');
+
+  result = call(mcp, 'category_edit', { project: first, id: 'general', name: 'Scoped general' });
+  assert.equal(result.localRow.kind, 'OVERRIDE');
+  assert.equal(result.effective.name, 'Scoped general');
+
+  result = call(mcp, 'category_edit', { project: first, id: 'mechanical', enabled: false });
+  assert.equal(result.localRow.kind, 'DISABLE');
+
+  result = call(mcp, 'category_list', { project: first });
+  assert.equal(result.categories.find((entry) => entry.id === 'project-only').origin, 'project');
+  assert.equal(result.categories.find((entry) => entry.id === 'general').origin, 'overridden');
+  assert.equal(result.categories.find((entry) => entry.id === 'mechanical').origin, 'disabled');
+
+  result = call(mcp, 'models', { project: first });
+  assert.ok(result.categories.some((entry) => entry.id === 'project-only'));
+  assert.ok(!result.categories.some((entry) => entry.id === 'mechanical'));
+
+  result = call(mcp, 'category_list', { project: second });
+  assert.ok(!result.categories.some((entry) => entry.id === 'project-only'));
+  assert.equal(result.categories.find((entry) => entry.id === 'general').name, 'General fallback');
+});

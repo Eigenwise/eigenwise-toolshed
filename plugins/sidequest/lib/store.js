@@ -363,20 +363,23 @@ function getModelVocab() {
   return routingModels();
 }
 
-function modelsPayload() {
+function modelsPayload(opts) {
+  opts = opts || {};
   const catalog = routingModels();
+  const projectCategories = getProjectCategories(opts.project);
   return {
     models: catalog.models,
     efforts: catalog.efforts,
     discovered: catalog.discovered,
     globalFallback: getRoutingFallback(),
-    categories: getCategories().map((category) => {
+    categories: getCategories({ project: opts.project }).map((category) => {
       const resolved = resolveCategoryRoute(category);
       return Object.assign({}, category, {
         resolved: { model: resolved.model, effort: resolved.effort, exec: execProjection(resolved.exec) },
         warnings: resolved.warnings,
       });
     }),
+    warnings: projectCategories.warnings,
   };
 }
 
@@ -415,20 +418,57 @@ function setRoutingFallback(route) {
   return normalized;
 }
 
-function getCategories(opts) {
-  const includeDisabled = !opts || opts.includeDisabled !== false;
-  const categories = [];
-  for (const raw of db.listRows(database(), 'categories')) {
-    const category = normalizeCategory(raw);
-    if (category && (includeDisabled || category.enabled)) categories.push(category);
-  }
-  categories.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-  return categories;
+function projectCategoryRows(project) {
+  if (!project) return [];
+  return database().prepare('SELECT id, kind, data FROM project_categories WHERE project = ? ORDER BY id').all(project)
+    .map((row) => {
+      try {
+        return { id: row.id, kind: row.kind, data: JSON.parse(row.data) };
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter(Boolean);
 }
 
-function getCategory(id) {
-  const raw = db.getRow(database(), 'categories', String(id || '').trim().toLowerCase());
-  return normalizeCategory(raw);
+function projectCategoryWarnings(project) {
+  const globalIds = new Set(db.listRows(database(), 'categories').map((category) => String(category && category.id || '').trim().toLowerCase()));
+  const orphaned = projectCategoryRows(project).filter((row) => row.kind !== 'ADD' && !globalIds.has(row.id));
+  return orphaned.length ? [`orphaned project category layer: ${orphaned.map((row) => row.id).join(', ')}`] : [];
+}
+
+function getProjectCategories(project) {
+  return { rows: projectCategoryRows(project), warnings: projectCategoryWarnings(project) };
+}
+
+function getCategories(opts) {
+  opts = opts || {};
+  const includeDisabled = opts.includeDisabled !== false;
+  const categories = new Map();
+  for (const raw of db.listRows(database(), 'categories')) {
+    const category = normalizeCategory(raw);
+    if (category) categories.set(category.id, category);
+  }
+  for (const row of projectCategoryRows(opts.project)) {
+    const base = categories.get(row.id);
+    if (row.kind === 'ADD' && !base) {
+      const category = normalizeCategory(row.data);
+      if (category) categories.set(category.id, category);
+    } else if (row.kind === 'OVERRIDE' && base) {
+      const category = normalizeCategory(Object.assign({}, base, row.data));
+      if (category) categories.set(category.id, category);
+    } else if (row.kind === 'DISABLE' && row.id !== 'general' && base) {
+      categories.delete(row.id);
+    }
+  }
+  return [...categories.values()]
+    .filter((category) => includeDisabled || category.enabled)
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+function getCategory(id, opts) {
+  const normalizedId = String(id || '').trim().toLowerCase();
+  return getCategories(opts).find((category) => category.id === normalizedId) || null;
 }
 
 function normalizeCategory(raw) {
@@ -467,8 +507,49 @@ function removeCategory(id) {
   return db.deleteRow(database(), 'categories', normalizedId);
 }
 
-function classifierCategories() {
-  return getCategories({ includeDisabled: false }).map(({ id, name, description, route, fallback, contract }) => ({ id, name, description, route, fallback, contract }));
+function setProjectCategory(project, id, kind, data) {
+  const normalizedProject = String(project || '').trim();
+  const normalizedId = String(id || '').trim().toLowerCase();
+  const normalizedKind = String(kind || '').trim().toUpperCase();
+  if (!normalizedProject || !normalizedId) throw new Error('Project and category id are required.');
+  if (!['ADD', 'OVERRIDE', 'DISABLE'].includes(normalizedKind)) throw new Error('Project category kind must be ADD, OVERRIDE, or DISABLE.');
+  const global = getCategory(normalizedId);
+  let normalizedData;
+  if (normalizedKind === 'ADD') {
+    if (global) throw new Error(`Project category ADD "${normalizedId}" collides with a global category.`);
+    const required = ['name', 'description', 'contract', 'route', 'fallback', 'enabled'];
+    if (!data || typeof data !== 'object' || required.some((key) => !Object.hasOwn(data, key))) {
+      throw new Error('Project category ADD requires a complete category row.');
+    }
+    normalizedData = normalizeCategory(Object.assign({}, data, { id: normalizedId }));
+    if (!normalizedData || !normalizeRoute(data && data.route)) throw new Error('Project category ADD requires a valid full category route.');
+    if (data && data.fallback != null && !normalizeRoute(data.fallback)) throw new Error('Project category ADD fallback requires a valid model and effort.');
+  } else if (normalizedKind === 'OVERRIDE') {
+    if (!global) throw new Error(`Project category OVERRIDE "${normalizedId}" requires a global category.`);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Project category OVERRIDE requires a patch object.');
+    const allowed = new Set(['name', 'description', 'contract', 'route', 'fallback']);
+    for (const key of Object.keys(data)) if (!allowed.has(key)) throw new Error(`Project category OVERRIDE cannot patch "${key}".`);
+    if (data.route != null && !normalizeRoute(data.route)) throw new Error('Project category OVERRIDE route requires a valid model and effort.');
+    if (data.fallback != null && !normalizeRoute(data.fallback)) throw new Error('Project category OVERRIDE fallback requires a valid model and effort.');
+    normalizedData = Object.assign({}, data);
+  } else {
+    if (normalizedId === 'general') throw new Error('Category "general" cannot be disabled.');
+    if (!global) throw new Error(`Project category DISABLE "${normalizedId}" requires a global category.`);
+    normalizedData = {};
+  }
+  db.putRow(database(), 'project_categories', { project: normalizedProject, id: normalizedId, kind: normalizedKind, data: normalizedData });
+  return { project: normalizedProject, id: normalizedId, kind: normalizedKind, data: normalizedData };
+}
+
+function removeProjectCategory(project, id) {
+  const normalizedProject = String(project || '').trim();
+  const normalizedId = String(id || '').trim().toLowerCase();
+  if (!normalizedProject || !normalizedId) throw new Error('Project and category id are required.');
+  return db.deleteRow(database(), 'project_categories', { project: normalizedProject, id: normalizedId });
+}
+
+function classifierCategories(opts) {
+  return getCategories(Object.assign({}, opts, { includeDisabled: false })).map(({ id, name, description, route, fallback, contract }) => ({ id, name, description, route, fallback, contract }));
 }
 
 function resolveCategoryRoute(category) {
@@ -499,8 +580,10 @@ function execProjection(exec) {
   return { agent: exec.agent, model: exec.model, backend: exec.backend, runsModel: exec.runsModel, runsLabel: exec.runsLabel, dispatch: exec.dispatch };
 }
 
-function applyDerivedRouting(t) {
+function applyDerivedRouting(t, opts) {
   if (!t) return t;
+  opts = opts || {};
+  const project = opts.project || t.project;
   let requestedCategory = ticketCategory(t);
   const warnings = Array.isArray(t.warnings) ? t.warnings.slice() : [];
   let legacy = false;
@@ -511,12 +594,12 @@ function applyDerivedRouting(t) {
   }
   if (requestedCategory != null) {
     const requestedId = String(requestedCategory).trim().toLowerCase();
-    let category = getCategory(requestedId);
+    let category = getCategory(requestedId, { project });
     let fallback = false;
     if (!category || !category.enabled) {
       fallback = true;
       warnings.push(`Category "${requestedId}" is unknown or disabled; falling back to "general".`);
-      category = getCategory('general');
+      category = getCategory('general', { project });
     }
     if (category) {
       const resolved = resolveCategoryRoute(category);
@@ -924,7 +1007,7 @@ function saveAssetData(slug, id, name, buffer) {
 function listTickets(slug) {
   const out = [];
   for (const t of db.listRows(database(), 'tickets', { project: slug })) {
-    if (t && t.id) out.push(applyDerivedRouting(t));
+    if (t && t.id) out.push(applyDerivedRouting(t, { project: slug }));
   }
   // Newest first by order (falls back to createdAt); the UI re-groups by column.
   out.sort((a, b) => (b.order || 0) - (a.order || 0));
@@ -2019,7 +2102,7 @@ function listPayload(slug, opts) {
     tickets = tickets.map((t) => briefTicket(slug, t, { index }));
   }
   const page = pageTickets(tickets, opts);
-  page.categories = classifierCategories();
+  page.categories = classifierCategories({ project: slug });
   return page;
 }
 
@@ -2032,7 +2115,7 @@ function readyPayload(slug, opts) {
   let tickets = readyTickets(slug, { model: opts.model, category: opts.category });
   const waves = readyWaves(slug, { model: opts.model, category: opts.category }).map((wave) => wave.map((t) => t.ref));
   if (opts.brief) tickets = tickets.map((t) => briefTicket(slug, t, { blockedBy: [] }));
-  return { tickets, waves, categories: classifierCategories() };
+  return { tickets, waves, categories: classifierCategories({ project: slug }) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -2654,6 +2737,9 @@ module.exports = {
   setRoutingFallback,
   getCategories,
   getCategory,
+  getProjectCategories,
+  setProjectCategory,
+  removeProjectCategory,
   setCategory,
   removeCategory,
   homeRoot,

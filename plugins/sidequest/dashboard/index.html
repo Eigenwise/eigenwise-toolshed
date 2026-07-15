@@ -424,6 +424,15 @@
   .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .category-settings { grid-column: 1 / 3; display: flex; flex-direction: column; min-height: 0; background: linear-gradient(90deg, var(--gold-soft), transparent 45%); }
   .category-settings .cat-head { padding: 18px 15px 10px; border-bottom: 1px solid var(--line-soft); }
+  .category-scope { display: inline-flex; margin-top: 10px; padding: 2px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 999px; }
+  .category-scope button { cursor: pointer; border: 0; border-radius: 999px; padding: 4px 9px; color: var(--text-faint); background: transparent; font: 700 9.5px var(--mono); letter-spacing: .03em; }
+  .category-scope button.active { color: var(--bg); background: var(--gold-bright); }
+  .category-scope-note { margin-left: 8px; font: 10px var(--mono); color: var(--gold-bright); }
+  .category-layer { margin-left: auto; font: 700 9px var(--mono); letter-spacing: .04em; padding: 2px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--gold-bright); background: var(--gold-soft); }
+  .category-layer.delta { color: var(--text-dim); background: var(--bg); }
+  .category-row.disabled { opacity: .55; border-style: dashed; }
+  .category-delta { margin-top: 6px; padding: 5px 6px; border-left: 2px solid var(--gold); background: var(--bg); font: 10px/1.4 var(--mono); color: var(--text-dim); }
+  .category-delta b { color: var(--gold-bright); font-weight: 700; }
   .category-settings h3 { margin: 0; font-family: var(--serif); font-size: 17px; font-weight: 500; color: var(--text); }
   .category-settings p { margin: 4px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--text-faint); }
   .category-list { padding: 8px 10px 14px; max-height: min(60vh, 560px); overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
@@ -682,7 +691,7 @@
                 <div class="fallback-control" id="globalFallbackControl"></div>
               </section>
               <section class="category-settings" aria-labelledby="categoriesTitle">
-                <div class="cat-head"><h3 id="categoriesTitle">Categories</h3><p>Categories choose the primary route. A category fallback overrides the global one.</p></div>
+                <div class="cat-head"><h3 id="categoriesTitle">Categories</h3><p>Categories choose the primary route. A category fallback overrides the global one.</p><div class="category-scope" id="categoryScope" role="group" aria-label="Category scope"></div></div>
                 <div class="category-list" id="categoryList"></div>
               </section>
             </div>
@@ -966,7 +975,8 @@
     unreadNeeds: 0,           // server-wide unread in the "Needs you" bucket (questions + due reminders)
     unreadQuestions: 0,       // server-wide unread questions (drives the red bell cue)
     inboxTab: "all",           // inbox category filter: "all" | "needs" | "activity"
-    categories: []
+    categories: [],
+    categoryScope: "global"
   };
   var lastSig = "";
   var lastUnread = null;      // previous unread count, to know when the bell badge should "pop"
@@ -1007,7 +1017,7 @@
 
   var routingCatalog = { models: CLAUDE_RUNTIME_OPTIONS.map(function (runtime) { return runtime.slug; }), efforts: EFFORTS, discovered: [], globalFallback: { model: "sonnet", effort: "high" } };
   function syncRoutingCatalog() {
-    return api("/api/routing-models").then(function (data) {
+    return api("/api/routing-models?project=" + encodeURIComponent(categoryProject())).then(function (data) {
       if (!data) return;
       routingCatalog = data;
       routingCatalog.efforts = (data.efforts || []).map(function (effort) { return typeof effort === "string" ? { k: effort, label: effort } : effort; });
@@ -1189,8 +1199,11 @@
       .catch(function () { state.stories = []; });
   }
 
+  function categoryProject() {
+    return state.categoryScope === "project" && state.current !== "all" ? state.current : "all";
+  }
   function loadCategories() {
-    return api("/api/categories?project=all").then(function (d) { state.categories = d.categories || []; })
+    return api("/api/categories?project=" + encodeURIComponent(categoryProject())).then(function (d) { state.categories = d.categories || []; })
       .catch(function () { state.categories = []; });
   }
   function categoryById(id) {
@@ -1756,7 +1769,7 @@
       '<label class="category-switch"><input data-field="has-fallback" type="checkbox"' + (fallback ? ' checked' : '') + ' /> Override global fallback</label>' +
       '<div class="category-route" data-fallback-route' + (fallback ? '' : ' hidden') + '><select data-field="fallback-model">' + categoryRouteOptions(fallback && fallback.model) + '</select><select data-field="fallback-effort">' + effortOptions(fallback && fallback.effort || "high") + '</select></div>' +
       '<textarea data-field="contract" placeholder="Executor contract">' + esc(category ? category.contract : "") + '</textarea>' +
-      '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /> Enabled</label>' +
+      (categoryProject() === "all" ? '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /> Enabled</label>' : '') +
       '<div class="category-actions"><button type="button" data-save-category="' + esc(id) + '">' + (create ? 'Add category' : 'Save') + '</button><button type="button" data-cancel-category>Cancel</button></div>' +
       '</div>';
   }
@@ -1769,45 +1782,76 @@
       route: { model: form.querySelector('[data-field="model"]').value, effort: form.querySelector('[data-field="effort"]').value },
       fallback: hasFallback ? { model: form.querySelector('[data-field="fallback-model"]').value, effort: form.querySelector('[data-field="fallback-effort"]').value } : null,
       contract: form.querySelector('[data-field="contract"]').value.trim(),
-      enabled: form.querySelector('[data-field="enabled"]').checked
+      enabled: !form.querySelector('[data-field="enabled"]') || form.querySelector('[data-field="enabled"]').checked
     };
+  }
+  function categoryScopeControls() {
+    var box = $("categoryScope"); if (!box) return;
+    var canProject = state.current !== "all";
+    box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Global</button>' +
+      '<button type="button" data-scope="project"' + (state.categoryScope === "project" ? ' class="active"' : '') + (canProject ? '' : ' disabled') + '>This project</button>' +
+      (canProject && state.categoryScope === "project" ? '<span class="category-scope-note">' + esc((state.projects.filter(function (p) { return p.slug === state.current; })[0] || {}).name || state.current) + '</span>' : '');
+    box.querySelectorAll('[data-scope]').forEach(function (button) { button.addEventListener("click", function () {
+      if (button.disabled) return;
+      state.categoryScope = button.dataset.scope;
+      loadCategories().then(function () { categoryScopeControls(); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); });
+    }); });
+  }
+  function categoryDelta(category) {
+    var layer = category.layer;
+    if (!layer || layer.kind !== "OVERRIDE") return "";
+    var changed = Object.keys(layer.data || {}).map(function (key) {
+      var before = key === "route" || key === "fallback" ? routeLabelFor(layer.base[key] && layer.base[key].model, layer.base[key] && layer.base[key].effort) : String(layer.base[key] || "—");
+      var after = key === "route" || key === "fallback" ? routeLabelFor(category[key] && category[key].model, category[key] && category[key].effort) : String(category[key] || "—");
+      return '<div><b>' + esc(key) + '</b> ' + esc(before) + ' → ' + esc(after) + '</div>';
+    });
+    return '<div class="category-delta">' + changed.join("") + '</div>';
   }
   function renderCategorySettings() {
     var box = $("categoryList"); if (!box) return;
+    categoryScopeControls();
     box.innerHTML = "";
+    var projectScope = categoryProject() !== "all";
     state.categories.forEach(function (category) {
-      var row = el("div", "category-row" + (category.enabled ? "" : " off"));
+      var layer = category.layer;
+      var disabled = category.disabled;
+      var row = el("div", "category-row" + (category.enabled && !disabled ? "" : " off") + (disabled ? " disabled" : ""));
       row.dataset.id = category.id;
       var effective = category.resolved || routingCatalog.globalFallback;
       var degraded = (category.warnings || []).length > 0;
-      row.innerHTML = '<div class="category-row-top"><span class="category-row-name">' + esc(category.name) + '</span><span class="category-usage">' + category.usageCount + ' tickets</span></div>' +
+      var label = layer ? (layer.kind === "ADD" ? "PROJECT ADD" : layer.kind === "OVERRIDE" ? "OVERRIDE" : "DISABLED HERE") : "";
+      var actions = disabled
+        ? '<button type="button" data-reenable-category>Re-enable here</button>'
+        : '<button type="button" data-edit-category>Edit</button>' + (projectScope
+          ? (category.id === "general" ? "" : '<button type="button" class="danger" data-disable-category>Disable here</button>')
+          : (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>'));
+      if (projectScope && layer && !disabled) actions += '<button type="button" data-remove-layer>Restore global</button>';
+      row.innerHTML = '<div class="category-row-top"><span class="category-row-name">' + esc(category.name) + '</span>' + (label ? '<span class="category-layer' + (layer.kind === "OVERRIDE" ? ' delta' : '') + '">' + label + '</span>' : '') + '<span class="category-usage">' + category.usageCount + ' tickets</span></div>' +
         '<div class="category-row-id">' + esc(category.id) + '</div>' +
         '<div class="category-row-detail"><span>' + esc(category.description || "No classifier description") + '</span><code>Primary · ' + esc(routeLabelFor(category.route.model, category.route.effort)) + '</code></div>' +
-        '<div class="category-row-detail"><span>' + (degraded ? '<b style="color:var(--high)">Degraded route</b>' : 'Effective fallback') + '</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
-        '<div class="category-actions"><button type="button" data-edit-category>Edit</button>' + (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>') + '</div>';
-      row.querySelector('[data-edit-category]').addEventListener("click", function () {
+        '<div class="category-row-detail"><span>' + (degraded ? '<b style="color:var(--high)">Degraded route</b>' : 'Effective fallback') + '</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' + categoryDelta(category) +
+        '<div class="category-actions">' + actions + '</div>';
+      var refresh = function (message) { return loadCategories().then(function () { toast(message); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }); };
+      var edit = row.querySelector('[data-edit-category]');
+      if (edit) edit.addEventListener("click", function () {
         row.innerHTML = categoryForm(category, false);
         var form = row.querySelector('.category-edit');
         form.querySelector('[data-field="model"]').value = category.route.model;
         form.querySelector('[data-field="effort"]').value = category.route.effort;
         var fallbackToggle = form.querySelector('[data-field="has-fallback"]');
         fallbackToggle.addEventListener("change", function () { form.querySelector('[data-fallback-route]').hidden = !fallbackToggle.checked; });
-        if (category.fallback) {
-          form.querySelector('[data-field="fallback-model"]').value = category.fallback.model;
-          form.querySelector('[data-field="fallback-effort"]').value = category.fallback.effort;
-        }
+        if (category.fallback) { form.querySelector('[data-field="fallback-model"]').value = category.fallback.model; form.querySelector('[data-field="fallback-effort"]').value = category.fallback.effort; }
         wireCategoryForm(form, category.id);
       });
-      var remove = row.querySelector('[data-delete-category]');
-      if (remove) remove.addEventListener("click", function () {
-        mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id)).then(function () { toast(category.name + " deleted"); return loadCategories(); }).then(function () { renderCategorySettings(); renderRoutingPlan(); }).catch(function (e) { toast("Delete failed: " + e.message); });
-      });
+      var remove = row.querySelector('[data-delete-category], [data-remove-layer], [data-reenable-category]');
+      if (remove) remove.addEventListener("click", function () { mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id) + (projectScope ? "?project=" + encodeURIComponent(state.current) : "")).then(function () { return refresh(disabled ? category.name + " re-enabled" : projectScope ? "Global category restored" : category.name + " deleted"); }).catch(function (e) { toast("Category failed: " + e.message); }); });
+      var disable = row.querySelector('[data-disable-category]');
+      if (disable) disable.addEventListener("click", function () { mutate("PATCH", "/api/categories/" + encodeURIComponent(category.id) + "?project=" + encodeURIComponent(state.current), { disable: true }).then(function () { return refresh(category.name + " disabled here"); }).catch(function (e) { toast("Category failed: " + e.message); }); });
       box.appendChild(row);
     });
     var add = el("details", "category-add");
-    add.innerHTML = '<summary>Add category</summary>' + categoryForm(null, true);
-    var addForm = add.querySelector('.category-edit');
-    wireCategoryForm(addForm, null);
+    add.innerHTML = '<summary>Add category' + (projectScope ? ' to this project' : '') + '</summary>' + categoryForm(null, true);
+    wireCategoryForm(add.querySelector('.category-edit'), null);
     box.appendChild(add);
   }
   function wireCategoryForm(form, id) {
@@ -1815,7 +1859,9 @@
     form.querySelector('[data-save-category]').addEventListener("click", function () {
       var payload = categoryPayload(form);
       if (!payload.name || (!id && !payload.id)) { toast("A category id and name are required"); return; }
-      var path = id ? "/api/categories/" + encodeURIComponent(id) : "/api/categories";
+      var project = categoryProject();
+      if (project !== "all") payload.project = project;
+      var path = id ? "/api/categories/" + encodeURIComponent(id) + (project !== "all" ? "?project=" + encodeURIComponent(project) : "") : "/api/categories";
       mutate(id ? "PATCH" : "POST", path, payload).then(function () { toast(id ? "Category saved" : "Category added"); return loadCategories(); }).then(function () { renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }).catch(function (e) { toast("Category failed: " + e.message); });
     });
   }
@@ -2695,6 +2741,7 @@
     renderRail();
     renderStoryMenu();         // rescope the story filter to the new board
     loadTickets().then(function () { renderBoard(); lastSig = signature(); });
+    if (state.categoryScope === "project") loadCategories().then(function () { categoryScopeControls(); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); });
   }
 
   // ---------------- archive view ----------------

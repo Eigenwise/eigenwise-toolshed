@@ -189,7 +189,7 @@ function guardDirectRouting(opts) {
 
 function categoryIdOrFail(slug, category) {
   const id = String(category || '').trim().toLowerCase();
-  const valid = store.getCategories({ includeDisabled: false }).map((entry) => entry.id);
+  const valid = store.getCategories({ project: slug, includeDisabled: false }).map((entry) => entry.id);
   if (!valid.includes(id)) fail(`unknown category "${category}" — valid: ${valid.join(', ')}`);
   return id;
 }
@@ -330,50 +330,30 @@ function cmdCategory(opts, positional) {
   const action = String(positional[0] || '').toLowerCase();
   const id = positional[1];
   const { slug, meta } = resolveProject(opts);
+  const projectScope = opts.project != null;
   const usage = (categoryId) => store.listTickets(slug).filter((ticket) => (ticket.categoryId || (ticket.category && ticket.category.id)) === categoryId).length;
+  const projectLayer = () => store.getProjectCategories(slug);
+  const localRow = (categoryId) => projectLayer().rows.find((row) => row.id === String(categoryId).trim().toLowerCase()) || null;
+  const details = (categoryId) => ({
+    localRow: projectScope ? localRow(categoryId) : null,
+    effective: store.getCategory(categoryId, projectScope ? { project: slug } : undefined),
+    warnings: projectScope ? projectLayer().warnings : [],
+  });
   const output = (result) => {
     if (opts.json) process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, result), null, 2) + '\n');
   };
-
-  if (action === 'list' || action === 'ls') {
-    const categories = store.getCategories().map((category) => {
-      const resolved = store.resolveCategoryRoute(category);
-      return Object.assign({}, category, {
-        ticketCount: usage(category.id),
-        resolved: { model: resolved.model, effort: resolved.effort, exec: resolved.exec },
-        warnings: resolved.warnings,
-      });
-    });
-    if (opts.json) return output({ categories });
-    for (const category of categories) {
-      console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})${category.enabled ? '' : '  disabled'}`);
-      for (const warning of category.warnings) console.log(`  ! ${warning}`);
-    }
-    return;
-  }
-  if (!id) fail(`category ${action || '<action>'}: pass a category id`);
-  if (action === 'add' || action === 'new' || action === 'create') {
-    if (store.getCategory(id)) fail(`category add: "${id}" already exists`);
-    const category = {
-      id,
-      name: opts.name || opts.title || id,
-      description: opts.desc != null ? opts.desc : opts.description || '',
-      route: { model: opts['route-model'] || opts.model, effort: opts['route-effort'] || opts.effort },
-      fallback: opts['fallback-model'] != null || opts['fallback-effort'] != null
-        ? { model: opts['fallback-model'], effort: opts['fallback-effort'] }
-        : null,
-      contract: opts.contract || '',
-      enabled: !opts.disabled,
-    };
-    try { store.setCategory(category); } catch (error) { fail(`category add: ${error.message}`); }
-    const saved = store.getCategory(id);
-    if (opts.json) return output({ ok: true, category: saved });
-    console.log(`✓ added category ${saved.id}  — ${meta.name}`);
-    return;
-  }
-  if (action === 'edit' || action === 'update' || action === 'set') {
-    const existing = store.getCategory(id);
-    if (!existing) fail(`category edit: no category "${id}"`);
+  const categoryInput = () => ({
+    id,
+    name: opts.name || opts.title || id,
+    description: opts.desc != null ? opts.desc : opts.description || '',
+    route: { model: opts['route-model'] || opts.model, effort: opts['route-effort'] || opts.effort },
+    fallback: opts['fallback-model'] != null || opts['fallback-effort'] != null
+      ? { model: opts['fallback-model'], effort: opts['fallback-effort'] }
+      : null,
+    contract: opts.contract || '',
+    enabled: !opts.disabled,
+  });
+  const patchFor = (existing) => {
     const route = Object.assign({}, existing.route);
     if (opts['route-model'] != null) route.model = opts['route-model'];
     if (opts['route-effort'] != null) route.effort = opts['route-effort'];
@@ -387,23 +367,105 @@ function cmdCategory(opts, positional) {
     if (opts.name != null || opts.title != null) patch.name = opts.name != null ? opts.name : opts.title;
     if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
     if (opts.contract != null) patch.contract = opts.contract;
-    if (opts.enabled || opts.disabled) patch.enabled = !!opts.enabled;
-    try { store.setCategory(id, patch); } catch (error) { fail(`category edit: ${error.message}`); }
-    const saved = store.getCategory(id);
-    if (opts.json) return output({ ok: true, category: saved });
-    console.log(`✓ updated category ${saved.id}  — ${meta.name}`);
+    return patch;
+  };
+
+  if (action === 'list' || action === 'ls') {
+    const rows = projectScope ? projectLayer().rows : [];
+    const categories = store.getCategories(projectScope ? { project: slug } : undefined).map((category) => {
+      const row = rows.find((entry) => entry.id === category.id);
+      const resolved = store.resolveCategoryRoute(category);
+      return Object.assign({}, category, {
+        origin: row ? (row.kind === 'ADD' ? 'project' : 'overridden') : 'global',
+        localRow: row || null,
+        ticketCount: usage(category.id),
+        resolved: { model: resolved.model, effort: resolved.effort, exec: resolved.exec },
+        warnings: resolved.warnings,
+      });
+    });
+    for (const row of rows.filter((entry) => entry.kind === 'DISABLE')) {
+      categories.push({ id: row.id, origin: 'disabled', localRow: row, effective: null, ticketCount: usage(row.id), warnings: [] });
+    }
+    if (opts.json) return output({ categories, warnings: projectScope ? projectLayer().warnings : [] });
+    for (const category of categories) {
+      if (category.origin === 'disabled') {
+        console.log(`${category.id}  disabled locally  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})`);
+        continue;
+      }
+      console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})  ${category.origin}`);
+      for (const warning of category.warnings) console.log(`  ! ${warning}`);
+    }
+    return;
+  }
+  if (!id) fail(`category ${action || '<action>'}: pass a category id`);
+  if (action === 'add' || action === 'new' || action === 'create') {
+    try {
+      const category = categoryInput();
+      if (projectScope) store.setProjectCategory(slug, id, 'ADD', category);
+      else store.setCategory(category);
+    } catch (error) { fail(`category add: ${error.message}`); }
+    const saved = details(id);
+    if (opts.json) return output(projectScope ? Object.assign({ ok: true }, saved) : { ok: true, category: saved.effective });
+    console.log(`✓ added category ${id}  — ${meta.name}`);
+    return;
+  }
+  if (action === 'disable') {
+    if (!projectScope) fail('category disable: pass --project to disable a category only for that project.');
+    try { store.setProjectCategory(slug, id, 'DISABLE', {}); } catch (error) { fail(`category disable: ${error.message}`); }
+    if (opts.json) return output(Object.assign({ ok: true }, details(id)));
+    console.log(`✓ disabled category ${id} for ${meta.name}`);
+    return;
+  }
+  if (action === 'enable') {
+    if (!projectScope) fail('category enable: pass --project to remove a project-local disable.');
+    const row = localRow(id);
+    if (!row || row.kind !== 'DISABLE') fail(`category enable: "${id}" is not disabled for ${meta.name}`);
+    try { store.removeProjectCategory(slug, id); } catch (error) { fail(`category enable: ${error.message}`); }
+    if (opts.json) return output(Object.assign({ ok: true }, details(id)));
+    console.log(`✓ enabled category ${id} for ${meta.name}`);
+    return;
+  }
+  if (action === 'edit' || action === 'update' || action === 'set') {
+    if (projectScope && opts.disabled) {
+      try { store.setProjectCategory(slug, id, 'DISABLE', {}); } catch (error) { fail(`category edit: ${error.message}`); }
+    } else if (projectScope && opts.enabled && localRow(id) && localRow(id).kind === 'DISABLE') {
+      try { store.removeProjectCategory(slug, id); } catch (error) { fail(`category edit: ${error.message}`); }
+    } else if (projectScope) {
+      const row = localRow(id);
+      const existing = store.getCategory(id, { project: slug });
+      if (!existing) fail(`category edit: no effective category "${id}" in ${meta.name}`);
+      const patch = patchFor(existing);
+      try {
+        if (row && row.kind === 'ADD') store.setProjectCategory(slug, id, 'ADD', Object.assign({}, existing, patch, { id }));
+        else store.setProjectCategory(slug, id, 'OVERRIDE', patch);
+      } catch (error) { fail(`category edit: ${error.message}`); }
+    } else {
+      const existing = store.getCategory(id);
+      if (!existing) fail(`category edit: no category "${id}"`);
+      const patch = patchFor(existing);
+      if (opts.enabled || opts.disabled) patch.enabled = !!opts.enabled;
+      try { store.setCategory(id, patch); } catch (error) { fail(`category edit: ${error.message}`); }
+    }
+    const saved = details(id);
+    if (opts.json) return output(projectScope ? Object.assign({ ok: true }, saved) : { ok: true, category: saved.effective });
+    console.log(`✓ updated category ${id}  — ${meta.name}`);
     return;
   }
   if (action === 'rm' || action === 'remove' || action === 'delete') {
     const ticketCount = usage(String(id).toLowerCase());
     try {
-      if (!store.removeCategory(id)) fail(`category rm: no category "${id}"`);
+      if (projectScope) {
+        if (localRow(id)) store.removeProjectCategory(slug, id);
+        else store.setProjectCategory(slug, id, 'DISABLE', {});
+      } else if (!store.removeCategory(id)) {
+        fail(`category rm: no category "${id}"`);
+      }
     } catch (error) { fail(`category rm: ${error.message}`); }
-    if (opts.json) return output({ ok: true, id: String(id).toLowerCase(), ticketCount });
-    console.log(`✓ removed category ${id} (${ticketCount} affected ticket${ticketCount === 1 ? '' : 's'} resolve to general on later reads)  — ${meta.name}`);
+    if (opts.json) return output(Object.assign({ ok: true, id: String(id).toLowerCase(), ticketCount }, projectScope ? details(id) : {}));
+    console.log(`✓ removed category ${id}  — ${meta.name}`);
     return;
   }
-  fail(`category: unknown action "${action}". Use list | add | edit | rm.`);
+  fail(`category: unknown action "${action}". Use list | add | edit | rm | disable | enable.`);
 }
 
 function cmdGlobalFallback(opts) {
@@ -1058,7 +1120,8 @@ function cmdModels(opts, positional) {
     cmdModelsSyncAgents(opts);
     return;
   }
-  const payload = store.modelsPayload();
+  const { slug } = resolveProject(opts);
+  const payload = store.modelsPayload({ project: slug });
   if (opts.json) {
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return;
@@ -1511,7 +1574,7 @@ Usage:
   sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
-  sidequest category list|add|edit|rm <id> [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>] [--json]
+  sidequest category list|add|edit|rm|disable|enable <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n>
   sidequest projects [--archived] [--json]
@@ -1543,7 +1606,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   sidequest add ... --category <id>
   sidequest update <id|SQ-n> --category <id|none>
   sidequest ready --model <model> --category <id>  ·  sidequest next --model <model> --category <id>
-  sidequest models [--json]                        available models, global fallback, and category routes
+  sidequest models [--project <path-or-slug>] [--json]  available models and the selected project's effective category routes
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   Legacy --complexity + --why remains supported for existing intake and maps to a category at read time.
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.

@@ -20,7 +20,7 @@ try {
   process.emitWarning = originalEmitWarning;
 }
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 const LEGACY_RUNTIME = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus', 'grade-4': 'fable', haiku: 'haiku', sonnet: 'sonnet', opus: 'opus', fable: 'fable' };
 const ROUTING_FALLBACK_DEFAULT = { model: 'sonnet', effort: 'high' };
 
@@ -29,6 +29,7 @@ const TABLES = {
   tickets: { key: 'id', columns: ['id', 'project', 'ref', 'status', 'archived', 'ord', 'claim_by', 'data'], orderBy: 'ord' },
   stories: { key: 'id', columns: ['id', 'project', 'data'] },
   categories: { key: 'id', columns: ['id', 'data'] },
+  project_categories: { key: ['project', 'id'], columns: ['project', 'id', 'kind', 'data'] },
   globals: { key: 'key', columns: ['key', 'data'] },
   meta: { key: 'key', columns: ['key', 'value'] },
 };
@@ -138,14 +139,42 @@ function openDb(homeRoot) {
     });
     schemaVersion = 3;
   }
+  if (schemaVersion < 4) {
+    txn(db, () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS project_categories (
+          project TEXT,
+          id TEXT,
+          kind TEXT,
+          data TEXT,
+          PRIMARY KEY (project, id)
+        );
+        CREATE INDEX IF NOT EXISTS project_categories_project_idx ON project_categories(project);
+      `);
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(4));
+    });
+    schemaVersion = 4;
+  }
   db.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;
   return db;
+}
+
+function keyColumns(spec) {
+  return Array.isArray(spec.key) ? spec.key : [spec.key];
+}
+
+function keyValues(spec, key) {
+  const columns = keyColumns(spec);
+  if (columns.length === 1) return [key];
+  if (!key || typeof key !== 'object') throw new Error(`Composite key for ${columns.join(', ')} requires an object.`);
+  return columns.map((column) => key[column]);
 }
 
 function getRow(db, table, key) {
   const spec = tableSpec(table);
   const payloadColumn = spec.columns.includes('data') ? 'data' : 'value';
-  const row = db.prepare(`SELECT ${payloadColumn} FROM ${table} WHERE ${spec.key} = ?`).get(key);
+  const columns = keyColumns(spec);
+  const row = db.prepare(`SELECT ${payloadColumn} FROM ${table} WHERE ${columns.map((column) => `${column} = ?`).join(' AND ')}`).get(...keyValues(spec, key));
   return row ? JSON.parse(row[payloadColumn]) : null;
 }
 
@@ -165,13 +194,13 @@ function putRow(db, table, rowObj) {
     return column === 'data' || column === 'value' ? JSON.stringify(value) : value;
   });
   const assignments = spec.columns
-    .filter((column) => column !== spec.key)
+    .filter((column) => !keyColumns(spec).includes(column))
     .map((column) => `${column} = excluded.${column}`)
     .join(', ');
   const placeholders = spec.columns.map(() => '?').join(', ');
   const result = db.prepare(`
     INSERT INTO ${table} (${spec.columns.join(', ')}) VALUES (${placeholders})
-    ON CONFLICT(${spec.key}) DO UPDATE SET ${assignments}
+    ON CONFLICT(${keyColumns(spec).join(', ')}) DO UPDATE SET ${assignments}
   `).run(...values);
   return result.changes;
 }
@@ -179,7 +208,8 @@ function putRow(db, table, rowObj) {
 function deleteRow(db, table, key) {
   assertWritable(db);
   const spec = tableSpec(table);
-  return db.prepare(`DELETE FROM ${table} WHERE ${spec.key} = ?`).run(key).changes > 0;
+  const columns = keyColumns(spec);
+  return db.prepare(`DELETE FROM ${table} WHERE ${columns.map((column) => `${column} = ?`).join(' AND ')}`).run(...keyValues(spec, key)).changes > 0;
 }
 
 function listRows(db, table, whereObj) {
@@ -199,7 +229,8 @@ function listRows(db, table, whereObj) {
 // persisted record without triggering a read that would throw on a corrupt blob.
 function hasRow(db, table, key) {
   const spec = tableSpec(table);
-  return db.prepare(`SELECT 1 FROM ${table} WHERE ${spec.key} = ? LIMIT 1`).get(key) !== undefined;
+  const columns = keyColumns(spec);
+  return db.prepare(`SELECT 1 FROM ${table} WHERE ${columns.map((column) => `${column} = ?`).join(' AND ')} LIMIT 1`).get(...keyValues(spec, key)) !== undefined;
 }
 
 function txn(db, fn) {

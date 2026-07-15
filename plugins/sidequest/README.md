@@ -160,11 +160,12 @@ sidequest global-fallback --model sonnet --effort medium
 Each category has a primary route and may define its own fallback. If that model is unavailable, sidequest
 tries the category fallback, then the required global fallback, and reports a warning for the route that
 was skipped. The CLI, MCP surfaces, and dashboard expose the same category CRUD operations and usage
-counts. `general` cannot be removed.
+counts. Project-scoped categories can add a local row, override a global route or fallback, or disable
+a row for that project; other projects keep the global taxonomy. `general` cannot be removed or disabled.
 
-Legacy tickets that use `--complexity` and `--why` remain readable and map to a category when they are
-resolved. New tickets should use `--category` so the dispatch intent is explicit. Routed work stays in the
-current Claude Code conversation: sidequest returns an already-registered native Agent executor, then the
+Tickets keep their category ID as policy, so changing a category updates the next dispatch without rewriting
+existing tickets. New tickets should use `--category` so the dispatch intent is explicit. Routed work stays in
+the current Claude Code conversation: sidequest returns an already-registered native Agent executor, then the
 conversation invokes it through Agent.
 
 ## File scopes & parallel waves
@@ -344,7 +345,7 @@ sidequest unarchive-board <board-ref>     # restore an archived board
 sidequest projects --archived             # list archived boards
 ```
 
-The dashboard exposes the same controls from a board's context menu. Archived boards appear under **Archived boards** in the sidebar, with **Restore board** available. Archiving is reversible and keeps the board files and tickets intact.
+The dashboard exposes the same controls from a board's context menu. Archived boards appear under **Archived boards** in the sidebar, with **Restore board** available. Archiving is reversible and keeps the board and tickets intact.
 
 Permanent deletion is a separate action. The dashboard's **Delete board…** prompt asks for a plain confirmation before it sends the delete request. Deletion removes the board directory and all of its tickets and assets permanently; there is no restore path. The CLI intentionally exposes archive and restore, but no board-delete command.
 
@@ -373,9 +374,9 @@ CLI on every action. Same store, same rules — but one tool approval covers the
 prompt per call, the data comes back as structured JSON, and a multi-line ticket description is just a
 string (no shell-quoting). It registers automatically when the plugin loads; you don't configure anything.
 
-The **CLI is still the human interface** and does everything the tools do plus `dashboard`/`serve`.
-Routed execution uses `native-agent` plus the current conversation's Agent tool. The two board surfaces
-act on the same boards.
+The **CLI is still the human interface** and does everything the tools do plus `dashboard`/`serve`. The
+category taxonomy and route shape are the same across CLI, MCP, and dashboard. Routed execution uses
+`native-agent` plus the current conversation's Agent tool. The two board surfaces act on the same boards.
 
 ## CLI
 
@@ -467,7 +468,7 @@ Two optional environment variables (set them in `.claude/settings.json` under `e
 
 ## Clean up
 
-- Tickets for one project: delete its folder under `~/.claude/sidequest/projects/`.
+- Tickets for one project: remove its project data with the board's project controls or delete the matching project data under `~/.claude/sidequest/projects/`.
 - Everything: delete `~/.claude/sidequest/` (stop the server first with `… stop`).
 - Plugin: `/plugin uninstall sidequest@eigenwise-toolshed`.
 

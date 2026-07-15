@@ -623,17 +623,24 @@ const TOOLS = [
   },
   {
     name: 'category_list',
-    description: 'List global categories with board usage counts. Use the returned classifier inputs to classify an unclassified ticket, then call update with category before dispatch.',
+    description: 'List the effective category taxonomy used to classify tickets for project. With project, entries include project ADD/OVERRIDE/DISABLE metadata and warnings; without it, global policy is listed.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      const projectScope = args.project != null;
       const usage = (id) => store.listTickets(slug).filter((ticket) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length;
-      return { project: slug, projectName: meta.name, categories: store.getCategories().map((category) => Object.assign({}, category, { ticketCount: usage(category.id) })) };
+      const layer = projectScope ? store.getProjectCategories(slug) : { rows: [], warnings: [] };
+      const categories = store.getCategories(projectScope ? { project: slug } : undefined).map((category) => {
+        const localRow = layer.rows.find((row) => row.id === category.id) || null;
+        return Object.assign({}, category, { origin: localRow ? (localRow.kind === 'ADD' ? 'project' : 'overridden') : 'global', localRow, ticketCount: usage(category.id) });
+      });
+      for (const localRow of layer.rows.filter((row) => row.kind === 'DISABLE')) categories.push({ id: localRow.id, origin: 'disabled', localRow, effective: null, ticketCount: usage(localRow.id) });
+      return { project: slug, projectName: meta.name, categories, warnings: layer.warnings };
     },
   },
   {
     name: 'category_add',
-    description: 'Create a global category. Its id is permanent. routeModel must be a Claude runtime or discovered backend slug; routeEffort is a valid effort level. fallbackModel and fallbackEffort optionally set its fallback route.',
+    description: 'Create a global category by default, or a project-local ADD when project is provided. Classification always uses that project\'s effective taxonomy.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -647,19 +654,22 @@ const TOOLS = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const id = String(args.id || '').trim().toLowerCase();
-      if (store.getCategory(id)) throw new Error(`category_add: "${id}" already exists.`);
-      const category = store.setCategory({
+      const category = {
         id, name: args.name, description: args.description || '', contract: args.contract || '',
         route: { model: args.routeModel, effort: args.routeEffort },
         fallback: args.fallbackModel == null && args.fallbackEffort == null ? null : { model: args.fallbackModel, effort: args.fallbackEffort },
         enabled: args.enabled !== false,
-      });
-      return { ok: true, project: slug, projectName: meta.name, category };
+      };
+      if (args.project != null) {
+        const localRow = store.setProjectCategory(slug, id, 'ADD', category);
+        return { ok: true, project: slug, projectName: meta.name, localRow, effective: store.getCategory(id, { project: slug }), warnings: store.getProjectCategories(slug).warnings };
+      }
+      return { ok: true, project: slug, projectName: meta.name, category: store.setCategory(category) };
     },
   },
   {
     name: 'category_edit',
-    description: 'Edit a global category without changing its id. general cannot be disabled.',
+    description: 'Edit global policy by default. With project, creates or updates a local OVERRIDE; enabled false disables it locally and enabled true removes that local disable. Classification always uses the effective project taxonomy.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -671,19 +681,32 @@ const TOOLS = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const existing = store.getCategory(args.id);
-      if (!existing) throw new Error(`category_edit: no category "${args.id}".`);
-      const patch = {};
-      for (const key of ['name', 'description', 'contract', 'enabled']) if (args[key] !== undefined) patch[key] = args[key];
-      if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
-      if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) {
-        patch.fallback = {
-          model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel,
-          effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort,
-        };
+      const id = String(args.id || '').trim().toLowerCase();
+      const layer = () => store.getProjectCategories(slug);
+      const localRow = () => layer().rows.find((row) => row.id === id) || null;
+      if (args.project != null && args.enabled === false) {
+        const row = store.setProjectCategory(slug, id, 'DISABLE', {});
+        return { ok: true, project: slug, projectName: meta.name, localRow: row, effective: null, warnings: layer().warnings };
       }
-      const category = store.setCategory(existing.id, patch);
-      return { ok: true, project: slug, projectName: meta.name, category };
+      if (args.project != null && args.enabled === true && localRow() && localRow().kind === 'DISABLE') {
+        store.removeProjectCategory(slug, id);
+        return { ok: true, project: slug, projectName: meta.name, localRow: null, effective: store.getCategory(id, { project: slug }), warnings: layer().warnings };
+      }
+      const existing = store.getCategory(id, args.project != null ? { project: slug } : undefined);
+      if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
+      const patch = {};
+      for (const key of ['name', 'description', 'contract']) if (args[key] !== undefined) patch[key] = args[key];
+      if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
+      if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
+      if (args.project != null) {
+        const prior = localRow();
+        const row = prior && prior.kind === 'ADD'
+          ? store.setProjectCategory(slug, id, 'ADD', Object.assign({}, existing, patch, { id }))
+          : store.setProjectCategory(slug, id, 'OVERRIDE', patch);
+        return { ok: true, project: slug, projectName: meta.name, localRow: row, effective: store.getCategory(id, { project: slug }), warnings: layer().warnings };
+      }
+      if (args.enabled !== undefined) patch.enabled = args.enabled;
+      return { ok: true, project: slug, projectName: meta.name, category: store.setCategory(existing.id, patch) };
     },
   },
   {
@@ -707,22 +730,28 @@ const TOOLS = [
   },
   {
     name: 'category_rm',
-    description: 'Remove a global category. general is required and cannot be removed. Existing tickets keep the id and resolve to general on later reads.',
+    description: 'Remove global policy by default. With project, removes that local row or disables an effective global category locally. general cannot be removed or disabled.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP, id: { type: 'string' } }, required: ['id'] },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const id = String(args.id || '').trim().toLowerCase();
       const ticketCount = store.listTickets(slug).filter((ticket) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length;
+      if (args.project != null) {
+        const row = store.getProjectCategories(slug).rows.find((entry) => entry.id === id);
+        const localRow = row ? (store.removeProjectCategory(slug, id), null) : store.setProjectCategory(slug, id, 'DISABLE', {});
+        return { ok: true, project: slug, projectName: meta.name, id, ticketCount, localRow, effective: store.getCategory(id, { project: slug }), warnings: store.getProjectCategories(slug).warnings };
+      }
       if (!store.removeCategory(id)) throw new Error(`category_rm: no category "${args.id}".`);
       return { ok: true, project: slug, projectName: meta.name, id, ticketCount };
     },
   },
   {
     name: 'models',
-    description: 'Available models, global fallback, and category taxonomy with configured primary/fallback routes, resolved routes, and warnings.',
+    description: 'Available models, global fallback, and the effective category taxonomy for project, including project-layer warnings.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
-    handler() {
-      return store.modelsPayload();
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      return store.modelsPayload({ project: slug });
     },
   },
   {

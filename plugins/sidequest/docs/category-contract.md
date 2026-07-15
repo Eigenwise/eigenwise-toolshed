@@ -109,3 +109,60 @@ Replace the dashboard's tier settings, ladder, bias, and route-picker assumption
 [`category-defaults.js`](../lib/category-defaults.js) is the executable seed source, and [`category-defaults.md`](category-defaults.md) is the human reference. Each shipped row must pin its recommended concrete backend in `route`, retain its existing effort, and name its prior Claude runtime in `fallback`.
 
 The modular architecture's engine lift changes from a capability ladder to a category-to-model router. The gateway catalog remains discovery data. It must not supply a policy-derived replacement route when a selected backend disappears: category fallback, global fallback, then the hardwired safety net own that decision.
+
+## 7. v3 project-scoped taxonomy layer
+
+This section is the next contract change after the concrete-route v2 policy above. It changes storage to schema v4. It does not introduce a repository `.claude/sidequest.json` layer yet.
+
+### 7.1 Storage: one local row per project and category ID
+
+Schema v4 adds a `project_categories` table with `project`, `id`, `kind`, and `data` columns, keyed by `PRIMARY KEY (project, id)`. `project` is the existing stable project slug, not a path. Use the same slug construction as [`slugify()` in `lib/store.js:62-71`](../lib/store.js#L62-L71), the same denormalized project key used by ticket and story rows ([`lib/db.js:27-34`](../lib/db.js#L27-L34)), and the existing ticket project indexes ([`lib/db.js:52-70`](../lib/db.js#L52-L70)).
+
+The table is a sparse local layer over the global `categories` table, which deliberately remains keyed only by category ID in v3 ([`lib/db.js:27-34`](../lib/db.js#L27-L34)). Each `(project, id)` has exactly one of these forms:
+
+| Kind | `data` | Effective result |
+| --- | --- | --- |
+| `ADD` | A complete category row | Adds a project-local category. Its ID must not already exist globally. |
+| `OVERRIDE` | `{ "name"?, "description"?, "contract"?, "route"?, "fallback"? }` | Patches only the present keys over an existing global category. |
+| `DISABLE` | `{}` | Hides an existing global category in this project. |
+
+A music project such as `C:\dev\BMR` can therefore add `music-analysis` and `composing`, then override the route for `coding.normal`, without either category or route appearing in a coding project. Project-local `ADD` rows use the same normalized full-row shape as [`normalizeCategory()` in `lib/store.js:434-449`](../lib/store.js#L434-L449). `OVERRIDE` rows must reject keys outside the five patchable fields above. A local override cannot change a global row's ID or enabled state; `DISABLE` is the local visibility control.
+
+### 7.2 Effective taxonomy: merge once at the category read seam
+
+The canonical merge point is `getCategories({ project })`, with `getCategory(id, { project })` reading from that result. Start with normalized global rows from the current category read seam ([`lib/store.js:418-449`](../lib/store.js#L418-L449)), then apply the selected project's `project_categories` rows by ID:
+
+1. Apply `ADD` only when no global row has that ID.
+2. Apply an `OVERRIDE` as a key-level patch over its global base row.
+3. Remove a global base row when its local row is `DISABLE`.
+4. Normalize and sort the resulting effective rows before returning them.
+
+No caller may independently merge rows. `applyDerivedRouting()` must resolve through the effective lookup ([`lib/store.js:502-540`](../lib/store.js#L502-L540)); `listTickets()` and `getTicket()` already centralize that read projection ([`lib/store.js:924-941`](../lib/store.js#L924-L941)). `listPayload()` and `readyPayload()` must expose the effective classifier taxonomy for their requested project ([`lib/store.js:2008-2036`](../lib/store.js#L2008-L2036)), and `modelsPayload({ project })` must expose the same effective rows and route warnings ([`lib/store.js:366-381`](../lib/store.js#L366-L381)). This keeps CLI, MCP, dashboard, ticket classification, ready filtering, and executor derivation on one policy.
+
+### 7.3 Invariants and orphan handling
+
+`general` is always effective. Reject a project `DISABLE` for `general`; a project may still `OVERRIDE` its `name`, description, contract, route, or fallback. The existing global guards in [`setCategory()` and `removeCategory()`](../lib/store.js#L451-L468) remain the baseline. Removing a local row means removing the local patch and restoring its global base, never deleting that base.
+
+Reject an `ADD` when its ID collides with a global category, including a global category currently disabled in the selected project. This prevents a local row from silently changing meaning when the global row changes.
+
+Deleting a global category does not delete local `OVERRIDE` or `DISABLE` rows. They become orphaned records: preserve them, omit them from the effective taxonomy, and report an `orphaned project category layer` warning in category-management reads. Existing tickets with the deleted ID retain that persisted ID and continue through the existing unknown-category-to-`general` projection ([`lib/store.js:493-540`](../lib/store.js#L493-L540)). If a global row with the same ID is later restored, its retained local override or disable applies again. A project-local `ADD` may use an ID only after no global row exists.
+
+### 7.4 Usage counts and classification
+
+Ticket rows already carry `project` and category IDs separately from their derived routing data ([`lib/store.js:214-232`](../lib/store.js#L214-L232), [`lib/db.js:52-64`](../lib/db.js#L52-L64)). Count category usage by filtering tickets for the selected project, then matching stored `categoryId`; never infer a count from the effective taxonomy or scan every project. The current dashboard helper is already project-parameterized at [`categoryUsageCounts(project)` in `lib/server.js:111-133`](../lib/server.js#L111-L133), while CLI and MCP category lists currently obtain usage in their active project ([`bin/sidequest.js:329-407`](../bin/sidequest.js#L329-L407), [`lib/mcp.js:625-633`](../lib/mcp.js#L625-L633)). Schema v4 keeps that scope.
+
+Classification confirmation receives only enabled effective categories for the target project through `classifierCategories()` ([`lib/store.js:470-472`](../lib/store.js#L470-L472)) and the shared list/ready payloads. `cmdAdd()`/`cmdUpdate()` and the MCP add/update tools validate a selected ID against that same effective enabled set, not the global table ([`bin/sidequest.js:190-241`](../bin/sidequest.js#L190-L241), [`lib/mcp.js:245-340`](../lib/mcp.js#L245-L340)). An unseen music-only category can be chosen in `C:\dev\BMR`; it must be rejected in a coding project.
+
+### 7.5 Public surfaces
+
+All category CRUD gains an explicit scope. Global is the default, preserving today's home-wide category management. Passing `--project <path-or-slug>` selects that project's local layer for CLI category commands at [`cmdCategory()` in `bin/sidequest.js:329-407`](../bin/sidequest.js#L329-L407): `ADD` writes a local row, edit writes an `OVERRIDE`, and remove either removes the local layer row or creates/removes a `DISABLE` record as the requested local action requires. The existing ticket `--category` and `ready`/`next` category filters continue to operate against the selected project's effective taxonomy ([`bin/sidequest.js:933-938`](../bin/sidequest.js#L933-L938)).
+
+MCP adds the same optional project scope to `category_list`, `category_add`, `category_edit`, and `category_rm` ([`lib/mcp.js:625-719`](../lib/mcp.js#L625-L719)). With no project argument, these mutate global policy. With a project, results return local row kind, effective row, and orphan warnings. `add`, `update`, `ready`, `next`, and `models` read the effective taxonomy for their board project ([`lib/mcp.js:226-245`](../lib/mcp.js#L226-L245), [`lib/mcp.js:402-419`](../lib/mcp.js#L402-L419), [`lib/mcp.js:721-727`](../lib/mcp.js#L721-L727)). The existing home-wide `global_fallback` surface remains unchanged in this phase ([`lib/mcp.js:690-707`](../lib/mcp.js#L690-L707)).
+
+The dashboard category panel gets a `Global` / `This project` scope toggle. Its existing endpoints are [`GET/POST /api/categories`](../lib/server.js#L312-L345) and [`PATCH|PUT|DELETE /api/categories/:id`](../lib/server.js#L347-L381); each accepts the selected project scope and returns effective rows plus local-layer metadata. The panel at [`dashboard/index.html:684-686`](../dashboard/index.html#L684-L686), loaded by [`loadCategories()` at `dashboard/index.html:1192-1195`](../dashboard/index.html#L1192-L1195) and rendered by [`renderCategorySettings()` at `dashboard/index.html:1747-1821`](../dashboard/index.html#L1747-L1821), badges local `ADD` rows, presents `OVERRIDE` values as deltas from their global base, and shows disabled/orphan records as local management state. Ticket category pickers continue to render only enabled effective choices ([`dashboard/index.html:1822-1836`](../dashboard/index.html#L1822-L1836)).
+
+### 7.6 Schema v4 migration and future configuration layers
+
+The v4 migration is additive: create `project_categories` and its project index inside the existing ordered transaction migration in [`openDb()` at `lib/db.js:42-143`](../lib/db.js#L42-L143), then update `meta.schema_version` to `4` last. Existing global categories and tickets are unchanged, and no local rows are seeded. Bump `CURRENT_SCHEMA_VERSION` from `3` ([`lib/db.js:23`](../lib/db.js#L23)); preserve the current future-schema read refusal and writer guard ([`lib/db.js:100-102`](../lib/db.js#L100-L102), [`lib/db.js:152-158`](../lib/db.js#L152-L158)). Use `txn()` for the migration ([`lib/db.js:205-224`](../lib/db.js#L205-L224)).
+
+A committable `.claude/sidequest.json` file layer is explicitly out of scope for v4. Keep the effective-taxonomy implementation source-ordered and key-level so that it can later accept the project file as another merge source. This is the required forward compatibility with the planned configuration order, `shipped defaults < user home < project .claude/<plugin>.json < environment`, and its key-level merge rule in [`docs/modular-architecture.md:147-166`](../../../docs/modular-architecture.md#L147-L166). The file layer must slot into the merge before the final effective taxonomy is normalized and exposed, without changing the ADD/OVERRIDE/DISABLE semantics or letting repository data execute code.

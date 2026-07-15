@@ -28,6 +28,17 @@ function ticket(id, project, status, ord) {
   };
 }
 
+test('schema v4 stores project category rows by project and id', () => {
+  const { db } = makeDb();
+  putRow(db, 'project_categories', { project: 'one', id: 'local', kind: 'ADD', data: { id: 'local' } });
+  putRow(db, 'project_categories', { project: 'two', id: 'local', kind: 'ADD', data: { id: 'local', name: 'Other' } });
+
+  assert.deepStrictEqual(getRow(db, 'project_categories', { project: 'one', id: 'local' }), { id: 'local' });
+  assert.deepStrictEqual(listRows(db, 'project_categories', { project: 'two' }), [{ id: 'local', name: 'Other' }]);
+  assert.strictEqual(deleteRow(db, 'project_categories', { project: 'one', id: 'local' }), true);
+  assert.strictEqual(getRow(db, 'project_categories', { project: 'one', id: 'local' }), null);
+  db.close();
+});
 test('putRow and getRow round-trip ticket data', () => {
   const { db } = makeDb();
   const row = ticket('tk_1', 'toolshed', 'todo', 1);

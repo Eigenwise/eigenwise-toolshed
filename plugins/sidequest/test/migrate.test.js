@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const db = require('../lib/db.js');
 const { migrateIfNeeded } = require('../lib/migrate.js');
@@ -58,6 +59,25 @@ function rowCounts(database) {
   };
 }
 
+test('schema v4 migration adds an empty project category layer to a v3 database', () => {
+  const homeRoot = makeHome();
+  const dbPath = path.join(homeRoot, 'sidequest.db');
+  const seed = String.raw`
+    const { DatabaseSync } = require('node:sqlite');
+    const database = new DatabaseSync(${JSON.stringify(dbPath)});
+    database.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT); INSERT INTO meta VALUES ('schema_version', '3');");
+    database.prepare('INSERT INTO categories VALUES (?, ?)').run('fixture', JSON.stringify({ id: 'fixture', name: 'Fixture', route: { model: 'opus', effort: 'high' } }));
+    database.close();
+  `;
+  assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
+
+  const database = db.openDb(homeRoot);
+  assert.equal(db.getRow(database, 'meta', 'schema_version'), 4);
+  assert.deepEqual(db.getRow(database, 'categories', 'fixture').id, 'fixture');
+  assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_categories'").get().name, 'project_categories');
+  assert.deepEqual(db.listRows(database, 'project_categories', { project: 'missing' }), []);
+  database.close();
+});
 test('migrates a JSON tree into SQLite without deleting its rollback copy', () => {
   const homeRoot = makeHome();
   const expected = writeLegacyTree(homeRoot);

@@ -122,14 +122,38 @@ function categoryUsageCounts(project) {
 
 function categoriesPayload(project) {
   const usage = categoryUsageCounts(project);
-  return store.getCategories().map((category) => {
-    const resolved = store.resolveCategoryRoute(category);
-    return Object.assign({}, category, {
-      usageCount: usage[category.id] || 0,
-      resolved: { model: resolved.model, effort: resolved.effort },
-      warnings: resolved.warnings,
-    });
-  });
+  const global = store.getCategories();
+  const globalById = new Map(global.map((category) => [category.id, category]));
+  const local = project && project !== 'all' ? store.getProjectCategories(project) : { rows: [], warnings: [] };
+  const localById = new Map(local.rows.map((row) => [row.id, row]));
+  const effectiveById = new Map((project && project !== 'all' ? store.getCategories({ project }) : global).map((category) => [category.id, category]));
+  const ids = new Set([...globalById.keys(), ...localById.keys()]);
+
+  return {
+    warnings: local.warnings,
+    categories: [...ids].map((id) => {
+      const base = globalById.get(id) || null;
+      const layer = localById.get(id) || null;
+      const category = effectiveById.get(id) || base || (layer && layer.kind === 'ADD' ? layer.data : null);
+      if (!category) return null;
+      const resolved = store.resolveCategoryRoute(category);
+      return Object.assign({}, category, {
+        usageCount: usage[id] || 0,
+        resolved: { model: resolved.model, effort: resolved.effort },
+        warnings: resolved.warnings,
+        layer: layer && { kind: layer.kind, data: layer.data, base },
+        disabled: Boolean(layer && layer.kind === 'DISABLE'),
+      });
+    }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+  };
+}
+
+function categoryOverride(base, incoming) {
+  const patch = {};
+  for (const key of ['name', 'description', 'contract', 'route', 'fallback']) {
+    if (JSON.stringify(base[key]) !== JSON.stringify(incoming[key])) patch[key] = incoming[key];
+  }
+  return patch;
 }
 
 // Stories for one project, each annotated with how many (non-archived) tickets
@@ -315,7 +339,8 @@ async function handle(req, res) {
       sendJson(res, 404, { error: 'unknown project' });
       return;
     }
-    sendJson(res, 200, { project, categories: categoriesPayload(project) });
+    const payload = categoriesPayload(project);
+    sendJson(res, 200, { project, categories: payload.categories, warnings: payload.warnings });
     return;
   }
 
@@ -327,7 +352,29 @@ async function handle(req, res) {
       sendJson(res, 400, { error: 'bad JSON body' });
       return;
     }
+    const project = body.project ? String(body.project) : null;
+    if (project && !store.readMeta(project)) {
+      sendJson(res, 404, { error: 'unknown project' });
+      return;
+    }
     try {
+      if (project) {
+        const id = String(body.id || '').trim().toLowerCase();
+        const global = store.getCategory(id);
+        const data = {
+          id,
+          name: body.name,
+          description: body.description,
+          route: body.route,
+          fallback: body.fallback,
+          contract: body.contract,
+          enabled: body.enabled !== false,
+        };
+        store.setProjectCategory(project, id, global ? 'OVERRIDE' : 'ADD', global ? categoryOverride(global, data) : data);
+        const payload = categoriesPayload(project);
+        sendJson(res, 201, { category: payload.categories.find((category) => category.id === id), warnings: payload.warnings });
+        return;
+      }
       const category = store.setCategory({
         id: body.id,
         name: body.name,
@@ -355,7 +402,28 @@ async function handle(req, res) {
         sendJson(res, 400, { error: 'bad JSON body' });
         return;
       }
+      const project = q.project ? String(q.project) : null;
+      if (project && !store.readMeta(project)) {
+        sendJson(res, 404, { error: 'unknown project' });
+        return;
+      }
       try {
+        if (project) {
+          if (body.disable === true) {
+            store.setProjectCategory(project, id, 'DISABLE', {});
+          } else {
+            const global = store.getCategory(id);
+            const current = store.getCategory(id, { project });
+            const data = Object.assign({}, current || {}, body, { id, enabled: body.enabled !== false });
+            delete data.project;
+            delete data.disable;
+            if (global) store.setProjectCategory(project, id, 'OVERRIDE', categoryOverride(global, data));
+            else store.setProjectCategory(project, id, 'ADD', data);
+          }
+          const payload = categoriesPayload(project);
+          sendJson(res, 200, { category: payload.categories.find((category) => category.id === id), warnings: payload.warnings });
+          return;
+        }
         if (!store.getCategory(id)) {
           sendJson(res, 404, { error: 'category not found' });
           return;
@@ -370,7 +438,17 @@ async function handle(req, res) {
       return;
     }
     if (req.method === 'DELETE') {
+      const project = q.project ? String(q.project) : null;
+      if (project && !store.readMeta(project)) {
+        sendJson(res, 404, { error: 'unknown project' });
+        return;
+      }
       try {
+        if (project) {
+          const existed = store.removeProjectCategory(project, id);
+          sendJson(res, existed ? 200 : 404, { ok: existed });
+          return;
+        }
         const existed = store.removeCategory(id);
         sendJson(res, existed ? 200 : 404, { ok: existed, usageCount: categoryUsageCounts('all')[id] || 0 });
       } catch (e) {
@@ -399,7 +477,8 @@ async function handle(req, res) {
 
   // --- Routing catalog: models available to category and fallback controls ---
   if (req.method === 'GET' && pathname === '/api/routing-models') {
-    sendJson(res, 200, store.modelsPayload());
+    const project = q.project ? String(q.project) : null;
+    sendJson(res, 200, store.modelsPayload(project ? { project } : undefined));
     return;
   }
 
@@ -766,7 +845,9 @@ function startReminderScheduler() {
     }
   };
   tick(); // catch anything that fired while the server was down
-  return setInterval(tick, REMINDER_TICK_MS);
+  const timer = setInterval(tick, REMINDER_TICK_MS);
+  timer.unref();
+  return timer;
 }
 
 /* ------------------------------------------------------------------ *
