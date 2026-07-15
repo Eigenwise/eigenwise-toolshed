@@ -8,8 +8,9 @@ description: >-
   SQ-3" — which requires atomically CLAIMING a ticket first so shared boards stay safe across agents.
   Use when the user hands you substantial or multi-part work — decompose it into linked tickets BEFORE
   implementing. Use to comment on a ticket, ask the user something on it (a question means
-  pause-and-wait), or relate tickets (depends-on/blocks). Tickets carry a complexity score that drives
-  model/effort routing. For a mid-task side issue, prefer the ticket-filer agent instead of derailing.
+  pause-and-wait), or relate tickets (depends-on/blocks). Tickets carry a category that drives
+  model/effort routing, with complexity kept for legacy tickets and genuine ambiguity. For a mid-task
+  side issue, prefer the ticket-filer agent instead of derailing.
 ---
 
 # sidequest
@@ -99,17 +100,22 @@ Binds to `127.0.0.1` only.
 
 ```bash
 sidequest add -t "Contact form does not send" -d "Submit does nothing; no email arrives." -p high -l bug \
-  --complexity 4 --why "one form handler + its endpoint; reproduce, fix, verify the mail path"
+  --category <id>
 ```
 
-- `-t` title (required) · `-d` description · `-p` `low|normal|high|urgent` · `-l` label (repeatable)
-- `--complexity 1-10` + `--why "<motivation>"` — BOTH required; routing is derived from the score
-  (`--model`/`--effort` are rejected). See "Complexity-driven routing" below.
-- `-s` status `todo|doing|done` · `-i` image path (repeatable) · `--file` scope (repeatable) ·
-  `--story US-n`
-- `--anchors "file:line symbol"` and `--verify "exact command"` seed native executor prompts verbatim.
-  Keep anchors under 4k chars, verify under 1k, and the assembled prompt under 7.6k so Windows'
-  8191-character command limit stays safe.
+1. Read the live taxonomy from a board read (`list` or `ready` JSON includes `categories`). Match the
+   work to each category's description, choose the narrowest fit, and stamp its ID with `--category`.
+   Categories are board data: never copy a category table or ID list into a prompt or skill.
+2. If the request is too underspecified to classify safely, use the taxonomy's fallback category or file
+   it unclassified only when the API explicitly permits that. Reclassify once concrete evidence exists.
+3. `--complexity 1-10` + `--why "<motivation>"` remains the legacy route for old tickets and the
+   fallback when category classification is genuinely ambiguous. Do not set `--model` or `--effort`.
+4. `-t` title (required) · `-d` description · `-p` `low|normal|high|urgent` · `-l` label (repeatable) ·
+   `-s` status `todo|doing|done` · `-i` image path (repeatable) · `--file` scope (repeatable) ·
+   `--story US-n`
+5. `--anchors "file:line symbol"` and `--verify "exact command"` seed native executor prompts verbatim.
+   Keep anchors under 4k chars, verify under 1k, and the assembled prompt under 7.6k so Windows'
+   8191-character command limit stays safe.
 
 **Descriptions are developer-to-developer specs, never a PM summary.** For non-trivial work, make the description an agent-ready brief: **Where** gives exact anchors (files, symbols, lines where known); **Contract** states the intended behavior, inputs/outputs, edge cases, and error behavior — or, for an investigation/spike, the question to answer and why it matters; **Bounds** names non-goals; **Dependencies/decisions** records prerequisites and choices already settled; **Verify** gives the exact command/test/reproduction that proves a change done, or the artifact/answer shape that proves an investigation done. Bugs additionally carry the reproduction; spikes state what's actually unknown. Trivial tickets only need the fields that add information, never boilerplate. **Scale the spec inversely to the executor's tier**: work routed to a cheap tier needs a near-patch-level spec — exact anchors, expected strings, precise verification commands — because the spec substitutes for judgment. **Everything you already know goes in the description**: a weaker executor fails on missing context, not on the work itself, so front-load what your investigation found (paths, the surrounding contract, the gotcha you spotted) instead of letting the executor re-derive it. Too little detail to write that? Investigate until you have it, or ask a quick clarifying question — never file a vague ticket.
 
@@ -145,8 +151,8 @@ sidequest rm SQ-3                 # delete
 ```
 
 Add `--json` to read data instead of showing it. Add `--brief` on `list`/`ready` (it implies
-`--json`) for the compact shape: ref, title, status, priority, complexity, model, effort, files,
-claim, `blockedBy`, a `comments` count, and `awaitingReply`. No description bodies, no thread
+`--json`) for the compact shape: ref, title, status, priority, complexity, category ID/name, model, effort,
+files, claim, `blockedBy`, a `comments` count, and `awaitingReply`. No description bodies, no thread
 contents. **Default to `--brief` for routine orchestration reads**; drop it only when you actually
 need bodies. "Close / mark done / ship it" → `--status done`. "Start / in progress" → `--status
 doing`.
@@ -178,7 +184,7 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
 
 ## Route execution down; keep the loop tight
 
-Every ticket is scored and routed to a model×effort tier (below), and the economics are the point:
+Every ticket is category-routed from the live taxonomy (below), and the economics are the point:
 **the orchestrator (this thread) is usually the most expensive model in the session; the stamped
 tiers are cheaper.** Executing ticket labor inline pays orchestrator prices for laborer work and
 drags tool output into the planning context — so **route essentially all real execution to each
@@ -240,45 +246,34 @@ spike gets filed, claimed, and its findings written back as a comment — that's
 uncommented investigation gets redone by the next agent. A quick ephemeral scout doesn't need a
 ticket.
 
-## Complexity-driven routing (ENFORCED)
+## Category-first routing (ENFORCED)
 
-You never pick a model or effort. **Score the task's COMPLEXITY (1–10) with a mandatory motivation**;
-sidequest maps the score onto a capability-ranked ladder of model×effort rungs built from the tiers
-the user enabled (tiers overlap and cross over — `sonnet·xhigh` outranks `opus·low`). Max effort is
-deliberately rare (complexity 10 only, per Anthropic's "use max sparingly"). The derivation is live —
-toggling a tier re-routes every open ticket. `sidequest models` prints the current ladder; mechanics
-and bias dial: [references/routing-details.md](references/routing-details.md).
+The live board taxonomy is the routing authority. Read `list` or `ready` JSON, match the requested
+work against each returned category's `description`, choose the narrowest category, and persist its ID
+when filing. The returned category route resolves model and effort, so you never hand-pick either.
+Category descriptions and contracts are live board data: do not hardcode category IDs, names, tables,
+or route assumptions in prompts.
 
-The scale is **absolute** because it anchors to **task shapes** — Anthropic's own descriptions of
-which work each tier is for — not to how hard the task feels in this repo. Score by matching the
-shape; the `--why` must name the actual work (files, moving parts, unknowns), not restate the number.
-Official grounding (quotes, per-model effort guidance, sources):
-[references/routing-guide.md](references/routing-guide.md).
-
-- **1–2 — subagent-shaped** (haiku's bucket): the executor discovers nothing; the spec says
-  everything. A lookup, a summary, a mechanical edit with exact anchors, a config bump.
-- **3–5 — daily-coding-shaped** (sonnet's bucket): the everyday unit of work — a function / endpoint /
-  component against a known pattern, a scoped bugfix with a reproduction in hand. Judgment inside one
-  area, no cross-cutting contract.
-- **6–7 — complex-agentic-shaped** (opus's bucket): a multi-file feature, a contract several consumers
-  must respect, a cross-cutting refactor whose edits must land together.
-- **8–10 — larger-than-a-sitting-shaped** (fable's bucket): unknown-root-cause debugging across a
-  system, architecture design under real constraints, research-grade work. 10 is the frontier end,
-  not "a hard day"; 9–10 firing rarely is intended.
-
-Normal day-to-day coding legitimately lands 1–7. A task straddling two bands: score lower and write
-the tighter spec — a well-specified ticket drops a band; a vague one climbs.
+**Legacy complexity stays available.** Use `--complexity 1-10` with a concrete `--why` only for an
+existing complexity-only ticket or when category classification is genuinely ambiguous after reading
+the taxonomy. The capability ladder, bias, and score mechanics remain documented in
+[references/routing-details.md](references/routing-details.md); task-shape grounding and sources are
+in [references/routing-guide.md](references/routing-guide.md).
 
 **Rules for working the board:**
 
-1. **Master switch first**: `sidequest models --json` → if `routing` is `false`, work any ticket
-   yourself; derived tags are informational.
-2. **The stamped `model`/`effort` on every read ARE the routing** — nothing to re-derive. Cap at your
-   own tier if the ladder tops out above you (`fable > opus > sonnet > haiku`); only spawn models that
-   exist in your environment.
-3. **The ticket read tells you exactly what to spawn.** Each ticket carries a resolved
+1. **Classify before claim.** A ticket with `category: null` must be classified from the taxonomy in a
+   fresh `list`/`ready` read, then stamped with `update --category <selected-id>` **before** claim or
+   spawn. Re-read it after the update. Reads must not silently persist a classification. An invalid or
+   disabled category falls back to the returned general projection with a warning; repair the stored ID
+   through an explicit update.
+2. **Trust the category projection.** The ticket includes the selected category's contract plus its
+   resolved `model`/`effort` and `exec` object. Inject the category contract text verbatim into the
+   executor spawn prompt alongside the ticket's full contract. Do not narrow, rewrite, or invent
+   instructions around it.
+3. **The ticket read tells you exactly what to spawn.** Each ticket carries a resolved `category`,
    `profile`, `runsLabel`, `backend`, `effort`, and exact `executor` from a fresh
-   `ready`/`list --json --brief` read of the current wave. Before every spawn, print `SQ-n · Cn ·
+   `ready`/`list --json --brief` read of the current wave. Before every spawn, print `SQ-n · category ·
    Profile · Actual Model · effort`. Claude Code's native suffix is external metadata; the Sidequest
    route line and executor name are authoritative. **All routed work dispatches through the native
    Agent tool** (`exec.dispatch` is `native-agent` on every route). Two paths:
@@ -301,16 +296,14 @@ the tighter spec — a well-specified ticket drops a band; a vague one climbs.
    better. The executor claims with `--effort <baked level>` and the board **refuses the claim on a
    mismatch**, bouncing the ticket back. A haiku ticket has no effort: `exec.agent` is null, spawn a
    plain Agent with `model: haiku` (still named).
-   **Per-tier Codex backend:** with [codex-gateway](../../../codex-gateway) installed, the user can map
-   any tier to a GPT-5.x model in the dashboard, so an "opus·high" ticket may actually run Terra. You
-   don't decide that; `exec` already resolved it — spawning the exact generated executor by name with
-   `model` omitted is what makes the mapped backend actually run.
-   **When `exec.backend` is `"codex"`, say so out loud before you spawn** — one visible line naming the
-   tier AND the model actually running it, e.g. *"SQ-42 is opus·high, and the opus tier is mapped to
-   `exec.runsLabel` (Codex), so it runs there."* Claude Code's own spawn line shows the tier ("Opus"),
-   not the backend, so this announcement is the only in-chat signal that the ticket is running on the
-   user's ChatGPT subscription instead of Anthropic. Don't skip it on a Codex-backed spawn.
-4. **Claim by tier**: `next --model X` / `ready --model X` hand out only tickets derived to X.
+   **Per-tier Codex backend:** a category route resolves through the user's configured backend mapping,
+   so `exec` already tells you what runs it. Spawn the exact generated executor with `model` omitted.
+   **When `exec.backend` is `"codex"`, say so out loud before you spawn** — name the category route and
+   the model actually running it. Claude Code's own spawn line shows a tier, not the backend, so this is
+   the in-chat signal that the work runs on the user's ChatGPT subscription. Don't skip it on a
+   Codex-backed spawn.
+4. **Claim by resolved route:** `next --model X` / `ready --model X` filter tickets by their resolved
+   route, including category-routed tickets.
 
 ## Comments & questions
 

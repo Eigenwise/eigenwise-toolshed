@@ -37,7 +37,7 @@ const { callTool } = makeMcpCaller(mcp);
 // not drift: every key is paid for on every orchestration read, and the
 // MCP/skill docs enumerate this list.
 const BRIEF_KEYS = [
-  'ref', 'title', 'status', 'priority', 'complexity', 'profile', 'model', 'backend',
+  'ref', 'title', 'status', 'priority', 'complexity', 'categoryId', 'categoryName', 'profile', 'model', 'backend',
   'runsModel', 'runsLabel', 'executor', 'effort',
   'files', 'claim', 'blockedBy', 'comments', 'awaitingReply',
 ].sort();

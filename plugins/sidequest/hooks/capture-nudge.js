@@ -156,7 +156,8 @@ function emit(context) {
 // SessionStart hook and the skill.
 function disciplineFooter() {
   return (
-    '\n— sidequest: plan multi-part work as tickets first; spawn each ticket\'s `exec.agent` with ' +
+    '\n— sidequest: classify tickets from the live taxonomy and stamp an unlabeled ticket before claim; ' +
+    'spawn each ticket\'s `exec.agent` with ' +
     '`model: exec.model` (required on Claude routes, omit on Codex) as short, bounded executor runs; ' +
     'batch small same-tier tickets, parallelize independent ones. Delegate substantial or parallel work; ' +
     'inline only trivial one-steps, never big work pulled inline to save wakeups.'
@@ -184,8 +185,8 @@ function main() {
     if (nudgeOff()) process.exit(0);
     emit(
       '=== sidequest (active) === Plan multi-part work as tickets on the board; capture side issues as ' +
-        'tickets (background `ticket-filer`). Route execution to each ticket\'s stamped cheap tier as ' +
-        'short, bounded executor runs. See the sidequest skill.'
+        'tickets (background `ticket-filer`). Category routing chooses the executor from live board reads; ' +
+        'classify and stamp an unlabeled ticket before claim. See the sidequest skill.'
     );
     process.exit(0);
   }
@@ -230,9 +231,9 @@ function main() {
     'ticket right now, then carry on without derailing. (If it is only about the current task, ignore ' +
     'this.)\n' +
     'Preferred: spawn the `ticket-filer` subagent in the BACKGROUND (run_in_background: true) with a short ' +
-    'title, a one-line description, a priority, any labels, and any pasted image path. Or file directly: ' +
+    'title, a one-line description, a category selected from the live taxonomy, a priority, any labels, and any pasted image path. Or file directly: ' +
     'mcp__plugin_sidequest_board__add when available, else\n' +
-    `  ${cli} add -t "Short title" -d "What is wrong" -p high -l bug --complexity <1-10> --why "<motivation>"` +
+    `  ${cli} add -t "Short title" -d "What is wrong" -p high -l bug --category <id> (legacy: --complexity <1-10> --why "<motivation>")` +
     (images.length ? ` -i "${images[0]}"` : '') +
     '\n' +
     imageHint +

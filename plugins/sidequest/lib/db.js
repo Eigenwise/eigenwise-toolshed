@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { DEFAULT_CATEGORIES } = require('./category-defaults.js');
 
 const originalEmitWarning = process.emitWarning;
 process.emitWarning = function emitWarningWithoutSqliteExperimentalWarning(warning, ...args) {
@@ -18,10 +19,13 @@ try {
   process.emitWarning = originalEmitWarning;
 }
 
+const CURRENT_SCHEMA_VERSION = 2;
+
 const TABLES = {
   projects: { key: 'slug', columns: ['slug', 'data'] },
   tickets: { key: 'id', columns: ['id', 'project', 'ref', 'status', 'archived', 'ord', 'claim_by', 'data'], orderBy: 'ord' },
   stories: { key: 'id', columns: ['id', 'project', 'data'] },
+  categories: { key: 'id', columns: ['id', 'data'] },
   globals: { key: 'key', columns: ['key', 'data'] },
   meta: { key: 'key', columns: ['key', 'value'] },
 };
@@ -71,6 +75,28 @@ function openDb(homeRoot) {
     );
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
   `);
+
+  const schemaRow = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+  let schemaVersion = Number(schemaRow && JSON.parse(schemaRow.value));
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 1) schemaVersion = 1;
+  if (schemaVersion < 2) {
+    txn(db, () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS categories (
+          id TEXT PRIMARY KEY,
+          data TEXT
+        )
+      `);
+      for (const category of DEFAULT_CATEGORIES) {
+        db.prepare('INSERT OR IGNORE INTO categories (id, data) VALUES (?, ?)').run(category.id, JSON.stringify(category));
+      }
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(2));
+    });
+    schemaVersion = 2;
+  }
+  if (schemaVersion > CURRENT_SCHEMA_VERSION) {
+    throw new Error(`Sidequest database schema ${schemaVersion} is newer than supported schema ${CURRENT_SCHEMA_VERSION}.`);
+  }
   return db;
 }
 
@@ -143,4 +169,4 @@ function txn(db, fn) {
   }
 }
 
-module.exports = { openDb, getRow, putRow, deleteRow, listRows, hasRow, txn };
+module.exports = { CURRENT_SCHEMA_VERSION, openDb, getRow, putRow, deleteRow, listRows, hasRow, txn };

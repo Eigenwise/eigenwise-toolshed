@@ -209,7 +209,7 @@ const TOOLS = [
         project: PROJECT_PROP,
         status: { type: 'string', enum: ['todo', 'doing', 'done'] },
         archived: { type: 'boolean' },
-        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies.' },
+        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: choose an id from the returned categories, then update before dispatch.' },
         cursor: { type: 'string', description: 'Page cursor from a previous response\'s nextCursor. Omit for the first page.' },
         limit: { type: 'integer', minimum: 0, description: 'Exact page size (max tickets per page). Omit for the automatic token-safe page.' },
         all: { type: 'boolean', description: 'Return every matching ticket in one call, bypassing paging. Use only when you truly need the whole column — a big board can overflow the tool-result limit.' },
@@ -244,7 +244,7 @@ const TOOLS = [
       properties: {
         project: PROJECT_PROP,
         model: { type: 'string', description: 'Filter to a derived grade (grade-1 through grade-4). Deprecated aliases are accepted as input.' },
-        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies.' },
+        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: choose an id from the returned categories, then update before dispatch.' },
       },
     },
     handler(args) {
@@ -257,7 +257,7 @@ const TOOLS = [
   },
   {
     name: 'add',
-    description: 'File a new ticket. complexity (1-10) and why (a real motivation, min 20 chars) are BOTH required — routing (model+effort) is derived from the score; model/effort are never set directly. description is a developer-to-developer spec (Where / Contract / Bounds / Verify), passed as a normal string (real newlines fine — no shell escaping).',
+    description: 'File a new ticket. Choose category from the returned taxonomy and pass it here, or use legacy complexity + why. Set unclassified:true only when deliberately leaving classification for a later update before dispatch. model/effort are never set directly. description is a developer-to-developer spec (Where / Contract / Bounds / Verify), passed as a normal string (real newlines fine — no shell escaping).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -273,15 +273,24 @@ const TOOLS = [
         story: { type: 'string', description: 'A story ref (US-n) to file this ticket into.' },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string', description: 'Motivation for the complexity score, against the actual task (min 20 chars).' },
+        category: { type: 'string', description: 'Enabled category id from list or ready taxonomy.' },
+        unclassified: { type: 'boolean', description: 'Explicitly allow no category or legacy complexity. Classify with update before dispatch.' },
       },
-      required: ['title', 'complexity', 'why'],
+      required: ['title'],
     },
     handler(args) {
       if (!args.title || !String(args.title).trim()) throw new Error('add: title is required.');
-      if (args.model != null || args.effort != null) throw new Error('add: model/effort are not set directly — score the task with complexity + why and routing is derived.');
-      if (store.coerceComplexity(args.complexity) == null) throw new Error('add: complexity is required — an integer 1-10 on the task-shape scale (1-2 subagent-shaped, 3-5 daily-coding-shaped, 6-7 complex-agentic-shaped, 8-10 larger-than-a-sitting/research-grade).');
-      if (!args.why || String(args.why).trim().length < 20) throw new Error('add: why is required (min 20 chars) — motivate the complexity against the real task.');
+      if (args.model != null || args.effort != null) throw new Error('add: model/effort are not set directly — use category or complexity + why.');
       const { slug, meta } = resolveProject(args.project);
+      let category = null;
+      if (args.category != null) {
+        category = String(args.category).trim().toLowerCase();
+        const valid = store.getCategories({ includeDisabled: false }).map((entry) => entry.id);
+        if (!valid.includes(category)) throw new Error(`add: unknown category "${args.category}" — valid: ${valid.join(', ')}`);
+      }
+      const complexity = store.coerceComplexity(args.complexity);
+      if (!category && complexity == null && !args.unclassified) throw new Error('add: pass category, legacy complexity + why, or unclassified:true.');
+      if (complexity != null && (!args.why || String(args.why).trim().length < 20)) throw new Error('add: why is required with complexity (min 20 chars).');
       const created = store.createTicket(slug, {
         title: args.title,
         description: args.description || '',
@@ -294,6 +303,7 @@ const TOOLS = [
         storyId: args.story,
         complexity: args.complexity,
         complexityWhy: args.why,
+        category,
         source: 'mcp',
       });
       const ticket = store.getTicket(slug, created.ref) || created;
@@ -319,6 +329,7 @@ const TOOLS = [
         story: { type: 'string' },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string' },
+        category: { type: 'string', description: 'Enabled category id from list or ready taxonomy. Use "none" to clear.' },
       },
       required: ['ref'],
     },
@@ -335,6 +346,15 @@ const TOOLS = [
       if (args.anchors !== undefined) patch.executorAnchors = args.anchors;
       if (args.verify !== undefined) patch.executorVerify = args.verify;
       if (args.story !== undefined) patch.storyId = args.story;
+      if (args.category !== undefined) {
+        if (args.category === 'none' || args.category === null) patch.category = null;
+        else {
+          const category = String(args.category).trim().toLowerCase();
+          const valid = store.getCategories({ includeDisabled: false }).map((entry) => entry.id);
+          if (!valid.includes(category)) throw new Error(`update: unknown category "${args.category}" — valid: ${valid.join(', ')}`);
+          patch.category = category;
+        }
+      }
       if (args.why !== undefined) patch.complexityWhy = args.why;
       const t = store.updateTicket(slug, args.ref, patch);
       if (!t) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
@@ -619,14 +639,83 @@ const TOOLS = [
     },
   },
   {
+    name: 'category_list',
+    description: 'List global categories with board usage counts. Use the returned classifier inputs to classify an unclassified ticket, then call update with category before dispatch.',
+    inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const usage = (id) => store.listTickets(slug).filter((ticket) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length;
+      return { project: slug, projectName: meta.name, categories: store.getCategories().map((category) => Object.assign({}, category, { ticketCount: usage(category.id) })) };
+    },
+  },
+  {
+    name: 'category_add',
+    description: 'Create a global category. Its id is permanent. routeModel must be a grade or discovered backend slug; routeEffort is a valid effort level.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP,
+        id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
+        routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
+      },
+      required: ['id', 'name', 'routeModel', 'routeEffort'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const id = String(args.id || '').trim().toLowerCase();
+      if (store.getCategory(id)) throw new Error(`category_add: "${id}" already exists.`);
+      const category = store.setCategory({ id, name: args.name, description: args.description || '', contract: args.contract || '', route: { model: args.routeModel, effort: args.routeEffort }, enabled: args.enabled !== false });
+      return { ok: true, project: slug, projectName: meta.name, category };
+    },
+  },
+  {
+    name: 'category_edit',
+    description: 'Edit a global category without changing its id. general cannot be disabled.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP, id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
+        routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
+      },
+      required: ['id'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const existing = store.getCategory(args.id);
+      if (!existing) throw new Error(`category_edit: no category "${args.id}".`);
+      const patch = {};
+      for (const key of ['name', 'description', 'contract', 'enabled']) if (args[key] !== undefined) patch[key] = args[key];
+      if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
+      const category = store.setCategory(existing.id, patch);
+      return { ok: true, project: slug, projectName: meta.name, category };
+    },
+  },
+  {
+    name: 'category_rm',
+    description: 'Remove a global category. general is required and cannot be removed. Existing tickets keep the id and resolve to general on later reads.',
+    inputSchema: { type: 'object', properties: { project: PROJECT_PROP, id: { type: 'string' } }, required: ['id'] },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const id = String(args.id || '').trim().toLowerCase();
+      const ticketCount = store.listTickets(slug).filter((ticket) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length;
+      if (!store.removeCategory(id)) throw new Error(`category_rm: no category "${args.id}".`);
+      return { ok: true, project: slug, projectName: meta.name, id, ticketCount };
+    },
+  },
+  {
     name: 'models',
-    description: 'The live routing ladder (which complexity maps to which tier·effort), the enabled tiers/efforts, the per-tier backend map (which tiers run on a Codex model vs Claude), the detected Codex models available to map, any stale-mapping warnings, the routing master switch, and the bias.',
+    description: 'The live routing ladder, enabled tiers/efforts, category taxonomy with resolved routes and warnings, per-tier backend map, detected Codex models, routing master switch, and bias.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
     handler() {
       const prefs = store.getModelPrefs();
+      const categories = store.getCategories().map((category) => {
+        const ticket = store.applyDerivedRouting({ category: category.id }, prefs);
+        return Object.assign({}, category, { resolved: { model: ticket.model, effort: ticket.effort, exec: ticket.exec }, warnings: ticket.warnings || [] });
+      });
       return {
         prefs,
         ladder: store.routingLadder(prefs),
+        categories,
         discovered: prefs.discovered,
         tierBackend: prefs.tierBackend,
         tierBackendResolved: prefs.tierBackendResolved,

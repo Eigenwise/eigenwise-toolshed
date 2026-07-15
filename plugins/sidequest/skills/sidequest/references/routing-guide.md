@@ -1,19 +1,15 @@
-# Routing guide: what Anthropic actually says about model and effort choice
+# Routing guide: category-first task matching and legacy complexity grounding
 
-This is the grounding for the complexity scale — Anthropic's own published guidance on which model
-tier fits which work and how hard it should think, distilled with direct quotes and sources. Read it
-when you're unsure how to score a task, when the user asks why something routed where it did, or when
-the derived rung looks wrong to you.
-
-The core idea: **you score a task by matching its SHAPE to Anthropic's own model positioning**, not by
-judging how hard it feels in this particular repo. "Feels hard" is relative to the codebase; "a
-multi-file feature with a contract several consumers must respect" is the same shape in any codebase.
-That's what makes the scale absolute.
+Category routing is the normal path. Read the live taxonomy from the board, match the work against its
+classifier descriptions, stamp the narrowest category, and trust the returned route and `exec` object.
+This guide grounds the legacy complexity fallback when a ticket is complexity-only or category
+classification is genuinely ambiguous. It does not replace the live taxonomy or authorize copying its
+IDs, table, or routes into prompts.
 
 > Kept in lockstep with the switchboard copy (`plugins/switchboard/skills/switchboard/references/`), same as
 > the ladder engine fork.
 
-## The official model matrix
+## Legacy model matrix
 
 From Anthropic's [Choosing the right model](https://platform.claude.com/docs/en/about-claude/models/choosing-a-model)
 and [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview):

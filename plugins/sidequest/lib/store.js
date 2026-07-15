@@ -213,6 +213,9 @@ function putProject(slug, meta) {
 
 function putTicket(slug, ticket) {
   const stored = Object.assign({}, ticket);
+  if (stored.category && typeof stored.category === 'object') stored.category = stored.categoryId || stored.category.id;
+  delete stored.categoryId;
+  delete stored.warnings;
   delete stored.exec;
   delete stored.profile;
   db.putRow(database(), 'tickets', {
@@ -404,6 +407,13 @@ function normalizeTierBackend(raw) {
 // { byTier: {tier: {backend, source, slug, id, label}}, warnings } where backend
 // is "claude" or "codex". A mapping to a now-absent model degrades to the
 // tier's default Claude runtime and adds a warning.
+function resolvedBackend(entry, discovered) {
+  const agentSlug = discovered.filter((candidate) => candidate.slug === entry.slug).length > 1
+    ? `${entry.source}-${entry.slug}`
+    : entry.slug;
+  return { backend: 'codex', source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label };
+}
+
 function resolveTierBackends(tierBackend) {
   const map = normalizeTierBackend(tierBackend);
   const catalog = discoveredByKey();
@@ -420,10 +430,7 @@ function resolveTierBackends(tierBackend) {
     }
     const d = catalog[v] || discovered.find((entry) => entry.slug === v);
     if (d) {
-      const agentSlug = discovered.filter((entry) => entry.slug === d.slug).length > 1
-        ? `${d.source}-${d.slug}`
-        : d.slug;
-      byTier[grade] = { backend: 'codex', source: d.source, slug: d.slug, agentSlug, id: d.id, label: d.label };
+      byTier[grade] = resolvedBackend(d, discovered);
     } else {
       warnings.push(`${GRADE_LABELS[grade]} is mapped to "${v}", which isn't currently available — falling back to Claude ${legacy}`);
       byTier[grade] = { backend: 'claude', source: null, slug: legacy, id: legacy, label: CLAUDE_RUNTIME_LABELS[legacy] };
@@ -744,15 +751,131 @@ function deriveRouting(complexity, prefs) {
   return { model: rung.model, effort: rung.effort };
 }
 
-// Stamp a ticket's derived model/effort in memory from its complexity (when it
-// has one), plus a resolved `exec` telling a spawner exactly how to launch it
-// (which agent, which model param) given the current per-tier backend map. Reads
-// are the single seam every consumer goes through, so chips, claim filters, waves
-// AND the orchestrator's spawn all reflect the ladder + backend of the moment —
-// no separate tier→backend lookup at spawn, which is what prevents backend drift.
+function getCategories(opts) {
+  const includeDisabled = !opts || opts.includeDisabled !== false;
+  const categories = [];
+  for (const raw of db.listRows(database(), 'categories')) {
+    const category = normalizeCategory(raw);
+    if (category && (includeDisabled || category.enabled)) categories.push(category);
+  }
+  categories.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  return categories;
+}
+
+function getCategory(id) {
+  const raw = db.getRow(database(), 'categories', String(id || '').trim().toLowerCase());
+  return normalizeCategory(raw);
+}
+
+function normalizeCategory(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = String(raw.id || '').trim().toLowerCase();
+  if (!id) return null;
+  const route = raw.route && typeof raw.route === 'object' ? raw.route : {};
+  const routeModel = normalizeCategoryRouteModel(route.model);
+  const routeEffort = coerceEffort(route.effort);
+  return {
+    id,
+    name: String(raw.name || id).trim().slice(0, 120) || id,
+    description: String(raw.description || '').trim(),
+    route: { model: routeModel || 'grade-2', effort: routeEffort || 'medium' },
+    contract: String(raw.contract || '').trim(),
+    enabled: raw.enabled !== false,
+  };
+}
+
+function normalizeCategoryRouteModel(model) {
+  const grade = coerceModel(model);
+  if (grade) return grade;
+  if (typeof model !== 'string') return null;
+  const value = model.trim().toLowerCase();
+  return BACKEND_SLUG_RE.test(value) || BACKEND_KEY_RE.test(value) ? value : null;
+}
+
+function setCategory(categoryOrId, patch) {
+  const requested = typeof categoryOrId === 'string'
+    ? Object.assign({}, getCategory(categoryOrId), patch || {}, { id: String(categoryOrId).trim().toLowerCase() })
+    : categoryOrId;
+  const normalized = normalizeCategory(requested);
+  if (!normalized) throw new Error('Category id is required.');
+  if (!normalizeCategoryRouteModel(requested && requested.route && requested.route.model)) throw new Error(`Invalid category route model: ${requested && requested.route && requested.route.model}`);
+  if (!coerceEffort(requested && requested.route && requested.route.effort)) throw new Error(`Invalid category route effort: ${requested && requested.route && requested.route.effort}`);
+  if (normalized.id === 'general' && !normalized.enabled) throw new Error('Category "general" cannot be disabled.');
+  db.putRow(database(), 'categories', { id: normalized.id, data: normalized });
+  return normalized;
+}
+
+function removeCategory(id) {
+  const normalizedId = String(id || '').trim().toLowerCase();
+  if (normalizedId === 'general') throw new Error('Category "general" cannot be removed.');
+  return db.deleteRow(database(), 'categories', normalizedId);
+}
+
+function classifierCategories() {
+  return getCategories({ includeDisabled: false }).map(({ id, name, description, route, contract }) => ({ id, name, description, route, contract }));
+}
+
+function resolveCategoryRoute(category, prefs) {
+  const model = category.route.model;
+  const effort = category.route.effort;
+  const grade = coerceModel(model);
+  if (grade) return { model: grade, effort, exec: resolveExec(grade, effort, prefs), warnings: [] };
+
+  const catalog = discoveredByKey();
+  const discovered = Object.values(catalog);
+  const backend = catalog[model] || discovered.find((entry) => entry.slug === model);
+  const backendMap = normalizeTierBackend(prefs.tierBackend);
+  const configuredGrade = VALID_MODELS.find((grade) => backendMap[grade] === model);
+  const fallbackGrade = backend && coerceModel(backend.suggestedTier) || configuredGrade || 'grade-2';
+  if (backend) {
+    return { model: fallbackGrade, effort, exec: execFromBackend(resolvedBackend(backend, discovered), effort), warnings: [] };
+  }
+  const fallbackExec = resolveExec(fallbackGrade, effort, Object.assign({}, prefs, {
+    tierBackend: Object.assign({}, prefs.tierBackend, { [fallbackGrade]: model }),
+  }));
+  const warning = resolveTierBackends(Object.assign({}, prefs.tierBackend, { [fallbackGrade]: model })).warnings.find((entry) => entry.includes(`"${model}"`));
+  return { model: fallbackGrade, effort, exec: fallbackExec, warnings: warning ? [warning] : [] };
+}
+
+function execFromBackend(backend, effort) {
+  const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
+  return { agent: `sidequest-exec-${backend.agentSlug || backend.slug}-${resolvedEffort}`, model: null, spawnId: backend.id, backend: 'codex', source: backend.source, slug: backend.slug, runsModel: backend.slug, runsLabel: backend.label || backend.slug, dispatch: 'native-agent' };
+}
+
+function ticketCategory(ticket) {
+  if (!ticket || ticket.category == null) return null;
+  return typeof ticket.category === 'object' ? ticket.categoryId || ticket.category.id : String(ticket.category);
+}
+
+function execProjection(exec) {
+  return { agent: exec.agent, model: exec.model, backend: exec.backend, runsModel: exec.runsModel, runsLabel: exec.runsLabel, dispatch: exec.dispatch };
+}
+
+// Stamp a ticket's derived model/effort in memory from its category or complexity.
 function applyDerivedRouting(t, prefs) {
   if (!t) return t;
-  if (t.complexity) {
+  const requestedCategory = ticketCategory(t);
+  if (requestedCategory != null) {
+    prefs = prefs || getModelPrefs();
+    const invalidId = String(requestedCategory).trim().toLowerCase();
+    let category = getCategory(invalidId);
+    let fallback = false;
+    const warnings = [];
+    if (!category || !category.enabled) {
+      fallback = true;
+      warnings.push(`Category "${invalidId}" is unknown or disabled; falling back to "general".`);
+      category = getCategory('general');
+    }
+    if (category) {
+      const resolved = resolveCategoryRoute(category, prefs);
+      t.categoryId = invalidId;
+      t.category = Object.assign({}, category, { fallback });
+      t.model = resolved.model;
+      t.effort = resolved.effort;
+      t.exec = execProjection(resolved.exec);
+      if (warnings.length || resolved.warnings.length) t.warnings = (Array.isArray(t.warnings) ? t.warnings : []).concat(warnings, resolved.warnings);
+    }
+  } else if (t.complexity) {
     prefs = prefs || getModelPrefs();
     const r = deriveRouting(t.complexity, prefs);
     if (r) {
@@ -772,6 +895,7 @@ function applyDerivedRouting(t, prefs) {
     const ex = resolveExec(t.model, t.effort || null, prefs);
     t.exec = { agent: ex.agent, model: ex.model, backend: ex.backend, runsModel: ex.runsModel, runsLabel: ex.runsLabel, dispatch: ex.dispatch };
   }
+  if (requestedCategory == null) t.category = null;
   t.profile = t.model || null;
   return t;
 }
@@ -1252,6 +1376,7 @@ function createTicket(slug, fields) {
     priority: coercePriority(fields.priority, 'normal'),
     labels: normalizeLabels(fields.labels),
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
+    category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
     complexityWhy: String(fields.complexityWhy || '').trim().slice(0, 1000), // the mandatory motivation for the score
     model: coerceModel(fields.model), // legacy direct tag (a built-in tier); overridden at read time when complexity is set
@@ -1393,6 +1518,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
+    if (patch.category !== undefined) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
     if (patch.model !== undefined) { const m = coerceModel(patch.model); if (m) t.model = m; }     // never clears the tier: an invalid/'any'/'none' patch leaves it unchanged
     if (patch.effort !== undefined) { const e = coerceEffort(patch.effort); if (e) t.effort = e; } // same for effort: once set it can only change to another valid level
     // Complexity can move to another valid score, never clear; a fresh motivation
@@ -2166,6 +2292,8 @@ function briefTicket(slug, t, opts) {
     status: t.status,
     priority: t.priority,
     complexity: t.complexity || null,
+    categoryId: t.categoryId || (t.category && t.category.id) || null,
+    categoryName: t.category && t.category.name || null,
     profile: t.profile || null,
     model: t.model || null,
     backend: t.exec ? t.exec.backend : null,
@@ -2252,7 +2380,9 @@ function listPayload(slug, opts) {
     const index = new Map(all.map((t) => [String(t.ref).toUpperCase(), t]));
     tickets = tickets.map((t) => briefTicket(slug, t, { index }));
   }
-  return pageTickets(tickets, opts);
+  const page = pageTickets(tickets, opts);
+  page.categories = classifierCategories();
+  return page;
 }
 
 // Same for the ready read. Waves are ALWAYS arrays of refs (both transports,
@@ -2264,7 +2394,7 @@ function readyPayload(slug, opts) {
   let tickets = readyTickets(slug, { model: opts.model });
   const waves = readyWaves(slug, { model: opts.model }).map((wave) => wave.map((t) => t.ref));
   if (opts.brief) tickets = tickets.map((t) => briefTicket(slug, t, { blockedBy: [] }));
-  return { tickets, waves };
+  return { tickets, waves, categories: classifierCategories() };
 }
 
 /* ------------------------------------------------------------------ *
@@ -3132,6 +3262,10 @@ module.exports = {
   classifyModelFilter,
   getModelPrefs,
   setModelPrefs,
+  getCategories,
+  getCategory,
+  setCategory,
+  removeCategory,
   hasModelPrefs,
   homeRoot,
   projectsRoot,

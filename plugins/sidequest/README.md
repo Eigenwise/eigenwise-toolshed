@@ -210,6 +210,26 @@ This ladder engine also ships standalone as the **switchboard** plugin (same run
 no ticket board attached). It's shared by copy, not by dependency: each plugin keeps its own tests,
 and a change to the ladder answers to that plugin's own tests, not the other's.
 
+## Category-based routing
+
+Categories give agents a clearer dispatch input than a bare complexity score. The shipped taxonomy covers
+coding, debugging, reviews, testing, research, docs, UI work, and a required `general` fallback. A ticket's
+category route wins over legacy complexity routing, and editing a category reroutes every ticket using it
+on the next read. Tickets without either field stay unclassified until an agent picks a category from the
+returned taxonomy.
+
+```bash
+sidequest category list
+sidequest add -t "Fix the checkout error" --category debugging
+sidequest category edit coding.normal --route-effort xhigh
+sidequest category add release-check --name "Release checks" --description "Focused release verification" \
+  --contract "Run the named checks and report failures." --route-model grade-2 --route-effort medium
+```
+
+Category rows carry classifier text, an executor contract, and a model-plus-effort route. The CLI, MCP
+surfaces, and dashboard expose the same CRUD operations and usage counts. `general` cannot be removed;
+unknown or disabled categories fall back to it with a warning.
+
 ## File scopes & parallel waves
 
 Declare which files a ticket will touch and the board can tell you **what's safe to run in parallel** —

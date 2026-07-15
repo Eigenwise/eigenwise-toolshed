@@ -198,11 +198,11 @@
      other popovers use): notifications | routing & models | the live ladder,
      three hairline-divided columns on one card. Anchored top-right like its
      siblings; collapses to a single column when the window is narrow. */
-  .popover.settings-panel { width: min(920px, 95vw); padding: 0; background: var(--card); }
+  .popover.settings-panel { width: min(1180px, 97vw); padding: 0; background: var(--card); }
   .settings-panel .sp-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px 12px; border-bottom: 1px solid var(--line-soft); }
   .settings-panel .sp-title { font-family: var(--sans); font-weight: 700; font-size: 14.5px; letter-spacing: .01em; color: var(--text); }
   .settings-panel .sp-title-sub { font-size: 11.5px; font-weight: 400; color: var(--text-faint); }
-  .settings-panel .sp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: min(74vh, 660px); overflow-y: auto; }
+  .settings-panel .sp-grid { display: grid; grid-template-columns: minmax(280px, 1.1fr) minmax(280px, 1fr) minmax(230px, .85fr); max-height: min(74vh, 660px); overflow-y: auto; }
   .settings-panel .sp-col { padding: 8px 15px 18px; border-right: 1px solid var(--line-soft); min-width: 0; }
   .settings-panel .sp-col + .sp-col { border-left: 0; }
   .settings-panel .sp-col:last-child { border-right: 0; }
@@ -473,6 +473,33 @@
   /* Target-model tier chip: which agent tier should work the ticket. */
   .modelchip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; text-transform: lowercase; }
   .modelchip svg { flex: none; opacity: .9; }
+  .categorychip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); color: var(--indigo); background: rgba(64,70,131,.08); border: 1px solid rgba(64,70,131,.28); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .categorychip::before { content: "◇"; color: var(--gold); font-size: 12px; line-height: 1; }
+  .category-settings { display: flex; flex-direction: column; min-height: 0; }
+  .category-settings .cat-head { padding: 18px 15px 10px; border-bottom: 1px solid var(--line-soft); }
+  .category-settings h3 { margin: 0; font-family: var(--serif); font-size: 17px; font-weight: 500; color: var(--text); }
+  .category-settings p { margin: 4px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--text-faint); }
+  .category-list { padding: 8px 10px 14px; max-height: min(60vh, 560px); overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
+  .category-row { padding: 9px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--panel); }
+  .category-row.off { opacity: .58; }
+  .category-row-top { display: flex; align-items: center; gap: 6px; }
+  .category-row-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-row-id, .category-usage { font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); }
+  .category-usage { color: var(--gold-bright); white-space: nowrap; }
+  .category-row-detail { display: grid; grid-template-columns: 1fr auto; gap: 5px 8px; margin-top: 6px; font-size: 10.5px; color: var(--text-faint); line-height: 1.35; }
+  .category-row-detail code { font-family: var(--mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-actions { display: flex; gap: 5px; margin-top: 8px; }
+  .category-actions button, .category-add button { cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--text-dim); background: var(--card); border: 1px solid var(--line-soft); padding: 4px 8px; border-radius: var(--radius-sm); }
+  .category-actions button:hover, .category-add button:hover { color: var(--text); border-color: var(--line); }
+  .category-actions button.danger:hover { color: var(--urgent); border-color: rgba(181,74,72,.45); }
+  .category-edit { display: grid; gap: 6px; margin-top: 8px; }
+  .category-edit input, .category-edit textarea, .category-edit select, .category-add input, .category-add textarea, .category-add select { width: 100%; box-sizing: border-box; padding: 6px 7px; font: 11px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+  .category-edit textarea, .category-add textarea { min-height: 42px; resize: vertical; line-height: 1.35; }
+  .category-route { display: grid; grid-template-columns: minmax(0, 1fr) 74px; gap: 6px; }
+  .category-switch { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-dim); cursor: pointer; }
+  .category-switch input { accent-color: var(--gold); }
+  .category-add { padding: 9px; border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--bg); display: grid; gap: 6px; }
+  .category-add summary { cursor: pointer; font-size: 11.5px; color: var(--text-dim); }
   /* Codex-backed tier mark on a card chip: the model name in a filled pill, so a
      Codex-run ticket is obvious at a glance while the tier name stays primary. */
   .codex-mark { font-family: var(--mono); font-size: 8.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; margin-left: 3px; padding: 0 4px; border-radius: 2px; background: currentColor; color: var(--card); }
@@ -756,6 +783,10 @@
               <div class="routing-profiles" id="routingProfiles"></div>
               <div class="routing-direct-controls"><div class="pop-head">Effort levels</div><div class="model-pref-list" id="modelPrefList"></div><div class="pop-head">Band preference</div><div class="bias-view" id="biasView"></div><div class="pop-head">Exact C1–C10 ladder</div><div class="ladder-view" id="ladderView"></div><div class="backend-warn" id="tierBackendWarn"></div></div>
             </section>
+            <section class="category-settings" aria-labelledby="categoriesTitle">
+              <div class="cat-head"><h3 id="categoriesTitle">Categories</h3><p>Set the route once. Every ticket using it follows on its next read.</p></div>
+              <div class="category-list" id="categoryList"></div>
+            </section>
             <div class="sp-col">
               <div class="pop-head">Desktop notifications</div>
               <div class="pop-row" id="desktopNotifRow" role="button" tabindex="0">
@@ -837,6 +868,11 @@
           <label>Assignee</label>
           <div class="seg assignee" id="mAssignee"></div>
           <div class="claim-hint" id="mClaimHint" style="display:none"></div>
+        </div>
+        <div class="field" id="categoryField">
+          <label for="mCategory">Category</label>
+          <select id="mCategory" aria-label="Ticket category"></select>
+          <div class="claim-hint" id="mCategoryRoute" style="display:none"></div>
         </div>
         <div class="field" id="storyField">
           <label for="mStory">Story</label>
@@ -1038,7 +1074,8 @@
     unread: 0,                // unread count reported by the server (server-wide, not just the loaded page)
     unreadNeeds: 0,           // server-wide unread in the "Needs you" bucket (questions + due reminders)
     unreadQuestions: 0,       // server-wide unread questions (drives the red bell cue)
-    inboxTab: "all"           // inbox category filter: "all" | "needs" | "activity"
+    inboxTab: "all",           // inbox category filter: "all" | "needs" | "activity"
+    categories: []
   };
   var lastSig = "";
   var lastUnread = null;      // previous unread count, to know when the bell badge should "pop"
@@ -1345,6 +1382,14 @@
     return api("/api/stories?project=all")
       .then(function (d) { state.stories = d.stories || []; })
       .catch(function () { state.stories = []; });
+  }
+
+  function loadCategories() {
+    return api("/api/categories?project=all").then(function (d) { state.categories = d.categories || []; })
+      .catch(function () { state.categories = []; });
+  }
+  function categoryById(id) {
+    return state.categories.filter(function (category) { return category.id === id; })[0] || null;
   }
 
   // The inbox is global (spans every project), independent of the currently selected board.
@@ -2030,6 +2075,91 @@
     state.seen = newSeen;
   }
 
+  function categoryRouteOptions(selected) {
+    var grades = MODELS.map(function (model) { return '<option value="' + model.k + '">' + esc(model.label) + '</option>'; });
+    var discovered = (modelPrefs.discovered || []).map(function (model) {
+      var value = externalBackendValue(model);
+      return '<option value="' + esc(value) + '">' + esc(model.label || model.slug) + '</option>';
+    });
+    return grades.concat(discovered).join("");
+  }
+  function categoryForm(category, create) {
+    var route = category && category.route || { model: "grade-2", effort: "medium" };
+    var id = category ? category.id : "";
+    return '<div class="category-edit">' +
+      (create ? '<input data-field="id" placeholder="category id, e.g. research.api" />' : '') +
+      '<input data-field="name" placeholder="Name" value="' + esc(category ? category.name : "") + '" />' +
+      '<textarea data-field="description" placeholder="What should land here?">' + esc(category ? category.description : "") + '</textarea>' +
+      '<div class="category-route"><select data-field="model">' + categoryRouteOptions(route.model) + '</select><select data-field="effort">' + EFFORTS.map(function (effort) { return '<option value="' + effort.k + '">' + effort.label + '</option>'; }).join("") + '</select></div>' +
+      '<textarea data-field="contract" placeholder="Executor contract">' + esc(category ? category.contract : "") + '</textarea>' +
+      '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /> Enabled</label>' +
+      '<div class="category-actions"><button type="button" data-save-category="' + esc(id) + '">' + (create ? 'Add category' : 'Save') + '</button><button type="button" data-cancel-category>Cancel</button></div>' +
+      '</div>';
+  }
+  function categoryPayload(form) {
+    return {
+      id: form.querySelector('[data-field="id"]') && form.querySelector('[data-field="id"]').value.trim(),
+      name: form.querySelector('[data-field="name"]').value.trim(),
+      description: form.querySelector('[data-field="description"]').value.trim(),
+      route: { model: form.querySelector('[data-field="model"]').value, effort: form.querySelector('[data-field="effort"]').value },
+      contract: form.querySelector('[data-field="contract"]').value.trim(),
+      enabled: form.querySelector('[data-field="enabled"]').checked
+    };
+  }
+  function renderCategorySettings() {
+    var box = $("categoryList"); if (!box) return;
+    box.innerHTML = "";
+    state.categories.forEach(function (category) {
+      var row = el("div", "category-row" + (category.enabled ? "" : " off"));
+      row.dataset.id = category.id;
+      row.innerHTML = '<div class="category-row-top"><span class="category-row-name">' + esc(category.name) + '</span><span class="category-usage">' + category.usageCount + ' tickets</span></div>' +
+        '<div class="category-row-id">' + esc(category.id) + '</div>' +
+        '<div class="category-row-detail"><span>' + esc(category.description || "No classifier description") + '</span><code>' + esc(routeLabelFor(category.route.model, category.route.effort)) + '</code></div>' +
+        '<div class="category-actions"><button type="button" data-edit-category>Edit</button>' + (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>') + '</div>';
+      row.querySelector('[data-edit-category]').addEventListener("click", function () {
+        row.innerHTML = categoryForm(category, false);
+        var form = row.querySelector('.category-edit');
+        form.querySelector('[data-field="model"]').value = category.route.model;
+        form.querySelector('[data-field="effort"]').value = category.route.effort;
+        wireCategoryForm(form, category.id);
+      });
+      var remove = row.querySelector('[data-delete-category]');
+      if (remove) remove.addEventListener("click", function () {
+        mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id)).then(function () { toast(category.name + " deleted"); return loadCategories(); }).then(renderCategorySettings).catch(function (e) { toast("Delete failed: " + e.message); });
+      });
+      box.appendChild(row);
+    });
+    var add = el("details", "category-add");
+    add.innerHTML = '<summary>Add category</summary>' + categoryForm(null, true);
+    var addForm = add.querySelector('.category-edit');
+    wireCategoryForm(addForm, null);
+    box.appendChild(add);
+  }
+  function wireCategoryForm(form, id) {
+    form.querySelector('[data-cancel-category]').addEventListener("click", renderCategorySettings);
+    form.querySelector('[data-save-category]').addEventListener("click", function () {
+      var payload = categoryPayload(form);
+      if (!payload.name || (!id && !payload.id)) { toast("A category id and name are required"); return; }
+      var path = id ? "/api/categories/" + encodeURIComponent(id) : "/api/categories";
+      mutate(id ? "PATCH" : "POST", path, payload).then(function () { toast(id ? "Category saved" : "Category added"); return loadCategories(); }).then(function () { renderCategorySettings(); populateCategorySelect(); }).catch(function (e) { toast("Category failed: " + e.message); });
+    });
+  }
+  function populateCategorySelect() {
+    var select = $("mCategory"); if (!select) return;
+    var ticket = state.editor && state.editor.ticket;
+    var chosen = ticket && (ticket.categoryId || (ticket.category && ticket.category.id)) || (state.editor && state.editor.categoryId) || "";
+    select.innerHTML = '<option value="">No category, use complexity</option>' + state.categories.filter(function (category) { return category.enabled || category.id === chosen; }).map(function (category) { return '<option value="' + esc(category.id) + '">' + esc(category.name + ' · ' + routeLabelFor(category.route.model, category.route.effort)) + '</option>'; }).join("");
+    select.value = chosen;
+    renderCategoryRoute();
+  }
+  function renderCategoryRoute() {
+    var box = $("mCategoryRoute"), select = $("mCategory"); if (!box || !select) return;
+    var category = categoryById(select.value);
+    if (!category) { box.style.display = "none"; box.innerHTML = ""; return; }
+    box.style.display = "";
+    box.innerHTML = 'Route → <b>' + esc(routeLabelFor(category.route.model, category.route.effort)) + '</b>';
+  }
+
   function renderCard(t) {
     var c = el("div", "card");
     c.dataset.id = t.id;
@@ -2105,8 +2235,12 @@
       modelChip = '<span class="modelchip" title="routing: ' + esc((t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "")) + '" style="color:' + mcL + ';background:' + tint(mcL, 0.1) + ';border-color:' + tint(mcL, 0.4) + '">' + chipSvg + esc(routeLabelL) + '</span>';
     }
 
+    var categoryChip = t.category && t.category.name
+      ? '<span class="categorychip" title="' + esc(t.category.description || t.category.id) + '">' + esc(t.category.name) + '</span>'
+      : "";
+
     c.innerHTML = storyTop +
-      '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge + storyChip +
+      '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge + storyChip + categoryChip +
       '<span class="prio-tag" data-p="' + esc(t.priority) + '">' + esc(t.priority) + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
       '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + modelChip + labels + filesChip + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
@@ -2262,6 +2396,7 @@
     setSeg($("mComplexity"), initialC);
     $("mWhy").value = isEdit && ticket.complexityWhy ? ticket.complexityWhy : "";
     renderDerivedLine(initialC ? Number(initialC) : null);
+    populateCategorySelect();
     // Refresh the ladder once per open, then re-render the derived line off it.
     refreshLadder();
     // Show any agent claim as a read-only hint (it's a separate axis from assignee).
@@ -2810,12 +2945,11 @@
     var ed = state.editor; if (!ed) return;
     var title = $("mTitle").value.trim();
     if (!title) { $("mTitle").focus(); toast("A title is required"); return; }
-    // Complexity + a motivated why are mandatory — the server 400s without them,
-    // so block here with a clear nudge instead of a failed request.
     var complexity = segValue($("mComplexity"));
-    if (!complexity) { toast("Score the complexity first (1-10)"); return; }
+    var category = $("mCategory").value || null;
+    if (!category && !complexity) { toast("Choose a category or score complexity"); return; }
     var why = $("mWhy").value.trim();
-    if (why.length < 20) { toast("Motivate the score (min 20 chars)"); return; }
+    if (!category && why.length < 20) { toast("Motivate the score (min 20 chars)"); return; }
     var payload = {
       title: title,
       description: $("mDesc").value.trim(),
@@ -2825,7 +2959,8 @@
       labels: $("mLabels").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       files: $("mFiles").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
       storyId: ($("mStory").value && $("mStory").value !== "__new") ? $("mStory").value : null,
-      complexity: parseInt(complexity, 10),
+      category: category,
+      complexity: complexity ? parseInt(complexity, 10) : null,
       complexityWhy: why,
       imagesData: ed.attachments.map(function (a) { return { name: a.name, base64: a.base64 }; })
     };
@@ -2932,7 +3067,7 @@
 
   // ---------------- polling ----------------
   function refresh(force) {
-    return Promise.all([loadProjects(), loadTickets(), loadNotifications(), loadStories()]).then(function () {
+    return Promise.all([loadProjects(), loadTickets(), loadNotifications(), loadStories(), loadCategories()]).then(function () {
       processEvents();         // fire desktop notifications for background changes
       renderBell();
       renderStoryMenu();       // keep the story filter's legend + counts current
@@ -2943,7 +3078,10 @@
       // these renders on state.mutating the same way renderBoard is guarded below.
       if (force || state.mutating === 0) {
         renderRail();          // reflect unread badges + mute marks
-        if ($("settingsPop").classList.contains("show")) renderProjectNotifySettings();
+        if ($("settingsPop").classList.contains("show")) {
+          renderProjectNotifySettings();
+          if (!document.querySelector('details.category-add[open], .category-row .category-edit')) renderCategorySettings();
+        }
       }
       if (state.view === "archive") {
         return loadArchived().then(renderArchive);
@@ -3236,7 +3374,7 @@
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
-      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderBiasControl(); renderLadderView(); }
+      if (opening) { renderProjectNotifySettings(); renderModelPrefSettings(); renderCategorySettings(); renderBiasControl(); renderLadderView(); }
     });
     document.addEventListener("click", function (e) {
       if (!e.target.closest(".project-menu")) closeProjectMenu();
@@ -3251,6 +3389,12 @@
     $("newStoryCreate").addEventListener("click", createStoryInline);
     $("newStoryCancel").addEventListener("click", function () { hideNewStory(); $("mStory").value = currentStoryId() || ""; renderStorySwatch(); });
     $("mProject").addEventListener("change", populateStorySelect);
+    $("mCategory").addEventListener("change", function () {
+      var category = $("mCategory").value || null;
+      renderCategoryRoute();
+      if (state.editor && state.editor.mode === "edit" && state.editor.ticket) autosave({ category: category });
+      else if (state.editor) state.editor.categoryId = category || "";
+    });
     $("desktopNotifRow").addEventListener("click", requestNotify);
     $("desktopNotifRow").addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); requestNotify(); } });
     settingsPop.querySelectorAll("input[data-notif]").forEach(function (box) {

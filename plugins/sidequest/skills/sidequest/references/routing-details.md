@@ -1,14 +1,30 @@
-# Routing details: the ladder, bias, the effort grid
+# Routing details: category routes, then the legacy ladder
 
-Read this when you need to explain or debug routing — which score lands on which rung, why a rung is
-missing, what the bias slider does. Day-to-day you don't: every `list`/`ready` read stamps each ticket
-with its derived `model`/`effort`, and those stamps are the routing. For WHY the ladder is shaped
-this way — Anthropic's official model/effort guidance, with quotes and sources — see
+Read this when you need to explain or debug routing. Category routing is primary: `list` and `ready`
+return the live taxonomy plus each ticket's category projection, route, and resolved `exec` object.
+Classify from the returned taxonomy, stamp the category before claim, then trust the resolved route.
+Complexity-only tickets still use the legacy ladder below. For task-shape grounding and sources, see
 [routing-guide.md](routing-guide.md).
 
-## The capability ladder
+## Category routing
 
-sidequest maps complexity scores onto **one capability-ranked ladder** of model×effort rungs built
+Categories are global board data. Each enabled row has a classifier description, default route, and
+executor contract. Use the classifier description to select the narrowest matching category, not a
+ticket title, urgency, requested model, or a copied local table. The route is live: changing a category
+re-routes its open tickets on their next read.
+
+A present valid category takes precedence over a stored complexity score. A missing category preserves
+legacy complexity routing. An invalid, deleted, or disabled category resolves through the returned
+general fallback projection with a warning, without rewriting the ticket. A ticket missing both fields
+must be explicitly classified and updated before claim or dispatch.
+
+The category projection includes its contract text. Inject that text verbatim into the executor prompt
+with the ticket contract. The `exec` object remains the dispatch authority; category routes can resolve
+through the configured backend mapping and degrade to a supported runtime with a warning.
+
+## Legacy capability ladder
+
+sidequest maps legacy complexity scores onto **one capability-ranked ladder** of model×effort rungs built
 from the tiers the user enabled in the model picker (dashboard gear → Available models). Key
 properties:
 
@@ -17,8 +33,9 @@ properties:
 - **Max effort is held out of the normal spread**: only complexity 10 on the top enabled tier gets
   `·max` (and 9 only at bias +5) — deliberately rare, per Anthropic's guidance to use max effort
   "sparingly for the hardest tasks".
-- **Live derivation**: toggling a tier or effort instantly re-routes every open ticket. Nothing is
-  stored on the ticket except the score; model/effort are stamped at read time.
+- **Live derivation for legacy tickets**: toggling a tier or effort instantly re-routes every open
+  complexity-only ticket. Nothing beyond the score is stored on those tickets; category-routed tickets
+  follow their category route instead.
 - **Effort exclusion is per model×effort pair**, not global — `opus·medium` can be off while
   `sonnet·medium` stays on. An excluded pair never appears in the ladder.
 - `sidequest models` prints the current ladder; `--json` gives `routing` (the master switch), the

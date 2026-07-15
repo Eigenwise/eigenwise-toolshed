@@ -73,7 +73,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -189,12 +189,22 @@ function guardDirectRouting(opts) {
   if (opts.model != null || opts.effort != null) failDirectRouting();
 }
 
+function categoryIdOrFail(slug, category) {
+  const id = String(category || '').trim().toLowerCase();
+  const valid = store.getCategories({ includeDisabled: false }).map((entry) => entry.id);
+  if (!valid.includes(id)) fail(`unknown category "${category}" — valid: ${valid.join(', ')}`);
+  return id;
+}
+
 function cmdAdd(opts) {
   if (!opts.title) fail('add: --title is required (e.g. sidequest add -t "Contact form does not send")');
   guardDirectRouting(opts);
-  if (store.coerceComplexity(opts.complexity) == null) failComplexity();
-  if (!opts.why || String(opts.why).trim().length < WHY_MIN) failWhy();
   const { slug, meta } = resolveProject(opts);
+  const category = opts.category != null ? categoryIdOrFail(slug, opts.category) : null;
+  const complexity = store.coerceComplexity(opts.complexity);
+  if (!category && !opts.unclassified && complexity == null) fail('add: pass --category, legacy --complexity + --why, or --unclassified for a deliberately unclassified ticket');
+  if (complexity != null && (!opts.why || String(opts.why).trim().length < WHY_MIN)) failWhy();
+  if (!category && complexity == null && !opts.unclassified) failComplexity();
   const warnings = [];
   const created = store.createTicket(slug, {
     title: opts.title,
@@ -209,6 +219,7 @@ function cmdAdd(opts) {
     storyId: opts.story,
     complexity: opts.complexity,
     complexityWhy: opts.why,
+    category,
     source: opts.source || 'cli',
     onAssetError: (src) => warnings.push(`could not attach image: ${src}`),
   });
@@ -300,6 +311,7 @@ function cmdUpdate(opts, positional) {
     patch.complexityWhy = opts.why;
   }
   if (opts.story != null) patch.storyId = opts.story; // link (US-n / raw id) or clear ("none"/null)
+  if (opts.category != null) patch.category = opts.category === 'none' ? null : categoryIdOrFail(slug, opts.category);
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
   const saved = store.updateTicket(slug, idOrRef, patch);
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
@@ -314,6 +326,67 @@ function cmdUpdate(opts, positional) {
   const st = story ? `  ↳${story.ref}` : '';
   console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]${st}${modelMark(updated)}  "${updated.title}"`);
   for (const warning of warnings) console.log(`  ! ${warning}`);
+}
+
+function cmdCategory(opts, positional) {
+  const action = String(positional[0] || '').toLowerCase();
+  const id = positional[1];
+  const { slug, meta } = resolveProject(opts);
+  const usage = (categoryId) => store.listTickets(slug).filter((ticket) => (ticket.categoryId || (ticket.category && ticket.category.id)) === categoryId).length;
+  const output = (result) => {
+    if (opts.json) process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, result), null, 2) + '\n');
+  };
+
+  if (action === 'list' || action === 'ls') {
+    const categories = store.getCategories().map((category) => Object.assign({}, category, { ticketCount: usage(category.id) }));
+    if (opts.json) return output({ categories });
+    for (const category of categories) console.log(`${category.id}  ${category.name}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})${category.enabled ? '' : '  disabled'}`);
+    return;
+  }
+  if (!id) fail(`category ${action || '<action>'}: pass a category id`);
+  if (action === 'add' || action === 'new' || action === 'create') {
+    if (store.getCategory(id)) fail(`category add: "${id}" already exists`);
+    const category = {
+      id,
+      name: opts.name || opts.title || id,
+      description: opts.desc != null ? opts.desc : opts.description || '',
+      route: { model: opts['route-model'] || opts.model, effort: opts['route-effort'] || opts.effort },
+      contract: opts.contract || '',
+      enabled: !opts.disabled,
+    };
+    try { store.setCategory(category); } catch (error) { fail(`category add: ${error.message}`); }
+    const saved = store.getCategory(id);
+    if (opts.json) return output({ ok: true, category: saved });
+    console.log(`✓ added category ${saved.id}  — ${meta.name}`);
+    return;
+  }
+  if (action === 'edit' || action === 'update' || action === 'set') {
+    const existing = store.getCategory(id);
+    if (!existing) fail(`category edit: no category "${id}"`);
+    const route = Object.assign({}, existing.route);
+    if (opts['route-model'] != null) route.model = opts['route-model'];
+    if (opts['route-effort'] != null) route.effort = opts['route-effort'];
+    const patch = { route };
+    if (opts.name != null || opts.title != null) patch.name = opts.name != null ? opts.name : opts.title;
+    if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
+    if (opts.contract != null) patch.contract = opts.contract;
+    if (opts.enabled || opts.disabled) patch.enabled = !!opts.enabled;
+    try { store.setCategory(id, patch); } catch (error) { fail(`category edit: ${error.message}`); }
+    const saved = store.getCategory(id);
+    if (opts.json) return output({ ok: true, category: saved });
+    console.log(`✓ updated category ${saved.id}  — ${meta.name}`);
+    return;
+  }
+  if (action === 'rm' || action === 'remove' || action === 'delete') {
+    const ticketCount = usage(String(id).toLowerCase());
+    try {
+      if (!store.removeCategory(id)) fail(`category rm: no category "${id}"`);
+    } catch (error) { fail(`category rm: ${error.message}`); }
+    if (opts.json) return output({ ok: true, id: String(id).toLowerCase(), ticketCount });
+    console.log(`✓ removed category ${id} (${ticketCount} affected ticket${ticketCount === 1 ? '' : 's'} resolve to general on later reads)  — ${meta.name}`);
+    return;
+  }
+  fail(`category: unknown action "${action}". Use list | add | edit | rm.`);
 }
 
 function cmdRm(opts, positional) {
@@ -963,6 +1036,10 @@ function cmdModels(opts, positional) {
   const prefs = store.getModelPrefs();
   const routing = prefs.routing !== false;
   const ladder = store.routingLadder(prefs);
+  const categories = store.getCategories().map((category) => {
+    const sample = store.applyDerivedRouting({ category: category.id }, prefs);
+    return Object.assign({}, category, { resolved: { model: sample.model, effort: sample.effort, exec: sample.exec }, warnings: sample.warnings || [] });
+  });
   // Effort is a per-model matrix now (prefs.efforts[model] = {low..max}); haiku
   // carries no row at all (no effort axis). Build the per-model enabled list
   // straight from whichever tiers the store actually gave a row to, rather than
@@ -989,6 +1066,7 @@ function cmdModels(opts, positional) {
         efforts: store.VALID_EFFORTS,
         enabledEfforts,
         ladder,
+        categories,
       }, null, 2) + '\n'
     );
     return;
@@ -1018,6 +1096,8 @@ function cmdModels(opts, positional) {
     console.log(`  ✓ ${m.padEnd(10)}${enabledEfforts[m].join(', ')}`);
   }
   printLadder(ladder);
+  console.log('Categories:');
+  for (const category of categories) console.log(`  ${category.id}  ${category.name} → ${category.resolved.model}·${category.resolved.effort}`);
 }
 
 // Shared with cmdBias so "models" and "bias" render the ladder identically.
@@ -1508,9 +1588,10 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" --complexity 1-10 --why "<motivation>" [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
+  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--complexity 1-10 --why "<motivation>"]
+  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
+  sidequest category list|add|edit|rm <id> [--json]
   sidequest rm <id|SQ-n>
   sidequest projects [--archived] [--json]
   sidequest archive-board <board-ref>                  archive a board
@@ -1662,6 +1743,10 @@ async function main() {
     case 'remove':
     case 'delete':
       cmdRm(opts, positional);
+      break;
+    case 'category':
+    case 'categories':
+      cmdCategory(opts, positional);
       break;
     case 'claim':
     case 'take':

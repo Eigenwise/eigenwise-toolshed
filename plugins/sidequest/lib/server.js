@@ -109,6 +109,23 @@ function aggregateTickets(archivedOnly) {
   return out;
 }
 
+function categoryUsageCounts(project) {
+  const counts = {};
+  const projects = project && project !== 'all' ? [{ slug: project }] : store.listProjects();
+  for (const entry of projects) {
+    for (const ticket of store.listTickets(entry.slug)) {
+      const id = ticket.categoryId || (ticket.category && ticket.category.id) || ticket.category;
+      if (typeof id === 'string' && id.trim()) counts[id.trim().toLowerCase()] = (counts[id.trim().toLowerCase()] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function categoriesPayload(project) {
+  const usage = categoryUsageCounts(project);
+  return store.getCategories().map((category) => Object.assign({}, category, { usageCount: usage[category.id] || 0 }));
+}
+
 // Stories for one project, each annotated with how many (non-archived) tickets
 // belong to it and which board it lives on — the shape the dashboard's story
 // legend/filter and the "All boards" aggregate consume.
@@ -285,6 +302,77 @@ async function handle(req, res) {
     }
   }
 
+  // --- Categories: taxonomy, CRUD, and live per-scope usage counts ---
+  if (req.method === 'GET' && pathname === '/api/categories') {
+    const project = q.project ? String(q.project) : 'all';
+    if (project !== 'all' && !store.readMeta(project)) {
+      sendJson(res, 404, { error: 'unknown project' });
+      return;
+    }
+    sendJson(res, 200, { project, categories: categoriesPayload(project) });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/categories') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    try {
+      const category = store.setCategory({
+        id: body.id,
+        name: body.name,
+        description: body.description,
+        route: body.route,
+        contract: body.contract,
+        enabled: body.enabled,
+      });
+      sendJson(res, 201, { category: Object.assign({}, category, { usageCount: categoryUsageCounts('all')[category.id] || 0 }) });
+    } catch (e) {
+      sendJson(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  const categoryMatch = /^\/api\/categories\/([^/]+)$/.exec(pathname);
+  if (categoryMatch) {
+    const id = categoryMatch[1];
+    if (req.method === 'PATCH' || req.method === 'PUT') {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        sendJson(res, 400, { error: 'bad JSON body' });
+        return;
+      }
+      try {
+        if (!store.getCategory(id)) {
+          sendJson(res, 404, { error: 'category not found' });
+          return;
+        }
+        const patch = Object.assign({}, body);
+        delete patch.id;
+        const category = store.setCategory(id, patch);
+        sendJson(res, 200, { category: Object.assign({}, category, { usageCount: categoryUsageCounts('all')[category.id] || 0 }) });
+      } catch (e) {
+        sendJson(res, 400, { error: e.message });
+      }
+      return;
+    }
+    if (req.method === 'DELETE') {
+      try {
+        const existed = store.removeCategory(id);
+        sendJson(res, existed ? 200 : 404, { ok: existed, usageCount: categoryUsageCounts('all')[id] || 0 });
+      } catch (e) {
+        sendJson(res, 400, { error: e.message });
+      }
+      return;
+    }
+  }
+
   // --- Tickets: list ---
   if (req.method === 'GET' && pathname === '/api/tickets') {
     const project = q.project ? String(q.project) : 'all';
@@ -325,15 +413,19 @@ async function handle(req, res) {
       sendJson(res, 404, { error: 'unknown project' });
       return;
     }
-    // Model and effort are mandatory at every entry point — sidequest never
-    // defaults either; the filing side judges the task's complexity and picks.
-    // (PATCH stays permissive: the store guard ignores invalid values there.)
-    if (!store.coerceComplexity(body.complexity)) {
-      sendJson(res, 400, { error: 'complexity is required (an integer 1-10; routing is derived from it)' });
+    // A category replaces the legacy complexity requirement. Deliberately
+    // unclassified tickets remain possible for intake flows that opt in.
+    const category = body.category == null ? null : String(body.category).trim().toLowerCase();
+    if (category && !store.getCategory(category)) {
+      sendJson(res, 400, { error: 'unknown category' });
       return;
     }
-    if (!body.complexityWhy || String(body.complexityWhy).trim().length < 20) {
-      sendJson(res, 400, { error: 'complexityWhy is required — motivate the score against the actual task (min 20 chars)' });
+    if (!category && !body.unclassified && !store.coerceComplexity(body.complexity)) {
+      sendJson(res, 400, { error: 'choose a category or provide a complexity score' });
+      return;
+    }
+    if (!category && !body.unclassified && (!body.complexityWhy || String(body.complexityWhy).trim().length < 20)) {
+      sendJson(res, 400, { error: 'complexityWhy is required with a complexity score (min 20 chars)' });
       return;
     }
     const ticket = store.createTicket(slug, {
@@ -343,6 +435,7 @@ async function handle(req, res) {
       priority: body.priority,
       labels: body.labels,
       storyId: body.storyId,
+      category,
       complexity: body.complexity,
       complexityWhy: body.complexityWhy,
       files: body.files,

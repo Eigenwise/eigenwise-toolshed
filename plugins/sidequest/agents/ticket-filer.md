@@ -48,20 +48,24 @@ Your task prompt contains some or all of:
      production / blocks work", `high` for clear bugs, `normal` by default, `low` for polish/nits.
    - **labels**: 0–3 short tags you can infer with confidence (e.g. `bug`, `frontend`, `payments`).
      Don't invent labels you're unsure about.
-   - **complexity + why** (BOTH required — the CLI errors without them): score the task 1–10 and
-     motivate it in one concrete sentence (min 20 chars) referencing the actual work. Rubric:
-     1–2 mechanical edit · 3–4 routine one-area fix/feature · 5–6 multi-file feature · 7–8
-     cross-cutting design · 9–10 novel/unknown-cause debugging. Routing (which model tier and
-     effort) is derived from the score — you never pass a model.
+   - **category first**: read the live taxonomy with `<prefix> category list --json`, match the issue
+     to its classifier descriptions, choose the narrowest category, and pass its ID. Taxonomy is live
+     data: never invent or hardcode an ID/table. If the issue is too thin to classify safely, use the
+     fallback category returned by the taxonomy.
+   - **complexity + why**: only use this legacy fallback when the prompt explicitly gives a
+     complexity-only filing instruction or category classification stays genuinely ambiguous. If used,
+     score 1–10 and give one concrete sentence (min 20 chars) naming the actual work. Never pass a
+     model or effort.
 
 2. **Run the CLI** with the command prefix you were given, appending:
 
    ```
-   <prefix> add -t "TITLE" -d "DESCRIPTION" -p PRIORITY -l LABEL -l LABEL -i "IMAGE_PATH" --complexity N --why "MOTIVATION"
+   <prefix> add -t "TITLE" -d "DESCRIPTION" -p PRIORITY -l LABEL -l LABEL -i "IMAGE_PATH" --category <selected-id>
    ```
 
    - Repeat `-l` per label and `-i` per image. Drop `-d`, `-l`, or `-i` if you have nothing for them.
-     `--complexity` and `--why` can never be dropped.
+     `--category` is the normal filing path. Add `--complexity` and `--why` together only for the
+     documented legacy fallback; drop `-d`, `-l`, or `-i` if you have nothing for them.
    - Quote every value. On Windows the CLI is invoked via `node "<path>/sidequest.js"`.
    - If you were **not** given a command prefix, use
      `node "$CLAUDE_PLUGIN_ROOT/bin/sidequest.js"`; if that variable is empty, look for
