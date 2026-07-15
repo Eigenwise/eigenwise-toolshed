@@ -23,6 +23,7 @@ const { discoverExternalModels } = discovery;
 const SECOND_SOURCE = { source: 'other-gateway', relPath: path.join('other-gateway', 'catalog.json') };
 discovery.CATALOG_SOURCES.push(SECOND_SOURCE);
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const { getModelPrefs, setModelPrefs, routingLadder } = store;
 
 function writeCatalogRaw(dir, body, source) {
@@ -225,17 +226,18 @@ test('clearing a mapping back to claude', () => {
   assert.strictEqual(store.resolveExec('grade-3', 'high', prefs).backend, 'claude');
 });
 
-test('a stale 1.35.0 customOverrides file is stripped on read, tierBackend defaults', () => {
+test('a stale 1.35.0 customOverrides record is stripped on read, tierBackend defaults', () => {
   clearCatalog();
   const dir = process.env.SIDEQUEST_HOME;
-  const prefsFile = path.join(dir, 'projects', 'model-prefs.json');
-  fs.mkdirSync(path.dirname(prefsFile), { recursive: true });
-  fs.writeFileSync(prefsFile, JSON.stringify({ opus: true, sonnet: true, haiku: true, fable: true, routing: true, customOverrides: { 'codex-x': { enabled: true } }, custom: [{ slug: 'codex-x' }] }));
+  db.putRow(db.openDb(dir), 'globals', {
+    key: 'model-prefs',
+    data: { opus: true, sonnet: true, haiku: true, fable: true, routing: true, customOverrides: { 'codex-x': { enabled: true } }, custom: [{ slug: 'codex-x' }] },
+  });
   const prefs = getModelPrefs();
   assert.strictEqual(prefs.customOverrides, undefined);
   assert.strictEqual(prefs.custom, undefined);
-  // and the file no longer has them
-  const onDisk = JSON.parse(fs.readFileSync(prefsFile, 'utf8'));
+  // and the persisted record no longer has them
+  const onDisk = db.getRow(db.openDb(dir), 'globals', 'model-prefs');
   assert.strictEqual('customOverrides' in onDisk, false);
   assert.strictEqual('custom' in onDisk, false);
 });

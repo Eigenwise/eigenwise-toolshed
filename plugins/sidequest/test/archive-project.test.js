@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-archive-project-test-'));
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 
 function runCli(args, cwd) {
@@ -28,12 +29,17 @@ const ACTIVE_PATH = path.join(os.tmpdir(), 'sq-archive-project-test', 'active');
 const ARCHIVED_PATH = path.join(os.tmpdir(), 'sq-archive-project-test', 'archived');
 const active = store.ensureProject(ACTIVE_PATH, 'Active Board');
 const archived = store.ensureProject(ARCHIVED_PATH, 'Archived Board');
+const database = db.openDb(store.homeRoot());
 store.createTicket(archived.slug, { title: 'todo' });
 const doing = store.createTicket(archived.slug, { title: 'doing' });
 store.updateTicket(archived.slug, doing.ref, { status: 'doing' });
 
 function meta(slug) {
-  return JSON.parse(fs.readFileSync(path.join(store.projectDir(slug), 'meta.json'), 'utf8'));
+  return store.readMeta(slug);
+}
+
+function writeMeta(slug, value) {
+  db.putRow(database, 'projects', { slug, data: value });
 }
 
 test('archive and unarchive persist a reversible metadata round trip', () => {
@@ -108,7 +114,7 @@ test('archive operations are idempotent and unknown boards are structured failur
 test('legacy metadata remains active and ensureProject does not silently restore', () => {
   const activeMeta = meta(active.slug);
   delete activeMeta.archivedAt;
-  fs.writeFileSync(path.join(store.projectDir(active.slug), 'meta.json'), JSON.stringify(activeMeta));
+  writeMeta(active.slug, activeMeta);
   assert.strictEqual(store.listProjects().find((project) => project.slug === active.slug).archivedAt, null);
 
   const result = store.archiveProject(archived.slug);

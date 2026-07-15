@@ -30,6 +30,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const db = require('./db.js');
+const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels } = require('./discovery.js');
 
 /* ------------------------------------------------------------------ *
@@ -171,41 +173,79 @@ function ticketsDir(slug) {
 function assetsDir(slug, id) {
   return path.join(projectDir(slug), 'assets', id);
 }
-function metaFile(slug) {
-  return path.join(projectDir(slug), 'meta.json');
-}
 
 /* ------------------------------------------------------------------ *
- *  Low-level JSON IO (atomic-ish, fail-soft on read)
+ *  SQLite persistence
  * ------------------------------------------------------------------ */
+
+const dbByHome = new Map();
+const transactionDepth = new WeakMap();
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function readJson(file, fallback) {
+function database() {
+  const root = homeRoot();
+  let handle = dbByHome.get(root);
+  if (!handle) {
+    handle = db.openDb(root);
+    migrateIfNeeded(handle, root);
+    dbByHome.set(root, handle);
+  }
+  return handle;
+}
+
+function transaction(fn) {
+  const handle = database();
+  if (transactionDepth.get(handle)) return fn();
+  transactionDepth.set(handle, 1);
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (_) {
-    return fallback;
+    return db.txn(handle, fn);
+  } finally {
+    transactionDepth.delete(handle);
   }
 }
 
-function writeJson(file, obj) {
-  ensureDir(path.dirname(file));
-  const tmp = `${file}.${process.pid}.${Math.floor(process.hrtime()[1] % 1e6)}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
-  try {
-    fs.renameSync(tmp, file);
-  } catch (_) {
-    // Windows rename onto an existing file can fail; replace explicitly.
-    try {
-      fs.unlinkSync(file);
-    } catch (_e) {
-      /* ignore */
-    }
-    fs.renameSync(tmp, file);
-  }
+function putProject(slug, meta) {
+  db.putRow(database(), 'projects', { slug, data: meta });
+}
+
+function putTicket(slug, ticket) {
+  const stored = Object.assign({}, ticket);
+  delete stored.exec;
+  delete stored.profile;
+  db.putRow(database(), 'tickets', {
+    id: stored.id,
+    project: slug,
+    ref: stored.ref || null,
+    status: stored.status || null,
+    archived: stored.archived ? 1 : 0,
+    ord: Number(stored.order) || 0,
+    claim_by: stored.claim && stored.claim.by ? stored.claim.by : null,
+    data: stored,
+  });
+}
+
+function putStory(slug, story) {
+  db.putRow(database(), 'stories', { id: story.id, project: slug, data: story });
+}
+
+function readGlobal(key, fallback) {
+  const value = db.getRow(database(), 'globals', key);
+  return value == null ? fallback : value;
+}
+
+function writeGlobal(key, value) {
+  db.putRow(database(), 'globals', { key, data: value });
+}
+
+// Raw existence of the persisted model-prefs record — no parse, and no
+// getModelPrefs side effect (which would create the row). Mirrors the old
+// "model-prefs.json exists" signal for callers deciding whether the user has
+// ever configured routing.
+function hasModelPrefs() {
+  return db.hasRow(database(), 'globals', 'model-prefs');
 }
 
 /* ------------------------------------------------------------------ *
@@ -228,7 +268,6 @@ const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 // Routing identity is intentionally provider-neutral. A grade owns the capability
 // slot; its runtime assignment says what actually executes work in that slot.
 const VALID_MODELS = ['grade-1', 'grade-2', 'grade-3', 'grade-4'];
-const LEGACY_TIER_GRADE = { haiku: 'grade-1', sonnet: 'grade-2', opus: 'grade-3', fable: 'grade-4' };
 const GRADE_TIER = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus', 'grade-4': 'fable' };
 const GRADE_LABELS = { 'grade-1': 'Grade 1', 'grade-2': 'Grade 2', 'grade-3': 'Grade 3', 'grade-4': 'Grade 4' };
 
@@ -243,7 +282,6 @@ const PROFILE_TIER = {
   routine: 'grade-1', everyday: 'grade-2', complex: 'grade-3', frontier: 'grade-4',
   haiku: 'grade-1', sonnet: 'grade-2', opus: 'grade-3', fable: 'grade-4',
 };
-const TIER_PROFILE = Object.assign({}, GRADE_TIER);
 const CLAUDE_RUNTIMES = ['haiku', 'sonnet', 'opus', 'fable'];
 const CLAUDE_RUNTIME_LABELS = {
   haiku: 'Claude Haiku', sonnet: 'Claude Sonnet',
@@ -779,11 +817,10 @@ function ensureProject(absPath, name) {
   const slug = slugify(resolved);
   const dir = projectDir(slug);
   ensureDir(ticketsDir(slug));
-  const mf = metaFile(slug);
-  let meta = readJson(mf, null);
+  let meta = readMeta(slug);
   if (!meta || typeof meta !== 'object') {
     meta = { path: resolved, name: name || defaultProjectName(resolved), createdAt: new Date().toISOString(), seq: 0, storySeq: 0 };
-    writeJson(mf, meta);
+    putProject(slug, meta);
   } else {
     // ensureProject runs on ordinary reads/writes, so restoring a board is
     // unarchiveProject's job. Keep meta.archivedAt intact here.
@@ -793,17 +830,27 @@ function ensureProject(absPath, name) {
     if (!meta.name) { meta.name = defaultProjectName(resolved); dirty = true; }
     if (typeof meta.seq !== 'number') { meta.seq = 0; dirty = true; }
     if (typeof meta.storySeq !== 'number') { meta.storySeq = 0; dirty = true; }
-    if (dirty) writeJson(mf, meta);
+    if (dirty) putProject(slug, meta);
   }
   return { slug, dir, meta };
 }
 
 function readMeta(slug) {
-  return readJson(metaFile(slug), null);
+  return db.getRow(database(), 'projects', slug);
 }
 
 function metaLockPath(slug) {
   return path.join(projectDir(slug), '.meta.lock');
+}
+
+function withMetaLock(slug, fn) {
+  const lock = metaLockPath(slug);
+  const locked = acquireLock(lock);
+  try {
+    return transaction(fn);
+  } finally {
+    if (locked) releaseLock(lock);
+  }
 }
 
 // Locked read-modify-write so two concurrent createTicket calls never mint the
@@ -812,88 +859,60 @@ function metaLockPath(slug) {
 // the lock (e.g. a wedged/unwritable dir), fall back to an unlocked bump rather
 // than blocking ticket creation entirely.
 function nextSeq(slug) {
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  try {
-    const mf = metaFile(slug);
-    const meta = readJson(mf, null) || { seq: 0 };
+  return withMetaLock(slug, () => {
+    const meta = readMeta(slug) || { seq: 0 };
     meta.seq = (typeof meta.seq === 'number' ? meta.seq : 0) + 1;
-    writeJson(mf, meta);
+    putProject(slug, meta);
     return meta.seq;
-  } finally {
-    if (locked) releaseLock(lock);
-  }
+  });
 }
 
-// The story counter is a second monotonic sequence on the same meta.json,
-// minting US-1, US-2, … independently of the SQ-N ticket refs. Shares the meta
-// lock with nextSeq so a concurrent ticket + story creation can't clobber each
-// other's write.
+// The story counter is a second monotonic sequence on the same project row,
+// minting US-1, US-2, … independently of the SQ-N ticket refs.
 function nextStorySeq(slug) {
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  try {
-    const mf = metaFile(slug);
-    const meta = readJson(mf, null) || { storySeq: 0 };
+  return withMetaLock(slug, () => {
+    const meta = readMeta(slug) || { storySeq: 0 };
     meta.storySeq = (typeof meta.storySeq === 'number' ? meta.storySeq : 0) + 1;
-    writeJson(mf, meta);
+    putProject(slug, meta);
     return meta.storySeq;
-  } finally {
-    if (locked) releaseLock(lock);
-  }
+  });
 }
 
 // Turn a board's per-project notifications on or off. When off, the board is
 // muted: queueEventNotification below drops every background event for it, even
-// with a dashboard tab open. Stored on meta.json (absent == on), behind the meta
-// lock so it can't race a seq bump.
+// with a dashboard tab open. Stored on the project row (absent == on).
 function setProjectNotify(slug, on) {
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  try {
-    const mf = metaFile(slug);
-    const meta = readJson(mf, null);
+  return withMetaLock(slug, () => {
+    const meta = readMeta(slug);
     if (!meta) return { ok: false, reason: 'not_found' };
     meta.notify = on !== false;
-    writeJson(mf, meta);
+    putProject(slug, meta);
     return { ok: true, notify: meta.notify };
-  } finally {
-    if (locked) releaseLock(lock);
-  }
+  });
 }
 
-// Board-level archive is a reversible meta.json stamp. Project files and tickets
+// Board-level archive is a reversible project-row stamp. Project data and tickets
 // remain in place, and repeat calls keep the original archive timestamp.
 function archiveProject(slug) {
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  try {
-    const mf = metaFile(slug);
-    const meta = readJson(mf, null);
+  return withMetaLock(slug, () => {
+    const meta = readMeta(slug);
     if (!meta) return { ok: false, reason: 'not_found' };
     if (meta.archivedAt) return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: true };
     meta.archivedAt = new Date().toISOString();
-    writeJson(mf, meta);
+    putProject(slug, meta);
     return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: false };
-  } finally {
-    if (locked) releaseLock(lock);
-  }
+  });
 }
 
 function unarchiveProject(slug) {
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  try {
-    const mf = metaFile(slug);
-    const meta = readJson(mf, null);
+  return withMetaLock(slug, () => {
+    const meta = readMeta(slug);
     if (!meta) return { ok: false, reason: 'not_found' };
     if (!meta.archivedAt) return { ok: true, slug, wasArchived: false };
     delete meta.archivedAt;
-    writeJson(mf, meta);
+    putProject(slug, meta);
     return { ok: true, slug, wasArchived: true };
-  } finally {
-    if (locked) releaseLock(lock);
-  }
+  });
 }
 
 // Permanent deletion is deliberately strict: callers must already have the exact
@@ -901,19 +920,13 @@ function unarchiveProject(slug) {
 // project lookup at a destructive boundary.
 function deleteProjectExact(slug) {
   if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9-]{1,80}$/.test(slug)) return { ok: false, reason: 'not_found' };
-  const dir = projectDir(slug);
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  let exists = false;
-  try {
-    exists = !!readJson(metaFile(slug), null);
-  } finally {
-    // The lock file lives inside the board directory. Release it before removal so
-    // Windows never holds an open handle on a child of the tree being deleted.
-    if (locked) releaseLock(lock);
-  }
-  if (!exists) return { ok: false, reason: 'not_found' };
-  fs.rmSync(dir, { recursive: true, force: true });
+  if (!readMeta(slug)) return { ok: false, reason: 'not_found' };
+  transaction(() => {
+    for (const ticket of db.listRows(database(), 'tickets', { project: slug })) db.deleteRow(database(), 'tickets', ticket.id);
+    for (const story of db.listRows(database(), 'stories', { project: slug })) db.deleteRow(database(), 'stories', story.id);
+    db.deleteRow(database(), 'projects', slug);
+  });
+  fs.rmSync(projectDir(slug), { recursive: true, force: true });
   return { ok: true, slug };
 }
 
@@ -923,17 +936,10 @@ function deleteProjectExact(slug) {
 // boards, or { all: true } for internal resolution.
 function listProjects(opts) {
   opts = opts || {};
-  const root = projectsRoot();
-  let slugs = [];
-  try {
-    slugs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
-  } catch (_) {
-    return [];
-  }
   const out = [];
-  for (const slug of slugs) {
-    const meta = readMeta(slug);
-    if (!meta) continue;
+  for (const meta of db.listRows(database(), 'projects')) {
+    if (!meta || !meta.path) continue;
+    const slug = slugify(meta.path);
     const archivedAt = meta.archivedAt || null;
     if (!opts.all && (opts.archived ? !archivedAt : !!archivedAt)) continue;
     const tickets = listTickets(slug);
@@ -1053,27 +1059,31 @@ function mergeProject(srcSlug, destSlug, opts) {
   if (dryRun) return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
 
   // Stories first, so a moved ticket's storyId still finds its story in dest.
-  for (const { story, newRef } of storyPlan) {
-    const moved = Object.assign({}, story, { ref: newRef });
-    writeJson(storyFile(destSlug, moved.id), moved);
-  }
-  for (const { ticket, newRef } of ticketPlan) {
-    const links = Array.isArray(ticket.links)
-      ? ticket.links.map((l) => Object.assign({}, l, { ref: refMap[String(l.ref).toUpperCase()] || l.ref }))
-      : [];
-    const moved = Object.assign({}, ticket, { ref: newRef, links });
-    writeJson(ticketFile(destSlug, moved.id), moved);
-    const srcAssets = assetsDir(srcSlug, ticket.id);
-    if (fs.existsSync(srcAssets)) {
-      try {
-        fs.cpSync(srcAssets, assetsDir(destSlug, ticket.id), { recursive: true });
-      } catch (_) {
-        /* an unreadable asset folder shouldn't abort the whole merge */
+  transaction(() => {
+    for (const ticket of tickets) db.deleteRow(database(), 'tickets', ticket.id);
+    for (const story of stories) db.deleteRow(database(), 'stories', story.id);
+    for (const { story, newRef } of storyPlan) {
+      const moved = Object.assign({}, story, { ref: newRef });
+      putStory(destSlug, moved);
+    }
+    for (const { ticket, newRef } of ticketPlan) {
+      const links = Array.isArray(ticket.links)
+        ? ticket.links.map((l) => Object.assign({}, l, { ref: refMap[String(l.ref).toUpperCase()] || l.ref }))
+        : [];
+      const moved = Object.assign({}, ticket, { ref: newRef, links });
+      putTicket(destSlug, moved);
+      const srcAssets = assetsDir(srcSlug, ticket.id);
+      if (fs.existsSync(srcAssets)) {
+        try {
+          fs.cpSync(srcAssets, assetsDir(destSlug, ticket.id), { recursive: true });
+        } catch (_) {
+          /* an unreadable asset folder shouldn't abort the whole merge */
+        }
       }
     }
-  }
+    db.deleteRow(database(), 'projects', srcSlug);
+  });
 
-  // Everything is copied into dest — retire the source board.
   try {
     fs.rmSync(projectDir(srcSlug), { recursive: true, force: true });
   } catch (_) {
@@ -1148,21 +1158,10 @@ function saveAssetData(slug, id, name, buffer) {
  *  Tickets
  * ------------------------------------------------------------------ */
 
-function ticketFile(slug, id) {
-  return path.join(ticketsDir(slug), `${path.basename(String(id))}.json`);
-}
-
 function listTickets(slug) {
-  let files = [];
-  try {
-    files = fs.readdirSync(ticketsDir(slug)).filter((f) => f.endsWith('.json'));
-  } catch (_) {
-    return [];
-  }
   const out = [];
   const prefs = getModelPrefs(); // one read; the ladder is the same for every ticket in the pass
-  for (const f of files) {
-    const t = readJson(path.join(ticketsDir(slug), f), null);
+  for (const t of db.listRows(database(), 'tickets', { project: slug })) {
     if (t && t.id) out.push(applyDerivedRouting(t, prefs));
   }
   // Newest first by order (falls back to createdAt); the UI re-groups by column.
@@ -1171,12 +1170,10 @@ function listTickets(slug) {
 }
 
 function getTicket(slug, idOrRef) {
-  const direct = readJson(ticketFile(slug, idOrRef), null);
-  if (direct && direct.id) return applyDerivedRouting(direct, null);
-  // Allow lookup by human ref like "SQ-4" (case-insensitive).
-  const wanted = String(idOrRef).toUpperCase();
+  const wanted = String(idOrRef);
+  const wantedRef = wanted.toUpperCase();
   for (const t of listTickets(slug)) {
-    if (String(t.ref).toUpperCase() === wanted) return t;
+    if (t.id === wanted || String(t.ref).toUpperCase() === wantedRef) return t;
   }
   return null;
 }
@@ -1279,7 +1276,7 @@ function createTicket(slug, fields) {
     updatedAt: now,
     order: Date.now(),
   };
-  writeJson(ticketFile(slug, id), ticket);
+  putTicket(slug, ticket);
   queueEventNotification(slug, ticket, 'created', ticket.lastEventSource);
   return ticket;
 }
@@ -1447,7 +1444,7 @@ function updateTicket(slug, idOrRef, patch) {
     t.lastEventType = t.status !== prevStatus ? 'status' : 'edit';
     t.lastEventSource = patch.source ? String(patch.source) : 'cli';
     t.updatedAt = new Date().toISOString();
-    writeJson(ticketFile(slug, t.id), t);
+    putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return t;
   };
@@ -1470,13 +1467,9 @@ function deleteTicket(slug, idOrRef) {
   const deletedRef = found.ref;
   const lock = ticketLockPath(slug, found.id);
   const locked = acquireLock(lock);
-  let ok = true;
+  let ok = false;
   try {
-    try {
-      fs.unlinkSync(ticketFile(slug, found.id));
-    } catch (_) {
-      ok = false;
-    }
+    ok = db.deleteRow(database(), 'tickets', found.id);
     if (ok) {
       try {
         fs.rmSync(assetsDir(slug, found.id), { recursive: true, force: true });
@@ -1522,7 +1515,7 @@ function setArchived(slug, idOrRef, archived, opts) {
     t.lastEventType = archived ? 'archived' : 'restored';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
-    writeJson(ticketFile(slug, t.id), t);
+    putTicket(slug, t);
     return { ok: true, ticket: t };
   });
 }
@@ -1651,7 +1644,7 @@ function withTicketLock(slug, id, fn) {
   const lock = ticketLockPath(slug, id);
   if (!acquireLock(lock)) return { ok: false, reason: 'busy' };
   try {
-    return fn();
+    return transaction(fn);
   } finally {
     releaseLock(lock);
   }
@@ -1679,7 +1672,7 @@ function claimTicket(slug, idOrRef, by, opts) {
     t.lastEventType = 'status';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
-    writeJson(ticketFile(slug, t.id), t);
+    putTicket(slug, t);
     // Tie this claim to the worker's session so a SessionEnd/SubagentStop hook can
     // release it immediately instead of waiting out the TTL. No-op without a session id.
     if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
@@ -1717,7 +1710,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     t.lastEventType = 'status';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
-    writeJson(ticketFile(slug, t.id), t);
+    putTicket(slug, t);
     // Drop this claim from the session registry — it's no longer outstanding, so a
     // later reconcile of the same session won't try to touch it (keyed on the
     // ticket, so a blank `by` on the done doesn't matter). No-op without a session id.
@@ -1835,7 +1828,7 @@ function assignTicket(slug, idOrRef, assignee, opts) {
     t.lastEventType = 'edit';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
-    writeJson(ticketFile(slug, t.id), t);
+    putTicket(slug, t);
     return { ok: true, ticket: t };
   });
 }
@@ -1851,12 +1844,6 @@ function assignTicket(slug, idOrRef, assignee, opts) {
  *  so these use a plain read-modify-write rather than the per-item lock tickets need.
  * ------------------------------------------------------------------ */
 
-function storiesDir(slug) {
-  return path.join(projectDir(slug), 'stories');
-}
-function storyFile(slug, id) {
-  return path.join(storiesDir(slug), `${path.basename(String(id))}.json`);
-}
 function newStoryId() {
   return 'st_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
 }
@@ -1864,28 +1851,17 @@ function newStoryId() {
 // Every story in a project, oldest-first (US-1 before US-2) so a legend/filter
 // reads in creation order. Fail-soft to [] when the folder doesn't exist yet.
 function listStories(slug) {
-  let files = [];
-  try {
-    files = fs.readdirSync(storiesDir(slug)).filter((f) => f.endsWith('.json'));
-  } catch (_) {
-    return [];
-  }
-  const out = [];
-  for (const f of files) {
-    const s = readJson(path.join(storiesDir(slug), f), null);
-    if (s && s.id) out.push(s);
-  }
+  const out = db.listRows(database(), 'stories', { project: slug }).filter((s) => s && s.id);
   out.sort((a, b) => (a.order || 0) - (b.order || 0));
   return out;
 }
 
 // Look up a story by its stable id or its human ref (US-4, case-insensitive).
 function getStory(slug, idOrRef) {
-  const direct = readJson(storyFile(slug, idOrRef), null);
-  if (direct && direct.id) return direct;
-  const wanted = String(idOrRef).toUpperCase();
+  const wanted = String(idOrRef);
+  const wantedRef = wanted.toUpperCase();
   for (const s of listStories(slug)) {
-    if (String(s.ref).toUpperCase() === wanted) return s;
+    if (s.id === wanted || String(s.ref).toUpperCase() === wantedRef) return s;
   }
   return null;
 }
@@ -1903,42 +1879,46 @@ function coerceStoryId(slug, val) {
 }
 
 function createStory(slug, fields) {
-  fields = fields || {};
-  const id = newStoryId();
-  const seq = nextStorySeq(slug);
-  const now = new Date().toISOString();
-  const story = {
-    id,
-    ref: `US-${seq}`,
-    title: String(fields.title || 'Untitled story').trim().slice(0, 200) || 'Untitled story',
-    description: String(fields.description || '').trim(),
-    // A requested colour wins if it parses; otherwise cycle the palette by the
-    // sequence number so successive stories stay visually distinct.
-    color: parseStoryColor(fields.color) || autoStoryColor(seq - 1),
-    createdAt: now,
-    updatedAt: now,
-    order: Date.now(),
-  };
-  writeJson(storyFile(slug, id), story);
-  return story;
+  return transaction(() => {
+    fields = fields || {};
+    const id = newStoryId();
+    const seq = nextStorySeq(slug);
+    const now = new Date().toISOString();
+    const story = {
+      id,
+      ref: `US-${seq}`,
+      title: String(fields.title || 'Untitled story').trim().slice(0, 200) || 'Untitled story',
+      description: String(fields.description || '').trim(),
+      // A requested colour wins if it parses; otherwise cycle the palette by the
+      // sequence number so successive stories stay visually distinct.
+      color: parseStoryColor(fields.color) || autoStoryColor(seq - 1),
+      createdAt: now,
+      updatedAt: now,
+      order: Date.now(),
+    };
+    putStory(slug, story);
+    return story;
+  });
 }
 
 // Apply a partial update to a story. An unparseable colour is ignored rather
 // than blanking the existing one.
 function updateStory(slug, idOrRef, patch) {
-  const s = getStory(slug, idOrRef);
-  if (!s) return null;
-  patch = patch || {};
-  if (patch.title != null) s.title = String(patch.title).trim().slice(0, 200) || s.title;
-  if (patch.description != null) s.description = String(patch.description).trim();
-  if (patch.color != null) {
-    const c = parseStoryColor(patch.color);
-    if (c) s.color = c;
-  }
-  if (patch.order != null && Number.isFinite(Number(patch.order))) s.order = Number(patch.order);
-  s.updatedAt = new Date().toISOString();
-  writeJson(storyFile(slug, s.id), s);
-  return s;
+  return transaction(() => {
+    const s = getStory(slug, idOrRef);
+    if (!s) return null;
+    patch = patch || {};
+    if (patch.title != null) s.title = String(patch.title).trim().slice(0, 200) || s.title;
+    if (patch.description != null) s.description = String(patch.description).trim();
+    if (patch.color != null) {
+      const c = parseStoryColor(patch.color);
+      if (c) s.color = c;
+    }
+    if (patch.order != null && Number.isFinite(Number(patch.order))) s.order = Number(patch.order);
+    s.updatedAt = new Date().toISOString();
+    putStory(slug, s);
+    return s;
+  });
 }
 
 // Delete a story and detach it from its member tickets (clearing storyId, the
@@ -1947,11 +1927,7 @@ function updateStory(slug, idOrRef, patch) {
 function deleteStory(slug, idOrRef) {
   const s = getStory(slug, idOrRef);
   if (!s) return false;
-  try {
-    fs.unlinkSync(storyFile(slug, s.id));
-  } catch (_) {
-    return false;
-  }
+  if (!db.deleteRow(database(), 'stories', s.id)) return false;
   try {
     for (const t of listTickets(slug)) {
       if (t.storyId === s.id) updateTicket(slug, t.id, { storyId: null, source: 'cli' });
@@ -2024,7 +2000,7 @@ function addComment(slug, idOrRef, fields) {
     t.lastEventType = kind === 'question' ? 'question' : 'comment';
     t.lastEventSource = source;
     t.updatedAt = comment.at;
-    writeJson(ticketFile(slug, t.id), t);
+    putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource, { commentBody: comment.body });
     return { ok: true, ticket: t, comment };
   });
@@ -2052,8 +2028,6 @@ function needsResponse(ticket) {
  *  blocks / blocked-by / related. "A depends-on B" == "A blocked-by B" (B must
  *  finish first) == "B blocks A".
  * ------------------------------------------------------------------ */
-
-const LINK_TYPES = ['blocks', 'blocked-by', 'related'];
 
 // Map a user verb to [typeStoredOnFrom, typeStoredOnTo].
 function linkTypePair(verb) {
@@ -2095,7 +2069,7 @@ function addLinkToTicket(slug, idOrRef, type, otherRef) {
     if (!t.links.some((l) => l.type === type && upperRef(l.ref) === ref)) {
       t.links.push({ type, ref });
       t.updatedAt = new Date().toISOString();
-      writeJson(ticketFile(slug, t.id), t);
+      putTicket(slug, t);
     }
   });
 }
@@ -2135,7 +2109,7 @@ function stripLinksTo(slug, idOrRef, otherRef) {
     if (kept.length !== t.links.length) {
       t.links = kept;
       t.updatedAt = new Date().toISOString();
-      writeJson(ticketFile(slug, t.id), t);
+      putTicket(slug, t);
     }
   });
 }
@@ -2318,9 +2292,6 @@ const NOTIFY_PREF_DEFAULTS = { question: true, comment: true, created: true, sta
 // only caps the tail of already-seen history so the file can't grow forever.
 const MAX_READ_KEPT = 100;
 
-function notificationsFile() {
-  return path.join(projectsRoot(), 'notifications.json');
-}
 function notificationsLockPath() {
   return path.join(projectsRoot(), '.notifications.lock');
 }
@@ -2331,11 +2302,11 @@ function newNotificationId() {
 
 // Fail-soft read: a missing/corrupt file degrades to an empty queue.
 function readNotifications() {
-  const data = readJson(notificationsFile(), null);
+  const data = readGlobal('notifications', null);
   return data && Array.isArray(data.notifications) ? data.notifications : [];
 }
 function writeNotifications(list) {
-  writeJson(notificationsFile(), { notifications: list });
+  writeGlobal('notifications', { notifications: list });
 }
 
 // Serialize every mutation on the queue behind one lock (best-effort, like the
@@ -2344,7 +2315,7 @@ function withNotificationsLock(fn) {
   const lock = notificationsLockPath();
   const locked = acquireLock(lock);
   try {
-    return fn();
+    return transaction(fn);
   } finally {
     if (locked) releaseLock(lock);
   }
@@ -2424,14 +2395,10 @@ function addNotification(fields) {
  *  an opted-out kind is never enqueued in the first place, tab or no tab.
  * ------------------------------------------------------------------ */
 
-function notifyPrefsFile() {
-  return path.join(projectsRoot(), 'notify-prefs.json');
-}
-
 // Read the saved opt-in/out settings. Missing/corrupt file -> all on, matching
 // the dashboard's own NOTIFY_DEFAULTS.
 function getNotifyPrefs() {
-  const saved = readJson(notifyPrefsFile(), null);
+  const saved = readGlobal('notify-prefs', null);
   const merged = Object.assign({}, NOTIFY_PREF_DEFAULTS, saved && typeof saved === 'object' ? saved : {});
   const out = {};
   for (const k of Object.keys(NOTIFY_PREF_DEFAULTS)) out[k] = merged[k] !== false;
@@ -2443,7 +2410,7 @@ function setNotifyPrefs(patch) {
   const next = Object.assign({}, getNotifyPrefs(), patch || {});
   const out = {};
   for (const k of Object.keys(NOTIFY_PREF_DEFAULTS)) out[k] = next[k] !== false;
-  writeJson(notifyPrefsFile(), out);
+  writeGlobal('notify-prefs', out);
   return out;
 }
 
@@ -2458,10 +2425,6 @@ function setNotifyPrefs(patch) {
  *  / coerceEffort stay permissive, so a ticket already tagged with a disabled
  *  tier/effort keeps its tag (and still renders) rather than losing data.
  * ------------------------------------------------------------------ */
-
-function modelPrefsFile() {
-  return path.join(projectsRoot(), 'model-prefs.json');
-}
 
 // The provider-neutral EXECUTION-PLAN view over the tier prefs (SQ-188): one
 // entry per profile with its tier, enabled flag, resolved runtime (backend +
@@ -2568,7 +2531,7 @@ function translateProfilePatch(patch) {
 // object but may carry the old flat effort keys — seed EVERY model row from
 // those flat values so an existing allowlist survives the upgrade unchanged.
 function getModelPrefs() {
-  const saved = readJson(modelPrefsFile(), null);
+  const saved = readGlobal('model-prefs', null);
   const merged = saved && typeof saved === 'object' ? saved : {};
   const out = {};
   for (const grade of VALID_MODELS) {
@@ -2610,7 +2573,7 @@ function getModelPrefs() {
   out.discovered = discoverExternalModels();
 
   out.profiles = deriveProfilesView(out);
-  if (JSON.stringify(merged) !== JSON.stringify(persistedPrefs(out))) writeJson(modelPrefsFile(), persistedPrefs(out));
+  if (JSON.stringify(merged) !== JSON.stringify(persistedPrefs(out))) writeGlobal('model-prefs', persistedPrefs(out));
   return out;
 }
 
@@ -2682,7 +2645,7 @@ function setModelPrefs(patch) {
   }
   out.tierBackend = normalizeTierBackend(mergedBackend);
 
-  writeJson(modelPrefsFile(), persistedPrefs(out));
+  writeGlobal('model-prefs', persistedPrefs(out));
 
   // Resolve after the write so the persisted file carries only tierBackend, while
   // the returned object also has the derived catalog + resolution for callers.
@@ -2922,24 +2885,21 @@ function fireDueReminders() {
 // the file can't grow forever from sessions that ended without a reconcile hook.
 const WORKER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-function workersFile() {
-  return path.join(projectsRoot(), 'workers.json');
-}
 function workersLockPath() {
   return path.join(projectsRoot(), '.workers.lock');
 }
 function readWorkers() {
-  const d = readJson(workersFile(), null);
+  const d = readGlobal('workers', null);
   return d && typeof d === 'object' && d.sessions && typeof d.sessions === 'object' ? d : { sessions: {} };
 }
 function writeWorkers(obj) {
-  writeJson(workersFile(), obj);
+  writeGlobal('workers', obj);
 }
 function withWorkersLock(fn) {
   const lock = workersLockPath();
   const locked = acquireLock(lock);
   try {
-    return fn();
+    return transaction(fn);
   } finally {
     if (locked) releaseLock(lock);
   }
@@ -3137,17 +3097,13 @@ function sessionClaims(sessionId) {
  * ------------------------------------------------------------------ */
 
 function readServerInfo() {
-  return readJson(serverFile(), null);
+  return readGlobal('server-info', null);
 }
 function writeServerInfo(info) {
-  writeJson(serverFile(), info);
+  writeGlobal('server-info', info);
 }
 function clearServerInfo() {
-  try {
-    fs.unlinkSync(serverFile());
-  } catch (_) {
-    /* ignore */
-  }
+  db.deleteRow(database(), 'globals', 'server-info');
 }
 
 module.exports = {
@@ -3176,6 +3132,7 @@ module.exports = {
   classifyModelFilter,
   getModelPrefs,
   setModelPrefs,
+  hasModelPrefs,
   homeRoot,
   projectsRoot,
   serverFile,

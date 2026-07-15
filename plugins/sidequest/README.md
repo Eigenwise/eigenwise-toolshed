@@ -458,21 +458,28 @@ The target board defaults to `$CLAUDE_PROJECT_DIR` (or the current directory); p
 
 ## Where things live
 
-Tickets and images are stored centrally, so they never clutter a repo and one dashboard can aggregate
-them:
+Board data lives in a single SQLite database, stored centrally so it never clutters a repo and one
+dashboard can aggregate every project:
 
 ```
 ~/.claude/sidequest/
+  sidequest.db                    # all board data: projects, tickets, stories, prefs (SQLite)
   server.json                     # the running dashboard's port + pid
   projects/
     <folder>-<hash>/
-      meta.json                   # project path, name, ticket + story counters, notify switch
-      tickets/<id>.json           # one file per ticket
-      stories/<id>.json           # one file per user story
-      assets/<id>/<image>         # attached screenshots
+      assets/<id>/<image>         # attached screenshots (on disk, referenced from the db)
 ```
 
 Each ticket gets a short human ref (`SQ-1`, `SQ-2`, …) and each story a `US-1`, `US-2`, … per project.
+
+Storage runs on Node's built-in `node:sqlite`, so there's no native dependency to build — but it needs
+**Node 22.5+**. WAL mode is on, so the dashboard reading and an agent writing don't block each other.
+
+**Upgrading from the JSON store.** Older builds kept one JSON file per ticket and story plus
+`meta.json`, `model-prefs.json`, and friends. The first time a newer build opens your home it migrates
+all of that into `sidequest.db` in a single pass, **non-destructively** — the old JSON tree is left
+exactly where it was, so you can roll back just by downgrading the plugin. The migration is guarded by
+a marker in the db: it runs once and is a no-op on every start after.
 
 ### Configuration
 

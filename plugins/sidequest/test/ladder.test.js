@@ -13,6 +13,7 @@ const fs = require('fs');
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-ladder-test-'));
 
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const { routingLadder, deriveRouting, coerceComplexity, setModelPrefs } = store;
 
 const TIER_ORDER = ['grade-1', 'grade-2', 'grade-3', 'grade-4'];
@@ -425,15 +426,16 @@ test('per-model efforts: disabling grade-4.max (all tiers on) removes the sparin
   assert.strictEqual(got[9], 'grade-4.xhigh', 'c10 lands the top normal rung');
 });
 
-test('migration: a legacy flat-key file on disk broadcasts into every model row', () => {
-  const file = path.join(process.env.SIDEQUEST_HOME, 'projects', 'model-prefs.json');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+test('migration: a legacy flat-key record broadcasts into every model row', () => {
   // Old shape: no `efforts` object, just the flat effort booleans.
-  fs.writeFileSync(file, JSON.stringify({
-    'grade-1': true, 'grade-2': true, 'grade-3': true, 'grade-4': true,
-    low: true, medium: false, high: true, xhigh: true, max: false,
-    routing: true, routingBias: 0,
-  }));
+  db.putRow(db.openDb(process.env.SIDEQUEST_HOME), 'globals', {
+    key: 'model-prefs',
+    data: {
+      'grade-1': true, 'grade-2': true, 'grade-3': true, 'grade-4': true,
+      low: true, medium: false, high: true, xhigh: true, max: false,
+      routing: true, routingBias: 0,
+    },
+  });
   const prefs = store.getModelPrefs();
   assert.ok(!('medium' in prefs), 'flat effort keys are gone from the returned shape');
   assert.ok(prefs.efforts && !prefs.efforts.haiku, 'haiku has no efforts row');

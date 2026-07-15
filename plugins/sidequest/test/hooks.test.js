@@ -42,7 +42,9 @@ const { execFileSync } = require('node:child_process');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const { slug } = store.ensureProject(path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board'));
+const database = db.openDb(SIDEQUEST_HOME);
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const CAPTURE = path.join(HOOKS, 'capture-nudge.js');
@@ -88,9 +90,8 @@ function runSessionWithHome(home, envOverrides) {
 }
 
 function writeModelPrefs(home, prefs) {
-  const projects = path.join(home, 'projects');
-  fs.mkdirSync(projects, { recursive: true });
-  fs.writeFileSync(path.join(projects, 'model-prefs.json'), JSON.stringify(prefs));
+  const database = db.openDb(home);
+  db.putRow(database, 'globals', { key: 'model-prefs', data: prefs });
 }
 
 const capture = (prompt) => runHook(CAPTURE, { prompt });
@@ -390,9 +391,10 @@ test('session-start: skips sync when prefs are unreadable', () => {
   const codexFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
   const original = '<!-- generated-by: sidequest-agentsync -->\nkeep';
   fs.writeFileSync(codexFile, original);
-  const projects = path.join(home, 'projects');
-  fs.mkdirSync(projects, { recursive: true });
-  fs.writeFileSync(path.join(projects, 'model-prefs.json'), '{');
+  // Genuinely corrupt: raw invalid JSON straight into the data column. putRow
+  // would JSON-encode the string into a *valid* blob, so write it directly —
+  // getModelPrefs's parse then throws and session-start must skip provisioning.
+  db.openDb(home).prepare("INSERT INTO globals (key, data) VALUES ('model-prefs', '{')").run();
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents });
   assert.strictEqual(fs.readFileSync(codexFile, 'utf8'), original, 'unreadable prefs must leave marked files untouched');
 });
@@ -540,12 +542,11 @@ function addEffortTicket(title, effort) {
 // Backdate every claim the registry attributes to `sessionId` by `minutesAgo`, so
 // the claim's `at` reads as an old, long-running run without waiting real time.
 function backdateSessionClaims(sessionId, minutesAgo) {
-  const wf = path.join(SIDEQUEST_HOME, 'projects', 'workers.json');
-  const w = JSON.parse(fs.readFileSync(wf, 'utf8'));
+  const w = db.getRow(database, 'globals', 'workers');
   const at = new Date(Date.now() - minutesAgo * 60 * 1000).toISOString();
   for (const c of w.sessions[sessionId].claims) c.at = at;
   w.sessions[sessionId].updatedAt = at;
-  fs.writeFileSync(wf, JSON.stringify(w));
+  db.putRow(database, 'globals', { key: 'workers', data: w });
 }
 
 test('subagent-stop: an over-threshold claim emits a one-line runaway note', () => {

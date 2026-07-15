@@ -56,11 +56,12 @@ function provisionExecAgents() {
   try {
     const sync = require(path.join(pluginRoot(), 'lib', 'agentsync.js'));
     const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
-    const fs = require('fs');
-    const home = process.env.SIDEQUEST_HOME;
-    const prefsFile = home ? path.join(path.resolve(home), 'projects', 'model-prefs.json') : path.join(require('os').homedir(), '.claude', 'sidequest', 'projects', 'model-prefs.json');
-    if (!fs.existsSync(prefsFile)) return null;
-    JSON.parse(fs.readFileSync(prefsFile, 'utf8'));
+    // Provision only when the user has a persisted prefs record. Post-SQLite
+    // that record lives in the DB (model-prefs.json is a frozen rollback copy),
+    // so check the store, not the file — otherwise prefs set after migration
+    // would never trigger provisioning. A corrupt prefs blob throws in
+    // getModelPrefs below and is caught, leaving marked files untouched.
+    if (!store.hasModelPrefs()) return null;
     const prefs = store.getModelPrefs();
     if (!prefs || typeof prefs !== 'object') return null;
     sync.cleanupNativeAgents({ staleBefore: Date.now() - 6 * 60 * 60 * 1000 });

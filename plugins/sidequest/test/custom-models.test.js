@@ -8,9 +8,10 @@ const fs = require('fs');
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-grade-routing-'));
 process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-grade-catalog-'));
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
+const database = db.openDb(store.homeRoot());
 
 const GRADES = ['grade-1', 'grade-2', 'grade-3', 'grade-4'];
-const PREFS_FILE = path.join(process.env.SIDEQUEST_HOME, 'projects', 'model-prefs.json');
 
 test('routing exposes canonical grade identities', () => {
   assert.deepStrictEqual(store.getModelVocab().models, GRADES);
@@ -21,12 +22,11 @@ test('routing exposes canonical grade identities', () => {
 });
 
 test('legacy provider, profile, effort and backend prefs migrate losslessly', () => {
-  fs.mkdirSync(path.dirname(PREFS_FILE), { recursive: true });
-  fs.writeFileSync(PREFS_FILE, JSON.stringify({
+  db.putRow(database, 'globals', { key: 'model-prefs', data: {
     haiku: false, sonnet: true, opus: true, fable: false,
     efforts: { sonnet: { low: false }, opus: { xhigh: false }, fable: { max: false } },
     tierBackend: { opus: 'codex-gpt-5-6-terra' }, routingBias: 2,
-  }));
+  }});
   const prefs = store.getModelPrefs();
   assert.strictEqual(prefs['grade-1'], false);
   assert.strictEqual(prefs['grade-2'], true);
@@ -36,7 +36,7 @@ test('legacy provider, profile, effort and backend prefs migrate losslessly', ()
   assert.strictEqual(prefs.efforts['grade-3'].xhigh, false);
   assert.strictEqual(prefs.tierBackend['grade-3'], 'codex-gpt-5-6-terra');
   assert.strictEqual(prefs.routingBias, 2);
-  const raw = JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8'));
+  const raw = db.getRow(database, 'globals', 'model-prefs');
   assert.deepStrictEqual(Object.keys(raw).filter((k) => /^grade-/.test(k)), GRADES);
   for (const old of ['haiku', 'sonnet', 'opus', 'fable', 'routine', 'everyday', 'complex', 'frontier']) assert.ok(!(old in raw), old + ' must not persist');
   assert.deepStrictEqual(Object.keys(raw.efforts).sort(), ['grade-1', 'grade-2', 'grade-3', 'grade-4']);
@@ -61,7 +61,7 @@ test('deprecated aliases are accepted but canonical output stays grade-keyed', (
   const saved = store.setModelPrefs({ profiles: { complex: { enabled: false, efforts: { low: false } } }, tierBackend: { frontier: 'claude' } });
   assert.strictEqual(saved['grade-3'], false);
   assert.strictEqual(saved.efforts['grade-3'].low, false);
-  const raw = JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8'));
+  const raw = db.getRow(database, 'globals', 'model-prefs');
   assert.ok(!('profiles' in raw));
   assert.ok(!('complex' in raw.tierBackend));
 });

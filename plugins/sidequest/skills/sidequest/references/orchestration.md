@@ -49,31 +49,39 @@ does not remove them: reading a 300k context 40 times is still 40 reads.
 
 The lead really has two kinds of turn: cheap routing/ack ("worker 3 done, spawn the next") and
 expensive plan/synthesis (decompose, weigh conflicting reports, write the spec, integrate). You want
-the frontier rate landing on the second kind, not the first. Three levers keep it there:
+the frontier rate landing on the second kind, not the first. **You can cut this cost without giving up
+steering** — reach for the first two levers, which cost nothing in control, before the third, which
+trades control for cost and is optional. Keeping every worker background and steerable and simply
+paying the wakeups is a legitimate default; the first two levers are what make it affordable. Do not
+reflexively go synchronous to save money.
 
-- **Prefer a synchronous batched wave over background teammates for orchestration-heavy rounds.** A
-  background (`in_process_teammate`) executor that finishes pings the lead, waking it to re-read the
-  full context just to acknowledge "done." N background workers over a long round is N full-context
-  re-reads. Spawning the wave with `run_in_background: false`, blocking until every worker returns,
-  and processing the batch once collapses that to a single resumption. This is exactly why the wave
-  rule above is "spawn wave, wait, re-run `ready`, repeat," and why Anthropic runs its own research
-  lead synchronously ([multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)).
-  Background fan-out is for fire-and-forget work you will not re-plan against mid-flight, not for a
-  supervised wave you are actively steering. **Caveat with agent teams on** (see below): a spawn
-  becomes a background teammate regardless of `run_in_background: false`, so you do not get the
-  single-resumption behavior — each teammate's completion still wakes the lead. The lever that
-  actually restores synchronous batching is running the wave with teams off. With teams on, you can
-  only soften the cost: spawn the whole wave in one message so completions cluster instead of
-  dribbling across the whole round, and lean hard on the other two levers below.
 - **Keep the lead context lean.** The executor already returns a terse summary and writes its full
   work to the ticket comment or a notes file (the executor protocol). Do not pull those full reports
   or notes back into the planning thread unless a synthesis step genuinely needs them: read them by
   reference (open the file or comment at the moment you need it), so raw executor output never becomes
-  permanent weight the lead re-reads on every later wake.
+  permanent weight the lead re-reads on every later wake. This shrinks `context-size` on every wakeup
+  and costs no steerability at all — reach for it first.
 - **Match the lead model to the round.** The strongest model as lead is right when the round is plan-
   and synthesis-heavy: Anthropic's Opus lead with Sonnet workers beat a solo Opus by 90.2%. A round
   that is mostly ack turns pays that premium on every wakeup for little return. If your session model
-  sits above Opus, an orchestration-heavy round is the case to notice it.
+  sits above Opus, an orchestration-heavy round is the case to notice it. Also free of any steering cost.
+- **Optional, and only when you do not need to steer: batch into a synchronous wave.** This one trades
+  control for cost, so it is a last resort, not the default. The wakeup tax is a property of
+  *background* execution, not of any one spawn mechanism: any worker that finishes in the background (a
+  `run_in_background: true` agent or a teammate alike) wakes the lead to re-read full context just to
+  acknowledge "done," so N background workers over a long round is N re-reads. A synchronous wave
+  (`run_in_background: false`, block until all return, process once) collapses that to a single
+  resumption — the cheap path, and why Anthropic runs its research lead synchronously
+  ([multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)).
+  But synchronous is *blind*: the lead sleeps until the batch finishes, so you cannot watch progress,
+  redirect a drifting worker, or kill a runaway — you pay for the whole batch and learn the outcome at
+  the end. Many workflows reasonably refuse that trade and stay background/steerable. If you do reach
+  for it, wave SIZE is the dial: one big synchronous wave is cheapest and blindest; small synchronous
+  waves ("spawn wave, wait, re-run `ready`, repeat") give a steering checkpoint between each. Fit it to
+  work that barely needs steering — tight, verify-gated tickets whose executors bounce back on
+  ambiguity — never to exploratory or drift-prone work. (Agent teams takes this lever off the table
+  anyway: with teams on, every spawn is a background teammate regardless of `run_in_background: false`,
+  which is no loss if you wanted the steering.)
 
 ## Scouting
 
