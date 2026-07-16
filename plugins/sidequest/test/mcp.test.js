@@ -85,6 +85,21 @@ test('tools/list advertises the board tools with input schemas', () => {
   }
 });
 
+test('tools/list keeps schemas compact without losing claim and dispatch discipline', () => {
+  const tools = mcp.toolDescriptors();
+  const descriptionBytes = (value) => {
+    if (Array.isArray(value)) return value.reduce((total, entry) => total + descriptionBytes(entry), 0);
+    if (!value || typeof value !== 'object') return 0;
+    return Object.entries(value).reduce((total, [key, entry]) =>
+      total + (key === 'description' && typeof entry === 'string' ? Buffer.byteLength(entry) : descriptionBytes(entry)), 0);
+  };
+  const total = descriptionBytes(tools);
+  assert.ok(total <= 6000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
+  assert.match(tools.find((tool) => tool.name === 'claim').description, /ok:true/);
+  assert.match(tools.find((tool) => tool.name === 'dispatch').description, /instant/);
+  assert.match(tools.find((tool) => tool.name === 'done').description, /actual model and effort/);
+});
+
 test('sweepClaims releases stale claims through MCP', () => {
   const created = callTool('add', { title: 'MCP stale sweep', unclassified: true });
   const slug = created.project;

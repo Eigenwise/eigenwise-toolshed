@@ -165,7 +165,29 @@ function requireKnownModel(action, value) {
  *  content block. A thrown Error becomes an isError tool result the model reads.
  * ------------------------------------------------------------------ */
 
-const PROJECT_PROP = { type: 'string', description: 'Board to target (a registered slug, display name, or absolute path). Omit for the current project.' };
+const PROJECT_PROP = { type: 'string', description: 'Board; defaults to the current project.' };
+
+const TOOL_DESCRIPTION_OVERRIDES = {
+  claim: 'Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.',
+  dispatch: 'Prepare a ticket executor. Default dispatch is instant; ephemeral writes a legacy per-ticket definition.',
+  done: 'Finish a claimed ticket and release its claim. Stamp the actual model and effort.',
+  native_agent: 'Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.',
+};
+
+function conciseDescription(description) {
+  const firstSentence = String(description || '').match(/^.*?[.!?](?:\s|$)/);
+  return firstSentence ? firstSentence[0].trim() : description;
+}
+
+function compactSchema(schema) {
+  if (Array.isArray(schema)) return schema.map(compactSchema);
+  if (!schema || typeof schema !== 'object') return schema;
+  const compact = {};
+  for (const [key, value] of Object.entries(schema)) {
+    compact[key] = key === 'description' ? conciseDescription(value) : compactSchema(value);
+  }
+  return compact;
+}
 
 /* ------------------------------------------------------------------ *
  *  List paging
@@ -924,7 +946,11 @@ const TOOLS = [
 const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
 function toolDescriptors() {
-  return TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
+  return TOOLS.map((tool) => ({
+    name: tool.name,
+    description: TOOL_DESCRIPTION_OVERRIDES[tool.name] || conciseDescription(tool.description),
+    inputSchema: compactSchema(tool.inputSchema),
+  }));
 }
 
 /* ------------------------------------------------------------------ *
