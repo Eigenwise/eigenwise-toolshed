@@ -1877,7 +1877,7 @@
         : '<button type="button" data-edit-category>Edit</button>' + (projectScope
           ? (category.id === "general" ? "" : '<button type="button" class="danger" data-disable-category>Disable here</button>')
           : (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>'));
-      if (projectScope && layer && !disabled) actions += '<button type="button" data-remove-layer>Restore global</button>';
+      if (projectScope && layer && layer.kind === "OVERRIDE" && !disabled) actions += '<button type="button" data-remove-layer>Restore global</button>';
       row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + (layer.kind === "OVERRIDE" ? ' delta' : '') + '">' + label + '</span>' : '') + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
         '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
         '<span class="category-usage">' + category.usageCount + ' tickets</span></summary>' +
