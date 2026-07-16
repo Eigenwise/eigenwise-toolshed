@@ -75,3 +75,12 @@ test('claim echoes declared file scope warning for dispatch visibility', () => {
     `Dispatch context warning: ${MISSING_SCOPE_WARNING.replace('Planning-depth warning: ', '')}`,
   ]);
 });
+
+test('add and update warn only for unknown mentioned ticket refs', () => {
+  const known = cliJson(['add', '-t', 'known ref', '--unclassified']);
+  const added = cliJson(['add', '-t', `follow ${known.ticket.ref}`, '--description', 'also check SQ-9999', '--unclassified']);
+  assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.']);
+
+  const updated = cliJson(['update', added.ticket.ref, '--title', `follow ${known.ticket.ref} and SQ-9998`]);
+  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998, SQ-9999.']);
+});

@@ -204,6 +204,15 @@ test('update returns only its changed fields', () => {
   assert.strictEqual(updated.categoryId, 'mcp-update-echo');
 });
 
+test('add and update attach unknown ticket-ref warnings to compact acknowledgements', () => {
+  const known = callTool('add', { title: 'known ticket', unclassified: true });
+  const added = callTool('add', { title: `use ${known.ref} and SQ-9999`, unclassified: true });
+  assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.']);
+
+  const updated = callTool('update', { ref: added.ref, description: 'now use SQ-9998' });
+  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9999, SQ-9998.']);
+});
+
 test('status validation fails loudly and directs deletion to remove', () => {
   const added = callTool('add', { title: 'strict status', complexity: 1, why: 'exercise loud validation for invalid MCP status values' });
   const invalid = callToolRaw('update', { ref: added.ref, status: 'deleted' });

@@ -386,7 +386,10 @@ const TOOLS = [
         source: 'mcp',
       });
       const ticket = store.getTicket(slug, created.ref) || created;
-      return mutationAck(slug, { ok: true, ticket }, { title: ticket.title });
+      const changed = { title: ticket.title };
+      const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
+      if (warnings.length) changed.warnings = warnings;
+      return mutationAck(slug, { ok: true, ticket }, changed);
     },
   },
   {
@@ -438,7 +441,10 @@ const TOOLS = [
       const updated = store.updateTicket(slug, args.ref, patch);
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
-      return mutationAck(slug, { ok: true, ticket: t }, changedTicketFields(t, args));
+      const changed = changedTicketFields(t, args);
+      const warnings = store.ticketReferenceWarnings(slug, t.title, t.description);
+      if (warnings.length) changed.warnings = warnings;
+      return mutationAck(slug, { ok: true, ticket: t }, changed);
     },
   },
   {

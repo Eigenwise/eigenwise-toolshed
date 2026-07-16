@@ -1136,6 +1136,14 @@ function executorText(value, max, label) {
   return text;
 }
 
+function ticketReferenceWarnings(slug, title, description) {
+  const refs = new Set((`${title || ''}\n${description || ''}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase()));
+  if (!refs.size) return [];
+  const known = new Set(listTickets(slug).map((ticket) => String(ticket.ref).toUpperCase()));
+  const unknown = [...refs].filter((ref) => !known.has(ref));
+  return unknown.length ? [`Unknown ticket refs: ${unknown.join(', ')}.`] : [];
+}
+
 function ticketPlanningWarnings(ticket, projectPath) {
   if (!ticket) return [];
   const warnings = [];
@@ -2974,6 +2982,7 @@ module.exports = {
   ROUTING_FALLBACK_DEFAULT,
   EXECUTOR_ANCHORS_MAX,
   EXECUTOR_VERIFY_MAX,
+  ticketReferenceWarnings,
   ticketPlanningWarnings,
   coerceComplexity,
   legacyCategoryForComplexity,

@@ -224,6 +224,7 @@ function cmdAdd(opts) {
   // Re-read through getTicket so the returned ticket carries its derived
   // model/effort (stamped from complexity at read time) for display/JSON.
   const ticket = store.getTicket(slug, created.ref) || created;
+  warnings.push(...store.ticketReferenceWarnings(slug, ticket.title, ticket.description));
   warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
 
   if (opts.json) {
@@ -330,7 +331,10 @@ function cmdUpdate(opts, positional) {
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
   // Re-read so derived model/effort (stamped from complexity at read time) show.
   const updated = store.getTicket(slug, saved.ref) || saved;
-  const warnings = store.ticketPlanningWarnings(updated, meta.path);
+  const warnings = [
+    ...store.ticketReferenceWarnings(slug, updated.title, updated.description),
+    ...store.ticketPlanningWarnings(updated, meta.path),
+  ];
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, ticket: updated, warnings }, null, 2) + '\n');
     return;
