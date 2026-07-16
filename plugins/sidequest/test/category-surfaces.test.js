@@ -176,6 +176,44 @@ test('MCP project category layers add, override, disable, and shape models', () 
   assert.equal(result.categories.find((entry) => entry.id === 'general').name, 'General fallback');
 });
 
+test('CLI category list defaults to the current project taxonomy and supports global policy view', () => {
+  const projectOnly = path.join(home, 'list-project');
+  fs.mkdirSync(projectOnly, { recursive: true });
+  let run = cli('category', 'add', 'project-only-list', '--project', projectOnly, '--name', 'Project only list', '--route-model', 'sonnet', '--route-effort', 'medium');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  run = cli('category', 'disable', 'mechanical', '--project', projectOnly);
+  assert.equal(run.result.status, 0, run.result.stderr);
+
+  const currentEnv = Object.assign({}, env, { CLAUDE_PROJECT_DIR: projectOnly });
+  const current = spawnSync(process.execPath, [BIN, 'category', 'list', '--json'], { encoding: 'utf8', env: currentEnv });
+  assert.equal(current.status, 0, current.stderr);
+  const currentBody = JSON.parse(current.stdout);
+  assert.ok(currentBody.categories.some((entry) => entry.id === 'project-only-list' && entry.origin === 'project'));
+  assert.ok(currentBody.categories.some((entry) => entry.id === 'mechanical' && entry.origin === 'disabled'));
+
+  const global = spawnSync(process.execPath, [BIN, 'category', 'list', '--global', '--json'], { encoding: 'utf8', env: currentEnv });
+  assert.equal(global.status, 0, global.stderr);
+  const globalBody = JSON.parse(global.stdout);
+  assert.ok(!globalBody.categories.some((entry) => entry.id === 'project-only-list'));
+  assert.ok(globalBody.categories.some((entry) => entry.id === 'mechanical' && entry.origin === 'global'));
+});
+
+test('MCP category list defaults to the resolved project taxonomy and supports global policy view', () => {
+  const mcp = freshMcp();
+  const first = process.env.CLAUDE_PROJECT_DIR;
+  fs.mkdirSync(first, { recursive: true });
+  call(mcp, 'category_add', { project: first, id: 'project-only-list', name: 'Project only list', routeModel: 'sonnet', routeEffort: 'medium' });
+  call(mcp, 'category_edit', { project: first, id: 'mechanical', enabled: false });
+
+  let result = call(mcp, 'category_list', {});
+  assert.ok(result.categories.some((entry) => entry.id === 'project-only-list' && entry.origin === 'project'));
+  assert.ok(result.categories.some((entry) => entry.id === 'mechanical' && entry.origin === 'disabled'));
+
+  result = call(mcp, 'category_list', { global: true });
+  assert.ok(!result.categories.some((entry) => entry.id === 'project-only-list'));
+  assert.ok(result.categories.some((entry) => entry.id === 'mechanical' && entry.origin === 'global'));
+});
+
 test('MCP ticket category validation uses the explicit project taxonomy for add and update', () => {
   const mcp = freshMcp();
   const first = process.env.CLAUDE_PROJECT_DIR;

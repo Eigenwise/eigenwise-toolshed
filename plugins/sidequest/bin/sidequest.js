@@ -73,7 +73,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -375,8 +375,9 @@ function cmdCategory(opts, positional) {
   };
 
   if (action === 'list' || action === 'ls') {
-    const rows = projectScope ? projectLayer().rows : [];
-    const categories = store.getCategories(projectScope ? { project: slug } : undefined).map((category) => {
+    const listProjectScope = !opts.global;
+    const rows = listProjectScope ? projectLayer().rows : [];
+    const categories = store.getCategories(listProjectScope ? { project: slug } : undefined).map((category) => {
       const row = rows.find((entry) => entry.id === category.id);
       const resolved = store.resolveCategoryRoute(category);
       return Object.assign({}, category, {
@@ -390,7 +391,7 @@ function cmdCategory(opts, positional) {
     for (const row of rows.filter((entry) => entry.kind === 'DISABLE')) {
       categories.push({ id: row.id, origin: 'disabled', localRow: row, effective: null, ticketCount: usage(row.id), warnings: [] });
     }
-    if (opts.json) return output({ categories, warnings: projectScope ? projectLayer().warnings : [] });
+    if (opts.json) return output({ categories, warnings: listProjectScope ? projectLayer().warnings : [] });
     for (const category of categories) {
       if (category.origin === 'disabled') {
         console.log(`${category.id}  disabled locally  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})`);

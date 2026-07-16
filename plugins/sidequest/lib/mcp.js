@@ -639,11 +639,11 @@ const TOOLS = [
   },
   {
     name: 'category_list',
-    description: 'List the effective category taxonomy used to classify tickets for project. With project, entries include project ADD/OVERRIDE/DISABLE metadata and warnings; without it, global policy is listed.',
-    inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
+    description: 'List the effective category taxonomy used to classify tickets for the resolved project. Omitted project means the current project, with project ADD/OVERRIDE/DISABLE metadata; pass global:true for the global-only policy view.',
+    inputSchema: { type: 'object', properties: { project: PROJECT_PROP, global: { type: 'boolean', description: 'Show global-only policy instead of the resolved project taxonomy.' } } },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const projectScope = args.project != null;
+      const projectScope = !args.global;
       const usage = (id) => store.listTickets(slug).filter((ticket) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length;
       const layer = projectScope ? store.getProjectCategories(slug) : { rows: [], warnings: [] };
       const categories = store.getCategories(projectScope ? { project: slug } : undefined).map((category) => {
