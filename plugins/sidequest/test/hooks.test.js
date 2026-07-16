@@ -12,8 +12,8 @@
  *   - The no-marker standing reminder is ONE short line. The full doctrine
  *     lives in SessionStart (which re-fires on compact/resume) and the skill.
  *   - SessionStart carries the execution economy: expensive orchestrator,
- *     cheap executors — route work DOWN to each ticket's stamped tier as
- *     SHORT, bounded runs that bounce back fast; batch small same-tier tickets
+ *     cheap executors — route work DOWN to each ticket's routed model as
+ *     SHORT, bounded runs that bounce back fast; batch small same-model tickets
  *     into one executor; inline only trivial one-steps.
  *   - Every block has a byte budget asserted here, so the blocks can't quietly
  *     grow back.
@@ -162,7 +162,7 @@ test('pre-tool hook keeps built-in executor model but removes overrides for pinn
 
 /* ------------------------------------------------------------------ *
  *  Builtin executors spawned WITHOUT a model must not silently inherit
- *  the session model — resolve the stamped tier from a ref in the prompt,
+ *  the session model — resolve the routed model from a ref in the prompt,
  *  or deny the spawn when it can't be resolved unambiguously (SQ-232).
  * ------------------------------------------------------------------ */
 
@@ -399,7 +399,7 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
     assert.ok(ctx.includes(field), `must require ${field} in the ticket spec`);
   }
   assert.match(ctx, /verify command, or the artifact\/answer/, 'done is a verify command for a change or an artifact/answer for an investigation');
-  assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the stamped tier');
+  assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the routed model');
   assert.ok(ctx.includes('exec.agent'), 'must use the ticket-provided persistent executor');
   assert.ok(ctx.includes('already-registered'), 'must explain why it must not create a temporary agent at dispatch time');
   assert.ok(ctx.includes('Do not use `native_agent`'), 'must reject temporary native dispatch for normal execution');

@@ -9,7 +9,7 @@
  *
  * A BUILTIN executor (sidequest-exec-low|medium|high|xhigh|max) has no pin — an
  * omitted `model` silently inherits the expensive session model instead of the
- * ticket's stamped tier, defeating routing. This hook resolves the ticket
+ * ticket's routed model, defeating routing. This hook resolves the ticket
  * ref(s) named in the prompt and injects the stamped model, or denies the spawn
  * when it can't be resolved unambiguously.
  */
@@ -117,7 +117,7 @@ function main() {
   // CLAUDE_CODE_SUBAGENT_MODEL overrides BOTH a per-invocation model AND the agent's
   // frontmatter pin (docs: model-config). Nothing this hook can edit wins over it:
   // for a pinned Codex/native executor it silently reroutes the ticket onto a Claude
-  // model (wrong backend + Claude spend); for a builtin it collapses every tier to
+  // model (wrong backend + Claude spend); for a builtin it collapses every route to
   // one model. Either way it defeats routing, so refuse the spawn rather than run it
   // on the wrong model.
   const subagentOverride = String(process.env.CLAUDE_CODE_SUBAGENT_MODEL || '').trim();
@@ -129,7 +129,7 @@ function main() {
         permissionDecisionReason:
           `sidequest: CLAUDE_CODE_SUBAGENT_MODEL="${subagentOverride}" is set — it overrides every sidequest ` +
           `executor's routed model (a Codex route would silently run on a Claude model; builtins collapse to one ` +
-          `tier), defeating routing. Unset it before spawning sidequest executors.`,
+          `route), defeating routing. Unset it before spawning sidequest executors.`,
       },
     }));
     return;

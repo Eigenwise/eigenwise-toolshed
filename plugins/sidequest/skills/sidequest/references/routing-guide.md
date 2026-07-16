@@ -16,7 +16,7 @@ From Anthropic's [Choosing the right model](https://platform.claude.com/docs/en/
 | **haiku** | A tightly specified, mechanical subtask where the executor discovers nothing | No effort parameter |
 | **sonnet** | Daily coding work against a known pattern, scoped bugfixes, and one-area features | Usually `high`; `low` fits high-volume or latency-sensitive work |
 | **opus** | Multi-file features, shared contracts, cross-cutting refactors, and complex agentic coding | Usually `high`; `xhigh` is the documented starting point for coding and agentic work |
-| **fable** | Root-cause investigations, architecture decisions, and work larger than one sitting | Start with `high`; use `xhigh` for capability-sensitive work |
+| **fable** | Root-cause investigations, architecture decisions, and work larger than one sitting | Start with `high`; use `xhigh` for model-sensitive work |
 
 `max` is for genuinely frontier problems and should stay rare. Effort is a category route field, not a
 second classification system. The live category description and contract remain authoritative over this

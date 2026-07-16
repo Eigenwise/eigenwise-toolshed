@@ -2,8 +2,8 @@
 
 Read this when you're about to run more than a couple of executors at once, when agent teams is on,
 or when a workflow might fit. The baseline
-delegation rule (route execution down to each ticket's stamped cheap tier as short bounded runs,
-batch small same-tier tickets, fan out over independent waves, inline only trivial one-steps) lives
+delegation rule (route execution down to each ticket's stamped cheap model as short bounded runs,
+batch small same-model tickets, fan out over independent waves, inline only trivial one-steps) lives
 in the main skill — this file is the detail on the bigger shapes.
 
 ## Fan-out mechanics
@@ -39,7 +39,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 
 ## Orchestration cost: keep the lead cheap to wake
 
-Delegation stays the default. Routing execution down to cheap tiers is the whole design, and the fix
+Delegation stays the default. Routing execution down to cheaper models is the whole design, and the fix
 for its cost is never to stop delegating. Rule out the wrong turn first: pulling the work back inline
 onto the lead to dodge the wakeups. That does not save the bill, it relocates the entire execution
 onto your priciest model at full context, which is strictly worse than the wakeups it was meant to
@@ -51,7 +51,7 @@ So the cost to manage is the lead's own bill, roughly `wakeups × lead-context-s
 Each time a worker finishes and hands control back, the lead resumes and re-reads its whole context to
 react. That context is often large (a planning thread sits at 300k+ tokens easily), and the lead runs
 on your session model, which may be your priciest one. The part that surprises people is not the
-executors, which route down to cheap tiers by design; it is the lead being woken over and over at full
+executors, which route to cheaper models by design; it is the lead being woken over and over at full
 context to do almost nothing. Prompt caching softens the per-token price of those re-reads but does not
 remove them: reading a 300k context 40 times is still 40 reads.
 
@@ -124,19 +124,19 @@ repeatable, or deterministic run: results stay in script variables, only the fin
 With agent teams on (a **per-user** flag), parallel workers spawn as manageable teammates. The routing
 rules do not change, and one thing is critical: a teammate is a real sidequest executor **only if it
 has BOTH the correct agent type AND a unique `name`** — spawn the ticket's `sidequest-exec-<effort>`
-type with `model: <tier>`, `mode: "bypassPermissions"`, plus the name, exactly as you would a
+type with `model: <model>`, `mode: "bypassPermissions"`, plus the name, exactly as you would a
 subagent. Sidequest executors are unattended; omitting bypass sends every Bash approval into the lead
 session. The failure to avoid:
 letting the "spawn a team" reflex launch default/generic teammates — a generic or unnamed teammate
-throws away the executor protocol (won't claim, won't verify, won't `done`), the tier routing, and
+throws away the executor protocol (won't claim, won't verify, won't `done`), the category routing, and
 addressability.
 
 Caveats:
 
 - A teammate may **inherit the lead's reasoning effort** instead of the effort the agent name implies.
   Spawn the correctly-named executor regardless — the claim's `--effort` check still enforces the
-  right tier took the ticket. If it matters, also state the effort in the spawn prompt.
-- **Model does not inherit** — always pass `model: <tier>` explicitly.
+  right model took the ticket. If it matters, also state the effort in the spawn prompt.
+- **Model does not inherit** — always pass `model: <model>` explicitly.
 - The flag is per-user, so the identical spawn must also work as a plain subagent when it's off (it
   does — never depend on teams being on).
 - Ticket execution is focused claim→do→verify→report work: the subagent sweet spot. Teams shine for
