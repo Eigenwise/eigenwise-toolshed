@@ -107,7 +107,7 @@ sidequest add -t "Contact form does not send" -d "Submit does nothing; no email 
   --category <id>
 ```
 
-1. Read the live taxonomy from a board read (`list` or `ready` JSON includes `categories`). Match the
+1. Read the live taxonomy with `category_list` (MCP) or `sidequest category list --json` (CLI). Match the
    work to each category's description, choose the narrowest fit, and stamp its ID with `--category`.
    A plausibly matching project-scoped category wins over any global row because it exists for that
    project's distinct work. Classify by the deliverable, not by whether the workflow involves code or
@@ -264,7 +264,7 @@ ticket.
 
 ## Category-first routing (ENFORCED)
 
-The live board taxonomy is the routing authority. Read `list` or `ready` JSON, match the requested
+The live board taxonomy is the routing authority. Read it with `category_list` (MCP) or `sidequest category list --json` (CLI), match the requested
 work against each returned category's `description`, choose the narrowest category, and persist its ID
 when filing. The returned category route resolves model and effort, so you never hand-pick either.
 Category descriptions and contracts are live board data: do not hardcode category IDs, names, tables,
@@ -278,8 +278,8 @@ and fallback chain, documented in [references/routing-details.md](references/rou
 
 **Rules for working the board:**
 
-1. **Classify before claim.** A ticket with `category: null` must be classified from the taxonomy in a
-   fresh `list`/`ready` read, then stamped with `update --category <selected-id>` **before** claim or
+1. **Classify before claim.** A ticket with `category: null` must be classified from `category_list` or
+   `sidequest category list --json`, then stamped with `update --category <selected-id>` **before** claim or
    spawn. Re-read it after the update. Reads must not silently persist a classification. An invalid or
    disabled category falls back to the returned general projection with a warning; repair the stored ID
    through an explicit update.

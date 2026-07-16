@@ -348,6 +348,30 @@ test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', 
   assert.strictEqual(t.claim, null);
 });
 
+test('MCP board reads omit category taxonomy while preserving claim TTL and category rows', () => {
+  const added = callTool('add', { title: 'trimmed taxonomy response', category: 'mechanical' });
+  const list = callTool('list', {});
+  const ready = callTool('ready', { brief: true });
+  const changes = callTool('changes', {});
+  const pulse = callTool('pulse', { ref: added.ref });
+
+  assert.equal(list.categories, undefined);
+  assert.equal(ready.categories, undefined);
+  assert.equal(changes.categories, undefined);
+  assert.equal(pulse.categories, undefined);
+  assert.equal(typeof list.claimTtlMs, 'number');
+  assert.equal(typeof ready.claimTtlMs, 'number');
+  assert.equal(list.tickets.find((ticket) => ticket.ref === added.ref).categoryId, 'mechanical');
+  assert.equal(typeof ready.tickets.find((ticket) => ticket.ref === added.ref).categoryName, 'string');
+});
+
+test('MCP brief ready response stays under 2 KB', () => {
+  const small = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-trimmed-ready'), 'SQ trimmed ready');
+  store.createTicket(small.slug, { title: 'the only ticket', category: 'mechanical' });
+  const out = callToolRaw('ready', { project: small.slug, brief: true });
+  assert.ok(out.content[0].text.length < 2048, `brief ready response is ${out.content[0].text.length} bytes`);
+});
+
 test('the real stdio server frames newline-delimited JSON-RPC', () => {
   const BIN = path.join(__dirname, '..', 'bin', 'sidequest-mcp.js');
   const requests = [

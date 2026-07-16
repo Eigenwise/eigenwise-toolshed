@@ -245,6 +245,11 @@ function changedTicketFields(ticket, args) {
   return fields;
 }
 
+function withoutCategories(payload) {
+  const { categories, ...trimmed } = payload;
+  return trimmed;
+}
+
 const TOOLS = [
   {
     name: 'list',
@@ -275,7 +280,7 @@ const TOOLS = [
         status, archived: args.archived, brief,
         cursor: args.cursor, limit: args.limit, all: args.all, maxChars,
       });
-      const out = Object.assign({ project: slug, projectName: meta.name }, payload);
+      const out = Object.assign({ project: slug, projectName: meta.name }, withoutCategories(payload));
       if (payload.nextCursor) {
         out.hint = `Page shows ${payload.returned} of ${payload.total} tickets. Fetch the next page with cursor:"${payload.nextCursor}"; keep following nextCursor until it is null. Or narrow with status/the ready tool, or pass all:true (may overflow on a big board).`;
       }
@@ -297,7 +302,7 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const pulse = store.pulsePayload(slug, args.ref);
       if (!pulse) throw new Error(`pulse: no ticket "${args.ref}" in ${meta.name}`);
-      return Object.assign({ project: slug, projectName: meta.name }, pulse);
+      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(pulse));
     },
   },
   {
@@ -312,7 +317,7 @@ const TOOLS = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      return Object.assign({ project: slug, projectName: meta.name }, store.changesPayload(slug, args.since));
+      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(store.changesPayload(slug, args.since)));
     },
   },
   {
@@ -324,14 +329,14 @@ const TOOLS = [
         project: PROJECT_PROP,
         model: { type: 'string', description: 'Filter to a resolved Claude runtime or discovered Codex model slug.' },
         category: { type: 'string', description: 'Filter to a category ID.' },
-        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: choose an id from the returned categories, then update before dispatch.' },
+        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: read category_list, then update before dispatch.' },
       },
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       requireKnownModelFilter('ready', args.model);
       const payload = store.readyPayload(slug, { model: args.model, category: args.category, brief: args.brief });
-      return Object.assign({ project: slug, projectName: meta.name }, payload);
+      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(payload));
     },
   },
   {
@@ -352,7 +357,7 @@ const TOOLS = [
         story: { type: 'string', description: 'A story ref (US-n) to file this ticket into.' },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string', description: 'Motivation for the complexity score, against the actual task (min 20 chars).' },
-        category: { type: 'string', description: 'Enabled category id from list or ready taxonomy.' },
+        category: { type: 'string', description: 'Enabled category id from category_list.' },
         unclassified: { type: 'boolean', description: 'Explicitly allow no category or legacy complexity. Classify with update before dispatch.' },
       },
       required: ['title'],
@@ -411,7 +416,7 @@ const TOOLS = [
         story: { type: 'string' },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string' },
-        category: { type: 'string', description: 'Enabled category id from list or ready taxonomy. Use "none" to clear.' },
+        category: { type: 'string', description: 'Enabled category id from category_list. Use "none" to clear.' },
       },
       required: ['ref'],
     },
