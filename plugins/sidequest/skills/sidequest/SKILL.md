@@ -55,7 +55,7 @@ code**:
 3. **Execute proportionally** — see "Execute proportionally" below. The board stays the source of
    truth for what's left.
 
-Before filing a **complexity 4+** ticket, make a scout pass first: read the integration surface yourself when it is obvious, or delegate a proportional read-only scout when it is unfamiliar. Pin the resulting file scope, executor anchors, and exact verify command in the ticket before filing. A separate scout ticket is still only for a genuinely unfamiliar and large surface; the requirement is the planning pass and its concrete output, not ceremony.
+Before filing a **complexity 4+** ticket, make a scout pass first: read the integration surface yourself when it is obvious, or delegate a proportional read-only scout when it is unfamiliar. Pin the resulting file scope, executor anchors, and exact verify command in the ticket before filing. For a wave ticket, make that verify command a scoped test or reproduction for its declared files; reserve full-suite green for the integration or ship ticket. A separate scout ticket is still only for a genuinely unfamiliar and large surface; the requirement is the planning pass and its concrete output, not ceremony.
 
 The point of the board: the plan is visible, survives context loss, and other agents can pick up
 unblocked pieces. For a genuinely trivial one-step change, just do it — no ticket ceremony.
@@ -73,7 +73,9 @@ they're present is the wrong call.** Same store, same rules (complexity+why on `
 `claim`, atomic claiming), but structured JSON in/out, one tool approval instead of a Bash prompt per
 call, and no shell-quoting trap (multi-line markdown bodies are plain strings with real newlines).
 They take the same fields as the CLI flags shown below — the examples in this file use CLI form for
-compactness, not as a recommendation.
+compactness, not as a recommendation. After shipping a schema-bumping Sidequest release, treat an
+already-loaded MCP server as a stale writer until plugins reload: route every store write through the
+new CLI and use MCP only for reads.
 
 The **CLI** is for when the MCP tools aren't loaded, for humans, and for the things only it does:
 `dashboard`/`serve` and legacy temporary `native-agent` cleanup. For routed work, render the ticket's
@@ -127,8 +129,9 @@ sidequest add -t "Contact form does not send" -d "Submit does nothing; no email 
    `-s` status `todo|doing|done` · `-i` image path (repeatable) · `--file` scope (repeatable) ·
    `--story US-n`
 5. `--anchors "file:line symbol"` and `--verify "exact command"` seed native executor prompts verbatim.
-   Keep anchors under 4k chars, verify under 1k, and the assembled prompt under 7.6k so Windows'
-   8191-character command limit stays safe.
+   For wave tickets, make `--verify` the precise per-ticket test or reproduction; the integration or ship
+   ticket owns the full suite. Keep anchors under 4k chars, verify under 1k, and the assembled prompt under
+   7.6k so Windows' 8191-character command limit stays safe.
 
 **Descriptions are developer-to-developer specs, never a PM summary.** For non-trivial work, make the description an agent-ready brief: **Where** gives exact anchors (files, symbols, lines where known); **Contract** states the intended behavior, inputs/outputs, edge cases, and error behavior — or, for an investigation/spike, the question to answer and why it matters; **Bounds** names non-goals; **Dependencies/decisions** records prerequisites and choices already settled; **Verify** gives the exact command/test/reproduction that proves a change done, or the artifact/answer shape that proves an investigation done. Bugs additionally carry the reproduction; spikes state what's actually unknown. Trivial tickets only need the fields that add information, never boilerplate. **Scale the spec inversely to the executor's tier**: work routed to a cheap tier needs a near-patch-level spec — exact anchors, expected strings, precise verification commands — because the spec substitutes for judgment. **Everything you already know goes in the description**: a weaker executor fails on missing context, not on the work itself, so front-load what your investigation found (paths, the surrounding contract, the gotcha you spotted) instead of letting the executor re-derive it. Too little detail to write that? Investigate until you have it, or ask a quick clarifying question — never file a vague ticket.
 
@@ -188,12 +191,15 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
   so two sessions both using a generic label like `"claude"` silently coexist as the same worker and
   the atomicity guarantee never trips.
 - **If a claim fails** (already claimed / done / gone), **do not work that ticket** — pick another or
-  stop.
+  stop. Re-read its claim state immediately before spawning any replacement. Never both resume a prior
+  executor with `SendMessage` and spawn a fresh executor for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`) — a prior agent may have
   left exactly the context you need.
 - **Stale claims** are reclaimable after a TTL (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). Claims
   this session still holds auto-release back to `todo` when the session ends (bundled SessionEnd
-  hook); `sidequest reconcile` runs the same release by hand.
+  hook); `sidequest reconcile` runs the same release by hand. When a dead executor's claim age exceeds
+  that TTL, release it with `sidequest release SQ-3 --by <dead-worker-id> --status todo`, then re-read
+  the ticket and respawn one replacement. Do not force a fresh claim while a live-looking worker may return.
 
 ## Route execution down; keep the loop tight
 
@@ -216,8 +222,10 @@ tokens), never transcripts. Once a ticket is cut with a self-contained spec, its
 within-ticket work end to end — don't pull ticket-internal digging back up here.
 
 **The shape is a LOOP, not a hand-off.** Orchestrator spawns a wave → executors return terse reports
-*quickly* → orchestrator verifies, integrates, re-plans, spawns the next wave. Many short round-trips
-beat one long autonomous run. **Verify by artifact, not by claim** — an executor report cites the
+*quickly* → orchestrator re-runs each ticket's exact assigned verify command, verifies, integrates,
+re-plans, spawns the next wave. Do not accept an executor's file list as proof of coverage. Done comments
+echo the exact command and full output tail so a narrowed verify is visible at a glance. Many short
+round-trips beat one long autonomous run. **Verify by artifact, not by claim** — an executor report cites the
 actual verification output (the test line, the diff), and you spot-check it; cap how much you fan out
 in parallel at what you can actually verify. The failure mode to prevent is the executor
 mini-session: a worker that runs for ten minutes re-discovering context, broadening scope, and

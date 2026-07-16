@@ -65,8 +65,10 @@ test('sync writes generated executors for concrete category routes', () => {
   assert.match(body, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
   assert.ok(body.includes(agentsync.MARKER));
   assert.match(body, /Never read large files whole/);
+  assert.match(body, /siblings may share this tree/);
+  assert.match(body, /session scratchpad path handed in your prompt/);
+  assert.match(body, /full output tail/);
   assert.match(body, /Never SendMessage/);
-  assert.match(body, /every deliberately skipped or partial assigned item/);
 });
 
 test('sync removes generated executors no longer reachable from category policy', () => {
@@ -133,8 +135,10 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.match(body, /Establish the local pattern/);
   assert.match(body, /--token dispatch-token-311/);
   assert.match(body, /Never read large files whole/);
+  assert.match(body, /siblings may share this tree/);
+  assert.match(body, /session scratchpad path handed in your prompt/);
+  assert.match(body, /full output tail/);
   assert.match(body, /Never SendMessage/);
-  assert.match(body, /every deliberately skipped or partial assigned item/);
   assert.deepStrictEqual(created.spawn, {
     subagent_type: created.name, name: created.name, mode: 'bypassPermissions',
   });

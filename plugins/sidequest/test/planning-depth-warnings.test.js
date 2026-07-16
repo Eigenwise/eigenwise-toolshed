@@ -10,6 +10,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnin
 const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const WARNING = 'Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: executor anchors, verify command, file scope.';
+const MISSING_SCOPE_WARNING = 'Planning-depth warning: declared file scope does not exist in the repo: missing/scope.js.';
 
 function cliJson(args) {
   const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
@@ -49,5 +50,28 @@ test('claim echoes missing planning context for dispatch visibility', () => {
 
   assert.deepStrictEqual(claim.warnings, [
     'Dispatch context warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: executor anchors, verify command, file scope.',
+  ]);
+});
+
+test('add warns when declared file scope does not exist in the repo', () => {
+  const added = cliJson([
+    'add', '-t', 'missing scope', '--complexity', '3',
+    '--why', 'exercise warning coverage for an invalid declared scope',
+    '--file', 'missing/scope.js',
+  ]);
+
+  assert.deepStrictEqual(added.warnings, [MISSING_SCOPE_WARNING]);
+});
+
+test('claim echoes declared file scope warning for dispatch visibility', () => {
+  const added = cliJson([
+    'add', '-t', 'claim missing scope', '--complexity', '3',
+    '--why', 'claim a ticket with an invalid declared scope for dispatch warning',
+    '--file', 'missing/scope.js',
+  ]);
+  const claim = cliJson(['claim', added.ticket.ref, '--by', 'scope-warning-worker']);
+
+  assert.deepStrictEqual(claim.warnings, [
+    `Dispatch context warning: ${MISSING_SCOPE_WARNING.replace('Planning-depth warning: ', '')}`,
   ]);
 });

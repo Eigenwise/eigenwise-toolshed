@@ -686,7 +686,7 @@ async function handle(req, res) {
     // Re-read so the response carries the derived model/effort (derivation is
     // read-time; createTicket returns the raw stored shape).
     const created = store.getTicket(slug, ticket.id) || ticket;
-    sendJson(res, 201, { ticket: created, warnings: store.ticketPlanningWarnings(created) });
+    sendJson(res, 201, { ticket: created, warnings: store.ticketPlanningWarnings(created, (store.readMeta(slug) || {}).path) });
     return;
   }
 
@@ -718,7 +718,7 @@ async function handle(req, res) {
         return;
       }
       updated.reminder = store.getPendingReminder(updated.id);
-      sendJson(res, 200, { ticket: updated, warnings: store.ticketPlanningWarnings(updated) });
+      sendJson(res, 200, { ticket: updated, warnings: store.ticketPlanningWarnings(updated, (store.readMeta(slug) || {}).path) });
       return;
     }
     if (req.method === 'DELETE') {

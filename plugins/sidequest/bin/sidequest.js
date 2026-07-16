@@ -224,7 +224,7 @@ function cmdAdd(opts) {
   // Re-read through getTicket so the returned ticket carries its derived
   // model/effort (stamped from complexity at read time) for display/JSON.
   const ticket = store.getTicket(slug, created.ref) || created;
-  warnings.push(...store.ticketPlanningWarnings(ticket));
+  warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
 
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, ticket, warnings }, null, 2) + '\n');
@@ -315,7 +315,7 @@ function cmdUpdate(opts, positional) {
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
   // Re-read so derived model/effort (stamped from complexity at read time) show.
   const updated = store.getTicket(slug, saved.ref) || saved;
-  const warnings = store.ticketPlanningWarnings(updated);
+  const warnings = store.ticketPlanningWarnings(updated, meta.path);
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, ticket: updated, warnings }, null, 2) + '\n');
     return;
@@ -660,10 +660,10 @@ function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token) 
   };
 }
 
-function claimPlanningWarnings(ticket) {
-  const warnings = store.ticketPlanningWarnings(ticket);
+function claimPlanningWarnings(ticket, projectPath) {
+  const warnings = store.ticketPlanningWarnings(ticket, projectPath);
   if (!warnings.length) return [];
-  return [`Dispatch context warning: ${warnings[0].replace('Planning-depth warning: ', '')}`];
+  return warnings.map((warning) => `Dispatch context warning: ${warning.replace('Planning-depth warning: ', '')}`);
 }
 
 function cmdClaim(opts, positional) {
@@ -683,7 +683,7 @@ function cmdClaim(opts, positional) {
     return;
   }
   const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts) });
-  const warnings = res.ok ? claimPlanningWarnings(res.ticket) : [];
+  const warnings = res.ok ? claimPlanningWarnings(res.ticket, meta.path) : [];
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, { warnings }), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;

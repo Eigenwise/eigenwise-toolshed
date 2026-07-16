@@ -1127,14 +1127,22 @@ function executorText(value, max, label) {
   return text;
 }
 
-function ticketPlanningWarnings(ticket) {
-  if (!ticket || Number(ticket.complexity) < 4) return [];
-  const missing = [];
-  if (!String(ticket.executorAnchors || '').trim()) missing.push('executor anchors');
-  if (!String(ticket.executorVerify || '').trim()) missing.push('verify command');
-  if (!Array.isArray(ticket.files) || !ticket.files.length) missing.push('file scope');
-  if (!missing.length) return [];
-  return [`Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: ${missing.join(', ')}.`];
+function ticketPlanningWarnings(ticket, projectPath) {
+  if (!ticket) return [];
+  const warnings = [];
+  if (Number(ticket.complexity) >= 4) {
+    const missing = [];
+    if (!String(ticket.executorAnchors || '').trim()) missing.push('executor anchors');
+    if (!String(ticket.executorVerify || '').trim()) missing.push('verify command');
+    if (!Array.isArray(ticket.files) || !ticket.files.length) missing.push('file scope');
+    if (missing.length) {
+      warnings.push(`Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: ${missing.join(', ')}.`);
+    }
+  }
+  if (!projectPath || !Array.isArray(ticket.files)) return warnings;
+  const absent = ticket.files.filter((file) => !fs.existsSync(path.resolve(projectPath, file)));
+  if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(', ')}.`);
+  return warnings;
 }
 
 function createTicket(slug, fields) {

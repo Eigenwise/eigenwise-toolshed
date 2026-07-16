@@ -305,7 +305,7 @@ const TOOLS = [
         source: 'mcp',
       });
       const ticket = store.getTicket(slug, created.ref) || created;
-      return { ok: true, project: slug, projectName: meta.name, ticket, warnings: store.ticketPlanningWarnings(ticket) };
+      return { ok: true, project: slug, projectName: meta.name, ticket, warnings: store.ticketPlanningWarnings(ticket, meta.path) };
     },
   },
   {
@@ -357,7 +357,7 @@ const TOOLS = [
       const updated = store.updateTicket(slug, args.ref, patch);
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
-      return { ok: true, project: slug, ticket: t, warnings: store.ticketPlanningWarnings(t) };
+      return { ok: true, project: slug, ticket: t, warnings: store.ticketPlanningWarnings(t, meta.path) };
     },
   },
   {
@@ -404,12 +404,12 @@ const TOOLS = [
       required: ['ref', 'by'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'claim');
       const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
-      return Object.assign({ project: slug }, res, { warnings: res.ok ? store.ticketPlanningWarnings(res.ticket) : [] });
+      return Object.assign({ project: slug }, res, { warnings: res.ok ? store.ticketPlanningWarnings(res.ticket, meta.path) : [] });
     },
   },
   {

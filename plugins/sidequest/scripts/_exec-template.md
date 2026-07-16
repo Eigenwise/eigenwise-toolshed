@@ -33,31 +33,37 @@ silently shadow or reject assignments; `$home` expands to the user profile and h
 directory. Use literal handed scratchpad paths and forward slashes.
 
 **Transport**: use the handed `sidequest` CLI for claim, done, and release; MCP is fine for reads. Use
-Node for HTTP or shell-sensitive work.
+Node for HTTP or shell-sensitive work. For cross-platform-sensitive work, write a `.js` script in the
+session scratchpad path handed in your prompt, run it with Node, and use forward-slash paths. Use
+`node -e` with built-in `fetch` for HTTP. Never use PowerShell HTTP commands or construct an ad-hoc temp path.
 
-**Shared tree**: before work, `git diff` the declared scope. Report unexplained in-scope changes UP in your
-claim acknowledgment; never absorb them. Never read large files whole: Grep, tail, or ranged reads only.
-For tickets that ship: pull `--rebase --autostash` immediately before commit, take origin's next free version,
-bump both manifests, and stage only scoped files (never `git add -A`).
+**Shared tree**: siblings may share this tree. Before work, `git diff` the declared scope. Report unexplained
+in-scope changes UP in your claim acknowledgment; never absorb them. Stay in the declared file scope and scope
+test runs to your files. Never read large files whole: Grep, tail, or ranged reads only. For tickets that ship:
+pull `--rebase --autostash` immediately before commit, take origin's next free version, bump both manifests,
+and stage only scoped files (never `git add -A`).
 
 Protocol, per ticket, in order:
 1. **Claim first**: `sidequest claim <ref> --by <worker-id> --executor {{NAME}} --effort {{EFFORT}} --project <project>`
    (add `--executor {{NAME}}` and `--effort {{EFFORT}}` even if the command you were handed omits them. The board refuses the claim if this agent is not the ticket's authoritative generated executor or its derived effort is not `{{EFFORT}}`.)
    If the claim FAILS for ANY reason (already claimed / done / gone / wrong executor / effort mismatch), do
    NOT touch any file for that ticket — in a batch, report the failure and move to the next ref;
-   for a single ticket, stop and report the failure verbatim. On an effort mismatch the failure names
-   the executor to spawn instead, so the orchestrator can re-route.
+   for a single ticket, stop and report the failure verbatim, including the claim holder and timestamp when
+   returned. On an effort mismatch the failure names the executor to spawn instead, so the orchestrator can re-route.
 2. **Read yourself in**: the ticket's description AND its comment thread
    (`sidequest comments <ref> --project <project>`), plus any linked tickets' threads — a prior agent
    may have left the context you need; don't rediscover it. (Skip the thread reads when the
    orchestrator told you the ticket has no comments — don't fetch empty threads.)
 3. **Do exactly the ticket's work** — nothing beyond its scope. No drive-by fixes; a separate issue
    you notice goes in your report, not in the diff.
-4. **Verify** the ticket's named check/test/reproduction before declaring success.
+4. **Verify** the ticket's exact named check/test/reproduction before declaring success. In the done comment,
+   echo that exact command and its full output tail; do not substitute a file list or a narrower command.
 5. **Record findings as a comment** for investigations or substantive changes: evidence (`file:line`), what
    you ruled out, fix, and verification. Markdown uses real newlines, never literal `\n`.
 6. **Close**: `sidequest done <ref> --by <same-worker-id> --model <your model> --effort {{EFFORT}}
-   --project <project>`. If unfinished, `release --status todo` with why. After done/release, stop.
+   --project <project>`. If unfinished, `release --status todo` with why. A remaining expected red outside
+   your declared scope is done, not a release: document the expected-red list in the done comment so it does
+   not keep dependents blocked. After done/release, stop.
 
 **Stuck? Escalate before you thrash.** If a ticket is harder or murkier than the assigned route can handle, or
 two honest attempts haven't moved it, and an `advisor` tool is available, call it — it forwards your
@@ -65,7 +71,8 @@ context to a stronger reviewer model (a genuine escalation even when your orches
 advisor). It's an escape hatch, not a routine step. No advisor? Leave a findings comment and
 `release --status todo` so a stronger route can pick it up.
 
-Report mandatory data per ticket: claim result, changes, verify command plus observed output, close confirmation,
-and every deliberately skipped or partial assigned item. **Report UP only**: final message and own-ticket
-comments. Never SendMessage, guess agent names, or contact peers.{{EXTRA_NOTE}}
+Report mandatory data per ticket: claim result, changes, the exact verify command plus its full output tail,
+artifacts or commit, close confirmation, and every deliberately skipped or partial assigned item. **Report UP
+only**: leave the final report before going idle, in your final message and own-ticket comments. Never SendMessage,
+guess agent names, or contact peers.{{EXTRA_NOTE}}
 {{TICKET_BRIEF}}
