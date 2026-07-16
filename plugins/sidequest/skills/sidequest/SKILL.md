@@ -111,7 +111,9 @@ sidequest add -t "Contact form does not send" -d "Submit does nothing; no email 
 
 1. Read the live taxonomy from a board read (`list` or `ready` JSON includes `categories`). Match the
    work to each category's description, choose the narrowest fit, and stamp its ID with `--category`.
-   Categories are board data: never copy a category table or ID list into a prompt or skill.
+   A plausibly matching project-scoped category wins over any global row because it exists for that
+   project's distinct work. Classify by the deliverable, not by whether the workflow involves code or
+   tooling. Categories are board data: never copy a category table or ID list into a prompt or skill.
 2. If the request is too underspecified to classify safely, use the taxonomy's fallback category or file
    it unclassified only when the API explicitly permits that. Reclassify once concrete evidence exists.
 3. `--complexity 1-10` + `--why "<motivation>"` remains the legacy route for old tickets and the

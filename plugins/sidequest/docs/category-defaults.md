@@ -1,6 +1,6 @@
 # Default category taxonomy
 
-These are the shipped defaults for category routing. The dispatcher receives each **Classifier description** verbatim, so classify the requested work rather than its title, urgency, or a requested model. Pick the narrowest matching row.
+These are the shipped defaults for category routing. The dispatcher receives each **Classifier description** verbatim, so classify the requested work rather than its title, urgency, or a requested model. Pick the narrowest matching row. A plausibly matching project-scoped category wins over any global row, and classification follows the deliverable rather than whether the workflow involves code or tooling.
 
 Each primary route is a concrete backend pin. Fallbacks default to none. The global fallback handles degradation when a concrete backend is unavailable, and a per-category fallback remains an explicit user option.
 
