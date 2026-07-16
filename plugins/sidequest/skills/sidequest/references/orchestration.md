@@ -178,7 +178,8 @@ announcement or registration wait in this path. Claude routes pass `model: exec.
 omit `model`: the shared `sidequest-exec-dispatch-<effort>` def pins the virtual `claude-codex-auto`,
 and the briefing's closing `[sidequest-route model=...]` line tells the codex-gateway shim which real
 model to run — pass the briefing verbatim, never write another such line, and never batch tickets
-stamped with different models into one spawn. Route edits change only board data; the executor def set
+stamped with different models into one spawn. All five effort levels for both Claude builtins and Codex
+dispatch are always provisioned. Route edits change only board data; the executor def set
 is fixed, so nothing is written or registered when a route changes. The executor claims with the
 returned token and exact stable executor name.
 

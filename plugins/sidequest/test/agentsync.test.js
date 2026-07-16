@@ -16,6 +16,12 @@ const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]
 const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' };
 const PROJECT_ONLY = { slug: 'codex-gpt-5-6-project-only', id: 'claude-codex-gpt-5.6-project-only[1m]', label: 'GPT-5.6 Project Only' };
 
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const STABLE_EXECUTORS = EFFORTS.flatMap((effort) => [
+  `sidequest-exec-dispatch-${effort}.md`,
+  `sidequest-exec-${effort}.md`,
+]).sort();
+
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function readDir(dir) { return fs.readdirSync(dir).filter((file) => file.endsWith('.md')).sort(); }
 function seedCatalog(models) {
@@ -29,7 +35,32 @@ function configure(store, id, route, fallback) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
-test('sync includes project-scoped routes and prunes them when removed', () => {
+test('sync writes the complete stable executor ladder with an empty taxonomy', () => {
+  clearCatalog();
+  const store = require('../lib/store.js');
+  const db = require('../lib/db.js').openDb(process.env.SIDEQUEST_HOME);
+  const categories = store.getCategories({ includeDisabled: true });
+  db.prepare('DELETE FROM categories').run();
+  const dir = tmpDir();
+  try {
+    assert.deepStrictEqual(store.getCategories({ includeDisabled: true }), []);
+    const result = agentsync.syncExecAgents(null, { dir });
+    assert.equal(result.written, 10);
+    assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
+    for (const effort of EFFORTS) {
+      const dispatch = fs.readFileSync(path.join(dir, `sidequest-exec-dispatch-${effort}.md`), 'utf8');
+      const builtin = fs.readFileSync(path.join(dir, `sidequest-exec-${effort}.md`), 'utf8');
+      assert.match(dispatch, /^model: claude-codex-auto$/m);
+      assert.doesNotMatch(builtin, /^model:/m);
+      assert.match(dispatch, new RegExp(`^effort: ${effort}$`, 'm'));
+      assert.match(builtin, new RegExp(`^effort: ${effort}$`, 'm'));
+    }
+  } finally {
+    for (const category of categories) store.setCategory(category);
+  }
+});
+
+test('sync keeps the complete stable ladder after route removal', () => {
   seedCatalog([TERRA, PROJECT_ONLY]);
   const store = require('../lib/store.js');
   const project = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'project-only'), 'Project only').slug;
@@ -37,20 +68,16 @@ test('sync includes project-scoped routes and prunes them when removed', () => {
     name: 'Project only',
     description: 'Project route',
     contract: 'Project route',
-    // 'low' is used by no default category route, so this project route is the
-    // only reason a dispatch-low executor exists — making the prune observable.
     route: { model: PROJECT_ONLY.slug, effort: 'low' },
     fallback: null,
     enabled: true,
   });
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
-  const generated = path.join(dir, 'sidequest-exec-dispatch-low.md');
-  assert.ok(fs.existsSync(generated));
   store.removeProjectCategory(project, 'project-only');
   const result = agentsync.syncExecAgents(null, { dir });
-  assert.ok(result.removed >= 1);
-  assert.ok(!fs.existsSync(generated));
+  assert.equal(result.removed, 0);
+  assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
 });
 
 test('sync prunes legacy per-combo codex executors in favor of the shared dispatch set', () => {
@@ -67,15 +94,14 @@ test('sync prunes legacy per-combo codex executors in favor of the shared dispat
 });
 
 
-test('sync writes generated executors for concrete category routes', () => {
+test('sync writes route-independent generated executors', () => {
   seedCatalog([TERRA, SOL]);
   const store = require('../lib/store.js');
   configure(store, 'sync-terra', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'high' });
   const dir = tmpDir();
   const result = agentsync.syncExecAgents(null, { dir });
-  assert.ok(result.written > 0);
-  assert.ok(readDir(dir).includes('sidequest-exec-dispatch-high.md'));
-  assert.ok(readDir(dir).includes('sidequest-exec-high.md'));
+  assert.equal(result.written, 10);
+  assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
   const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch-high.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
   assert.match(body, /resolves the real Codex model/);
@@ -90,19 +116,16 @@ test('sync writes generated executors for concrete category routes', () => {
   assert.match(body, /Never SendMessage/);
 });
 
-test('sync removes generated executors no longer reachable from category policy', () => {
+test('sync keeps stable executors when category policy is remapped', () => {
   seedCatalog([TERRA, SOL]);
   const store = require('../lib/store.js');
   configure(store, 'sync-remap', { model: TERRA.slug, effort: 'medium' });
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
-  const stale = path.join(dir, 'sidequest-exec-dispatch-medium.md');
-  assert.ok(fs.existsSync(stale));
   configure(store, 'sync-remap', { model: SOL.slug, effort: 'xhigh' });
   const result = agentsync.syncExecAgents(null, { dir });
-  assert.ok(result.removed >= 1);
-  assert.ok(!fs.existsSync(stale));
-  assert.ok(readDir(dir).includes('sidequest-exec-dispatch-xhigh.md'));
+  assert.equal(result.removed, 0);
+  assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
 });
 
 test('sync is idempotent and never overwrites an unmarked collision', () => {

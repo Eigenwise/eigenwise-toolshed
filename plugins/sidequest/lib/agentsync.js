@@ -1,12 +1,11 @@
 'use strict';
 /**
- * sidequest - runtime exec agent sync for live category routes (SQ-158)
+ * sidequest - runtime exec agent sync (SQ-158)
  *
- * syncExecAgents() reads the live routing taxonomy, including global categories
- * and project-scoped layers, then generates the concrete executor definitions
- * needed by the current routes and fallbacks. Each file is marked as owned by
- * Sidequest. Reconciliation updates wanted files and prunes stale marked files,
- * while never touching an unmarked user-authored agent.
+ * syncExecAgents() generates the complete stable executor ladder for both Claude
+ * and Codex dispatch, independent of the live routing taxonomy. Each file is
+ * marked as owned by Sidequest. Reconciliation updates wanted files and prunes
+ * stale marked files, while never touching an unmarked user-authored agent.
  *
  * Claude Code watches user agent definitions written mid-session, including
  * Codex frontmatter pins. Registration takes minutes and the harness announces
@@ -48,6 +47,7 @@ const TEMP_PREFIX = 'sidequest-native-';
 const TICKET_PREFIX = 'sidequest-ticket-';
 
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const RESTART_NOTICE = 'Executor definitions register within minutes. Wait for `New agent types are now available: <name>` before spawning; premature per-ticket spawns silently run generic agents and their token-gated claim refuses. If registration lags, use the stable pre-provisioned executor. Verify with transcript/meta.json and the token claim, never self-report.';
 
 // Effort-scaled hard caps stamped into every executor definition's `maxTurns`
@@ -422,28 +422,19 @@ function cleanupNativeAgents(opts) {
   return { removed };
 }
 
-// Sync executors for each configured concrete category route and fallback. A missing prefs
-// object (or routing explicitly disabled) retains the generic files for manual
-// dispatch. The MARKER lifecycle below remains responsible for stale cleanup.
+// Sync the complete stable Claude and Codex dispatch executor ladders. The
+// MARKER lifecycle below remains responsible for stale cleanup.
 function syncExecAgents(_prefs, opts) {
   opts = opts || {};
   const dir = opts.dir || defaultAgentsDir();
   const wanted = new Map();
-  const routes = [];
-  for (const pair of store.getCategoryRoutePairs()) {
-    routes.push(pair.route);
-    if (pair.fallback) routes.push(pair.fallback);
-  }
-  const globalFallback = store.getRoutingFallback();
-  if (globalFallback) routes.push(globalFallback);
-  for (const route of routes) {
-    if (!route) continue;
-    const resolved = store.resolveExec(route.model, route.effort);
-    if (!resolved || !resolved.agent || wanted.has(`${resolved.agent}.md`)) continue;
-    const content = resolved.backend === 'codex'
-      ? renderDispatchAgent(resolved.effort || route.effort)
-      : renderExecAgent({ name: resolved.agent, effort: route.effort, marker: MARKER });
-    wanted.set(`${resolved.agent}.md`, content);
+  for (const effort of EXEC_EFFORTS) {
+    wanted.set(`sidequest-exec-dispatch-${effort}.md`, renderDispatchAgent(effort));
+    wanted.set(`sidequest-exec-${effort}.md`, renderExecAgent({
+      name: `sidequest-exec-${effort}`,
+      effort,
+      marker: MARKER,
+    }));
   }
 
   let existing = [];
