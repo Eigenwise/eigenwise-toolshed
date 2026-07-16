@@ -445,8 +445,17 @@
   .category-layer { margin-left: auto; font: 700 9px var(--mono); letter-spacing: .04em; padding: 2px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--gold-bright); background: var(--gold-soft); }
   .category-layer.delta { color: var(--text-dim); background: var(--bg); }
   .category-row.disabled { opacity: .55; border-style: dashed; }
-  .category-delta { margin-top: 10px; padding: 7px 8px; border-left: 2px solid var(--gold); background: var(--bg); font: 11px/1.45 var(--mono); color: var(--text-dim); }
-  .category-delta b { color: var(--gold-bright); font-weight: 700; }
+  .category-delta { margin-top: 12px; padding: 10px; border: 1px solid var(--gold-line); border-left: 3px solid var(--gold); background: linear-gradient(90deg, var(--gold-soft), var(--bg) 68%); }
+  .category-delta-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .category-delta-head strong { color: var(--text); font-size: 12px; }
+  .category-delta-head span { color: var(--text-faint); font: 10px var(--mono); }
+  .category-delta-list { display: grid; gap: 5px; }
+  .category-delta-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 5px 6px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+  .category-delta-field b { color: var(--gold-bright); font: 700 10px var(--mono); letter-spacing: .03em; text-transform: uppercase; }
+  .category-delta-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 600 11px var(--mono); }
+  .category-delta-value::after { content: " · global value on hover"; color: var(--text-faint); font-weight: 400; }
+  .category-restore-note { margin: 10px 0 -3px; color: var(--text-faint); font-size: 11px; }
+  .category-restore-note b { color: var(--text-dim); font-weight: 650; }
   .category-list { padding: 11px 14px 18px; max-height: none; overflow: visible; display: flex; flex-direction: column; gap: 7px; }
   .category-row { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--panel); }
   .category-row.off { opacity: .58; }
@@ -1856,12 +1865,18 @@
   function categoryDelta(category) {
     var layer = category.layer;
     if (!layer || layer.kind !== "OVERRIDE") return "";
+    var labels = { name: "Name", description: "Description", contract: "Instructions", route: "Primary route", fallback: "Category fallback" };
+    var values = function (value, key) {
+      if (key === "route" || key === "fallback") return routeLabelFor(value && value.model, value && value.effort);
+      return String(value == null || value === "" ? "—" : value);
+    };
     var changed = Object.keys(layer.data || {}).map(function (key) {
-      var before = key === "route" || key === "fallback" ? routeLabelFor(layer.base[key] && layer.base[key].model, layer.base[key] && layer.base[key].effort) : String(layer.base[key] || "—");
-      var after = key === "route" || key === "fallback" ? routeLabelFor(category[key] && category[key].model, category[key] && category[key].effort) : String(category[key] || "—");
-      return '<div><b>' + esc(key) + '</b> ' + esc(before) + ' → ' + esc(after) + '</div>';
+      var before = values(layer.base && layer.base[key], key);
+      var after = values(category[key], key);
+      return '<div class="category-delta-field"><b>' + esc(labels[key] || key) + '</b><span class="category-delta-value" title="Global: ' + esc(before) + '">' + esc(after) + '</span></div>';
     });
-    return '<div class="category-delta">' + changed.join("") + '</div>';
+    if (!changed.length) return "";
+    return '<div class="category-delta"><div class="category-delta-head"><strong>Local changes</strong><span>Hover any value to compare with global</span></div><div class="category-delta-list">' + changed.join("") + '</div></div>';
   }
   function renderCategorySettings() {
     var box = $("categoryList"); if (!box) return;
@@ -1881,14 +1896,18 @@
       var actions = disabled
         ? '<button type="button" data-reenable-category>Re-enable here</button>'
         : '<button type="button" data-edit-category>Edit</button>' + (projectScope
-          ? (category.id === "general" ? "" : '<button type="button" class="danger" data-disable-category>Disable here</button>')
+          ? (layer && layer.kind === "ADD"
+            ? '<button type="button" class="danger" data-delete-category>Delete</button>'
+            : (category.id === "general" ? "" : '<button type="button" class="danger" data-disable-category>Disable here</button>'))
           : (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>'));
       if (projectScope && layer && layer.kind === "OVERRIDE" && !disabled) actions += '<button type="button" data-remove-layer>Restore global</button>';
+      var restoreNote = projectScope && layer && layer.kind === "OVERRIDE" && !disabled
+        ? '<p class="category-restore-note"><b>Restore global</b> drops these local changes and brings back the global values.</p>' : "";
       row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + (layer.kind === "OVERRIDE" ? ' delta' : '') + '">' + label + '</span>' : '') + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
         '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
         '<span class="category-usage">' + category.usageCount + ' tickets</span></summary>' +
         '<div class="category-row-body"><div class="category-row-detail">' + esc(category.description || "No classifier description") + '</div>' +
-        (degraded ? '<div class="category-route-warning"><strong>Route changed:</strong> ' + esc((category.warnings || []).join(' ')) + '</div>' : '') + categoryDelta(category) +
+        (degraded ? '<div class="category-route-warning"><strong>Route changed:</strong> ' + esc((category.warnings || []).join(' ')) + '</div>' : '') + categoryDelta(category) + restoreNote +
         '<div class="category-actions">' + actions + '</div></div>';
       var refresh = function (message) { return loadCategories().then(function () { toast(message); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }); };
       var edit = row.querySelector('[data-edit-category]');
