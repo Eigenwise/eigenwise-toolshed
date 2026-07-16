@@ -68,6 +68,8 @@ test('sync writes generated executors for concrete category routes', () => {
   assert.match(body, /siblings may share this tree/);
   assert.match(body, /session scratchpad path handed in your prompt/);
   assert.match(body, /full output tail/);
+  assert.match(body, /Commit and ship before done/);
+  assert.match(body, /include its hash in your own done comment/);
   assert.match(body, /Never SendMessage/);
 });
 
@@ -138,6 +140,8 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.match(body, /siblings may share this tree/);
   assert.match(body, /session scratchpad path handed in your prompt/);
   assert.match(body, /full output tail/);
+  assert.match(body, /Commit and ship before done/);
+  assert.match(body, /include its hash in your own done comment/);
   assert.match(body, /Never SendMessage/);
   assert.deepStrictEqual(created.spawn, {
     subagent_type: created.name, name: created.name, mode: 'bypassPermissions',
@@ -186,6 +190,8 @@ test('renderTicketBriefing reuses the template body with the ticket brief and to
   assert.match(briefing, /Plan against the system, verify end to end/);
   assert.match(briefing, /--executor sidequest-exec-codex-gpt-5-6-terra-high/);
   assert.match(briefing, /--token instant-token-334/);
+  assert.match(briefing, /Commit and ship before done/);
+  assert.match(briefing, /include its hash in your own done comment/);
 });
 
 test('renderTicketBriefing rejects an empty or multi-line nonce', () => {

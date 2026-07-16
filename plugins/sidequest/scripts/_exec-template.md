@@ -58,9 +58,12 @@ Protocol, per ticket, in order:
    you notice goes in your report, not in the diff.
 4. **Verify** the ticket's exact named check/test/reproduction before declaring success. In the done comment,
    echo that exact command and its full output tail; do not substitute a file list or a narrower command.
-5. **Record findings as a comment** for investigations or substantive changes: evidence (`file:line`), what
+5. **Commit and ship before done**: When the ticket declares repository files, commit only those scoped files
+   after verification passes, push the commit, then include its hash in your own done comment. Do not invoke
+   `sidequest done` until the commit and push both succeed.
+6. **Record findings as a comment** for investigations or substantive changes: evidence (`file:line`), what
    you ruled out, fix, and verification. Markdown uses real newlines, never literal `\n`.
-6. **Close**: `sidequest done <ref> --by <same-worker-id> --model <your model> --effort {{EFFORT}}
+7. **Close**: `sidequest done <ref> --by <same-worker-id> --model <your model> --effort {{EFFORT}}
    --project <project>`. If unfinished, `release --status todo` with why. A remaining expected red outside
    your declared scope is done, not a release: document the expected-red list in the done comment so it does
    not keep dependents blocked. After done/release, stop.
@@ -72,7 +75,7 @@ advisor). It's an escape hatch, not a routine step. No advisor? Leave a findings
 `release --status todo` so a stronger route can pick it up.
 
 Report mandatory data per ticket: claim result, changes, the exact verify command plus its full output tail,
-artifacts or commit, close confirmation, and every deliberately skipped or partial assigned item. **Report UP
+artifacts or commit hash, close confirmation, and every deliberately skipped or partial assigned item. **Report UP
 only**: leave the final report before going idle, in your final message and own-ticket comments. Never SendMessage,
 guess agent names, or contact peers.{{EXTRA_NOTE}}
 {{TICKET_BRIEF}}

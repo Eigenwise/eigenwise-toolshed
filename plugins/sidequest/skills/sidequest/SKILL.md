@@ -193,6 +193,10 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
   that TTL, release it with `sidequest release SQ-3 --by <dead-worker-id> --status todo`, then re-read
   the ticket and respawn one replacement. Do not force a fresh claim while a live-looking worker may return.
 
+When a dead or stopped executor's ticket reads `done`, inspect `git status` and the ticket's declared files before
+trusting that it shipped. The done state proves only the board transition; a missing commit hash or uncommitted
+in-scope diff means recover the work, then commit and push it before treating the ticket as complete.
+
 ## Route execution down; keep the loop tight
 
 Every ticket is category-routed from the live taxonomy (below), and the economics are the point:
