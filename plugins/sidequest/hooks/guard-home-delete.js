@@ -6,7 +6,9 @@ const os = require('os');
 const path = require('path');
 
 function hasRecursiveDelete(command) {
-  const deletes = /(?:^|[;&|\n])\s*(?:[\w.-]+\s+)*(?:remove-item|rm|rmdir|del)\b/i;
+  // {}() must anchor too: the 2026-07-16 wipe wrapped its Remove-Item in
+  // `if (...) { ... }`, which a start/;&| anchor never sees.
+  const deletes = /(?:^|[;&|{}()\n])\s*(?:[\w.-]+\s+)*(?:remove-item|rm|rmdir|rd|ri|del|erase)\b/i;
   const recursive = /(?:--recursive\b|-r(?:[fivd]*\b)?|-f[rivd]*\b|-recurse\b|\/s\b)/i;
   return deletes.test(command) && recursive.test(command);
 }

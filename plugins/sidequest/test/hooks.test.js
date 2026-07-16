@@ -356,6 +356,21 @@ test('home-delete guard: allows non-delete PowerShell commands', () => {
   assert.strictEqual(runHomeDeleteGuard('PowerShell', 'Get-ChildItem $HOME'), null);
 });
 
+test('home-delete guard: blocks the 2026-07-16 incident command verbatim', () => {
+  const out = runHomeDeleteGuard('PowerShell', '$home = Join-Path "C:\\Temp\\x" "sq330-runtime"; if (Test-Path $home) { Remove-Item -Recurse -Force $home -Confirm:$false }');
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('home-delete guard: blocks deletes wrapped in blocks, pipelines, and aliases', () => {
+  for (const command of [
+    'Get-ChildItem ~ | ForEach-Object { Remove-Item -Recurse -Force $home }',
+    'if (Test-Path $home) { ri -Recurse -Force $home }',
+    'rd /s %USERPROFILE%',
+  ]) {
+    assert.equal(runHomeDeleteGuard('PowerShell', command).hookSpecificOutput.permissionDecision, 'deny', command);
+  }
+});
+
 test('session-start sweep is fail-soft and releases only claims past the TTL', () => {
   const stale = addTicket('session-start stale claim');
   const fresh = addTicket('session-start fresh claim');
