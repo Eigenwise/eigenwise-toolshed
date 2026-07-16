@@ -84,12 +84,12 @@ test('CLI global fallback reads and updates routing policy', () => {
 test('MCP category tools stamp tickets and reject unknown categories', () => {
   const mcp = freshMcp();
   const added = call(mcp, 'add', { title: 'Categorized MCP ticket', category: 'mechanical' });
-  assert.equal(added.ticket.category.id, 'mechanical');
+  assert.match(added.ref, /^SQ-\d+$/);
 
   const listed = call(mcp, 'category_list', {});
   assert.ok(listed.categories.some((category) => category.id === 'mechanical' && category.ticketCount === 1));
 
-  const raw = mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ticket.ref, category: 'missing' } } });
+  const raw = mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ref, category: 'missing' } } });
   assert.ok(raw.result.isError);
   assert.match(raw.result.content[0].text, /unknown category.*valid:/i);
 });
@@ -188,11 +188,12 @@ test('MCP category detach and relink expose project link states and warnings', (
   fs.mkdirSync(scoped, { recursive: true });
 
   let result = call(mcp, 'category_edit', { project: scoped, id: 'mechanical', name: 'Local mechanical' });
+  assert.deepEqual(Object.keys(result).sort(), ['id', 'localRow', 'ok', 'project']);
   assert.equal(result.localRow.kind, 'OVERRIDE');
 
   result = call(mcp, 'category_detach', { project: scoped, id: 'mechanical' });
+  assert.deepEqual(Object.keys(result).sort(), ['id', 'localRow', 'ok', 'project']);
   assert.equal(result.localRow.kind, 'DETACH');
-  assert.ok(result.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'mechanical'));
 
   result = call(mcp, 'category_list', { project: scoped });
   const category = result.categories.find((entry) => entry.id === 'mechanical');
@@ -201,6 +202,5 @@ test('MCP category detach and relink expose project link states and warnings', (
   assert.ok(result.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'mechanical'));
 
   result = call(mcp, 'category_relink', { project: scoped, id: 'mechanical' });
-  assert.equal(result.localRow, null);
-  assert.equal(result.effective.name, 'Mechanical change');
+  assert.deepEqual(result, { ok: true, project: result.project, id: 'mechanical', localRow: null });
 });

@@ -106,8 +106,8 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
 test('sweepClaims releases stale claims through MCP', () => {
   const created = callTool('add', { title: 'MCP stale sweep', unclassified: true });
   const slug = created.project;
-  assert.equal(store.claimTicket(slug, created.ticket.ref, 'mcp-stale').ok, true);
-  const stale = store.getTicket(slug, created.ticket.ref);
+  assert.equal(store.claimTicket(slug, created.ref, 'mcp-stale').ok, true);
+  const stale = store.getTicket(slug, created.ref);
   stale.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
   const dbModule = require('../lib/db.js');
   dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
@@ -116,7 +116,7 @@ test('sweepClaims releases stale claims through MCP', () => {
   });
   const swept = callTool('sweepClaims', { project: slug });
   assert.equal(swept.released.length, 1);
-  assert.equal(store.getTicket(slug, created.ticket.ref).claim, null);
+  assert.equal(store.getTicket(slug, created.ref).claim, null);
 });
 
 
@@ -138,7 +138,7 @@ test('dispatch is instant by default (stable executor + briefing + token); ephem
   const slug = store.ensureProject(PROJ).slug;
 
   const addedInstant = callTool('add', { title: 'instant dispatch', category: 'dispatch-codex' });
-  const instant = callTool('dispatch', { ref: addedInstant.ticket.ref, session: 'mcp-dispatch-session' });
+  const instant = callTool('dispatch', { ref: addedInstant.ref, session: 'mcp-dispatch-session' });
   assert.equal(instant.mode, 'instant');
   assert.equal(instant.agent, 'sidequest-exec-dispatch-high');
   assert.equal(instant.spawn.subagent_type, instant.agent);
@@ -148,14 +148,14 @@ test('dispatch is instant by default (stable executor + briefing + token); ephem
   assert.match(instant.briefing, /## This ticket/);
   assert.doesNotMatch(instant.briefing, /^---$/m);
   assert.match(instant.guidance, /executor/);
-  assert.equal(store.getTicket(slug, addedInstant.ticket.ref).dispatchExecutor, instant.agent);
+  assert.equal(store.getTicket(slug, addedInstant.ref).dispatchExecutor, instant.agent);
 
   const addedEphemeral = callTool('add', { title: 'ephemeral dispatch', category: 'dispatch-codex' });
-  const ephemeral = callTool('dispatch', { ref: addedEphemeral.ticket.ref, session: 'mcp-dispatch-session', ephemeral: true });
+  const ephemeral = callTool('dispatch', { ref: addedEphemeral.ref, session: 'mcp-dispatch-session', ephemeral: true });
   assert.equal(ephemeral.mode, 'ephemeral');
-  assert.match(ephemeral.agent, new RegExp(`^sidequest-ticket-${addedEphemeral.ticket.ref.toLowerCase()}-gpt-5-6-terra-[a-f0-9]{8}$`));
+  assert.match(ephemeral.agent, new RegExp(`^sidequest-ticket-${addedEphemeral.ref.toLowerCase()}-gpt-5-6-terra-[a-f0-9]{8}$`));
   assert.equal(ephemeral.tokenPrefix, ephemeral.token.slice(0, 12));
-  assert.equal(store.getTicket(slug, addedEphemeral.ticket.ref).dispatchExecutor, ephemeral.agent);
+  assert.equal(store.getTicket(slug, addedEphemeral.ref).dispatchExecutor, ephemeral.agent);
 });
 
 test('native_agent carries ticket anchors and verify command through its stable fallback', () => {
@@ -166,7 +166,7 @@ test('native_agent carries ticket anchors and verify command through its stable 
       title: 'prompt context', category: 'native-codex',
       anchors: 'lib/work.js:14 executorPrompt', verify: 'node --test plugins/sidequest/test/work.test.js',
     });
-    const native = callTool('native_agent', { ref: added.ticket.ref, prompt: 'Implement exactly this ticket.' });
+    const native = callTool('native_agent', { ref: added.ref, prompt: 'Implement exactly this ticket.' });
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
     assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch-high');
@@ -184,37 +184,33 @@ test('an unknown method is a JSON-RPC method-not-found error', () => {
   assert.strictEqual(resp.error.code, -32601);
 });
 
-test('add enforces complexity + why and rejects direct model/effort', () => {
-  // Missing complexity/why -> isError.
+test('add rejects incomplete routing inputs', () => {
   assert.ok(callToolRaw('add', { title: 'no score' }).isError, 'missing complexity/why errors');
   assert.ok(callToolRaw('add', { title: 'bad', complexity: 3, why: 'too short' }).isError, 'a thin why errors');
   assert.ok(callToolRaw('add', { title: 'direct', complexity: 3, why: 'x'.repeat(25), model: 'grade-3' }).isError, 'a direct model errors');
-
+});
+test('add returns a compact acknowledgement', () => {
   const out = callTool('add', { title: 'MCP add works', complexity: 3, why: 'a real motivation referencing the actual single-file change' });
-  assert.strictEqual(out.ok, true);
-  assert.match(out.ticket.ref, /^SQ-\d+$/);
-  assert.strictEqual(out.ticket.complexity, 3);
-  assert.ok(out.ticket.model, 'routing is derived and stamped');
+  assert.deepStrictEqual(Object.keys(out).sort(), ['ok', 'project', 'ref', 'status', 'title']);
+  assert.match(out.ref, /^SQ-\d+$/);
+  assert.strictEqual(out.status, 'todo');
 });
 
-test('update echoes freshly resolved routing after changing category', () => {
+test('update returns only its changed fields', () => {
   store.setCategory({ id: 'mcp-update-echo', name: 'MCP update echo', route: { model: 'opus', effort: 'high' } });
   const added = callTool('add', { title: 'MCP update echo', category: 'mechanical' });
-  const updated = callTool('update', { ref: added.ticket.ref, category: 'mcp-update-echo' });
-  assert.strictEqual(updated.ticket.categoryId, 'mcp-update-echo');
-  assert.strictEqual(updated.ticket.category.id, 'mcp-update-echo');
-  assert.strictEqual(updated.ticket.model, 'opus');
-  assert.strictEqual(updated.ticket.effort, 'high');
-  assert.strictEqual(updated.ticket.exec.model, 'opus');
+  const updated = callTool('update', { ref: added.ref, category: 'mcp-update-echo' });
+  assert.deepStrictEqual(Object.keys(updated).sort(), ['categoryId', 'ok', 'project', 'ref', 'status']);
+  assert.strictEqual(updated.categoryId, 'mcp-update-echo');
 });
 
 test('status validation fails loudly and directs deletion to remove', () => {
   const added = callTool('add', { title: 'strict status', complexity: 1, why: 'exercise loud validation for invalid MCP status values' });
-  const invalid = callToolRaw('update', { ref: added.ticket.ref, status: 'deleted' });
+  const invalid = callToolRaw('update', { ref: added.ref, status: 'deleted' });
   assert.ok(invalid.isError);
   assert.match(invalid.content[0].text, /Valid statuses: todo, doing, done/);
   assert.match(invalid.content[0].text, /remove tool/i);
-  assert.throws(() => store.updateTicket(store.ensureProject(PROJ).slug, added.ticket.ref, { status: 'deleted' }), /remove tool/i);
+  assert.throws(() => store.updateTicket(store.ensureProject(PROJ).slug, added.ref, { status: 'deleted' }), /remove tool/i);
   assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
 });
 
@@ -224,26 +220,27 @@ test('CLI-only ticket removal is absent from MCP', () => {
   assert.match(response.content[0].text, /unknown tool/i);
 });
 
-test('claim -> comment -> done round-trips over the same store, tagged source mcp', () => {
+test('claim -> comment -> done return compact acknowledgements', () => {
   const added = callTool('add', { title: 'work me', complexity: 2, why: 'a mechanical change to exercise the claim/done path over MCP' });
-  const ref = added.ticket.ref;
+  const ref = added.ref;
+  const ticket = store.getTicket(added.project, ref);
 
   const claim = callTool('claim', { ref, by: 'mcp-worker-1' });
-  assert.strictEqual(claim.ok, true);
-  assert.strictEqual(claim.ticket.status, 'doing');
+  assert.deepStrictEqual(Object.keys(claim).sort(), ['claim', 'ok', 'project', 'ref', 'status']);
+  assert.strictEqual(claim.status, 'doing');
 
   const note = callTool('comment', { ref, body: 'progress note from an MCP tool call' });
-  assert.strictEqual(note.ok, true);
+  assert.deepStrictEqual(Object.keys(note).sort(), ['comment', 'ok', 'project', 'ref', 'status']);
   assert.strictEqual(note.comment.source, 'mcp', 'MCP actions are tagged as background (not dashboard)');
 
-  const done = callTool('done', { ref, by: 'mcp-worker-1', model: added.ticket.model, effort: added.ticket.effort });
-  assert.strictEqual(done.ok, true);
-  assert.strictEqual(done.ticket.status, 'done');
+  const done = callTool('done', { ref, by: 'mcp-worker-1', model: ticket.model, effort: ticket.effort });
+  assert.deepStrictEqual(Object.keys(done).sort(), ['ok', 'project', 'ref', 'status', 'workedBy']);
+  assert.strictEqual(done.status, 'done');
 });
 
 test('SQ-174: a spaced comment round-trips with spaces intact and no NUL bytes', () => {
   const added = callTool('add', { title: 'spaces intact', complexity: 1, why: 'exercise the MCP comment write path preserves internal spaces verbatim' });
-  const ref = added.ticket.ref;
+  const ref = added.ref;
   const body = 'alpha  beta   gamma    delta'; // 2, 3, then 4 internal spaces
   const posted = callTool('comment', { ref, body });
   assert.strictEqual(posted.ok, true);
@@ -256,7 +253,7 @@ test('SQ-174: a spaced comment round-trips with spaces intact and no NUL bytes',
 
 test('SQ-174: an author-supplied NUL (a NUL-separated key in prose) is stripped, not persisted', () => {
   const added = callTool('add', { title: 'nul stripped', complexity: 1, why: 'a comment describing a NUL-separated dedup key must not persist the raw 0x00' });
-  const ref = added.ticket.ref;
+  const ref = added.ref;
   // Mirrors the real SQ-171 note that misfired: `source + '\0' + slug`, but with
   // a genuine 0x00 char between the quotes (as the reporter's body had).
   const body = 'dedup key: source + \u0000 + slug (works)';
@@ -270,7 +267,7 @@ test('SQ-174: an author-supplied NUL (a NUL-separated key in prose) is stripped,
 
 test('SQ-173: an over-cap comment is rejected, not silently truncated', () => {
   const added = callTool('add', { title: 'over cap', complexity: 1, why: 'confirm the MCP comment tool rejects a body past the 4k cap instead of cutting it' });
-  const ref = added.ticket.ref;
+  const ref = added.ref;
 
   // A body one char over the cap must fail loudly, and nothing may be stored.
   const tooLong = 'x'.repeat(4001);
@@ -292,7 +289,7 @@ test('SQ-173: an over-cap comment is rejected, not silently truncated', () => {
 
 test('claim requires a worker id (no shared-identity default)', () => {
   const added = callTool('add', { title: 'needs by', complexity: 2, why: 'confirm the atomic-claim identity guard is enforced over MCP' });
-  const res = callToolRaw('claim', { ref: added.ticket.ref });
+  const res = callToolRaw('claim', { ref: added.ref });
   assert.ok(res.isError, 'a claim without by is refused');
   assert.match(res.content[0].text, /by.*required/i);
 });
@@ -302,11 +299,11 @@ test('MCP claim passes prepared dispatch token and executor through to the store
   store.setCategory({ id: 'mcp-dispatch-claim', name: 'MCP dispatch claim', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const added = callTool('add', { title: 'nonce through MCP', category: 'mcp-dispatch-claim' });
   const slug = store.ensureProject(PROJ).slug;
-  const prepared = store.prepareDispatch(slug, added.ticket.ref);
-  const refused = callTool('claim', { ref: added.ticket.ref, by: 'mcp-no-token' });
+  const prepared = store.prepareDispatch(slug, added.ref);
+  const refused = callTool('claim', { ref: added.ref, by: 'mcp-no-token' });
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'token');
-  const accepted = callTool('claim', { ref: added.ticket.ref, by: 'mcp-with-token', token: prepared.token, executor: prepared.ticket.dispatchExecutor });
+  const accepted = callTool('claim', { ref: added.ref, by: 'mcp-with-token', token: prepared.token, executor: prepared.ticket.dispatchExecutor });
   assert.strictEqual(accepted.ok, true);
 });
 
@@ -315,8 +312,8 @@ test('MCP claim rejects a generic executor for a Codex route', () => {
   try {
     store.setCategory({ id: 'claim-codex', name: 'Claim Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
     const added = callTool('add', { title: 'Codex executor guard', category: 'claim-codex' });
-    const ticket = store.getTicket(store.ensureProject(PROJ).slug, added.ticket.ref);
-    const rejected = callTool('claim', { ref: added.ticket.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}` });
+    const ticket = store.getTicket(store.ensureProject(PROJ).slug, added.ref);
+    const rejected = callTool('claim', { ref: added.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}` });
     assert.strictEqual(rejected.ok, false);
     assert.strictEqual(rejected.reason, 'executor_mismatch');
     assert.strictEqual(rejected.expectedExecutor, ticket.exec.agent);
@@ -327,8 +324,8 @@ test('MCP claim rejects a generic executor for a Codex route', () => {
 
 test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', () => {
   const added = callTool('add', { title: 'effort guard', category: 'mechanical' });
-  const ref = added.ticket.ref;
-  const derived = added.ticket.effort;
+  const ref = added.ref;
+  const derived = store.getTicket(added.project, added.ref).effort;
   assert.ok(derived, 'routing on -> a derived effort');
   const wrong = store.VALID_EFFORTS.find((e) => e !== derived);
   const res = callTool('claim', { ref, by: 'mcp-w', effort: wrong });
@@ -383,11 +380,11 @@ test('done stamps workedBy with a discovered Codex slug', () => {
   try {
     store.setCategory({ id: 'provenance-codex', name: 'Provenance Codex', route: { model: 'codex-terra', effort: 'high' } });
     const added = callTool('add', { title: 'codex provenance', category: 'provenance-codex' });
-    const ref = added.ticket.ref;
+    const ref = added.ref;
     callTool('claim', { ref, by: 'mcp-w-codex' });
     const done = callTool('done', { ref, by: 'mcp-w-codex', model: 'codex-terra', effort: 'high' });
     assert.strictEqual(done.ok, true);
-    assert.strictEqual(done.ticket.workedBy.model, 'codex-terra');
+    assert.strictEqual(done.workedBy.model, 'codex-terra');
   } finally {
     clearCatalog();
   }
@@ -405,11 +402,11 @@ test('claim guard refusal names the Codex-backed executor for a concrete route',
   try {
     store.setCategory({ id: 'guard-codex', name: 'Guard Codex', route: { model: 'codex-terra', effort: 'high' } });
     const added = callTool('add', { title: 'codex guard', category: 'guard-codex' });
-    const wrong = store.VALID_EFFORTS.find((effort) => effort !== added.ticket.effort);
-    const res = callTool('claim', { ref: added.ticket.ref, by: 'mcp-w-guard', effort: wrong });
+    const wrong = store.VALID_EFFORTS.find((effort) => effort !== store.getTicket(added.project, added.ref).effort);
+    const res = callTool('claim', { ref: added.ref, by: 'mcp-w-guard', effort: wrong });
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, 'effort_mismatch');
-    assert.match(res.message, new RegExp(`sidequest-exec-dispatch-${added.ticket.effort}`));
+    assert.match(res.message, new RegExp(`sidequest-exec-dispatch-${store.getTicket(added.project, added.ref).effort}`));
   } finally {
     clearCatalog();
   }

@@ -219,17 +219,43 @@ function closeDispatchExecutor(ticket) {
   if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
 }
 
+function mutationAck(project, result, changed) {
+  const ticket = result.ticket;
+  const out = { ok: !!result.ok, project };
+  if (ticket) Object.assign(out, { ref: ticket.ref, status: ticket.status });
+  if (!result.ok) {
+    for (const key of ['reason', 'claim', 'expectedExecutor', 'derivedEffort', 'claimedEffort', 'max', 'length', 'message']) {
+      if (result[key] !== undefined) out[key] = result[key];
+    }
+    return out;
+  }
+  return Object.assign(out, changed || {});
+}
+
+function changedTicketFields(ticket, args) {
+  const fields = {};
+  for (const key of ['title', 'description', 'priority', 'labels', 'files', 'complexity']) {
+    if (args[key] !== undefined) fields[key] = ticket[key];
+  }
+  if (args.anchors !== undefined) fields.anchors = ticket.executorAnchors;
+  if (args.verify !== undefined) fields.verify = ticket.executorVerify;
+  if (args.story !== undefined) fields.storyId = ticket.storyId;
+  if (args.category !== undefined) fields.categoryId = ticket.categoryId;
+  if (args.why !== undefined) fields.why = ticket.complexityWhy;
+  return fields;
+}
+
 const TOOLS = [
   {
     name: 'list',
-    description: 'List tickets on a board, PAGED so a large board never overflows the tool-result cap. status filters one column; archived:true shows archived. brief:true returns the compact shape (no bodies or threads) — default to it for routine orchestration reads. Returns tickets + total + returned + nextCursor. When nextCursor is non-null there are more: call again with cursor set to it to fetch the next page; iterate until nextCursor is null to see every ticket. limit:N sets an exact page size; all:true returns the whole column in one call (may overflow on a big board).',
+    description: 'List tickets on a board, PAGED so a large board never overflows the tool-result cap. Default rows are compact (no bodies or threads). Pass detail:true for full tickets. Returns tickets + total + returned + nextCursor. When nextCursor is non-null, call again with cursor set to it; limit:N sets an exact page size; all:true returns the whole column (may overflow on a big board).',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         status: { type: 'string', enum: ['todo', 'doing', 'done'] },
         archived: { type: 'boolean' },
-        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: choose an id from the returned categories, then update before dispatch.' },
+        detail: { type: 'boolean', description: 'Return full ticket bodies and comment threads. Omit for the compact default.' },
         cursor: { type: 'string', description: 'Page cursor from a previous response\'s nextCursor. Omit for the first page.' },
         limit: { type: 'integer', minimum: 0, description: 'Exact page size (max tickets per page). Omit for the automatic token-safe page.' },
         all: { type: 'boolean', description: 'Return every matching ticket in one call, bypassing paging. Use only when you truly need the whole column — a big board can overflow the tool-result limit.' },
@@ -240,7 +266,7 @@ const TOOLS = [
       // MCP board reads are routine orchestration reads, so omit completed work
       // and ticket bodies unless the caller explicitly asks for either.
       const status = args.status == null ? ['todo', 'doing'] : args.status;
-      const brief = args.brief == null ? true : args.brief;
+      const brief = !args.detail;
       // Bound the DEFAULT page so a few-hundred-ticket column can't overflow the
       // tool-result token ceiling. A caller that passes limit or all opts out of
       // the auto budget and takes responsibility for the page size.
@@ -360,7 +386,7 @@ const TOOLS = [
         source: 'mcp',
       });
       const ticket = store.getTicket(slug, created.ref) || created;
-      return { ok: true, project: slug, projectName: meta.name, ticket, warnings: store.ticketPlanningWarnings(ticket, meta.path) };
+      return mutationAck(slug, { ok: true, ticket }, { title: ticket.title });
     },
   },
   {
@@ -412,7 +438,7 @@ const TOOLS = [
       const updated = store.updateTicket(slug, args.ref, patch);
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
-      return { ok: true, project: slug, ticket: t, warnings: store.ticketPlanningWarnings(t, meta.path) };
+      return mutationAck(slug, { ok: true, ticket: t }, changedTicketFields(t, args));
     },
   },
   {
@@ -464,7 +490,7 @@ const TOOLS = [
       const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
-      return Object.assign({ project: slug }, res, { warnings: res.ok ? store.ticketPlanningWarnings(res.ticket, meta.path) : [] });
+      return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
     },
   },
   {
@@ -475,7 +501,7 @@ const TOOLS = [
       properties: { project: PROJECT_PROP },
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       return store.sweepStaleClaims({ project: slug, source: 'mcp' });
     },
   },
@@ -495,11 +521,11 @@ const TOOLS = [
       required: ['by'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'next');
       requireKnownModelFilter('next', args.model);
       const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, source: 'mcp', sessionId: sessionOf(args) });
-      return Object.assign({ project: slug }, res);
+      return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
     },
   },
   {
@@ -518,13 +544,13 @@ const TOOLS = [
       required: ['ref', 'by'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'done');
       requireKnownModel('done', args.model);
       const ticket = store.getTicket(slug, args.ref);
       const res = store.completeTicket(slug, args.ref, by, { source: 'mcp', model: args.model, effort: args.effort, sessionId: sessionOf(args) });
       if (res.ok) closeDispatchExecutor(ticket);
-      return Object.assign({ project: slug }, res);
+      return mutationAck(slug, res, res.ok ? { workedBy: res.ticket.workedBy } : null);
     },
   },
   {
@@ -542,12 +568,12 @@ const TOOLS = [
       required: ['ref', 'by'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'release');
       const ticket = store.getTicket(slug, args.ref);
       const res = store.releaseTicket(slug, args.ref, by, { status: args.status, source: 'mcp', sessionId: sessionOf(args) });
       if (res.ok) closeDispatchExecutor(ticket);
-      return Object.assign({ project: slug }, res);
+      return mutationAck(slug, res);
     },
   },
   {
@@ -559,9 +585,9 @@ const TOOLS = [
       required: ['ref', 'body'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const res = store.addComment(slug, args.ref, { body: args.body, by: args.by || 'agent', kind: 'comment', source: 'mcp' });
-      return Object.assign({ project: slug }, res);
+      return mutationAck(slug, res, res.ok ? { comment: res.comment } : null);
     },
   },
   {
@@ -573,9 +599,9 @@ const TOOLS = [
       required: ['ref', 'body'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const res = store.addComment(slug, args.ref, { body: args.body, by: args.by || 'agent', kind: 'question', source: 'mcp' });
-      return Object.assign({ project: slug }, res);
+      return mutationAck(slug, res, res.ok ? { comment: res.comment } : null);
     },
   },
   {
@@ -587,7 +613,7 @@ const TOOLS = [
       required: ['ref'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const t = store.getTicket(slug, args.ref);
       if (!t) throw new Error(`comments: no ticket "${args.ref}".`);
       return { project: slug, ref: t.ref, comments: t.comments || [], needsResponse: store.needsResponse(t) };
@@ -607,10 +633,10 @@ const TOOLS = [
       required: ['from', 'verb', 'to'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const res = store.linkTickets(slug, args.from, args.verb, args.to);
       if (!res.ok) throw new Error(`link: ${res.reason}`);
-      return Object.assign({ project: slug }, res);
+      return { ok: true, project: slug, from: res.from.ref, to: res.to.ref, type: res.type };
     },
   },
   {
@@ -622,10 +648,10 @@ const TOOLS = [
       required: ['a', 'b'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const res = store.unlinkTickets(slug, args.a, args.b);
       if (!res.ok) throw new Error(`unlink: ${res.reason}`);
-      return Object.assign({ project: slug }, res);
+      return { ok: true, project: slug, a: args.a, b: args.b };
     },
   },
   {
@@ -637,11 +663,11 @@ const TOOLS = [
       required: ['ref'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const who = args.to == null ? 'you' : (String(args.to).toLowerCase() === 'none' ? null : args.to);
       const res = store.assignTicket(slug, args.ref, who, { source: 'mcp' });
       if (!res.ok) throw new Error(`assign: no ticket "${args.ref}".`);
-      return Object.assign({ project: slug }, res);
+      return mutationAck(slug, res, { assignee: res.ticket.assignee });
     },
   },
   {
@@ -658,7 +684,7 @@ const TOOLS = [
       required: ['ref'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const ephemeral = !!args.ephemeral;
       const prepared = store.prepareDispatch(slug, args.ref, { ephemeral });
       if (ephemeral) {
@@ -702,7 +728,7 @@ const TOOLS = [
       required: ['ref', 'prompt'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
       if (!ticket.model || !ticket.effort) throw new Error(`native_agent: ${ticket.ref} has no routable model and effort.`);
@@ -799,11 +825,11 @@ const TOOLS = [
       const localRow = () => layer().rows.find((row) => row.id === id) || null;
       if (args.project != null && args.enabled === false) {
         const row = store.setProjectCategory(slug, id, 'DISABLE', {});
-        return { ok: true, project: slug, projectName: meta.name, localRow: row, effective: null, warnings: layer().warnings };
+        return { ok: true, project: slug, id, localRow: { id: row.id, kind: row.kind } };
       }
       if (args.project != null && args.enabled === true && localRow() && localRow().kind === 'DISABLE') {
         store.removeProjectCategory(slug, id);
-        return { ok: true, project: slug, projectName: meta.name, localRow: null, effective: store.getCategory(id, { project: slug }), warnings: layer().warnings };
+        return { ok: true, project: slug, id, localRow: null };
       }
       const existing = store.getCategory(id, args.project != null ? { project: slug } : undefined);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
@@ -816,10 +842,11 @@ const TOOLS = [
         const row = prior && prior.kind === 'ADD'
           ? store.setProjectCategory(slug, id, 'ADD', Object.assign({}, existing, patch, { id }))
           : store.setProjectCategory(slug, id, 'OVERRIDE', patch);
-        return { ok: true, project: slug, projectName: meta.name, localRow: row, effective: store.getCategory(id, { project: slug }), warnings: layer().warnings };
+        return { ok: true, project: slug, id, localRow: { id: row.id, kind: row.kind } };
       }
       if (args.enabled !== undefined) patch.enabled = args.enabled;
-      return { ok: true, project: slug, projectName: meta.name, category: store.setCategory(existing.id, patch) };
+      const category = store.setCategory(existing.id, patch);
+      return { ok: true, project: slug, id: category.id, changed: Object.keys(patch) };
     },
   },
   {
@@ -835,7 +862,7 @@ const TOOLS = [
       const id = String(args.id || '').trim().toLowerCase();
       const localRow = store.detachCategory(slug, id);
       const layer = store.getProjectCategories(slug);
-      return { ok: true, project: slug, projectName: meta.name, localRow, effective: store.getCategory(id, { project: slug }), warnings: layer.warnings };
+      return { ok: true, project: slug, id, localRow: { id: localRow.id, kind: localRow.kind } };
     },
   },
   {
@@ -853,7 +880,7 @@ const TOOLS = [
       if (!localRow || !['OVERRIDE', 'DETACH'].includes(localRow.kind)) throw new Error(`category_relink: "${args.id}" has no local override or detach.`);
       store.removeProjectCategory(slug, id);
       const layer = store.getProjectCategories(slug);
-      return { ok: true, project: slug, projectName: meta.name, id, localRow: null, effective: store.getCategory(id, { project: slug }), warnings: layer.warnings };
+      return { ok: true, project: slug, id, localRow: null };
     },
   },
   {
@@ -897,7 +924,7 @@ const TOOLS = [
     description: 'Available models, global fallback, and the effective category taxonomy for project, including project-layer warnings.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug, meta } = resolveProject(args.project);
       return store.modelsPayload({ project: slug });
     },
   },
