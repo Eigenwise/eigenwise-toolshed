@@ -279,7 +279,7 @@ const TOOLS = [
       let category = null;
       if (args.category != null) {
         category = String(args.category).trim().toLowerCase();
-        const valid = store.getCategories({ includeDisabled: false }).map((entry) => entry.id);
+        const valid = store.getCategories({ project: slug, includeDisabled: false }).map((entry) => entry.id);
         if (!valid.includes(category)) throw new Error(`add: unknown category "${args.category}" — valid: ${valid.join(', ')}`);
       }
       const complexity = store.coerceComplexity(args.complexity);
@@ -344,7 +344,7 @@ const TOOLS = [
         if (args.category === 'none' || args.category === null) patch.category = null;
         else {
           const category = String(args.category).trim().toLowerCase();
-          const valid = store.getCategories({ includeDisabled: false }).map((entry) => entry.id);
+          const valid = store.getCategories({ project: slug, includeDisabled: false }).map((entry) => entry.id);
           if (!valid.includes(category)) throw new Error(`update: unknown category "${args.category}" — valid: ${valid.join(', ')}`);
           patch.category = category;
         }

@@ -175,3 +175,27 @@ test('MCP project category layers add, override, disable, and shape models', () 
   assert.ok(!result.categories.some((entry) => entry.id === 'project-only'));
   assert.equal(result.categories.find((entry) => entry.id === 'general').name, 'General fallback');
 });
+
+test('MCP ticket category validation uses the explicit project taxonomy for add and update', () => {
+  const mcp = freshMcp();
+  const first = process.env.CLAUDE_PROJECT_DIR;
+  fs.mkdirSync(first, { recursive: true });
+  const second = path.join(path.dirname(first), 'second-project');
+  fs.mkdirSync(second, { recursive: true });
+  call(mcp, 'category_add', { project: first, id: 'project-only', name: 'Project only', routeModel: 'sonnet', routeEffort: 'medium' });
+
+  const added = call(mcp, 'add', { project: first, title: 'Project category ticket', category: 'project-only' });
+  assert.equal(added.ticket.category.id, 'project-only');
+
+  process.env.CLAUDE_PROJECT_DIR = second;
+  let raw = mcp.handleRequest({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: 'add', arguments: { title: 'Wrong project category', category: 'project-only' } } });
+  assert.ok(raw.result.isError);
+  assert.match(raw.result.content[0].text, /unknown category.*valid:/i);
+
+  const updated = call(mcp, 'update', { project: first, ref: added.ticket.ref, category: 'project-only' });
+  assert.equal(updated.ticket.category.id || updated.ticket.category, 'project-only');
+
+  raw = mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ticket.ref, category: 'project-only' } } });
+  assert.ok(raw.result.isError);
+  assert.match(raw.result.content[0].text, /unknown category.*valid:/i);
+});
