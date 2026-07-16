@@ -144,6 +144,34 @@ function nudgeOff() {
   return v === 'off' || v === '0' || v === 'false' || v === 'no';
 }
 
+const MAX_TAXONOMY_BYTES = 400;
+
+function taxonomyLine() {
+  try {
+    const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+    const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const found = store.findProject(store.nearestRepoRoot(start));
+    const project = found.ok ? found.slug : '';
+    const globalIds = store.getCategories({ includeDisabled: false }).map((category) => category.id);
+    const effectiveIds = new Set(store.getCategories({ project, includeDisabled: false }).map((category) => category.id));
+    const projectIds = project
+      ? store.getProjectCategories(project).rows
+        .filter((row) => row.kind === 'ADD' && effectiveIds.has(row.id))
+        .map((row) => row.id)
+      : [];
+    const line = 'taxonomy: ' + globalIds.join(', ') +
+      (projectIds.length ? ' | project: ' + projectIds.join(', ') : '');
+    return Buffer.byteLength(line) <= MAX_TAXONOMY_BYTES ? line : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function withTaxonomy(context) {
+  const line = taxonomyLine();
+  return line ? context + '\n' + line : context;
+}
+
 function emit(context) {
   process.stdout.write(
     JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: context } })
@@ -183,11 +211,11 @@ function main() {
   // compact/resume), and the sidequest skill carries the details.
   if (!isCapture && !isMgmt) {
     if (nudgeOff()) process.exit(0);
-    emit(
+    emit(withTaxonomy(
       '=== sidequest (active) === Plan multi-part work as tickets on the board; capture side issues as ' +
         'tickets (background `ticket-filer`). Category routing chooses the executor from live board reads; ' +
-        'classify and stamp an unlabeled ticket before claim. See the sidequest skill.'
-    );
+        'classify against the ids shown; fetch the category list for ambiguous stamps. See the sidequest skill.'
+    ));
     process.exit(0);
   }
 
@@ -195,7 +223,7 @@ function main() {
   // SQ-3"): give Claude the resolved CLI path and the exact commands. Capture
   // wins only when a *new* issue is clearly present (bug/interjection/image).
   if (isMgmt && !strongCapture) {
-    emit(
+    emit(withTaxonomy(
       '=== sidequest — board control ===\n' +
         'Board actions go through the MCP tools when they are in your toolset: ' +
         'mcp__plugin_sidequest_board__list / add / update / claim / next / done / release / comment / ' +
@@ -208,7 +236,7 @@ function main() {
         'To WORK a ticket, claim it FIRST (claim/next with a unique --by), then work, then done ' +
         '(release to drop it). Claiming is atomic — if it fails, do NOT work that ticket; pick another.' +
         disciplineFooter()
-    );
+    ));
     process.exit(0);
   }
 
@@ -241,7 +269,7 @@ function main() {
     '(e.g. "filed SQ-5") in one short line.' +
     disciplineFooter();
 
-  emit(context);
+  emit(withTaxonomy(context));
   process.exit(0);
 }
 

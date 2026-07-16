@@ -27,6 +27,34 @@
 
 const path = require('path');
 
+const MAX_TAXONOMY_BYTES = 400;
+
+function taxonomyLine() {
+  try {
+    const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+    const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const found = store.findProject(store.nearestRepoRoot(start));
+    const project = found.ok ? found.slug : '';
+    const globalIds = store.getCategories({ includeDisabled: false }).map((category) => category.id);
+    const effectiveIds = new Set(store.getCategories({ project, includeDisabled: false }).map((category) => category.id));
+    const projectIds = project
+      ? store.getProjectCategories(project).rows
+        .filter((row) => row.kind === 'ADD' && effectiveIds.has(row.id))
+        .map((row) => row.id)
+      : [];
+    const line = 'taxonomy: ' + globalIds.join(', ') +
+      (projectIds.length ? ' | project: ' + projectIds.join(', ') : '');
+    return Buffer.byteLength(line) <= MAX_TAXONOMY_BYTES ? line : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function withTaxonomy(context) {
+  const line = taxonomyLine();
+  return line ? context + '\n' + line : context;
+}
+
 // Returns the parsed stdin payload, or null if stdin was empty/unparseable.
 // Unlike capture-nudge.js (which only reads one field and can shrug off a
 // parse failure), this hook has no per-field logic to fall back on, so an
@@ -68,8 +96,9 @@ function nudgeOff() {
 }
 
 function emit(context, notice) {
+  const output = notice ? context + '\n' + notice : context;
   process.stdout.write(
-    JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: notice ? context + '\n' + notice : context } })
+    JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: withTaxonomy(output) } })
   );
 }
 
@@ -107,7 +136,7 @@ function main() {
   emit(
     '=== sidequest (active) ===\n' +
       'This project tracks work on the sidequest board — plan multi-part requests as independently checkable ATOMIC ' +
-      'tickets (stamp a live-taxonomy category; complexity + why are legacy fallback). ' +
+      'tickets (stamp a live-taxonomy category; classify against ids shown and fetch the list if ambiguous; complexity + why are legacy fallback). ' +
       'Atomic = one piece a single agent finishes and checks: a change, or an investigation, spike, or review. ' +
       'Split for parallelism: independent tickets fan out; keep tightly coupled work together. ' +
       'One ticket owning several deliverables (CLI + wiring + tests) is a smell: use a cheap scout that pins the shared contract, then a wave fanning the pieces out. ' +

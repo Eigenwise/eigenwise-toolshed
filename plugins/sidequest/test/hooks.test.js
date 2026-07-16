@@ -54,14 +54,15 @@ const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 
 // Byte budgets (chars ≈ tokens × ~4). CLI paths inside the blocks vary by
-// machine, so these have headroom — the point is catching a doctrine block
-// growing back to its old ~2.5KB size, not byte-exact accounting.
+// machine, so these have headroom. The live taxonomy adds at most 400 bytes to
+// each hook block, including project ADD ids, so each ceiling grows only by that
+// explicit cap instead of letting the doctrine grow back.
 const BUDGET = {
-  standing: 400, // the every-prompt line — keep this one genuinely tiny
-  session: 2450, // once per session start
-  compact: 600, // once per compact/resume
-  capture: 1500, // marker-gated
-  mgmt: 1600, // marker-gated
+  standing: 800,
+  session: 2850,
+  compact: 1000,
+  capture: 1900,
+  mgmt: 2000,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
 
@@ -481,6 +482,32 @@ test('standing reminder: SIDEQUEST_NUDGE=off silences it (marker blocks still fi
     env,
   });
   assert.ok(defect.includes('capture the side quest'), 'capture block must still fire when nudge is off');
+});
+
+test('standing reminder: reads live effective taxonomy including a project ADD within budget', () => {
+  const projectPath = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'taxonomy-project');
+  fs.mkdirSync(projectPath, { recursive: true });
+  const project = store.ensureProject(projectPath);
+  store.setProjectCategory(project.slug, 'leak-analysis', 'ADD', {
+    id: 'leak-analysis',
+    name: 'Leak analysis',
+    description: 'Fixture project category.',
+    contract: 'Inspect the leak.',
+    route: { model: 'sonnet', effort: 'medium' },
+    fallback: null,
+    enabled: true,
+  });
+  const out = execFileSync(process.execPath, [CAPTURE], {
+    input: JSON.stringify({ prompt: 'add a new export format' }),
+    encoding: 'utf8',
+    cwd: project.meta.path,
+    env: { ...process.env, SIDEQUEST_HOME },
+  });
+  const ctx = JSON.parse(out).hookSpecificOutput.additionalContext;
+  assert.match(ctx, /^taxonomy: .*\| project: leak-analysis$/m);
+  const line = ctx.split('\n').find((entry) => entry.startsWith('taxonomy: '));
+  assert.ok(Buffer.byteLength(line) <= 400, `taxonomy line is ${Buffer.byteLength(line)} bytes — cap is 400`);
+  assert.ok(ctx.length <= BUDGET.standing, `standing reminder is ${ctx.length} chars — budget is ${BUDGET.standing}`);
 });
 
 /* ------------------------------------------------------------------ *
