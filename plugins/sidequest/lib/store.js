@@ -30,6 +30,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const db = require('./db.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels } = require('./discovery.js');
@@ -2283,6 +2284,83 @@ function readyPayload(slug, opts) {
   return { tickets, waves, claimTtlMs: claimTtlMs(), categories: classifierCategories({ project: slug }) };
 }
 
+function claimPulse(claim, now) {
+  if (!claim || !claim.by) return null;
+  const atMs = Date.parse(claim.at);
+  return {
+    by: claim.by,
+    at: claim.at,
+    ageMs: Number.isFinite(atMs) ? Math.max(0, now - atMs) : null,
+  };
+}
+
+function lastCommentPulse(ticket) {
+  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  const comment = comments[comments.length - 1];
+  if (!comment) return null;
+  return {
+    at: comment.at,
+    by: comment.by,
+    kind: comment.kind,
+    body: String(comment.body || '').slice(0, 100),
+  };
+}
+
+function gitPulse(projectPath, files) {
+  if (!projectPath || !Array.isArray(files) || !files.length) return null;
+  try {
+    const git = (args) => execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (git(['rev-parse', '--is-inside-work-tree']) !== 'true') return null;
+    const commit = git(['log', '-1', '--format=%H%x1f%s%x1f%cI', '--', ...files]);
+    const [hash, subject, at] = commit ? commit.split('\x1f') : [];
+    const changed = git(['status', '--porcelain', '--', ...files]);
+    return {
+      commit: hash ? { hash, subject, at } : null,
+      dirty: Boolean(changed),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function pulsePayload(slug, idOrRef) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket) return null;
+  const meta = readMeta(slug);
+  return {
+    ref: ticket.ref,
+    title: ticket.title,
+    status: ticket.status,
+    claim: claimPulse(ticket.claim, Date.now()),
+    comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
+    lastComment: lastCommentPulse(ticket),
+    dispatchExecutor: ticket.dispatchExecutor || null,
+    dispatchNonce: ticket.dispatchNonce || null,
+    git: gitPulse(meta && meta.path, ticket.files),
+  };
+}
+
+function changesPayload(slug, since) {
+  const serverTime = new Date().toISOString();
+  const defaultSince = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const after = since == null ? defaultSince : String(since);
+  const afterMs = Date.parse(after);
+  if (!Number.isFinite(afterMs)) throw new Error('changes: --since must be an ISO timestamp.');
+  const tickets = listTickets(slug)
+    .filter((ticket) => Date.parse(ticket.updatedAt) > afterMs)
+    .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
+    .map((ticket) => ({
+      ref: ticket.ref,
+      title: ticket.title,
+      status: ticket.status,
+      lastEventType: ticket.lastEventType || null,
+      lastEventSource: ticket.lastEventSource || null,
+      claim: claimPulse(ticket.claim, Date.now()),
+      updatedAt: ticket.updatedAt,
+    }));
+  return { since: after, serverTime, tickets };
+}
+
 /* ------------------------------------------------------------------ *
  *  Notifications
  *
@@ -2962,6 +3040,8 @@ module.exports = {
   briefTicket,
   listPayload,
   readyPayload,
+  pulsePayload,
+  changesPayload,
   archiveTicket,
   unarchiveTicket,
   archiveAllDone,

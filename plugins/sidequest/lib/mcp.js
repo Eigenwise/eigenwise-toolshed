@@ -235,6 +235,39 @@ const TOOLS = [
     },
   },
   {
+    name: 'pulse',
+    description: 'One compact liveness read for a ticket: status, claim age, latest comment, dispatch state, and fail-soft scoped git activity.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP,
+        ref: { type: 'string', description: 'Ticket ref or id.' },
+      },
+      required: ['ref'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const pulse = store.pulsePayload(slug, args.ref);
+      if (!pulse) throw new Error(`pulse: no ticket "${args.ref}" in ${meta.name}`);
+      return Object.assign({ project: slug, projectName: meta.name }, pulse);
+    },
+  },
+  {
+    name: 'changes',
+    description: 'Compact ticket delta since an ISO timestamp. Omit since for the last 60 minutes. Returns serverTime to use as the next since value.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP,
+        since: { type: 'string', description: 'Exclusive ISO timestamp from a prior serverTime.' },
+      },
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      return Object.assign({ project: slug, projectName: meta.name }, store.changesPayload(slug, args.since));
+    },
+  },
+  {
     name: 'ready',
     description: 'The workable set: unclaimed, unblocked, not-done tickets, partitioned into parallel-safe waves by declared file scope. Filter by resolved model or category ID. brief:true returns compact tickets — default to it for orchestration reads.',
     inputSchema: {

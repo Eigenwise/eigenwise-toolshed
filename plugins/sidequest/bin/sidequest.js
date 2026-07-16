@@ -285,6 +285,21 @@ function cmdList(opts) {
   }
 }
 
+function cmdPulse(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('pulse: pass a ticket id or ref, e.g. sidequest pulse SQ-3');
+  const { slug, meta } = resolveProject(opts);
+  const pulse = store.pulsePayload(slug, idOrRef);
+  if (!pulse) fail(`pulse: no ticket "${idOrRef}" in ${meta.name}`);
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, pulse), null, 2) + '\n');
+}
+
+function cmdChanges(opts) {
+  const { slug, meta } = resolveProject(opts);
+  const changes = store.changesPayload(slug, opts.since);
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2) + '\n');
+}
+
 function cmdUpdate(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('update: pass a ticket id or ref, e.g. sidequest update SQ-4 --status done');
@@ -1687,6 +1702,8 @@ function help() {
 Usage:
   sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
+  sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
+  sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
   sidequest category list|add|edit|rm|disable|enable|detach|relink <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
@@ -1818,6 +1835,12 @@ async function main() {
     case 'list':
     case 'ls':
       cmdList(opts);
+      break;
+    case 'pulse':
+      cmdPulse(opts, positional);
+      break;
+    case 'changes':
+      cmdChanges(opts);
       break;
     case 'update':
     case 'edit':
