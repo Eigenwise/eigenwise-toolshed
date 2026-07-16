@@ -108,11 +108,20 @@ function effortDrift(slug, idOrRef, claimedEffort) {
   };
 }
 
-function executorDrift(slug, idOrRef, claimedEffort, executorName) {
+function executorDrift(slug, idOrRef, claimedEffort, executorName, token) {
   const effort = effortDrift(slug, idOrRef, claimedEffort);
   if (effort) return effort;
-  if (!executorName) return null;
   const t = store.getTicket(slug, idOrRef);
+  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName !== t.dispatchExecutor) {
+    return {
+      reason: 'executor_mismatch', ref: t.ref,
+      derivedModel: t.model, derivedEffort: t.effort,
+      executor: executorName || null, expectedExecutor: t.dispatchExecutor,
+      message: `${t.ref} has a prepared dispatch and requires ${t.dispatchExecutor} with its token. Claim refused.`,
+    };
+  }
+  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
+  if (!executorName) return null;
   if (!t || !t.exec || t.exec.backend !== 'codex') return null;
   if (executorName === t.exec.agent) return null;
   return {
@@ -392,9 +401,9 @@ const TOOLS = [
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'claim');
-      const drift = executorDrift(slug, args.ref, args.effort, args.executor);
+      const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
-      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, token: args.token, source: 'mcp', sessionId: sessionOf(args) });
+      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
       return Object.assign({ project: slug }, res, { warnings: res.ok ? store.ticketPlanningWarnings(res.ticket) : [] });
     },
   },
@@ -560,6 +569,29 @@ const TOOLS = [
     },
   },
   {
+    name: 'dispatch',
+    description: 'Prepare and render a token-gated per-ticket executor in one step. Spawn the returned agent, then claim with its exact executor name and token.',
+    inputSchema: {
+      type: 'object',
+      properties: { ref: { type: 'string' }, project: PROJECT_PROP, session: { type: 'string' } },
+      required: ['ref'],
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      const prepared = store.prepareDispatch(slug, args.ref);
+      const created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId: sessionOf(args) });
+      return {
+        project: slug,
+        ref: prepared.ticket.ref,
+        agent: created.name,
+        tokenPrefix: prepared.token.slice(0, 12),
+        token: prepared.token,
+        spawn: created.spawn,
+        guidance: `Spawn ${created.name}, then claim ${prepared.ticket.ref} with executor ${created.name} and the returned token.`,
+      };
+    },
+  },
+  {
     name: 'native_agent',
     description: 'Return a stable native Agent spawn spec for a ticket. Claude Code snapshots agent definitions at session start, so temporary definitions written mid-session cannot be safely spawned. The returned executor is already registered, uses the ticket runtime, and must be passed to Agent unchanged.',
     inputSchema: {
@@ -603,23 +635,6 @@ const TOOLS = [
     handler(args) {
       if (!args.name && !sessionOf(args)) throw new Error('native_agent_cleanup: pass name or session.');
       return agentsync.cleanupNativeAgents({ name: args.name, sessionId: sessionOf(args) });
-    },
-  },
-  {
-    name: 'dispatch',
-    description: 'Disabled. Routed work must use native_agent to return an already-registered executor, then the current conversation invokes it through Agent. Sidequest never starts a separate Claude process.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string' },
-        project: PROJECT_PROP,
-      },
-      required: ['ref'],
-    },
-    handler(args) {
-      const { slug } = resolveProject(args.project);
-      const res = work.nativeDispatchRequired(slug, args.ref);
-      throw new Error(`dispatch: ${res.message || res.reason}`);
     },
   },
   {

@@ -163,6 +163,10 @@ function ticketExecutorName(ref, runtime) {
   return token ? `${TICKET_PREFIX}${ticket}-${token}` : `${TICKET_PREFIX}${ticket}`;
 }
 
+function ticketExecutorNameForTicket(ticket) {
+  return store.dispatchExecutorName(ticket);
+}
+
 function temporaryAgentFile(name, dir) {
   if (!String(name || '').startsWith(TEMP_PREFIX) && !String(name || '').startsWith(TICKET_PREFIX)) {
     throw new Error('temporary agent name must use a Sidequest temporary prefix.');
@@ -234,13 +238,14 @@ function ticketBrief(ticket, nonce) {
 
 function createTicketExecutor(ticket, opts) {
   opts = opts || {};
-  if (!ticket || !ticket.ref || !ticket.model || !ticket.effort) throw new Error('ticket executor requires a routable ticket.');
-  const nonce = String(opts.nonce || '').trim();
-  if (!nonce || /[\r\n]/.test(nonce)) throw new Error('ticket executor nonce is required and must be one line.');
+  const rawNonce = opts.nonce;
+  if (typeof rawNonce !== 'string' || !rawNonce.trim() || /[\r\n]/.test(rawNonce)) {
+    throw new Error('ticket executor nonce is required and must be a non-empty one-line string.');
+  }
+  const nonce = rawNonce.trim();
+  const name = ticketExecutorNameForTicket(ticket);
   const resolved = store.resolveExec(ticket.model, ticket.effort);
-  if (!resolved || !resolved.runsModel) throw new Error(`ticket executor could not resolve ${ticket.model} at ${ticket.effort}.`);
   const dir = opts.dir || defaultAgentsDir();
-  const name = ticketExecutorName(ticket.ref, resolved.runsModel);
   const file = temporaryAgentFile(name, dir);
   const sessionId = String(opts.sessionId || '').replace(/[\r\n]/g, '');
   const source = renderExecAgent({
@@ -444,6 +449,7 @@ module.exports = {
   agentFileName,
   renderExecAgent,
   createTicketExecutor,
+  ticketExecutorNameForTicket,
   createNativeAgent,
   cleanupNativeAgents,
   nativeAgentName,

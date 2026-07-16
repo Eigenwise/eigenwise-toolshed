@@ -597,11 +597,23 @@ function validateModelFilter(action, opts) {
   return false;
 }
 
-function executorDriftReason(slug, idOrRef, claimedEffort, executorName) {
+function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token) {
   const effortDrift = effortDriftReason(slug, idOrRef, claimedEffort);
   if (effortDrift) return effortDrift;
-  if (!executorName) return null;
   const t = store.getTicket(slug, idOrRef);
+  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName !== t.dispatchExecutor) {
+    return {
+      reason: 'executor_mismatch',
+      ref: t.ref,
+      derivedModel: t.model,
+      derivedEffort: t.effort,
+      executor: executorName || null,
+      expectedExecutor: t.dispatchExecutor,
+      message: `${t.ref} has a prepared dispatch and requires ${t.dispatchExecutor} with its token. Claim refused.`,
+    };
+  }
+  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
+  if (!executorName) return null;
   if (!t || !t.exec || t.exec.backend !== 'codex') return null;
   const expected = t.exec.agent;
   if (executorName === expected) return null;
@@ -631,17 +643,17 @@ function cmdClaim(opts, positional) {
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
   // Guard before claiming so a wrong-tier claim leaves the ticket untouched.
-  const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor);
+  const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor, opts.token);
   if (drift) {
     process.exitCode = 1;
     if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ ok: false, reason: 'effort_mismatch', project: slug }, drift), null, 2) + '\n');
+      process.stdout.write(JSON.stringify(Object.assign({ ok: false, reason: drift.reason || 'effort_mismatch', project: slug }, drift), null, 2) + '\n');
     } else {
       console.log(`✗ ${drift.message}`);
     }
     return;
   }
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, token: opts.token, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts) });
   const warnings = res.ok ? claimPlanningWarnings(res.ticket) : [];
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, { warnings }), null, 2) + '\n');
@@ -1073,6 +1085,34 @@ function cmdUnarchive(opts, positional) {
     process.exitCode = 1;
     console.log(`✗ unarchive: no ticket "${idOrRef}" in ${meta.name}`);
   }
+}
+
+function cmdDispatch(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('dispatch: pass a ticket ref, e.g. sidequest dispatch SQ-12.');
+  const { slug } = resolveProject(opts);
+  const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
+  let prepared;
+  try {
+    prepared = store.prepareDispatch(slug, idOrRef);
+  } catch (err) {
+    fail(`dispatch: ${(err && err.message) || err}`);
+  }
+  let created;
+  try {
+    created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId });
+  } catch (err) {
+    fail(`dispatch: ${(err && err.message) || err}`);
+  }
+  process.stdout.write(JSON.stringify({
+    project: slug,
+    ref: prepared.ticket.ref,
+    agent: created.name,
+    tokenPrefix: prepared.token.slice(0, 12),
+    token: prepared.token,
+    spawn: created.spawn,
+    guidance: `Spawn ${created.name}, then claim ${prepared.ticket.ref} with --executor ${created.name} --token ${prepared.token}.`,
+  }, null, 2) + '\n');
 }
 
 function cmdNativeAgent(opts, positional) {
@@ -1616,6 +1656,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
+  sidequest dispatch <SQ-n> [--project <path-or-slug>] [--session id]  prepare and render a token-gated per-ticket executor
   sidequest native-agent <SQ-n> [--prompt "task"] [--json]  return an already-registered native Agent spawn spec + bounded prompt
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
@@ -1790,6 +1831,9 @@ async function main() {
     case 'unarchive':
     case 'restore':
       cmdUnarchive(opts, positional);
+      break;
+    case 'dispatch':
+      cmdDispatch(opts, positional);
       break;
     case 'native-agent':
     case 'native_agent':

@@ -114,26 +114,46 @@ test('omitting effort remains compatible with callers that do not prove an execu
   assert.equal(claim.ticket.status, 'doing');
 });
 
-test('prepared dispatches refuse missing or wrong claim tokens, then clear on done and release', () => {
+test('prepared dispatches require their token and ephemeral executor, then clear on done and release', () => {
   const slug = store.ensureProject(PROJ).slug;
 
-  const doneRef = seed('guard.claude');
+  const doneRef = seed('guard.codex');
   const preparedDone = store.prepareDispatch(slug, doneRef);
   assert.equal(preparedDone.ok, true);
   assert.ok(preparedDone.token);
+  assert.equal(preparedDone.ticket.dispatchExecutor, `sidequest-ticket-${doneRef.toLowerCase()}-gpt-test`);
   const missing = runCli(['claim', doneRef, '--by', 'missing-token', '--json']);
   assert.notEqual(missing.status, 0);
   assert.equal(JSON.parse(missing.stdout).reason, 'token');
-  const wrong = runCli(['claim', doneRef, '--by', 'wrong-token', '--token', 'wrong', '--json']);
+  const wrong = runCli(['claim', doneRef, '--by', 'wrong-executor', '--token', preparedDone.token, '--executor', 'sidequest-ticket-wrong-gpt-test', '--json']);
   assert.notEqual(wrong.status, 0);
-  assert.equal(JSON.parse(wrong.stdout).reason, 'token');
-  assert.equal(cliJson(['claim', doneRef, '--by', 'right-token', '--token', preparedDone.token]).ok, true);
-  assert.equal(cliJson(['done', doneRef, '--by', 'right-token']).ticket.dispatchNonce, null);
+  assert.equal(JSON.parse(wrong.stdout).reason, 'executor_mismatch');
+  assert.equal(cliJson(['claim', doneRef, '--by', 'right-token', '--token', preparedDone.token, '--executor', preparedDone.ticket.dispatchExecutor]).ok, true);
+  const done = cliJson(['done', doneRef, '--by', 'right-token']);
+  assert.equal(done.ticket.dispatchNonce, null);
+  assert.equal(done.ticket.dispatchExecutor, null);
 
-  const releaseRef = seed('guard.claude');
+  const releaseRef = seed('guard.codex');
   const preparedRelease = store.prepareDispatch(slug, releaseRef);
-  assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token', preparedRelease.token]).ok, true);
-  assert.equal(cliJson(['release', releaseRef, '--by', 'release-token', '--status', 'todo']).ticket.dispatchNonce, null);
+  assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token', preparedRelease.token, '--executor', preparedRelease.ticket.dispatchExecutor]).ok, true);
+  const released = cliJson(['release', releaseRef, '--by', 'release-token', '--status', 'todo']);
+  assert.equal(released.ticket.dispatchNonce, null);
+  assert.equal(released.ticket.dispatchExecutor, null);
+});
+
+test('dispatch prepares and renders a claim-ready ephemeral executor', () => {
+  const ref = seed('guard.codex');
+  const dispatched = cliJson(['dispatch', ref]);
+  assert.equal(dispatched.ref, ref);
+  assert.equal(dispatched.agent, `sidequest-ticket-${ref.toLowerCase()}-gpt-test`);
+  assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
+  assert.match(dispatched.guidance, new RegExp(`--executor ${dispatched.agent}`));
+  assert.equal(ticket(ref).dispatchExecutor, dispatched.agent);
+});
+
+test('prepare dispatch rejects unknown ticket refs loudly', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  assert.throws(() => store.prepareDispatch(slug, 'SQ-999999'), /no ticket/);
 });
 
 test('an unavailable primary uses the category fallback effort for the guard', () => {

@@ -107,17 +107,20 @@ test('MCP board archive tools require explicit refs and list archived boards', (
   assert.strictEqual(restored.ok, true);
   assert.strictEqual(restored.wasArchived, true);
 });
-test('dispatch is disabled and directs callers to native_agent', () => {
+test('dispatch prepares and renders a token-gated ticket executor', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref', 'session']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
-  assert.match(d.description, /native_agent/i);
 
-  const added = callTool('add', { title: 'native dispatch only', complexity: 2, why: 'confirm MCP dispatch cannot start a separate Claude process anymore' });
-  const res = callToolRaw('dispatch', { ref: added.ticket.ref });
-  assert.ok(res.isError);
-  assert.match(res.content[0].text, /native_agent.*Agent tool/i);
+  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
+  store.setCategory({ id: 'dispatch-codex', name: 'Dispatch Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  const added = callTool('add', { title: 'token-gated dispatch', category: 'dispatch-codex' });
+  const dispatched = callTool('dispatch', { ref: added.ticket.ref, session: 'mcp-dispatch-session' });
+  assert.equal(dispatched.agent, `sidequest-ticket-${added.ticket.ref.toLowerCase()}-gpt-5-6-terra`);
+  assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
+  assert.match(dispatched.guidance, /executor/);
+  assert.equal(store.getTicket(store.ensureProject(PROJ).slug, added.ticket.ref).dispatchExecutor, dispatched.agent);
 });
 
 test('native_agent carries ticket anchors and verify command through its stable fallback', () => {
@@ -259,14 +262,16 @@ test('claim requires a worker id (no shared-identity default)', () => {
   assert.match(res.content[0].text, /by.*required/i);
 });
 
-test('MCP claim passes a prepared dispatch token through to the store', () => {
-  const added = callTool('add', { title: 'nonce through MCP', complexity: 2, why: 'exercise the ephemeral executor claim nonce through the MCP claim tool' });
+test('MCP claim passes prepared dispatch token and executor through to the store', () => {
+  seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
+  store.setCategory({ id: 'mcp-dispatch-claim', name: 'MCP dispatch claim', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  const added = callTool('add', { title: 'nonce through MCP', category: 'mcp-dispatch-claim' });
   const slug = store.ensureProject(PROJ).slug;
   const prepared = store.prepareDispatch(slug, added.ticket.ref);
   const refused = callTool('claim', { ref: added.ticket.ref, by: 'mcp-no-token' });
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'token');
-  const accepted = callTool('claim', { ref: added.ticket.ref, by: 'mcp-with-token', token: prepared.token });
+  const accepted = callTool('claim', { ref: added.ticket.ref, by: 'mcp-with-token', token: prepared.token, executor: prepared.ticket.dispatchExecutor });
   assert.strictEqual(accepted.ok, true);
 });
 

@@ -1147,6 +1147,7 @@ function createTicket(slug, fields) {
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
     claim: null,               // { by, at } when an agent has claimed it to work on
     dispatchNonce: null,
+    dispatchExecutor: null,
     assignee: normalizeAssignee(fields.assignee), // who it's assigned to (usually the human "you"); distinct from an agent claim
     archived: false,           // hidden from the board (kept, restorable) once true
     archivedAt: null,
@@ -1533,13 +1534,23 @@ function withTicketLock(slug, id, fn) {
   }
 }
 
+function dispatchExecutorName(ticket) {
+  if (!ticket || !ticket.ref || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
+  const resolved = resolveExec(ticket.model, ticket.effort);
+  if (!resolved || !resolved.runsModel) throw new Error(`dispatch executor could not resolve ${ticket.model} at ${ticket.effort}.`);
+  const ref = String(ticket.ref).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'ticket';
+  const runtime = String(resolved.runsModel).toLowerCase().replace(/^codex-/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return runtime ? `sidequest-ticket-${ref}-${runtime}` : `sidequest-ticket-${ref}`;
+}
+
 function prepareDispatch(slug, idOrRef) {
   const found = getTicket(slug, idOrRef);
-  if (!found) return { ok: false, reason: 'not_found' };
+  if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t) return { ok: false, reason: 'not_found' };
+    if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
+    t.dispatchExecutor = dispatchExecutorName(t);
     t.updatedAt = new Date().toISOString();
     putTicket(slug, t);
     return { ok: true, ticket: t, token: t.dispatchNonce };
@@ -1559,6 +1570,7 @@ function claimTicket(slug, idOrRef, by, opts) {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
     if (t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
+    if (t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     const held = t.claim;
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
@@ -1603,6 +1615,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     }
     t.claim = null;
     t.dispatchNonce = null;
+    t.dispatchExecutor = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
     if (opts.workedBy) t.workedBy = opts.workedBy; // self-reported provenance stamp (done transition only)
     t.lastEventType = 'status';
@@ -2822,6 +2835,7 @@ module.exports = {
   createTicket,
   updateTicket,
   deleteTicket,
+  dispatchExecutorName,
   prepareDispatch,
   claimTicket,
   releaseTicket,

@@ -135,6 +135,14 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.ok(JSON.stringify(created.spawn).length < 200);
 });
 
+test('ticket executor rejects non-string and empty dispatch nonces', () => {
+  seedCatalog([TERRA]);
+  const ticket = { ref: 'SQ-315', title: 'Nonce validation', model: TERRA.slug, effort: 'high', category: {} };
+  for (const nonce of [undefined, null, '', '   ', { token: 'wrong-shape' }]) {
+    assert.throws(() => agentsync.createTicketExecutor(ticket, { nonce, dir: tmpDir(), waitMs: 0 }), /nonce is required/);
+  }
+});
+
 test('ticket executors use the existing temporary cleanup lifecycle', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
