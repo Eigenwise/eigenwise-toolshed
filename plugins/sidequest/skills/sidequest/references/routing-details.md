@@ -46,7 +46,7 @@ A fresh read returns this ticket projection:
   "category": { "id": "coding.normal", "route": { "model": "codex-gpt-5-6-terra", "effort": "high" } },
   "model": "codex-gpt-5-6-terra",
   "effort": "high",
-  "exec": { "agent": "sidequest-exec-codex-gpt-5-6-terra-high", "model": null, "backend": "codex" }
+  "exec": { "agent": "sidequest-exec-dispatch-high", "model": null, "backend": "codex" }
 }
 ```
 

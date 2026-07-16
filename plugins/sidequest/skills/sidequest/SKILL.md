@@ -305,15 +305,17 @@ and fallback chain, documented in [references/routing-details.md](references/rou
      **Never spawn a Claude-route executor without `model:`** — an omitted model inherits the session
      model (usually the priciest route), silently defeating routing; the bundled PreToolUse hook
      injects or blocks as a backstop, but the spawn call must carry it.
-   - **Codex (`exec.model` null):** spawn the EXACT generated backend-specific executor named by
-     `exec.agent` (e.g. `sidequest-exec-codex-gpt-5-6-terra-high`) through the Agent tool with
+   - **Codex (`exec.model` null):** spawn the EXACT shared dispatch executor named by
+     `exec.agent` (`sidequest-exec-dispatch-<effort>`) through the Agent tool with
      `mode: "bypassPermissions"`, a unique `name`, and **the `model` parameter OMITTED entirely** —
-     `exec.model` is null precisely so you leave it out. The real model id is pinned in the generated
-     agent's frontmatter (with bypass), and omitting `model` runs that pin for real: the spawned
-     agent self-reports the GPT backend and the gateway's codex counter advances. Passing ANY
-     `model` value (`fable|opus|sonnet|haiku`) overrides the pin and silently runs Anthropic
-     instead. Never substitute a generic `sidequest-exec-<effort>` agent for a Codex route — the
-     board refuses its claim.
+     `exec.model` is null precisely so you leave it out. The def pins the virtual `claude-codex-auto`;
+     the REAL model rides the dispatch briefing as its `[sidequest-route model=...]` line, which the
+     codex-gateway shim resolves per request — so the briefing from `dispatch` must reach the spawn
+     prompt intact, and one spawn carries exactly one marker (never batch tickets stamped with
+     different models). Passing ANY `model` value (`fable|opus|sonnet|haiku`) overrides the pin and
+     silently runs Anthropic instead. Never substitute a generic `sidequest-exec-<effort>` agent for
+     a Codex route — the board refuses its claim. Model provenance lives in the gateway route log,
+     the subagent transcript, and `done --model`, not in the executor name.
    `<effort>` is the ticket's `effort` **verbatim from that read**, never a level you judge fits
    better. The executor claims with `--effort <baked level>` and the board **refuses the claim on a
    mismatch**, bouncing the ticket back. A haiku ticket has no effort: `exec.agent` is null, spawn a

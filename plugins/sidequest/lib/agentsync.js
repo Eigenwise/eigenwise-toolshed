@@ -17,8 +17,11 @@
  * A registered agent file with a `model: <full-id>` frontmatter pin genuinely
  * runs through codex-gateway when spawned with the Agent `model` parameter
  * omitted. Passing an Agent `model` value overrides the pin, so Codex routes
- * advertise `model: null`. Every concrete Codex category route therefore gets
- * sidequest-exec-<source>-<slug>-<effort>.md in the user's live agents directory.
+ * advertise `model: null`. Codex routes share ONE executor per effort
+ * (sidequest-exec-dispatch-<effort>.md, pinned to the virtual claude-codex-auto):
+ * the real model rides each dispatch briefing as a [sidequest-route model=...]
+ * marker the codex-gateway shim resolves per request (SQ-347/SQ-348). The def
+ * set is therefore fixed — route edits never write or register agent files.
  *
  * syncExecAgents() renders through scripts/_exec-template.md via
  * renderExecAgent() below, so the ticket-execution protocol body stays in one
@@ -82,9 +85,17 @@ function defaultAgentsDir() {
   return path.join(os.homedir(), '.claude', 'agents');
 }
 
-function agentFileName(source, slug, effort, namespace) {
-  const prefix = namespace ? `${source}-` : '';
-  return `sidequest-exec-${prefix}${slug}-${effort}.md`;
+// The virtual model id the codex-gateway shim (>=0.9.0) resolves per request
+// from the route marker below. Must match the gateway's advertised id.
+const DISPATCH_MODEL_ID = 'claude-codex-auto';
+const ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63}\]$/;
+
+// The exact marker grammar the shim scans for. Throws rather than emitting a
+// marker the gateway would silently ignore (which would 400 the whole run).
+function routeMarker(dispatchModel) {
+  const marker = `[sidequest-route model=${String(dispatchModel || '')}]`;
+  if (!ROUTE_MARKER_RE.test(marker)) throw new Error(`dispatch model id is not marker-safe: ${dispatchModel}`);
+  return marker;
 }
 
 // Render one agent file's full source from the shared template. Every runtime
@@ -103,23 +114,22 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
     .split('{{TICKET_BRIEF}}').join(ticketBrief || '');
 }
 
-// A single-line (one-paragraph) note appended to a Codex-backed agent's body:
-// its effort is set via Claude Code's frontmatter, which the codex-gateway shim
-// forwards to the Codex backend's reasoning.effort — so unlike an earlier read,
-// effort DOES reach the model. The note records which real model runs.
-function backendNote(slug, id) {
-  const runtime = id || slug;
-  return `\n\n_This agent is the authoritative Sidequest executor for the \`${slug}\` runtime and runs on \`${runtime}\` through codex-gateway. Claude Code's native suffix is external metadata; the Sidequest route line and this backend-specific executor name are authoritative. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
+// Appended to every shared dispatch executor's body. Effort is set via Claude
+// Code's frontmatter, which the shim forwards to the Codex backend's
+// reasoning.effort; the model is NOT in the def — the shim resolves it from the
+// briefing's route marker, so the note bans writing that marker anywhere else
+// (the gateway takes the last occurrence in the conversation).
+function dispatchNote(effort) {
+  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at \`${effort}\` effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model from the \`[sidequest-route model=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models: one spawn carries exactly one route marker. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
 }
 
-function renderBackendAgent(source, slug, id, effort, namespace) {
-  const prefix = namespace ? `${source}-` : '';
+function renderDispatchAgent(effort) {
   return renderExecAgent({
-    name: `sidequest-exec-${prefix}${slug}-${effort}`,
+    name: `sidequest-exec-dispatch-${effort}`,
     effort,
-    modelId: id,
+    modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
-    extraNote: backendNote(slug, id),
+    extraNote: dispatchNote(effort),
   });
 }
 
@@ -218,7 +228,7 @@ function ticketCommentsDigest(comments) {
   }).join('\n');
 }
 
-function ticketBrief(ticket, nonce) {
+function ticketBrief(ticket, nonce, marker) {
   const category = ticket.category || {};
   const parts = [
     '',
@@ -233,6 +243,11 @@ function ticketBrief(ticket, nonce) {
     'Dispatch claim guard:',
     `Claim this ticket with \`--token ${nonce}\`. A token refusal means this agent was spawned before its definition registered or is not the prepared dispatch. Stop and report that refusal.`,
   ];
+  // Last on purpose: the gateway resolves the LAST marker in the conversation,
+  // so this one outranks any marker-shaped text inside the ticket description.
+  if (marker) {
+    parts.push('Model route (gateway dispatch marker — never write another):', marker);
+  }
   return parts.join('\n\n');
 }
 
@@ -261,12 +276,16 @@ function renderTicketBriefing(ticket, nonce) {
   const name = ticket && ticket.dispatchExecutor
     ? String(ticket.dispatchExecutor)
     : ((ticket && ticket.exec && ticket.exec.agent) || `sidequest-exec-${(ticket && ticket.effort) || 'low'}`);
+  const resolved = store.resolveExec(ticket.model, ticket.effort);
+  const marker = resolved && resolved.backend === 'codex' && resolved.dispatchModel
+    ? routeMarker(resolved.dispatchModel)
+    : null;
   const source = renderExecAgent({
     name,
     effort: ticket.effort,
     marker: '',
     extraNote: '',
-    ticketBrief: ticketBrief(ticket, nonce.trim()),
+    ticketBrief: ticketBrief(ticket, nonce.trim(), marker),
   });
   return stripExecFrontmatter(source);
 }
@@ -422,7 +441,7 @@ function syncExecAgents(_prefs, opts) {
     const resolved = store.resolveExec(route.model, route.effort);
     if (!resolved || !resolved.agent || wanted.has(`${resolved.agent}.md`)) continue;
     const content = resolved.backend === 'codex'
-      ? renderBackendAgent(resolved.source, resolved.slug, resolved.spawnId, route.effort, resolved.agent !== `sidequest-exec-${resolved.slug}-${route.effort}`)
+      ? renderDispatchAgent(resolved.effort || route.effort)
       : renderExecAgent({ name: resolved.agent, effort: route.effort, marker: MARKER });
     wanted.set(`${resolved.agent}.md`, content);
   }
@@ -488,8 +507,10 @@ module.exports = {
   NON_MAX_EFFORTS,
   RESTART_NOTICE,
   EXEC_MAX_TURNS,
+  DISPATCH_MODEL_ID,
   execMaxTurns,
-  agentFileName,
+  routeMarker,
+  renderDispatchAgent,
   renderExecAgent,
   renderTicketBriefing,
   createTicketExecutor,

@@ -85,6 +85,32 @@ function resolveStampedModel(input) {
   return { status: 'ok', refs, model: [...models][0] };
 }
 
+// A shared dispatch executor (sidequest-exec-dispatch-<effort>) runs the model
+// named by the ONE route marker in its spawn prompt — a batch mixing tickets
+// stamped with different models would silently run every ticket on the last
+// marker's model. Only a proven conflict denies; unresolvable refs pass through
+// (the gateway's missing-marker 400 is the loud backstop).
+function dispatchBatchConflict(input) {
+  const prompt = input && input.tool_input && input.tool_input.prompt;
+  const refs = extractRefs(prompt);
+  if (refs.length < 2) return null;
+  let store;
+  try {
+    store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+  } catch (_) {
+    return null;
+  }
+  const projectArg = extractProjectArg(prompt) || input.cwd || process.env.CLAUDE_PROJECT_DIR;
+  const found = projectArg ? store.findProject(projectArg) : { ok: false };
+  if (!found.ok) return null;
+  const runtimes = new Set();
+  for (const ref of refs) {
+    const ticket = store.getTicket(found.slug, ref);
+    if (ticket && ticket.exec && ticket.exec.runsModel) runtimes.add(ticket.exec.runsModel);
+  }
+  return runtimes.size > 1 ? [...runtimes] : null;
+}
+
 function denyReason(res, type) {
   const retry = 'Re-read the wave (`ready --brief`) and re-spawn with `model: exec.model`.';
   const base = `sidequest: ${type} was spawned without \`model\` and it couldn't be resolved`;
@@ -138,6 +164,22 @@ function main() {
   const updatedInput = { ...toolInput, mode: 'bypassPermissions' };
 
   if (isPinnedSidequestExecutor(type)) {
+    if (type.startsWith('sidequest-exec-dispatch-')) {
+      const conflict = dispatchBatchConflict(input);
+      if (conflict) {
+        process.stdout.write(JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason:
+              `sidequest: this batch mixes tickets stamped with different models (${conflict.join(', ')}) under one ` +
+              `dispatch executor — every ticket would silently run on the last route marker's model. Split the batch ` +
+              `per model and re-spawn each with its own dispatch briefing.`,
+          },
+        }));
+        return;
+      }
+    }
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, 'model');
     if (hadModel) delete updatedInput.model;
     process.stdout.write(JSON.stringify({

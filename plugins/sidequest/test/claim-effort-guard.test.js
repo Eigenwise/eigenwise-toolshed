@@ -66,7 +66,7 @@ function otherEffort(effort) {
 test('Codex category routes reject a generic executor even when effort matches', () => {
   const ref = seed('guard.codex');
   const derived = ticket(ref);
-  const expected = `sidequest-exec-codex-gpt-test-${derived.effort}`;
+  const expected = `sidequest-exec-dispatch-${derived.effort}`;
   const rejected = runCli(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', `sidequest-exec-${derived.effort}`]);
   assert.notEqual(rejected.status, 0);
   assert.match(rejected.stdout + rejected.stderr, new RegExp(expected));
@@ -126,7 +126,7 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   assert.ok(preparedDone.token);
   // Instant dispatch points the guard at the STABLE per-model executor, not a
   // fresh per-ticket definition, and writes no def file.
-  assert.equal(preparedDone.ticket.dispatchExecutor, 'sidequest-exec-codex-gpt-test-high');
+  assert.equal(preparedDone.ticket.dispatchExecutor, 'sidequest-exec-dispatch-high');
   assert.equal(preparedDone.ticket.dispatchExecutor, ticket(doneRef).exec.agent);
   // The stable executor is registered from session start; closeout on done/release
   // must never delete it (it is not a per-ticket temp def).
@@ -147,7 +147,7 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
 
   const releaseRef = seed('guard.codex');
   const preparedRelease = store.prepareDispatch(slug, releaseRef);
-  assert.equal(preparedRelease.ticket.dispatchExecutor, 'sidequest-exec-codex-gpt-test-high');
+  assert.equal(preparedRelease.ticket.dispatchExecutor, 'sidequest-exec-dispatch-high');
   assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token', preparedRelease.token, '--executor', preparedRelease.ticket.dispatchExecutor]).ok, true);
   const released = cliJson(['release', releaseRef, '--by', 'release-token', '--status', 'todo']);
   assert.equal(released.ticket.dispatchNonce, null);
@@ -202,7 +202,7 @@ test('instant dispatch (default) returns the stable executor, the briefing, and 
   const dispatched = cliJson(['dispatch', ref]);
   assert.equal(dispatched.ref, ref);
   assert.equal(dispatched.mode, 'instant');
-  assert.equal(dispatched.agent, 'sidequest-exec-codex-gpt-test-high');
+  assert.equal(dispatched.agent, 'sidequest-exec-dispatch-high');
   assert.equal(dispatched.spawn.subagent_type, dispatched.agent);
   assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
   assert.match(dispatched.briefing, new RegExp(`--token ${dispatched.token}`));

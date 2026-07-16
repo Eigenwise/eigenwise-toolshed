@@ -140,10 +140,11 @@ test('dispatch is instant by default (stable executor + briefing + token); ephem
   const addedInstant = callTool('add', { title: 'instant dispatch', category: 'dispatch-codex' });
   const instant = callTool('dispatch', { ref: addedInstant.ticket.ref, session: 'mcp-dispatch-session' });
   assert.equal(instant.mode, 'instant');
-  assert.equal(instant.agent, 'sidequest-exec-codex-gpt-5-6-terra-high');
+  assert.equal(instant.agent, 'sidequest-exec-dispatch-high');
   assert.equal(instant.spawn.subagent_type, instant.agent);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
   assert.match(instant.briefing, new RegExp(`--token ${instant.token}`));
+  assert.match(instant.briefing, /\[sidequest-route model=gpt-5\.6-terra\]/);
   assert.match(instant.briefing, /## This ticket/);
   assert.doesNotMatch(instant.briefing, /^---$/m);
   assert.match(instant.guidance, /executor/);
@@ -168,7 +169,7 @@ test('native_agent carries ticket anchors and verify command through its stable 
     const native = callTool('native_agent', { ref: added.ticket.ref, prompt: 'Implement exactly this ticket.' });
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
-    assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-codex-gpt-5-6-terra-high');
+    assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch-high');
     assert.match(native.prompt, /Authoritative ticket contract \(the task prompt may add logistics only; do not narrow this scope\):/);
     assert.match(native.prompt, /Title: prompt context/);
     assert.match(native.prompt, /Anchors:\nlib\/work\.js:14 executorPrompt/);
@@ -408,7 +409,7 @@ test('claim guard refusal names the Codex-backed executor for a concrete route',
     const res = callTool('claim', { ref: added.ticket.ref, by: 'mcp-w-guard', effort: wrong });
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, 'effort_mismatch');
-    assert.match(res.message, new RegExp(`sidequest-exec-codex-terra-${added.ticket.effort}`));
+    assert.match(res.message, new RegExp(`sidequest-exec-dispatch-${added.ticket.effort}`));
   } finally {
     clearCatalog();
   }

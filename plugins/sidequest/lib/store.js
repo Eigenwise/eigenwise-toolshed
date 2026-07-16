@@ -328,10 +328,18 @@ function availableRoute(model) {
   return entry ? resolvedBackend(entry, discovered) : null;
 }
 
+// The id the codex-gateway shim forwards upstream for a discovered backend: its
+// advertised id minus the local claude-codex- discovery prefix and any [1m]
+// suffix. Dispatch briefings embed it as the [sidequest-route model=...] marker
+// that resolves the shared executors' virtual claude-codex-auto pin (SQ-347).
+function dispatchModelFor(id) {
+  return String(id || '').replace(/^claude-codex-/, '').replace(/\[1m\]$/, '');
+}
+
 function execFromBackend(backend, effort) {
   if (backend.backend === 'codex') {
     const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
-    return { agent: `sidequest-exec-${backend.agentSlug || backend.slug}-${resolvedEffort}`, model: null, spawnId: backend.id, backend: 'codex', source: backend.source, slug: backend.slug, runsModel: backend.slug, runsLabel: backend.label || backend.slug, dispatch: 'native-agent' };
+    return { agent: `sidequest-exec-dispatch-${resolvedEffort}`, effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: 'codex', source: backend.source, slug: backend.slug, runsModel: backend.slug, runsLabel: backend.label || backend.slug, dispatch: 'native-agent' };
   }
   const runtime = backend.slug;
   if (runtime === 'haiku' || !effort) {
@@ -1595,7 +1603,8 @@ function dispatchExecutorName(ticket) {
 }
 
 // The STABLE, session-start-registered executor for a ticket's route (e.g.
-// sidequest-exec-xhigh, or the backend-specific sidequest-exec-codex-*-high).
+// sidequest-exec-xhigh, or the shared Codex sidequest-exec-dispatch-high whose
+// model the gateway resolves from the briefing's route marker).
 // Instant dispatch targets this instead of a fresh per-ticket definition: it is
 // already registered, so there is no watcher-registration wait and no def file.
 // A route with no stable executor (haiku, agent:null) has no instant target —

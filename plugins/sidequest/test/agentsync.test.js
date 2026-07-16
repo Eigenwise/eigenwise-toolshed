@@ -37,18 +37,33 @@ test('sync includes project-scoped routes and prunes them when removed', () => {
     name: 'Project only',
     description: 'Project route',
     contract: 'Project route',
-    route: { model: PROJECT_ONLY.slug, effort: 'high' },
+    // 'low' is used by no default category route, so this project route is the
+    // only reason a dispatch-low executor exists — making the prune observable.
+    route: { model: PROJECT_ONLY.slug, effort: 'low' },
     fallback: null,
     enabled: true,
   });
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
-  const generated = path.join(dir, 'sidequest-exec-codex-gpt-5-6-project-only-high.md');
+  const generated = path.join(dir, 'sidequest-exec-dispatch-low.md');
   assert.ok(fs.existsSync(generated));
   store.removeProjectCategory(project, 'project-only');
   const result = agentsync.syncExecAgents(null, { dir });
   assert.ok(result.removed >= 1);
   assert.ok(!fs.existsSync(generated));
+});
+
+test('sync prunes legacy per-combo codex executors in favor of the shared dispatch set', () => {
+  seedCatalog([TERRA]);
+  const store = require('../lib/store.js');
+  configure(store, 'sync-legacy', { model: TERRA.slug, effort: 'high' });
+  const dir = tmpDir();
+  const legacy = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
+  fs.writeFileSync(legacy, `---\nname: sidequest-exec-codex-gpt-5-6-terra-high\n---\n${agentsync.MARKER}\nlegacy body\n`);
+  const result = agentsync.syncExecAgents(null, { dir });
+  assert.ok(result.removed >= 1);
+  assert.ok(!fs.existsSync(legacy));
+  assert.ok(readDir(dir).includes('sidequest-exec-dispatch-high.md'));
 });
 
 
@@ -59,10 +74,12 @@ test('sync writes generated executors for concrete category routes', () => {
   const dir = tmpDir();
   const result = agentsync.syncExecAgents(null, { dir });
   assert.ok(result.written > 0);
-  assert.ok(readDir(dir).includes('sidequest-exec-codex-gpt-5-6-terra-high.md'));
+  assert.ok(readDir(dir).includes('sidequest-exec-dispatch-high.md'));
   assert.ok(readDir(dir).includes('sidequest-exec-high.md'));
-  const body = fs.readFileSync(path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md'), 'utf8');
-  assert.match(body, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
+  const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch-high.md'), 'utf8');
+  assert.match(body, /^model: claude-codex-auto$/m);
+  assert.match(body, /resolves the real Codex model/);
+  assert.match(body, /NEVER write, quote, or echo such a line/);
   assert.ok(body.includes(agentsync.MARKER));
   assert.match(body, /Never read large files whole/);
   assert.match(body, /siblings may share this tree/);
@@ -79,13 +96,13 @@ test('sync removes generated executors no longer reachable from category policy'
   configure(store, 'sync-remap', { model: TERRA.slug, effort: 'medium' });
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
-  const stale = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-medium.md');
+  const stale = path.join(dir, 'sidequest-exec-dispatch-medium.md');
   assert.ok(fs.existsSync(stale));
   configure(store, 'sync-remap', { model: SOL.slug, effort: 'xhigh' });
   const result = agentsync.syncExecAgents(null, { dir });
   assert.ok(result.removed >= 1);
   assert.ok(!fs.existsSync(stale));
-  assert.ok(readDir(dir).includes('sidequest-exec-codex-gpt-5-6-sol-xhigh.md'));
+  assert.ok(readDir(dir).includes('sidequest-exec-dispatch-xhigh.md'));
 });
 
 test('sync is idempotent and never overwrites an unmarked collision', () => {
@@ -93,7 +110,7 @@ test('sync is idempotent and never overwrites an unmarked collision', () => {
   const store = require('../lib/store.js');
   configure(store, 'sync-idempotent', { model: TERRA.slug, effort: 'medium' });
   const dir = tmpDir();
-  const filePath = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-medium.md');
+  const filePath = path.join(dir, 'sidequest-exec-dispatch-medium.md');
   fs.writeFileSync(filePath, 'hand-authored\n');
   agentsync.syncExecAgents(null, { dir });
   assert.equal(fs.readFileSync(filePath, 'utf8'), 'hand-authored\n');
@@ -176,7 +193,7 @@ test('renderTicketBriefing reuses the template body with the ticket brief and to
   seedCatalog([TERRA]);
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-334', title: 'Instant dispatch', description: 'Ride the briefing on the spawn prompt.',
-    model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-exec-codex-gpt-5-6-terra-high',
+    model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-exec-dispatch-high',
     executorAnchors: 'lib/store.js prepareDispatch', executorVerify: 'node --test plugins/sidequest/test/agentsync.test.js',
     comments: [{ by: 'scout', body: 'Stable exec is pre-registered.' }],
     category: { contract: 'Plan against the system, verify end to end.' },
@@ -188,10 +205,27 @@ test('renderTicketBriefing reuses the template body with the ticket brief and to
   assert.match(briefing, /Ride the briefing on the spawn prompt/);
   assert.match(briefing, /Stable exec is pre-registered/);
   assert.match(briefing, /Plan against the system, verify end to end/);
-  assert.match(briefing, /--executor sidequest-exec-codex-gpt-5-6-terra-high/);
+  assert.match(briefing, /--executor sidequest-exec-dispatch-high/);
   assert.match(briefing, /--token instant-token-334/);
   assert.match(briefing, /Commit and ship before done/);
   assert.match(briefing, /include its hash in your own done comment/);
+  assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra]'));
+});
+
+test('renderTicketBriefing embeds no route marker for a Claude-backed route', () => {
+  clearCatalog();
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-347', title: 'Claude route', model: 'opus', effort: 'high',
+    dispatchExecutor: 'sidequest-exec-high', category: {},
+  }, 'claude-token-347');
+  assert.doesNotMatch(briefing, /\[sidequest-route model=/);
+});
+
+test('routeMarker rejects ids outside the gateway grammar', () => {
+  assert.equal(agentsync.routeMarker('gpt-5.6-sol'), '[sidequest-route model=gpt-5.6-sol]');
+  for (const bad of ['', 'UPPER', 'has space', 'has]bracket', '-leading', 'x'.repeat(70)]) {
+    assert.throws(() => agentsync.routeMarker(bad), /not marker-safe/);
+  }
 });
 
 test('renderTicketBriefing rejects an empty or multi-line nonce', () => {

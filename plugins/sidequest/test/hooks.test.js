@@ -231,6 +231,7 @@ test('pre-tool hook: pinned Codex-style executor still strips model even when a 
 });
 
 
+
 /* ------------------------------------------------------------------ *
  *  CLAUDE_CODE_SUBAGENT_MODEL defeats routing (it overrides both the Agent
  *  model and the frontmatter pin) — so a sidequest executor spawn must be
@@ -456,7 +457,7 @@ test('session-start: reports newly provisioned executors once, then stays quiet'
   const secondContext = second.hookSpecificOutput.additionalContext;
   assert.doesNotMatch(secondContext, /Executor definitions were just \(re\)provisioned/);
 });
-test('session-start: preserves reachable Codex executors when syncing category routes', () => {
+test('session-start: provisions the shared dispatch executor and prunes legacy per-combo defs', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-codex-'));
   writeCategory(home, {
     id: 'hooks-codex',
@@ -467,20 +468,21 @@ test('session-start: preserves reachable Codex executors when syncing category r
   });
   const agents = path.join(home, 'agents');
   fs.mkdirSync(agents, { recursive: true });
-  const codexFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
-  fs.writeFileSync(codexFile, '<!-- generated-by: sidequest-agentsync -->\nold');
+  const legacyFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
+  fs.writeFileSync(legacyFile, '<!-- generated-by: sidequest-agentsync -->\nold');
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
   fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({ source: 'codex-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
-  assert.ok(fs.existsSync(codexFile), 'reachable marked Codex executor must survive session sync');
+  assert.ok(!fs.existsSync(legacyFile), 'legacy per-combo Codex executor must be pruned by session sync');
+  assert.ok(fs.existsSync(path.join(agents, 'sidequest-exec-dispatch-high.md')), 'reachable Codex route must provision the shared dispatch executor');
 });
 
 test('session-start: category-route sync ignores retired prefs data', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-unreadable-'));
   const agents = path.join(home, 'agents');
   fs.mkdirSync(agents, { recursive: true });
-  const codexFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
+  const codexFile = path.join(agents, 'sidequest-exec-dispatch-high.md');
   writeCategory(home, {
     id: 'hooks-codex',
     name: 'Hooks Codex',
@@ -758,4 +760,34 @@ test('subagent-stop: long-run threshold settings do not suppress a held-claim ve
   const parsed = out.trim() ? JSON.parse(out) : null;
   const ctx = parsed ? parsed.hookSpecificOutput.additionalContext : '';
   assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim`));
+});
+
+// Registered LAST: creates extra fixture categories, which would otherwise grow
+// the taxonomy line inside earlier byte-budget assertions.
+test('pre-tool hook: dispatch executor batch mixing stamped models is denied; same-model batch passes', () => {
+  const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-dispatch-catalog-'));
+  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({
+    source: 'codex-gateway',
+    models: [
+      { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' },
+      { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]' },
+    ],
+  }));
+  const a = fixtureTicket('SQ-347 dispatch batch A', 'codex-gpt-5-6-terra', 'high');
+  const b = fixtureTicket('SQ-347 dispatch batch B', 'codex-gpt-5-6-sol', 'high');
+  const mixed = runForceBypassWithEnv(
+    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-mixed', prompt: `batch ${a.ref} and ${b.ref} --project "${slug}"` },
+    { SIDEQUEST_DISCOVERY_DIRS: catalog }
+  );
+  assert.equal(mixed.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /route marker/);
+  assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /Split the batch/);
+  const c = fixtureTicket('SQ-347 dispatch batch C', 'codex-gpt-5-6-terra', 'high');
+  const same = runForceBypassWithEnv(
+    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-same', prompt: `batch ${a.ref} and ${c.ref} --project "${slug}"` },
+    { SIDEQUEST_DISCOVERY_DIRS: catalog }
+  );
+  assert.ok(!same.hookSpecificOutput.permissionDecision, 'a same-model batch must not be denied');
+  assert.equal(same.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
 });

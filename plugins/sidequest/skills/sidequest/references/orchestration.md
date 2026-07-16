@@ -175,7 +175,11 @@ its returned stable per-model `agent` and `spawn` object immediately. Pass the r
 unchanged as the Agent prompt. The briefing carries the full ticket contract, category contract,
 anchors, verify command, comments digest, and token-gated claim guard. There is no watcher-registration
 announcement or registration wait in this path. Claude routes pass `model: exec.model`; Codex routes
-omit `model` so the stable executor's frontmatter pins the backend. The executor claims with the
+omit `model`: the shared `sidequest-exec-dispatch-<effort>` def pins the virtual `claude-codex-auto`,
+and the briefing's closing `[sidequest-route model=...]` line tells the codex-gateway shim which real
+model to run — pass the briefing verbatim, never write another such line, and never batch tickets
+stamped with different models into one spawn. Route edits change only board data; the executor def set
+is fixed, so nothing is written or registered when a route changes. The executor claims with the
 returned token and exact stable executor name.
 
 Use `dispatch <ref> --ephemeral` (or `{ephemeral:true}` in MCP) only for cross-session adoption. That
