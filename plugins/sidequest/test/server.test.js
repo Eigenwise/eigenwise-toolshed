@@ -121,8 +121,9 @@ test('dashboard uses concrete model fallbacks and removes grade routing', () => 
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
   assert.match(html, /id="categoryList"/);
   assert.match(html, /id="globalFallbackControl"/);
-  assert.match(html, /Override global fallback/);
-  assert.match(html, /Degraded route/);
+  assert.match(html, /Add a category-specific fallback step/);
+  assert.match(html, /Global fallback/);
+  assert.match(html, /Route changed:/);
   assert.doesNotMatch(html, /id="routingProfiles"/);
   assert.doesNotMatch(html, /legacy-routing/);
   assert.doesNotMatch(html, /routing-ladder/);

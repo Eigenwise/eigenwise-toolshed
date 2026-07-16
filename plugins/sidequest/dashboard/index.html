@@ -426,56 +426,68 @@
   .storychip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .category-settings { grid-column: 1 / 3; display: flex; flex-direction: column; min-height: 0; background: linear-gradient(90deg, var(--gold-soft), transparent 45%); }
-  .category-settings .cat-head { padding: 18px 15px 10px; border-bottom: 1px solid var(--line-soft); }
-  .category-scope { display: inline-flex; margin-top: 10px; padding: 2px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 999px; }
-  .category-scope button { cursor: pointer; border: 0; border-radius: 999px; padding: 4px 9px; color: var(--text-faint); background: transparent; font: 700 9.5px var(--mono); letter-spacing: .03em; }
+  .category-settings .cat-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 18px 17px 12px; border-bottom: 1px solid var(--line-soft); }
+  .category-settings .cat-head-copy { min-width: 0; }
+  .category-settings h3 { margin: 0; font-family: var(--serif); font-size: 20px; font-weight: 500; color: var(--text); }
+  .category-settings p { margin: 4px 0 0; font-size: 13px; line-height: 1.45; color: var(--text-faint); }
+  .category-scope-wrap { display: flex; align-items: center; gap: 10px; flex: none; }
+  .category-scope-project { max-width: 175px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 11px var(--sans); color: var(--text-dim); }
+  .category-scope { display: inline-flex; padding: 2px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 999px; }
+  .category-scope button { cursor: pointer; border: 0; border-radius: 999px; padding: 5px 10px; color: var(--text-faint); background: transparent; font: 700 10px var(--mono); letter-spacing: .03em; }
   .category-scope button.active { color: var(--bg); background: var(--gold-bright); }
-  .category-scope-note { margin-left: 8px; font: 10px var(--mono); color: var(--gold-bright); }
   .category-layer { margin-left: auto; font: 700 9px var(--mono); letter-spacing: .04em; padding: 2px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--gold-bright); background: var(--gold-soft); }
   .category-layer.delta { color: var(--text-dim); background: var(--bg); }
   .category-row.disabled { opacity: .55; border-style: dashed; }
-  .category-delta { margin-top: 6px; padding: 5px 6px; border-left: 2px solid var(--gold); background: var(--bg); font: 10px/1.4 var(--mono); color: var(--text-dim); }
+  .category-delta { margin-top: 10px; padding: 7px 8px; border-left: 2px solid var(--gold); background: var(--bg); font: 11px/1.45 var(--mono); color: var(--text-dim); }
   .category-delta b { color: var(--gold-bright); font-weight: 700; }
-  .category-settings h3 { margin: 0; font-family: var(--serif); font-size: 17px; font-weight: 500; color: var(--text); }
-  .category-settings p { margin: 4px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--text-faint); }
-  .category-list { padding: 8px 10px 14px; max-height: min(60vh, 560px); overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
-  .category-row { padding: 9px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--panel); }
+  .category-list { padding: 9px 12px 15px; max-height: min(60vh, 560px); overflow-y: auto; display: flex; flex-direction: column; gap: 5px; }
+  .category-row { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--panel); }
   .category-row.off { opacity: .58; }
-  .category-row-top { display: flex; align-items: center; gap: 6px; }
-  .category-row-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .category-row-id, .category-usage { font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); }
-  .category-usage { color: var(--gold-bright); white-space: nowrap; }
-  .category-row-detail { display: grid; grid-template-columns: 1fr auto; gap: 5px 8px; margin-top: 6px; font-size: 10.5px; color: var(--text-faint); line-height: 1.35; }
-  .category-row-detail code, .category-route-story code { font-family: var(--mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .category-route-story { margin-top: 8px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg); }
-  .category-route-live { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 7px; background: linear-gradient(90deg, var(--gold-soft), transparent); }
-  .category-route-live span { font: 700 9px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--gold-bright); }
-  .category-route-live code { color: var(--text); font-weight: 700; }
-  .category-route-config { display: grid; gap: 4px; padding: 6px 7px 7px; }
-  .category-route-config div { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 9.5px; color: var(--text-faint); }
-  .category-route-warning { padding: 5px 7px; border-top: 1px solid rgba(181,74,72,.22); color: var(--high); font-size: 10px; }
-  .category-actions { display: flex; gap: 5px; margin-top: 8px; }
-  .category-actions button, .category-add button { cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--text-dim); background: var(--card); border: 1px solid var(--line-soft); padding: 4px 8px; border-radius: var(--radius-sm); }
+  .category-row > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: minmax(190px, 1.35fr) minmax(240px, 1.7fr) auto; align-items: center; gap: 14px; padding: 10px 12px; }
+  .category-row > summary::-webkit-details-marker { display: none; }
+  .category-row > summary::after { content: "+"; grid-column: 4; color: var(--text-faint); font: 18px/1 var(--serif); }
+  .category-row[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--card); }
+  .category-row[open] > summary::after { content: "−"; }
+  .category-row-name { min-width: 0; font-size: 14px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-row-id { margin-top: 2px; font: 10.5px var(--mono); color: var(--text-faint); }
+  .category-usage { font: 10.5px var(--mono); color: var(--gold-bright); white-space: nowrap; }
+  .category-route-live { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .category-route-live span { flex: none; font: 700 10px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--gold-bright); }
+  .category-route-live code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px var(--mono); color: var(--text); }
+  .category-row-body { padding: 13px 14px 14px; }
+  .category-row-detail { font-size: 12px; line-height: 1.45; color: var(--text-faint); }
+  .category-route-warning { margin-top: 10px; padding: 8px 9px; border: 1px solid rgba(181,74,72,.26); background: rgba(181,74,72,.06); color: var(--high); font-size: 11.5px; line-height: 1.4; }
+  .category-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
+  .category-actions button, .category-add button { cursor: pointer; font-family: var(--sans); font-size: 11.5px; color: var(--text-dim); background: var(--card); border: 1px solid var(--line-soft); padding: 5px 9px; border-radius: var(--radius-sm); }
   .category-actions button:hover, .category-add button:hover { color: var(--text); border-color: var(--line); }
   .category-actions button.danger:hover { color: var(--urgent); border-color: rgba(181,74,72,.45); }
-  .category-edit { display: grid; gap: 9px; margin-top: 8px; }
-  .category-form-section, .category-route-group { display: grid; gap: 7px; padding: 9px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--bg); }
+  .category-edit { display: grid; gap: 10px; }
+  .category-form-section, .category-route-group { display: grid; gap: 8px; padding: 11px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--bg); }
   .category-route-group.primary { border-left: 3px solid var(--gold); }
-  .category-route-group.fallback { background: linear-gradient(90deg, var(--gold-soft), var(--bg) 42%); }
+  .category-route-group.fallback { background: linear-gradient(90deg, var(--gold-soft), var(--bg) 52%); }
   .category-form-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-  .category-form-heading strong, .category-field > span, .category-route-field > span { color: var(--text-dim); font: 700 10px var(--sans); }
-  .category-form-heading small { color: var(--text-faint); font: 9px var(--mono); }
-  .category-field, .category-route-field { display: grid; gap: 4px; color: var(--text-dim); }
-  .category-edit input, .category-edit textarea, .category-edit select, .category-add input, .category-add textarea, .category-add select { width: 100%; box-sizing: border-box; padding: 6px 7px; font: 11px var(--sans); color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+  .category-form-heading strong, .category-field > span, .category-route-field > span { color: var(--text-dim); font: 700 11px var(--sans); }
+  .category-form-heading small { color: var(--text-faint); font: 10px var(--sans); }
+  .category-field, .category-route-field { display: grid; gap: 5px; color: var(--text-dim); }
+  .category-edit input, .category-edit textarea, .category-edit select, .category-add input, .category-add textarea, .category-add select { width: 100%; box-sizing: border-box; padding: 7px 8px; font: 12px var(--sans); color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
   .category-edit input:focus, .category-edit textarea:focus, .category-edit select:focus { outline: 2px solid var(--gold-line); outline-offset: 1px; border-color: var(--gold); }
-  .category-edit textarea, .category-add textarea { min-height: 48px; resize: vertical; line-height: 1.35; }
-  .category-route { display: grid; grid-template-columns: minmax(0, 1fr) 74px; gap: 6px; }
-  .category-switch { display: flex; align-items: flex-start; gap: 8px; font-size: 10.5px; color: var(--text-dim); cursor: pointer; }
+  .category-edit textarea, .category-add textarea { min-height: 54px; resize: vertical; line-height: 1.4; }
+  .category-route { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 8px; }
+  .category-chain { display: grid; gap: 7px; }
+  .category-chain-step { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 8px; align-items: start; }
+  .category-chain-step .chain-index { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--gold-line); border-radius: 50%; color: var(--gold-bright); font: 700 10px var(--mono); }
+  .category-chain-step .chain-copy { min-width: 0; }
+  .category-chain-step .chain-copy > strong { display: block; font-size: 12px; color: var(--text); }
+  .category-chain-step .chain-copy > small { display: block; margin-top: 2px; font-size: 10.5px; color: var(--text-faint); }
+  .category-chain-global { padding: 8px; border: 1px dashed var(--line); background: var(--panel); }
+  .category-chain-global code { font: 600 12px var(--mono); color: var(--text-dim); }
+  .category-switch { display: flex; align-items: flex-start; gap: 8px; font-size: 11px; color: var(--text-dim); cursor: pointer; }
   .category-switch input { width: auto; margin: 2px 0 0; accent-color: var(--gold); }
   .category-switch strong, .category-switch small { display: block; }
-  .category-switch strong { color: var(--text-dim); font-size: 10.5px; }
-  .category-switch small { margin-top: 2px; color: var(--text-faint); font-size: 9.5px; line-height: 1.3; }
-  .category-add { padding: 9px; border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--bg); display: grid; gap: 6px; }
+  .category-switch strong { color: var(--text-dim); font-size: 11px; }
+  .category-switch small { margin-top: 2px; color: var(--text-faint); font-size: 10px; line-height: 1.35; }
+  .category-add { padding: 10px; border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--bg); display: grid; gap: 7px; }
+  @media (max-width: 700px) { .category-settings .cat-head { align-items: start; flex-direction: column; } .category-row > summary { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; } .category-route-live { grid-column: 1 / -1; } .category-row > summary::after { grid-column: 2; grid-row: 1; } }
   .category-add summary { cursor: pointer; font-size: 11.5px; color: var(--text-dim); }
   /* Story field in the ticket editor: a swatch beside the select, and the
      inline "new story" panel with a palette picker. */
@@ -712,7 +724,7 @@
                 <div class="fallback-control" id="globalFallbackControl"></div>
               </section>
               <section class="category-settings" aria-labelledby="categoriesTitle">
-                <div class="cat-head"><h3 id="categoriesTitle">Categories</h3><p>Categories choose the primary route. A category fallback overrides the global one.</p><div class="category-scope" id="categoryScope" role="group" aria-label="Category scope"></div></div>
+                <div class="cat-head"><div class="cat-head-copy"><h3 id="categoriesTitle">Categories</h3><p>Choose where each kind of work runs. Open a category to see and edit its fallback chain.</p></div><div class="category-scope-wrap"><span class="category-scope-project" id="categoryScopeProject"></span><div class="category-scope" id="categoryScope" role="group" aria-label="Category scope"></div></div></div>
                 <div class="category-list" id="categoryList"></div>
               </section>
             </div>
@@ -1780,6 +1792,7 @@
   function categoryForm(category, create) {
     var route = category && category.route || { model: "sonnet", effort: "high" };
     var fallback = category && category.fallback || null;
+    var globalFallback = category && category.globalFallback || routingCatalog.globalFallback || { model: "sonnet", effort: "high" };
     var id = category ? category.id : "";
     var isGlobal = categoryProject() === "all";
     return '<div class="category-edit">' +
@@ -1790,22 +1803,24 @@
         '<label class="category-field"><span>Classifier description</span><textarea data-field="description">' + esc(category ? category.description : "") + '</textarea></label>' +
       '</div>' +
       '<div class="category-route-group primary">' +
-        '<div class="category-form-heading"><strong>Primary route</strong><small>Try this first</small></div>' +
-        '<div class="category-route"><label class="category-route-field"><span>Model</span><select data-field="model">' + categoryRouteOptions(route.model) + '</select></label><label class="category-route-field"><span>Effort</span><select data-field="effort">' + effortOptions(route.effort) + '</select></label></div>' +
-      '</div>' +
-      '<div class="category-route-group fallback">' +
-        '<label class="category-switch"><input data-field="has-fallback" type="checkbox"' + (fallback ? ' checked' : '') + ' /><span><strong>Fallback override</strong><small>Override global fallback with a category-specific route.</small></span></label>' +
-        '<div class="category-route" data-fallback-route' + (fallback ? '' : ' hidden') + '><label class="category-route-field"><span>Model</span><select data-field="fallback-model">' + categoryRouteOptions(fallback && fallback.model) + '</select></label><label class="category-route-field"><span>Effort</span><select data-field="fallback-effort">' + effortOptions(fallback && fallback.effort || "high") + '</select></label></div>' +
+        '<div class="category-form-heading"><strong>Fallback chain</strong><small>Dispatch tries each step in order</small></div>' +
+        '<div class="category-chain">' +
+          '<div class="category-chain-step"><span class="chain-index">1</span><div class="chain-copy"><strong>Primary</strong><small>First choice for this category</small><div class="category-route"><label class="category-route-field"><span>Model</span><select data-field="model">' + categoryRouteOptions(route.model) + '</select></label><label class="category-route-field"><span>Effort</span><select data-field="effort">' + effortOptions(route.effort) + '</select></label></div></div></div>' +
+          '<div class="category-chain-step" data-fallback-step' + (fallback ? '' : ' hidden') + '><span class="chain-index">2</span><div class="chain-copy"><strong>Category fallback</strong><small>Used after the primary cannot run</small><div class="category-route"><label class="category-route-field"><span>Model</span><select data-field="fallback-model">' + categoryRouteOptions(fallback && fallback.model) + '</select></label><label class="category-route-field"><span>Effort</span><select data-field="fallback-effort">' + effortOptions(fallback && fallback.effort || "high") + '</select></label></div><button type="button" class="category-remove-fallback" data-remove-fallback>Remove category fallback</button></div></div>' +
+          '<button type="button" class="category-add-fallback" data-add-fallback' + (fallback ? ' hidden' : '') + '>Add a category-specific fallback step</button>' +
+          '<div class="category-chain-step" data-global-step><span class="chain-index">' + (fallback ? '3' : '2') + '</span><div class="chain-copy category-chain-global"><strong>Global fallback</strong><small>Always last. Change it in the global fallback setting above.</small><code>' + esc(routeLabelFor(globalFallback.model, globalFallback.effort)) + '</code></div></div>' +
+        '</div>' +
       '</div>' +
       '<div class="category-form-section">' +
-        '<label class="category-field"><span>Executor contract</span><textarea data-field="contract">' + esc(category ? category.contract : "") + '</textarea></label>' +
+        '<label class="category-field"><span>Executor instructions</span><textarea data-field="contract">' + esc(category ? category.contract : "") + '</textarea><small>Injected into the executor’s prompt for every ticket in this category.</small></label>' +
         (isGlobal ? '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /><span><strong>Enabled</strong><small>Available for ticket routing.</small></span></label>' : '') +
       '</div>' +
       '<div class="category-actions"><button type="button" data-save-category="' + esc(id) + '">' + (create ? 'Add category' : 'Save changes') + '</button><button type="button" data-cancel-category>Cancel</button></div>' +
       '</div>';
   }
   function categoryPayload(form) {
-    var hasFallback = form.querySelector('[data-field="has-fallback"]').checked;
+    var fallbackStep = form.querySelector('[data-fallback-step]');
+    var hasFallback = fallbackStep && !fallbackStep.hidden;
     return {
       id: form.querySelector('[data-field="id"]') && form.querySelector('[data-field="id"]').value.trim(),
       name: form.querySelector('[data-field="name"]').value.trim(),
@@ -1818,10 +1833,12 @@
   }
   function categoryScopeControls() {
     var box = $("categoryScope"); if (!box) return;
+    var projectLabel = $("categoryScopeProject");
     var canProject = state.current !== "all";
+    var project = (state.projects.filter(function (p) { return p.slug === state.current; })[0] || {});
+    if (projectLabel) projectLabel.textContent = canProject ? project.name || state.current : "";
     box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Global</button>' +
-      '<button type="button" data-scope="project"' + (state.categoryScope === "project" ? ' class="active"' : '') + (canProject ? '' : ' disabled') + '>This project</button>' +
-      (canProject && state.categoryScope === "project" ? '<span class="category-scope-note">' + esc((state.projects.filter(function (p) { return p.slug === state.current; })[0] || {}).name || state.current) + '</span>' : '');
+      '<button type="button" data-scope="project"' + (state.categoryScope === "project" ? ' class="active"' : '') + (canProject ? '' : ' disabled') + '>This project</button>';
     box.querySelectorAll('[data-scope]').forEach(function (button) { button.addEventListener("click", function () {
       if (button.disabled) return;
       state.categoryScope = button.dataset.scope;
@@ -1859,19 +1876,12 @@
           ? (category.id === "general" ? "" : '<button type="button" class="danger" data-disable-category>Disable here</button>')
           : (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>'));
       if (projectScope && layer && !disabled) actions += '<button type="button" data-remove-layer>Restore global</button>';
-      row.innerHTML = '<div class="category-row-top"><span class="category-row-name">' + esc(category.name) + '</span>' + (label ? '<span class="category-layer' + (layer.kind === "OVERRIDE" ? ' delta' : '') + '">' + label + '</span>' : '') + '<span class="category-usage">' + category.usageCount + ' tickets</span></div>' +
-        '<div class="category-row-id">' + esc(category.id) + '</div>' +
-        '<div class="category-row-detail"><span>' + esc(category.description || "No classifier description") + '</span></div>' +
-        '<div class="category-route-story">' +
-          '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
-          '<div class="category-route-config">' +
-            '<div><span>Primary</span><code>' + esc(routeLabelFor(category.route.model, category.route.effort)) + '</code></div>' +
-            '<div><span>Category fallback</span><code>' + esc(categoryFallback ? routeLabelFor(categoryFallback.model, categoryFallback.effort) : 'Uses global fallback') + '</code></div>' +
-            '<div><span>Global fallback</span><code>' + esc(routeLabelFor(globalFallback.model, globalFallback.effort)) + '</code></div>' +
-          '</div>' +
-          (degraded ? '<div class="category-route-warning">Degraded route: ' + esc((category.warnings || []).join(' ')) + '</div>' : '') +
-        '</div>' + categoryDelta(category) +
-        '<div class="category-actions">' + actions + '</div>';
+      row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + (layer.kind === "OVERRIDE" ? ' delta' : '') + '">' + label + '</span>' : '') + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
+        '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
+        '<span class="category-usage">' + category.usageCount + ' tickets</span></summary>' +
+        '<div class="category-row-body"><div class="category-row-detail">' + esc(category.description || "No classifier description") + '</div>' +
+        (degraded ? '<div class="category-route-warning"><strong>Route changed:</strong> ' + esc((category.warnings || []).join(' ')) + '</div>' : '') + categoryDelta(category) +
+        '<div class="category-actions">' + actions + '</div></div>';
       var refresh = function (message) { return loadCategories().then(function () { toast(message); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }); };
       var edit = row.querySelector('[data-edit-category]');
       if (edit) edit.addEventListener("click", function () {
@@ -1879,8 +1889,6 @@
         var form = row.querySelector('.category-edit');
         form.querySelector('[data-field="model"]').value = category.route.model;
         form.querySelector('[data-field="effort"]').value = category.route.effort;
-        var fallbackToggle = form.querySelector('[data-field="has-fallback"]');
-        fallbackToggle.addEventListener("change", function () { form.querySelector('[data-fallback-route]').hidden = !fallbackToggle.checked; });
         if (category.fallback) { form.querySelector('[data-field="fallback-model"]').value = category.fallback.model; form.querySelector('[data-field="fallback-effort"]').value = category.fallback.effort; }
         wireCategoryForm(form, category.id);
       });
@@ -1896,6 +1904,19 @@
     box.appendChild(add);
   }
   function wireCategoryForm(form, id) {
+    var fallbackStep = form.querySelector('[data-fallback-step]');
+    var addFallback = form.querySelector('[data-add-fallback]');
+    var removeFallback = form.querySelector('[data-remove-fallback]');
+    if (fallbackStep && addFallback && removeFallback) {
+      var syncFallbackStep = function (show) {
+        fallbackStep.hidden = !show;
+        addFallback.hidden = show;
+        var globalIndex = fallbackStep.parentNode.querySelector('[data-global-step] .chain-index');
+        if (globalIndex) globalIndex.textContent = show ? "3" : "2";
+      };
+      addFallback.addEventListener("click", function () { syncFallbackStep(true); });
+      removeFallback.addEventListener("click", function () { syncFallbackStep(false); });
+    }
     form.querySelector('[data-cancel-category]').addEventListener("click", renderCategorySettings);
     form.querySelector('[data-save-category]').addEventListener("click", function () {
       var payload = categoryPayload(form);
