@@ -128,8 +128,8 @@ function main() {
   if (source === 'compact' || source === 'resume') {
     emit(
       '=== sidequest (active — context restored) ===\n' +
-        'Context was just compacted/resumed — RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
-        'Discipline: taxonomy, stamp, render executor, wait for `New agent types are now available: <name>`, spawn `exec.agent`, claim its token. `reason:token` means premature generic: TaskStop, wait, respawn. If no announcement, stable executor. Verify `transcript/meta.json` + token claim, never self-report. Codex omits model; Claude passes it.\n' ,
+        'Context was just compacted/resumed — use mcp__plugin_sidequest_board__list with status=doing FIRST to re-check in-flight claims; only if MCP is unavailable, fall back to `' + cli + ' list --status doing`.\n' +
+        'Board truth beats idle pings: pulse ref, inspect claim age, comments, git. Discipline: taxonomy, stamp, render executor, wait for `New agent types are now available: <name>`, spawn `exec.agent`, claim its token. `reason:token`: TaskStop, wait, respawn. No announcement: stable executor. Verify `transcript/meta.json` + token claim, never self-report. Codex omits model; Claude passes it.\n' ,
       restartNotice
     );
     process.exit(0);

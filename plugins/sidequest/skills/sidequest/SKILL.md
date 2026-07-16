@@ -75,7 +75,9 @@ call, and no shell-quoting trap (multi-line markdown bodies are plain strings wi
 They take the same fields as the CLI flags shown below — the examples in this file use CLI form for
 compactness, not as a recommendation. After shipping a schema-bumping Sidequest release, treat an
 already-loaded MCP server as a stale writer until plugins reload: route every store write through the
-new CLI and use MCP only for reads.
+new CLI and use MCP only for reads. When resuming or recovering context, read the board through
+`mcp__plugin_sidequest_board__list` with `status: doing` first; use the resolved CLI only when MCP is
+unavailable.
 
 The **CLI** is for when the MCP tools aren't loaded, for humans, and for the things only it does:
 `dashboard`/`serve` and legacy temporary `native-agent` cleanup. For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable per-model executor, a complete `briefing`, a `spawn` object, and a token. Spawn that exact stable executor immediately with the returned briefing as its prompt. There is no registration announcement or watcher-lag wait. Claude routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the backend. Use `dispatch <ref> --ephemeral` only for cross-session adoption. It creates a self-contained temporary executor definition, and that opt-in path waits for the generated type to register. Never end the turn waiting for registration: continue independent work or use a background timer to wake the session. Any session may

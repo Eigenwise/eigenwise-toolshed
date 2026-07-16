@@ -504,7 +504,9 @@ test('session-start: category-route sync ignores retired prefs data', () => {
 test('session-start: source=compact gets the terse re-grounding block, not the full nudge', () => {
   const ctx = runHook(SESSION, { session_id: 't', source: 'compact' });
   assert.match(ctx, /sidequest \(active — context restored\)/);
-  assert.ok(ctx.includes('list --status doing'), 'must tell Claude to re-check in-flight claims');
+  assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), 'resume must prefer the MCP doing-list read');
+  assert.ok(ctx.includes('pulse ref'), 'resume must point to the compact liveness read');
+  assert.ok(ctx.includes('list --status doing'), 'CLI doing-list must remain an explicit fallback');
   assert.ok(!ctx.includes('external tracker'), 'must NOT be the full block on compact');
   assert.ok(ctx.length <= BUDGET.compact, `compact block is ${ctx.length} chars — budget is ${BUDGET.compact}`);
 });
