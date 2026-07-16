@@ -26,9 +26,9 @@ can wander. A fast bounce-back is a success, not a failure.
 - Attachment images: `projects/<slug>/assets/<ticket-id>/<filename>` under that root — get slug/id/
   filenames from `sidequest list --json`, then join the path.
 
-**Transport**: when `mcp__plugin_sidequest_board__*` tools are in your toolset, use them for every
-board action below (claim/comments/comment/done/release, same fields as the CLI flags); fall back to
-the `sidequest` CLI via Bash only when they aren't.
+**Transport**: use the handed `sidequest` CLI command for claim, done, and release. It runs the current
+store code, while a session's MCP server may predate the prepared dispatch. MCP board tools are fine for
+reads such as ticket details and comments.
 
 Protocol, per ticket, in order:
 1. **Claim first**: `sidequest claim <ref> --by <worker-id> --executor {{NAME}} --effort {{EFFORT}} --project <project>`

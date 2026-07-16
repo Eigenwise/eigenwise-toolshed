@@ -1540,7 +1540,12 @@ function dispatchExecutorName(ticket) {
   if (!resolved || !resolved.runsModel) throw new Error(`dispatch executor could not resolve ${ticket.model} at ${ticket.effort}.`);
   const ref = String(ticket.ref).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'ticket';
   const runtime = String(resolved.runsModel).toLowerCase().replace(/^codex-/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return runtime ? `sidequest-ticket-${ref}-${runtime}` : `sidequest-ticket-${ref}`;
+  const base = runtime ? `sidequest-ticket-${ref}-${runtime}` : `sidequest-ticket-${ref}`;
+  let name;
+  do {
+    name = `${base}-${crypto.randomBytes(4).toString('hex')}`;
+  } while (name === ticket.dispatchExecutor);
+  return name;
 }
 
 function prepareDispatch(slug, idOrRef) {

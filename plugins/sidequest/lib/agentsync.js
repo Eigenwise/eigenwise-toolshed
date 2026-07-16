@@ -157,14 +157,14 @@ function nativeAgentName(ref, runtime, nonce) {
   return `${base}-${suffix}`;
 }
 
-function ticketExecutorName(ref, runtime) {
-  const ticket = refToken(ref);
-  const token = runtimeToken(runtime);
-  return token ? `${TICKET_PREFIX}${ticket}-${token}` : `${TICKET_PREFIX}${ticket}`;
+function ticketExecutorNameForTicket(ticket) {
+  const name = String(ticket && ticket.dispatchExecutor || '');
+  if (!name.startsWith(TICKET_PREFIX)) throw new Error('ticket executor requires a prepared dispatch executor name.');
+  return name;
 }
 
-function ticketExecutorNameForTicket(ticket) {
-  return store.dispatchExecutorName(ticket);
+function ticketExecutorPrefix(ticket) {
+  return `${TICKET_PREFIX}${refToken(ticket.ref)}-`;
 }
 
 function temporaryAgentFile(name, dir) {
@@ -257,6 +257,14 @@ function createTicketExecutor(ticket, opts) {
     ticketBrief: ticketBrief(ticket, nonce),
   });
   fs.mkdirSync(dir, { recursive: true });
+  for (const candidate of fs.readdirSync(dir)) {
+    if (!candidate.startsWith(ticketExecutorPrefix(ticket)) || candidate === `${name}.md` || !candidate.endsWith('.md')) continue;
+    const candidateFile = path.join(dir, candidate);
+    let previous = '';
+    try { previous = fs.readFileSync(candidateFile, 'utf8'); } catch (_) { continue; }
+    if (!previous.includes(TEMP_MARKER)) continue;
+    try { fs.unlinkSync(candidateFile); } catch (_) { /* best effort */ }
+  }
   if (fs.existsSync(file)) {
     const previous = fs.readFileSync(file, 'utf8');
     if (!previous.includes(TEMP_MARKER)) throw new Error(`ticket executor file already exists and is not owned by Sidequest: ${file}`);

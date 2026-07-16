@@ -113,13 +113,13 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   const dir = tmpDir();
   const created = agentsync.createTicketExecutor({
     ref: 'SQ-311', title: 'Ship ephemeral agents', description: 'Carry the complete ticket briefing.',
-    model: TERRA.slug, effort: 'high', executorAnchors: 'lib/agentsync.js:235 createTicketExecutor',
+    model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-ticket-sq-311-gpt-5-6-terra-a1b2c3d4', executorAnchors: 'lib/agentsync.js:235 createTicketExecutor',
     executorVerify: 'node --test plugins/sidequest/test/agentsync.test.js',
     comments: [{ by: 'scout', body: 'Watcher registration takes time.' }],
     category: { contract: 'Establish the local pattern, then verify it.' },
   }, { nonce: 'dispatch-token-311', sessionId: 'session-311', dir, waitMs: 0 });
   const body = fs.readFileSync(created.file, 'utf8');
-  assert.equal(created.name, 'sidequest-ticket-sq-311-gpt-5-6-terra');
+  assert.equal(created.name, 'sidequest-ticket-sq-311-gpt-5-6-terra-a1b2c3d4');
   assert.match(body, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
   assert.match(body, /^effort: high$/m);
   assert.match(body, /^maxTurns: 60$/m);
@@ -135,9 +135,24 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.ok(JSON.stringify(created.spawn).length < 200);
 });
 
+test('ticket executors use a fresh prepared name and prune a superseded definition', () => {
+  seedCatalog([TERRA]);
+  const dir = tmpDir();
+  const base = { ref: 'SQ-319', title: 'Fresh dispatch', model: TERRA.slug, effort: 'high', category: {} };
+  const first = agentsync.createTicketExecutor(Object.assign({}, base, { dispatchExecutor: 'sidequest-ticket-sq-319-gpt-5-6-terra-a1b2c3d4' }), {
+    nonce: 'first-token', sessionId: 'session-319', dir, waitMs: 0,
+  });
+  const second = agentsync.createTicketExecutor(Object.assign({}, base, { dispatchExecutor: 'sidequest-ticket-sq-319-gpt-5-6-terra-d4c3b2a1' }), {
+    nonce: 'second-token', sessionId: 'session-319', dir, waitMs: 0,
+  });
+  assert.notEqual(first.name, second.name);
+  assert.ok(!fs.existsSync(first.file));
+  assert.ok(fs.existsSync(second.file));
+});
+
 test('ticket executor rejects non-string and empty dispatch nonces', () => {
   seedCatalog([TERRA]);
-  const ticket = { ref: 'SQ-315', title: 'Nonce validation', model: TERRA.slug, effort: 'high', category: {} };
+  const ticket = { ref: 'SQ-315', title: 'Nonce validation', model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-ticket-sq-315-gpt-5-6-terra-a1b2c3d4', category: {} };
   for (const nonce of [undefined, null, '', '   ', { token: 'wrong-shape' }]) {
     assert.throws(() => agentsync.createTicketExecutor(ticket, { nonce, dir: tmpDir(), waitMs: 0 }), /nonce is required/);
   }
@@ -146,7 +161,7 @@ test('ticket executor rejects non-string and empty dispatch nonces', () => {
 test('ticket executors use the existing temporary cleanup lifecycle', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
-  const ticket = (ref) => ({ ref, title: ref, model: TERRA.slug, effort: 'high', category: {} });
+  const ticket = (ref) => ({ ref, title: ref, model: TERRA.slug, effort: 'high', dispatchExecutor: `sidequest-ticket-${ref.toLowerCase()}-gpt-5-6-terra-a1b2c3d4`, category: {} });
   const byName = agentsync.createTicketExecutor(ticket('SQ-312'), { nonce: 'nonce-312', sessionId: 'session-a', dir, waitMs: 0 });
   const bySession = agentsync.createTicketExecutor(ticket('SQ-313'), { nonce: 'nonce-313', sessionId: 'session-b', dir, waitMs: 0 });
   const stale = agentsync.createTicketExecutor(ticket('SQ-314'), { nonce: 'nonce-314', sessionId: 'session-c', dir, waitMs: 0 });

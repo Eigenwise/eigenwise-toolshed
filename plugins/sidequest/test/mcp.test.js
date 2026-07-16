@@ -117,7 +117,7 @@ test('dispatch prepares and renders a token-gated ticket executor', () => {
   store.setCategory({ id: 'dispatch-codex', name: 'Dispatch Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const added = callTool('add', { title: 'token-gated dispatch', category: 'dispatch-codex' });
   const dispatched = callTool('dispatch', { ref: added.ticket.ref, session: 'mcp-dispatch-session' });
-  assert.equal(dispatched.agent, `sidequest-ticket-${added.ticket.ref.toLowerCase()}-gpt-5-6-terra`);
+  assert.match(dispatched.agent, new RegExp(`^sidequest-ticket-${added.ticket.ref.toLowerCase()}-gpt-5-6-terra-[a-f0-9]{8}$`));
   assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
   assert.match(dispatched.guidance, /executor/);
   assert.equal(store.getTicket(store.ensureProject(PROJ).slug, added.ticket.ref).dispatchExecutor, dispatched.agent);

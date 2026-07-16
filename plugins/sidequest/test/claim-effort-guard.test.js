@@ -121,7 +121,7 @@ test('prepared dispatches require their token and ephemeral executor, then clear
   const preparedDone = store.prepareDispatch(slug, doneRef);
   assert.equal(preparedDone.ok, true);
   assert.ok(preparedDone.token);
-  assert.equal(preparedDone.ticket.dispatchExecutor, `sidequest-ticket-${doneRef.toLowerCase()}-gpt-test`);
+  assert.match(preparedDone.ticket.dispatchExecutor, new RegExp(`^sidequest-ticket-${doneRef.toLowerCase()}-gpt-test-[a-f0-9]{8}$`));
   const missing = runCli(['claim', doneRef, '--by', 'missing-token', '--json']);
   assert.notEqual(missing.status, 0);
   assert.equal(JSON.parse(missing.stdout).reason, 'token');
@@ -141,11 +141,24 @@ test('prepared dispatches require their token and ephemeral executor, then clear
   assert.equal(released.ticket.dispatchExecutor, null);
 });
 
+test('a re-dispatch replaces the executor and token, rejecting the stale pair', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  const ref = seed('guard.codex');
+  const first = store.prepareDispatch(slug, ref);
+  const second = store.prepareDispatch(slug, ref);
+
+  assert.notEqual(first.ticket.dispatchExecutor, second.ticket.dispatchExecutor);
+  assert.equal(ticket(ref).dispatchExecutor, second.ticket.dispatchExecutor);
+  const stale = runCli(['claim', ref, '--by', 'stale', '--token', first.token, '--executor', first.ticket.dispatchExecutor, '--json']);
+  assert.notEqual(stale.status, 0);
+  assert.equal(cliJson(['claim', ref, '--by', 'latest', '--token', second.token, '--executor', second.ticket.dispatchExecutor]).ok, true);
+});
+
 test('dispatch prepares and renders a claim-ready ephemeral executor', () => {
   const ref = seed('guard.codex');
   const dispatched = cliJson(['dispatch', ref]);
   assert.equal(dispatched.ref, ref);
-  assert.equal(dispatched.agent, `sidequest-ticket-${ref.toLowerCase()}-gpt-test`);
+  assert.match(dispatched.agent, new RegExp(`^sidequest-ticket-${ref.toLowerCase()}-gpt-test-[a-f0-9]{8}$`));
   assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
   assert.match(dispatched.guidance, new RegExp(`--executor ${dispatched.agent}`));
   assert.equal(ticket(ref).dispatchExecutor, dispatched.agent);
