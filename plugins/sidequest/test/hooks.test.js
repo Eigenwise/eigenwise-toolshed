@@ -52,6 +52,7 @@ const SESSION = path.join(HOOKS, 'session-start.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
+const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 
 // Byte budgets (chars ≈ tokens × ~4). CLI paths inside the blocks vary by
 // machine, so these have headroom. The live taxonomy adds at most 400 bytes to
@@ -315,6 +316,44 @@ test('peer-guard: a main-thread SendMessage (no agent_type) is allowed', () => {
 
 test('peer-guard: a non-sidequest subagent messaging a peer is allowed', () => {
   assert.strictEqual(runGuardPeer({ agent_type: 'code-reviewer', tool_input: { to: 'researcher', message: 'hi' } }), null);
+});
+
+function runHomeDeleteGuard(tool_name, command) {
+  return runHookOutput(GUARD_HOME_DELETE, { tool_name, tool_input: { command } });
+}
+
+test('home-delete guard: blocks a recursive delete using $home', () => {
+  const out = runHomeDeleteGuard('PowerShell', 'Remove-Item -Recurse -Force $home');
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /user profile or \.claude root/);
+});
+
+test('home-delete guard: blocks profile and .claude roots', () => {
+  for (const command of [
+    'Remove-Item -Recurse -Force $env:USERPROFILE',
+    'rm -rf %USERPROFILE%',
+    `rm -rf ${path.join(os.homedir(), '.claude')}`,
+  ]) {
+    assert.equal(runHomeDeleteGuard('Bash', command).hookSpecificOutput.permissionDecision, 'deny');
+  }
+});
+
+test('home-delete guard: blocks a recursive delete of the profile root', () => {
+  const out = runHomeDeleteGuard('Bash', `rm -rf ${os.homedir()}`);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('home-delete guard: blocks a parent traversal from .claude', () => {
+  const out = runHomeDeleteGuard('Bash', `rm -rf ${path.join(os.homedir(), '.claude', '..')}`);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('home-delete guard: allows scratchpad deletion', () => {
+  assert.strictEqual(runHomeDeleteGuard('PowerShell', 'Remove-Item -Recurse -Force C:\\scratchpad\\run-42'), null);
+});
+
+test('home-delete guard: allows non-delete PowerShell commands', () => {
+  assert.strictEqual(runHomeDeleteGuard('PowerShell', 'Get-ChildItem $HOME'), null);
 });
 
 test('session-start sweep is fail-soft and releases only claims past the TTL', () => {

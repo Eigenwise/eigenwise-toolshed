@@ -26,8 +26,14 @@ can wander. A fast bounce-back is a success, not a failure.
 - Attachment images: `projects/<slug>/assets/<ticket-id>/<filename>` under that root — get slug/id/
   filenames from `sidequest list --json`, then join the path.
 
+**Scripting safety**: Executors NEVER write multi-statement PowerShell or assign PowerShell variables. Write
+scripts as `.js` files and run them with Node; use a single simple shell command only when Node cannot do
+it. PowerShell automatic variables (`$home`, `$host`, `$error`, `$input`, `$pid`, `$profile`, `$args`) can
+silently shadow or reject assignments; `$home` expands to the user profile and has wiped a user home
+directory. Use literal handed scratchpad paths and forward slashes.
+
 **Transport**: use the handed `sidequest` CLI for claim, done, and release; MCP is fine for reads. Use
-Node for HTTP or shell-sensitive work, literal handed scratchpad paths, and forward slashes.
+Node for HTTP or shell-sensitive work.
 
 **Shared tree**: before work, `git diff` the declared scope. Report unexplained in-scope changes UP in your
 claim acknowledgment; never absorb them. Never read large files whole: Grep, tail, or ranged reads only.
