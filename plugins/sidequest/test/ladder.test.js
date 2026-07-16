@@ -23,6 +23,7 @@ test('invalid legacy complexity has no routing category', () => {
 
 test('category filters select stable policy while model filters select resolved runtime', () => {
   const project = store.ensureProject(path.join(store.homeRoot(), 'project'));
+  store.setCategory('coding.hard', { fallback: { model: 'opus', effort: 'high' } });
   store.createTicket(project.slug, { title: 'easy', category: 'coding.easy' });
   store.createTicket(project.slug, { title: 'hard', category: 'coding.hard' });
   assert.deepEqual(store.readyTickets(project.slug, { category: 'coding.easy' }).map((ticket) => ticket.title), ['easy']);
