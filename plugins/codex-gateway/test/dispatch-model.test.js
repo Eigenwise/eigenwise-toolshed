@@ -54,7 +54,7 @@ async function waitForHealthz(port) {
   throw lastError || new Error('shim did not become healthy');
 }
 
-test('dispatch model resolves the newest route marker and rewrites the response model', async (t) => {
+test('dispatch model resolves route marker v2 model and effort', async (t) => {
   const shimPort = await freePort();
   const proxyPort = await freePort();
   const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-dispatch-'));
@@ -92,17 +92,35 @@ test('dispatch model resolves the newest route marker and rewrites the response 
   const models = JSON.parse((await request(shimPort, '/v1/models')).body).data;
   assert.ok(models.some((model) => model.id === 'claude-codex-auto' && model.display_name === 'Sidequest Dispatch (Codex)'));
 
-  const response = await request(shimPort, '/v1/messages', JSON.stringify({
+  const v2Response = await request(shimPort, '/v1/messages', JSON.stringify({
     model: 'claude-codex-auto',
-    messages: [{ role: 'user', content: '[sidequest-route model=gpt-5.6-sol] old [sidequest-route model=gpt-5.6-terra] newest' }],
+    messages: [{ role: 'user', content: '[sidequest-route model=gpt-5.6-sol effort=low] old [sidequest-route model=gpt-5.6-terra effort=xhigh] newest' }],
+    output_config: { preserve: true },
   }));
-  assert.equal(response.status, 200);
-  assert.equal(forwarded.length, 1);
+  assert.equal(v2Response.status, 200);
   assert.equal(forwarded[0].model, 'gpt-5.6-terra');
-  assert.equal(JSON.parse(response.body).model, 'claude-codex-auto');
-  const route = JSON.parse(fs.readFileSync(routeLog, 'utf8').trim());
-  assert.deepEqual({ backend: route.backend, model: route.model, via: route.via }, {
-    backend: 'codex', model: 'gpt-5.6-terra', via: 'dispatch',
+  assert.deepEqual(forwarded[0].output_config, { preserve: true, effort: 'xhigh' });
+  assert.equal(JSON.parse(v2Response.body).model, 'claude-codex-auto');
+
+  const v1Response = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-codex-auto',
+    messages: [{ role: 'user', content: '[sidequest-route model=gpt-5.6-sol effort=low] superseded [sidequest-route model=gpt-5.6-terra]' }],
+  }));
+  assert.equal(v1Response.status, 200);
+  assert.equal(forwarded[1].model, 'gpt-5.6-terra');
+  assert.equal('output_config' in forwarded[1], false);
+
+  const invalidEffortResponse = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-codex-auto',
+    messages: [{ role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high] valid [sidequest-route model=gpt-5.6-sol effort=invalid] ignored' }],
+  }));
+  assert.equal(invalidEffortResponse.status, 200);
+  assert.equal(forwarded[2].model, 'gpt-5.6-terra');
+  assert.deepEqual(forwarded[2].output_config, { effort: 'high' });
+
+  const routes = fs.readFileSync(routeLog, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual({ backend: routes[0].backend, model: routes[0].model, via: routes[0].via, effort: routes[0].effort }, {
+    backend: 'codex', model: 'gpt-5.6-terra', via: 'dispatch', effort: 'xhigh',
   });
 });
 

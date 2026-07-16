@@ -828,12 +828,17 @@ function gatewayModel(id) {
   };
 }
 
-function dispatchModelFromRawBody(raw) {
-  const marker = /\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63})\]/g;
+function dispatchRouteFromRawBody(raw) {
+  const marker = /\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
   let match;
-  let model = null;
-  while ((match = marker.exec(raw))) model = match[1];
-  return model;
+  let route = null;
+  while ((match = marker.exec(raw))) route = { model: match[1], effort: match[2] || null };
+  return route;
+}
+
+function dispatchModelFromRawBody(raw) {
+  const route = dispatchRouteFromRawBody(raw);
+  return route ? route.model : null;
 }
 
 // ------------------------------------------------------------ model catalog
@@ -1019,7 +1024,7 @@ function runShim() {
   // auth, and arbitrary headers are all excluded. Claude Code currently sends a
   // session id in x-claude-code-session-id when it has one; keep only that safe
   // caller correlation value.
-  function requestRouteLog(req, backend, model, pathOnly, via = null) {
+  function requestRouteLog(req, backend, model, pathOnly, via = null, effort = null) {
     if (!REQUEST_ROUTE_LOG) return;
     const sessionId = req.headers['x-claude-code-session-id'];
     const entry = {
@@ -1028,6 +1033,7 @@ function runShim() {
       model: typeof model === 'string' ? model : null,
       path: pathOnly,
       ...(via ? { via } : {}),
+      ...(effort ? { effort } : {}),
       ...(typeof sessionId === 'string' && sessionId ? { sessionId } : {}),
     };
     try {
@@ -1471,8 +1477,8 @@ function runShim() {
           if (typeof parsed.model === 'string' && parsed.model.startsWith(PREFIX)) {
             const advertisedModel = parsed.model;
             const requestedBase = parsed.model.slice(PREFIX.length).replace(/\[1m\]$/, '');
-            const dispatchModel = requestedBase === 'auto' ? dispatchModelFromRawBody(raw.toString()) : null;
-            if (requestedBase === 'auto' && !dispatchModel) {
+            const dispatchRoute = requestedBase === 'auto' ? dispatchRouteFromRawBody(raw.toString()) : null;
+            if (requestedBase === 'auto' && !dispatchRoute) {
               const body = JSON.stringify({
                 type: 'error',
                 error: {
@@ -1485,7 +1491,10 @@ function runShim() {
             }
             // Accept legacy typed ids from pre-0.4.2 sessions even though new
             // discovery rows are unsuffixed.
-            parsed.model = dispatchModel || requestedBase;
+            parsed.model = dispatchRoute ? dispatchRoute.model : requestedBase;
+            if (dispatchRoute && dispatchRoute.effort) {
+              parsed.output_config = { ...(parsed.output_config || {}), effort: dispatchRoute.effort };
+            }
             // Non-Claude models call the plan-mode tools spuriously, and an
             // approved ExitPlanMode downgrades the session's permission mode
             // to acceptEdits instead of restoring it (anthropics/claude-code
@@ -1496,7 +1505,7 @@ function runShim() {
               parsed.tools = parsed.tools.filter((t) => !PLAN_TOOLS.includes(t && t.name));
             }
             counters.codex++;
-            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchModel ? 'dispatch' : null);
+            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchRoute ? 'dispatch' : null, dispatchRoute ? dispatchRoute.effort : null);
             const sessionId = codexSessionId(req);
             if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId)) return;
             // claude.ai credentials never leave this machine toward the proxy
