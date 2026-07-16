@@ -190,25 +190,34 @@ function categoriesPayload(project) {
   const globalById = new Map(global.map((category) => [category.id, category]));
   const local = project && project !== 'all' ? store.getProjectCategories(project) : { rows: [], warnings: [] };
   const localById = new Map(local.rows.map((row) => [row.id, row]));
-  const effectiveById = new Map((project && project !== 'all' ? store.getCategories({ project }) : global).map((category) => [category.id, category]));
+  const effectiveById = new Map((project && project !== 'all' ? store.getCategories({ project, withState: true }) : global).map((category) => [category.id, category]));
   const ids = new Set([...globalById.keys(), ...localById.keys()]);
+  const danglingOverrides = local.warnings.filter((warning) => warning.kind === 'dangling-override');
 
   return {
     warnings: local.warnings,
     categories: [...ids].map((id) => {
       const base = globalById.get(id) || null;
       const layer = localById.get(id) || null;
-      const category = effectiveById.get(id) || base || (layer && layer.kind === 'ADD' ? layer.data : null);
+      const category = effectiveById.get(id) || base || (layer && (layer.kind === 'ADD' || layer.kind === 'DETACH') ? layer.data : null);
       if (!category) return null;
       const resolved = store.resolveCategoryRoute(category);
       return Object.assign({}, category, {
         usageCount: usage[id] || 0,
         resolved: { model: resolved.model, effort: resolved.effort },
-        warnings: resolved.warnings,
+        warnings: resolved.warnings.concat(local.warnings.filter((warning) => warning.id === id)),
         layer: layer && { kind: layer.kind, data: layer.data, base },
         disabled: Boolean(layer && layer.kind === 'DISABLE'),
       });
-    }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+    }).filter(Boolean).concat(danglingOverrides.map((warning) => ({
+      id: warning.id,
+      name: warning.id,
+      linkState: 'dangling-override',
+      usageCount: usage[warning.id] || 0,
+      warnings: [warning],
+      layer: localById.get(warning.id) && { kind: localById.get(warning.id).kind, data: localById.get(warning.id).data, base: null },
+      dangling: true,
+    }))).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
   };
 }
 
@@ -475,6 +484,37 @@ async function handle(req, res) {
       sendJson(res, 201, { category: Object.assign({}, category, { usageCount: categoryUsageCounts('all')[category.id] || 0 }) });
     } catch (e) {
       sendJson(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  const categoryActionMatch = /^\/api\/categories\/([^/]+)\/(detach|relink)$/.exec(pathname);
+  if (categoryActionMatch && req.method === 'POST') {
+    const id = categoryActionMatch[1];
+    const action = categoryActionMatch[2];
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (_) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    const project = body.project ? String(body.project) : null;
+    if (!project || !store.readMeta(project)) {
+      sendJson(res, 404, { error: 'unknown project' });
+      return;
+    }
+    try {
+      if (action === 'detach') store.detachCategory(project, id);
+      else {
+        const row = store.getProjectCategories(project).rows.find((entry) => entry.id === id);
+        if (!row || !['OVERRIDE', 'DETACH'].includes(row.kind)) throw new Error(`Category "${id}" has no local override or detach.`);
+        store.removeProjectCategory(project, id);
+      }
+      const payload = categoriesPayload(project);
+      sendJson(res, 200, { category: payload.categories.find((category) => category.id === id) || null, warnings: payload.warnings });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
     }
     return;
   }

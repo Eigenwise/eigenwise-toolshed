@@ -444,6 +444,11 @@
   .category-scope button.active { color: var(--bg); background: var(--gold-bright); }
   .category-layer { margin-left: auto; font: 700 9px var(--mono); letter-spacing: .04em; padding: 2px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--gold-bright); background: var(--gold-soft); }
   .category-layer.delta { color: var(--text-dim); background: var(--bg); }
+  .category-layer.detached { color: #6554a6; border-color: rgba(101,84,166,.38); background: rgba(101,84,166,.11); }
+  .category-layer.shadow { color: #6554a6; border-color: rgba(101,84,166,.38); background: rgba(101,84,166,.11); }
+  .category-warning { margin: 0 14px; padding: 10px 12px; border: 1px solid rgba(181,74,72,.32); border-left: 3px solid var(--high); background: rgba(181,74,72,.06); color: var(--text-dim); font-size: 12px; line-height: 1.4; }
+  .category-warning strong { color: var(--high); }
+  .category-warning button { margin-left: 8px; cursor: pointer; font: 700 10px var(--sans); color: var(--high); background: var(--panel); border: 1px solid rgba(181,74,72,.32); border-radius: var(--radius-sm); padding: 3px 7px; }
   .category-row.disabled { opacity: .55; border-style: dashed; }
   .category-delta { margin-top: 12px; padding: 10px; border: 1px solid var(--gold-line); border-left: 3px solid var(--gold); background: linear-gradient(90deg, var(--gold-soft), var(--bg) 68%); }
   .category-delta-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
@@ -1883,6 +1888,21 @@
     categoryScopeControls();
     box.innerHTML = "";
     var projectScope = categoryProject() !== "all";
+    var dangling = (state.categories || []).filter(function (category) { return category.dangling; });
+    if (projectScope && dangling.length) {
+      var warning = el("div", "category-warning");
+      warning.innerHTML = '<strong>Global category missing.</strong> ' + dangling.map(function (category) { return esc(category.id); }).join(", ") + ' still has a local override. Remove it to clear this warning.';
+      dangling.forEach(function (category) {
+        var remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "Remove " + category.id;
+        remove.addEventListener("click", function () {
+          mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id) + "?project=" + encodeURIComponent(state.current)).then(function () { return loadCategories(); }).then(renderCategorySettings).catch(function (error) { toast("Category failed: " + error.message); });
+        });
+        warning.appendChild(remove);
+      });
+      box.appendChild(warning);
+    }
     state.categories.forEach(function (category) {
       var layer = category.layer;
       var disabled = category.disabled;
@@ -1892,7 +1912,8 @@
       var categoryFallback = category.fallback;
       var globalFallback = category.globalFallback || routingCatalog.globalFallback;
       var degraded = (category.warnings || []).length > 0;
-      var label = layer ? (layer.kind === "ADD" ? "PROJECT ADD" : layer.kind === "OVERRIDE" ? "OVERRIDE" : "DISABLED HERE") : "";
+      var label = layer ? (layer.kind === "ADD" ? "PROJECT ADD" : layer.kind === "OVERRIDE" ? "OVERRIDE" : layer.kind === "DETACH" ? "DETACHED" : "DISABLED HERE") : "";
+      var shadowed = (category.warnings || []).some(function (warning) { return warning.kind === "shadows-global"; });
       var actions = disabled
         ? '<button type="button" data-reenable-category>Re-enable here</button>'
         : '<button type="button" data-edit-category>Edit</button>' + (projectScope
@@ -1901,9 +1922,15 @@
             : (category.id === "general" ? "" : '<button type="button" class="danger" data-disable-category>Disable here</button>'))
           : (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>'));
       if (projectScope && layer && layer.kind === "OVERRIDE" && !disabled) actions += '<button type="button" data-remove-layer>Restore global</button>';
+      if (projectScope && !disabled && (!layer || layer.kind === "OVERRIDE")) actions += '<button type="button" data-detach-category>Detach from global</button>';
+      if (projectScope && layer && layer.kind === "DETACH" && !disabled) actions += '<button type="button" data-relink-category>Relink to global</button>';
       var restoreNote = projectScope && layer && layer.kind === "OVERRIDE" && !disabled
-        ? '<p class="category-restore-note"><b>Restore global</b> drops these local changes and brings back the global values.</p>' : "";
-      row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + (layer.kind === "OVERRIDE" ? ' delta' : '') + '">' + label + '</span>' : '') + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
+        ? '<p class="category-restore-note"><b>Restore global</b> drops these local changes and brings back the global values.</p>'
+        : projectScope && layer && layer.kind === "DETACH" && !disabled
+          ? '<p class="category-restore-note"><b>Detached from global.</b> This category keeps its own local content until you relink it.</p>' : "";
+      var badgeClass = layer && layer.kind === "OVERRIDE" ? " delta" : layer && layer.kind === "DETACH" ? " detached" : "";
+      var shadowBadge = shadowed ? '<span class="category-layer shadow">SHADOWS GLOBAL</span>' : "";
+      row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + badgeClass + '">' + label + '</span>' : '') + shadowBadge + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
         '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
         '<span class="category-usage">' + category.usageCount + ' tickets</span></summary>' +
         '<div class="category-row-body"><div class="category-row-detail">' + esc(category.description || "No classifier description") + '</div>' +
@@ -1922,6 +1949,16 @@
       });
       var remove = row.querySelector('[data-delete-category], [data-remove-layer], [data-reenable-category]');
       if (remove) remove.addEventListener("click", function () { mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id) + (projectScope ? "?project=" + encodeURIComponent(state.current) : "")).then(function () { return refresh(disabled ? category.name + " re-enabled" : projectScope ? "Global category restored" : category.name + " deleted"); }).catch(function (e) { toast("Category failed: " + e.message); }); });
+      var detach = row.querySelector('[data-detach-category]');
+      if (detach) detach.addEventListener("click", function () {
+        if (!confirm("Detach this category from global policy? This board stops receiving global updates for this category. Global edits, renames, and deletions no longer affect it. You can relink later, but relinking discards local changes.")) return;
+        mutate("POST", "/api/categories/" + encodeURIComponent(category.id) + "/detach", { project: state.current }).then(function () { return refresh(category.name + " detached from global"); }).catch(function (e) { toast("Category failed: " + e.message); });
+      });
+      var relink = row.querySelector('[data-relink-category]');
+      if (relink) relink.addEventListener("click", function () {
+        if (!confirm("Relink this category to global policy? Its local content will be replaced by the live global category.")) return;
+        mutate("POST", "/api/categories/" + encodeURIComponent(category.id) + "/relink", { project: state.current }).then(function () { return refresh(category.name + " relinked to global"); }).catch(function (e) { toast("Category failed: " + e.message); });
+      });
       var disable = row.querySelector('[data-disable-category]');
       if (disable) disable.addEventListener("click", function () { mutate("PATCH", "/api/categories/" + encodeURIComponent(category.id) + "?project=" + encodeURIComponent(state.current), { disable: true }).then(function () { return refresh(category.name + " disabled here"); }).catch(function (e) { toast("Category failed: " + e.message); }); });
       box.appendChild(row);

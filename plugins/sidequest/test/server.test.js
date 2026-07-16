@@ -250,6 +250,16 @@ test('category endpoints project scope preserves global taxonomy and reports loc
   assert.ok(!global.categories.some((category) => category.id === 'music'));
   assert.ok(global.categories.some((category) => category.id === 'coding' && !category.disabled));
   assert.strictEqual((await requestJson(started.port, 'PATCH', `/api/categories/general?project=${one}`, { disable: true })).status, 400);
+  assert.strictEqual((await requestJson(started.port, 'DELETE', `/api/categories/coding?project=${one}`)).status, 200);
+
+  const detached = await requestJson(started.port, 'POST', '/api/categories/coding/detach', { project: one });
+  assert.strictEqual(detached.status, 200);
+  assert.strictEqual(detached.body.category.linkState, 'detached');
+  assert.ok(detached.body.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'coding'));
+
+  const relinked = await requestJson(started.port, 'POST', '/api/categories/coding/relink', { project: one });
+  assert.strictEqual(relinked.status, 200);
+  assert.strictEqual(relinked.body.category.linkState, 'linked');
 });
 
 function copyPlugin(from, to, version) {
