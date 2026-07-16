@@ -26,9 +26,10 @@
  * renderExecAgent() below, so the ticket-execution protocol body stays in one
  * place for every generated file.
  *
- * Lifecycle safety: every file this module writes starts with MARKER on its
- * own line. A file WITHOUT the marker — whether or not its name collides with
- * one we'd generate — is NEVER written, overwritten, or deleted; it isn't ours.
+ * Lifecycle safety: every stable executor file this module writes starts with
+ * the generation-two MARKER on its own line. A file WITHOUT either recognized
+ * marker — whether or not its name collides with one we'd generate — is NEVER
+ * written, overwritten, or deleted; it isn't ours.
  */
 
 const fs = require('fs');
@@ -39,9 +40,14 @@ const store = require('./store.js');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md');
 
-// Marks a file as ours. Must stay unique enough that no human-authored agent
-// file would plausibly contain it verbatim.
-const MARKER = '<!-- generated-by: sidequest-agentsync -->';
+// Generation two deliberately differs from LEGACY_MARKER before its closing
+// delimiter. Pre-1.84 Sidequest only checks for the full legacy marker, so it
+// treats gen2 files as user-authored and leaves them alone during version skew.
+const LEGACY_MARKER = '<!-- generated-by: sidequest-agentsync -->';
+const MARKER = '<!-- generated-by: sidequest-agentsync gen2 -->';
+// No generational marker change is needed for temporary definitions: they are
+// nonce-named and short-lived, so stale version sessions cannot disrupt the
+// stable ladder through this cleanup path.
 const TEMP_MARKER = '<!-- generated-by: sidequest-native-agent -->';
 const TEMP_PREFIX = 'sidequest-native-';
 const TICKET_PREFIX = 'sidequest-ticket-';
@@ -427,8 +433,13 @@ function cleanupNativeAgents(opts) {
   return { removed };
 }
 
-// Sync the complete stable Claude and Codex dispatch executor ladders. The
-// MARKER lifecycle below remains responsible for stale cleanup.
+function hasStableMarker(source) {
+  return source.includes(MARKER) || source.includes(LEGACY_MARKER);
+}
+
+// Sync the complete stable Claude and Codex dispatch executor ladders. An old
+// session can still add legacy definitions during version skew, but this sync
+// owns and prunes them without ever touching generation-two files it did not write.
 function syncExecAgents(_prefs, opts) {
   opts = opts || {};
   const dir = opts.dir || defaultAgentsDir();
@@ -464,7 +475,7 @@ function syncExecAgents(_prefs, opts) {
     }
     // A file already sitting at this path that ISN'T ours (no marker) is left
     // completely alone, even though its name matches what we'd generate.
-    if (prev !== null && !prev.includes(MARKER)) continue;
+    if (prev !== null && !hasStableMarker(prev)) continue;
     if (prev === content) {
       unchanged++;
       continue;
@@ -483,7 +494,7 @@ function syncExecAgents(_prefs, opts) {
     } catch (_) {
       continue;
     }
-    if (body == null || !body.includes(MARKER)) continue; // never delete an unmarked file
+    if (body == null || !hasStableMarker(body)) continue; // never delete an unmarked file
     try {
       fs.unlinkSync(filePath);
       removed++;
@@ -496,6 +507,7 @@ function syncExecAgents(_prefs, opts) {
 }
 
 module.exports = {
+  LEGACY_MARKER,
   MARKER,
   TEMP_MARKER,
   TEMP_PREFIX,

@@ -35,6 +35,27 @@ function configure(store, id, route, fallback) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
+test('generation-two marker cannot be mistaken for the legacy marker', () => {
+  assert.ok(!agentsync.MARKER.includes(agentsync.LEGACY_MARKER));
+});
+
+test('sync protects generation-two executors from legacy marker GC and prunes legacy definitions', () => {
+  const dir = tmpDir();
+  const generationTwo = path.join(dir, 'sidequest-exec-dispatch-high.md');
+  const legacy = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
+  fs.writeFileSync(generationTwo, `generation two\n${agentsync.MARKER}\n`);
+  fs.writeFileSync(legacy, `legacy\n${agentsync.LEGACY_MARKER}\n`);
+
+  const legacyGcWouldDelete = (file) => fs.readFileSync(file, 'utf8').includes(agentsync.LEGACY_MARKER);
+  assert.ok(!legacyGcWouldDelete(generationTwo));
+  assert.ok(legacyGcWouldDelete(legacy));
+
+  const result = agentsync.syncExecAgents(null, { dir });
+  assert.equal(result.removed, 1);
+  assert.ok(fs.existsSync(generationTwo));
+  assert.ok(!fs.existsSync(legacy));
+});
+
 test('sync writes the complete stable executor ladder with an empty taxonomy', () => {
   clearCatalog();
   const store = require('../lib/store.js');
