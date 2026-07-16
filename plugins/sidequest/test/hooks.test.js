@@ -54,16 +54,12 @@ const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 
-// Byte budgets (chars ≈ tokens × ~4). CLI paths inside the blocks vary by
-// machine, so these have headroom. The live taxonomy adds at most 400 bytes to
-// each hook block, including project ADD ids, so each ceiling grows only by that
-// explicit cap instead of letting the doctrine grow back.
+// Byte budgets (chars ≈ tokens × ~4). The per-message reminder must stay tiny;
+// SessionStart is the only hook that carries taxonomy and execution guidance.
 const BUDGET = {
-  standing: 800,
+  standing: 160,
   session: 2850,
   compact: 1000,
-  capture: 1900,
-  mgmt: 2000,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
 
@@ -102,8 +98,6 @@ function writeModelPrefs(home, prefs) {
 }
 
 const capture = (prompt) => runHook(CAPTURE, { prompt });
-
-const FOOTER_MARK = '— sidequest:';
 
 // Phrases from the retired heavy doctrine that must NOT come back to any block.
 const RETIRED = ['95%', 'read ~4+ files', 'AskUserQuestion', 'coreDiscipline'];
@@ -531,8 +525,8 @@ test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
 
 test('standing reminder: plain task prompt gets one short line, not a doctrine block', () => {
   const ctx = capture('add a new export format to the reporter');
-  assert.match(ctx, /sidequest \(active\)/);
-  assert.ok(ctx.includes('tickets'), 'must still point at the board');
+  assert.match(ctx, /sidequest ===/);
+  assert.ok(ctx.includes('ticket-filer'), 'must still point at ticket filing');
   assert.ok(
     ctx.length <= BUDGET.standing,
     `standing reminder is ${ctx.length} chars — budget is ${BUDGET.standing}; this fires EVERY prompt`
@@ -540,7 +534,7 @@ test('standing reminder: plain task prompt gets one short line, not a doctrine b
   assertNoRetiredDoctrine(ctx, 'standing reminder');
 });
 
-test('standing reminder: SIDEQUEST_NUDGE=off silences it (marker blocks still fire)', () => {
+test('standing reminder: SIDEQUEST_NUDGE=off silences plain prompts but keeps side-issue capture visible', () => {
   const env = { ...process.env, SIDEQUEST_NUDGE: 'off' };
   const plain = execFileSync(process.execPath, [CAPTURE], {
     input: JSON.stringify({ prompt: 'add a new export format' }),
@@ -553,93 +547,35 @@ test('standing reminder: SIDEQUEST_NUDGE=off silences it (marker blocks still fi
     encoding: 'utf8',
     env,
   });
-  assert.ok(defect.includes('capture the side quest'), 'capture block must still fire when nudge is off');
+  assert.ok(defect.includes('ticket-filer'), 'side-issue prompt must still point at ticket filing');
 });
 
-test('standing reminder: reads live effective taxonomy including a project ADD within budget', () => {
-  const projectPath = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'taxonomy-project');
-  fs.mkdirSync(projectPath, { recursive: true });
-  const project = store.ensureProject(projectPath);
-  store.setProjectCategory(project.slug, 'leak-analysis', 'ADD', {
-    id: 'leak-analysis',
-    name: 'Leak analysis',
-    description: 'Fixture project category.',
-    contract: 'Inspect the leak.',
-    route: { model: 'sonnet', effort: 'medium' },
-    fallback: null,
-    enabled: true,
-  });
-  const out = execFileSync(process.execPath, [CAPTURE], {
-    input: JSON.stringify({ prompt: 'add a new export format' }),
-    encoding: 'utf8',
-    cwd: project.meta.path,
-    env: { ...process.env, SIDEQUEST_HOME },
-  });
-  const ctx = JSON.parse(out).hookSpecificOutput.additionalContext;
-  assert.match(ctx, /^taxonomy: .*\| project: leak-analysis$/m);
-  const line = ctx.split('\n').find((entry) => entry.startsWith('taxonomy: '));
-  assert.ok(Buffer.byteLength(line) <= 400, `taxonomy line is ${Buffer.byteLength(line)} bytes — cap is 400`);
-  assert.ok(ctx.length <= BUDGET.standing, `standing reminder is ${ctx.length} chars — budget is ${BUDGET.standing}`);
-});
-
-/* ------------------------------------------------------------------ *
- *  Capture block
- * ------------------------------------------------------------------ */
-
-test('capture block: fires on a defect prompt, carries the filing command + footer, inside budget', () => {
+test('side-issue prompts keep the ticket-filer pointer inside the per-message budget', () => {
   const ctx = capture('the login form is broken');
-  assert.ok(ctx.includes('capture the side quest'), 'a defect prompt should hit the capture block');
-  assert.ok(ctx.includes('ticket-filer'), 'must prefer the background ticket-filer');
-  assert.ok(ctx.includes('--complexity'), 'must show the required complexity flag');
-  assert.ok(ctx.includes(FOOTER_MARK), 'must keep the one-line discipline footer');
-  assert.ok(ctx.length <= BUDGET.capture, `capture block is ${ctx.length} chars — budget is ${BUDGET.capture}`);
-  assertNoRetiredDoctrine(ctx, 'capture block');
-});
-
-/* ------------------------------------------------------------------ *
- *  Board-management block
- * ------------------------------------------------------------------ */
-
-test('board-management block: fires on a dashboard prompt, carries claim discipline, inside budget', () => {
-  const ctx = capture('show me the dashboard');
-  assert.ok(ctx.includes('board control'), 'a dashboard prompt should hit the mgmt block');
-  assert.ok(ctx.includes('claim'), 'must carry the claim-first rule');
-  assert.ok(
-    ctx.indexOf('mcp__plugin_sidequest_board__') < ctx.indexOf('dashboard    —'),
-    'the MCP tools must LEAD the block, before any concrete CLI command (concrete beats abstract)'
-  );
-  assert.ok(ctx.includes(FOOTER_MARK), 'must keep the one-line discipline footer');
-  assert.ok(ctx.length <= BUDGET.mgmt, `mgmt block is ${ctx.length} chars — budget is ${BUDGET.mgmt}`);
-  assertNoRetiredDoctrine(ctx, 'mgmt block');
-});
-
-test('an SQ-ref prompt routes to the board-management block', () => {
-  const ctx = capture('close SQ-3');
-  assert.ok(ctx.includes('board control'), 'an SQ-\\d+ ref should hit the mgmt block');
+  assert.match(ctx, /sidequest ===/);
+  assert.ok(ctx.includes('ticket-filer'), 'must still point at ticket filing');
+  assert.ok(ctx.length <= BUDGET.standing, `per-message reminder is ${ctx.length} chars — trim it, don't raise the budget`);
+  assertNoRetiredDoctrine(ctx, 'side-issue reminder');
 });
 
 /* ------------------------------------------------------------------ *
  *  Marker pruning — ordinary task verbs no longer trip capture (SQ-106)
  * ------------------------------------------------------------------ */
 
-test("pruned markers: 'needs to' / 'missing' no longer trip the capture block", () => {
+test("pruned markers: 'needs to' / 'missing' keep the minimal reminder", () => {
   const ctx = capture('the parser needs to handle the missing config field');
-  assert.ok(
-    !ctx.includes('capture the side quest'),
-    "'needs to'/'missing' are ordinary task words and must not fire capture"
-  );
-  assert.match(ctx, /sidequest \(active\)/, 'it should fall through to the standing reminder');
+  assert.match(ctx, /sidequest ===/);
+  assert.ok(ctx.length <= BUDGET.standing);
 });
 
-test("pruned markers: \"won't\" no longer trips the capture block", () => {
+test("pruned markers: \"won't\" keeps the minimal reminder", () => {
   const ctx = capture("the build won't finish on my machine");
-  assert.ok(!ctx.includes('capture the side quest'), '"won\'t" must not fire capture on its own');
+  assert.match(ctx, /sidequest ===/);
 });
 
-test('genuine defect words still trip capture', () => {
-  // 'crash' is deliberately kept — a real "X crashed" report should still file.
-  assert.ok(capture('the exporter crashes on empty input').includes('capture the side quest'));
-  assert.ok(capture('oh and the contact form is broken').includes('capture the side quest'));
+test('genuine defect words keep the minimal reminder', () => {
+  assert.ok(capture('the exporter crashes on empty input').includes('ticket-filer'));
+  assert.ok(capture('oh and the contact form is broken').includes('ticket-filer'));
 });
 
 /* ------------------------------------------------------------------ *
