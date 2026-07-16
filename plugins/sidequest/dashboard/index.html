@@ -443,17 +443,35 @@
   .category-row-id, .category-usage { font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); }
   .category-usage { color: var(--gold-bright); white-space: nowrap; }
   .category-row-detail { display: grid; grid-template-columns: 1fr auto; gap: 5px 8px; margin-top: 6px; font-size: 10.5px; color: var(--text-faint); line-height: 1.35; }
-  .category-row-detail code { font-family: var(--mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-row-detail code, .category-route-story code { font-family: var(--mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-route-story { margin-top: 8px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg); }
+  .category-route-live { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 7px; background: linear-gradient(90deg, var(--gold-soft), transparent); }
+  .category-route-live span { font: 700 9px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--gold-bright); }
+  .category-route-live code { color: var(--text); font-weight: 700; }
+  .category-route-config { display: grid; gap: 4px; padding: 6px 7px 7px; }
+  .category-route-config div { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 9.5px; color: var(--text-faint); }
+  .category-route-warning { padding: 5px 7px; border-top: 1px solid rgba(181,74,72,.22); color: var(--high); font-size: 10px; }
   .category-actions { display: flex; gap: 5px; margin-top: 8px; }
   .category-actions button, .category-add button { cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--text-dim); background: var(--card); border: 1px solid var(--line-soft); padding: 4px 8px; border-radius: var(--radius-sm); }
   .category-actions button:hover, .category-add button:hover { color: var(--text); border-color: var(--line); }
   .category-actions button.danger:hover { color: var(--urgent); border-color: rgba(181,74,72,.45); }
-  .category-edit { display: grid; gap: 6px; margin-top: 8px; }
-  .category-edit input, .category-edit textarea, .category-edit select, .category-add input, .category-add textarea, .category-add select { width: 100%; box-sizing: border-box; padding: 6px 7px; font: 11px var(--sans); color: var(--text); background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
-  .category-edit textarea, .category-add textarea { min-height: 42px; resize: vertical; line-height: 1.35; }
+  .category-edit { display: grid; gap: 9px; margin-top: 8px; }
+  .category-form-section, .category-route-group { display: grid; gap: 7px; padding: 9px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--bg); }
+  .category-route-group.primary { border-left: 3px solid var(--gold); }
+  .category-route-group.fallback { background: linear-gradient(90deg, var(--gold-soft), var(--bg) 42%); }
+  .category-form-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .category-form-heading strong, .category-field > span, .category-route-field > span { color: var(--text-dim); font: 700 10px var(--sans); }
+  .category-form-heading small { color: var(--text-faint); font: 9px var(--mono); }
+  .category-field, .category-route-field { display: grid; gap: 4px; color: var(--text-dim); }
+  .category-edit input, .category-edit textarea, .category-edit select, .category-add input, .category-add textarea, .category-add select { width: 100%; box-sizing: border-box; padding: 6px 7px; font: 11px var(--sans); color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+  .category-edit input:focus, .category-edit textarea:focus, .category-edit select:focus { outline: 2px solid var(--gold-line); outline-offset: 1px; border-color: var(--gold); }
+  .category-edit textarea, .category-add textarea { min-height: 48px; resize: vertical; line-height: 1.35; }
   .category-route { display: grid; grid-template-columns: minmax(0, 1fr) 74px; gap: 6px; }
-  .category-switch { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-dim); cursor: pointer; }
-  .category-switch input { accent-color: var(--gold); }
+  .category-switch { display: flex; align-items: flex-start; gap: 8px; font-size: 10.5px; color: var(--text-dim); cursor: pointer; }
+  .category-switch input { width: auto; margin: 2px 0 0; accent-color: var(--gold); }
+  .category-switch strong, .category-switch small { display: block; }
+  .category-switch strong { color: var(--text-dim); font-size: 10.5px; }
+  .category-switch small { margin-top: 2px; color: var(--text-faint); font-size: 9.5px; line-height: 1.3; }
   .category-add { padding: 9px; border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--bg); display: grid; gap: 6px; }
   .category-add summary { cursor: pointer; font-size: 11.5px; color: var(--text-dim); }
   /* Story field in the ticket editor: a swatch beside the select, and the
@@ -1760,16 +1778,27 @@
     var route = category && category.route || { model: "sonnet", effort: "high" };
     var fallback = category && category.fallback || null;
     var id = category ? category.id : "";
+    var isGlobal = categoryProject() === "all";
     return '<div class="category-edit">' +
-      (create ? '<input data-field="id" placeholder="category id, e.g. research.api" />' : '') +
-      '<input data-field="name" placeholder="Name" value="' + esc(category ? category.name : "") + '" />' +
-      '<textarea data-field="description" placeholder="What should land here?">' + esc(category ? category.description : "") + '</textarea>' +
-      '<div class="category-route"><select data-field="model">' + categoryRouteOptions(route.model) + '</select><select data-field="effort">' + effortOptions(route.effort) + '</select></div>' +
-      '<label class="category-switch"><input data-field="has-fallback" type="checkbox"' + (fallback ? ' checked' : '') + ' /> Override global fallback</label>' +
-      '<div class="category-route" data-fallback-route' + (fallback ? '' : ' hidden') + '><select data-field="fallback-model">' + categoryRouteOptions(fallback && fallback.model) + '</select><select data-field="fallback-effort">' + effortOptions(fallback && fallback.effort || "high") + '</select></div>' +
-      '<textarea data-field="contract" placeholder="Executor contract">' + esc(category ? category.contract : "") + '</textarea>' +
-      (categoryProject() === "all" ? '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /> Enabled</label>' : '') +
-      '<div class="category-actions"><button type="button" data-save-category="' + esc(id) + '">' + (create ? 'Add category' : 'Save') + '</button><button type="button" data-cancel-category>Cancel</button></div>' +
+      '<div class="category-form-section">' +
+        '<div class="category-form-heading"><strong>Category details</strong><small>How tickets get classified</small></div>' +
+        (create ? '<label class="category-field"><span>Category ID</span><input data-field="id" placeholder="e.g. research.api" /></label>' : '') +
+        '<label class="category-field"><span>Name</span><input data-field="name" value="' + esc(category ? category.name : "") + '" /></label>' +
+        '<label class="category-field"><span>Classifier description</span><textarea data-field="description">' + esc(category ? category.description : "") + '</textarea></label>' +
+      '</div>' +
+      '<div class="category-route-group primary">' +
+        '<div class="category-form-heading"><strong>Primary route</strong><small>Try this first</small></div>' +
+        '<div class="category-route"><label class="category-route-field"><span>Model</span><select data-field="model">' + categoryRouteOptions(route.model) + '</select></label><label class="category-route-field"><span>Effort</span><select data-field="effort">' + effortOptions(route.effort) + '</select></label></div>' +
+      '</div>' +
+      '<div class="category-route-group fallback">' +
+        '<label class="category-switch"><input data-field="has-fallback" type="checkbox"' + (fallback ? ' checked' : '') + ' /><span><strong>Fallback override</strong><small>Override global fallback with a category-specific route.</small></span></label>' +
+        '<div class="category-route" data-fallback-route' + (fallback ? '' : ' hidden') + '><label class="category-route-field"><span>Model</span><select data-field="fallback-model">' + categoryRouteOptions(fallback && fallback.model) + '</select></label><label class="category-route-field"><span>Effort</span><select data-field="fallback-effort">' + effortOptions(fallback && fallback.effort || "high") + '</select></label></div>' +
+      '</div>' +
+      '<div class="category-form-section">' +
+        '<label class="category-field"><span>Executor contract</span><textarea data-field="contract">' + esc(category ? category.contract : "") + '</textarea></label>' +
+        (isGlobal ? '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /><span><strong>Enabled</strong><small>Available for ticket routing.</small></span></label>' : '') +
+      '</div>' +
+      '<div class="category-actions"><button type="button" data-save-category="' + esc(id) + '">' + (create ? 'Add category' : 'Save changes') + '</button><button type="button" data-cancel-category>Cancel</button></div>' +
       '</div>';
   }
   function categoryPayload(form) {
@@ -1817,6 +1846,8 @@
       var row = el("div", "category-row" + (category.enabled && !disabled ? "" : " off") + (disabled ? " disabled" : ""));
       row.dataset.id = category.id;
       var effective = category.resolved || routingCatalog.globalFallback;
+      var categoryFallback = category.fallback;
+      var globalFallback = category.globalFallback || routingCatalog.globalFallback;
       var degraded = (category.warnings || []).length > 0;
       var label = layer ? (layer.kind === "ADD" ? "PROJECT ADD" : layer.kind === "OVERRIDE" ? "OVERRIDE" : "DISABLED HERE") : "";
       var actions = disabled
@@ -1827,8 +1858,16 @@
       if (projectScope && layer && !disabled) actions += '<button type="button" data-remove-layer>Restore global</button>';
       row.innerHTML = '<div class="category-row-top"><span class="category-row-name">' + esc(category.name) + '</span>' + (label ? '<span class="category-layer' + (layer.kind === "OVERRIDE" ? ' delta' : '') + '">' + label + '</span>' : '') + '<span class="category-usage">' + category.usageCount + ' tickets</span></div>' +
         '<div class="category-row-id">' + esc(category.id) + '</div>' +
-        '<div class="category-row-detail"><span>' + esc(category.description || "No classifier description") + '</span><code>Primary · ' + esc(routeLabelFor(category.route.model, category.route.effort)) + '</code></div>' +
-        '<div class="category-row-detail"><span>' + (degraded ? '<b style="color:var(--high)">Degraded route</b>' : 'Effective fallback') + '</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' + categoryDelta(category) +
+        '<div class="category-row-detail"><span>' + esc(category.description || "No classifier description") + '</span></div>' +
+        '<div class="category-route-story">' +
+          '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
+          '<div class="category-route-config">' +
+            '<div><span>Primary</span><code>' + esc(routeLabelFor(category.route.model, category.route.effort)) + '</code></div>' +
+            '<div><span>Category fallback</span><code>' + esc(categoryFallback ? routeLabelFor(categoryFallback.model, categoryFallback.effort) : 'Uses global fallback') + '</code></div>' +
+            '<div><span>Global fallback</span><code>' + esc(routeLabelFor(globalFallback.model, globalFallback.effort)) + '</code></div>' +
+          '</div>' +
+          (degraded ? '<div class="category-route-warning">Degraded route: ' + esc((category.warnings || []).join(' ')) + '</div>' : '') +
+        '</div>' + categoryDelta(category) +
         '<div class="category-actions">' + actions + '</div>';
       var refresh = function (message) { return loadCategories().then(function () { toast(message); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }); };
       var edit = row.querySelector('[data-edit-category]');
