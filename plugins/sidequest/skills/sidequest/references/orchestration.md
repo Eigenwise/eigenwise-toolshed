@@ -168,7 +168,9 @@ bypass.
 The per-ticket path is deliberately two-phase. Render the ticket brief and its embedded dispatch token,
 but **do not spawn immediately**. Keep doing independent orchestration work until Claude Code announces
 `New agent types are now available: <name>`, then spawn that exact generated type with only the short
-logistics prompt. The executor claim must carry the token from its definition (`--token <nonce>`).
+logistics prompt. **Never end a turn waiting for registration:** start a background timer that re-invokes
+the session, then spawn on the announcement, or use the stable pre-provisioned executor now. Any session
+may adopt an unspawned prepared definition. The executor claim must carry its token (`--token <nonce>`).
 
 If claim returns `reason:token`, the spawn happened before registration and ran the silent generic agent.
 TaskStop that agent, wait for the availability announcement, and respawn the same prepared definition. If

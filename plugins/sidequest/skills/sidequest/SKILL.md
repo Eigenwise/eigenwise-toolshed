@@ -77,7 +77,10 @@ The **CLI** is for when the MCP tools aren't loaded, for humans, and for the thi
 `dashboard`/`serve` and legacy temporary `native-agent` cleanup. For routed work, render the ticket's
 per-ticket executor definition, then DO NOT spawn it immediately. Continue other work until the harness
 announces `New agent types are now available: <name>`, then spawn that exact short-lived agent with the
-short logistics prompt. Its claim must carry the token embedded in the definition. A `reason:token`
+short logistics prompt. **Never end the turn waiting for registration:** start a background timer to wake this
+session (for example `node -e "setTimeout(() => {}, 420000)"` through Bash with `run_in_background`) and
+spawn on the announcement, or use the stable pre-provisioned executor now. Any session may adopt a prepared,
+unspawned ticket definition. Its claim must carry the token embedded in the definition. A `reason:token`
 refusal means the spawn was premature generic: TaskStop it, wait for the announcement, and respawn. If no
 announcement arrives in a sensible window, use the stable pre-provisioned executor path instead. Never
 trust a worker's self-report: `transcript/meta.json` and the token-gated claim are the evidence. The

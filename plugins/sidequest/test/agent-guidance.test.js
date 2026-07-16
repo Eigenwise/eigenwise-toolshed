@@ -19,3 +19,10 @@ test('workflow guidance suggests a documented Claude Code script shape', () => {
   assert.doesNotMatch(orchestration, /`parallel\(\)`/);
   assert.match(orchestration, /`pipeline\(tickets, ticket => agent\(ticket\.prompt, \{ label: ticket\.ref \}\)\)`/);
 });
+
+test('ephemeral dispatch guidance prevents registration wait stalls', () => {
+  assert.match(skill, /Never end the turn waiting for registration/);
+  assert.match(skill, /background timer/);
+  assert.match(orchestration, /Never end a turn waiting for registration/);
+  assert.match(orchestration, /Any session\nmay adopt an unspawned prepared definition/);
+});
