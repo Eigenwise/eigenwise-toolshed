@@ -636,7 +636,7 @@ test('subagent-stop: an over-threshold claim reports a dead-claim verdict', () =
   backdateSessionClaims(sess, 28);
 
   const ctx = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
-  assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, do not nudge`);
+  assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, then TaskStop it`);
   assert.ok(ctx.length <= BUDGET.longrun, `stop verdict is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
   assert.ok(ctx.indexOf('\n') === -1, 'the verdict must stay ONE line');
 });
@@ -685,7 +685,7 @@ test('subagent-stop: a repeated stop repeats the held-claim verdict until releas
   const t = addTicket('over-threshold claim reports every stop');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-dedupe', { sessionId: sess }).ok, true);
   backdateSessionClaims(sess, 28);
-  const expected = `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, do not nudge`;
+  const expected = `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, then TaskStop it`;
   assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), expected);
   assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), expected);
 });
@@ -695,7 +695,7 @@ test('subagent-stop: a stopped executor holding a fresh claim gets the dead-clai
   const t = addTicket('quick ticket, just claimed');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-fresh', { sessionId: sess }).ok, true);
   const ctx = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
-  assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim \\(age 1m\\), likely dead: release \\+ respawn, do not nudge$`));
+  assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim \\(age 1m\\), likely dead: release \\+ respawn, then TaskStop it$`));
 });
 
 test('subagent-stop: a completed executor reports a clean stop from its done comment', () => {
@@ -710,7 +710,7 @@ test('subagent-stop: a completed executor reports a clean stop from its done com
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-completed', { sessionId: sess }).ok, true);
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-completed', kind: 'comment', body: 'Shipped abc1234.', source: 'cli' }).ok, true);
   assert.strictEqual(store.completeTicket(slug, t.ref, 'worker-completed', {}).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done (abc1234)`);
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done (abc1234); verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
 test('subagent-stop: a completed file ticket without a hash is flagged', () => {
@@ -725,7 +725,7 @@ test('subagent-stop: a completed file ticket without a hash is flagged', () => {
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-no-hash', { sessionId: sess }).ok, true);
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-no-hash', kind: 'comment', body: 'Done and verified.', source: 'cli' }).ok, true);
   assert.strictEqual(store.completeTicket(slug, t.ref, 'worker-no-hash', {}).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done WITHOUT commit hash`);
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
 test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
@@ -741,7 +741,7 @@ test('subagent-stop: a prior owner is silent after another worker reclaims the t
 test('subagent-stop: a stopped executor without a claim gets a respawn verdict', () => {
   assert.strictEqual(
     runHook(SUBAGENT_STOP, { session_id: 'sess-nobody-here', agent_type: 'sidequest-exec-high' }),
-    'exec stopped without ever claiming, respawn with the same briefing'
+    'exec stopped without ever claiming, TaskStop it first, then respawn with the same briefing'
   );
   assert.strictEqual(runHook(SUBAGENT_STOP, {}), '', 'a bare payload with no session id stays silent');
 });

@@ -93,7 +93,7 @@ function stopVerdict(store, claims, agentType) {
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash
       ? ' done WITHOUT commit hash'
       : ` done${hash ? ` (${hash})` : ''}`;
-    return `exec stopped clean: ${ticket.ref}${suffix}`;
+    return `exec stopped clean: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
   }
 
   const held = claims.find((claim) => claim && claim.held && claim.status === 'doing');
@@ -101,10 +101,10 @@ function stopVerdict(store, claims, agentType) {
     const started = Date.parse(held.at);
     const mins = Number.isFinite(started) ? Math.max(1, Math.round((now - started) / 60000)) : 0;
     const label = held.ref || held.ticketId || 'a ticket';
-    return `exec stopped HOLDING ${label} claim (age ${mins}m), likely dead: release + respawn, do not nudge`;
+    return `exec stopped HOLDING ${label} claim (age ${mins}m), likely dead: release + respawn, then TaskStop it`;
   }
 
-  if (agentType.startsWith('sidequest-')) return 'exec stopped without ever claiming, respawn with the same briefing';
+  if (agentType.startsWith('sidequest-')) return 'exec stopped without ever claiming, TaskStop it first, then respawn with the same briefing';
   return null;
 }
 
