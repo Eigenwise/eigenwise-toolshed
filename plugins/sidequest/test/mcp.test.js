@@ -77,7 +77,7 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'claim', 'sweepClaims', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'archive_board', 'unarchive_board']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'claim', 'sweepClaims', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'category_detach', 'category_relink', 'archive_board', 'unarchive_board']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const t of resp.result.tools) {

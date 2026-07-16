@@ -666,9 +666,9 @@ const TOOLS = [
       const projectScope = !args.global;
       const usage = (id) => store.listTickets(slug).filter((ticket) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length;
       const layer = projectScope ? store.getProjectCategories(slug) : { rows: [], warnings: [] };
-      const categories = store.getCategories(projectScope ? { project: slug } : undefined).map((category) => {
+      const categories = store.getCategories(projectScope ? { project: slug, withState: true } : undefined).map((category) => {
         const localRow = layer.rows.find((row) => row.id === category.id) || null;
-        return Object.assign({}, category, { origin: localRow ? (localRow.kind === 'ADD' ? 'project' : 'overridden') : 'global', localRow, ticketCount: usage(category.id) });
+        return Object.assign({}, category, { origin: localRow ? (localRow.kind === 'ADD' ? 'project' : category.linkState) : 'global', localRow, ticketCount: usage(category.id) });
       });
       for (const localRow of layer.rows.filter((row) => row.kind === 'DISABLE')) categories.push({ id: localRow.id, origin: 'disabled', localRow, effective: null, ticketCount: usage(localRow.id) });
       return { project: slug, projectName: meta.name, categories, warnings: layer.warnings };
@@ -743,6 +743,40 @@ const TOOLS = [
       }
       if (args.enabled !== undefined) patch.enabled = args.enabled;
       return { ok: true, project: slug, projectName: meta.name, category: store.setCategory(existing.id, patch) };
+    },
+  },
+  {
+    name: 'category_detach',
+    description: 'Detach a project category from global policy, preserving its current effective category as local content.',
+    inputSchema: {
+      type: 'object',
+      properties: { project: PROJECT_PROP, id: { type: 'string' } },
+      required: ['project', 'id'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const id = String(args.id || '').trim().toLowerCase();
+      const localRow = store.detachCategory(slug, id);
+      const layer = store.getProjectCategories(slug);
+      return { ok: true, project: slug, projectName: meta.name, localRow, effective: store.getCategory(id, { project: slug }), warnings: layer.warnings };
+    },
+  },
+  {
+    name: 'category_relink',
+    description: 'Remove a project category OVERRIDE or DETACH row and restore inheritance from global policy.',
+    inputSchema: {
+      type: 'object',
+      properties: { project: PROJECT_PROP, id: { type: 'string' } },
+      required: ['project', 'id'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const id = String(args.id || '').trim().toLowerCase();
+      const localRow = store.getProjectCategories(slug).rows.find((row) => row.id === id) || null;
+      if (!localRow || !['OVERRIDE', 'DETACH'].includes(localRow.kind)) throw new Error(`category_relink: "${args.id}" has no local override or detach.`);
+      store.removeProjectCategory(slug, id);
+      const layer = store.getProjectCategories(slug);
+      return { ok: true, project: slug, projectName: meta.name, id, localRow: null, effective: store.getCategory(id, { project: slug }), warnings: layer.warnings };
     },
   },
   {

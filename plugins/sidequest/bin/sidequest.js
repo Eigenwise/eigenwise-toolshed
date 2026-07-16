@@ -376,12 +376,13 @@ function cmdCategory(opts, positional) {
 
   if (action === 'list' || action === 'ls') {
     const listProjectScope = !opts.global;
-    const rows = listProjectScope ? projectLayer().rows : [];
-    const categories = store.getCategories(listProjectScope ? { project: slug } : undefined).map((category) => {
+    const layer = listProjectScope ? projectLayer() : { rows: [], warnings: [] };
+    const rows = layer.rows;
+    const categories = store.getCategories(listProjectScope ? { project: slug, withState: true } : undefined).map((category) => {
       const row = rows.find((entry) => entry.id === category.id);
       const resolved = store.resolveCategoryRoute(category);
       return Object.assign({}, category, {
-        origin: row ? (row.kind === 'ADD' ? 'project' : 'overridden') : 'global',
+        origin: row ? (row.kind === 'ADD' ? 'project' : category.linkState) : 'global',
         localRow: row || null,
         ticketCount: usage(category.id),
         resolved: { model: resolved.model, effort: resolved.effort, exec: resolved.exec },
@@ -391,14 +392,24 @@ function cmdCategory(opts, positional) {
     for (const row of rows.filter((entry) => entry.kind === 'DISABLE')) {
       categories.push({ id: row.id, origin: 'disabled', localRow: row, effective: null, ticketCount: usage(row.id), warnings: [] });
     }
-    if (opts.json) return output({ categories, warnings: listProjectScope ? projectLayer().warnings : [] });
+    if (opts.json) return output({ categories, warnings: layer.warnings });
     for (const category of categories) {
       if (category.origin === 'disabled') {
         console.log(`${category.id}  disabled locally  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})`);
         continue;
       }
-      console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})  ${category.origin}`);
+      const state = category.linkState === 'overridden'
+        ? `  overridden (${category.changedFields.join(', ')})`
+        : category.linkState === 'detached'
+          ? '  detached from global'
+          : '';
+      console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})${state}`);
       for (const warning of category.warnings) console.log(`  ! ${warning}`);
+    }
+    for (const warning of layer.warnings) {
+      if (warning.kind === 'dangling-override') console.log(`  ! ${warning.id} has a dangling override in ${warning.project}`);
+      else if (warning.kind === 'shadows-global') console.log(`  ! ${warning.id} is detached and shadows a global category`);
+      else console.log(`  ! ${String(warning)}`);
     }
     return;
   }
@@ -428,6 +439,23 @@ function cmdCategory(opts, positional) {
     try { store.removeProjectCategory(slug, id); } catch (error) { fail(`category enable: ${error.message}`); }
     if (opts.json) return output(Object.assign({ ok: true }, details(id)));
     console.log(`✓ enabled category ${id} for ${meta.name}`);
+    return;
+  }
+  if (action === 'detach') {
+    if (!projectScope) fail('category detach: pass --project to detach a category from global policy.');
+    let localRow;
+    try { localRow = store.detachCategory(slug, id); } catch (error) { fail(`category detach: ${error.message}`); }
+    if (opts.json) return output(Object.assign({ ok: true, localRow }, details(id)));
+    console.log(`✓ detached category ${id} from global policy for ${meta.name}`);
+    return;
+  }
+  if (action === 'relink') {
+    if (!projectScope) fail('category relink: pass --project to restore global policy inheritance.');
+    const row = localRow(id);
+    if (!row || !['OVERRIDE', 'DETACH'].includes(row.kind)) fail(`category relink: "${id}" has no local override or detach in ${meta.name}`);
+    try { store.removeProjectCategory(slug, id); } catch (error) { fail(`category relink: ${error.message}`); }
+    if (opts.json) return output(Object.assign({ ok: true, id: String(id).toLowerCase(), localRow: null }, details(id)));
+    console.log(`✓ relinked category ${id} to global policy for ${meta.name}`);
     return;
   }
   if (action === 'edit' || action === 'update' || action === 'set') {
@@ -470,7 +498,7 @@ function cmdCategory(opts, positional) {
     console.log(`✓ removed category ${id}  — ${meta.name}`);
     return;
   }
-  fail(`category: unknown action "${action}". Use list | add | edit | rm | disable | enable.`);
+  fail(`category: unknown action "${action}". Use list | add | edit | rm | disable | enable | detach | relink.`);
 }
 
 function cmdGlobalFallback(opts) {
@@ -1637,7 +1665,7 @@ Usage:
   sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
-  sidequest category list|add|edit|rm|disable|enable <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
+  sidequest category list|add|edit|rm|disable|enable|detach|relink <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n>
   sidequest projects [--archived] [--json]

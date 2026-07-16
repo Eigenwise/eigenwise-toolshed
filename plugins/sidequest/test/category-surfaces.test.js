@@ -237,3 +237,60 @@ test('MCP ticket category validation uses the explicit project taxonomy for add 
   assert.ok(raw.result.isError);
   assert.match(raw.result.content[0].text, /unknown category.*valid:/i);
 });
+
+test('CLI category detach and relink expose project link states and warnings', () => {
+  const scoped = path.join(home, 'detach-project');
+  fs.mkdirSync(scoped, { recursive: true });
+
+  let run = cli('category', 'edit', 'mechanical', '--project', scoped, '--name', 'Local mechanical');
+  assert.equal(run.result.status, 0, run.result.stderr);
+
+  run = cli('category', 'list', '--project', scoped);
+  assert.equal(run.result.status, 0, run.result.stderr);
+  let category = run.body.categories.find((entry) => entry.id === 'mechanical');
+  assert.equal(category.linkState, 'overridden');
+  assert.deepEqual(category.changedFields, ['name', 'route']);
+
+  run = cli('category', 'detach', 'mechanical', '--project', scoped);
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(run.body.localRow.kind, 'DETACH');
+
+  run = cli('category', 'list', '--project', scoped);
+  assert.equal(run.result.status, 0, run.result.stderr);
+  category = run.body.categories.find((entry) => entry.id === 'mechanical');
+  assert.equal(category.linkState, 'detached');
+  assert.ok(run.body.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'mechanical'));
+
+  const plain = spawnSync(process.execPath, [BIN, 'category', 'list', '--project', scoped], { encoding: 'utf8', env });
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.match(plain.stdout, /detached from global/);
+  assert.match(plain.stdout, /shadows a global category/);
+
+  run = cli('category', 'relink', 'mechanical', '--project', scoped);
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(run.body.localRow, null);
+  assert.equal(run.body.effective.name, 'Mechanical change');
+});
+
+test('MCP category detach and relink expose project link states and warnings', () => {
+  const mcp = freshMcp();
+  const scoped = process.env.CLAUDE_PROJECT_DIR;
+  fs.mkdirSync(scoped, { recursive: true });
+
+  let result = call(mcp, 'category_edit', { project: scoped, id: 'mechanical', name: 'Local mechanical' });
+  assert.equal(result.localRow.kind, 'OVERRIDE');
+
+  result = call(mcp, 'category_detach', { project: scoped, id: 'mechanical' });
+  assert.equal(result.localRow.kind, 'DETACH');
+  assert.ok(result.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'mechanical'));
+
+  result = call(mcp, 'category_list', { project: scoped });
+  const category = result.categories.find((entry) => entry.id === 'mechanical');
+  assert.equal(category.linkState, 'detached');
+  assert.equal(category.origin, 'detached');
+  assert.ok(result.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'mechanical'));
+
+  result = call(mcp, 'category_relink', { project: scoped, id: 'mechanical' });
+  assert.equal(result.localRow, null);
+  assert.equal(result.effective.name, 'Mechanical change');
+});
