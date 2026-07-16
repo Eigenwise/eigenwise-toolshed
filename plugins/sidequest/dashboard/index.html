@@ -400,6 +400,9 @@
   .thumbs .more { width: 46px; height: 46px; border-radius: var(--radius-sm); border: 1px solid var(--line-soft); display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 
   .card .foot { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .modelchip { display: inline-flex; align-items: center; gap: 4px; min-height: 22px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: -.015em; padding: 2px 7px 2px 6px; border: 1px solid; border-radius: var(--radius-sm); white-space: nowrap; }
+  .modelchip svg { flex: 0 0 auto; }
+  .modelchip-complexity { align-self: stretch; display: inline-flex; align-items: center; padding-right: 4px; border-right: 1px solid currentColor; font-size: 9px; font-weight: 500; opacity: .72; }
   .label { font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--line-soft); padding: 2px 7px; border-radius: var(--radius-sm); }
   .label::before { content: "#"; color: var(--text-faint); }
   .time { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
@@ -1973,25 +1976,17 @@
       ? '<span class="storychip" title="' + esc((story.ref || "") + " · " + story.title) + '" style="color:' + esc(story.color) + ';background:' + tint(story.color, 0.1) + ';border-color:' + tint(story.color, 0.4) + '"><span class="sdot" style="background:' + esc(story.color) + '"></span>' + esc(story.title || story.ref) + '</span>'
       : "";
 
-    // Routing chip: complexity score prefixing its derived tier·effort
-    // ("C7·opus·max"). Legacy tickets with a stored tag but no score keep the
-    // old model·effort chip. Tinted per (derived) model tier.
+    // Routing chips use the resolved concrete model for every ticket. Legacy
+    // complexity remains context, while model color always comes from that slug.
     var chipSvg = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>';
-    // A Codex-backed tier (t.exec.backend from the resolved read) gets a filled
-    // pill naming the model that runs it; the tier name + color stay primary.
-    var codexMark = (t.exec && t.exec.backend === "codex")
-      ? '<span class="codex-mark" title="the ' + esc(t.model || "") + ' tier runs on ' + esc(t.exec.runsLabel || t.exec.runsModel || "a Codex model") + ' via codex-gateway">' + esc((t.exec.runsLabel || t.exec.runsModel || "codex").replace(/^GPT-/i, "")) + '</span>' : "";
     var modelChip = "";
-    if (t.complexity) {
-      var mc = t.model ? modelColor(t.model) : "#52545f";
-      var routeLabel = "C" + t.complexity + (t.model ? "·" + t.model : "") + (t.effort ? "·" + t.effort : "");
+    if (t.model || t.effort) {
+      var routeColor = t.model ? modelColor(t.model) : "#52545f";
+      var routeLabel = (t.model || "any") + (t.effort ? "·" + t.effort : "");
+      var complexityPrefix = t.complexity ? "C" + t.complexity + " · " : "";
       var whySnip = t.complexityWhy ? String(t.complexityWhy).slice(0, 80) : "";
-      var cTitle = "complexity " + t.complexity + " → " + (t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "") + (t.exec && t.exec.backend === "codex" ? " (runs on " + (t.exec.runsModel || "Codex") + ")" : "") + (whySnip ? " — " + whySnip : "");
-      modelChip = '<span class="modelchip" title="' + esc(cTitle) + '" style="color:' + mc + ';background:' + tint(mc, 0.1) + ';border-color:' + tint(mc, 0.4) + '">' + chipSvg + esc(routeLabel) + codexMark + '</span>';
-    } else if (t.model || t.effort) {
-      var mcL = t.model ? modelColor(t.model) : "#52545f"; // neutral for effort-only
-      var routeLabelL = (t.model || "any") + (t.effort ? "·" + t.effort : "");
-      modelChip = '<span class="modelchip" title="routing: ' + esc((t.model || "any tier") + (t.effort ? ", " + t.effort + " effort" : "")) + '" style="color:' + mcL + ';background:' + tint(mcL, 0.1) + ';border-color:' + tint(mcL, 0.4) + '">' + chipSvg + esc(routeLabelL) + '</span>';
+      var routeTitle = "routing: " + complexityPrefix + routeLabel + (whySnip ? " — " + whySnip : "");
+      modelChip = '<span class="modelchip" title="' + esc(routeTitle) + '" style="color:' + routeColor + ';background:' + tint(routeColor, 0.1) + ';border-color:' + tint(routeColor, 0.4) + '">' + chipSvg + (t.complexity ? '<span class="modelchip-complexity">C' + esc(t.complexity) + '</span>' : "") + esc(routeLabel) + '</span>';
     }
 
     var categoryChip = t.category && t.category.name
