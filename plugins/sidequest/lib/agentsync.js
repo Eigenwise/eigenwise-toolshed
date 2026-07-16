@@ -2,11 +2,17 @@
 /**
  * sidequest - runtime exec agent sync for live category routes (SQ-158)
  *
- * At session start, syncExecAgents() reads the live routing taxonomy, including
- * global categories and project-scoped layers, then generates the concrete
- * executor definitions needed by the current routes and fallbacks. Each file is
- * marked as owned by Sidequest. Reconciliation updates wanted files and prunes
- * stale marked files, while never touching an unmarked user-authored agent.
+ * syncExecAgents() reads the live routing taxonomy, including global categories
+ * and project-scoped layers, then generates the concrete executor definitions
+ * needed by the current routes and fallbacks. Each file is marked as owned by
+ * Sidequest. Reconciliation updates wanted files and prunes stale marked files,
+ * while never touching an unmarked user-authored agent.
+ *
+ * Claude Code watches user agent definitions written mid-session, including
+ * Codex frontmatter pins. Registration takes minutes and the harness announces
+ * when a definition is ready. Spawning before that point silently runs a generic
+ * agent, so per-ticket executors carry a dispatch nonce that turns that mistake
+ * into a claim refusal. Deleting an agent definition hot-applies too.
  *
  * A registered agent file with a `model: <full-id>` frontmatter pin genuinely
  * runs through codex-gateway when spawned with the Agent `model` parameter
@@ -36,9 +42,10 @@ const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md')
 const MARKER = '<!-- generated-by: sidequest-agentsync -->';
 const TEMP_MARKER = '<!-- generated-by: sidequest-native-agent -->';
 const TEMP_PREFIX = 'sidequest-native-';
+const TICKET_PREFIX = 'sidequest-ticket-';
 
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
-const RESTART_NOTICE = 'Executor definitions were just (re)provisioned and may not be spawnable until next session; if Agent rejects a sidequest-exec-* type, dispatch inline this session; restart clears this.';
+const RESTART_NOTICE = 'Executor definitions are watched mid-session. Registration can take minutes; wait for Claude Code to announce readiness before spawning. A premature per-ticket spawn claims with its nonce and fails loudly instead of working generic.';
 
 // Effort-scaled hard caps stamped into every executor definition's `maxTurns`
 // frontmatter — the one FIRST-CLASS harness-enforced limit on a subagent run
@@ -84,7 +91,7 @@ function agentFileName(source, slug, effort, namespace) {
 // file is user-scoped rather than plugin-scoped so Claude Code honors its
 // permissionMode: bypassPermissions frontmatter. `name` and `effort` are
 // required; `modelId`, `marker`, and `extraNote` are optional.
-function renderExecAgent({ name, effort, modelId, marker, extraNote }) {
+function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief }) {
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   return template
     .split('{{NAME}}').join(String(name))
@@ -92,7 +99,8 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote }) {
     .split('{{MODEL_FRONTMATTER}}').join(modelId ? `\nmodel: ${modelId}` : '')
     .split('{{MAX_TURNS}}').join(String(execMaxTurns(String(effort))))
     .split('{{MARKER}}').join(marker || '')
-    .split('{{EXTRA_NOTE}}').join(extraNote || '');
+    .split('{{EXTRA_NOTE}}').join(extraNote || '')
+    .split('{{TICKET_BRIEF}}').join(ticketBrief || '');
 }
 
 // A single-line (one-paragraph) note appended to a Codex-backed agent's body:
@@ -149,8 +157,16 @@ function nativeAgentName(ref, runtime, nonce) {
   return `${base}-${suffix}`;
 }
 
-function nativeAgentFile(name, dir) {
-  if (!String(name || '').startsWith(TEMP_PREFIX)) throw new Error('native agent name must use the Sidequest temporary prefix.');
+function ticketExecutorName(ref, runtime) {
+  const ticket = refToken(ref);
+  const token = runtimeToken(runtime);
+  return token ? `${TICKET_PREFIX}${ticket}-${token}` : `${TICKET_PREFIX}${ticket}`;
+}
+
+function temporaryAgentFile(name, dir) {
+  if (!String(name || '').startsWith(TEMP_PREFIX) && !String(name || '').startsWith(TICKET_PREFIX)) {
+    throw new Error('temporary agent name must use a Sidequest temporary prefix.');
+  }
   return path.join(dir || defaultAgentsDir(), `${name}.md`);
 }
 
@@ -189,15 +205,73 @@ function waitForNativeAgentReload(waitMs) {
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function ticketCommentsDigest(comments) {
+  if (!Array.isArray(comments) || !comments.length) return '(No ticket comments were recorded.)';
+  return comments.map((comment) => {
+    const by = comment && comment.by ? ` by ${comment.by}` : '';
+    const body = comment && comment.body ? comment.body : String(comment || '');
+    return `- Comment${by}: ${body}`;
+  }).join('\n');
+}
+
+function ticketBrief(ticket, nonce) {
+  const category = ticket.category || {};
+  const parts = [
+    '',
+    '## This ticket',
+    `Ref: ${ticket.ref}`,
+    `Title: ${ticket.title || '(Untitled ticket)'}`,
+    `Description:\n${ticket.description || '(No additional description was recorded.)'}`,
+    `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
+    `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
+    `Comments digest:\n${ticketCommentsDigest(ticket.comments)}`,
+    `Category executor instructions:\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
+    'Dispatch claim guard:',
+    `Claim this ticket with \`--token ${nonce}\`. A token refusal means this agent was spawned before its definition registered or is not the prepared dispatch. Stop and report that refusal.`,
+  ];
+  return parts.join('\n\n');
+}
+
+function createTicketExecutor(ticket, opts) {
+  opts = opts || {};
+  if (!ticket || !ticket.ref || !ticket.model || !ticket.effort) throw new Error('ticket executor requires a routable ticket.');
+  const nonce = String(opts.nonce || '').trim();
+  if (!nonce || /[\r\n]/.test(nonce)) throw new Error('ticket executor nonce is required and must be one line.');
+  const resolved = store.resolveExec(ticket.model, ticket.effort);
+  if (!resolved || !resolved.runsModel) throw new Error(`ticket executor could not resolve ${ticket.model} at ${ticket.effort}.`);
+  const dir = opts.dir || defaultAgentsDir();
+  const name = ticketExecutorName(ticket.ref, resolved.runsModel);
+  const file = temporaryAgentFile(name, dir);
+  const sessionId = String(opts.sessionId || '').replace(/[\r\n]/g, '');
+  const source = renderExecAgent({
+    name,
+    effort: ticket.effort,
+    modelId: resolved.backend === 'codex' ? resolved.spawnId : null,
+    marker: TEMP_MARKER,
+    extraNote: `\n<!-- sidequest-native-session: ${sessionId} -->\n<!-- sidequest-native-runtime: ${resolved.runsModel} -->`,
+    ticketBrief: ticketBrief(ticket, nonce),
+  });
+  fs.mkdirSync(dir, { recursive: true });
+  if (fs.existsSync(file)) {
+    const previous = fs.readFileSync(file, 'utf8');
+    if (!previous.includes(TEMP_MARKER)) throw new Error(`ticket executor file already exists and is not owned by Sidequest: ${file}`);
+  }
+  fs.writeFileSync(file, source);
+  waitForNativeAgentReload(opts.waitMs);
+  return {
+    name,
+    file,
+    spawn: { subagent_type: name, name, mode: 'bypassPermissions' },
+    cleanup: { name, sessionId: opts.sessionId || null },
+  };
+}
+
 function createNativeAgent(spec, opts) {
   opts = opts || {};
   spec = spec || {};
-  // Claude Code snapshots the user-agent registry when the session starts. A
-  // definition written mid-session can appear in a later agent listing yet still
-  // be rejected by Agent as unknown. Route native dispatch through the stable,
-  // session-start-provisioned executor instead. Keep a unique display name so
-  // concurrent ticket cards remain distinguishable, but do not create a stale
-  // temporary definition that Agent cannot resolve.
+  // The stable route remains the default until orchestration deliberately opts
+  // into a ticket-specific definition. It stays available while the watcher is
+  // registering a new temporary definition.
   if (spec.agentType) {
     const name = nativeAgentName(spec.ref, spec.runtime, spec.nonce);
     const model = spec.spawnModel == null ? null : String(spec.spawnModel).trim();
@@ -222,11 +296,11 @@ function createNativeAgent(spec, opts) {
   const runtime = spec.runtime != null ? spec.runtime : spec.runsModel;
   const explicitNonce = spec.nonce != null ? spec.nonce : null;
   let name = nativeAgentName(spec.ref, runtime, explicitNonce);
-  if (explicitNonce == null && fs.existsSync(nativeAgentFile(name, dir))) {
+  if (explicitNonce == null && fs.existsSync(temporaryAgentFile(name, dir))) {
     // A same-runtime name for the same ref already exists on disk — disambiguate.
     name = nativeAgentName(spec.ref, runtime, crypto.randomBytes(4).toString('hex'));
   }
-  let file = nativeAgentFile(name, dir);
+  let file = temporaryAgentFile(name, dir);
   for (let attempt = 0; ; attempt++) {
     const source = nativeAgentSource(Object.assign({}, spec, { name }));
     try {
@@ -237,7 +311,7 @@ function createNativeAgent(spec, opts) {
       // when we own the nonce (no explicit one was pinned by the caller).
       if (err && err.code === 'EEXIST' && explicitNonce == null && attempt < 25) {
         name = nativeAgentName(spec.ref, runtime, crypto.randomBytes(4).toString('hex'));
-        file = nativeAgentFile(name, dir);
+        file = temporaryAgentFile(name, dir);
         continue;
       }
       throw err;
@@ -263,7 +337,7 @@ function cleanupNativeAgents(opts) {
   const sessionId = opts.sessionId == null ? null : String(opts.sessionId);
   let removed = 0;
   let files = [];
-  try { files = fs.readdirSync(dir).filter((f) => f.startsWith(TEMP_PREFIX) && f.endsWith('.md')); } catch (_) { return { removed }; }
+  try { files = fs.readdirSync(dir).filter((f) => (f.startsWith(TEMP_PREFIX) || f.startsWith(TICKET_PREFIX)) && f.endsWith('.md')); } catch (_) { return { removed }; }
   for (const fileName of files) {
     if (name && fileName !== `${name}.md`) continue;
     const file = path.join(dir, fileName);
@@ -362,12 +436,14 @@ module.exports = {
   MARKER,
   TEMP_MARKER,
   TEMP_PREFIX,
+  TICKET_PREFIX,
   NON_MAX_EFFORTS,
   RESTART_NOTICE,
   EXEC_MAX_TURNS,
   execMaxTurns,
   agentFileName,
   renderExecAgent,
+  createTicketExecutor,
   createNativeAgent,
   cleanupNativeAgents,
   nativeAgentName,

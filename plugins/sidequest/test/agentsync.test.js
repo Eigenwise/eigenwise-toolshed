@@ -107,3 +107,46 @@ test('native dispatch fallback does not write a temporary agent file', () => {
   assert.strictEqual(created.file, null);
   assert.deepStrictEqual(readDir(dir), []);
 });
+
+test('ticket executor renders the briefing and nonce while keeping spawn short', () => {
+  seedCatalog([TERRA]);
+  const dir = tmpDir();
+  const created = agentsync.createTicketExecutor({
+    ref: 'SQ-311', title: 'Ship ephemeral agents', description: 'Carry the complete ticket briefing.',
+    model: TERRA.slug, effort: 'high', executorAnchors: 'lib/agentsync.js:235 createTicketExecutor',
+    executorVerify: 'node --test plugins/sidequest/test/agentsync.test.js',
+    comments: [{ by: 'scout', body: 'Watcher registration takes time.' }],
+    category: { contract: 'Establish the local pattern, then verify it.' },
+  }, { nonce: 'dispatch-token-311', sessionId: 'session-311', dir, waitMs: 0 });
+  const body = fs.readFileSync(created.file, 'utf8');
+  assert.equal(created.name, 'sidequest-ticket-sq-311-gpt-5-6-terra');
+  assert.match(body, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
+  assert.match(body, /^effort: high$/m);
+  assert.match(body, /^maxTurns: 60$/m);
+  assert.ok(body.includes(agentsync.TEMP_MARKER));
+  assert.match(body, /sidequest-native-session: session-311/);
+  assert.match(body, /Ship ephemeral agents/);
+  assert.match(body, /Watcher registration takes time/);
+  assert.match(body, /Establish the local pattern/);
+  assert.match(body, /--token dispatch-token-311/);
+  assert.deepStrictEqual(created.spawn, {
+    subagent_type: created.name, name: created.name, mode: 'bypassPermissions',
+  });
+  assert.ok(JSON.stringify(created.spawn).length < 200);
+});
+
+test('ticket executors use the existing temporary cleanup lifecycle', () => {
+  seedCatalog([TERRA]);
+  const dir = tmpDir();
+  const ticket = (ref) => ({ ref, title: ref, model: TERRA.slug, effort: 'high', category: {} });
+  const byName = agentsync.createTicketExecutor(ticket('SQ-312'), { nonce: 'nonce-312', sessionId: 'session-a', dir, waitMs: 0 });
+  const bySession = agentsync.createTicketExecutor(ticket('SQ-313'), { nonce: 'nonce-313', sessionId: 'session-b', dir, waitMs: 0 });
+  const stale = agentsync.createTicketExecutor(ticket('SQ-314'), { nonce: 'nonce-314', sessionId: 'session-c', dir, waitMs: 0 });
+  assert.equal(agentsync.cleanupNativeAgents({ name: byName.name, dir }).removed, 1);
+  assert.ok(!fs.existsSync(byName.file));
+  assert.equal(agentsync.cleanupNativeAgents({ sessionId: 'session-b', dir }).removed, 1);
+  assert.ok(!fs.existsSync(bySession.file));
+  fs.utimesSync(stale.file, new Date(0), new Date(0));
+  assert.equal(agentsync.cleanupNativeAgents({ staleBefore: Date.now() - 1, dir }).removed, 1);
+  assert.ok(!fs.existsSync(stale.file));
+});
