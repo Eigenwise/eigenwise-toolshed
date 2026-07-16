@@ -81,25 +81,6 @@ test('CLI global fallback reads and updates routing policy', () => {
   assert.ok(!JSON.stringify(run.body).includes('grade-'));
 });
 
-test('MCP global fallback and category fallback routes round-trip', () => {
-  const mcp = freshMcp();
-  const created = call(mcp, 'category_add', {
-    id: 'fallback-test', name: 'Fallback test', routeModel: 'sonnet', routeEffort: 'high',
-    fallbackModel: 'opus', fallbackEffort: 'xhigh',
-  });
-  assert.deepEqual(created.category.fallback, { model: 'opus', effort: 'xhigh' });
-
-  const updated = call(mcp, 'category_edit', { id: 'fallback-test', fallbackEffort: 'medium' });
-  assert.deepEqual(updated.category.fallback, { model: 'opus', effort: 'medium' });
-
-  assert.deepEqual(call(mcp, 'global_fallback', {}).fallback, { model: 'sonnet', effort: 'high' });
-  assert.deepEqual(call(mcp, 'global_fallback', { model: 'fable', effort: 'high' }).fallback, { model: 'fable', effort: 'high' });
-
-  const models = call(mcp, 'models', {});
-  assert.deepEqual(models.globalFallback, { model: 'fable', effort: 'high' });
-  assert.ok(!JSON.stringify(models).includes('grade-'));
-});
-
 test('MCP category tools stamp tickets and reject unknown categories', () => {
   const mcp = freshMcp();
   const added = call(mcp, 'add', { title: 'Categorized MCP ticket', category: 'mechanical' });
@@ -145,37 +126,6 @@ test('CLI project category layers stay isolated and expose effective origins', (
   assert.match(run.result.stderr, /unknown category/i);
 });
 
-test('MCP project category layers add, override, disable, and shape models', () => {
-  const mcp = freshMcp();
-  const first = process.env.CLAUDE_PROJECT_DIR;
-  fs.mkdirSync(first, { recursive: true });
-  const second = path.join(path.dirname(first), 'second-project');
-  fs.mkdirSync(second, { recursive: true });
-  call(mcp, 'category_list', {});
-  let result = call(mcp, 'category_add', { project: first, id: 'project-only', name: 'Project only', routeModel: 'sonnet', routeEffort: 'medium' });
-  assert.equal(result.localRow.kind, 'ADD');
-
-  result = call(mcp, 'category_edit', { project: first, id: 'general', name: 'Scoped general' });
-  assert.equal(result.localRow.kind, 'OVERRIDE');
-  assert.equal(result.effective.name, 'Scoped general');
-
-  result = call(mcp, 'category_edit', { project: first, id: 'mechanical', enabled: false });
-  assert.equal(result.localRow.kind, 'DISABLE');
-
-  result = call(mcp, 'category_list', { project: first });
-  assert.equal(result.categories.find((entry) => entry.id === 'project-only').origin, 'project');
-  assert.equal(result.categories.find((entry) => entry.id === 'general').origin, 'overridden');
-  assert.equal(result.categories.find((entry) => entry.id === 'mechanical').origin, 'disabled');
-
-  result = call(mcp, 'models', { project: first });
-  assert.ok(result.categories.some((entry) => entry.id === 'project-only'));
-  assert.ok(!result.categories.some((entry) => entry.id === 'mechanical'));
-
-  result = call(mcp, 'category_list', { project: second });
-  assert.ok(!result.categories.some((entry) => entry.id === 'project-only'));
-  assert.equal(result.categories.find((entry) => entry.id === 'general').name, 'General fallback');
-});
-
 test('CLI category list defaults to the current project taxonomy and supports global policy view', () => {
   const projectOnly = path.join(home, 'list-project');
   fs.mkdirSync(projectOnly, { recursive: true });
@@ -196,46 +146,6 @@ test('CLI category list defaults to the current project taxonomy and supports gl
   const globalBody = JSON.parse(global.stdout);
   assert.ok(!globalBody.categories.some((entry) => entry.id === 'project-only-list'));
   assert.ok(globalBody.categories.some((entry) => entry.id === 'mechanical' && entry.origin === 'global'));
-});
-
-test('MCP category list defaults to the resolved project taxonomy and supports global policy view', () => {
-  const mcp = freshMcp();
-  const first = process.env.CLAUDE_PROJECT_DIR;
-  fs.mkdirSync(first, { recursive: true });
-  call(mcp, 'category_add', { project: first, id: 'project-only-list', name: 'Project only list', routeModel: 'sonnet', routeEffort: 'medium' });
-  call(mcp, 'category_edit', { project: first, id: 'mechanical', enabled: false });
-
-  let result = call(mcp, 'category_list', {});
-  assert.ok(result.categories.some((entry) => entry.id === 'project-only-list' && entry.origin === 'project'));
-  assert.ok(result.categories.some((entry) => entry.id === 'mechanical' && entry.origin === 'disabled'));
-
-  result = call(mcp, 'category_list', { global: true });
-  assert.ok(!result.categories.some((entry) => entry.id === 'project-only-list'));
-  assert.ok(result.categories.some((entry) => entry.id === 'mechanical' && entry.origin === 'global'));
-});
-
-test('MCP ticket category validation uses the explicit project taxonomy for add and update', () => {
-  const mcp = freshMcp();
-  const first = process.env.CLAUDE_PROJECT_DIR;
-  fs.mkdirSync(first, { recursive: true });
-  const second = path.join(path.dirname(first), 'second-project');
-  fs.mkdirSync(second, { recursive: true });
-  call(mcp, 'category_add', { project: first, id: 'project-only', name: 'Project only', routeModel: 'sonnet', routeEffort: 'medium' });
-
-  const added = call(mcp, 'add', { project: first, title: 'Project category ticket', category: 'project-only' });
-  assert.equal(added.ticket.category.id, 'project-only');
-
-  process.env.CLAUDE_PROJECT_DIR = second;
-  let raw = mcp.handleRequest({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name: 'add', arguments: { title: 'Wrong project category', category: 'project-only' } } });
-  assert.ok(raw.result.isError);
-  assert.match(raw.result.content[0].text, /unknown category.*valid:/i);
-
-  const updated = call(mcp, 'update', { project: first, ref: added.ticket.ref, category: 'project-only' });
-  assert.equal(updated.ticket.category.id || updated.ticket.category, 'project-only');
-
-  raw = mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ticket.ref, category: 'project-only' } } });
-  assert.ok(raw.result.isError);
-  assert.match(raw.result.content[0].text, /unknown category.*valid:/i);
 });
 
 test('CLI category detach and relink expose project link states and warnings', () => {

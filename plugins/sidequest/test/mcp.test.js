@@ -77,8 +77,11 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'claim', 'sweepClaims', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'category_detach', 'category_relink', 'archive_board', 'unarchive_board']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'claim', 'sweepClaims', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'category_detach', 'category_relink']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
+  }
+  for (const cliOnly of ['archive_board', 'unarchive_board', 'category_add', 'category_rm', 'global_fallback', 'unlink', 'assign', 'remove']) {
+    assert.ok(!names.includes(cliOnly), `${cliOnly} stays CLI-only`);
   }
   for (const t of resp.result.tools) {
     assert.strictEqual(t.inputSchema.type, 'object', `${t.name} has an object input schema`);
@@ -117,27 +120,12 @@ test('sweepClaims releases stale claims through MCP', () => {
 });
 
 
-test('MCP board archive tools require explicit refs and list archived boards', () => {
-  const board = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-archived-board'), 'MCP Archived Board');
-  store.createTicket(board.slug, { title: 'preserve me' });
-
-  const missing = callToolRaw('archive_board', {});
-  assert.ok(missing.isError);
-  assert.match(missing.content[0].text, /project is required/i);
-
-  const archived = callTool('archive_board', { project: board.slug });
-  assert.strictEqual(archived.ok, true);
-  assert.strictEqual(archived.project, board.slug);
-  assert.ok(archived.archivedAt);
-
-  const active = callTool('projects', {});
-  assert.ok(!active.projects.some((project) => project.slug === board.slug));
-  const archivedBoards = callTool('projects', { archived: true });
-  assert.ok(archivedBoards.projects.some((project) => project.slug === board.slug));
-
-  const restored = callTool('unarchive_board', { project: board.slug });
-  assert.strictEqual(restored.ok, true);
-  assert.strictEqual(restored.wasArchived, true);
+test('CLI-only board archive tools are absent from MCP', () => {
+  for (const name of ['archive_board', 'unarchive_board']) {
+    const response = callToolRaw(name, {});
+    assert.ok(response.isError);
+    assert.match(response.content[0].text, /unknown tool/i);
+  }
 });
 test('dispatch is instant by default (stable executor + briefing + token); ephemeral writes a per-ticket def', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
@@ -229,21 +217,10 @@ test('status validation fails loudly and directs deletion to remove', () => {
   assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
 });
 
-test('remove permanently deletes tickets and protects live claims without force', () => {
-  const added = callTool('add', { title: 'remove me', complexity: 1, why: 'exercise permanent MCP ticket removal and list disappearance' });
-  const removed = callTool('remove', { ref: added.ticket.ref });
-  assert.strictEqual(removed.ok, true);
-  assert.deepStrictEqual(removed.removed, { ref: added.ticket.ref, title: 'remove me' });
-  assert.ok(!callTool('list', {}).tickets.some((ticket) => ticket.ref === added.ticket.ref));
-
-  const claimed = callTool('add', { title: 'claimed remove', complexity: 1, why: 'exercise refusal when a ticket has a live executor claim' });
-  const claim = callTool('claim', { ref: claimed.ticket.ref, by: 'mcp-remove-worker' });
-  assert.strictEqual(claim.ok, true);
-  const refused = callTool('remove', { ref: claimed.ticket.ref });
-  assert.strictEqual(refused.ok, false);
-  assert.strictEqual(refused.reason, 'claimed');
-  const forced = callTool('remove', { ref: claimed.ticket.ref, force: true });
-  assert.strictEqual(forced.ok, true);
+test('CLI-only ticket removal is absent from MCP', () => {
+  const response = callToolRaw('remove', {});
+  assert.ok(response.isError);
+  assert.match(response.content[0].text, /unknown tool/i);
 });
 
 test('claim -> comment -> done round-trips over the same store, tagged source mcp', () => {

@@ -943,10 +943,19 @@ const TOOLS = [
   },
 ];
 
-const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
+const MCP_CLI_ONLY_TOOLS = new Set([
+  'archive_board', 'unarchive_board', 'category_add', 'category_rm',
+  'global_fallback', 'unlink', 'assign', 'remove',
+]);
+
+const TOOL_BY_NAME = new Map(TOOLS
+  .filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name))
+  .map((tool) => [tool.name, tool]));
 
 function toolDescriptors() {
-  return TOOLS.map((tool) => ({
+  return TOOLS
+    .filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name))
+    .map((tool) => ({
     name: tool.name,
     description: TOOL_DESCRIPTION_OVERRIDES[tool.name] || conciseDescription(tool.description),
     inputSchema: compactSchema(tool.inputSchema),

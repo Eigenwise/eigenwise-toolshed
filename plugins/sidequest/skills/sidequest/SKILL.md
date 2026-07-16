@@ -67,11 +67,9 @@ still your local execution ledger — see
 ## The MCP tools ARE the board interface; the CLI is the fallback
 
 When tools named **`mcp__plugin_sidequest_board__*`** are in your toolset (`list`, `ready`, `add`,
-`update`, `claim`, `next`, `done`, `release`, `comment`, `ask`, `comments`, `link`, `assign`,
-`models`, `projects`), **every board action goes through them — reaching for Bash out of habit when
-they're present is the wrong call.** Same store, same rules (complexity+why on `add`, effort guard on
-`claim`, atomic claiming), but structured JSON in/out, one tool approval instead of a Bash prompt per
-call, and no shell-quoting trap (multi-line markdown bodies are plain strings with real newlines).
+`update`, `claim`, `next`, `done`, `release`, `comment`, `ask`, `comments`, `link`,
+`models`, `projects`), use them for routine board work. The CLI remains the path for rare admin,
+policy, assignment, archive, unlink, and permanent-removal actions.
 They take the same fields as the CLI flags shown below — the examples in this file use CLI form for
 compactness, not as a recommendation. After shipping a schema-bumping Sidequest release, treat an
 already-loaded MCP server as a stale writer until plugins reload: route every store write through the
@@ -79,8 +77,7 @@ new CLI and use MCP only for reads. When resuming or recovering context, read th
 `mcp__plugin_sidequest_board__list` with `status: doing` first; use the resolved CLI only when MCP is
 unavailable.
 
-The **CLI** is for when the MCP tools aren't loaded, for humans, and for the things only it does:
-`dashboard`/`serve` and legacy temporary `native-agent` cleanup. For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable per-model executor, a complete `briefing`, a `spawn` object, and a token. Spawn that exact stable executor immediately with the returned briefing as its prompt. There is no registration announcement or watcher-lag wait. Claude routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the backend. Use `dispatch <ref> --ephemeral` only for cross-session adoption. It creates a self-contained temporary executor definition, and that opt-in path waits for the generated type to register. Never end the turn waiting for registration: continue independent work or use a background timer to wake the session. Any session may
+The **CLI** is for when the MCP tools aren't loaded, for humans, and for rare admin actions: category policy, assignment, archive, unlink, permanent removal, `dashboard`/`serve`, and legacy temporary `native-agent` cleanup. For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable per-model executor, a complete `briefing`, a `spawn` object, and a token. Spawn that exact stable executor immediately with the returned briefing as its prompt. There is no registration announcement or watcher-lag wait. Claude routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the backend. Use `dispatch <ref> --ephemeral` only for cross-session adoption. It creates a self-contained temporary executor definition, and that opt-in path waits for the generated type to register. Never end the turn waiting for registration: continue independent work or use a background timer to wake the session. Any session may
 adopt an unspawned prepared definition, whose claim must carry its token. Routes without a stable executor, such as haiku, use `--ephemeral`. Never trust a worker's self-report: the dispatch token and claim executor guard are the evidence. The
 SessionStart hook injects the **resolved
 absolute command** (`node "<path>/bin/sidequest.js"`) into your context — use exactly that with the
