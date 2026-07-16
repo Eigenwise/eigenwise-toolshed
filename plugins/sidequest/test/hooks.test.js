@@ -689,49 +689,27 @@ function backdateSessionClaims(sessionId, minutesAgo, effort) {
   db.putRow(database, 'globals', { key: 'workers', data: w });
 }
 
-test('subagent-stop: an over-threshold claim emits a one-line runaway note', () => {
+test('subagent-stop: an over-threshold claim reports a dead-claim verdict', () => {
   const sess = `sess-long-${++sqSeq}`;
   const t = addTicket('runaway 28-min ticket');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-long', { sessionId: sess }).ok, true);
-  backdateSessionClaims(sess, 28); // default threshold is 15m
+  backdateSessionClaims(sess, 28);
 
-  // Payload is deliberately BARE (no duration/tokens) — the hook must derive
-  // elapsed from the store, not from stdin.
-  const ctx = runHook(SUBAGENT_STOP, { session_id: sess });
-  assert.ok(ctx, 'an over-threshold claim must produce a note');
-  assert.ok(ctx.includes(t.ref), `the note must name the ticket ref (${t.ref})`);
-  assert.match(ctx, /~\d+m/, 'the note must state the elapsed minutes');
-  assert.match(ctx, /atomic/i, 'the note must ask whether the ticket was atomic');
-  assert.ok(ctx.length <= BUDGET.longrun, `runaway note is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
-  assert.ok(ctx.indexOf('\n') === -1, 'the note must stay ONE line');
+  const ctx = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
+  assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, do not nudge`);
+  assert.ok(ctx.length <= BUDGET.longrun, `stop verdict is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
+  assert.ok(ctx.indexOf('\n') === -1, 'the verdict must stay ONE line');
 });
 
-test('subagent-stop: the long-run threshold scales by claimed effort', () => {
-  const tiers = [
-    ['low', 10],
-    ['medium', 15],
-    ['high', 25],
-    ['xhigh', 40],
-  ];
+test('subagent-stop: a held claim is classified regardless of claimed effort', () => {
+  const tiers = ['low', 'medium', 'high', 'xhigh'];
 
-  for (const [effort, threshold] of tiers) {
-    const quietSession = `sess-${effort}-quiet-${++sqSeq}`;
-    const quietTicket = addEffortTicket(`${effort} run under budget`, effort);
-    assert.strictEqual(store.claimTicket(slug, quietTicket.ref, `worker-${effort}-quiet`, { sessionId: quietSession }).ok, true);
-    backdateSessionClaims(quietSession, threshold - 1, effort);
-    assert.strictEqual(
-      runHook(SUBAGENT_STOP, { session_id: quietSession }),
-      '',
-      `${effort} run under ${threshold}m must stay silent`
-    );
-
-    const loudSession = `sess-${effort}-loud-${++sqSeq}`;
-    const loudTicket = addEffortTicket(`${effort} run over budget`, effort);
-    assert.strictEqual(store.claimTicket(slug, loudTicket.ref, `worker-${effort}-loud`, { sessionId: loudSession }).ok, true);
-    backdateSessionClaims(loudSession, threshold + 1, effort);
-    const ctx = runHook(SUBAGENT_STOP, { session_id: loudSession });
-    assert.ok(ctx.includes(loudTicket.ref), `${effort} run over ${threshold}m must be flagged`);
-    assert.match(ctx, new RegExp(`over the ${threshold}m`), `${effort} note must name its threshold`);
+  for (const effort of tiers) {
+    const session = `sess-${effort}-${++sqSeq}`;
+    const ticket = addEffortTicket(`${effort} stopped claim`, effort);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, `worker-${effort}`, { sessionId: session }).ok, true);
+    const ctx = runHook(SUBAGENT_STOP, { session_id: session, agent_type: 'sidequest-exec-high' });
+    assert.match(ctx, new RegExp(`^exec stopped HOLDING ${ticket.ref} claim`));
   }
 });
 
@@ -762,33 +740,52 @@ test('subagent-stop: a non-executor child (reviewer) is not nagged about a sessi
   assert.ok(ctx.includes(t.ref), 'a sidequest executor child must still get the note');
 });
 
-test('subagent-stop: the same long run is flagged once, not on every child stop', () => {
+test('subagent-stop: a repeated stop repeats the held-claim verdict until release', () => {
   const sess = `sess-dedupe-${++sqSeq}`;
-  const t = addTicket('over-threshold claim flagged exactly once');
+  const t = addTicket('over-threshold claim reports every stop');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-dedupe', { sessionId: sess }).ok, true);
   backdateSessionClaims(sess, 28);
-  const first = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
-  assert.ok(first.includes(t.ref), 'the first stop must surface the runaway note');
-  const second = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
-  assert.strictEqual(second, '', 'a second stop for the same claim must not re-inject the note');
+  const expected = `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, do not nudge`;
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), expected);
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), expected);
 });
 
-test('subagent-stop: a fresh (under-threshold) claim stays silent', () => {
+test('subagent-stop: a stopped executor holding a fresh claim gets the dead-claim verdict', () => {
   const sess = `sess-fresh-${++sqSeq}`;
   const t = addTicket('quick ticket, just claimed');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-fresh', { sessionId: sess }).ok, true);
-  // No backdating: the claim `at` is ~now, well under the 15m default.
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', 'a fresh claim must not fire');
+  const ctx = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
+  assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim \\(age 1m\\), likely dead: release \\+ respawn, do not nudge$`));
 });
 
-test('subagent-stop: a completed executor is silent even when its registry entry lingers', () => {
+test('subagent-stop: a completed executor reports a clean stop from its done comment', () => {
   const sess = `sess-completed-${++sqSeq}`;
-  const t = addTicket('completed ticket with stale worker entry');
+  const t = store.createTicket(slug, {
+    title: 'completed ticket with commit note',
+    files: ['lib/fixture.js'],
+    complexity: 3,
+    complexityWhy: 'fixture for clean SubagentStop completion verdict coverage',
+    source: 'cli',
+  });
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-completed', { sessionId: sess }).ok, true);
-  backdateSessionClaims(sess, 28);
+  assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-completed', kind: 'comment', body: 'Shipped abc1234.', source: 'cli' }).ok, true);
   assert.strictEqual(store.completeTicket(slug, t.ref, 'worker-completed', {}).ok, true);
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done (abc1234)`);
+});
 
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', 'a terminal ticket must not wake its finished executor');
+test('subagent-stop: a completed file ticket without a hash is flagged', () => {
+  const sess = `sess-no-hash-${++sqSeq}`;
+  const t = store.createTicket(slug, {
+    title: 'completed ticket without commit note',
+    files: ['lib/fixture.js'],
+    complexity: 3,
+    complexityWhy: 'fixture for missing commit hash completion verdict coverage',
+    source: 'cli',
+  });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-no-hash', { sessionId: sess }).ok, true);
+  assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-no-hash', kind: 'comment', body: 'Done and verified.', source: 'cli' }).ok, true);
+  assert.strictEqual(store.completeTicket(slug, t.ref, 'worker-no-hash', {}).ok, true);
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done WITHOUT commit hash`);
 });
 
 test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
@@ -801,27 +798,26 @@ test('subagent-stop: a prior owner is silent after another worker reclaims the t
 
   assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', 'a prior owner must not be warned about another worker\'s live claim');
 });
-test('subagent-stop: a session with no attributable claim stays silent', () => {
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: 'sess-nobody-here' }), '', 'unknown session must be silent');
-  assert.strictEqual(runHook(SUBAGENT_STOP, {}), '', 'a bare payload with no session id must be silent');
+test('subagent-stop: a stopped executor without a claim gets a respawn verdict', () => {
+  assert.strictEqual(
+    runHook(SUBAGENT_STOP, { session_id: 'sess-nobody-here', agent_type: 'sidequest-exec-high' }),
+    'exec stopped without ever claiming, respawn with the same briefing'
+  );
+  assert.strictEqual(runHook(SUBAGENT_STOP, {}), '', 'a bare payload with no session id stays silent');
 });
 
-test('subagent-stop: SIDEQUEST_LONG_RUN_MIN overrides the effort-scaled threshold', () => {
+test('subagent-stop: long-run threshold settings do not suppress a held-claim verdict', () => {
   const sess = `sess-tuned-${++sqSeq}`;
-  const t = addEffortTicket('5-min high-effort run, flagged only under a tighter threshold', 'high');
+  const t = addEffortTicket('5-min high-effort stopped claim', 'high');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-tuned', { sessionId: sess }).ok, true);
   backdateSessionClaims(sess, 5);
 
-  // Default high-effort threshold is 25m: silent.
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', '5m is under the high-effort default');
-  // Override to 2m: now it fires.
   const out = execFileSync(process.execPath, [SUBAGENT_STOP], {
-    input: JSON.stringify({ session_id: sess }),
+    input: JSON.stringify({ session_id: sess, agent_type: 'sidequest-exec-high' }),
     encoding: 'utf8',
     env: { ...process.env, SIDEQUEST_LONG_RUN_MIN: '2' },
   });
   const parsed = out.trim() ? JSON.parse(out) : null;
   const ctx = parsed ? parsed.hookSpecificOutput.additionalContext : '';
-  assert.ok(ctx.includes(t.ref), 'with a 2m threshold a 5m run must be flagged');
-  assert.match(ctx, /over the 2m/, 'the note must reflect the overridden threshold');
+  assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim`));
 });

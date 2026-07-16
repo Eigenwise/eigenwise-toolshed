@@ -68,6 +68,46 @@ function emit(context) {
   );
 }
 
+function doneComment(ticket, by) {
+  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  return comments.slice().reverse().find((comment) =>
+    comment && comment.kind === 'comment' &&
+    (!by || comment.by === by) &&
+    /\b(done|shipped|commit)\b/i.test(String(comment.body || ''))
+  ) || null;
+}
+
+function commitHash(comment) {
+  const match = comment && String(comment.body || '').match(/\b[0-9a-f]{7,40}\b/i);
+  return match ? match[0] : null;
+}
+
+function stopVerdict(store, claims, agentType) {
+  const now = Date.now();
+  for (const claim of claims) {
+    if (!claim || claim.status !== 'done') continue;
+    const ticket = store.getTicket(claim.slug, claim.ticketId);
+    const comment = ticket && doneComment(ticket, claim.by);
+    if (!ticket || !comment) continue;
+    const hash = commitHash(comment);
+    const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash
+      ? ' done WITHOUT commit hash'
+      : ` done${hash ? ` (${hash})` : ''}`;
+    return `exec stopped clean: ${ticket.ref}${suffix}`;
+  }
+
+  const held = claims.find((claim) => claim && claim.held && claim.status === 'doing');
+  if (held) {
+    const started = Date.parse(held.at);
+    const mins = Number.isFinite(started) ? Math.max(1, Math.round((now - started) / 60000)) : 0;
+    const label = held.ref || held.ticketId || 'a ticket';
+    return `exec stopped HOLDING ${label} claim (age ${mins}m), likely dead: release + respawn, do not nudge`;
+  }
+
+  if (agentType.startsWith('sidequest-')) return 'exec stopped without ever claiming, respawn with the same briefing';
+  return null;
+}
+
 function main() {
   const data = readStdin();
   if (!data) process.exit(0);
@@ -99,7 +139,19 @@ function main() {
   } catch (_) {
     process.exit(0);
   }
-  if (!Array.isArray(claims) || !claims.length) process.exit(0);
+  if (!Array.isArray(claims)) process.exit(0);
+
+  let verdict;
+  try {
+    verdict = stopVerdict(store, claims, agentType);
+  } catch (_) {
+    process.exit(0);
+  }
+  if (verdict) {
+    emit(verdict);
+    process.exit(0);
+  }
+  if (!claims.length) process.exit(0);
 
   const now = Date.now();
   let worst = null; // the longest-running over-threshold claim
