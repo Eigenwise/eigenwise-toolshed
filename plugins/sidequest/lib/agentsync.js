@@ -1,12 +1,12 @@
 'use strict';
 /**
- * sidequest - runtime exec agent sync for enabled discovered models (SQ-158)
+ * sidequest - runtime exec agent sync for live category routes (SQ-158)
  *
- * The five shipped sidequest-exec-<effort>.md agents (scripts/gen-exec-agents.js,
- * build time) give the orchestrator one Task-tool subagent_type per built-in
- * effort level, spawned at a chosen model via the Agent tool's `model` param
- * (sonnet|opus|haiku|fable). That param does not accept an arbitrary model
- * string, so a discovered custom model needs a generated executor definition.
+ * At session start, syncExecAgents() reads the live routing taxonomy, including
+ * global categories and project-scoped layers, then generates the concrete
+ * executor definitions needed by the current routes and fallbacks. Each file is
+ * marked as owned by Sidequest. Reconciliation updates wanted files and prunes
+ * stale marked files, while never touching an unmarked user-authored agent.
  *
  * A registered agent file with a `model: <full-id>` frontmatter pin genuinely
  * runs through codex-gateway when spawned with the Agent `model` parameter
@@ -14,17 +14,13 @@
  * advertise `model: null`. Every concrete Codex category route therefore gets
  * sidequest-exec-<source>-<slug>-<effort>.md in the user's live agents directory.
  *
- * Both the build-time generator (scripts/gen-exec-agents.js) and this module's
- * syncExecAgents() render through the SAME scripts/_exec-template.md via
- * renderExecAgent() below, so the ticket-execution protocol body can never
- * drift between the shipped and the runtime-generated files.
+ * syncExecAgents() renders through scripts/_exec-template.md via
+ * renderExecAgent() below, so the ticket-execution protocol body stays in one
+ * place for every generated file.
  *
  * Lifecycle safety: every file this module writes starts with MARKER on its
- * own line. A sync pass writes/updates exactly the files the current prefs
- * call for, and removes any MARKER-bearing file in the target dir that no
- * longer corresponds to an enabled-custom x enabled-non-max-effort combo. A
- * file WITHOUT the marker — whether or not its name collides with one we'd
- * generate — is NEVER written, overwritten, or deleted; it isn't ours.
+ * own line. A file WITHOUT the marker — whether or not its name collides with
+ * one we'd generate — is NEVER written, overwritten, or deleted; it isn't ours.
  */
 
 const fs = require('fs');
@@ -293,9 +289,9 @@ function syncExecAgents(_prefs, opts) {
   const dir = opts.dir || defaultAgentsDir();
   const wanted = new Map();
   const routes = [];
-  for (const category of store.getCategories()) {
-    routes.push(category.route);
-    if (category.fallback) routes.push(category.fallback);
+  for (const pair of store.getCategoryRoutePairs()) {
+    routes.push(pair.route);
+    if (pair.fallback) routes.push(pair.fallback);
   }
   const globalFallback = store.getRoutingFallback();
   if (globalFallback) routes.push(globalFallback);

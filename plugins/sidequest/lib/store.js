@@ -437,6 +437,45 @@ function projectCategoryWarnings(project) {
   return orphaned.length ? [`orphaned project category layer: ${orphaned.map((row) => row.id).join(', ')}`] : [];
 }
 
+function getCategoryRoutePairs() {
+  const pairs = [];
+  const seen = new Set();
+  const add = (category) => {
+    if (!category) return;
+    const route = normalizeRoute(category.route);
+    const fallback = category.fallback == null ? null : normalizeRoute(category.fallback);
+    if (!route) return;
+    const key = JSON.stringify({ route, fallback });
+    if (seen.has(key)) return;
+    seen.add(key);
+    pairs.push({ route, fallback });
+  };
+
+  for (const category of getCategories()) add(category);
+
+  const globals = new Map(getCategories().map((category) => [category.id, category]));
+  let rows = [];
+  try {
+    rows = database().prepare('SELECT id, kind, data FROM project_categories ORDER BY project, id').all();
+  } catch (_) {
+    rows = [];
+  }
+  for (const row of rows) {
+    if (row.kind === 'DISABLE') continue;
+    let data;
+    try { data = JSON.parse(row.data); } catch (_) { continue; }
+    if (row.kind === 'ADD') {
+      add(normalizeCategory(data));
+      continue;
+    }
+    if (row.kind === 'OVERRIDE') {
+      const base = globals.get(String(row.id || '').trim().toLowerCase());
+      if (base) add(normalizeCategory(Object.assign({}, base, data)));
+    }
+  }
+  return pairs;
+}
+
 function getProjectCategories(project) {
   return { rows: projectCategoryRows(project), warnings: projectCategoryWarnings(project) };
 }
@@ -2736,6 +2775,7 @@ module.exports = {
   getRoutingFallback,
   setRoutingFallback,
   getCategories,
+  getCategoryRoutePairs,
   getCategory,
   getProjectCategories,
   setProjectCategory,

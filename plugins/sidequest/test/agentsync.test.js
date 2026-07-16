@@ -14,6 +14,7 @@ const agentsync = require('../lib/agentsync.js');
 
 const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' };
 const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' };
+const PROJECT_ONLY = { slug: 'codex-gpt-5-6-project-only', id: 'claude-codex-gpt-5.6-project-only[1m]', label: 'GPT-5.6 Project Only' };
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function readDir(dir) { return fs.readdirSync(dir).filter((file) => file.endsWith('.md')).sort(); }
@@ -27,6 +28,29 @@ function clearCatalog() { process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 function configure(store, id, route, fallback) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
+
+test('sync includes project-scoped routes and prunes them when removed', () => {
+  seedCatalog([TERRA, PROJECT_ONLY]);
+  const store = require('../lib/store.js');
+  const project = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'project-only'), 'Project only').slug;
+  store.setProjectCategory(project, 'project-only', 'ADD', {
+    name: 'Project only',
+    description: 'Project route',
+    contract: 'Project route',
+    route: { model: PROJECT_ONLY.slug, effort: 'high' },
+    fallback: null,
+    enabled: true,
+  });
+  const dir = tmpDir();
+  agentsync.syncExecAgents(null, { dir });
+  const generated = path.join(dir, 'sidequest-exec-codex-gpt-5-6-project-only-high.md');
+  assert.ok(fs.existsSync(generated));
+  store.removeProjectCategory(project, 'project-only');
+  const result = agentsync.syncExecAgents(null, { dir });
+  assert.ok(result.removed >= 1);
+  assert.ok(!fs.existsSync(generated));
+});
+
 
 test('sync writes generated executors for concrete category routes', () => {
   seedCatalog([TERRA, SOL]);
