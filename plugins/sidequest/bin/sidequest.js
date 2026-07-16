@@ -73,7 +73,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -347,9 +347,11 @@ function cmdCategory(opts, positional) {
     name: opts.name || opts.title || id,
     description: opts.desc != null ? opts.desc : opts.description || '',
     route: { model: opts['route-model'] || opts.model, effort: opts['route-effort'] || opts.effort },
-    fallback: opts['fallback-model'] != null || opts['fallback-effort'] != null
-      ? { model: opts['fallback-model'], effort: opts['fallback-effort'] }
-      : null,
+    fallback: opts['no-fallback'] || opts['fallback-model'] === 'none'
+      ? null
+      : opts['fallback-model'] != null || opts['fallback-effort'] != null
+        ? { model: opts['fallback-model'], effort: opts['fallback-effort'] }
+        : null,
     contract: opts.contract || '',
     enabled: !opts.disabled,
   });
@@ -358,7 +360,9 @@ function cmdCategory(opts, positional) {
     if (opts['route-model'] != null) route.model = opts['route-model'];
     if (opts['route-effort'] != null) route.effort = opts['route-effort'];
     const patch = { route };
-    if (opts['fallback-model'] != null || opts['fallback-effort'] != null) {
+    if (opts['no-fallback'] || opts['fallback-model'] === 'none') {
+      patch.fallback = null;
+    } else if (opts['fallback-model'] != null || opts['fallback-effort'] != null) {
       const fallback = Object.assign({}, existing.fallback || {});
       if (opts['fallback-model'] != null) fallback.model = opts['fallback-model'];
       if (opts['fallback-effort'] != null) fallback.effort = opts['fallback-effort'];
@@ -1574,7 +1578,7 @@ Usage:
   sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
-  sidequest category list|add|edit|rm|disable|enable <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>] [--json]
+  sidequest category list|add|edit|rm|disable|enable <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n>
   sidequest projects [--archived] [--json]

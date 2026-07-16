@@ -45,10 +45,10 @@ test('CLI category CRUD reports usage and category ticket stamping', () => {
   const category = run.body.categories.find((entry) => entry.id === 'release-check');
   assert.equal(category.ticketCount, 1);
 
-  run = cli('category', 'edit', 'release-check', '--name', 'Release verification', '--fallback-effort', 'xhigh');
+  run = cli('category', 'edit', 'release-check', '--name', 'Release verification', '--no-fallback');
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.category.name, 'Release verification');
-  assert.deepEqual(run.body.category.fallback, { model: 'opus', effort: 'xhigh' });
+  assert.equal(run.body.category.fallback, null);
 
   run = cli('category', 'rm', 'release-check');
   assert.equal(run.result.status, 0, run.result.stderr);

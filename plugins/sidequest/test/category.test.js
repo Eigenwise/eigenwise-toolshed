@@ -23,12 +23,12 @@ function freshStore(options) {
   return { store, slug, home };
 }
 
-test('default categories store concrete primary and Claude fallback routes', () => {
+test('default categories store concrete primary routes without fallbacks', () => {
   const { store } = freshStore();
   assert.equal(store.getCategories().length, 14);
   const normal = store.getCategory('coding.normal');
   assert.deepEqual(normal.route, { model: 'codex-gpt-5-6-terra', effort: 'high' });
-  assert.deepEqual(normal.fallback, { model: 'opus', effort: 'high' });
+  assert.equal(normal.fallback, null);
   assert.throws(() => store.removeCategory('general'), /cannot be removed/);
   assert.throws(() => store.setCategory('general', { enabled: false }), /cannot be disabled/);
 });
