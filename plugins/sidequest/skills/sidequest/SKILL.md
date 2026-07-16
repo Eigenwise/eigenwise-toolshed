@@ -78,16 +78,8 @@ already-loaded MCP server as a stale writer until plugins reload: route every st
 new CLI and use MCP only for reads.
 
 The **CLI** is for when the MCP tools aren't loaded, for humans, and for the things only it does:
-`dashboard`/`serve` and legacy temporary `native-agent` cleanup. For routed work, render the ticket's
-per-ticket executor definition, then DO NOT spawn it immediately. Continue other work until the harness
-announces `New agent types are now available: <name>`, then spawn that exact short-lived agent with the
-short logistics prompt. **Never end the turn waiting for registration:** start a background timer to wake this
-session (for example `node -e "setTimeout(() => {}, 420000)"` through Bash with `run_in_background`) and
-spawn on the announcement, or use the stable pre-provisioned executor now. Any session may adopt a prepared,
-unspawned ticket definition. Its claim must carry the token embedded in the definition. A `reason:token`
-refusal means the spawn was premature generic: TaskStop it, wait for the announcement, and respawn. If no
-announcement arrives in a sensible window, use the stable pre-provisioned executor path instead. Never
-trust a worker's self-report: `transcript/meta.json` and the token-gated claim are the evidence. The
+`dashboard`/`serve` and legacy temporary `native-agent` cleanup. For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable per-model executor, a complete `briefing`, a `spawn` object, and a token. Spawn that exact stable executor immediately with the returned briefing as its prompt. There is no registration announcement or watcher-lag wait. Claude routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the backend. Use `dispatch <ref> --ephemeral` only for cross-session adoption. It creates a self-contained temporary executor definition, and that opt-in path waits for the generated type to register. Never end the turn waiting for registration: continue independent work or use a background timer to wake the session. Any session may
+adopt an unspawned prepared definition, whose claim must carry its token. Routes without a stable executor, such as haiku, use `--ephemeral`. Never trust a worker's self-report: the dispatch token and claim executor guard are the evidence. The
 SessionStart hook injects the **resolved
 absolute command** (`node "<path>/bin/sidequest.js"`) into your context — use exactly that with the
 Bash tool; `sidequest` in this file is shorthand for it. Commands default to the current project
@@ -297,7 +289,13 @@ and fallback chain, documented in [references/routing-details.md](references/rou
    `ready`/`list --json --brief` read of the current wave. Before every spawn, print `SQ-n · category ·
    Model · effort`. Claude Code's native suffix is external metadata; the Sidequest route line and
    executor name are authoritative. **All routed work dispatches through the native Agent tool**
-   (`exec.dispatch` is `native-agent` on every route). Two paths:
+   (`exec.dispatch` is `native-agent` on every route). For a ticket, `dispatch <ref>` (CLI) or the
+   matching MCP tool is **instant by default**: it returns the stable per-model `agent`, a complete
+   `briefing` to use as the spawn prompt, and the token-gated claim details. Spawn that exact stable
+   `agent` immediately from the returned `spawn` object. There is no registration announcement or
+   watcher-lag wait. Use `dispatch <ref> --ephemeral` (or `{ephemeral:true}` in MCP) only when a
+   cross-session handoff needs a self-contained temporary executor; that path still waits for the
+   generated type to register, and any session may adopt it.
    - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with
      `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are
      unattended workers; never omit bypass or their ordinary Bash calls prompt into the lead session.

@@ -163,20 +163,26 @@ add commands to the executor surface, extend the allowlist (the `fewer-permissio
 generate it from transcripts). Never add `ask` rules — an `ask` forces a prompt even under a genuine
 bypass.
 
-## Ephemeral ticket executor dispatch
+## Instant ticket executor dispatch
 
-The per-ticket path is deliberately two-phase. Render the ticket brief and its embedded dispatch token,
-but **do not spawn immediately**. Keep doing independent orchestration work until Claude Code announces
-`New agent types are now available: <name>`, then spawn that exact generated type with only the short
-logistics prompt. **Never end a turn waiting for registration:** start a background timer that re-invokes
-the session, then spawn on the announcement, or use the stable pre-provisioned executor now. Any session
-may adopt an unspawned prepared definition. The executor claim must carry its token (`--token <nonce>`).
+The normal per-ticket path is instant. Call `dispatch <ref>` (CLI) or the matching MCP tool and use
+its returned stable per-model `agent` and `spawn` object immediately. Pass the returned `briefing`
+unchanged as the Agent prompt. The briefing carries the full ticket contract, category contract,
+anchors, verify command, comments digest, and token-gated claim guard. There is no watcher-registration
+announcement or registration wait in this path. Claude routes pass `model: exec.model`; Codex routes
+omit `model` so the stable executor's frontmatter pins the backend. The executor claims with the
+returned token and exact stable executor name.
 
-If claim returns `reason:token`, the spawn happened before registration and ran the silent generic agent.
-TaskStop that agent, wait for the availability announcement, and respawn the same prepared definition. If
-there is no announcement in a sensible window, use the stable pre-provisioned executor type instead so
-dispatch never blocks on watcher lag. Never trust a worker's self-reported identity. The transcript's
-`meta.json` and a token-gated claim are the evidence.
+Use `dispatch <ref> --ephemeral` (or `{ephemeral:true}` in MCP) only for cross-session adoption. That
+opt-in path creates a self-contained per-ticket executor definition that another session can pick up,
+but it costs the watcher-registration wait. Never end a turn waiting for registration: continue independent work or use a background timer to wake the session. Any session
+may adopt an unspawned prepared definition. If the tool returns `RESTART_NOTICE`, restart plugin
+loading or use `/reload-plugins` as directed. A route with no stable executor, such as haiku, must use
+`--ephemeral`; instant dispatch will explain that fallback.
+
+Re-dispatch rotates the token while the stable executor name remains fixed. A stale token is refused,
+and `done` or `release` clears the dispatch guard for either mode. Never trust a worker's self-reported
+identity. The token-gated claim and the dispatch response are the evidence.
 
 ## Native Agent dispatch
 
