@@ -1131,20 +1131,36 @@ function runShim() {
     return block && block.type === 'tool_use' && PLAN_TOOLS.includes(block.name);
   }
 
-  function filterPlanToolJson(body) {
+  function rewriteResponseModel(value, advertisedModel) {
+    if (!value || typeof value !== 'object') return value;
+    if (Array.isArray(value)) {
+      for (const item of value) rewriteResponseModel(item, advertisedModel);
+      return value;
+    }
+    for (const [key, item] of Object.entries(value)) {
+      if (key === 'model' && typeof item === 'string' && item.startsWith('gpt-')) value[key] = advertisedModel;
+      else rewriteResponseModel(item, advertisedModel);
+    }
+    return value;
+  }
+
+  function rewriteCodexJson(body, advertisedModel, filterPlanTools) {
     let parsed;
     try { parsed = JSON.parse(body.toString()); } catch { return body; }
-    if (!Array.isArray(parsed.content)) return body;
-    const content = parsed.content.filter((block) => !filterPlanToolBlock(block));
-    if (content.length === parsed.content.length) return body;
-    parsed.content = content;
-    if (parsed.stop_reason === 'tool_use' && !content.some((block) => block && block.type === 'tool_use')) {
-      parsed.stop_reason = 'end_turn';
+    rewriteResponseModel(parsed, advertisedModel);
+    if (filterPlanTools && Array.isArray(parsed.content)) {
+      const content = parsed.content.filter((block) => !filterPlanToolBlock(block));
+      if (content.length !== parsed.content.length) {
+        parsed.content = content;
+        if (parsed.stop_reason === 'tool_use' && !content.some((block) => block && block.type === 'tool_use')) {
+          parsed.stop_reason = 'end_turn';
+        }
+      }
     }
     return Buffer.from(JSON.stringify(parsed));
   }
 
-  function createPlanToolSseFilter(write, observe) {
+  function createCodexSseTransformer(write, observe, advertisedModel, filterPlanTools) {
     const decoder = new StringDecoder('utf8');
     let pending = '';
     const dropped = new Set();
@@ -1160,9 +1176,10 @@ function runShim() {
       let event;
       try { event = JSON.parse(raw); } catch { return write(frame + separator); }
       if (observe) observe(event);
+      rewriteResponseModel(event, advertisedModel);
 
       const originalIndex = Number.isInteger(event.index) ? event.index : null;
-      if (event.type === 'content_block_start' && originalIndex != null) {
+      if (filterPlanTools && event.type === 'content_block_start' && originalIndex != null) {
         if (filterPlanToolBlock(event.content_block)) {
           dropped.add(originalIndex);
           droppedCount++;
@@ -1170,9 +1187,9 @@ function runShim() {
         }
         if (event.content_block && event.content_block.type === 'tool_use') keptToolUse = true;
       }
-      if (originalIndex != null && dropped.has(originalIndex)) return;
-      if (originalIndex != null) event.index = originalIndex - droppedCount;
-      if (event.type === 'message_delta' && event.delta && event.delta.stop_reason === 'tool_use'
+      if (filterPlanTools && originalIndex != null && dropped.has(originalIndex)) return;
+      if (filterPlanTools && originalIndex != null) event.index = originalIndex - droppedCount;
+      if (filterPlanTools && event.type === 'message_delta' && event.delta && event.delta.stop_reason === 'tool_use'
           && droppedCount > 0 && !keptToolUse) {
         event.delta.stop_reason = 'end_turn';
       }
@@ -1254,7 +1271,7 @@ function runShim() {
     arm();
   }
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null) {
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null) {
     const url = new URL(clientReq.url, target);
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
@@ -1291,7 +1308,7 @@ function runShim() {
         upRes.on('end', () => {
           if (settled) return;
           settled = true;
-          const normalized = normalizeGenuineContextOverflow(Buffer.concat(chunks), sessionId);
+          const normalized = rewriteCodexJson(normalizeGenuineContextOverflow(Buffer.concat(chunks), sessionId), advertisedModel, false);
           resHeaders['content-length'] = normalized.length;
           clientRes.writeHead(413, resHeaders);
           clientRes.end(normalized);
@@ -1318,7 +1335,7 @@ function runShim() {
         upRes.on('end', () => {
           if (settled) return;
           settled = true;
-          const upstreamBody = Buffer.concat(chunks);
+          const upstreamBody = rewriteCodexJson(Buffer.concat(chunks), advertisedModel, false);
           const text = upstreamBody.toString();
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
             const normalized = CODEX_SENTRY_ENABLED
@@ -1341,15 +1358,30 @@ function runShim() {
         });
         return;
       }
-      if (filterPlanTools && upRes.statusCode >= 200 && upRes.statusCode < 300) {
+      if (advertisedModel && upRes.statusCode >= 400) {
+        const chunks = [];
+        upRes.on('data', (chunk) => chunks.push(chunk));
+        upRes.on('error', () => clientRes.destroy());
+        upRes.on('aborted', () => clientRes.destroy());
+        upRes.on('end', () => {
+          const rewritten = rewriteCodexJson(Buffer.concat(chunks), advertisedModel, false);
+          resHeaders['content-length'] = rewritten.length;
+          clientRes.writeHead(upRes.statusCode, resHeaders);
+          clientRes.end(rewritten);
+        });
+        return;
+      }
+      if (advertisedModel && upRes.statusCode >= 200 && upRes.statusCode < 300) {
         const contentType = String(upRes.headers['content-type'] || '').toLowerCase();
         delete resHeaders['content-length'];
         if (contentType.includes('text/event-stream')) {
           clientRes.writeHead(upRes.statusCode, resHeaders);
           keepSseAlive(upRes, clientRes);
-          const filter = createPlanToolSseFilter(
+          const filter = createCodexSseTransformer(
             (chunk) => clientRes.write(chunk),
-            (event) => recordSentryUsage(sessionId, event),
+            (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) ? (event) => recordSentryUsage(sessionId, event) : null,
+            advertisedModel,
+            filterPlanTools,
           );
           upRes.on('data', (chunk) => filter.write(chunk));
           upRes.on('end', () => { filter.end(); clientRes.end(); });
@@ -1362,7 +1394,7 @@ function runShim() {
         upRes.on('error', () => clientRes.destroy());
         upRes.on('aborted', () => clientRes.destroy());
         upRes.on('end', () => {
-          const filtered = filterPlanToolJson(Buffer.concat(chunks));
+          const filtered = rewriteCodexJson(Buffer.concat(chunks), advertisedModel, filterPlanTools);
           resHeaders['content-length'] = filtered.length;
           clientRes.writeHead(upRes.statusCode, resHeaders);
           clientRes.end(filtered);
@@ -1446,7 +1478,7 @@ function runShim() {
             if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId)) return;
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              JSON.stringify(parsed), ['authorization', 'x-api-key'], true, !keepPlanTools, sessionId);
+              JSON.stringify(parsed), ['authorization', 'x-api-key'], true, !keepPlanTools, sessionId, requestedModel);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }

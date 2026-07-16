@@ -501,6 +501,7 @@ test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', asy
     if (!useSse) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({
+        model: 'gpt-5.6-sol',
         type: 'message',
         stop_reason: 'tool_use',
         content: [
@@ -511,7 +512,7 @@ test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', asy
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const events = [
-      { type: 'message_start', message: { id: 'm1' } },
+      { type: 'message_start', message: { id: 'm1', model: 'gpt-5.6-sol' } },
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
       { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'keep' } },
       { type: 'content_block_stop', index: 0 },
@@ -547,6 +548,7 @@ test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', asy
   const body = JSON.stringify({ model: 'claude-codex-gpt-5.6-sol', max_tokens: 1, messages: [] });
   const jsonResponse = await request(shimPort, 'POST', '/v1/messages', body);
   const json = JSON.parse(jsonResponse.body);
+  assert.equal(json.model, 'claude-codex-gpt-5.6-sol');
   assert.deepEqual(json.content, [{ type: 'text', text: 'keep' }]);
   assert.equal(json.stop_reason, 'end_turn');
 
@@ -558,6 +560,8 @@ test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', asy
   const data = sseResponse.body.split(/\r?\n/)
     .filter((line) => line.startsWith('data: '))
     .map((line) => JSON.parse(line.slice(6)));
+  const start = data.find((event) => event.type === 'message_start');
+  assert.equal(start.message.model, 'claude-codex-gpt-5.6-sol');
   const bashStart = data.find((event) => event.type === 'content_block_start' && event.content_block?.name === 'Bash');
   assert.equal(bashStart.index, 1);
   assert.equal(data.find((event) => event.type === 'content_block_delta' && event.delta?.partial_json)?.index, 1);
