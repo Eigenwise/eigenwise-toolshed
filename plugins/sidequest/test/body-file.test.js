@@ -1,0 +1,44 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+const { makeCliRunner } = require('./_helpers.js');
+
+const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-body-file-test-'));
+const PROJ = path.join(os.tmpdir(), 'sq-body-file-fixtures', 'board');
+const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
+const { cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
+
+function bodyFile(name, body) {
+  const file = path.join(SIDEQUEST_HOME, name);
+  fs.writeFileSync(file, body, 'utf8');
+  return file;
+}
+
+function ticket(title) {
+  return cliJson(['add', '--title', title, '--complexity', '2', '--why', 'a small CLI fixture for body-file round-trip coverage', '--json']).ticket.ref;
+}
+
+test('comment reads markdown unchanged from --body-file', () => {
+  const ref = ticket('comment body-file fixture');
+  const body = 'Installed `claude-code-proxy 0.1.17` (with "quotes").\n\n- `node --test` passed';
+  cliJson(['comment', ref, '--body-file', bodyFile('comment.md', body), '--json']);
+
+  const stored = cliJson(['comments', ref, '--json']).comments.at(-1);
+  assert.strictEqual(stored.body, body);
+});
+
+test('done reads --body-file into its closing comment before completing', () => {
+  const ref = ticket('done body-file fixture');
+  cliJson(['claim', ref, '--by', 'body-file-worker', '--json']);
+  const body = 'Shipped `abc1234` (all checks passed).';
+  const done = cliJson(['done', ref, '--by', 'body-file-worker', '--body-file', bodyFile('done.md', body), '--json']);
+  assert.strictEqual(done.ticket.status, 'done');
+
+  const stored = cliJson(['comments', ref, '--json']).comments.at(-1);
+  assert.strictEqual(stored.body, body);
+  assert.strictEqual(stored.by, 'body-file-worker');
+});

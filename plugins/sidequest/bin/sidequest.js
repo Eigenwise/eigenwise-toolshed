@@ -734,11 +734,27 @@ function cmdRelease(opts, positional) {
   else reportClaimFailure('release', idOrRef, res, meta);
 }
 
+function bodyFromOpts(opts, command) {
+  if (opts.body != null && opts['body-file'] != null) fail(`${command}: pass either -m/--body or --body-file, not both`);
+  if (opts['body-file'] == null) return opts.body;
+  try {
+    return fs.readFileSync(String(opts['body-file']), 'utf8');
+  } catch (e) {
+    fail(`${command}: couldn't read --body-file "${opts['body-file']}": ${(e && e.message) || e}`);
+  }
+}
+
+function addBodyComment(slug, idOrRef, by, body, source) {
+  if (!body || !String(body).trim()) return null;
+  return store.addComment(slug, idOrRef, { by, body, kind: 'comment', source });
+}
+
 function cmdDone(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('done: pass a ticket id or ref, e.g. sidequest done SQ-3');
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
+  const body = bodyFromOpts(opts, 'done');
   // Optional self-reported provenance: which tier/effort actually worked this
   // ticket. Invalid values throw from the store; surface them as a clean error.
   const ticket = store.getTicket(slug, idOrRef);
@@ -754,7 +770,11 @@ function cmdDone(opts, positional) {
   } catch (e) {
     fail(`done: ${(e && e.message) || e}`);
   }
-  if (res.ok) closeDispatchExecutor(ticket);
+  if (res.ok) {
+    closeDispatchExecutor(ticket);
+    const comment = addBodyComment(slug, idOrRef, by, body, opts.source || 'cli');
+    if (comment && !comment.ok) fail(`done: completed ${idOrRef}, but couldn't add closing comment: ${comment.reason}`);
+  }
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -911,8 +931,8 @@ function cmdUnremind(opts, positional) {
 function cmdComment(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('comment: pass a ticket id or ref, e.g. sidequest comment SQ-3 -m "note" [--kind question]');
-  const body = opts.body;
-  if (!body || !String(body).trim()) fail('comment: -m/--body is required, e.g. sidequest comment SQ-3 -m "note"');
+  const body = bodyFromOpts(opts, 'comment');
+  if (!body || !String(body).trim()) fail('comment: -m/--body or --body-file is required, e.g. sidequest comment SQ-3 -m "note"');
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
   const kind = opts.kind === 'question' ? 'question' : 'comment';
@@ -1722,7 +1742,7 @@ Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level]   atomically take a ticket (fails if gone/done/claimed; a prepared dispatch requires its nonce; --effort must match the resolved route or the claim is refused as wrong-executor)
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>]   claim the best available ticket (highest priority first)
-  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level]   mark it done (stamp who/what worked it)
+  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
   When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.
@@ -1764,7 +1784,7 @@ Reminders (fires into the notification queue/bell inbox when the dashboard serve
   sidequest unremind <id|SQ-n>                      cancel a pending reminder
 
 Comments:
-  sidequest comment <id|SQ-n> -m "body" [--by who] [--kind comment|question]   a note-to-self; keep going
+  sidequest comment <id|SQ-n> (-m "body" | --body-file path) [--by who] [--kind comment|question]   a note-to-self; keep going
   sidequest ask <id|SQ-n> -m "question?" [--by who]   post a question — then AWAIT it, don't just continue
   sidequest comments <id|SQ-n> [--json]            list a ticket's comment thread
   sidequest await <id|SQ-n> [--timeout secs=120] [--poll secs=5]   block until the human replies (or times out)

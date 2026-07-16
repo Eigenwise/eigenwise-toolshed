@@ -58,6 +58,7 @@ Protocol, per ticket, in order:
    you notice goes in your report, not in the diff.
 4. **Verify** the ticket's exact named check/test/reproduction before declaring success. In the done comment,
    echo that exact command and its full output tail; do not substitute a file list or a narrower command.
+   For bodies with backticks, quotes, or parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment` or `sidequest done`.
 5. **Commit and ship before done**: When the ticket declares repository files, commit only those scoped files
    after verification passes, push the commit, then include its hash in your own done comment. Do not invoke
    `sidequest done` until the commit and push both succeed.

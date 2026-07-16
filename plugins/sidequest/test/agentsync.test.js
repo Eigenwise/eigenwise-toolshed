@@ -134,6 +134,7 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /full output tail/);
   assert.match(body, /Commit and ship before done/);
   assert.match(body, /include its hash in your own done comment/);
+  assert.match(body, /pass `--body-file <path>`/);
   assert.match(body, /Never SendMessage/);
 });
 
@@ -203,6 +204,7 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.match(body, /full output tail/);
   assert.match(body, /Commit and ship before done/);
   assert.match(body, /include its hash in your own done comment/);
+  assert.match(body, /pass `--body-file <path>`/);
   assert.match(body, /Never SendMessage/);
   assert.deepStrictEqual(created.spawn, {
     subagent_type: created.name, name: created.name, mode: 'bypassPermissions',
