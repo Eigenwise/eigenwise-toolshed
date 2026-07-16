@@ -128,7 +128,7 @@ test('project category layers merge ADD, OVERRIDE, and DISABLE without leaking t
   assert.equal(store.modelsPayload({ project: slug }).categories.some((category) => category.id === 'music-analysis'), true);
 });
 
-test('project category layer guards reject invalid local changes and preserve harmless orphans', () => {
+test('project category layer guards reject invalid local changes and report dangling overrides', () => {
   const { store, slug } = freshStore();
   assert.throws(() => store.setProjectCategory(slug, 'general', 'DISABLE'), /cannot be disabled/);
   assert.throws(() => store.setProjectCategory(slug, 'coding.normal', 'ADD', {
@@ -139,5 +139,75 @@ test('project category layer guards reject invalid local changes and preserve ha
   store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', { name: 'Local coding' });
   store.removeCategory('coding.normal');
   assert.equal(store.getCategories({ project: slug }).some((category) => category.id === 'coding.normal'), false);
-  assert.match(store.getProjectCategories(slug).warnings.join(' '), /orphaned project category layer/);
+  assert.deepEqual(store.getProjectCategories(slug).warnings, [
+    { kind: 'dangling-override', id: 'coding.normal', project: slug },
+  ]);
+});
+
+test('detached categories snapshot the merged view, shadow globals, survive deletion, and relink', () => {
+  const { store, slug } = freshStore();
+  store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', {
+    name: 'Local coding',
+    route: { model: 'fable', effort: 'xhigh' },
+  });
+
+  const detached = store.detachCategory(slug, 'coding.normal');
+  assert.equal(detached.kind, 'DETACH');
+  assert.equal(detached.data.name, 'Local coding');
+  assert.deepEqual(detached.data.route, { model: 'fable', effort: 'xhigh' });
+  assert.deepEqual(store.getProjectCategories(slug).rows, [{
+    id: detached.id,
+    kind: detached.kind,
+    data: detached.data,
+  }]);
+  assert.deepEqual(store.getProjectCategories(slug).warnings, [
+    { kind: 'shadows-global', id: 'coding.normal' },
+  ]);
+  assert.throws(() => store.detachCategory(slug, 'coding.normal'), /already detached/);
+  assert.throws(() => store.detachCategory(slug, 'general'), /cannot be detached/);
+  assert.throws(() => store.detachCategory(slug, 'missing'), /does not resolve/);
+
+  store.setCategory('coding.normal', { name: 'Global rename', route: { model: 'opus', effort: 'high' } });
+  assert.equal(store.getCategory('coding.normal', { project: slug }).name, 'Local coding');
+  assert.deepEqual(store.getCategory('coding.normal', { project: slug }).route, { model: 'fable', effort: 'xhigh' });
+
+  store.removeCategory('coding.normal');
+  assert.equal(store.getCategory('coding.normal', { project: slug }).name, 'Local coding');
+  assert.deepEqual(store.getProjectCategories(slug).warnings, []);
+  assert.equal(store.getCategoryRoutePairs().some(({ route }) => route.model === 'fable' && route.effort === 'xhigh'), true);
+
+  assert.equal(store.removeProjectCategory(slug, 'coding.normal'), true);
+  assert.equal(store.getCategory('coding.normal', { project: slug }), null);
+});
+
+test('category link state annotations are opt-in and identify changed override fields', () => {
+  const { store, slug } = freshStore();
+  store.setProjectCategory(slug, 'music-analysis', 'ADD', {
+    name: 'Music analysis',
+    description: 'Analyze a score.',
+    contract: 'Read the score first.',
+    route: { model: 'opus', effort: 'high' },
+    fallback: null,
+    enabled: true,
+  });
+  store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', {
+    route: { model: 'fable', effort: 'xhigh' },
+    name: 'Local coding',
+  });
+  store.detachCategory(slug, 'coding.hard');
+
+  assert.equal(store.getCategory('coding.easy', { project: slug }).linkState, undefined);
+  const categories = store.getCategories({ project: slug, withState: true });
+  assert.deepEqual(
+    Object.fromEntries(categories.filter(({ id }) => ['coding.easy', 'coding.normal', 'coding.hard', 'music-analysis'].includes(id)).map((category) => [category.id, {
+      linkState: category.linkState,
+      changedFields: category.changedFields,
+    }])),
+    {
+      'coding.easy': { linkState: 'linked', changedFields: undefined },
+      'coding.hard': { linkState: 'detached', changedFields: undefined },
+      'coding.normal': { linkState: 'overridden', changedFields: ['name', 'route'] },
+      'music-analysis': { linkState: 'added', changedFields: undefined },
+    },
+  );
 });

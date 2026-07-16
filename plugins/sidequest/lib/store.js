@@ -433,8 +433,15 @@ function projectCategoryRows(project) {
 
 function projectCategoryWarnings(project) {
   const globalIds = new Set(db.listRows(database(), 'categories').map((category) => String(category && category.id || '').trim().toLowerCase()));
-  const orphaned = projectCategoryRows(project).filter((row) => row.kind !== 'ADD' && !globalIds.has(row.id));
-  return orphaned.length ? [`orphaned project category layer: ${orphaned.map((row) => row.id).join(', ')}`] : [];
+  const warnings = [];
+  for (const row of projectCategoryRows(project)) {
+    if (row.kind === 'OVERRIDE' && !globalIds.has(row.id)) {
+      warnings.push({ kind: 'dangling-override', id: row.id, project });
+    } else if (row.kind === 'DETACH' && globalIds.has(row.id)) {
+      warnings.push({ kind: 'shadows-global', id: row.id });
+    }
+  }
+  return warnings;
 }
 
 function getCategoryRoutePairs() {
@@ -464,7 +471,7 @@ function getCategoryRoutePairs() {
     if (row.kind === 'DISABLE') continue;
     let data;
     try { data = JSON.parse(row.data); } catch (_) { continue; }
-    if (row.kind === 'ADD') {
+    if (row.kind === 'ADD' || row.kind === 'DETACH') {
       add(normalizeCategory(data));
       continue;
     }
@@ -483,19 +490,27 @@ function getProjectCategories(project) {
 function getCategories(opts) {
   opts = opts || {};
   const includeDisabled = opts.includeDisabled !== false;
+  const withState = opts.withState === true;
   const categories = new Map();
   for (const raw of db.listRows(database(), 'categories')) {
     const category = normalizeCategory(raw);
-    if (category) categories.set(category.id, category);
+    if (category) categories.set(category.id, withState ? Object.assign({}, category, { linkState: 'linked' }) : category);
   }
   for (const row of projectCategoryRows(opts.project)) {
     const base = categories.get(row.id);
     if (row.kind === 'ADD' && !base) {
       const category = normalizeCategory(row.data);
-      if (category) categories.set(category.id, category);
+      if (category) categories.set(category.id, withState ? Object.assign({}, category, { linkState: 'added' }) : category);
+    } else if (row.kind === 'DETACH') {
+      const category = normalizeCategory(row.data);
+      if (category) categories.set(category.id, withState ? Object.assign({}, category, { linkState: 'detached' }) : category);
     } else if (row.kind === 'OVERRIDE' && base) {
       const category = normalizeCategory(Object.assign({}, base, row.data));
-      if (category) categories.set(category.id, category);
+      if (category) {
+        categories.set(category.id, withState
+          ? Object.assign({}, category, { linkState: 'overridden', changedFields: Object.keys(row.data).sort() })
+          : category);
+      }
     } else if (row.kind === 'DISABLE' && row.id !== 'general' && base) {
       categories.delete(row.id);
     }
@@ -546,23 +561,31 @@ function removeCategory(id) {
   return db.deleteRow(database(), 'categories', normalizedId);
 }
 
+function normalizeFullProjectCategory(id, kind, data) {
+  const required = ['name', 'description', 'contract', 'route', 'fallback', 'enabled'];
+  if (!data || typeof data !== 'object' || Array.isArray(data) || required.some((key) => !Object.hasOwn(data, key))) {
+    throw new Error(`Project category ${kind} requires a complete category row.`);
+  }
+  const normalized = normalizeCategory(Object.assign({}, data, { id }));
+  if (!normalized || !normalizeRoute(data.route)) throw new Error(`Project category ${kind} requires a valid full category route.`);
+  if (data.fallback != null && !normalizeRoute(data.fallback)) throw new Error(`Project category ${kind} fallback requires a valid model and effort.`);
+  return normalized;
+}
+
 function setProjectCategory(project, id, kind, data) {
   const normalizedProject = String(project || '').trim();
   const normalizedId = String(id || '').trim().toLowerCase();
   const normalizedKind = String(kind || '').trim().toUpperCase();
   if (!normalizedProject || !normalizedId) throw new Error('Project and category id are required.');
-  if (!['ADD', 'OVERRIDE', 'DISABLE'].includes(normalizedKind)) throw new Error('Project category kind must be ADD, OVERRIDE, or DISABLE.');
+  if (!['ADD', 'OVERRIDE', 'DETACH', 'DISABLE'].includes(normalizedKind)) throw new Error('Project category kind must be ADD, OVERRIDE, DETACH, or DISABLE.');
   const global = getCategory(normalizedId);
   let normalizedData;
   if (normalizedKind === 'ADD') {
     if (global) throw new Error(`Project category ADD "${normalizedId}" collides with a global category.`);
-    const required = ['name', 'description', 'contract', 'route', 'fallback', 'enabled'];
-    if (!data || typeof data !== 'object' || required.some((key) => !Object.hasOwn(data, key))) {
-      throw new Error('Project category ADD requires a complete category row.');
-    }
-    normalizedData = normalizeCategory(Object.assign({}, data, { id: normalizedId }));
-    if (!normalizedData || !normalizeRoute(data && data.route)) throw new Error('Project category ADD requires a valid full category route.');
-    if (data && data.fallback != null && !normalizeRoute(data.fallback)) throw new Error('Project category ADD fallback requires a valid model and effort.');
+    normalizedData = normalizeFullProjectCategory(normalizedId, normalizedKind, data);
+  } else if (normalizedKind === 'DETACH') {
+    if (normalizedId === 'general') throw new Error('Category "general" cannot be detached.');
+    normalizedData = normalizeFullProjectCategory(normalizedId, normalizedKind, data);
   } else if (normalizedKind === 'OVERRIDE') {
     if (!global) throw new Error(`Project category OVERRIDE "${normalizedId}" requires a global category.`);
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Project category OVERRIDE requires a patch object.');
@@ -578,6 +601,18 @@ function setProjectCategory(project, id, kind, data) {
   }
   db.putRow(database(), 'project_categories', { project: normalizedProject, id: normalizedId, kind: normalizedKind, data: normalizedData });
   return { project: normalizedProject, id: normalizedId, kind: normalizedKind, data: normalizedData };
+}
+
+function detachCategory(project, id) {
+  const normalizedProject = String(project || '').trim();
+  const normalizedId = String(id || '').trim().toLowerCase();
+  if (!normalizedProject || !normalizedId) throw new Error('Project and category id are required.');
+  if (normalizedId === 'general') throw new Error('Category "general" cannot be detached.');
+  const existing = projectCategoryRows(normalizedProject).find((row) => row.id === normalizedId);
+  if (existing && existing.kind === 'DETACH') throw new Error(`Project category "${normalizedId}" is already detached.`);
+  const category = getCategory(normalizedId, { project: normalizedProject });
+  if (!category) throw new Error(`Project category "${normalizedId}" does not resolve to a category.`);
+  return setProjectCategory(normalizedProject, normalizedId, 'DETACH', category);
 }
 
 function removeProjectCategory(project, id) {
@@ -2842,6 +2877,7 @@ module.exports = {
   getCategory,
   getProjectCategories,
   setProjectCategory,
+  detachCategory,
   removeProjectCategory,
   setCategory,
   removeCategory,
