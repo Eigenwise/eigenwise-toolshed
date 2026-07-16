@@ -124,20 +124,34 @@ test('MCP board archive tools require explicit refs and list archived boards', (
   assert.strictEqual(restored.ok, true);
   assert.strictEqual(restored.wasArchived, true);
 });
-test('dispatch prepares and renders a token-gated ticket executor', () => {
+test('dispatch is instant by default (stable executor + briefing + token); ephemeral writes a per-ticket def', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref', 'session']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['ephemeral', 'project', 'ref', 'session']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
   store.setCategory({ id: 'dispatch-codex', name: 'Dispatch Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
-  const added = callTool('add', { title: 'token-gated dispatch', category: 'dispatch-codex' });
-  const dispatched = callTool('dispatch', { ref: added.ticket.ref, session: 'mcp-dispatch-session' });
-  assert.match(dispatched.agent, new RegExp(`^sidequest-ticket-${added.ticket.ref.toLowerCase()}-gpt-5-6-terra-[a-f0-9]{8}$`));
-  assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
-  assert.match(dispatched.guidance, /executor/);
-  assert.equal(store.getTicket(store.ensureProject(PROJ).slug, added.ticket.ref).dispatchExecutor, dispatched.agent);
+  const slug = store.ensureProject(PROJ).slug;
+
+  const addedInstant = callTool('add', { title: 'instant dispatch', category: 'dispatch-codex' });
+  const instant = callTool('dispatch', { ref: addedInstant.ticket.ref, session: 'mcp-dispatch-session' });
+  assert.equal(instant.mode, 'instant');
+  assert.equal(instant.agent, 'sidequest-exec-codex-gpt-5-6-terra-high');
+  assert.equal(instant.spawn.subagent_type, instant.agent);
+  assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
+  assert.match(instant.briefing, new RegExp(`--token ${instant.token}`));
+  assert.match(instant.briefing, /## This ticket/);
+  assert.doesNotMatch(instant.briefing, /^---$/m);
+  assert.match(instant.guidance, /executor/);
+  assert.equal(store.getTicket(slug, addedInstant.ticket.ref).dispatchExecutor, instant.agent);
+
+  const addedEphemeral = callTool('add', { title: 'ephemeral dispatch', category: 'dispatch-codex' });
+  const ephemeral = callTool('dispatch', { ref: addedEphemeral.ticket.ref, session: 'mcp-dispatch-session', ephemeral: true });
+  assert.equal(ephemeral.mode, 'ephemeral');
+  assert.match(ephemeral.agent, new RegExp(`^sidequest-ticket-${addedEphemeral.ticket.ref.toLowerCase()}-gpt-5-6-terra-[a-f0-9]{8}$`));
+  assert.equal(ephemeral.tokenPrefix, ephemeral.token.slice(0, 12));
+  assert.equal(store.getTicket(slug, addedEphemeral.ticket.ref).dispatchExecutor, ephemeral.agent);
 });
 
 test('native_agent carries ticket anchors and verify command through its stable fallback', () => {

@@ -1585,17 +1585,37 @@ function dispatchExecutorName(ticket) {
   return name;
 }
 
-function prepareDispatch(slug, idOrRef) {
+// The STABLE, session-start-registered executor for a ticket's route (e.g.
+// sidequest-exec-xhigh, or the backend-specific sidequest-exec-codex-*-high).
+// Instant dispatch targets this instead of a fresh per-ticket definition: it is
+// already registered, so there is no watcher-registration wait and no def file.
+// A route with no stable executor (haiku, agent:null) has no instant target —
+// throw so the dispatch surface can steer the caller to --ephemeral.
+function stableExecutorName(ticket) {
+  if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
+  const resolved = resolveExec(ticket.model, ticket.effort);
+  if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort} — dispatch with --ephemeral.`);
+  return resolved.agent;
+}
+
+// Prepare a ticket for dispatch: persist a fresh claim nonce and the executor
+// name the claim guard will require. Default (instant) mode points
+// dispatchExecutor at the STABLE per-model executor, so the briefing + token can
+// ride the spawn prompt with no def write and no registration wait. opts.ephemeral
+// keeps the legacy behavior — a unique per-ticket executor name whose self-contained
+// definition any session can later adopt.
+function prepareDispatch(slug, idOrRef, opts) {
+  opts = opts || {};
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
-    t.dispatchExecutor = dispatchExecutorName(t);
+    t.dispatchExecutor = opts.ephemeral ? dispatchExecutorName(t) : stableExecutorName(t);
     t.updatedAt = new Date().toISOString();
     putTicket(slug, t);
-    return { ok: true, ticket: t, token: t.dispatchNonce };
+    return { ok: true, ticket: t, token: t.dispatchNonce, ephemeral: !!opts.ephemeral };
   });
 }
 
@@ -2906,6 +2926,7 @@ module.exports = {
   updateTicket,
   deleteTicket,
   dispatchExecutorName,
+  stableExecutorName,
   prepareDispatch,
   claimTicket,
   releaseTicket,

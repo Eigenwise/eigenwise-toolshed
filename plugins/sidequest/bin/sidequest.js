@@ -73,7 +73,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'ephemeral']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -1139,26 +1139,49 @@ function cmdDispatch(opts, positional) {
   if (!idOrRef) fail('dispatch: pass a ticket ref, e.g. sidequest dispatch SQ-12.');
   const { slug } = resolveProject(opts);
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
+  const ephemeral = !!opts.ephemeral;
   let prepared;
   try {
-    prepared = store.prepareDispatch(slug, idOrRef);
+    prepared = store.prepareDispatch(slug, idOrRef, { ephemeral });
   } catch (err) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
-  let created;
+  if (ephemeral) {
+    let created;
+    try {
+      created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId });
+    } catch (err) {
+      fail(`dispatch: ${(err && err.message) || err}`);
+    }
+    process.stdout.write(JSON.stringify({
+      project: slug,
+      ref: prepared.ticket.ref,
+      mode: 'ephemeral',
+      agent: created.name,
+      tokenPrefix: prepared.token.slice(0, 12),
+      token: prepared.token,
+      spawn: created.spawn,
+      guidance: `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then spawn ${created.name} and claim ${prepared.ticket.ref} with --executor ${created.name} --token ${prepared.token}.`,
+    }, null, 2) + '\n');
+    return;
+  }
+  let briefing;
   try {
-    created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId });
+    briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
   } catch (err) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
+  const agent = prepared.ticket.dispatchExecutor;
   process.stdout.write(JSON.stringify({
     project: slug,
     ref: prepared.ticket.ref,
-    agent: created.name,
+    mode: 'instant',
+    agent,
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
-    spawn: created.spawn,
-    guidance: `Spawn ${created.name}, then claim ${prepared.ticket.ref} with --executor ${created.name} --token ${prepared.token}.`,
+    spawn: { subagent_type: agent, name: agent, mode: 'bypassPermissions' },
+    briefing,
+    guidance: `Instant: spawn ${agent} (already registered) with the briefing as its prompt; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}. No registration wait.`,
   }, null, 2) + '\n');
 }
 
@@ -1703,7 +1726,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--project <path-or-slug>] [--session id]  prepare and render a token-gated per-ticket executor
+  sidequest dispatch <SQ-n> [--ephemeral] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: default (instant) returns the briefing + token to spawn the ticket's stable executor with no registration wait; --ephemeral writes a per-ticket definition for cross-session adoption
   sidequest native-agent <SQ-n> [--prompt "task"] [--json]  return an already-registered native Agent spawn spec + bounded prompt
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.

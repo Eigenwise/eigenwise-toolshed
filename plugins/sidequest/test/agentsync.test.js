@@ -164,6 +164,34 @@ test('ticket executor rejects non-string and empty dispatch nonces', () => {
   }
 });
 
+test('renderTicketBriefing reuses the template body with the ticket brief and token, minus frontmatter', () => {
+  seedCatalog([TERRA]);
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-334', title: 'Instant dispatch', description: 'Ride the briefing on the spawn prompt.',
+    model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-exec-codex-gpt-5-6-terra-high',
+    executorAnchors: 'lib/store.js prepareDispatch', executorVerify: 'node --test plugins/sidequest/test/agentsync.test.js',
+    comments: [{ by: 'scout', body: 'Stable exec is pre-registered.' }],
+    category: { contract: 'Plan against the system, verify end to end.' },
+  }, 'instant-token-334');
+  assert.doesNotMatch(briefing, /^---$/m);
+  assert.doesNotMatch(briefing, /^name:/m);
+  assert.match(briefing, /You are a sidequest ticket executor/);
+  assert.match(briefing, /Instant dispatch/);
+  assert.match(briefing, /Ride the briefing on the spawn prompt/);
+  assert.match(briefing, /Stable exec is pre-registered/);
+  assert.match(briefing, /Plan against the system, verify end to end/);
+  assert.match(briefing, /--executor sidequest-exec-codex-gpt-5-6-terra-high/);
+  assert.match(briefing, /--token instant-token-334/);
+});
+
+test('renderTicketBriefing rejects an empty or multi-line nonce', () => {
+  seedCatalog([TERRA]);
+  const ticket = { ref: 'SQ-334', title: 't', model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-exec-codex-gpt-5-6-terra-high', category: {} };
+  for (const nonce of [undefined, '', '  ', 'line1\nline2']) {
+    assert.throws(() => agentsync.renderTicketBriefing(ticket, nonce), /nonce is required/);
+  }
+});
+
 test('ticket executors use the existing temporary cleanup lifecycle', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();

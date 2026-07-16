@@ -236,6 +236,41 @@ function ticketBrief(ticket, nonce) {
   return parts.join('\n\n');
 }
 
+// Drop the YAML frontmatter block a rendered executor file opens with, leaving
+// the prompt body. Instant dispatch pastes the body into a spawn prompt, where
+// def-file frontmatter (name/model/maxTurns/permissionMode) is meaningless — the
+// stable executor supplies its own.
+function stripExecFrontmatter(source) {
+  const text = String(source);
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(text);
+  const body = match ? text.slice(match[0].length) : text;
+  return body.replace(/^\s*\n/, '');
+}
+
+// Instant-dispatch briefing: the SAME executor body an ephemeral def would carry
+// — the shared template plus this ticket's brief and claim token — minus the
+// def-file frontmatter, returned as text for the orchestrator to paste into the
+// STABLE executor's spawn prompt. One renderer (renderExecAgent + ticketBrief)
+// backs both modes, so the template in scripts/_exec-template.md stays the single
+// source. The stable executor is registered from session start, so instant
+// dispatch writes no def and waits on no watcher.
+function renderTicketBriefing(ticket, nonce) {
+  if (typeof nonce !== 'string' || !nonce.trim() || /[\r\n]/.test(nonce)) {
+    throw new Error('dispatch briefing nonce is required and must be a non-empty one-line string.');
+  }
+  const name = ticket && ticket.dispatchExecutor
+    ? String(ticket.dispatchExecutor)
+    : ((ticket && ticket.exec && ticket.exec.agent) || `sidequest-exec-${(ticket && ticket.effort) || 'low'}`);
+  const source = renderExecAgent({
+    name,
+    effort: ticket.effort,
+    marker: '',
+    extraNote: '',
+    ticketBrief: ticketBrief(ticket, nonce.trim()),
+  });
+  return stripExecFrontmatter(source);
+}
+
 function createTicketExecutor(ticket, opts) {
   opts = opts || {};
   const rawNonce = opts.nonce;
@@ -456,6 +491,7 @@ module.exports = {
   execMaxTurns,
   agentFileName,
   renderExecAgent,
+  renderTicketBriefing,
   createTicketExecutor,
   ticketExecutorNameForTicket,
   createNativeAgent,

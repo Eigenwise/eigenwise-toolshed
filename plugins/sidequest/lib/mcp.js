@@ -591,24 +591,45 @@ const TOOLS = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare and render a token-gated per-ticket executor in one step. Spawn the returned agent, then claim with its exact executor name and token.',
+    description: 'Prepare a token-gated dispatch for a ticket. Default (instant): returns the full rendered briefing text plus the token — spawn the ticket\'s STABLE executor (the returned agent) with that briefing as its prompt; it is registered from session start, so there is no registration wait and no def file. ephemeral:true instead writes a unique per-ticket definition with the token embedded (self-contained so any session may adopt it) and returns its name to spawn once registered. Either way the claim stays gated on the token and executor.',
     inputSchema: {
       type: 'object',
-      properties: { ref: { type: 'string' }, project: PROJECT_PROP, session: { type: 'string' } },
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        session: { type: 'string' },
+        ephemeral: { type: 'boolean', description: 'Write a unique per-ticket executor definition (legacy path) instead of instant dispatch. Use for cross-session adoption; costs the watcher-registration wait.' },
+      },
       required: ['ref'],
     },
     handler(args) {
       const { slug } = resolveProject(args.project);
-      const prepared = store.prepareDispatch(slug, args.ref);
-      const created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId: sessionOf(args) });
+      const ephemeral = !!args.ephemeral;
+      const prepared = store.prepareDispatch(slug, args.ref, { ephemeral });
+      if (ephemeral) {
+        const created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId: sessionOf(args) });
+        return {
+          project: slug,
+          ref: prepared.ticket.ref,
+          mode: 'ephemeral',
+          agent: created.name,
+          tokenPrefix: prepared.token.slice(0, 12),
+          token: prepared.token,
+          spawn: created.spawn,
+          guidance: `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then spawn ${created.name} and claim ${prepared.ticket.ref} with executor ${created.name} and the returned token.`,
+        };
+      }
+      const agent = prepared.ticket.dispatchExecutor;
       return {
         project: slug,
         ref: prepared.ticket.ref,
-        agent: created.name,
+        mode: 'instant',
+        agent,
         tokenPrefix: prepared.token.slice(0, 12),
         token: prepared.token,
-        spawn: created.spawn,
-        guidance: `Spawn ${created.name}, then claim ${prepared.ticket.ref} with executor ${created.name} and the returned token.`,
+        spawn: { subagent_type: agent, name: agent, mode: 'bypassPermissions' },
+        briefing: agentsync.renderTicketBriefing(prepared.ticket, prepared.token),
+        guidance: `Instant: spawn ${agent} (already registered) with the returned briefing as its prompt; it claims ${prepared.ticket.ref} with executor ${agent} and the token. No registration wait.`,
       };
     },
   },
