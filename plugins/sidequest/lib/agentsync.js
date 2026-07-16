@@ -88,13 +88,18 @@ function defaultAgentsDir() {
 // The virtual model id the codex-gateway shim (>=0.9.0) resolves per request
 // from the route marker below. Must match the gateway's advertised id.
 const DISPATCH_MODEL_ID = 'claude-codex-auto';
-const ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63}\]$/;
+const ROUTE_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
+const ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
 
 // The exact marker grammar the shim scans for. Throws rather than emitting a
 // marker the gateway would silently ignore (which would 400 the whole run).
-function routeMarker(dispatchModel) {
-  const marker = `[sidequest-route model=${String(dispatchModel || '')}]`;
-  if (!ROUTE_MARKER_RE.test(marker)) throw new Error(`dispatch model id is not marker-safe: ${dispatchModel}`);
+function routeMarker(dispatchModel, effort) {
+  const model = String(dispatchModel || '');
+  const markerEffort = String(effort || '');
+  if (!ROUTE_MODEL_RE.test(model)) throw new Error(`dispatch model id is not marker-safe: ${dispatchModel}`);
+  if (!EXEC_EFFORTS.includes(markerEffort)) throw new Error(`dispatch effort is not marker-safe: ${effort}`);
+  const marker = `[sidequest-route model=${model} effort=${markerEffort}]`;
+  if (!ROUTE_MARKER_RE.test(marker)) throw new Error('dispatch route marker does not match the gateway grammar.');
   return marker;
 }
 
@@ -120,7 +125,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
 // briefing's route marker, so the note bans writing that marker anywhere else
 // (the gateway takes the last occurrence in the conversation).
 function dispatchNote(effort) {
-  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at \`${effort}\` effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model from the \`[sidequest-route model=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models: one spawn carries exactly one route marker. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
+  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at \`${effort}\` effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, whose effort mirrors this def frontmatter for gateway-side audit, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models: one spawn carries exactly one route marker. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
 }
 
 function renderDispatchAgent(effort) {
@@ -278,7 +283,7 @@ function renderTicketBriefing(ticket, nonce) {
     : ((ticket && ticket.exec && ticket.exec.agent) || `sidequest-exec-${(ticket && ticket.effort) || 'low'}`);
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const marker = resolved && resolved.backend === 'codex' && resolved.dispatchModel
-    ? routeMarker(resolved.dispatchModel)
+    ? routeMarker(resolved.dispatchModel, ticket.effort)
     : null;
   const source = renderExecAgent({
     name,

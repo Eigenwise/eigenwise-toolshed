@@ -176,9 +176,9 @@ unchanged as the Agent prompt. The briefing carries the full ticket contract, ca
 anchors, verify command, comments digest, and token-gated claim guard. There is no watcher-registration
 announcement or registration wait in this path. Claude routes pass `model: exec.model`; Codex routes
 omit `model`: the shared `sidequest-exec-dispatch-<effort>` def pins the virtual `claude-codex-auto`,
-and the briefing's closing `[sidequest-route model=...]` line tells the codex-gateway shim which real
-model to run — pass the briefing verbatim, never write another such line, and never batch tickets
-stamped with different models into one spawn. All five effort levels for both Claude builtins and Codex
+and the briefing's closing `[sidequest-route model=... effort=...]` line tells the codex-gateway shim which real
+model and effort to run — pass the briefing verbatim, never write another such line, and never batch tickets
+stamped with different models into one spawn. The gateway route log records both values per dispatch; a marker effort that differs from the board stamp in an audit means the prompt was hand-edited. All five effort levels for both Claude builtins and Codex
 dispatch are always provisioned. Route edits change only board data; the executor def set
 is fixed, so nothing is written or registered when a route changes. The executor claims with the
 returned token and exact stable executor name.

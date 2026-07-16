@@ -144,7 +144,7 @@ test('dispatch is instant by default (stable executor + briefing + token); ephem
   assert.equal(instant.spawn.subagent_type, instant.agent);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
   assert.match(instant.briefing, new RegExp(`--token ${instant.token}`));
-  assert.match(instant.briefing, /\[sidequest-route model=gpt-5\.6-terra\]/);
+  assert.match(instant.briefing, /\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
   assert.match(instant.briefing, /## This ticket/);
   assert.doesNotMatch(instant.briefing, /^---$/m);
   assert.match(instant.guidance, /executor/);

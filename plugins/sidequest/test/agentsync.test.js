@@ -232,7 +232,7 @@ test('renderTicketBriefing reuses the template body with the ticket brief and to
   assert.match(briefing, /--token instant-token-334/);
   assert.match(briefing, /Commit and ship before done/);
   assert.match(briefing, /include its hash in your own done comment/);
-  assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra]'));
+  assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
 });
 
 test('renderTicketBriefing embeds no route marker for a Claude-backed route', () => {
@@ -244,10 +244,15 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
   assert.doesNotMatch(briefing, /\[sidequest-route model=/);
 });
 
-test('routeMarker rejects ids outside the gateway grammar', () => {
-  assert.equal(agentsync.routeMarker('gpt-5.6-sol'), '[sidequest-route model=gpt-5.6-sol]');
+test('routeMarker rejects ids and efforts outside the gateway grammar', () => {
+  for (const effort of EFFORTS) {
+    assert.equal(agentsync.routeMarker('gpt-5.6-sol', effort), `[sidequest-route model=gpt-5.6-sol effort=${effort}]`);
+  }
   for (const bad of ['', 'UPPER', 'has space', 'has]bracket', '-leading', 'x'.repeat(70)]) {
-    assert.throws(() => agentsync.routeMarker(bad), /not marker-safe/);
+    assert.throws(() => agentsync.routeMarker(bad, 'high'), /model id is not marker-safe/);
+  }
+  for (const bad of ['', 'highest', 'HIGH', ' has-space', 'high\nlow']) {
+    assert.throws(() => agentsync.routeMarker('gpt-5.6-sol', bad), /effort is not marker-safe/);
   }
 });
 
