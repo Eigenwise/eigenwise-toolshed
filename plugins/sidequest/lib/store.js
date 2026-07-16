@@ -1146,6 +1146,7 @@ function createTicket(slug, fields) {
     comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
     claim: null,               // { by, at } when an agent has claimed it to work on
+    dispatchNonce: null,
     assignee: normalizeAssignee(fields.assignee), // who it's assigned to (usually the human "you"); distinct from an agent claim
     archived: false,           // hidden from the board (kept, restorable) once true
     archivedAt: null,
@@ -1532,6 +1533,19 @@ function withTicketLock(slug, id, fn) {
   }
 }
 
+function prepareDispatch(slug, idOrRef) {
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
+    t.updatedAt = new Date().toISOString();
+    putTicket(slug, t);
+    return { ok: true, ticket: t, token: t.dispatchNonce };
+  });
+}
+
 // Atomically claim a ticket for worker `by`. Refuses (ok:false) if the ticket is
 // gone, already done, or actively claimed by someone else — unless that claim is
 // stale or opts.force is set. On success sets claim and moves it to "doing"
@@ -1544,6 +1558,7 @@ function claimTicket(slug, idOrRef, by, opts) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
+    if (t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     const held = t.claim;
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
@@ -1587,6 +1602,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
     t.claim = null;
+    t.dispatchNonce = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
     if (opts.workedBy) t.workedBy = opts.workedBy; // self-reported provenance stamp (done transition only)
     t.lastEventType = 'status';
@@ -2806,6 +2822,7 @@ module.exports = {
   createTicket,
   updateTicket,
   deleteTicket,
+  prepareDispatch,
   claimTicket,
   releaseTicket,
   completeTicket,

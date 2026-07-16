@@ -259,6 +259,17 @@ test('claim requires a worker id (no shared-identity default)', () => {
   assert.match(res.content[0].text, /by.*required/i);
 });
 
+test('MCP claim passes a prepared dispatch token through to the store', () => {
+  const added = callTool('add', { title: 'nonce through MCP', complexity: 2, why: 'exercise the ephemeral executor claim nonce through the MCP claim tool' });
+  const slug = store.ensureProject(PROJ).slug;
+  const prepared = store.prepareDispatch(slug, added.ticket.ref);
+  const refused = callTool('claim', { ref: added.ticket.ref, by: 'mcp-no-token' });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'token');
+  const accepted = callTool('claim', { ref: added.ticket.ref, by: 'mcp-with-token', token: prepared.token });
+  assert.strictEqual(accepted.ok, true);
+});
+
 test('MCP claim rejects a generic executor for a Codex route', () => {
   seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
   try {

@@ -114,6 +114,28 @@ test('omitting effort remains compatible with callers that do not prove an execu
   assert.equal(claim.ticket.status, 'doing');
 });
 
+test('prepared dispatches refuse missing or wrong claim tokens, then clear on done and release', () => {
+  const slug = store.ensureProject(PROJ).slug;
+
+  const doneRef = seed('guard.claude');
+  const preparedDone = store.prepareDispatch(slug, doneRef);
+  assert.equal(preparedDone.ok, true);
+  assert.ok(preparedDone.token);
+  const missing = runCli(['claim', doneRef, '--by', 'missing-token', '--json']);
+  assert.notEqual(missing.status, 0);
+  assert.equal(JSON.parse(missing.stdout).reason, 'token');
+  const wrong = runCli(['claim', doneRef, '--by', 'wrong-token', '--token', 'wrong', '--json']);
+  assert.notEqual(wrong.status, 0);
+  assert.equal(JSON.parse(wrong.stdout).reason, 'token');
+  assert.equal(cliJson(['claim', doneRef, '--by', 'right-token', '--token', preparedDone.token]).ok, true);
+  assert.equal(cliJson(['done', doneRef, '--by', 'right-token']).ticket.dispatchNonce, null);
+
+  const releaseRef = seed('guard.claude');
+  const preparedRelease = store.prepareDispatch(slug, releaseRef);
+  assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token', preparedRelease.token]).ok, true);
+  assert.equal(cliJson(['release', releaseRef, '--by', 'release-token', '--status', 'todo']).ticket.dispatchNonce, null);
+});
+
 test('an unavailable primary uses the category fallback effort for the guard', () => {
   const ref = seed('guard.codex');
   process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-empty-'));

@@ -637,7 +637,7 @@ function cmdClaim(opts, positional) {
     }
     return;
   }
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, token: opts.token, source: opts.source || 'cli', sessionId: sessionId(opts) });
   const warnings = res.ok ? claimPlanningWarnings(res.ticket) : [];
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, { warnings }), null, 2) + '\n');
@@ -1589,7 +1589,7 @@ Usage:
 
 Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
-  sidequest claim <id|SQ-n> [--by who] [--force] [--effort level]   atomically take a ticket (fails if gone/done/claimed; --effort must match the resolved route or the claim is refused as wrong-executor)
+  sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level]   atomically take a ticket (fails if gone/done/claimed; a prepared dispatch requires its nonce; --effort must match the resolved route or the claim is refused as wrong-executor)
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>]   claim the best available ticket (highest priority first)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing

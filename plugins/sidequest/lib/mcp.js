@@ -383,6 +383,7 @@ const TOOLS = [
         by: { type: 'string', description: 'Unique per-worker id (e.g. claude-<8 hex>).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         executor: { type: 'string', description: 'Exact executor name from the ticket runtime; proves a Codex route uses its backend-specific generated executor.' },
+        token: { type: 'string', description: 'Dispatch nonce required by tickets prepared for an ephemeral executor.' },
         force: { type: 'boolean', description: 'Steal a live claim — only when certain.' },
         session: { type: 'string' },
       },
@@ -393,7 +394,7 @@ const TOOLS = [
       const by = requireBy(args, 'claim');
       const drift = executorDrift(slug, args.ref, args.effort, args.executor);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
-      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, source: 'mcp', sessionId: sessionOf(args) });
+      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, token: args.token, source: 'mcp', sessionId: sessionOf(args) });
       return Object.assign({ project: slug }, res, { warnings: res.ok ? store.ticketPlanningWarnings(res.ticket) : [] });
     },
   },
