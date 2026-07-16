@@ -354,8 +354,9 @@ const TOOLS = [
         }
       }
       if (args.why !== undefined) patch.complexityWhy = args.why;
-      const t = store.updateTicket(slug, args.ref, patch);
-      if (!t) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
+      const updated = store.updateTicket(slug, args.ref, patch);
+      if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
+      const t = store.getTicket(slug, updated.ref) || updated;
       return { ok: true, project: slug, ticket: t, warnings: store.ticketPlanningWarnings(t) };
     },
   },

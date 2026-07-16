@@ -179,6 +179,17 @@ test('add enforces complexity + why and rejects direct model/effort', () => {
   assert.ok(out.ticket.model, 'routing is derived and stamped');
 });
 
+test('update echoes freshly resolved routing after changing category', () => {
+  store.setCategory({ id: 'mcp-update-echo', name: 'MCP update echo', route: { model: 'opus', effort: 'high' } });
+  const added = callTool('add', { title: 'MCP update echo', category: 'mechanical' });
+  const updated = callTool('update', { ref: added.ticket.ref, category: 'mcp-update-echo' });
+  assert.strictEqual(updated.ticket.categoryId, 'mcp-update-echo');
+  assert.strictEqual(updated.ticket.category.id, 'mcp-update-echo');
+  assert.strictEqual(updated.ticket.model, 'opus');
+  assert.strictEqual(updated.ticket.effort, 'high');
+  assert.strictEqual(updated.ticket.exec.model, 'opus');
+});
+
 test('status validation fails loudly and directs deletion to remove', () => {
   const added = callTool('add', { title: 'strict status', complexity: 1, why: 'exercise loud validation for invalid MCP status values' });
   const invalid = callToolRaw('update', { ref: added.ticket.ref, status: 'deleted' });
