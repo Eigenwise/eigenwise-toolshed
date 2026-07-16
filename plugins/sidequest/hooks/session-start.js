@@ -80,7 +80,9 @@ function pluginRoot() {
 // remain fail-soft because provisioning never blocks a session.
 function provisionExecAgents() {
   try {
+    const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
     const sync = require(path.join(pluginRoot(), 'lib', 'agentsync.js'));
+    store.sweepStaleClaims({ source: 'session-start' });
     sync.cleanupNativeAgents({ staleBefore: Date.now() - 6 * 60 * 60 * 1000 });
     return sync.syncExecAgents();
   } catch (_) {

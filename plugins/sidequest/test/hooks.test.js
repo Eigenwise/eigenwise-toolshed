@@ -317,6 +317,22 @@ test('peer-guard: a non-sidequest subagent messaging a peer is allowed', () => {
   assert.strictEqual(runGuardPeer({ agent_type: 'code-reviewer', tool_input: { to: 'researcher', message: 'hi' } }), null);
 });
 
+test('session-start sweep is fail-soft and releases only claims past the TTL', () => {
+  const stale = addTicket('session-start stale claim');
+  const fresh = addTicket('session-start fresh claim');
+  assert.equal(store.claimTicket(slug, stale.ref, 'stale-session').ok, true);
+  assert.equal(store.claimTicket(slug, fresh.ref, 'fresh-session').ok, true);
+  const staleTicket = store.getTicket(slug, stale.ref);
+  staleTicket.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  db.putRow(database, 'tickets', {
+    id: staleTicket.id, project: slug, ref: staleTicket.ref, status: staleTicket.status,
+    archived: staleTicket.archived ? 1 : 0, ord: staleTicket.order, claim_by: staleTicket.claim.by, data: staleTicket,
+  });
+  assert.doesNotThrow(() => runHook(SESSION, { session_id: 'sweep-test' }));
+  assert.equal(store.getTicket(slug, stale.ref).claim, null);
+  assert.equal(store.getTicket(slug, fresh.ref).claim.by, 'fresh-session');
+});
+
 test('session-start: carries the route-down + tight-loop doctrine', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.match(ctx, /sidequest \(active\)/);

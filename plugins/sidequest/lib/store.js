@@ -1453,11 +1453,13 @@ function priorityRank(p) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? PRIORITY_RANK[p] : 9;
 }
 
+const DEFAULT_CLAIM_TTL_MIN = 60;
+
 // How long a claim stays valid without being refreshed before another worker
 // may take it over (a crashed/abandoned worker must never wedge a ticket).
 function claimTtlMs() {
   const min = Number(process.env.SIDEQUEST_CLAIM_TTL_MIN);
-  return (Number.isFinite(min) && min > 0 ? min : 60) * 60 * 1000;
+  return (Number.isFinite(min) && min > 0 ? min : DEFAULT_CLAIM_TTL_MIN) * 60 * 1000;
 }
 
 function isClaimStale(claim) {
@@ -1671,6 +1673,32 @@ function completeTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   const workedBy = makeWorkedBy({ model: opts.model, effort: opts.effort, by });
   return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, { status: 'done', workedBy }));
+}
+
+// Release claims that exceeded the shared TTL. Each release is locked and audited,
+// so a fresh replacement claim is never cleared by a stale snapshot.
+function sweepStaleClaims(opts) {
+  opts = opts || {};
+  const source = opts.source ? String(opts.source) : 'sweep';
+  const released = [];
+  for (const project of listProjects({ all: true })) {
+    if (opts.project && project.slug !== opts.project) continue;
+    for (const ticket of listTickets(project.slug)) {
+      if (ticket.archived || ticket.status === 'done' || !isClaimStale(ticket.claim)) continue;
+      try {
+        const res = releaseTicket(project.slug, ticket.id, ticket.claim.by, { status: 'todo', source });
+        if (!res.ok) continue;
+        released.push({ project: project.slug, ref: ticket.ref });
+        addComment(project.slug, ticket.id, {
+          by: 'sidequest', kind: 'comment', source,
+          body: `Auto-released to **todo**: claim exceeded the ${Math.round(claimTtlMs() / 60000)} minute TTL (was claimed by \`${ticket.claim.by}\`).`,
+        });
+      } catch (_) {
+        // One inaccessible board must not prevent other stale claims from recovering.
+      }
+    }
+  }
+  return { ok: true, ttlMs: claimTtlMs(), released };
 }
 
 // True when a ticket may be handed to a worker running as tier `want`: either the
@@ -2175,6 +2203,7 @@ function listPayload(slug, opts) {
     tickets = tickets.map((t) => briefTicket(slug, t, { index }));
   }
   const page = pageTickets(tickets, opts);
+  page.claimTtlMs = claimTtlMs();
   page.categories = classifierCategories({ project: slug });
   return page;
 }
@@ -2188,7 +2217,7 @@ function readyPayload(slug, opts) {
   let tickets = readyTickets(slug, { model: opts.model, category: opts.category });
   const waves = readyWaves(slug, { model: opts.model, category: opts.category }).map((wave) => wave.map((t) => t.ref));
   if (opts.brief) tickets = tickets.map((t) => briefTicket(slug, t, { blockedBy: [] }));
-  return { tickets, waves, categories: classifierCategories({ project: slug }) };
+  return { tickets, waves, claimTtlMs: claimTtlMs(), categories: classifierCategories({ project: slug }) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -2874,6 +2903,9 @@ module.exports = {
   listArchived,
   listActive,
   isClaimStale,
+  claimTtlMs,
+  DEFAULT_CLAIM_TTL_MIN,
+  sweepStaleClaims,
   normalizeLabels,
   NOTIFICATION_KINDS,
   listNotifications,

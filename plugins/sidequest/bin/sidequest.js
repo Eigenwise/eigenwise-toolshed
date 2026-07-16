@@ -670,12 +670,18 @@ function cmdClaim(opts, positional) {
   }
 }
 
+function closeDispatchExecutor(ticket) {
+  if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
+}
+
 function cmdRelease(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('release: pass a ticket id or ref, e.g. sidequest release SQ-3');
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
+  const ticket = store.getTicket(slug, idOrRef);
   const res = store.releaseTicket(slug, idOrRef, by, { force: !!opts.force, status: opts.status, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  if (res.ok) closeDispatchExecutor(ticket);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -692,6 +698,7 @@ function cmdDone(opts, positional) {
   const by = workerId(opts);
   // Optional self-reported provenance: which tier/effort actually worked this
   // ticket. Invalid values throw from the store; surface them as a clean error.
+  const ticket = store.getTicket(slug, idOrRef);
   let res;
   try {
     res = store.completeTicket(slug, idOrRef, by, {
@@ -704,6 +711,7 @@ function cmdDone(opts, positional) {
   } catch (e) {
     fail(`done: ${(e && e.message) || e}`);
   }
+  if (res.ok) closeDispatchExecutor(ticket);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -711,6 +719,16 @@ function cmdDone(opts, positional) {
   }
   if (res.ok) console.log(`✓ ${res.ticket.ref} done  — ${meta.name}`);
   else reportClaimFailure('complete', idOrRef, res, meta);
+}
+
+function cmdSweepClaims(opts) {
+  const { slug, meta } = resolveProject(opts);
+  const res = store.sweepStaleClaims({ project: slug, source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    return;
+  }
+  console.log(`✓ swept ${res.released.length} stale claim(s) from ${meta.name} (TTL ${Math.round(res.ttlMs / 60000)}m)`);
 }
 
 function cmdNext(opts) {
@@ -1666,6 +1684,7 @@ Native Agent dispatch (routed work stays in this conversation):
     (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's
     tickets recover immediately instead of waiting out the claim TTL; safe — it only touches that session's
     claims). Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.
+  sidequest claims sweep [--project <path-or-slug>]  release claims older than SIDEQUEST_CLAIM_TTL_MIN (default 60m)
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
@@ -1770,6 +1789,10 @@ async function main() {
     case 'claim':
     case 'take':
       cmdClaim(opts, positional);
+      break;
+    case 'claims':
+      if (positional[0] !== 'sweep') fail('claims: expected `sidequest claims sweep`');
+      cmdSweepClaims(opts);
       break;
     case 'next':
     case 'grab':

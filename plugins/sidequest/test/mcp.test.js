@@ -77,13 +77,30 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'claim', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'archive_board', 'unarchive_board']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'claim', 'sweepClaims', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'archive_board', 'unarchive_board']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const t of resp.result.tools) {
     assert.strictEqual(t.inputSchema.type, 'object', `${t.name} has an object input schema`);
   }
 });
+
+test('sweepClaims releases stale claims through MCP', () => {
+  const created = callTool('add', { title: 'MCP stale sweep', unclassified: true });
+  const slug = created.project;
+  assert.equal(store.claimTicket(slug, created.ticket.ref, 'mcp-stale').ok, true);
+  const stale = store.getTicket(slug, created.ticket.ref);
+  stale.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  const dbModule = require('../lib/db.js');
+  dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: stale.id, project: slug, ref: stale.ref, status: stale.status,
+    archived: stale.archived ? 1 : 0, ord: stale.order, claim_by: stale.claim.by, data: stale,
+  });
+  const swept = callTool('sweepClaims', { project: slug });
+  assert.equal(swept.released.length, 1);
+  assert.equal(store.getTicket(slug, created.ticket.ref).claim, null);
+});
+
 
 test('MCP board archive tools require explicit refs and list archived boards', () => {
   const board = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-archived-board'), 'MCP Archived Board');

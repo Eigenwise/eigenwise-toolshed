@@ -116,9 +116,12 @@ test('omitting effort remains compatible with callers that do not prove an execu
 
 test('prepared dispatches require their token and ephemeral executor, then clear on done and release', () => {
   const slug = store.ensureProject(PROJ).slug;
+  const agents = path.join(SIDEQUEST_HOME, 'agents');
+  fs.mkdirSync(agents, { recursive: true });
 
   const doneRef = seed('guard.codex');
   const preparedDone = store.prepareDispatch(slug, doneRef);
+  fs.writeFileSync(path.join(agents, `${preparedDone.ticket.dispatchExecutor}.md`), '<!-- generated-by: sidequest-native-agent -->');
   assert.equal(preparedDone.ok, true);
   assert.ok(preparedDone.token);
   assert.match(preparedDone.ticket.dispatchExecutor, new RegExp(`^sidequest-ticket-${doneRef.toLowerCase()}-gpt-test-[a-f0-9]{8}$`));
@@ -132,13 +135,43 @@ test('prepared dispatches require their token and ephemeral executor, then clear
   const done = cliJson(['done', doneRef, '--by', 'right-token']);
   assert.equal(done.ticket.dispatchNonce, null);
   assert.equal(done.ticket.dispatchExecutor, null);
+  assert.ok(!fs.existsSync(path.join(agents, `${preparedDone.ticket.dispatchExecutor}.md`)));
 
   const releaseRef = seed('guard.codex');
   const preparedRelease = store.prepareDispatch(slug, releaseRef);
+  fs.writeFileSync(path.join(agents, `${preparedRelease.ticket.dispatchExecutor}.md`), '<!-- generated-by: sidequest-native-agent -->');
   assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token', preparedRelease.token, '--executor', preparedRelease.ticket.dispatchExecutor]).ok, true);
   const released = cliJson(['release', releaseRef, '--by', 'release-token', '--status', 'todo']);
   assert.equal(released.ticket.dispatchNonce, null);
   assert.equal(released.ticket.dispatchExecutor, null);
+  assert.ok(!fs.existsSync(path.join(agents, `${preparedRelease.ticket.dispatchExecutor}.md`)));
+});
+
+test('claims sweep marks stale claims, audits release, and leaves fresh claims alone', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  const staleRef = seed('guard.claude');
+  const freshRef = seed('guard.claude');
+  assert.equal(store.claimTicket(slug, staleRef, 'stale-worker').ok, true);
+  assert.equal(store.claimTicket(slug, freshRef, 'fresh-worker').ok, true);
+  const stale = store.getTicket(slug, staleRef);
+  stale.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  stale.updatedAt = stale.claim.at;
+  const dbModule = require('../lib/db.js');
+  const db = dbModule.openDb(SIDEQUEST_HOME);
+  dbModule.putRow(db, 'tickets', {
+    id: stale.id, project: slug, ref: stale.ref, status: stale.status,
+    archived: stale.archived ? 1 : 0, ord: stale.order, claim_by: stale.claim.by, data: stale,
+  });
+
+  const before = cliJson(['list', '--brief']);
+  assert.equal(before.tickets.find((ticket) => ticket.ref === staleRef).claim.stale, true);
+  assert.equal(before.tickets.find((ticket) => ticket.ref === freshRef).claim.stale, false);
+  const swept = cliJson(['claims', 'sweep']);
+  assert.equal(swept.released.length, 1);
+  assert.equal(ticket(staleRef).status, 'todo');
+  assert.equal(ticket(staleRef).claim, null);
+  assert.match(ticket(staleRef).comments.at(-1).body, /claim exceeded the/);
+  assert.equal(ticket(freshRef).claim.by, 'fresh-worker');
 });
 
 test('a re-dispatch replaces the executor and token, rejecting the stale pair', () => {

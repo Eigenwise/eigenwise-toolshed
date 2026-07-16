@@ -193,6 +193,10 @@ const PROJECT_PROP = { type: 'string', description: 'Board to target (a register
 // envelope and array indentation are added.
 const LIST_CHAR_BUDGET = 55000;
 
+function closeDispatchExecutor(ticket) {
+  if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
+}
+
 const TOOLS = [
   {
     name: 'list',
@@ -408,6 +412,18 @@ const TOOLS = [
     },
   },
   {
+    name: 'sweepClaims',
+    description: 'Release every claim older than the configured staleness TTL, add an audit comment, and leave fresh claims untouched.',
+    inputSchema: {
+      type: 'object',
+      properties: { project: PROJECT_PROP },
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      return store.sweepStaleClaims({ project: slug, source: 'mcp' });
+    },
+  },
+  {
     name: 'next',
     description: 'Atomically claim the top-priority available ticket. Filter by resolved model and/or category ID. Returns ok:false reason:empty when nothing is claimable.',
     inputSchema: {
@@ -449,7 +465,9 @@ const TOOLS = [
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'done');
       requireKnownModel('done', args.model);
+      const ticket = store.getTicket(slug, args.ref);
       const res = store.completeTicket(slug, args.ref, by, { source: 'mcp', model: args.model, effort: args.effort, sessionId: sessionOf(args) });
+      if (res.ok) closeDispatchExecutor(ticket);
       return Object.assign({ project: slug }, res);
     },
   },
@@ -470,7 +488,9 @@ const TOOLS = [
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'release');
+      const ticket = store.getTicket(slug, args.ref);
       const res = store.releaseTicket(slug, args.ref, by, { status: args.status, source: 'mcp', sessionId: sessionOf(args) });
+      if (res.ok) closeDispatchExecutor(ticket);
       return Object.assign({ project: slug }, res);
     },
   },
