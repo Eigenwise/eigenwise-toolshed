@@ -488,7 +488,10 @@
   .category-switch strong, .category-switch small { display: block; }
   .category-switch strong { color: var(--text-dim); font-size: 11px; }
   .category-switch small { margin-top: 2px; color: var(--text-faint); font-size: 10px; line-height: 1.35; }
-  .category-add { padding: 10px; border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--bg); display: grid; gap: 7px; }
+  .category-draft { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; padding: 9px; border: 1px solid var(--gold-line); border-radius: var(--radius-sm); background: var(--gold-soft); }
+  .category-draft input { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 8px; font: 12px var(--sans); color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+  .category-draft button { cursor: pointer; font: 700 11px var(--sans); color: var(--bg); background: var(--gold-bright); border: 1px solid var(--gold-bright); border-radius: var(--radius-sm); padding: 5px 10px; }
+  .category-draft small { grid-column: 1 / -1; color: var(--text-dim); font-size: 10.5px; }
   @media (max-width: 700px) { .category-settings .cat-head { align-items: start; flex-direction: column; } .category-row > summary { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; } .category-route-live { grid-column: 1 / -1; } .category-row > summary::after { grid-column: 2; grid-row: 1; } }
   .category-add summary { cursor: pointer; font-size: 11.5px; color: var(--text-dim); }
   /* Story field in the ticket editor: a swatch beside the select, and the
@@ -1799,7 +1802,9 @@
     var globalFallback = category && category.globalFallback || routingCatalog.globalFallback || { model: "sonnet", effort: "high" };
     var id = category ? category.id : "";
     var isGlobal = categoryProject() === "all";
+      var data = routingCatalog.categoryDraftAvailable ? '<div class="category-draft"><input type="text" data-category-draft placeholder="Describe the category in one sentence" /><button type="button" data-draft-category>Draft</button><small>Draft fills the form for review. It never saves on its own.</small></div>' : '';
     return '<div class="category-edit">' +
+      data +
       '<div class="category-form-section">' +
         '<div class="category-form-heading"><strong>Category details</strong><small>How tickets get classified</small></div>' +
         (create ? '<label class="category-field"><span>Category ID</span><input data-field="id" placeholder="e.g. research.api" /></label>' : '') +
@@ -1922,6 +1927,20 @@
       addFallback.addEventListener("click", function () { syncFallbackStep(true); });
       removeFallback.addEventListener("click", function () { syncFallbackStep(false); });
     }
+    var draft = form.querySelector('[data-draft-category]');
+    if (draft) draft.addEventListener("click", function () {
+      var sentence = form.querySelector('[data-category-draft]').value.trim();
+      if (!sentence) { toast("Describe the category first"); return; }
+      draft.disabled = true;
+      draft.textContent = "Drafting…";
+      api("/api/categories/draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sentence: sentence, project: categoryProject() !== "all" ? categoryProject() : undefined }) }).then(function (data) {
+        var value = data.draft;
+        var set = function (field, next) { var input = form.querySelector('[data-field="' + field + '"]'); if (input) input.value = next || ""; };
+        set("id", value.id); set("name", value.name); set("description", value.description); set("contract", value.contract); set("model", value.route.model); set("effort", value.route.effort);
+        if (value.fallback) { syncFallbackStep(true); set("fallback-model", value.fallback.model); set("fallback-effort", value.fallback.effort); } else { syncFallbackStep(false); }
+        toast("Category draft ready to review");
+      }).catch(function (e) { toast("Category draft failed: " + e.message); }).then(function () { draft.disabled = false; draft.textContent = "Draft"; });
+    });
     form.querySelector('[data-cancel-category]').addEventListener("click", renderCategorySettings);
     form.querySelector('[data-save-category]').addEventListener("click", function () {
       var payload = categoryPayload(form);

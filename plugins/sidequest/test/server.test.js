@@ -21,7 +21,8 @@ const HOME_DIR = os.homedir();
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-server-test-'));
 process.env.SIDEQUEST_NO_HOT_RECYCLE = '1';
 
-const { start, pickNewerInstall, findNewerInstall } = require('../lib/server.js');
+const { EventEmitter } = require('events');
+const { start, pickNewerInstall, findNewerInstall, validateCategoryDraft, setCategoryDraftSpawn, setCategoryDraftAvailable, setCategoryDraftTimeout } = require('../lib/server.js');
 const store = require('../lib/store.js');
 
 /* ------------------------------------------------------------------ *
@@ -187,6 +188,42 @@ test('dashboard exposes board archive routes and guarded project controls', () =
   assert.match(html, /Archive failed:/);
   assert.match(html, /Restore failed:/);
 });
+
+test('category draft validation accepts only live routes', () => {
+  const draft = validateCategoryDraft({ id: 'poker.analysis', name: 'Poker analysis', description: 'Analyze poker hand histories and related strategy work.', contract: 'Review the supplied hands and explain the result.', route: { model: 'sonnet', effort: 'high' }, fallback: null });
+  assert.equal(draft.id, 'poker.analysis');
+  assert.throws(() => validateCategoryDraft({ ...draft, name: { value: 'not a string' } }), /omitted name/);
+  assert.throws(() => validateCategoryDraft({ ...draft, route: { model: 'missing', effort: 'high' } }), /live catalog/);
+});
+
+test('category draft endpoint handles success, malformed output, missing CLI, and timeout', { concurrency: false }, async (t) => {
+  const started = await start(45000 + Math.floor(Math.random() * 1000));
+  t.after(() => { started.server.close(); setCategoryDraftSpawn(null); setCategoryDraftTimeout(null); });
+  const childFor = (stdout, code) => () => {
+    const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => child.emit('close', null);
+    process.nextTick(() => { if (stdout) child.stdout.emit('data', stdout); child.emit('close', code == null ? 0 : code); });
+    return child;
+  };
+  setCategoryDraftAvailable(true);
+  setCategoryDraftSpawn(childFor(JSON.stringify({ id: 'poker.analysis', name: 'Poker analysis', description: 'Analyze poker hand histories and related strategy work.', contract: 'Review the supplied hands.', route: { model: 'sonnet', effort: 'high' }, fallback: null })));
+  const ok = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'an agent that analyzes poker hand histories' });
+  assert.equal(ok.status, 200); assert.equal(ok.body.draft.id, 'poker.analysis');
+  setCategoryDraftSpawn(childFor('```json\n' + JSON.stringify({ id: 'fenced.category', name: 'Fenced category', description: 'Accept category drafts returned in fenced JSON.', contract: 'Review the draft.', route: { model: 'haiku', effort: 'medium' }, fallback: null }) + '\n```'));
+  const fenced = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'test' });
+  assert.equal(fenced.status, 200); assert.equal(fenced.body.draft.id, 'fenced.category');
+  setCategoryDraftSpawn(childFor('not json'));
+  const malformed = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'test' });
+  assert.equal(malformed.status, 422);
+  setCategoryDraftAvailable(false);
+  const missing = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'test' });
+  assert.equal(missing.status, 503);
+  setCategoryDraftAvailable(true);
+  setCategoryDraftSpawn(() => { const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {}; return child; });
+  setCategoryDraftTimeout(10);
+  const timedOut = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'test' });
+  assert.equal(timedOut.status, 422);
+});
+
 
 test('category endpoints project scope preserves global taxonomy and reports local layers', { concurrency: false }, async (t) => {
   const one = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'one')).slug;

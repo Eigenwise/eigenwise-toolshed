@@ -49,6 +49,19 @@ const CONTENT_TYPES = {
 };
 
 const START_TIME = new Date().toISOString();
+const CATEGORY_DRAFT_CLI = process.env.SIDEQUEST_CLAUDE_BIN || 'claude';
+const CATEGORY_DRAFT_TIMEOUT_MS = 60 * 1000;
+let categoryDraftTimeoutMs = CATEGORY_DRAFT_TIMEOUT_MS;
+const CATEGORY_DRAFT_MAX_OUTPUT = 64 * 1024;
+let categoryDraftAvailable = false;
+let categoryDraftSpawn = spawn;
+
+try {
+  const probe = spawnSync(CATEGORY_DRAFT_CLI, ['--version'], { stdio: 'ignore', timeout: 3000, windowsHide: true });
+  categoryDraftAvailable = !probe.error && probe.status === 0;
+} catch (_) {
+  categoryDraftAvailable = false;
+}
 
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -92,9 +105,60 @@ async function readJsonBody(req) {
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
-/* ------------------------------------------------------------------ *
- *  Aggregate ticket listing (used by the "All projects" view)
- * ------------------------------------------------------------------ */
+function categoryDraftPrompt(sentence, project) {
+  const catalog = store.modelsPayload(project ? { project } : undefined);
+  const examples = catalog.categories.slice(0, 4).map((category) => ({ id: category.id, name: category.name, description: category.description, contract: category.contract, route: category.route, fallback: category.fallback }));
+  const positioning = 'Haiku is for fast straightforward work; Sonnet for coding and analysis; Opus for complex autonomous work; Fable for the most demanding long-running work. Luna is clear repeatable high-volume work; Terra is the everyday tool-using workhorse; Sol is complex open-ended work.';
+  return 'Return strict JSON only, with no markdown. Draft one Sidequest category from the user sentence. The JSON schema is {"id":string,"name":string,"description":string,"contract":string,"route":{"model":string,"effort":string},"fallback":{"model":string,"effort":string}|null}. The id must be lowercase kebab-case or dot-namespaced. The description must classify requested work, not restate a title. The contract is executor instructions. Pick route and optional fallback only from the live catalog.\n\nUser sentence:\n' + JSON.stringify(String(sentence || '').trim()) + '\n\nLive catalog:\n' + JSON.stringify({ models: catalog.models, efforts: catalog.efforts, discovered: catalog.discovered, positioning }) + '\n\nStyle examples:\n' + JSON.stringify(examples);
+}
+
+function validateCategoryDraft(raw, project) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Claude returned a non-object draft.');
+  const id = String(raw.id || '').trim().toLowerCase();
+  if (!/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(id)) throw new Error('Claude returned an invalid category id.');
+  for (const field of ['name', 'description', 'contract']) {
+    if (typeof raw[field] !== 'string' || !raw[field].trim()) throw new Error(`Claude omitted ${field}.`);
+  }
+  const catalog = store.modelsPayload(project ? { project } : undefined);
+  const isRoute = (route) => route && typeof route === 'object' && !Array.isArray(route) && typeof route.model === 'string' && typeof route.effort === 'string' && catalog.models.includes(route.model) && catalog.efforts.includes(route.effort);
+  if (!isRoute(raw.route)) throw new Error('Claude returned a route outside the live catalog.');
+  if (raw.fallback !== null && !isRoute(raw.fallback)) throw new Error('Claude returned a fallback outside the live catalog.');
+  return { id, name: String(raw.name).trim(), description: String(raw.description).trim(), contract: String(raw.contract).trim(), route: { model: raw.route.model, effort: raw.route.effort }, fallback: raw.fallback === null ? null : { model: raw.fallback.model, effort: raw.fallback.effort } };
+}
+
+function parseCategoryDraft(stdout) {
+  const text = String(stdout || '').trim();
+  const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
+  return JSON.parse(fenced ? fenced[1] : text);
+}
+
+function draftCategory(sentence, project) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = categoryDraftSpawn(CATEGORY_DRAFT_CLI, ['-p', '--model', 'haiku', categoryDraftPrompt(sentence, project)], { windowsHide: true });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    let stdout = '', stderr = '', finished = false;
+    const finish = (error, value) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      if (error) reject(error); else resolve(value);
+    };
+    const timeout = setTimeout(() => { child.kill(); finish(new Error('Category draft timed out after 60 seconds.')); }, categoryDraftTimeoutMs);
+    child.stdout.on('data', (chunk) => { stdout += chunk; if (stdout.length > CATEGORY_DRAFT_MAX_OUTPUT) { child.kill(); finish(new Error('Category draft was too large.')); } });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', (error) => finish(error));
+    child.once('close', (code) => {
+      if (code !== 0) { finish(new Error(stderr.trim() || 'Claude could not draft this category.')); return; }
+      try { finish(null, validateCategoryDraft(parseCategoryDraft(stdout), project)); } catch (error) { finish(error); }
+    });
+  });
+}
+
 
 function aggregateTickets(archivedOnly) {
   const projects = store.listProjects();
@@ -344,6 +408,30 @@ async function handle(req, res) {
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/api/categories/draft') {
+    if (!categoryDraftAvailable) {
+      sendJson(res, 503, { error: 'Category drafting needs the claude CLI on PATH.' });
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch (_) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    const sentence = String(body.sentence || '').trim();
+    const project = body.project && body.project !== 'all' ? String(body.project) : null;
+    if (!sentence) { sendJson(res, 400, { error: 'A category sentence is required.' }); return; }
+    if (project && !store.readMeta(project)) { sendJson(res, 404, { error: 'unknown project' }); return; }
+    try {
+      sendJson(res, 200, { draft: await draftCategory(sentence, project) });
+    } catch (error) {
+      sendJson(res, 422, { error: error.message || 'Claude returned an invalid category draft.' });
+    }
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/categories') {
     let body;
     try {
@@ -478,7 +566,9 @@ async function handle(req, res) {
   // --- Routing catalog: models available to category and fallback controls ---
   if (req.method === 'GET' && pathname === '/api/routing-models') {
     const project = q.project ? String(q.project) : null;
-    sendJson(res, 200, store.modelsPayload(project ? { project } : undefined));
+    const payload = store.modelsPayload(project ? { project } : undefined);
+    payload.categoryDraftAvailable = categoryDraftAvailable;
+    sendJson(res, 200, payload);
     return;
   }
 
@@ -1068,4 +1158,4 @@ async function start(requestedPort) {
   return { server, port, url: info.url };
 }
 
-module.exports = { start, pickNewerInstall, findNewerInstall };
+module.exports = { start, pickNewerInstall, findNewerInstall, categoryDraftPrompt, validateCategoryDraft, draftCategory, setCategoryDraftSpawn: (value) => { categoryDraftSpawn = value || spawn; }, setCategoryDraftAvailable: (value) => { categoryDraftAvailable = value; }, setCategoryDraftTimeout: (value) => { categoryDraftTimeoutMs = value || CATEGORY_DRAFT_TIMEOUT_MS; } };
