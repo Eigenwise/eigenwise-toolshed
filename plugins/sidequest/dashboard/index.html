@@ -194,12 +194,14 @@
   .pop-row em { font-style: normal; font-size: 11px; color: var(--text-faint); }
   .pop-foot { font-size: 10.5px; color: var(--text-faint); padding: 8px; line-height: 1.45; border-top: 1px solid var(--line-soft); margin-top: 4px; }
 
-  .popover.settings-panel { width: min(1060px, 97vw); padding: 0; background: var(--card); }
-  .settings-panel .sp-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px 12px; border-bottom: 1px solid var(--line-soft); }
-  .settings-panel .sp-title { font-family: var(--sans); font-weight: 700; font-size: 14.5px; letter-spacing: .01em; color: var(--text); }
-  .settings-panel .sp-title-sub { font-size: 11.5px; font-weight: 400; color: var(--text-faint); }
-  .settings-panel .sp-grid { display: grid; grid-template-columns: minmax(440px, 1.5fr) minmax(230px, .8fr); max-height: min(74vh, 660px); overflow-y: auto; }
-  .settings-panel .sp-col { padding: 8px 15px 18px; min-width: 0; border-left: 1px solid var(--line-soft); }
+  .popover.settings-panel { position: fixed; inset: 0; width: auto; padding: 24px; background: rgba(28,30,43,.4); border: 0; border-radius: 0; align-items: center; justify-content: center; z-index: 60; overflow: auto; }
+  .popover.settings-panel.show { display: flex; }
+  .settings-dialog { width: min(1100px, 92vw); max-height: 85vh; overflow: hidden; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 24px 72px rgba(22,23,35,.3); }
+  .settings-panel .sp-head { display: flex; align-items: center; gap: 10px; padding: 16px 20px 14px; border-bottom: 1px solid var(--line-soft); }
+  .settings-panel .sp-title { font-family: var(--sans); font-weight: 700; font-size: 15px; letter-spacing: .01em; color: var(--text); }
+  .settings-panel .sp-title-sub { font-size: 12px; font-weight: 400; color: var(--text-faint); }
+  .settings-panel .sp-grid { display: grid; grid-template-columns: minmax(500px, 1.5fr) minmax(250px, .8fr); max-height: calc(85vh - 58px); overflow-y: auto; }
+  .settings-panel .sp-col { padding: 10px 17px 20px; min-width: 0; border-left: 1px solid var(--line-soft); }
   .settings-panel .sp-col .pop-head:first-child { padding-top: 10px; }
   .routing-panel { padding: 16px 18px 14px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(90deg, var(--gold-soft), transparent 62%); }
   .routing-head { display: flex; align-items: flex-start; gap: 16px; }
@@ -440,22 +442,22 @@
   .category-row.disabled { opacity: .55; border-style: dashed; }
   .category-delta { margin-top: 10px; padding: 7px 8px; border-left: 2px solid var(--gold); background: var(--bg); font: 11px/1.45 var(--mono); color: var(--text-dim); }
   .category-delta b { color: var(--gold-bright); font-weight: 700; }
-  .category-list { padding: 9px 12px 15px; max-height: min(60vh, 560px); overflow-y: auto; display: flex; flex-direction: column; gap: 5px; }
+  .category-list { padding: 11px 14px 18px; max-height: none; overflow: visible; display: flex; flex-direction: column; gap: 7px; }
   .category-row { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--panel); }
   .category-row.off { opacity: .58; }
-  .category-row > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: minmax(190px, 1.35fr) minmax(240px, 1.7fr) auto; align-items: center; gap: 14px; padding: 10px 12px; }
+  .category-row > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: minmax(220px, 1.35fr) minmax(280px, 1.7fr) auto; align-items: center; gap: 16px; padding: 13px 15px; }
   .category-row > summary::-webkit-details-marker { display: none; }
-  .category-row > summary::after { content: "+"; grid-column: 4; color: var(--text-faint); font: 18px/1 var(--serif); }
+  .category-row > summary::after { content: "+"; grid-column: 4; color: var(--text-faint); font: 22px/1 var(--serif); }
   .category-row[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--card); }
   .category-row[open] > summary::after { content: "−"; }
-  .category-row-name { min-width: 0; font-size: 14px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .category-row-id { margin-top: 2px; font: 10.5px var(--mono); color: var(--text-faint); }
-  .category-usage { font: 10.5px var(--mono); color: var(--gold-bright); white-space: nowrap; }
-  .category-route-live { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-  .category-route-live span { flex: none; font: 700 10px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--gold-bright); }
-  .category-route-live code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px var(--mono); color: var(--text); }
-  .category-row-body { padding: 13px 14px 14px; }
-  .category-row-detail { font-size: 12px; line-height: 1.45; color: var(--text-faint); }
+  .category-row-name { min-width: 0; font-size: 18px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-row-id { margin-top: 3px; font: 13px var(--mono); color: var(--text-faint); }
+  .category-usage { font: 13px var(--mono); color: var(--gold-bright); white-space: nowrap; }
+  .category-route-live { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .category-route-live span { flex: none; font: 700 12.5px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--gold-bright); }
+  .category-route-live code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 15px var(--mono); color: var(--text); }
+  .category-row-body { padding: 16px 17px 18px; }
+  .category-row-detail { font-size: 15px; line-height: 1.5; color: var(--text-faint); }
   .category-route-warning { margin-top: 10px; padding: 8px 9px; border: 1px solid rgba(181,74,72,.26); background: rgba(181,74,72,.06); color: var(--high); font-size: 11.5px; line-height: 1.4; }
   .category-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
   .category-actions button, .category-add button { cursor: pointer; font-family: var(--sans); font-size: 11.5px; color: var(--text-dim); background: var(--card); border: 1px solid var(--line-soft); padding: 5px 9px; border-radius: var(--radius-sm); }
@@ -712,7 +714,8 @@
         <button class="iconbtn" id="settingsBtn" title="Notification settings" aria-label="Notification settings">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
-        <div class="popover settings-panel" id="settingsPop" role="menu" aria-label="Settings">
+        <div class="popover settings-panel" id="settingsPop" role="dialog" aria-modal="true" aria-label="Settings">
+          <div class="settings-dialog" role="document">
           <div class="sp-head">
             <span class="sp-title">Settings</span>
             <span class="sp-title-sub">notifications &amp; execution plan</span>
@@ -746,6 +749,7 @@
             </div>
           </div>
           <div class="pop-foot">Notification kinds apply everywhere; a muted project (toggle off) queues <em>nothing</em>, of any kind. Your own dashboard edits never notify.</div>
+          </div>
         </div>
       </div>
       <button class="btn btn-primary" id="newBtn">
@@ -1884,7 +1888,8 @@
         '<div class="category-actions">' + actions + '</div></div>';
       var refresh = function (message) { return loadCategories().then(function () { toast(message); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }); };
       var edit = row.querySelector('[data-edit-category]');
-      if (edit) edit.addEventListener("click", function () {
+      if (edit) edit.addEventListener("click", function (e) {
+        e.stopPropagation();
         row.innerHTML = categoryForm(category, false);
         var form = row.querySelector('.category-edit');
         form.querySelector('[data-field="model"]').value = category.route.model;
@@ -3087,7 +3092,7 @@
     function closeSort() { sortPop.classList.remove("show"); sortBtn.classList.remove("on"); sortBtn.setAttribute("aria-expanded", "false"); }
     function closeAssign() { assignPop.classList.remove("show"); assignBtn.classList.remove("on"); assignBtn.setAttribute("aria-expanded", "false"); }
     function closeStory() { storyPop.classList.remove("show"); storyBtn.classList.remove("on"); storyBtn.setAttribute("aria-expanded", "false"); }
-    function closeSettings() { settingsPop.classList.remove("show"); $("settingsBtn").classList.remove("on"); }
+    function closeSettings() { settingsPop.classList.remove("show"); $("settingsBtn").classList.remove("on"); $("settingsBtn").setAttribute("aria-expanded", "false"); }
     function closeInbox() { inboxPop.classList.remove("show"); $("notifyBtn").classList.remove("on"); }
 
     assignBtn.addEventListener("click", function (e) {
@@ -3148,12 +3153,13 @@
       var opening = !settingsPop.classList.contains("show");
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
+      $("settingsBtn").setAttribute("aria-expanded", opening ? "true" : "false");
       if (opening) { renderProjectNotifySettings(); renderGlobalFallback(); renderCategorySettings(); }
     });
-    settingsPop.addEventListener("click", function (e) { e.stopPropagation(); });
+    settingsPop.addEventListener("mousedown", function (e) { if (e.target === settingsPop) closeSettings(); });
     document.addEventListener("click", function (e) {
       if (!e.target.closest(".project-menu")) closeProjectMenu();
-      if (e.target.closest(".popwrap, #settingsPop")) return;
+      if (e.target.closest(".popwrap") || settingsPop.contains(e.target)) return;
       closeSettings(); closeSort(); closeAssign(); closeStory(); closeInbox();
     });
 
@@ -3192,7 +3198,7 @@
     $("search").addEventListener("input", function (e) { state.query = e.target.value; renderBoard(); });
 
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") { if (document.querySelector(".project-menu")) { closeProjectMenu(); return; } if ($("lightbox").classList.contains("show")) { $("lightbox").classList.remove("show"); return; } if ($("overlay").classList.contains("show")) closeModal(); }
+      if (e.key === "Escape") { if (document.querySelector(".project-menu")) { closeProjectMenu(); return; } if (settingsPop.classList.contains("show")) { closeSettings(); return; } if ($("lightbox").classList.contains("show")) { $("lightbox").classList.remove("show"); return; } if ($("overlay").classList.contains("show")) closeModal(); }
       if ((e.key === "n" || e.key === "N") && !/input|textarea|select/i.test(document.activeElement.tagName) && !$("overlay").classList.contains("show")) { e.preventDefault(); openEditor(null); }
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && $("overlay").classList.contains("show")) { e.preventDefault(); saveEditor(); }
     });
