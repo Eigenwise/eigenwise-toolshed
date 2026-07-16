@@ -1579,12 +1579,11 @@
       box.appendChild(row);
     });
   }
-  function externalBackendValue(model) { return model.source ? model.source + ":" + model.slug : model.slug; }
   function routeOptions(selected) {
     var known = {};
     var options = CLAUDE_RUNTIME_OPTIONS.map(function (runtime) { known[runtime.slug] = true; return '<option value="' + runtime.slug + '">' + esc(runtime.label) + '</option>'; });
     (routingCatalog.discovered || []).forEach(function (model) {
-      var value = externalBackendValue(model);
+      var value = model.slug;
       known[value] = true;
       options.push('<option value="' + esc(value) + '">' + esc(model.label || model.slug) + '</option>');
     });
