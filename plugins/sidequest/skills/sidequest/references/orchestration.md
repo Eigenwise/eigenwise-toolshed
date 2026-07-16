@@ -163,6 +163,19 @@ add commands to the executor surface, extend the allowlist (the `fewer-permissio
 generate it from transcripts). Never add `ask` rules — an `ask` forces a prompt even under a genuine
 bypass.
 
+## Ephemeral ticket executor dispatch
+
+The per-ticket path is deliberately two-phase. Render the ticket brief and its embedded dispatch token,
+but **do not spawn immediately**. Keep doing independent orchestration work until Claude Code announces
+`New agent types are now available: <name>`, then spawn that exact generated type with only the short
+logistics prompt. The executor claim must carry the token from its definition (`--token <nonce>`).
+
+If claim returns `reason:token`, the spawn happened before registration and ran the silent generic agent.
+TaskStop that agent, wait for the availability announcement, and respawn the same prepared definition. If
+there is no announcement in a sensible window, use the stable pre-provisioned executor type instead so
+dispatch never blocks on watcher lag. Never trust a worker's self-reported identity. The transcript's
+`meta.json` and a token-gated claim are the evidence.
+
 ## Native Agent dispatch
 
 All routed execution stays in the current conversation. Call `native_agent`, pass its returned spawn

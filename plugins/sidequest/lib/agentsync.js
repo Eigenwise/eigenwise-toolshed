@@ -45,7 +45,7 @@ const TEMP_PREFIX = 'sidequest-native-';
 const TICKET_PREFIX = 'sidequest-ticket-';
 
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
-const RESTART_NOTICE = 'Executor definitions are watched mid-session. Registration can take minutes; wait for Claude Code to announce readiness before spawning. A premature per-ticket spawn claims with its nonce and fails loudly instead of working generic.';
+const RESTART_NOTICE = 'Executor definitions register within minutes. Wait for `New agent types are now available: <name>` before spawning; premature per-ticket spawns silently run generic agents and their token-gated claim refuses. If registration lags, use the stable pre-provisioned executor. Verify with transcript/meta.json and the token claim, never self-report.';
 
 // Effort-scaled hard caps stamped into every executor definition's `maxTurns`
 // frontmatter — the one FIRST-CLASS harness-enforced limit on a subagent run

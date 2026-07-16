@@ -384,8 +384,8 @@ test('session-start: reports newly provisioned executors once, then stays quiet'
   });
   const first = JSON.parse(runSessionWithHome(home));
   const firstContext = first.hookSpecificOutput.additionalContext;
-  assert.match(firstContext, /Executor definitions were just \(re\)provisioned/);
-  assert.match(firstContext, /restart clears this/);
+  assert.match(firstContext, /Executor definitions register within minutes/);
+  assert.match(firstContext, /New agent types are now available/);
 
   const second = JSON.parse(runSessionWithHome(home));
   const secondContext = second.hookSpecificOutput.additionalContext;

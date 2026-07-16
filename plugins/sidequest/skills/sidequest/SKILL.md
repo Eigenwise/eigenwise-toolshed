@@ -74,8 +74,14 @@ They take the same fields as the CLI flags shown below — the examples in this 
 compactness, not as a recommendation.
 
 The **CLI** is for when the MCP tools aren't loaded, for humans, and for the things only it does:
-`dashboard`/`serve` and legacy temporary `native-agent` cleanup. Routed work must use `native_agent` plus
-the current conversation's Agent tool. The SessionStart hook injects the **resolved
+`dashboard`/`serve` and legacy temporary `native-agent` cleanup. For routed work, render the ticket's
+per-ticket executor definition, then DO NOT spawn it immediately. Continue other work until the harness
+announces `New agent types are now available: <name>`, then spawn that exact short-lived agent with the
+short logistics prompt. Its claim must carry the token embedded in the definition. A `reason:token`
+refusal means the spawn was premature generic: TaskStop it, wait for the announcement, and respawn. If no
+announcement arrives in a sensible window, use the stable pre-provisioned executor path instead. Never
+trust a worker's self-report: `transcript/meta.json` and the token-gated claim are the evidence. The
+SessionStart hook injects the **resolved
 absolute command** (`node "<path>/bin/sidequest.js"`) into your context — use exactly that with the
 Bash tool; `sidequest` in this file is shorthand for it. Commands default to the current project
 (`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another

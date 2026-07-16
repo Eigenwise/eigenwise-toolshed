@@ -98,7 +98,7 @@ function main() {
     emit(
       '=== sidequest (active — context restored) ===\n' +
         'Context was just compacted/resumed — RE-CHECK in-flight claims: `' + cli + ' list --status doing`.\n' +
-        'Discipline: re-read the live taxonomy, classify and stamp any unlabeled ticket before claim; spawn the ticket\'s `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, omit on Codex routes) as short, bounded executor runs — batch small same-model tickets; inline only trivial one-steps.',
+        'Discipline: taxonomy, stamp, render executor, wait for `New agent types are now available: <name>`, spawn `exec.agent`, claim its token. `reason:token` means premature generic: TaskStop, wait, respawn. If no announcement, stable executor. Verify `transcript/meta.json` + token claim, never self-report. Codex omits model; Claude passes it.\n' ,
       restartNotice
     );
     process.exit(0);
@@ -106,25 +106,20 @@ function main() {
 
   emit(
     '=== sidequest (active) ===\n' +
-      'This project tracks work on the sidequest board — plan any multi-part request as independently checkable ATOMIC ' +
-      'tickets first (stamp a live-taxonomy category; complexity + why are legacy fallback). ' +
-      'Atomic = one piece a single agent finishes and checks itself — a change, or an investigation, spike, or review. ' +
-      'Split for parallelism: independent tickets fan out to sub-agents; keep tightly coupled work together. ' +
-      'One ticket OWNING several deliverables (CLI + wiring + tests) is a smell: prefer a cheap read-only scout that pins the shared contract, then a wave fanning the pieces out. ' +
-      'The spec carries exact anchors, contract or question, bounds/non-goals, dependencies/decisions, and how done is checked (verify command, or the artifact/answer for a spike). Even with an external tracker ' +
-      '(Jira), that owns the deliverable — sidequest is the local execution layer; ' +
-      'use both.\n' +
+      'This project tracks work on the sidequest board — plan multi-part requests as independently checkable ATOMIC ' +
+      'tickets (stamp a live-taxonomy category; complexity + why are legacy fallback). ' +
+      'Atomic = one piece a single agent finishes and checks: a change, or an investigation, spike, or review. ' +
+      'Split for parallelism: independent tickets fan out; keep tightly coupled work together. ' +
+      'One ticket owning several deliverables (CLI + wiring + tests) is a smell: use a cheap scout that pins the shared contract, then a wave fanning the pieces out. ' +
+      'The spec carries exact anchors, contract or question, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. Even with an external tracker (Jira), use sidequest as the local execution layer.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
-      '• Route execution DOWN: stamp an unlabeled ticket before claim, then spawn `exec.agent` via Agent with `model: exec.model` (REQUIRED on Claude routes, else it inherits the SESSION model; Codex routes: `exec.model` null, omit model). It is already-registered — unique name + `bypassPermissions`. Do not use `native_agent` for ticket execution. Inline only trivial one-steps; never pull substantial or parallel work inline to save wakeups.\n' +
-      '• Keep executor runs SHORT and bounded — the ticket is the spec (exact anchors + verify command); ' +
-      'scope the spawn prompt; executors bounce back fast (release + report), verified by artifact (test/diff) not claim.\n' +
-      '• Batch small SAME-model tickets into ONE executor (sequential inside); parallel-wave only independent tickets with no shared runtime resource.\n' +
+      '• Route execution DOWN: stamp, render the per-ticket definition, wait for `New agent types are now available: <name>`, then spawn the already-registered `exec.agent`; pass its token and `model: exec.model` (Codex omits model). `reason:token`: TaskStop, wait, respawn; no announcement: stable executor. Verify `transcript/meta.json` + token claim, never self-report. Use `bypassPermissions`; Do not use `native_agent`. Inline only trivial one-step.\n' +
+      '• Keep runs SHORT and bounded; the ticket is the spec; bounce back fast and verify artifacts.\n' +
+      '• Batch small SAME-model tickets into ONE executor; parallelize only independent tickets.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +
       '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\n' +
       'Capture side issues as tickets (background `ticket-filer`) without derailing the current task.\n' +
-      'Board actions go through the ' +
-      'mcp__plugin_sidequest_board__* MCP tools whenever they are in your toolset — reach for them ' +
-      'FIRST; Bash+CLI is the fallback. Open the board: `' +
+      'Board actions go through the mcp__plugin_sidequest_board__* MCP tools whenever available — reach for them FIRST; Bash+CLI is the fallback. Open the board: `' +
       cli + ' dashboard`.',
     restartNotice
   );
