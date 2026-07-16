@@ -266,47 +266,52 @@
   .blockchip { font-family: var(--mono); font-size: 10px; color: var(--urgent); background: rgba(178,59,59,.08); border: 1px solid rgba(178,59,59,.32); padding: 2px 7px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 4px; }
 
   /* Comment thread + link pills (ticket detail modal) */
-  .thread { display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; padding-right: 2px; }
-  .cmt { position: relative; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 9px 12px 10px 15px; overflow: hidden; }
-  /* Left accent stripe: who wrote it (indigo = you, sage = an agent), same
-     visual language as the card priority stripe. Question bg wins either way. */
+  .thread {
+    display: flex; flex-direction: column; gap: 12px; max-height: min(46vh, 520px); overflow-y: auto;
+    padding: 2px 9px 2px 2px; scrollbar-color: var(--line) transparent;
+  }
+  .cmt {
+    position: relative; background: var(--card); border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
+    padding: 13px 15px 15px 18px; overflow: hidden;
+  }
   .cmt::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--mint); }
   .cmt.mine::before { background: var(--indigo); }
-  .cmt.question { border-color: var(--gold-line); background: var(--gold-soft); }
+  .cmt.question { border-color: var(--gold-line); background: #f8f8ff; }
   .cmt.question::before { background: var(--gold-bright); }
-  .cmt-head { display: flex; align-items: baseline; gap: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); margin-bottom: 6px; }
-  .cmt-head .who { color: var(--text); font-weight: 600; }
+  .cmt-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 7px; font-family: var(--mono); font-size: 10px; letter-spacing: .025em; color: var(--text-faint); margin-bottom: 10px; }
+  .cmt-head .who { color: var(--text); font-family: var(--sans); font-size: 12px; font-weight: 700; letter-spacing: 0; }
+  .cmt-head .tag { color: var(--mint); font-weight: 700; text-transform: uppercase; }
   .cmt.question .cmt-head .tag { color: var(--gold-bright); }
-  .cmt-body { font-size: 13.5px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+  .cmt-body { font-size: 14px; line-height: 1.62; color: var(--text); overflow-wrap: anywhere; }
   .cmt-body strong { font-weight: 700; }
   .cmt-body em { font-style: italic; }
-  .cmt-body code { font-family: var(--mono); font-size: .92em; font-weight: 500; color: var(--gold-bright); background: var(--gold-soft); padding: .1em .35em; border-radius: var(--radius-sm); }
+  .cmt-body code { font-family: var(--mono); font-size: .88em; font-weight: 550; color: var(--gold-bright); background: var(--gold-soft); padding: .12em .38em; border-radius: var(--radius-sm); }
   .cmt-empty { font-size: 12.5px; color: var(--text-faint); line-height: 1.6; padding: 10px 2px; }
 
   /* Rendered markdown blocks, shared by the details view (.desc-view) and the
      comment thread (.cmt-body) — same vocabulary, same tokens, tightened
      margins so a plain one-line body still sits flush with no leading gap. */
-  .desc-view > *, .cmt-body > * { margin: .6em 0; }
+  .desc-view > *, .cmt-body > * { margin: .72em 0; }
   .desc-view > *:first-child, .cmt-body > *:first-child { margin-top: 0; }
   .desc-view > *:last-child, .cmt-body > *:last-child { margin-bottom: 0; }
   .desc-view h1, .desc-view h2, .desc-view h3,
   .cmt-body h1, .cmt-body h2, .cmt-body h3 {
-    font-family: var(--serif); font-weight: 500; line-height: 1.3; color: var(--text);
+    font-family: var(--serif); font-weight: 500; line-height: 1.25; color: var(--text);
   }
   .desc-view h1, .cmt-body h1 { font-size: 1.32em; letter-spacing: -.005em; }
   .desc-view h2, .cmt-body h2 { font-size: 1.16em; letter-spacing: -.005em; }
   .desc-view h3, .cmt-body h3 { font-size: 1.04em; }
-  .desc-view ul, .desc-view ol, .cmt-body ul, .cmt-body ol { padding-left: 1.35em; }
-  .desc-view li, .cmt-body li { margin: .22em 0; }
-  .desc-view li > ul, .desc-view li > ol, .cmt-body li > ul, .cmt-body li > ol { margin: .22em 0 .22em .1em; }
+  .desc-view ul, .desc-view ol, .cmt-body ul, .cmt-body ol { padding-left: 1.45em; }
+  .desc-view li, .cmt-body li { margin: .28em 0; }
+  .desc-view li > ul, .desc-view li > ol, .cmt-body li > ul, .cmt-body li > ol { margin: .28em 0 .28em .1em; }
   .desc-view ul ul, .cmt-body ul ul { list-style-type: circle; }
   .desc-view blockquote, .cmt-body blockquote {
-    margin: .6em 0; padding: .15em 0 .15em 12px; border-left: 3px solid var(--gold-line); color: var(--text-dim);
+    margin: .8em 0; padding: .2em 0 .2em 12px; border-left: 3px solid var(--gold-line); color: var(--text-dim);
   }
   .desc-view blockquote p, .cmt-body blockquote p { margin: 0; }
   .desc-view pre, .cmt-body pre {
-    margin: .6em 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line-soft);
-    border-radius: var(--radius-sm); overflow-x: auto;
+    margin: .8em 0; max-width: 100%; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm); overflow-x: auto; overscroll-behavior-inline: contain;
   }
   .desc-view pre code, .cmt-body pre code {
     font-family: var(--mono); font-size: .88em; font-weight: 400; line-height: 1.5; color: var(--text);
@@ -2507,8 +2512,8 @@
     comments.forEach(function (c) {
       var mine = String(c.by || "").toLowerCase() === ME;
       var d = el("div", "cmt" + (c.kind === "question" ? " question" : "") + (mine ? " mine" : ""));
-      var tag = c.kind === "question" ? "❓ question" : "💬";
-      d.innerHTML = '<div class="cmt-head"><span class="tag">' + tag + '</span> <span class="who">' + esc(c.by) + '</span> · ' + relTime(c.at) + '</div>' +
+      var tag = c.kind === "question" ? "Question" : "Comment";
+      d.innerHTML = '<div class="cmt-head"><span class="tag">' + tag + '</span><span class="who">' + esc(c.by) + '</span><span aria-hidden="true">·</span><time datetime="' + esc(c.at || "") + '">' + relTime(c.at) + '</time></div>' +
         '<div class="cmt-body">' + renderRich(c.body) + '</div>';
       box.appendChild(d);
     });
