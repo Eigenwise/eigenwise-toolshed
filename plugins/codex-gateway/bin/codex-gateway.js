@@ -828,17 +828,50 @@ function gatewayModel(id) {
   };
 }
 
-function dispatchRouteFromRawBody(raw) {
+// Scan one text string for route markers, last-wins. `route` seeds the running
+// winner so a caller can thread it across several text fragments in order.
+function lastRouteInText(text, route = null) {
   const marker = /\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
   let match;
-  let route = null;
-  while ((match = marker.exec(raw))) route = { model: match[1], effort: match[2] || null };
+  while ((match = marker.exec(text))) route = { model: match[1], effort: match[2] || null };
   return route;
+}
+
+function dispatchRouteFromRawBody(raw) {
+  return lastRouteInText(String(raw));
 }
 
 function dispatchModelFromRawBody(raw) {
   const route = dispatchRouteFromRawBody(raw);
   return route ? route.model : null;
+}
+
+// Resolve the dispatch route from a request's messages, restricted to text a
+// human/orchestrator authored. The legitimate marker lives in the dispatch
+// briefing (first user message text), so only type:"text" blocks of role:"user"
+// messages count. tool_result blocks ride user-role messages in the Anthropic
+// format but carry echoed tool output — a fixture, log, or diff containing
+// marker-shaped text there must NOT hijack the next request's route (SQ-375:
+// that flipped a live executor onto an invalid upstream id and killed it).
+// Assistant-authored text never counts. Last-wins holds among the qualifiers.
+function dispatchRouteFromMessages(messages) {
+  if (!Array.isArray(messages)) return null;
+  let route = null;
+  for (const message of messages) {
+    if (!message || message.role !== 'user') continue;
+    const content = message.content;
+    if (typeof content === 'string') {
+      route = lastRouteInText(content, route);
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (block && block.type === 'text' && typeof block.text === 'string') {
+        route = lastRouteInText(block.text, route);
+      }
+    }
+  }
+  return route;
 }
 
 // ------------------------------------------------------------ model catalog
@@ -1477,7 +1510,7 @@ function runShim() {
           if (typeof parsed.model === 'string' && parsed.model.startsWith(PREFIX)) {
             const advertisedModel = parsed.model;
             const requestedBase = parsed.model.slice(PREFIX.length).replace(/\[1m\]$/, '');
-            const dispatchRoute = requestedBase === 'auto' ? dispatchRouteFromRawBody(raw.toString()) : null;
+            const dispatchRoute = requestedBase === 'auto' ? dispatchRouteFromMessages(parsed.messages) : null;
             if (requestedBase === 'auto' && !dispatchRoute) {
               const body = JSON.stringify({
                 type: 'error',
@@ -1666,4 +1699,5 @@ module.exports = {
   MIN_PROXY_VERSION,
   buildCatalog,
   dispatchModelFromRawBody,
+  dispatchRouteFromMessages,
 };

@@ -155,6 +155,148 @@ test('dispatch model rejects missing and malformed route markers', async (t) => 
   }
 });
 
+test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
+  // Briefing marker in a plain-string user message resolves (back-compat).
+  assert.deepEqual(
+    gw.dispatchRouteFromMessages([
+      { role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high] work the ticket' },
+    ]),
+    { model: 'gpt-5.6-terra', effort: 'high' },
+  );
+
+  // Briefing marker in a type:"text" block resolves.
+  assert.deepEqual(
+    gw.dispatchRouteFromMessages([
+      { role: 'user', content: [{ type: 'text', text: '[sidequest-route model=gpt-5.6-sol]' }] },
+    ]),
+    { model: 'gpt-5.6-sol', effort: null },
+  );
+
+  // A LATER valid marker inside a tool_result block is ignored — briefing wins.
+  assert.deepEqual(
+    gw.dispatchRouteFromMessages([
+      { role: 'user', content: '[sidequest-route model=gpt-5.6-terra] briefing' },
+      { role: 'assistant', content: [{ type: 'text', text: 'reading the diff' }] },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't1', content: 'echoed [sidequest-route model=codex-gpt-5-6-terra] fixture' },
+      ] },
+    ]),
+    { model: 'gpt-5.6-terra', effort: null },
+  );
+
+  // A tool_result whose content is a nested block array is also skipped whole.
+  assert.deepEqual(
+    gw.dispatchRouteFromMessages([
+      { role: 'user', content: '[sidequest-route model=gpt-5.6-terra] briefing' },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: '[sidequest-route model=codex-gpt-5-6-luna]' }] },
+      ] },
+    ]),
+    { model: 'gpt-5.6-terra', effort: null },
+  );
+
+  // A valid marker in assistant message text never counts.
+  assert.equal(
+    gw.dispatchRouteFromMessages([
+      { role: 'assistant', content: [{ type: 'text', text: '[sidequest-route model=gpt-5.6-sol]' }] },
+      { role: 'assistant', content: '[sidequest-route model=gpt-5.6-luna]' },
+    ]),
+    null,
+  );
+
+  // No qualifying marker anywhere (only tool_result / assistant) → null.
+  assert.equal(
+    gw.dispatchRouteFromMessages([
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't3', content: '[sidequest-route model=codex-gpt-5-6-terra]' },
+      ] },
+      { role: 'assistant', content: '[sidequest-route model=gpt-5.6-sol]' },
+    ]),
+    null,
+  );
+
+  // Last-wins holds among the qualifying user text markers, across messages.
+  assert.deepEqual(
+    gw.dispatchRouteFromMessages([
+      { role: 'user', content: '[sidequest-route model=gpt-5.6-sol effort=low] first' },
+      { role: 'user', content: [
+        { type: 'text', text: 'noise' },
+        { type: 'text', text: '[sidequest-route model=gpt-5.6-terra effort=xhigh] newest' },
+      ] },
+    ]),
+    { model: 'gpt-5.6-terra', effort: 'xhigh' },
+  );
+});
+
+test('dispatch route ignores markers echoed through tool_result blocks end-to-end', async (t) => {
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const forwarded = [];
+  const proxy = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (req.url === '/v1/models') {
+        res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
+        return;
+      }
+      forwarded.push(JSON.parse(Buffer.concat(chunks).toString()));
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-terra', content: [] }));
+    });
+  });
+  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  t.after(() => proxy.close());
+
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+      CODEX_GATEWAY_SENTRY: '0',
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForHealthz(shimPort);
+
+  // Briefing marker wins even though a later tool_result echoes a competing
+  // (invalid-upstream) marker — the SQ-375 self-hijack scenario.
+  const hijackAttempt = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-codex-auto',
+    messages: [
+      { role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high] work the ticket' },
+      { role: 'assistant', content: [{ type: 'text', text: 'ok, reading the diff' }] },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't1', content: 'leftover diff: [sidequest-route model=codex-gpt-5-6-terra]' },
+      ] },
+    ],
+  }));
+  assert.equal(hijackAttempt.status, 200);
+  assert.equal(forwarded[0].model, 'gpt-5.6-terra');
+  assert.deepEqual(forwarded[0].output_config, { effort: 'high' });
+
+  // A marker present ONLY in a tool_result → no qualifying route → 400 redispatch.
+  const toolResultOnly = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-codex-auto',
+    messages: [
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't2', content: '[sidequest-route model=gpt-5.6-terra]' },
+      ] },
+    ],
+  }));
+  assert.equal(toolResultOnly.status, 400);
+  assert.deepEqual(JSON.parse(toolResultOnly.body), {
+    type: 'error',
+    error: {
+      type: 'invalid_request_error',
+      message: 'codex-gateway: dispatch model requires a [sidequest-route model=...] marker in the conversation; redispatch the ticket',
+    },
+  });
+  assert.equal(forwarded.length, 1);
+});
+
 test('buildCatalog excludes the dispatch model', () => {
   const catalog = gw.buildCatalog(['claude-codex-auto', 'claude-codex-gpt-5.6-terra']);
   assert.deepEqual(catalog.models.map((model) => model.id), ['claude-codex-gpt-5.6-terra']);
