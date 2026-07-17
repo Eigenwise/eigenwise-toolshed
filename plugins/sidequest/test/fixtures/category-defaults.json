@@ -1,7 +1,4 @@
-'use strict';
-
-// Regenerate this list whenever global categories are edited.
-const DEFAULT_CATEGORIES = [
+[
   {
     "id": "architecture-design",
     "name": "Architecture design",
@@ -236,6 +233,4 @@ const DEFAULT_CATEGORIES = [
     "contract": "Return a sourced synthesis; do not edit repository files.",
     "enabled": true
   }
-];
-
-module.exports = { DEFAULT_CATEGORIES };
+]
