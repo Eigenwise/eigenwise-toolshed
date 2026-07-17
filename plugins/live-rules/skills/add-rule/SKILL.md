@@ -24,11 +24,18 @@ ready-to-adapt examples before writing your first rule.
 **Do not edit `CLAUDE.md`.** The hooks are the only delivery mechanism; rules live entirely in the
 live-rules file.
 
-## Process
+## Atomic storage
+
+For new workspaces, write each rule as `.claude/live-rules/rules/<stable-name>.md` and maintain
+`.claude/live-rules/manifest.json`. Every manifest entry needs the relative rule path, SHA-256 hash, and the
+rule's `description`, `globs`, `dirs`, `prompt`, and `enabled` metadata. Write the replacement rule file and
+manifest to temporary sibling paths, then rename them so readers never observe half an update. Keep the old
+`.claude/live-rules.md` format only for existing projects until it has been migrated.
 
 ### Step 1 - Find the rules file
 
-All rules live in **one Markdown file**. Resolve it in this order:
+New workspaces use the atomic directory described above. Existing projects may still have one Markdown
+file. Resolve that legacy file in this order when migrating or maintaining an existing project:
 
 1. If the `LIVE_RULES_PATH` environment variable is set (commonly in `.claude/settings.json` under
    `env`), that path is the file (it may be project-relative, absolute, or `~`-relative).

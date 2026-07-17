@@ -9,13 +9,12 @@
 
 *Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
 
-**Developer-friendly, live rules for Claude Code.** Keep your rules in one Markdown file
-(`.claude/live-rules.md` by default, or anywhere you like), and bundled hooks re-inject the
-ones that apply, right when they apply: global and prompt-keyword rules on every prompt, directory
-rules when the working directory or edited file is inside a matching folder, and path/glob rules right
-before Claude edits a matching file. The hooks read the file fresh every time, so editing a rule takes
-effect on the **next prompt, with no restart**. That is the "live" part: the rules are re-asserted every
-turn, so they do not get buried and forgotten as a session grows.
+**Developer-friendly, live rules for Claude Code.** New workspaces store one rule per Markdown file under
+`.claude/live-rules/`, with a small hash manifest. Hooks re-ground only rules that are newly relevant,
+changed, or lost after a context reset. Healthy prompts inject zero rule content. Global and prompt-keyword
+rules apply on prompts, directory rules apply in their folder, and path/glob rules apply right before Claude
+edits a matching file. Existing `.claude/live-rules.md` projects stay supported and can migrate without
+changing rule behavior.
 
 It is the same idea behind [codebase-mapper](../codebase-mapper) (a hook that re-injects context so
 it stays salient), pointed at a different job: instead of a map of your codebase, it injects **your
@@ -29,6 +28,18 @@ rules**, scoped to the moment they matter.
 ```
 
 Then run `/reload-plugins` (or restart Claude Code).
+
+## Atomic rule storage
+
+Use `.claude/live-rules/manifest.json` with one frontmatter-plus-body Markdown rule under
+`.claude/live-rules/rules/`. The manifest records each rule path, SHA-256 content hash, and scope metadata.
+Write changed rule files and the manifest through a temporary sibling, then rename them into place. The hooks
+verify hashes before using the manifest. A manual edit with an old hash is still loaded from the rule file and
+called out as stale, so it is re-grounded instead of silently treated as already loaded.
+
+Projects using the old `.claude/live-rules.md` format remain readable. The maintenance path can call
+`migrateLegacyRules(projectDir)` to write the atomic copy without deleting the original, then commit the new
+directory after checking the generated rules.
 
 ## Why not just use `CLAUDE.md`?
 
@@ -122,9 +133,9 @@ a missing rules file produces no output and never blocks anything).
 
 | Hook | Fires | Injects |
 |------|-------|---------|
-| `SessionStart` | once, when a session starts (or resumes / clears / compacts) | **global** rules only, as a fallback so they reach you at least once even if `UserPromptSubmit` isn't wired that session (see below) |
-| `UserPromptSubmit` | every time you submit a prompt | **global** rules, **prompt-keyword** rules matching your text, and **directory** rules whose folder contains the session's working dir |
-| `PreToolUse` (Edit / Write / MultiEdit / NotebookEdit) | right before Claude edits a file | **path/glob** rules matching the file, and **directory** rules whose folder contains it |
+| `SessionStart` | when a session starts, resumes, clears, or compacts | all rules currently applicable to the working directory, then resets that session's seen-hash ledger |
+| `UserPromptSubmit` | every time you submit a prompt | relevant global, prompt-keyword, and directory rules only when their content hash is new to this session |
+| `PreToolUse` (Edit / Write / MultiEdit / NotebookEdit) | right before Claude edits a file | relevant path/glob and directory rules only when their content hash is new to this session |
 
 Why this split? `UserPromptSubmit` sees your prompt text and working directory, so it serves the
 rules that depend on those. `PreToolUse` is the only event that knows **which file** is about to be

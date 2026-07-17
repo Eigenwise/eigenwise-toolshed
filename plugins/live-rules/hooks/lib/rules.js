@@ -27,6 +27,7 @@
  * globs/dirs/prompt is "always-on" and injected on every prompt.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -403,28 +404,145 @@ function splitSections(text) {
   return sections;
 }
 
-function loadRules(projectDir) {
+const ATOMIC_RULES_DIR = path.join('.claude', 'live-rules');
+const ATOMIC_MANIFEST = 'manifest.json';
+
+function hashContent(content) {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function getAtomicRulesDir(projectDir) {
+  return path.join(projectDir, ATOMIC_RULES_DIR);
+}
+
+function getManifestFile(projectDir) {
+  return path.join(getAtomicRulesDir(projectDir), ATOMIC_MANIFEST);
+}
+
+function isSafeRulePath(value) {
+  const normalized = String(value || '').replace(/\\/g, '/');
+  return normalized && !path.isAbsolute(normalized) && !normalized.split('/').includes('..') && normalized.endsWith('.md');
+}
+
+function enrichRule(rule, sourcePath, content) {
+  rule.sourcePath = sourcePath;
+  rule.hash = hashContent(content);
+  return rule;
+}
+
+function loadLegacyRules(projectDir) {
   const file = getRulesFile(projectDir);
   let text;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (_) {
-    return []; // no rules file -> no rules, silently
+    return [];
   }
   const base = path.basename(file);
   const sections = splitSections(text);
   const rules = [];
   for (let i = 0; i < sections.length; i++) {
-    // A single-rule file is just "<file>"; multiple sections get "<file>#N" so
-    // an un-described rule still has a distinct, locatable id.
     const id = sections.length > 1 ? base + '#' + (i + 1) : base;
     try {
-      rules.push(buildRule(id, sections[i].data, sections[i].body));
+      const content = sections.length === 1 ? text : renderRuleFile(sections[i].data, sections[i].body);
+      rules.push(enrichRule(buildRule(id, sections[i].data, sections[i].body), displayPath(projectDir, file) + (sections.length > 1 ? '#' + (i + 1) : ''), content));
     } catch (_) {
       /* skip malformed section */
     }
   }
   return rules;
+}
+
+function loadAtomicRules(projectDir) {
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(getManifestFile(projectDir), 'utf8'));
+  } catch (_) {
+    return null;
+  }
+  if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.rules)) return { rules: [], stale: true };
+  const rules = [];
+  let stale = false;
+  for (const entry of manifest.rules) {
+    if (!entry || !isSafeRulePath(entry.path)) {
+      stale = true;
+      continue;
+    }
+    const target = path.join(getAtomicRulesDir(projectDir), entry.path);
+    let content;
+    try {
+      content = fs.readFileSync(target, 'utf8');
+    } catch (_) {
+      stale = true;
+      continue;
+    }
+    if (entry.hash !== hashContent(content)) stale = true;
+    const sections = splitSections(content);
+    if (sections.length !== 1) {
+      stale = true;
+      continue;
+    }
+    try {
+      const rule = buildRule(entry.id || entry.path, sections[0].data, sections[0].body);
+      if (
+        entry.description !== rule.description ||
+        JSON.stringify(entry.globs || []) !== JSON.stringify(rule.globs) ||
+        JSON.stringify(entry.dirs || []) !== JSON.stringify(rule.dirs) ||
+        JSON.stringify(entry.prompt || []) !== JSON.stringify(rule.prompts) ||
+        entry.enabled !== rule.enabled
+      ) stale = true;
+      rules.push(enrichRule(rule, ATOMIC_RULES_DIR.replace(/\\/g, '/') + '/' + entry.path.replace(/\\/g, '/'), content));
+    } catch (_) {
+      stale = true;
+    }
+  }
+  return { rules, stale };
+}
+
+function loadRuleSet(projectDir) {
+  const atomic = loadAtomicRules(projectDir);
+  if (atomic) return atomic;
+  return { rules: loadLegacyRules(projectDir), stale: false, legacy: true };
+}
+
+function loadRules(projectDir) {
+  return loadRuleSet(projectDir).rules;
+}
+
+function renderRuleFile(data, body) {
+  const lines = [];
+  for (const key of ['description', 'globs', 'dirs', 'prompt', 'priority', 'enabled', 'include']) {
+    if (data[key] == null || data[key] === '') continue;
+    const value = Array.isArray(data[key]) ? JSON.stringify(data[key]) : String(data[key]);
+    lines.push(key + ': ' + value);
+  }
+  return lines.length ? '---\n' + lines.join('\n') + '\n---\n' + String(body || '').trim() + '\n' : String(body || '').trim() + '\n';
+}
+
+function writeAtomicRuleSet(projectDir, ruleFiles) {
+  const destination = getAtomicRulesDir(projectDir);
+  if (fs.existsSync(destination)) throw new Error('Atomic live-rules directory already exists');
+  const temp = destination + '.tmp-' + process.pid + '-' + crypto.randomBytes(6).toString('hex');
+  fs.mkdirSync(path.join(temp, 'rules'), { recursive: true });
+  const entries = ruleFiles.map((item, index) => {
+    const relative = 'rules/' + String(index + 1).padStart(3, '0') + '.md';
+    const content = item.content;
+    fs.writeFileSync(path.join(temp, relative), content);
+    return { path: relative, hash: hashContent(content), description: item.rule.description, globs: item.rule.globs, dirs: item.rule.dirs, prompt: item.rule.prompts, enabled: item.rule.enabled };
+  });
+  const manifest = { version: 1, rules: entries };
+  const manifestTemp = path.join(temp, ATOMIC_MANIFEST + '.tmp');
+  fs.writeFileSync(manifestTemp, JSON.stringify(manifest, null, 2) + '\n');
+  fs.renameSync(manifestTemp, path.join(temp, ATOMIC_MANIFEST));
+  fs.renameSync(temp, destination);
+  return manifest;
+}
+
+function migrateLegacyRules(projectDir) {
+  if (loadAtomicRules(projectDir) || !fs.existsSync(getRulesFile(projectDir))) return false;
+  const rules = loadLegacyRules(projectDir);
+  writeAtomicRuleSet(projectDir, rules.map((rule) => ({ rule, content: renderRuleFile({ description: rule.description, globs: rule.globs, dirs: rule.dirs, prompt: rule.prompts, priority: rule.priority, enabled: rule.enabled, include: rule.includes }, rule.body) })));
+  return true;
 }
 
 /* ------------------------------------------------------------------ *
@@ -544,6 +662,7 @@ function attachIncludes(selected, projectDir) {
     }
     if (!resolved.length) continue; // all includes missing -> drop the rule
     entry.includes = resolved;
+    entry.rule.hash = hashContent(entry.rule.hash + ' ' + resolved.map((file) => file.display + ' ' + file.content).join(' '));
     out.push(entry);
   }
   return out;
@@ -614,6 +733,12 @@ module.exports = {
   buildRule,
   isAlways,
   getRulesFile,
+  getAtomicRulesDir,
+  getManifestFile,
+  hashContent,
+  loadRuleSet,
+  migrateLegacyRules,
+  writeAtomicRuleSet,
   resolveIncludePath,
   displayPath,
   splitSections,

@@ -26,8 +26,10 @@
 const path = require('path');
 
 let lib;
+let ledger;
 try {
   lib = require('./lib/rules');
+  ledger = require('./lib/session-ledger');
 } catch (_) {
   process.exit(0);
 }
@@ -40,8 +42,8 @@ function main() {
 
   const projectDir = lib.getProjectDir(data);
 
-  const rules = lib.loadRules(projectDir);
-  if (!rules.length) process.exit(0);
+  const ruleSet = lib.loadRuleSet(projectDir);
+  if (!ruleSet.rules.length) process.exit(0);
 
   // Resolve to a repo-relative POSIX path. path.resolve handles both absolute
   // (Windows "C:\repo\..." or POSIX "/repo/...") and already-relative inputs.
@@ -59,14 +61,15 @@ function main() {
     process.exit(0);
   }
 
-  const selected = lib.attachIncludes(lib.selectForEdit(rules, relPath), projectDir);
-  if (!selected.length) process.exit(0);
+  const selected = lib.attachIncludes(lib.selectForEdit(ruleSet.rules, relPath), projectDir);
+  const changed = ledger.changed(projectDir, data.session_id, selected, false);
+  if (!changed.length) process.exit(0);
 
   const header =
     '=== LIVE RULES for ' + relPath + ' (live-rules) ===\n' +
     'Project rules that apply to the file you are about to edit. Follow them in this change.';
 
-  lib.emit('PreToolUse', lib.renderRules(selected, header));
+  lib.emit('PreToolUse', lib.renderRules(changed, header));
   process.exit(0);
 }
 

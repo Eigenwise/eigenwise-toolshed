@@ -108,10 +108,12 @@ Critical rules for this file:
   block is worse than none.
 - **Validate** the JSON after writing (`node -e "JSON.parse(require('fs').readFileSync('.claude/settings.json','utf8'))"`).
 
-### 2b. `.claude/live-rules.md`
+### 2b. Atomic live rules
 
-Write the starter rules from `references/rule-templates.md`. Structure:
-
+Write every starter rule as its own `.claude/live-rules/rules/<stable-name>.md` file, then atomically write
+`.claude/live-rules/manifest.json`. Each entry has the relative rule path, SHA-256 hash, and applicability
+metadata (`description`, `globs`, `dirs`, `prompt`, `enabled`). Use the starter rules from
+`references/rule-templates.md`. Include:
 - The **terse header** (naming the ~10k-char injection budget) above the first `---` fence.
 - The **craft baseline** (global, `priority` 90–100): atomic commits / two hats, simple design,
   surgical/Karpathy directive, verify-before-done, no-inline-comments/naming. Ship these on every
@@ -124,9 +126,10 @@ Write the starter rules from `references/rule-templates.md`. Structure:
 - Optionally the **guidelines-pointer** rule plus a copied `clean-code-principles.md` if the user
   wants the deeper digest available (copy `references/clean-code-principles.md` into `.claude/`).
 
-Keep bodies tight — they share the budget. Follow the live-rules format exactly (no bare `---` inside
-a body; use `***`). If live-rules' `add-rule` skill is available you may use it, but hand-writing the
-file is fine and needs no plugin loaded.
+Keep bodies tight. Follow the live-rules format exactly (no bare `---` inside a body, use `***`). Write rule
+files plus the manifest through temporary siblings and rename them into place together. If a project already
+has `.claude/live-rules.md`, migrate its rules into atomic files without deleting the original until the
+manifest and matcher behavior have been checked.
 
 ### 2c. Structure notes
 

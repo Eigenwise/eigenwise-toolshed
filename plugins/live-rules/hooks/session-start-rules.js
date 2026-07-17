@@ -27,9 +27,13 @@
 
 'use strict';
 
+const path = require('path');
+
 let lib;
+let ledger;
 try {
   lib = require('./lib/rules');
+  ledger = require('./lib/session-ledger');
 } catch (_) {
   process.exit(0);
 }
@@ -41,21 +45,22 @@ function main() {
   const data = lib.readStdin();
   const projectDir = lib.getProjectDir(data);
 
-  const rules = lib.loadRules(projectDir);
-  if (!rules.length) process.exit(0);
+  const ruleSet = lib.loadRuleSet(projectDir);
+  if (!ruleSet.rules.length) process.exit(0);
 
-  const selected = lib.attachIncludes(lib.selectAlways(rules), projectDir);
-  if (!selected.length) process.exit(0);
+  const cwd = (data && typeof data.cwd === 'string' && data.cwd) || projectDir;
+  const cwdRel = path.relative(projectDir, cwd).replace(/\\/g, '/');
+  const selected = lib.attachIncludes(lib.selectForPrompt(ruleSet.rules, { promptText: '', cwdRel }), projectDir);
+  const changed = ledger.changed(projectDir, data.session_id, selected, true);
+  if (!changed.length) process.exit(0);
 
   const header =
     '=== LIVE RULES (live-rules, session start) ===\n' +
-    'Always-on project rules, injected once here so they reach you even if the per-prompt hook ' +
-    "is not wired this session. They repeat on every prompt from here on; if this block doesn't " +
-    'come back on your very next prompt, the UserPromptSubmit hook is not registered (a common ' +
-    'cause: live-rules was enabled or updated mid-session and needs a restart to pick up). ' +
+    'Rules re-grounded after SessionStart (' + (data.source || 'startup') + '). ' +
+    (ruleSet.stale ? 'The live-rules manifest is stale, so these files were read directly. ' : '') +
     'Source: ' + lib.displayPath(projectDir, lib.getRulesFile(projectDir));
 
-  lib.emit('SessionStart', lib.renderRules(selected, header));
+  lib.emit('SessionStart', lib.renderRules(changed, header));
   process.exit(0);
 }
 

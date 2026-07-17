@@ -25,8 +25,10 @@
 const path = require('path');
 
 let lib;
+let ledger;
 try {
   lib = require('./lib/rules');
+  ledger = require('./lib/session-ledger');
 } catch (_) {
   process.exit(0);
 }
@@ -35,8 +37,8 @@ function main() {
   const data = lib.readStdin();
   const projectDir = lib.getProjectDir(data);
 
-  const rules = lib.loadRules(projectDir);
-  if (!rules.length) process.exit(0);
+  const ruleSet = lib.loadRuleSet(projectDir);
+  if (!ruleSet.rules.length) process.exit(0);
 
   const cwd = (data && typeof data.cwd === 'string' && data.cwd) || projectDir;
   let cwdRel = '';
@@ -48,15 +50,17 @@ function main() {
 
   const promptText = data && typeof data.prompt === 'string' ? data.prompt : '';
 
-  const selected = lib.attachIncludes(lib.selectForPrompt(rules, { promptText, cwdRel }), projectDir);
-  if (!selected.length) process.exit(0);
+  const selected = lib.attachIncludes(lib.selectForPrompt(ruleSet.rules, { promptText, cwdRel }), projectDir);
+  const changed = ledger.changed(projectDir, data.session_id, selected, false);
+  if (!changed.length) process.exit(0);
 
   const header =
     '=== LIVE RULES (live-rules) ===\n' +
-    'Project rules currently in effect. Follow them for the work in this session. ' +
+    'Project rules re-grounded because they are new or changed for this session. Follow them for the work in this session. ' +
+    (ruleSet.stale ? 'The live-rules manifest is stale, so these files were read directly. ' : '') +
     'Source: ' + lib.displayPath(projectDir, lib.getRulesFile(projectDir));
 
-  lib.emit('UserPromptSubmit', lib.renderRules(selected, header));
+  lib.emit('UserPromptSubmit', lib.renderRules(changed, header));
   process.exit(0);
 }
 
