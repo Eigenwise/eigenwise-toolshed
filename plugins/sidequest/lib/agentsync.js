@@ -57,12 +57,10 @@ const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const RESTART_NOTICE = 'Executor definitions register within minutes. Wait for `New agent types are now available: <name>` before spawning; premature per-ticket spawns silently run generic agents and their token-gated claim refuses. If registration lags, use the stable pre-provisioned executor. Verify with transcript/meta.json and the token claim, never self-report.';
 
 // Effort-scaled hard caps stamped into every executor definition's `maxTurns`
-// frontmatter — the one FIRST-CLASS harness-enforced limit on a subagent run
-// ("maximum number of agentic turns before the subagent stops"). Generous
-// enough that a legitimately-scoped atomic ticket never hits the cap, tight
-// enough that an unbounded wander does. Complements (does not replace) the
-// SubagentStop wall-clock tripwire: maxTurns bounds turns, not minutes.
-const EXEC_MAX_TURNS = { low: 25, medium: 40, high: 60, xhigh: 80, max: 80 };
+// frontmatter — the harness's runaway backstop, not a work budget. Legitimately
+// scoped atomic tickets should finish well below it. Complements (does not
+// replace) the SubagentStop wall-clock tripwire: maxTurns bounds turns, not minutes.
+const EXEC_MAX_TURNS = { low: 50, medium: 100, high: 150, xhigh: 200, max: 250 };
 
 // The cap for one effort tier. SIDEQUEST_EXEC_MAX_TURNS, when set to a positive
 // integer, overrides ALL tiers; garbage or non-positive values are ignored and

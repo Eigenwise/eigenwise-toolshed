@@ -53,6 +53,7 @@ const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
+const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
 
 // Byte budgets (chars ≈ tokens × ~4). The per-message reminder must stay tiny;
 // SessionStart is the only hook that carries taxonomy and execution guidance.
@@ -152,6 +153,24 @@ test('pre-tool hook keeps built-in executor model but removes overrides for pinn
   });
   assert.equal(builtIn.hookSpecificOutput.updatedInput.model, 'opus');
   assert.equal(builtIn.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
+
+test('pre-tool hook warns a sidequest executor once near its turn backstop', () => {
+  const agentId = `near-cap-${Date.now()}`;
+  const payload = { tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: agentId, effort: 'high' };
+  const first = execFileSync(process.execPath, [NEAR_TURN_CAP], {
+    input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
+  });
+  const second = execFileSync(process.execPath, [NEAR_TURN_CAP], {
+    input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
+  });
+  assert.match(JSON.parse(first).hookSpecificOutput.additionalContext, /made 1 tool calls/);
+  assert.equal(second, '');
+});
+
+test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', () => {
+  assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_id: 'main-thread' }), null);
+  assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_type: 'explore', agent_id: 'other-agent' }), null);
 });
 
 /* ------------------------------------------------------------------ *

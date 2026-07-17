@@ -55,7 +55,10 @@ Protocol, per ticket, in order:
    may have left the context you need; don't rediscover it. (Skip the thread reads when the
    orchestrator told you the ticket has no comments — don't fetch empty threads.)
 3. **Do exactly the ticket's work** — nothing beyond its scope. No drive-by fixes; a separate issue
-   you notice goes in your report, not in the diff.
+   you notice goes in your report, not in the diff. On long generation or creative tickets, publish and
+   commit useful increments as you finish them so a hard stop cannot strand the work. Bounce back early
+   (release + findings) when the work is clearly bigger than the briefing. Do not grind toward the cap;
+   keep additions tight enough for the briefing byte budgets.
 4. **Verify** the ticket's exact named check/test/reproduction before declaring success. In the done comment,
    echo that exact command and its full output tail; do not substitute a file list or a narrower command.
    For bodies with backticks, quotes, or parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment` or `sidequest done`.

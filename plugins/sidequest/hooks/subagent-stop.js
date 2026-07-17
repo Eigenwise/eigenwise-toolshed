@@ -33,6 +33,8 @@
  *   - Fail-soft: any error -> exit 0 with no output. It must never break teardown.
  */
 
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 function readStdin() {
@@ -108,9 +110,21 @@ function stopVerdict(store, claims, agentType) {
   return null;
 }
 
+function clearNearTurnCapCounter(agentId) {
+  if (!agentId) return;
+  const counter = path.join(os.tmpdir(), 'sidequest-near-turn-cap', encodeURIComponent(agentId));
+  try {
+    fs.unlinkSync(counter);
+  } catch (_) {
+    // A missing counter is expected for runs that never reached PreToolUse.
+  }
+}
+
 function main() {
   const data = readStdin();
   if (!data) process.exit(0);
+  const agentId = String(data.agent_id || data.agentId || '');
+  clearNearTurnCapCounter(agentId);
 
   // Our own additionalContext re-fires SubagentStop with this set. Never drive our
   // continuation — that recursion is the nag loop. Bail before touching the store.

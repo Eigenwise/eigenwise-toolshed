@@ -191,7 +191,7 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.equal(created.name, 'sidequest-ticket-sq-311-gpt-5-6-terra-a1b2c3d4');
   assert.match(body, /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
   assert.match(body, /^effort: high$/m);
-  assert.match(body, /^maxTurns: 60$/m);
+  assert.match(body, /^maxTurns: 150$/m);
   assert.ok(body.includes(agentsync.TEMP_MARKER));
   assert.match(body, /sidequest-native-session: session-311/);
   assert.match(body, /Ship ephemeral agents/);
