@@ -100,9 +100,7 @@ You're mid-task and you toss out a stray issue: *"oh, and the checkout throws on
 that either derails what Claude is doing or gets forgotten three messages later. sidequest does
 neither:
 
-- A bundled `UserPromptSubmit` hook spots the side issue and nudges Claude to **capture it as a ticket
-  without stopping** the work in progress — a background `ticket-filer` subagent writes it while the
-  main task keeps moving.
+- The Sidequest skill tells Claude to file a separate issue directly as a ticket without stopping the work in progress.
 - **Pasted images become attachments.** Paste a screenshot with your message and it's copied into the
   ticket (as real bytes, so it survives Claude Code's ephemeral image cache) and shown on the card.
 - Ask *"show me the dashboard"* (or run `/sidequest:board`) and a **live, self-hosted Kanban board**

@@ -1,33 +1,4 @@
 'use strict';
-/**
- * Tests for the UserPromptSubmit / SessionStart hooks.
- *
- * These lock in the 2026-07 token diet. Hook output is UNCACHED context on the
- * turn it fires and then sits in the transcript for the rest of the session, so
- * the per-prompt hook was the plugin's most expensive surface: it used to emit
- * a ~600-token doctrine block on EVERY prompt ("~95% off the main thread",
- * "scout before reading ~4+ files"), which is exactly the over-orchestration
- * users then saw. The regime now:
- *
- *   - The no-marker standing reminder is ONE short line. The full doctrine
- *     lives in SessionStart (which re-fires on compact/resume) and the skill.
- *   - SessionStart carries the execution economy: expensive orchestrator,
- *     cheap executors — route work DOWN to each ticket's routed model as
- *     SHORT, bounded runs that bounce back fast; batch small same-model tickets
- *     into one executor; inline only trivial one-steps.
- *   - Every block has a byte budget asserted here, so the blocks can't quietly
- *     grow back.
- *   - Earlier fixes stay locked: over-broad capture markers stay pruned
- *     (SQ-106), and capture/mgmt blocks keep a (now one-line) discipline
- *     footer so an action prompt doesn't lose it entirely.
- *
- * The hooks are Node scripts that read a JSON payload on stdin and print a
- * hookSpecificOutput envelope on stdout, so we exercise them as subprocesses
- * over sample prompts and assert on the injected additionalContext.
- *
- * Run: node --test plugins/sidequest/test/hooks.test.js
- * (the directory form of `node --test` is broken on this Node v22/Windows setup)
- */
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('os');
@@ -47,7 +18,6 @@ const { slug } = store.ensureProject(path.join(os.tmpdir(), 'sq-hooks-fixtures',
 const database = db.openDb(SIDEQUEST_HOME);
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
-const CAPTURE = path.join(HOOKS, 'capture-nudge.js');
 const SESSION = path.join(HOOKS, 'session-start.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
@@ -55,10 +25,7 @@ const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
 
-// Byte budgets (chars ≈ tokens × ~4). The per-message reminder must stay tiny;
-// SessionStart is the only hook that carries taxonomy and execution guidance.
 const BUDGET = {
-  standing: 160,
   session: 2850,
   compact: 1000,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
@@ -97,8 +64,6 @@ function writeModelPrefs(home, prefs) {
   const database = db.openDb(home);
   db.putRow(database, 'globals', { key: 'model-prefs', data: prefs });
 }
-
-const capture = (prompt) => runHook(CAPTURE, { prompt });
 
 // Phrases from the retired heavy doctrine that must NOT come back to any block.
 const RETIRED = ['95%', 'read ~4+ files', 'AskUserQuestion', 'coreDiscipline'];
@@ -519,6 +484,7 @@ test('session-start: category-route sync ignores retired prefs data', () => {
 test('session-start: source=compact gets the terse re-grounding block, not the full nudge', () => {
   const ctx = runHook(SESSION, { session_id: 't', source: 'compact' });
   assert.match(ctx, /sidequest \(active — context restored\)/);
+  assert.ok(ctx.includes('Reload the Sidequest skill'), 'resume must reload the sidequest skill after compaction');
   assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), 'resume must prefer the MCP doing-list read');
   assert.ok(ctx.includes('pulse ref'), 'resume must point to the compact liveness read');
   assert.ok(ctx.includes('list --status doing'), 'CLI doing-list must remain an explicit fallback');
@@ -529,6 +495,7 @@ test('session-start: source=compact gets the terse re-grounding block, not the f
 test('session-start: source=startup still gets the full block', () => {
   const ctx = runHook(SESSION, { session_id: 't', source: 'startup' });
   assert.ok(ctx.includes('external tracker'), 'startup source must still carry the full nudge');
+  assert.ok(ctx.includes('Reload the Sidequest skill'), 'startup must reload the sidequest skill');
 });
 
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
@@ -540,63 +507,26 @@ test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   assert.strictEqual(out.trim(), '', 'should emit nothing when nudge is off');
 });
 
-/* ------------------------------------------------------------------ *
- *  Standing reminder — the no-marker path is ONE short line
- * ------------------------------------------------------------------ */
+test('ticket filing uses the skill, not an agent or UserPromptSubmit hook', () => {
+  const pluginRoot = path.join(__dirname, '..');
+  const repoRoot = path.join(pluginRoot, '..', '..');
+  const references = [
+    path.join(repoRoot, 'README.md'),
+    path.join(pluginRoot, 'README.md'),
+    path.join(pluginRoot, 'bin', 'sidequest.js'),
+    path.join(HOOKS, 'session-start.js'),
+    path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'),
+  ];
 
-test('standing reminder: plain task prompt gets one short line, not a doctrine block', () => {
-  const ctx = capture('add a new export format to the reporter');
-  assert.match(ctx, /sidequest ===/);
-  assert.ok(ctx.includes('ticket-filer'), 'must still point at ticket filing');
-  assert.ok(
-    ctx.length <= BUDGET.standing,
-    `standing reminder is ${ctx.length} chars — budget is ${BUDGET.standing}; this fires EVERY prompt`
-  );
-  assertNoRetiredDoctrine(ctx, 'standing reminder');
-});
+  assert.ok(!fs.existsSync(path.join(pluginRoot, 'agents', 'ticket-filer.md')));
+  assert.ok(!fs.existsSync(path.join(HOOKS, 'capture-nudge.js')));
+  for (const file of references) {
+    assert.ok(!fs.readFileSync(file, 'utf8').includes('ticket-filer'), `${file} must not reference ticket-filer`);
+  }
 
-test('standing reminder: SIDEQUEST_NUDGE=off silences plain prompts but keeps side-issue capture visible', () => {
-  const env = { ...process.env, SIDEQUEST_NUDGE: 'off' };
-  const plain = execFileSync(process.execPath, [CAPTURE], {
-    input: JSON.stringify({ prompt: 'add a new export format' }),
-    encoding: 'utf8',
-    env,
-  });
-  assert.strictEqual(plain.trim(), '', 'no-marker path should emit nothing when nudge is off');
-  const defect = execFileSync(process.execPath, [CAPTURE], {
-    input: JSON.stringify({ prompt: 'the login form is broken' }),
-    encoding: 'utf8',
-    env,
-  });
-  assert.ok(defect.includes('ticket-filer'), 'side-issue prompt must still point at ticket filing');
-});
-
-test('side-issue prompts keep the ticket-filer pointer inside the per-message budget', () => {
-  const ctx = capture('the login form is broken');
-  assert.match(ctx, /sidequest ===/);
-  assert.ok(ctx.includes('ticket-filer'), 'must still point at ticket filing');
-  assert.ok(ctx.length <= BUDGET.standing, `per-message reminder is ${ctx.length} chars — trim it, don't raise the budget`);
-  assertNoRetiredDoctrine(ctx, 'side-issue reminder');
-});
-
-/* ------------------------------------------------------------------ *
- *  Marker pruning — ordinary task verbs no longer trip capture (SQ-106)
- * ------------------------------------------------------------------ */
-
-test("pruned markers: 'needs to' / 'missing' keep the minimal reminder", () => {
-  const ctx = capture('the parser needs to handle the missing config field');
-  assert.match(ctx, /sidequest ===/);
-  assert.ok(ctx.length <= BUDGET.standing);
-});
-
-test("pruned markers: \"won't\" keeps the minimal reminder", () => {
-  const ctx = capture("the build won't finish on my machine");
-  assert.match(ctx, /sidequest ===/);
-});
-
-test('genuine defect words keep the minimal reminder', () => {
-  assert.ok(capture('the exporter crashes on empty input').includes('ticket-filer'));
-  assert.ok(capture('oh and the contact form is broken').includes('ticket-filer'));
+  const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
+  assert.strictEqual(config.hooks.UserPromptSubmit, undefined);
+  assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
 });
 
 /* ------------------------------------------------------------------ *

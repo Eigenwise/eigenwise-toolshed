@@ -3,8 +3,7 @@
 /**
  * sidequest - command-line interface
  *
- * The single entry point used by humans, the capture hook, and the ticket-filer
- * subagent. Node stdlib only; cross-platform.
+ * The single entry point for board actions. Node stdlib only; cross-platform.
  *
  *   sidequest add -t "title" [-d desc] [-p priority] [-l label]... [-i image]... [-s status]
  *   sidequest list [--status todo] [--json]

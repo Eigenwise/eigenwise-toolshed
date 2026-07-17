@@ -10,7 +10,7 @@ description: >-
   implementing. Use to comment on a ticket, ask the user something on it (a question means
   pause-and-wait), or relate tickets (depends-on/blocks). Tickets carry a category that drives
   model/effort routing, with complexity kept for legacy tickets and genuine ambiguity. For a mid-task
-  side issue, prefer the ticket-filer agent instead of derailing.
+  side issue, file it directly with `add`, then keep working. Filing a ticket never asks you to work it.
 ---
 
 # sidequest
@@ -147,9 +147,10 @@ EOF
 ```
 
 For a side issue raised **while you're mid-task** ("oh, and the footer link is broken"), don't stop:
-spawn the **`ticket-filer`** subagent (`run_in_background: true`) with the issue text, any pasted
-image path, and the CLI command. **Filing a ticket is not a request to work it** — "make a ticket for
-X" means file it and stop.
+file it directly with `mcp__plugin_sidequest_board__add` (or `sidequest add` when MCP is unavailable),
+including any pasted image path as an attachment. Write the developer-to-developer detail you have; a
+thin issue can stay thin. **Filing a ticket is not a request to work it.** "Make a ticket for X" means
+file it and stop.
 
 ## List / update / close
 

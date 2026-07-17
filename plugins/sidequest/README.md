@@ -39,10 +39,9 @@ only (Claude Code already ships Node), cross-platform.
 You're deep in a CSS fix. You say *"oh and the checkout throws on Safari."* Normally that either
 derails the current task or gets forgotten three messages later. sidequest does neither:
 
-1. A **hook** notices the side issue and, without interrupting the work in progress, nudges Claude to
-   capture it.
-2. Claude spins off a tiny background **`ticket-filer`** subagent that writes the ticket — title,
-   description, priority, labels, and any **pasted image** — while the main task keeps moving.
+1. The **Sidequest skill** keeps filing side issues in scope without interrupting the work in progress.
+2. Claude files the ticket directly with the MCP `add` tool (or the CLI): title, description, priority,
+   labels, and any **pasted image**, then the main task keeps moving.
 3. The ticket appears on your **board**. Ask *"show me the dashboard"* and it opens in your browser,
    live-updating as new tickets land.
 
@@ -50,19 +49,14 @@ Nothing leaves your machine. The board server binds to `127.0.0.1` only.
 
 ## Capturing side issues
 
-The bundled `UserPromptSubmit` hook watches for a message that raises something separate from the task
-at hand — interjections (*"also…", "by the way…", "don't forget…"*), defect language (*"broken",
-"doesn't work", "throws"*), or a pasted image — and reminds Claude to file it as a ticket **and keep
-going**. The decision to file stays with Claude, so an ordinary on-task prompt creates no ticket.
+The Sidequest skill tells Claude to file a separate issue directly as a ticket and keep going. It carries
+the developer-to-developer detail available, while a thin issue can stay thin. Filing a ticket never asks
+Claude to work it.
 
-- **Pasted images become attachments.** Paste a screenshot with your message and it's copied into the
-  ticket; you'll see the thumbnail on the card and full-size in the board's lightbox.
-- **It doesn't derail the current task.** Capture happens on a background subagent (or a single quick
-  CLI call), then Claude continues what it was doing.
-- **A quiet standing reminder.** On other prompts the hook injects one short line keeping Claude aware
-  that this project uses sidequest, so it reaches for the board instead of forgetting the system exists.
-  Find it too chatty? Set `SIDEQUEST_NUDGE=off` — the capture and board blocks above still fire on a
-  match.
+- **Pasted images become attachments.** Paste a screenshot with your message and Claude carries it into
+  the ticket; you'll see the thumbnail on the card and full-size in the board's lightbox.
+- **It doesn't derail the current task.** Claude makes one MCP `add` call (or a single quick CLI call),
+  then continues what it was doing.
 
 You can also just ask directly: *"make a ticket for the flaky signup test, high priority."*
 
@@ -71,7 +65,7 @@ You can also just ask directly: *"make a ticket for the flaky signup test, high 
 Ask *"show me the dashboard"*, *"open the board"*, or run **`/sidequest:board`**. Claude starts the
 local server (idempotently — it reuses one that's already running) and opens your browser.
 
-- **Live.** The board polls every ~2.5s, so tickets added from anywhere (the CLI, the capture hook,
+- **Live.** The board polls every ~2.5s, so tickets added from anywhere (the CLI, MCP,
   another window) show up on their own and animate in — no refresh. It only re-renders when something
   actually changed, pauses polling while its browser tab is in the background, and refreshes instantly
   the moment you switch back to it.

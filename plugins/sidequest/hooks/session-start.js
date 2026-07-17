@@ -62,10 +62,6 @@ function withTaxonomy(context) {
 }
 
 // Returns the parsed stdin payload, or null if stdin was empty/unparseable.
-// Unlike capture-nudge.js (which only reads one field and can shrug off a
-// parse failure), this hook has no per-field logic to fall back on, so an
-// unreadable payload is treated as "not a real hook invocation" and stays
-// silent rather than firing on every malformed call.
 function readStdin() {
   try {
     const fs = require('fs');
@@ -97,7 +93,7 @@ function provisionExecAgents() {
   }
 }
 
-// Turned off with SIDEQUEST_NUDGE=off for anyone who finds this too chatty.
+// Set SIDEQUEST_NUDGE=off to skip injected SessionStart context.
 function nudgeOff() {
   const v = String(process.env.SIDEQUEST_NUDGE || '').trim().toLowerCase();
   return v === 'off' || v === '0' || v === 'false' || v === 'no';
@@ -134,7 +130,7 @@ function main() {
   if (source === 'compact' || source === 'resume') {
     emit(
       '=== sidequest (active — context restored) ===\n' +
-        'Context was just compacted/resumed — use mcp__plugin_sidequest_board__list with status=doing FIRST to re-check in-flight claims; only if MCP is unavailable, fall back to `' + cli + ' list --status doing`.\n' +
+        'Context was just compacted/resumed. Reload the Sidequest skill before acting. Use mcp__plugin_sidequest_board__list with status=doing FIRST to re-check in-flight claims; only if MCP is unavailable, fall back to `' + cli + ' list --status doing`.\n' +
         'Board truth beats idle pings: pulse ref, inspect claim age, comments, git. Discipline: taxonomy, stamp, render executor, wait for `New agent types are now available: <name>`, spawn `exec.agent`, claim its token. `reason:token`: TaskStop, wait, respawn. No announcement: stable executor. Verify `transcript/meta.json` + token claim, never self-report. Codex omits model; Claude passes it.\n' ,
       restartNotice
     );
@@ -143,7 +139,7 @@ function main() {
 
   emit(
     '=== sidequest (active) ===\n' +
-      'This project tracks work on the sidequest board — plan multi-part requests as independently checkable ATOMIC ' +
+      'This project tracks work on the sidequest board. Reload the Sidequest skill before acting. Plan multi-part requests as independently checkable ATOMIC ' +
       'tickets (stamp a live-taxonomy category; classify against ids shown and fetch the list if ambiguous; complexity + why are legacy fallback). ' +
       'Atomic = one piece a single agent finishes and checks: a change, or an investigation, spike, or review. ' +
       'Split for parallelism: independent tickets fan out; keep tightly coupled work together. ' +
@@ -155,7 +151,7 @@ function main() {
       '• Batch small SAME-model tickets into ONE executor; parallelize only independent tickets.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +
       '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\n' +
-      'Capture side issues as tickets (background `ticket-filer`) without derailing the current task.\n' +
+      '• File every side issue directly with mcp__plugin_sidequest_board__add (or the CLI fallback), detailed or thin, then keep working. Filing a ticket never asks you to work it.\n' +
       'Board actions go through the mcp__plugin_sidequest_board__* MCP tools whenever available — reach for them FIRST; Bash+CLI is the fallback. Open the board: `' +
       cli + ' dashboard`.',
     restartNotice
