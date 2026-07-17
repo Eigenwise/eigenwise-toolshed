@@ -571,7 +571,27 @@ function setCategory(categoryOrId, patch) {
 function removeCategory(id) {
   const normalizedId = normalizeCategoryId(id);
   if (normalizedId === 'general') throw new Error('Category "general" cannot be removed.');
-  return db.deleteRow(database(), 'categories', normalizedId);
+  return transaction(() => {
+    // A project that only customized (OVERRODE) this global category holds a
+    // partial patch that inherits the rest from global. Once the global row is
+    // gone that patch would dangle and the board would drop into a broken
+    // "global category missing" state. Freeze each such customization into a
+    // full local (pinned/DETACH) copy of its effective value so the board keeps
+    // a working category instead.
+    const base = getCategory(normalizedId);
+    if (base) {
+      const overrides = database()
+        .prepare("SELECT project, data FROM project_categories WHERE id = ? AND kind = 'OVERRIDE'")
+        .all(normalizedId);
+      for (const row of overrides) {
+        let patch;
+        try { patch = JSON.parse(row.data); } catch (_) { patch = {}; }
+        const pinned = normalizeCategory(Object.assign({}, base, patch, { id: normalizedId }));
+        if (pinned) db.putRow(database(), 'project_categories', { project: row.project, id: normalizedId, kind: 'DETACH', data: pinned });
+      }
+    }
+    return db.deleteRow(database(), 'categories', normalizedId);
+  });
 }
 
 function normalizeFullProjectCategory(id, kind, data) {

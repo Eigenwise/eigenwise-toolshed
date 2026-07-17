@@ -33,8 +33,8 @@ situation calls for it**:
   Jira / Linear / GitHub Issues.
 - [references/board-features.md](references/board-features.md) — stories, notifications, reminders,
   human assignment, attachment paths.
-- [references/category-links.md](references/category-links.md) — project category link states, warnings,
-  and detach/relink behavior across CLI, MCP, and dashboard surfaces.
+- [references/category-links.md](references/category-links.md) — shared defaults vs board customizations,
+  the customize/reset/pin model, warnings, and auto-pin on delete across CLI, MCP, and dashboard surfaces.
 
 ## Plan substantial work on the board first
 

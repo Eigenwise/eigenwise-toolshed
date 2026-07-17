@@ -149,7 +149,9 @@ can name Claude runtimes or Codex models discovered through [codex-gateway](../c
 ```bash
 sidequest category list
 sidequest add -t "Fix the checkout error" --category debugging
-sidequest category edit coding.normal --route-model codex-gpt-5-6-terra --route-effort high
+sidequest category edit coding.normal --route-model codex-gpt-5-6-terra --route-effort high   # global, or --project . to customize one board
+sidequest category reset coding.normal --project .                                            # drop this board's customization
+sidequest category pin coding.normal --project .                                              # freeze this board's copy (hard fork)
 sidequest category add release-check --name "Release checks" --description "Focused release verification" \
   --contract "Run the named checks and report failures." \
   --route-model sonnet --route-effort medium \
@@ -159,9 +161,14 @@ sidequest global-fallback --model sonnet --effort medium
 
 Each category has a primary route and may define its own fallback. If that model is unavailable, sidequest
 tries the category fallback, then the required global fallback, and reports a warning for the route that
-was skipped. The CLI, MCP surfaces, and dashboard expose the same category CRUD operations and usage
-counts. Project-scoped categories can add a local row, override a global route or fallback, or disable
-a row for that project; other projects keep the global taxonomy. `general` cannot be removed or disabled.
+was skipped. The CLI, MCP surfaces, and dashboard expose the same category CRUD operations and usage counts.
+
+Categories live in a shared default policy. Pick a board to customize a category just for it: editing a
+category on a board saves your changes as a local customization and leaves every other board on the shared
+default. **Reset** drops that customization and follows the shared default again. **Pin** freezes a board's
+copy so it ignores later shared-default renames or removal — normal customizing already keeps your own
+changes, so pin is only for a hard fork. Deleting a shared default auto-pins the boards that customized it,
+so a board is never stranded without one. `general` cannot be removed or disabled.
 
 Tickets keep their category ID as policy, so changing a category updates the next dispatch without rewriting
 existing tickets. New tickets should use `--category` so the dispatch intent is explicit. Routed work stays in

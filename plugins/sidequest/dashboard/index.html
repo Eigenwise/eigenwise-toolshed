@@ -442,13 +442,14 @@
   .category-scope { display: inline-flex; padding: 2px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 999px; }
   .category-scope button { cursor: pointer; border: 0; border-radius: 999px; padding: 5px 10px; color: var(--text-faint); background: transparent; font: 700 10px var(--mono); letter-spacing: .03em; }
   .category-scope button.active { color: var(--bg); background: var(--gold-bright); }
+  .category-scope button.scope-board { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-scope-banner { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; padding: 9px 11px; border-radius: var(--radius-sm); font-size: 11.5px; line-height: 1.4; color: var(--text-dim); border: 1px solid var(--line-soft); background: var(--bg); }
+  .category-scope-banner b { flex: none; font: 700 9px var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: 2px 6px; border-radius: 999px; }
+  .category-scope-banner.shared b { color: var(--gold-bright); background: var(--gold-soft); border: 1px solid var(--gold-line); }
+  .category-scope-banner.board b { color: #6554a6; background: rgba(101,84,166,.11); border: 1px solid rgba(101,84,166,.38); }
   .category-layer { margin-left: auto; font: 700 9px var(--mono); letter-spacing: .04em; padding: 2px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--gold-bright); background: var(--gold-soft); }
   .category-layer.delta { color: var(--text-dim); background: var(--bg); }
   .category-layer.detached { color: #6554a6; border-color: rgba(101,84,166,.38); background: rgba(101,84,166,.11); }
-  .category-layer.shadow { color: #6554a6; border-color: rgba(101,84,166,.38); background: rgba(101,84,166,.11); }
-  .category-warning { margin: 0 14px; padding: 10px 12px; border: 1px solid rgba(181,74,72,.32); border-left: 3px solid var(--high); background: rgba(181,74,72,.06); color: var(--text-dim); font-size: 12px; line-height: 1.4; }
-  .category-warning strong { color: var(--high); }
-  .category-warning button { margin-left: 8px; cursor: pointer; font: 700 10px var(--sans); color: var(--high); background: var(--panel); border: 1px solid rgba(181,74,72,.32); border-radius: var(--radius-sm); padding: 3px 7px; }
   .category-row.disabled { opacity: .55; border-style: dashed; }
   .category-delta { margin-top: 12px; padding: 10px; border: 1px solid var(--gold-line); border-left: 3px solid var(--gold); background: linear-gradient(90deg, var(--gold-soft), var(--bg) 68%); }
   .category-delta-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
@@ -458,7 +459,7 @@
   .category-delta-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 5px 6px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
   .category-delta-field b { color: var(--gold-bright); font: 700 10px var(--mono); letter-spacing: .03em; text-transform: uppercase; }
   .category-delta-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 600 11px var(--mono); }
-  .category-delta-value::after { content: " · global value on hover"; color: var(--text-faint); font-weight: 400; }
+  .category-delta-value::after { content: " · shared default on hover"; color: var(--text-faint); font-weight: 400; }
   .category-restore-note { margin: 10px 0 -3px; color: var(--text-faint); font-size: 11px; }
   .category-restore-note b { color: var(--text-dim); font-weight: 650; }
   .category-list { padding: 11px 14px 18px; max-height: none; overflow: visible; display: flex; flex-direction: column; gap: 7px; }
@@ -750,7 +751,7 @@
                 <div class="fallback-control" id="globalFallbackControl"></div>
               </section>
               <section class="category-settings" aria-labelledby="categoriesTitle">
-                <div class="cat-head"><div class="cat-head-copy"><h3 id="categoriesTitle">Categories</h3><p>Choose where each kind of work runs. Open a category to see and edit its fallback chain.</p></div><div class="category-scope-wrap"><span class="category-scope-project" id="categoryScopeProject"></span><div class="category-scope" id="categoryScope" role="group" aria-label="Category scope"></div></div></div>
+                <div class="cat-head"><div class="cat-head-copy"><h3 id="categoriesTitle">Categories</h3><p>Choose where each kind of work runs. Edit the shared defaults, or switch to a board to customize a category just for it.</p></div><div class="category-scope-wrap"><span class="category-scope-project" id="categoryScopeProject"></span><div class="category-scope" id="categoryScope" role="group" aria-label="Category scope"></div></div></div>
                 <div class="category-list" id="categoryList"></div>
               </section>
             </div>
@@ -1815,8 +1816,19 @@
     var globalFallback = category && category.globalFallback || routingCatalog.globalFallback || { model: "sonnet", effort: "high" };
     var id = category ? category.id : "";
     var isGlobal = categoryProject() === "all";
+    var boardName = currentBoardName();
+    var layerKind = category && category.layer && category.layer.kind;
+    var pinnable = !isGlobal && !create && category && (!layerKind || layerKind === "OVERRIDE" || (layerKind === "DETACH" && category.layer.base));
+    var pinned = layerKind === "DETACH";
+    var banner = isGlobal
+      ? '<div class="category-scope-banner shared"><b>Shared default</b><span>' + (create ? "New category, available to every board." : "Editing the shared default. Applies to every board that hasn’t customized this category.") + '</span></div>'
+      : '<div class="category-scope-banner board"><b>' + esc(boardName) + '</b><span>' + (create ? "New category for this board only." : "Customizing for this board only. Other boards keep the shared default.") + '</span></div>';
+    var pinToggle = pinnable
+      ? '<label class="category-switch"><input data-field="pin" type="checkbox"' + (pinned ? " checked" : "") + ' /><span><strong>Pin this copy</strong><small>Stop following the shared default entirely. Keeps these values even if the shared default is later renamed or removed.</small></span></label>'
+      : '';
       var data = routingCatalog.categoryDraftAvailable ? '<div class="category-draft"><input type="text" data-category-draft placeholder="Describe the category in one sentence" /><button type="button" data-draft-category>Draft</button><small>Draft fills the form for review. It never saves on its own.</small></div>' : '';
     return '<div class="category-edit">' +
+      banner +
       data +
       '<div class="category-form-section">' +
         '<div class="category-form-heading"><strong>Category details</strong><small>How tickets get classified</small></div>' +
@@ -1836,6 +1848,7 @@
       '<div class="category-form-section">' +
         '<label class="category-field"><span>Executor instructions</span><textarea data-field="contract">' + esc(category ? category.contract : "") + '</textarea><small>Injected into the executor’s prompt for every ticket in this category.</small></label>' +
         (isGlobal ? '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /><span><strong>Enabled</strong><small>Available for ticket routing.</small></span></label>' : '') +
+        pinToggle +
       '</div>' +
       '<div class="category-actions"><button type="button" data-save-category="' + esc(id) + '">' + (create ? 'Add category' : 'Save changes') + '</button><button type="button" data-cancel-category>Cancel</button></div>' +
       '</div>';
@@ -1843,6 +1856,7 @@
   function categoryPayload(form) {
     var fallbackStep = form.querySelector('[data-fallback-step]');
     var hasFallback = fallbackStep && !fallbackStep.hidden;
+    var pinField = form.querySelector('[data-field="pin"]');
     return {
       id: form.querySelector('[data-field="id"]') && form.querySelector('[data-field="id"]').value.trim(),
       name: form.querySelector('[data-field="name"]').value.trim(),
@@ -1850,17 +1864,22 @@
       route: { model: form.querySelector('[data-field="model"]').value, effort: form.querySelector('[data-field="effort"]').value },
       fallback: hasFallback ? { model: form.querySelector('[data-field="fallback-model"]').value, effort: form.querySelector('[data-field="fallback-effort"]').value } : null,
       contract: form.querySelector('[data-field="contract"]').value.trim(),
-      enabled: !form.querySelector('[data-field="enabled"]') || form.querySelector('[data-field="enabled"]').checked
+      enabled: !form.querySelector('[data-field="enabled"]') || form.querySelector('[data-field="enabled"]').checked,
+      pin: pinField ? pinField.checked : null
     };
+  }
+  function currentBoardName() {
+    var project = (state.projects.filter(function (p) { return p.slug === state.current; })[0] || {});
+    return project.name || state.current;
   }
   function categoryScopeControls() {
     var box = $("categoryScope"); if (!box) return;
     var projectLabel = $("categoryScopeProject");
     var canProject = state.current !== "all";
-    var project = (state.projects.filter(function (p) { return p.slug === state.current; })[0] || {});
-    if (projectLabel) projectLabel.textContent = canProject ? project.name || state.current : "";
-    box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Global</button>' +
-      '<button type="button" data-scope="project"' + (state.categoryScope === "project" ? ' class="active"' : '') + (canProject ? '' : ' disabled') + '>This project</button>';
+    var boardName = canProject ? currentBoardName() : "This board";
+    if (projectLabel) projectLabel.textContent = "";
+    box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Shared defaults</button>' +
+      '<button type="button" class="scope-board" data-scope="project"' + (state.categoryScope === "project" ? ' class="active"' : '') + (canProject ? '' : ' disabled') + ' title="' + esc(boardName) + '">' + esc(boardName) + '</button>';
     box.querySelectorAll('[data-scope]').forEach(function (button) { button.addEventListener("click", function () {
       if (button.disabled) return;
       state.categoryScope = button.dataset.scope;
@@ -1878,32 +1897,20 @@
     var changed = Object.keys(layer.data || {}).map(function (key) {
       var before = values(layer.base && layer.base[key], key);
       var after = values(category[key], key);
-      return '<div class="category-delta-field"><b>' + esc(labels[key] || key) + '</b><span class="category-delta-value" title="Global: ' + esc(before) + '">' + esc(after) + '</span></div>';
+      return '<div class="category-delta-field"><b>' + esc(labels[key] || key) + '</b><span class="category-delta-value" title="Shared default: ' + esc(before) + '">' + esc(after) + '</span></div>';
     });
     if (!changed.length) return "";
-    return '<div class="category-delta"><div class="category-delta-head"><strong>Local changes</strong><span>Hover any value to compare with global</span></div><div class="category-delta-list">' + changed.join("") + '</div></div>';
+    return '<div class="category-delta"><div class="category-delta-head"><strong>This board’s changes</strong><span>Hover any value to compare with the shared default</span></div><div class="category-delta-list">' + changed.join("") + '</div></div>';
   }
   function renderCategorySettings() {
     var box = $("categoryList"); if (!box) return;
     categoryScopeControls();
     box.innerHTML = "";
     var projectScope = categoryProject() !== "all";
-    var dangling = (state.categories || []).filter(function (category) { return category.dangling; });
-    if (projectScope && dangling.length) {
-      var warning = el("div", "category-warning");
-      warning.innerHTML = '<strong>Global category missing.</strong> ' + dangling.map(function (category) { return esc(category.id); }).join(", ") + ' still has a local override. Remove it to clear this warning.';
-      dangling.forEach(function (category) {
-        var remove = document.createElement("button");
-        remove.type = "button";
-        remove.textContent = "Remove " + category.id;
-        remove.addEventListener("click", function () {
-          mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id) + "?project=" + encodeURIComponent(state.current)).then(function () { return loadCategories(); }).then(renderCategorySettings).catch(function (error) { toast("Category failed: " + error.message); });
-        });
-        warning.appendChild(remove);
-      });
-      box.appendChild(warning);
-    }
-    state.categories.forEach(function (category) {
+    // Deleting a shared default now auto-pins the boards that customized it
+    // (see removeCategory in store.js), so a category can no longer be left
+    // stranded without one. Skip any legacy dangling rows defensively.
+    state.categories.filter(function (category) { return !category.dangling; }).forEach(function (category) {
       var layer = category.layer;
       var disabled = category.disabled;
       var row = el("div", "category-row" + (category.enabled && !disabled ? "" : " off") + (disabled ? " disabled" : ""));
@@ -1912,25 +1919,31 @@
       var categoryFallback = category.fallback;
       var globalFallback = category.globalFallback || routingCatalog.globalFallback;
       var degraded = (category.warnings || []).length > 0;
-      var label = layer ? (layer.kind === "ADD" ? "PROJECT ADD" : layer.kind === "OVERRIDE" ? "OVERRIDE" : layer.kind === "DETACH" ? "DETACHED" : "DISABLED HERE") : "";
-      var shadowed = (category.warnings || []).some(function (warning) { return warning.kind === "shadows-global"; });
-      var actions = disabled
-        ? '<button type="button" data-reenable-category>Re-enable here</button>'
-        : '<button type="button" data-edit-category>Edit</button>' + (projectScope
-          ? (layer && layer.kind === "ADD"
-            ? '<button type="button" class="danger" data-delete-category>Delete</button>'
-            : (category.id === "general" ? "" : '<button type="button" class="danger" data-disable-category>Disable here</button>'))
-          : (category.id === "general" ? "" : '<button type="button" class="danger" data-delete-category>Delete</button>'));
-      if (projectScope && layer && layer.kind === "OVERRIDE" && !disabled) actions += '<button type="button" data-remove-layer>Restore global</button>';
-      if (projectScope && !disabled && (!layer || layer.kind === "OVERRIDE")) actions += '<button type="button" data-detach-category>Detach from global</button>';
-      if (projectScope && layer && layer.kind === "DETACH" && !disabled) actions += '<button type="button" data-relink-category>Relink to global</button>';
-      var restoreNote = projectScope && layer && layer.kind === "OVERRIDE" && !disabled
-        ? '<p class="category-restore-note"><b>Restore global</b> drops these local changes and brings back the global values.</p>'
-        : projectScope && layer && layer.kind === "DETACH" && !disabled
-          ? '<p class="category-restore-note"><b>Detached from global.</b> This category keeps its own local content until you relink it.</p>' : "";
-      var badgeClass = layer && layer.kind === "OVERRIDE" ? " delta" : layer && layer.kind === "DETACH" ? " detached" : "";
-      var shadowBadge = shadowed ? '<span class="category-layer shadow">SHADOWS GLOBAL</span>' : "";
-      row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + badgeClass + '">' + label + '</span>' : '') + shadowBadge + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
+      var layerKind = layer && layer.kind;
+      // A category with no shared default behind it (a board-only ADD, or a pin
+      // whose shared default was removed) can only be deleted, not reset.
+      var localOnly = layerKind === "ADD" || (layerKind === "DETACH" && !layer.base);
+      var customized = layerKind === "OVERRIDE" || (layerKind === "DETACH" && layer.base);
+      var label = layerKind === "ADD" ? "ADDED HERE" : layerKind === "OVERRIDE" ? "CUSTOMIZED" : layerKind === "DETACH" ? "PINNED" : layerKind === "DISABLE" ? "DISABLED HERE" : "";
+      var actions;
+      if (disabled) {
+        actions = '<button type="button" data-reenable-category>Re-enable here</button>';
+      } else {
+        actions = '<button type="button" data-edit-category>Edit</button>';
+        if (projectScope) {
+          if (localOnly) actions += '<button type="button" class="danger" data-delete-category>Delete</button>';
+          else if (category.id !== "general") actions += '<button type="button" class="danger" data-disable-category>Disable here</button>';
+          if (customized) actions += '<button type="button" data-reset-category>Reset to shared default</button>';
+        } else if (category.id !== "general") {
+          actions += '<button type="button" class="danger" data-delete-category>Delete</button>';
+        }
+      }
+      var restoreNote = !projectScope || disabled ? ""
+        : layerKind === "OVERRIDE" ? '<p class="category-restore-note"><b>Reset to shared default</b> drops this board’s changes and brings back the shared values.</p>'
+        : layerKind === "DETACH" && layer.base ? '<p class="category-restore-note"><b>Pinned.</b> This category ignores the shared default until you reset it.</p>'
+        : layerKind === "DETACH" && !layer.base ? '<p class="category-restore-note"><b>Local to this board.</b> Its shared default was removed, so it no longer follows one.</p>' : "";
+      var badgeClass = layerKind === "OVERRIDE" ? " delta" : layerKind === "DETACH" ? " detached" : "";
+      row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + badgeClass + '">' + label + '</span>' : '') + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
         '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
         '<span class="category-usage">' + category.usageCount + ' tickets</span></summary>' +
         '<div class="category-row-body"><div class="category-row-detail">' + esc(category.description || "No classifier description") + '</div>' +
@@ -1947,24 +1960,19 @@
         if (category.fallback) { form.querySelector('[data-field="fallback-model"]').value = category.fallback.model; form.querySelector('[data-field="fallback-effort"]').value = category.fallback.effort; }
         wireCategoryForm(form, category.id);
       });
-      var remove = row.querySelector('[data-delete-category], [data-remove-layer], [data-reenable-category]');
-      if (remove) remove.addEventListener("click", function () { mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id) + (projectScope ? "?project=" + encodeURIComponent(state.current) : "")).then(function () { return refresh(disabled ? category.name + " re-enabled" : projectScope ? "Global category restored" : category.name + " deleted"); }).catch(function (e) { toast("Category failed: " + e.message); }); });
-      var detach = row.querySelector('[data-detach-category]');
-      if (detach) detach.addEventListener("click", function () {
-        if (!confirm("Detach this category from global policy? This board stops receiving global updates for this category. Global edits, renames, and deletions no longer affect it. You can relink later, but relinking discards local changes.")) return;
-        mutate("POST", "/api/categories/" + encodeURIComponent(category.id) + "/detach", { project: state.current }).then(function () { return refresh(category.name + " detached from global"); }).catch(function (e) { toast("Category failed: " + e.message); });
-      });
-      var relink = row.querySelector('[data-relink-category]');
-      if (relink) relink.addEventListener("click", function () {
-        if (!confirm("Relink this category to global policy? Its local content will be replaced by the live global category.")) return;
-        mutate("POST", "/api/categories/" + encodeURIComponent(category.id) + "/relink", { project: state.current }).then(function () { return refresh(category.name + " relinked to global"); }).catch(function (e) { toast("Category failed: " + e.message); });
+      var remove = row.querySelector('[data-delete-category], [data-reenable-category]');
+      if (remove) remove.addEventListener("click", function () { mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id) + (projectScope ? "?project=" + encodeURIComponent(state.current) : "")).then(function () { return refresh(disabled ? category.name + " re-enabled" : category.name + " deleted"); }).catch(function (e) { toast("Category failed: " + e.message); }); });
+      var reset = row.querySelector('[data-reset-category]');
+      if (reset) reset.addEventListener("click", function () {
+        if (!confirm("Reset this category to the shared default? This board’s customizations for it will be dropped.")) return;
+        mutate("DELETE", "/api/categories/" + encodeURIComponent(category.id) + "?project=" + encodeURIComponent(state.current)).then(function () { return refresh(category.name + " reset to the shared default"); }).catch(function (e) { toast("Category failed: " + e.message); });
       });
       var disable = row.querySelector('[data-disable-category]');
       if (disable) disable.addEventListener("click", function () { mutate("PATCH", "/api/categories/" + encodeURIComponent(category.id) + "?project=" + encodeURIComponent(state.current), { disable: true }).then(function () { return refresh(category.name + " disabled here"); }).catch(function (e) { toast("Category failed: " + e.message); }); });
       box.appendChild(row);
     });
     var add = el("details", "category-add");
-    add.innerHTML = '<summary>Add category' + (projectScope ? ' to this project' : '') + '</summary>' + categoryForm(null, true);
+    add.innerHTML = '<summary>Add category' + (projectScope ? ' to this board' : '') + '</summary>' + categoryForm(null, true);
     wireCategoryForm(add.querySelector('.category-edit'), null);
     box.appendChild(add);
   }
@@ -2000,10 +2008,17 @@
     form.querySelector('[data-save-category]').addEventListener("click", function () {
       var payload = categoryPayload(form);
       if (!payload.name || (!id && !payload.id)) { toast("A category id and name are required"); return; }
+      var pin = payload.pin;
+      delete payload.pin;
       var project = categoryProject();
       if (project !== "all") payload.project = project;
       var path = id ? "/api/categories/" + encodeURIComponent(id) + (project !== "all" ? "?project=" + encodeURIComponent(project) : "") : "/api/categories";
-      mutate(id ? "PATCH" : "POST", path, payload).then(function () { toast(id ? "Category saved" : "Category added"); return loadCategories(); }).then(function () { renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }).catch(function (e) { toast("Category failed: " + e.message); });
+      // Saving in board scope writes a customization (OVERRIDE). If "Pin this
+      // copy" is checked, follow up by pinning (DETACH) so it stops tracking the
+      // shared default. Unchecking is handled by the customize write itself.
+      mutate(id ? "PATCH" : "POST", path, payload).then(function () {
+        if (pin && project !== "all" && id) return mutate("POST", "/api/categories/" + encodeURIComponent(id) + "/detach", { project: state.current });
+      }).then(function () { toast(id ? "Category saved" : "Category added"); return loadCategories(); }).then(function () { renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }).catch(function (e) { toast("Category failed: " + e.message); });
     });
   }
   function populateCategorySelect() {

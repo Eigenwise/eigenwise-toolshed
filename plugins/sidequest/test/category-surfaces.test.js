@@ -173,8 +173,8 @@ test('CLI category detach and relink expose project link states and warnings', (
 
   const plain = spawnSync(process.execPath, [BIN, 'category', 'list', '--project', scoped], { encoding: 'utf8', env });
   assert.equal(plain.status, 0, plain.stderr);
-  assert.match(plain.stdout, /detached from global/);
-  assert.match(plain.stdout, /shadows a global category/);
+  assert.match(plain.stdout, /pinned/);
+  assert.match(plain.stdout, /is pinned and also exists as a shared default/);
 
   run = cli('category', 'relink', 'mechanical', '--project', scoped);
   assert.equal(run.result.status, 0, run.result.stderr);

@@ -414,20 +414,20 @@ function cmdCategory(opts, positional) {
     if (opts.json) return output({ categories, warnings: layer.warnings });
     for (const category of categories) {
       if (category.origin === 'disabled') {
-        console.log(`${category.id}  disabled locally  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})`);
+        console.log(`${category.id}  disabled here  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})`);
         continue;
       }
       const state = category.linkState === 'overridden'
-        ? `  overridden (${category.changedFields.join(', ')})`
+        ? `  customized (${category.changedFields.join(', ')})`
         : category.linkState === 'detached'
-          ? '  detached from global'
+          ? '  pinned'
           : '';
       console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})${state}`);
       for (const warning of category.warnings) console.log(`  ! ${warning}`);
     }
     for (const warning of layer.warnings) {
-      if (warning.kind === 'dangling-override') console.log(`  ! ${warning.id} has a dangling override in ${warning.project}`);
-      else if (warning.kind === 'shadows-global') console.log(`  ! ${warning.id} is detached and shadows a global category`);
+      if (warning.kind === 'dangling-override') console.log(`  ! ${warning.id} customization in ${warning.project} has no shared default`);
+      else if (warning.kind === 'shadows-global') console.log(`  ! ${warning.id} is pinned and also exists as a shared default`);
       else console.log(`  ! ${String(warning)}`);
     }
     return;
@@ -460,21 +460,21 @@ function cmdCategory(opts, positional) {
     console.log(`✓ enabled category ${id} for ${meta.name}`);
     return;
   }
-  if (action === 'detach') {
-    if (!projectScope) fail('category detach: pass --project to detach a category from global policy.');
+  if (action === 'detach' || action === 'pin') {
+    if (!projectScope) fail('category pin: pass --project to pin a category to this board.');
     let localRow;
-    try { localRow = store.detachCategory(slug, id); } catch (error) { fail(`category detach: ${error.message}`); }
+    try { localRow = store.detachCategory(slug, id); } catch (error) { fail(`category pin: ${error.message}`); }
     if (opts.json) return output(Object.assign({ ok: true, localRow }, details(id)));
-    console.log(`✓ detached category ${id} from global policy for ${meta.name}`);
+    console.log(`✓ pinned category ${id} for ${meta.name} (stops following the shared default)`);
     return;
   }
-  if (action === 'relink') {
-    if (!projectScope) fail('category relink: pass --project to restore global policy inheritance.');
+  if (action === 'relink' || action === 'reset') {
+    if (!projectScope) fail('category reset: pass --project to reset a category to the shared default.');
     const row = localRow(id);
-    if (!row || !['OVERRIDE', 'DETACH'].includes(row.kind)) fail(`category relink: "${id}" has no local override or detach in ${meta.name}`);
-    try { store.removeProjectCategory(slug, id); } catch (error) { fail(`category relink: ${error.message}`); }
+    if (!row || !['OVERRIDE', 'DETACH'].includes(row.kind)) fail(`category reset: "${id}" is not customized or pinned in ${meta.name}`);
+    try { store.removeProjectCategory(slug, id); } catch (error) { fail(`category reset: ${error.message}`); }
     if (opts.json) return output(Object.assign({ ok: true, id: String(id).toLowerCase(), localRow: null }, details(id)));
-    console.log(`✓ relinked category ${id} to global policy for ${meta.name}`);
+    console.log(`✓ reset category ${id} to the shared default for ${meta.name}`);
     return;
   }
   if (action === 'edit' || action === 'update' || action === 'set') {
@@ -517,7 +517,7 @@ function cmdCategory(opts, positional) {
     console.log(`✓ removed category ${id}  — ${meta.name}`);
     return;
   }
-  fail(`category: unknown action "${action}". Use list | add | edit | rm | disable | enable | detach | relink.`);
+  fail(`category: unknown action "${action}". Use list | add | edit | rm | disable | enable | pin | reset.`);
 }
 
 function cmdGlobalFallback(opts) {
@@ -1729,7 +1729,7 @@ Usage:
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
-  sidequest category list|add|edit|rm|disable|enable|detach|relink <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
+  sidequest category list|add|edit|rm|disable|enable|pin|reset <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n>
   sidequest projects [--archived] [--json]

@@ -773,7 +773,7 @@ const TOOLS = [
   },
   {
     name: 'category_list',
-    description: 'List the effective category taxonomy used to classify tickets for the resolved project. Omitted project means the current project, with project ADD/OVERRIDE/DISABLE metadata; pass global:true for the global-only policy view.',
+    description: 'List the categories a project uses to classify tickets, each marked as following the shared default, customized for this board, pinned, added here, or disabled here. Omitted project means the current project; pass global:true for the shared-default policy only.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP, global: { type: 'boolean', description: 'Show global-only policy instead of the resolved project taxonomy.' } } },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
@@ -819,7 +819,7 @@ const TOOLS = [
   },
   {
     name: 'category_edit',
-    description: 'Edit global policy by default. With project, creates or updates a local OVERRIDE; enabled false disables it locally and enabled true removes that local disable. Classification always uses the effective project taxonomy.',
+    description: 'Customize a category for one board (pass project) or edit the shared default for every board (omit project). With project, your changes are saved as this board\'s customization and other boards keep the shared default; enabled false disables the category on this board and enabled true clears that local disable. Without project you are rewriting the shared default that every uncustomized board inherits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -862,7 +862,7 @@ const TOOLS = [
   },
   {
     name: 'category_detach',
-    description: 'Detach a project category from global policy, preserving its current effective category as local content.',
+    description: 'Pin a board\'s category so it stops following the shared default, keeping its current values even if the shared default is later renamed or removed. Advanced fork: normal category_edit already keeps a board\'s own changes, so pin only to freeze against future shared-default edits.',
     inputSchema: {
       type: 'object',
       properties: { project: PROJECT_PROP, id: { type: 'string' } },
@@ -878,7 +878,7 @@ const TOOLS = [
   },
   {
     name: 'category_relink',
-    description: 'Remove a project category OVERRIDE or DETACH row and restore inheritance from global policy.',
+    description: 'Reset a board\'s category to the shared default, dropping its local customization or pin so it follows the shared default again.',
     inputSchema: {
       type: 'object',
       properties: { project: PROJECT_PROP, id: { type: 'string' } },

@@ -128,20 +128,32 @@ test('project category layers merge ADD, OVERRIDE, and DISABLE without leaking t
   assert.equal(store.modelsPayload({ project: slug }).categories.some((category) => category.id === 'music-analysis'), true);
 });
 
-test('project category layer guards reject invalid local changes and report dangling overrides', () => {
+test('project category layer guards reject invalid local changes', () => {
   const { store, slug } = freshStore();
   assert.throws(() => store.setProjectCategory(slug, 'general', 'DISABLE'), /cannot be disabled/);
   assert.throws(() => store.setProjectCategory(slug, 'coding.normal', 'ADD', {
     route: { model: 'opus', effort: 'high' },
   }), /collides with a global category/);
   assert.throws(() => store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', { enabled: false }), /cannot patch/);
+});
 
+test('deleting a global category auto-pins the customizations that depend on it', () => {
+  const { store, slug, home } = freshStore();
+  const other = store.ensureProject(path.join(home, 'other-project'), 'Other project').slug;
   store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', { name: 'Local coding' });
+
   store.removeCategory('coding.normal');
-  assert.equal(store.getCategories({ project: slug }).some((category) => category.id === 'coding.normal'), false);
-  assert.deepEqual(store.getProjectCategories(slug).warnings, [
-    { kind: 'dangling-override', id: 'coding.normal', project: slug },
-  ]);
+
+  // The board keeps a working, pinned copy instead of dropping into a broken
+  // "global category missing" state — no dangling override to clean up.
+  const pinned = store.getCategory('coding.normal', { project: slug });
+  assert.equal(pinned.name, 'Local coding');
+  assert.deepEqual(pinned.route, { model: 'codex-gpt-5-6-terra', effort: 'high' });
+  assert.deepEqual(store.getProjectCategories(slug).warnings, []);
+  assert.equal(store.getCategory('coding.normal', { project: slug, withState: true }).linkState, 'detached');
+
+  // A project that never customized the category simply loses it.
+  assert.equal(store.getCategories({ project: other }).some((category) => category.id === 'coding.normal'), false);
 });
 
 test('detached categories snapshot the merged view, shadow globals, survive deletion, and relink', () => {
