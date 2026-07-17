@@ -985,6 +985,12 @@ const TOOLS = [
 const MCP_CLI_ONLY_TOOLS = new Set([
   'archive_board', 'unarchive_board', 'category_add', 'category_rm',
   'global_fallback', 'unlink', 'assign', 'remove',
+  // Rare admin/config/switcher reads and the deprecated native_agent path. Kept
+  // off the always-on MCP descriptor list (they cost ~530 tokens of schema every
+  // request for ops fired ~never); still reachable via the CLI, documented in the
+  // skill's "CLI is the fallback" section.
+  'native_agent', 'native_agent_cleanup', 'category_detach', 'category_relink',
+  'models', 'projects',
 ]);
 
 const TOOL_BY_NAME = new Map(TOOLS

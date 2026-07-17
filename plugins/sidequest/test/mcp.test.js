@@ -61,6 +61,13 @@ function callToolRaw(name, args) {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
   return resp.result;
 }
+// CLI-only tools are excluded from the MCP callable map on purpose, so exercise
+// their handler logic directly (the CLI path is what ships them to callers).
+function callHandler(name, args) {
+  const tool = mcp.TOOLS.find((t) => t.name === name);
+  assert.ok(tool, `tool ${name} exists in the registry`);
+  return tool.handler(args || {});
+}
 
 test('initialize returns a protocol version, tools capability, and serverInfo', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
@@ -77,10 +84,11 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'claim', 'sweepClaims', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'models', 'category_detach', 'category_relink']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'claim', 'sweepClaims', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'category_edit', 'category_list']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
-  for (const cliOnly of ['archive_board', 'unarchive_board', 'category_add', 'category_rm', 'global_fallback', 'unlink', 'assign', 'remove']) {
+  for (const cliOnly of ['archive_board', 'unarchive_board', 'category_add', 'category_rm', 'global_fallback', 'unlink', 'assign', 'remove',
+    'native_agent', 'native_agent_cleanup', 'category_detach', 'category_relink', 'models', 'projects']) {
     assert.ok(!names.includes(cliOnly), `${cliOnly} stays CLI-only`);
   }
   for (const t of resp.result.tools) {
@@ -166,7 +174,7 @@ test('native_agent carries ticket anchors and verify command through its stable 
       title: 'prompt context', category: 'native-codex',
       anchors: 'lib/work.js:14 executorPrompt', verify: 'node --test plugins/sidequest/test/work.test.js',
     });
-    const native = callTool('native_agent', { ref: added.ref, prompt: 'Implement exactly this ticket.' });
+    const native = callHandler('native_agent', { ref: added.ref, prompt: 'Implement exactly this ticket.' });
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
     assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch-high');
@@ -378,7 +386,7 @@ test('the real stdio server frames newline-delimited JSON-RPC', () => {
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
     { jsonrpc: '2.0', id: 2, method: 'tools/list' },
-    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'projects', arguments: {} } },
+    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list', arguments: {} } },
   ];
   const input = requests.map((r) => JSON.stringify(r)).join('\n') + '\n';
   const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
@@ -392,14 +400,14 @@ test('the real stdio server frames newline-delimited JSON-RPC', () => {
   assert.strictEqual(parsed[1].id, 2);
   assert.ok(Array.isArray(parsed[1].result.tools));
   assert.strictEqual(parsed[2].id, 3);
-  assert.ok(!parsed[2].result.isError, 'projects tool call succeeded');
+  assert.ok(!parsed[2].result.isError, 'list tool call succeeded');
 });
 
 test('models reports concrete routes and no grade output', () => {
   seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra' }]);
   try {
     store.setCategory({ id: 'model-codex', name: 'Model Codex', route: { model: 'codex-terra', effort: 'high' }, fallback: { model: 'opus', effort: 'high' } });
-    const out = callTool('models', {});
+    const out = callHandler('models', {});
     assert.ok(out.models.includes('codex-terra'));
     assert.ok(out.categories.some((category) => category.id === 'model-codex' && category.resolved.model === 'codex-terra'));
     assert.ok(!JSON.stringify(out).includes('grade-'));

@@ -173,7 +173,7 @@ test('CLI category edit forks a board category, and reset returns it to the shar
   assert.equal(run.body.effective.name, 'Mechanical change');
 });
 
-test('MCP category edit forks a board category, and relink resets it to the shared default', () => {
+test('MCP category edit forks a board category; category_relink (CLI-only) resets it to the shared default', () => {
   const mcp = freshMcp();
   const scoped = process.env.CLAUDE_PROJECT_DIR;
   fs.mkdirSync(scoped, { recursive: true });
@@ -188,6 +188,8 @@ test('MCP category edit forks a board category, and relink resets it to the shar
   assert.equal(category.origin, 'detached');
   assert.deepEqual(result.warnings, []);
 
-  result = call(mcp, 'category_relink', { project: scoped, id: 'mechanical' });
+  // category_relink is CLI-only (excluded from the MCP callable map), so drive
+  // its handler directly on the same module scope the fork above ran in.
+  result = mcp.TOOLS.find((t) => t.name === 'category_relink').handler({ project: scoped, id: 'mechanical' });
   assert.deepEqual(result, { ok: true, project: result.project, id: 'mechanical', localRow: null });
 });

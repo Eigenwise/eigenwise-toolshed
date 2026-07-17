@@ -67,9 +67,13 @@ still your local execution ledger — see
 ## The MCP tools ARE the board interface; the CLI is the fallback
 
 When tools named **`mcp__plugin_sidequest_board__*`** are in your toolset (`list`, `ready`, `add`,
-`update`, `claim`, `next`, `done`, `release`, `comment`, `ask`, `comments`, `link`,
-`models`, `projects`), use them for routine board work. The CLI remains the path for rare admin,
-policy, assignment, archive, unlink, and permanent-removal actions.
+`update`, `claim`, `next`, `done`, `release`, `comment`, `ask`, `comments`, `link`, `dispatch`,
+`pulse`, `changes`, `category_list`, `category_edit`, `sweepClaims`), use them for routine board work.
+The CLI is the ONLY path for rare admin/config ops that are deliberately kept off the MCP surface —
+run them with the resolved `sidequest` command: model/taxonomy read (`sidequest models`), board
+switcher (`sidequest projects`), category pin/reset (`sidequest category detach|relink <id> --project
+<p>`), the deprecated native-agent spawn (`sidequest native-agent`, prefer `dispatch`), plus policy,
+assignment, archive, unlink, and permanent-removal actions.
 They take the same fields as the CLI flags shown below — the examples in this file use CLI form for
 compactness, not as a recommendation. After shipping a schema-bumping Sidequest release, treat an
 already-loaded MCP server as a stale writer until plugins reload: route every store write through the
