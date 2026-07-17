@@ -91,12 +91,10 @@ function resolveStampedModel(input) {
 // silently run tickets on the wrong model. This mirrors the gateway marker grammar.
 const ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
 
-function dispatchBatchConflict(input) {
+function dispatchRouteModels(input) {
   const prompt = input && input.tool_input && input.tool_input.prompt;
-  if (typeof prompt !== 'string' || !prompt) return null;
-  const models = new Set();
-  for (const match of prompt.matchAll(ROUTE_MARKER_RE)) models.add(match[1]);
-  return models.size > 1 ? [...models] : null;
+  if (typeof prompt !== 'string' || !prompt) return [];
+  return [...new Set([...prompt.matchAll(ROUTE_MARKER_RE)].map((match) => match[1]))];
 }
 
 function denyReason(res, type) {
@@ -153,7 +151,19 @@ function main() {
 
   if (isPinnedSidequestExecutor(type)) {
     if (type.startsWith('sidequest-exec-dispatch-')) {
-      const conflict = dispatchBatchConflict(input);
+      const routeModels = dispatchRouteModels(input);
+      if (!routeModels.length) {
+        process.stdout.write(JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason:
+              `sidequest: a dispatch executor's spawn prompt must contain its briefing's route marker — spawn with the dispatch briefing verbatim and append addenda; re-run dispatch if the briefing was lost.`,
+          },
+        }));
+        return;
+      }
+      const conflict = routeModels.length > 1 ? routeModels : null;
       if (conflict) {
         process.stdout.write(JSON.stringify({
           hookSpecificOutput: {

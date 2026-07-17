@@ -815,3 +815,29 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   assert.ok(!same.hookSpecificOutput.permissionDecision, 'a same-model batch must not be denied');
   assert.equal(same.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
 });
+
+test('pre-tool hook: dispatch executor requires a canonical route marker without affecting markerless executor types', () => {
+  const missingMarker = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-no-marker', prompt: 'work SQ-377' },
+  });
+  assert.equal(missingMarker.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(
+    missingMarker.hookSpecificOutput.permissionDecisionReason,
+    "sidequest: a dispatch executor's spawn prompt must contain its briefing's route marker — spawn with the dispatch briefing verbatim and append addenda; re-run dispatch if the briefing was lost."
+  );
+
+  const builtIn = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-high', model: 'opus', name: 'w-builtin-no-marker', prompt: 'work SQ-377' },
+  });
+  assert.ok(!builtIn.hookSpecificOutput.permissionDecision, 'markerless builtin executors remain valid');
+  assert.equal(builtIn.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
+  const pinned = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', name: 'w-pinned-no-marker', prompt: 'work SQ-377' },
+  });
+  assert.ok(!pinned.hookSpecificOutput.permissionDecision, 'markerless pinned executors remain valid');
+  assert.equal(pinned.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
