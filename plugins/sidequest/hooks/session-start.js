@@ -28,6 +28,12 @@
 const path = require('path');
 
 const MAX_TAXONOMY_BYTES = 400;
+const MAX_TAXONOMY_IDS = 10;
+
+function taxonomyIds(ids) {
+  const shown = ids.slice(0, MAX_TAXONOMY_IDS);
+  return shown.join(', ') + (shown.length < ids.length ? `, +${ids.length - shown.length} more` : '');
+}
 
 function taxonomyLine() {
   try {
@@ -42,8 +48,8 @@ function taxonomyLine() {
         .filter((row) => row.kind === 'ADD' && effectiveIds.has(row.id))
         .map((row) => row.id)
       : [];
-    const line = 'taxonomy: ' + globalIds.join(', ') +
-      (projectIds.length ? ' | project: ' + projectIds.join(', ') : '');
+    const line = 'taxonomy (' + globalIds.length + '): ' + taxonomyIds(globalIds) +
+      (projectIds.length ? ' | project: ' + taxonomyIds(projectIds) : '');
     return Buffer.byteLength(line) <= MAX_TAXONOMY_BYTES ? line : '';
   } catch (_) {
     return '';

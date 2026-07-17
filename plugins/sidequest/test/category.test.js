@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+const DEFAULT_CATEGORIES = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'category-defaults.json'), 'utf8'));
+
 function freshStore(options) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-test-'));
   const discovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-discovery-'));
@@ -23,12 +25,20 @@ function freshStore(options) {
   return { store, slug, home };
 }
 
-test('default categories store concrete primary routes without fallbacks', () => {
+test('default categories match the current defaults contract', () => {
   const { store } = freshStore();
-  assert.equal(store.getCategories().length, 14);
-  const normal = store.getCategory('coding.normal');
-  assert.deepEqual(normal.route, { model: 'codex-gpt-5-6-terra', effort: 'high' });
-  assert.equal(normal.fallback, null);
+  const defaultsById = new Map(DEFAULT_CATEGORIES.map((category) => [category.id, category]));
+  const categories = store.getCategories();
+
+  assert.deepEqual(categories.map((category) => category.id).sort(), [...defaultsById.keys()].sort());
+  for (const expected of defaultsById.values()) {
+    assert.ok(expected.route.model && store.VALID_EFFORTS.includes(expected.route.effort));
+    if (expected.fallback) assert.ok(expected.fallback.model && store.VALID_EFFORTS.includes(expected.fallback.effort));
+  }
+  for (const category of categories) {
+    assert.ok(category.route.model && store.VALID_EFFORTS.includes(category.route.effort));
+    if (category.fallback) assert.ok(category.fallback.model && store.VALID_EFFORTS.includes(category.fallback.effort));
+  }
   assert.throws(() => store.removeCategory('general'), /cannot be removed/);
   assert.throws(() => store.setCategory('general', { enabled: false }), /cannot be disabled/);
 });
@@ -99,6 +109,7 @@ test('schema v2 migration materializes configured backends, fallbacks, and globa
 test('project category layers merge ADD, OVERRIDE, and DISABLE without leaking to another project', () => {
   const { store, slug, home } = freshStore();
   const other = store.ensureProject(path.join(home, 'other-project'), 'Other project').slug;
+  const defaultNormalRoute = store.getCategory('coding.normal').route;
 
   store.setProjectCategory(slug, 'music-analysis', 'ADD', {
     name: 'Music analysis',
@@ -119,7 +130,7 @@ test('project category layers merge ADD, OVERRIDE, and DISABLE without leaking t
   assert.equal(local.find((category) => category.id === 'coding.normal').route.model, 'fable');
   assert.equal(local.some((category) => category.id === 'coding.easy'), false);
   assert.equal(store.getCategories({ project: other }).some((category) => category.id === 'music-analysis'), false);
-  assert.equal(store.getCategories({ project: other }).find((category) => category.id === 'coding.normal').route.model, 'codex-gpt-5-6-terra');
+  assert.equal(store.getCategories({ project: other }).find((category) => category.id === 'coding.normal').route.model, defaultNormalRoute.model);
 
   const ticket = store.createTicket(slug, { title: 'Analyze song', category: 'music-analysis' });
   assert.equal(store.getTicket(slug, ticket.ref).category.id, 'music-analysis');
@@ -140,6 +151,7 @@ test('project category layer guards reject invalid local changes', () => {
 test('deleting a global category auto-pins the customizations that depend on it', () => {
   const { store, slug, home } = freshStore();
   const other = store.ensureProject(path.join(home, 'other-project'), 'Other project').slug;
+  const defaultNormalRoute = store.getCategory('coding.normal').route;
   store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', { name: 'Local coding' });
 
   store.removeCategory('coding.normal');
@@ -148,7 +160,7 @@ test('deleting a global category auto-pins the customizations that depend on it'
   // "global category missing" state — no dangling override to clean up.
   const pinned = store.getCategory('coding.normal', { project: slug });
   assert.equal(pinned.name, 'Local coding');
-  assert.deepEqual(pinned.route, { model: 'codex-gpt-5-6-terra', effort: 'high' });
+  assert.deepEqual(pinned.route, defaultNormalRoute);
   assert.deepEqual(store.getProjectCategories(slug).warnings, []);
   assert.equal(store.getCategory('coding.normal', { project: slug, withState: true }).linkState, 'detached');
 

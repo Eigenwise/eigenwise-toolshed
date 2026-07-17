@@ -63,7 +63,8 @@ Protocol, per ticket, in order:
    echo that exact command and its full output tail; do not substitute a file list or a narrower command.
    For bodies with backticks, quotes, or parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment` or `sidequest done`.
 5. **Commit and ship before done**: When the ticket declares repository files, commit only those scoped files
-   after verification passes, push the commit, then include its hash in your own done comment. Do not invoke
+   after verification passes, push the commit, then include its hash in your own done comment. If `git pull --rebase`
+   pulled new commits, re-run the ticket's verify command before pushing. Do not invoke
    `sidequest done` until the commit and push both succeed.
 6. **Record findings as a comment** for investigations or substantive changes: evidence (`file:line`), what
    you ruled out, fix, and verification. Markdown uses real newlines, never literal `\n`.
