@@ -170,12 +170,19 @@ function keyValues(spec, key) {
   return columns.map((column) => key[column]);
 }
 
+function keyWhere(spec) {
+  return keyColumns(spec).map((column) => `${column} = ?`).join(' AND ');
+}
+
+function payloadColumn(spec) {
+  return spec.columns.includes('data') ? 'data' : 'value';
+}
+
 function getRow(db, table, key) {
   const spec = tableSpec(table);
-  const payloadColumn = spec.columns.includes('data') ? 'data' : 'value';
-  const columns = keyColumns(spec);
-  const row = db.prepare(`SELECT ${payloadColumn} FROM ${table} WHERE ${columns.map((column) => `${column} = ?`).join(' AND ')}`).get(...keyValues(spec, key));
-  return row ? JSON.parse(row[payloadColumn]) : null;
+  const column = payloadColumn(spec);
+  const row = db.prepare(`SELECT ${column} FROM ${table} WHERE ${keyWhere(spec)}`).get(...keyValues(spec, key));
+  return row ? JSON.parse(row[column]) : null;
 }
 
 function assertWritable(db) {
@@ -208,29 +215,27 @@ function putRow(db, table, rowObj) {
 function deleteRow(db, table, key) {
   assertWritable(db);
   const spec = tableSpec(table);
-  const columns = keyColumns(spec);
-  return db.prepare(`DELETE FROM ${table} WHERE ${columns.map((column) => `${column} = ?`).join(' AND ')}`).run(...keyValues(spec, key)).changes > 0;
+  return db.prepare(`DELETE FROM ${table} WHERE ${keyWhere(spec)}`).run(...keyValues(spec, key)).changes > 0;
 }
 
 function listRows(db, table, whereObj) {
   const spec = tableSpec(table);
-  const payloadColumn = spec.columns.includes('data') ? 'data' : 'value';
+  const column = payloadColumn(spec);
   const filters = Object.entries(whereObj || {});
-  for (const [column] of filters) {
-    if (!spec.columns.includes(column)) throw new Error(`Unknown ${table} column: ${column}`);
+  for (const [filterColumn] of filters) {
+    if (!spec.columns.includes(filterColumn)) throw new Error(`Unknown ${table} column: ${filterColumn}`);
   }
-  const where = filters.length ? ` WHERE ${filters.map(([column]) => `${column} = ?`).join(' AND ')}` : '';
+  const where = filters.length ? ` WHERE ${filters.map(([filterColumn]) => `${filterColumn} = ?`).join(' AND ')}` : '';
   const orderBy = spec.orderBy ? ` ORDER BY ${spec.orderBy}` : '';
-  const rows = db.prepare(`SELECT ${payloadColumn} FROM ${table}${where}${orderBy}`).all(...filters.map(([, value]) => value));
-  return rows.map((row) => JSON.parse(row[payloadColumn]));
+  const rows = db.prepare(`SELECT ${column} FROM ${table}${where}${orderBy}`).all(...filters.map(([, value]) => value));
+  return rows.map((row) => JSON.parse(row[column]));
 }
 
 // Existence check that never parses the payload — callers use it to detect a
 // persisted record without triggering a read that would throw on a corrupt blob.
 function hasRow(db, table, key) {
   const spec = tableSpec(table);
-  const columns = keyColumns(spec);
-  return db.prepare(`SELECT 1 FROM ${table} WHERE ${columns.map((column) => `${column} = ?`).join(' AND ')} LIMIT 1`).get(...keyValues(spec, key)) !== undefined;
+  return db.prepare(`SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== undefined;
 }
 
 function txn(db, fn) {

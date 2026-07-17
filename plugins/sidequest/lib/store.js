@@ -529,14 +529,18 @@ function getCategories(opts) {
     .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 
+function normalizeCategoryId(id) {
+  return String(id || '').trim().toLowerCase();
+}
+
 function getCategory(id, opts) {
-  const normalizedId = String(id || '').trim().toLowerCase();
+  const normalizedId = normalizeCategoryId(id);
   return getCategories(opts).find((category) => category.id === normalizedId) || null;
 }
 
 function normalizeCategory(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const id = String(raw.id || '').trim().toLowerCase();
+  const id = normalizeCategoryId(raw.id);
   if (!id) return null;
   const route = normalizeRoute(raw.route) || { model: 'sonnet', effort: 'medium' };
   const fallback = raw.fallback == null ? null : normalizeRoute(raw.fallback);
@@ -553,7 +557,7 @@ function normalizeCategory(raw) {
 
 function setCategory(categoryOrId, patch) {
   const requested = typeof categoryOrId === 'string'
-    ? Object.assign({}, getCategory(categoryOrId), patch || {}, { id: String(categoryOrId).trim().toLowerCase() })
+    ? Object.assign({}, getCategory(categoryOrId), patch || {}, { id: normalizeCategoryId(categoryOrId) })
     : categoryOrId;
   const normalized = normalizeCategory(requested);
   if (!normalized) throw new Error('Category id is required.');
@@ -565,7 +569,7 @@ function setCategory(categoryOrId, patch) {
 }
 
 function removeCategory(id) {
-  const normalizedId = String(id || '').trim().toLowerCase();
+  const normalizedId = normalizeCategoryId(id);
   if (normalizedId === 'general') throw new Error('Category "general" cannot be removed.');
   return db.deleteRow(database(), 'categories', normalizedId);
 }
@@ -583,7 +587,7 @@ function normalizeFullProjectCategory(id, kind, data) {
 
 function setProjectCategory(project, id, kind, data) {
   const normalizedProject = String(project || '').trim();
-  const normalizedId = String(id || '').trim().toLowerCase();
+  const normalizedId = normalizeCategoryId(id);
   const normalizedKind = String(kind || '').trim().toUpperCase();
   if (!normalizedProject || !normalizedId) throw new Error('Project and category id are required.');
   if (!['ADD', 'OVERRIDE', 'DETACH', 'DISABLE'].includes(normalizedKind)) throw new Error('Project category kind must be ADD, OVERRIDE, DETACH, or DISABLE.');
@@ -614,7 +618,7 @@ function setProjectCategory(project, id, kind, data) {
 
 function detachCategory(project, id) {
   const normalizedProject = String(project || '').trim();
-  const normalizedId = String(id || '').trim().toLowerCase();
+  const normalizedId = normalizeCategoryId(id);
   if (!normalizedProject || !normalizedId) throw new Error('Project and category id are required.');
   if (normalizedId === 'general') throw new Error('Category "general" cannot be detached.');
   const existing = projectCategoryRows(normalizedProject).find((row) => row.id === normalizedId);
@@ -626,7 +630,7 @@ function detachCategory(project, id) {
 
 function removeProjectCategory(project, id) {
   const normalizedProject = String(project || '').trim();
-  const normalizedId = String(id || '').trim().toLowerCase();
+  const normalizedId = normalizeCategoryId(id);
   if (!normalizedProject || !normalizedId) throw new Error('Project and category id are required.');
   return db.deleteRow(database(), 'project_categories', { project: normalizedProject, id: normalizedId });
 }
