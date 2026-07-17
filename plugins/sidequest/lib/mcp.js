@@ -329,7 +329,7 @@ const TOOLS = [
         project: PROJECT_PROP,
         model: { type: 'string', description: 'Filter to a resolved Claude runtime or discovered Codex model slug.' },
         category: { type: 'string', description: 'Filter to a category ID.' },
-        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: read category_list, then update before dispatch.' },
+        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy/submission, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: read category_list, then update before dispatch.' },
       },
     },
     handler(args) {

@@ -73,7 +73,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'ephemeral']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'ephemeral', 'clear', 'steal']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -588,6 +588,9 @@ function reportClaimFailure(action, idOrRef, res, meta) {
     not_owner: `${idOrRef} is claimed by "${c.by}", not you — use --force only if you are certain.`,
     busy: `${idOrRef} is locked by another claim right now — retry in a moment.`,
     empty: `no available tickets in ${meta.name}.`,
+    submitted: `${idOrRef} is READY_FOR_INTEGRATION (submitted commit awaiting the publish transaction) — integrate it, or clear the submission before re-claiming.`,
+    not_claimed: `${idOrRef} is not claimed by anyone — claim it before submitting (a submit is the terminal act of a claimed run).`,
+    no_submission: `${idOrRef} has no submission to clear.`,
   };
   console.log(`✗ ${messages[res.reason] || action + ' failed: ' + res.reason}`);
 }
@@ -783,6 +786,133 @@ function cmdDone(opts, positional) {
   }
   if (res.ok) console.log(`✓ ${res.ticket.ref} done  — ${meta.name}`);
   else reportClaimFailure('complete', idOrRef, res, meta);
+}
+
+// Executor terminal for repo-changing tickets: park verified, committed work as
+// READY_FOR_INTEGRATION instead of publishing it. The orchestrator's publish
+// transaction (references/publishing.md) integrates, versions, reverifies,
+// pushes, and marks done. --clear is the orchestrator's reset for a bounced
+// integration (drops the submission, optionally with -s todo).
+function cmdSubmit(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('submit: pass a ticket id or ref, e.g. sidequest submit SQ-3 --by me --commit <hash>');
+  const { slug, meta } = resolveProject(opts);
+  const by = workerId(opts);
+  if (opts.clear) {
+    const res = store.clearSubmission(slug, idOrRef, { status: opts.status, source: opts.source || 'cli' });
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+      if (!res.ok) process.exitCode = 1;
+      return;
+    }
+    if (res.ok) console.log(`✓ cleared submission on ${res.ticket.ref}  [${res.ticket.status}]  — ${meta.name}`);
+    else reportClaimFailure('clear submission', idOrRef, res, meta);
+    return;
+  }
+  const body = bodyFromOpts(opts, 'submit');
+  let res;
+  try {
+    res = store.submitTicket(slug, idOrRef, by, {
+      commit: opts.commit,
+      gitRef: opts.gitref || opts['git-ref'],
+      verify: opts.verify,
+      worktree: opts.worktree,
+      force: !!opts.force,
+      source: opts.source || 'cli',
+      sessionId: sessionId(opts),
+    });
+  } catch (e) {
+    fail(`submit: ${(e && e.message) || e}`);
+  }
+  if (res.ok) {
+    const comment = addBodyComment(slug, idOrRef, by, body, opts.source || 'cli');
+    if (comment && !comment.ok) fail(`submit: recorded ${idOrRef}, but couldn't add evidence comment: ${comment.reason}`);
+  }
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) {
+    const s = res.ticket.submission;
+    console.log(`✓ ${res.ticket.ref} READY_FOR_INTEGRATION (${s.commit.slice(0, 12)} @ ${s.gitRef})  — ${meta.name}`);
+    console.log('  claim released; the orchestrator publish transaction integrates, reverifies, pushes, and marks done.');
+  } else {
+    reportClaimFailure('submit', idOrRef, res, meta);
+  }
+}
+
+// Orchestrator control-plane surface: the cross-process publish lock plus the
+// integration queue. The lock file lives in the repo's common git dir so every
+// worktree/session/process serializes on the same publish transaction.
+function cmdPublish(opts, positional) {
+  const publish = require('../lib/publish');
+  const sub = positional[0];
+  const emit = (payload, failed) => {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+      if (failed) process.exitCode = 1;
+      return true;
+    }
+    return false;
+  };
+  if (sub === 'queue') {
+    const { slug, meta } = resolveProject(opts);
+    const payload = store.submissionsPayload(slug);
+    if (emit(Object.assign({ project: slug }, payload), false)) return;
+    if (!payload.count) {
+      console.log(`no submissions awaiting integration in ${meta.name}.`);
+      return;
+    }
+    console.log(`${payload.count} submission(s) awaiting integration — ${meta.name}:`);
+    for (const t of payload.tickets) {
+      console.log(`  ${t.ref}  ${t.submission.commit.slice(0, 12)} @ ${t.submission.gitRef}  (by ${t.submission.by}, ${t.submission.at})`);
+      if (t.submission.verify) console.log(`      verify: ${t.submission.verify}`);
+    }
+    return;
+  }
+  const repo = opts.repo ? path.resolve(String(opts.repo)) : resolveProject(opts).meta.path;
+  if (sub === 'lock') {
+    const res = publish.acquirePublishLock(repo, {
+      by: workerId(opts),
+      sessionId: sessionId(opts),
+      steal: !!opts.steal,
+      transient: true, // the CLI process exits now; its session holds the lock
+    });
+    if (emit(res, !res.ok)) return;
+    if (res.ok) {
+      console.log(`✓ publish lock ${res.reacquired ? 're-acquired' : 'acquired'}: ${res.file}`);
+    } else {
+      process.exitCode = 1;
+      const h = res.holder || {};
+      console.log(`✗ publish lock held by "${h.by || h.sessionId || 'unknown'}" (pid ${h.pid}, since ${h.at}) — retry after it releases, or --steal a dead holder.`);
+    }
+    return;
+  }
+  if (sub === 'unlock') {
+    const res = publish.releasePublishLock(repo, { by: workerId(opts), sessionId: sessionId(opts), force: !!opts.force });
+    if (emit(res, !res.ok)) return;
+    if (res.ok) console.log(res.released ? `✓ publish lock released: ${res.file}` : 'publish lock was not held.');
+    else {
+      process.exitCode = 1;
+      const h = res.holder || {};
+      console.log(`✗ publish lock belongs to "${h.by || h.sessionId || 'unknown'}" (pid ${h.pid}, since ${h.at}) — not yours to release without --force.`);
+    }
+    return;
+  }
+  if (sub === 'status') {
+    const res = publish.publishLockStatus(repo);
+    if (emit(res, false)) return;
+    if (!res.locked) {
+      console.log(`publish lock free: ${res.file}`);
+    } else {
+      const h = res.holder || {};
+      console.log(`publish lock HELD${res.stale ? ' (STALE — reclaimable)' : ''}: ${res.file}`);
+      console.log(`  by "${h.by || 'unknown'}"  session ${h.sessionId || '-'}  pid ${h.pid}  host ${h.host}  since ${h.at}`);
+    }
+    return;
+  }
+  fail('publish: expected `sidequest publish lock|unlock|status|queue`');
 }
 
 function cmdSweepClaims(opts) {
@@ -1745,6 +1875,13 @@ Working the board safely (multi-agent):
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>]   claim the best available ticket (highest priority first)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
+  sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
+    executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
+    (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).
+  sidequest submit <id|SQ-n> --clear [-s todo]     orchestrator reset: drop a submission after a bounced integration
+  sidequest publish lock|unlock|status [--repo path] [--steal] [--force]   cross-process publish lock (owner pid +
+    session metadata in the repo's common git dir; stale/dead holders reclaimable, --steal takes over explicitly)
+  sidequest publish queue [--json]                 tickets awaiting the publish transaction, oldest first
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
   When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.
   sidequest add/update ... --file path [--file path...]   declare the files a ticket will touch — repeat for
@@ -1904,6 +2041,12 @@ async function main() {
     case 'complete':
     case 'finish':
       cmdDone(opts, positional);
+      break;
+    case 'submit':
+      cmdSubmit(opts, positional);
+      break;
+    case 'publish':
+      cmdPublish(opts, positional);
       break;
     case 'release':
     case 'unclaim':

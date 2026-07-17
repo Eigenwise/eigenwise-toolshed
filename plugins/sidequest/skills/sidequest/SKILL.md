@@ -163,7 +163,7 @@ sidequest rm SQ-3                 # delete
 
 Add `--json` to read data instead of showing it. Add `--brief` on `list`/`ready` (it implies
 `--json`) for the compact shape: ref, title, status, priority, complexity, category ID/name, model, effort,
-files, claim, `blockedBy`, a `comments` count, and `awaitingReply`. No description bodies, no thread
+files, claim, `blockedBy`, a pending `submission` (or null), a `comments` count, and `awaitingReply`. No description bodies, no thread
 contents. **Default to `--brief` for routine orchestration reads**; drop it only when you actually
 need bodies. "Close / mark done / ship it" → `--status done`. "Start / in progress" → `--status
 doing`.
@@ -177,6 +177,8 @@ ticket. **Never start work on a ticket you haven't successfully claimed**, even 
 ```bash
 sidequest next --by <you>              # atomically claim the top-priority available ticket
 sidequest claim SQ-3 --by <you>        # or claim a specific one
+sidequest submit SQ-3 --by <you> --commit <hash> --verify "<cmd>"   # executor terminal for repo-changing work:
+                                       # park the verified LOCAL commit READY_FOR_INTEGRATION (no push, no versions)
 sidequest done SQ-3 --by <you> --model <model> --effort <level>   # finish + stamp who/what worked it
 sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --status todo)
 ```
@@ -196,9 +198,19 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
   that TTL, release it with `sidequest release SQ-3 --by <dead-worker-id> --status todo`, then re-read
   the ticket and respawn one replacement. Do not force a fresh claim while a live-looking worker may return.
 
+**Repository publishing is the orchestrator's, alone.** Executors stop at a verified local commit and
+`submit` it (durable ref `refs/sidequest/<SQ-n>`, claim released, ticket parked in `doing` awaiting
+integration — `pulse`/`list --brief` show the `submission`, and `ready` excludes it). The orchestrator
+then runs the serialized publish transaction — publish lock, clean integration worktree, central
+version assignment, per-ticket reverify, batch seam check, push, reachability check, `done` — from
+[references/publishing.md](references/publishing.md). Never mark a submitted ticket done without
+integrating it, and never re-dispatch one (its claim is refused as `submitted`; clear the submission
+first if the work must genuinely be redone).
+
 When a dead or stopped executor's ticket reads `done`, inspect `git status` and the ticket's declared files before
 trusting that it shipped. The done state proves only the board transition; a missing commit hash or uncommitted
-in-scope diff means recover the work, then commit and push it before treating the ticket as complete.
+in-scope diff means recover the work, then submit it through the publish transaction before treating the
+ticket as complete.
 
 ## Route execution down; keep the loop tight
 
@@ -221,8 +233,9 @@ tokens), never transcripts. Once a ticket is cut with a self-contained spec, its
 within-ticket work end to end — don't pull ticket-internal digging back up here.
 
 **The shape is a LOOP, not a hand-off.** Orchestrator spawns a wave → executors return terse reports
-*quickly* → orchestrator re-runs each ticket's exact assigned verify command, verifies, integrates,
-re-plans, spawns the next wave. Do not accept an executor's file list as proof of coverage. Done comments
+*quickly* and submit verified commits → orchestrator re-runs each ticket's exact assigned verify
+command, publishes the wave's submissions in one transaction
+([references/publishing.md](references/publishing.md)), re-plans, spawns the next wave. Do not accept an executor's file list as proof of coverage. Done comments
 echo the exact command and full output tail so a narrowed verify is visible at a glance. Many short
 round-trips beat one long autonomous run. **Verify by artifact, not by claim** — an executor report cites the
 actual verification output (the test line, the diff), and you spot-check it; cap how much you fan out
@@ -259,7 +272,8 @@ recognize mean another session may be working the board; flag it to the user fir
 
 The main thread's job is decompose, score, spec, spawn, integrate. Larger orchestration shapes
 (workflows — opt-in, you propose rather than launch — and agent-teams caveats):
-[references/orchestration.md](references/orchestration.md).
+[references/orchestration.md](references/orchestration.md). The serialized publish transaction that
+ships submitted executor commits: [references/publishing.md](references/publishing.md).
 
 **A substantive investigation belongs on a ticket.** A root-cause hunt or "figure out how X works"
 spike gets filed, claimed, and its findings written back as a comment — that's the deliverable; an

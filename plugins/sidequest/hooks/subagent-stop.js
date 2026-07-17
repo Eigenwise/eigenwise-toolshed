@@ -98,6 +98,21 @@ function stopVerdict(store, claims, agentType) {
     return `exec stopped clean: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
   }
 
+  // A submitted run ended exactly right: verified commit parked, claim released,
+  // no publish. Point the orchestrator at the publish transaction, not a respawn.
+  for (const claim of claims) {
+    if (!claim || claim.held) continue;
+    let ticket = null;
+    try {
+      ticket = store.getTicket(claim.slug, claim.ticketId);
+    } catch (_) {
+      continue;
+    }
+    const sub = ticket && ticket.submission;
+    if (!sub || !sub.commit || sub.integratedAt) continue;
+    return `exec stopped clean: ${ticket.ref} READY_FOR_INTEGRATION (${sub.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
+  }
+
   const held = claims.find((claim) => claim && claim.held && claim.status === 'doing');
   if (held) {
     const started = Date.parse(held.at);

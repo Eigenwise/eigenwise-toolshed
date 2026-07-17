@@ -1683,6 +1683,10 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
     if (t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
+    // Submitted work awaits the orchestrator's publish transaction, not another
+    // executor: re-claiming it would fork the already-verified commit. The
+    // orchestrator clears the submission first when rework is genuinely wanted.
+    if (pendingSubmission(t) && !opts.force) return { ok: false, reason: 'submitted', ticket: t, submission: t.submission };
     const held = t.claim;
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
       return { ok: false, reason: 'claimed', ticket: t, claim: held };
@@ -1729,6 +1733,12 @@ function releaseTicket(slug, idOrRef, by, opts) {
     t.dispatchExecutor = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
     if (opts.workedBy) t.workedBy = opts.workedBy; // self-reported provenance stamp (done transition only)
+    // Completing a submitted ticket is the publish transaction consuming the
+    // submission — stamp it integrated (kept as provenance) so the ticket
+    // leaves the ready-for-integration queue the moment it goes done.
+    if (t.status === 'done' && pendingSubmission(t)) {
+      t.submission = Object.assign({}, t.submission, { integratedAt: new Date().toISOString() });
+    }
     t.lastEventType = 'status';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
     t.updatedAt = new Date().toISOString();
@@ -1779,6 +1789,128 @@ function completeTicket(slug, idOrRef, by, opts) {
   return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, { status: 'done', workedBy }));
 }
 
+/* ------------------------------------------------------------------ *
+ *  Ready-for-integration submissions (SQ-398)
+ *
+ *  Executors never publish. A repo-changing executor finishes at a verified
+ *  LOCAL commit in its isolated worktree and submits it — commit hash, durable
+ *  git ref, the verify command it ran — as a submission riding the ticket. The
+ *  ticket stays "doing" with the claim released: ready-for-integration is a
+ *  lifecycle of its own, distinct from done. The orchestrator's publish
+ *  transaction (see skills/sidequest/references/publishing.md) integrates the
+ *  submitted commits under the repo publish lock (lib/publish.js), assigns
+ *  versions centrally, reverifies, pushes main, and only then completes the
+ *  ticket — which stamps the submission integrated.
+ * ------------------------------------------------------------------ */
+
+const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
+const SUBMISSION_GITREF_MAX = 200;
+const SUBMISSION_WORKTREE_MAX = 500;
+
+// A submission that has not been consumed by a done transition yet — the
+// ticket is parked for the publish transaction, not for another executor.
+function pendingSubmission(t) {
+  return !!(t && t.submission && t.submission.commit && !t.submission.integratedAt);
+}
+
+function submissionGitRef(ticket) {
+  return `refs/sidequest/${ticket.ref}`;
+}
+
+// Record verified, committed work as ready for integration and release the
+// claim in the same locked step. Requires the caller to HOLD the claim (the
+// submit is the terminal act of a claimed run) unless opts.force — mirroring
+// releaseTicket's ownership rules. Status deliberately stays "doing".
+function submitTicket(slug, idOrRef, by, opts) {
+  opts = opts || {};
+  by = String(by || 'agent');
+  const commit = String(opts.commit || '').trim().toLowerCase();
+  if (!SUBMISSION_COMMIT_RE.test(commit)) {
+    throw new Error(`invalid commit "${opts.commit}" — pass the verified commit's hex hash (7-64 chars)`);
+  }
+  const gitRef = opts.gitRef != null && String(opts.gitRef).trim()
+    ? String(opts.gitRef).trim().slice(0, SUBMISSION_GITREF_MAX)
+    : null;
+  const verify = opts.verify != null && String(opts.verify).trim()
+    ? String(opts.verify).trim().slice(0, EXECUTOR_VERIFY_MAX)
+    : null;
+  const worktree = opts.worktree != null && String(opts.worktree).trim()
+    ? String(opts.worktree).trim().slice(0, SUBMISSION_WORKTREE_MAX)
+    : null;
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
+    const held = t.claim;
+    if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
+      return { ok: false, reason: 'not_owner', ticket: t, claim: held };
+    }
+    if ((!held || !held.by) && !opts.force) return { ok: false, reason: 'not_claimed', ticket: t };
+    t.submission = {
+      by,
+      at: new Date().toISOString(),
+      commit,
+      gitRef: gitRef || submissionGitRef(t),
+      verify,
+      worktree,
+      integratedAt: null,
+    };
+    t.claim = null;
+    t.dispatchNonce = null;
+    t.dispatchExecutor = null;
+    t.status = 'doing'; // ready-for-integration parks in doing, never done
+    t.lastEventType = 'status';
+    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+    t.updatedAt = new Date().toISOString();
+    putTicket(slug, t);
+    if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
+    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
+    return { ok: true, ticket: t };
+  });
+}
+
+// Orchestrator reset: drop a pending submission so the ticket is claimable
+// again (integration bounced and the work must be redone rather than merged).
+// opts.status optionally moves it (usually back to todo) at the same time.
+function clearSubmission(slug, idOrRef, opts) {
+  opts = opts || {};
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    if (!t.submission) return { ok: false, reason: 'no_submission', ticket: t };
+    const cleared = t.submission;
+    t.submission = null;
+    if (opts.status) t.status = coerceStatus(opts.status, t.status);
+    t.lastEventType = 'status';
+    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+    t.updatedAt = new Date().toISOString();
+    putTicket(slug, t);
+    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
+    return { ok: true, ticket: t, cleared };
+  });
+}
+
+// The integration queue: every ticket parked ready-for-integration, oldest
+// submission first — the order the publish transaction integrates them in.
+function submissionsPayload(slug) {
+  const tickets = listTickets(slug)
+    .filter((t) => !t.archived && t.status !== 'done' && pendingSubmission(t))
+    .sort((a, b) => String(a.submission.at).localeCompare(String(b.submission.at)))
+    .map((t) => ({
+      ref: t.ref,
+      title: t.title,
+      status: t.status,
+      files: Array.isArray(t.files) ? t.files : [],
+      executorVerify: t.executorVerify || null,
+      submission: t.submission,
+    }));
+  return { tickets, count: tickets.length };
+}
+
 // Release claims that exceeded the shared TTL. Each release is locked and audited,
 // so a fresh replacement claim is never cleared by a stale snapshot.
 function sweepStaleClaims(opts) {
@@ -1825,6 +1957,7 @@ function readyTickets(slug, opts) {
   return listTickets(slug)
     .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
+    .filter((t) => !pendingSubmission(t)) // parked for integration, not for another executor
     .filter((t) => !t.claim || isClaimStale(t.claim))
     .filter((t) => !isBlocked(slug, t))
     .filter((t) => modelMatches(t.model, want === 'any' ? null : want))
@@ -1848,6 +1981,7 @@ function claimNext(slug, by, opts) {
   const candidates = listTickets(slug)
     .filter((t) => !t.archived)
     .filter((t) => t.status !== 'done')
+    .filter((t) => !pendingSubmission(t)) // parked for integration, not for another executor
     .filter((t) => !t.claim || isClaimStale(t.claim) || t.claim.by === by)
     .filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase())
     .filter((t) => modelMatches(t.model, want === 'any' ? null : want))
@@ -2232,6 +2366,7 @@ function briefTicket(slug, t, opts) {
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
     awaitingReply: needsResponse(t),
+    submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at } : null,
   };
 }
 
@@ -2376,6 +2511,7 @@ function pulsePayload(slug, idOrRef) {
     lastComment: lastCommentPulse(ticket),
     dispatchExecutor: ticket.dispatchExecutor || null,
     dispatchNonce: ticket.dispatchNonce || null,
+    submission: ticket.submission || null,
     git: gitPulse(meta && meta.path, ticket.files),
   };
 }
@@ -3059,6 +3195,10 @@ module.exports = {
   releaseTicket,
   completeTicket,
   makeWorkedBy,
+  submitTicket,
+  clearSubmission,
+  pendingSubmission,
+  submissionsPayload,
   claimNext,
   assignTicket,
   readyTickets,

@@ -747,6 +747,23 @@ test('subagent-stop: a completed file ticket without a hash is flagged', () => {
   assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
+test('subagent-stop: a submitted executor reports READY_FOR_INTEGRATION, not a dead claim', () => {
+  const sess = `sess-submitted-${++sqSeq}`;
+  const t = store.createTicket(slug, {
+    title: 'submitted ticket awaiting the publish transaction',
+    files: ['lib/fixture.js'],
+    complexity: 3,
+    complexityWhy: 'fixture for the SubagentStop ready-for-integration verdict',
+    source: 'cli',
+  });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-submitted', { sessionId: sess }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-submitted', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
+  assert.strictEqual(
+    runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }),
+    `exec stopped clean: ${t.ref} READY_FOR_INTEGRATION (abc1234def56); run the publish transaction (references/publishing.md), then TaskStop this executor`
+  );
+});
+
 test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
   const sess = `sess-prior-owner-${++sqSeq}`;
   const t = addTicket('reclaimed ticket with stale prior owner entry');

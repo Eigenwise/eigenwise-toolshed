@@ -39,9 +39,9 @@ session scratchpad path handed in your prompt, run it with Node, and use forward
 
 **Shared tree**: siblings may share this tree. Before work, `git diff` the declared scope. Report unexplained
 in-scope changes UP in your claim acknowledgment; never absorb them. Stay in the declared file scope and scope
-test runs to your files. Never read large files whole: Grep, tail, or ranged reads only. For tickets that ship:
-pull `--rebase --autostash` immediately before commit, take origin's next free version, bump both manifests,
-and stage only scoped files (never `git add -A`).
+test runs to your files. Never read large files whole: Grep, tail, or ranged reads only. Executors NEVER
+publish: no push, no plugin/marketplace version bumps, no marketplace manifest edits, no branch creation —
+verified commits are SUBMITTED for the orchestrator's publish transaction instead (step 5).
 
 Protocol, per ticket, in order:
 1. **Claim first**: `sidequest claim <ref> --by <worker-id> --executor {{NAME}} --effort {{EFFORT}} --project <project>`
@@ -59,19 +59,25 @@ Protocol, per ticket, in order:
    commit useful increments as you finish them so a hard stop cannot strand the work. Bounce back early
    (release + findings) when the work is clearly bigger than the briefing. Do not grind toward the cap;
    keep additions tight enough for the briefing byte budgets.
-4. **Verify** the ticket's exact named check/test/reproduction before declaring success. In the done comment,
-   echo that exact command and its full output tail; do not substitute a file list or a narrower command.
-   For bodies with backticks, quotes, or parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment` or `sidequest done`.
-5. **Commit and ship before done**: When the ticket declares repository files, commit only those scoped files
-   after verification passes. Ship means commit on the CURRENT branch (main unless the ticket says otherwise) and push that same branch to origin. NEVER create, switch to, or push a new branch. Never leave the tree on a different branch than you found it, and include its hash in your own done comment. If `git pull --rebase`
-   pulled new commits, re-run the ticket's verify command before pushing. Do not invoke
-   `sidequest done` until the commit and push both succeed.
+4. **Verify** the ticket's exact named check/test/reproduction before declaring success. In the closing
+   comment, echo that exact command and its full output tail; do not substitute a file list or a narrower command.
+   For bodies with backticks, quotes, or parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment`, `sidequest submit`, or `sidequest done`.
+5. **Commit and submit — never publish**: When the ticket declares repository files, commit only those scoped
+   files locally on the CURRENT branch after verification passes (stage only scoped files, never `git add -A`;
+   NEVER create, switch to, or push a branch; NEVER push, and NEVER bump plugin or marketplace versions — the
+   orchestrator assigns versions centrally at integration). Pin the commit to a durable ref
+   (`git update-ref refs/sidequest/<ref> <hash>`), then park it ready-for-integration:
+   `sidequest submit <ref> --by <same-worker-id> --commit <hash> --verify "<exact verify command>"
+   --project <project>` with an evidence comment (`--body-file`) carrying the verify output tail and changed
+   paths. Submitting releases your claim and ends the ticket for you: the orchestrator integrates, reverifies,
+   pushes, and marks done. Do not call `sidequest done` on a ticket that changed repository files.
 6. **Record findings as a comment** for investigations or substantive changes: evidence (`file:line`), what
    you ruled out, fix, and verification. Markdown uses real newlines, never literal `\n`.
-7. **Close**: `sidequest done <ref> --by <same-worker-id> --model <your model> --effort {{EFFORT}}
+7. **Close**: a ticket that changed repository files ends at step 5's submit. Otherwise (investigation,
+   board-only work): `sidequest done <ref> --by <same-worker-id> --model <your model> --effort {{EFFORT}}
    --project <project>`. If unfinished, `release --status todo` with why. A remaining expected red outside
-   your declared scope is done, not a release: document the expected-red list in the done comment so it does
-   not keep dependents blocked. After done/release, stop.
+   your declared scope is done, not a release: document the expected-red list in the closing comment so it does
+   not keep dependents blocked. After submit/done/release, stop.
 
 **Stuck? Escalate before you thrash.** If a ticket is harder or murkier than the assigned route can handle, or
 two honest attempts haven't moved it, and an `advisor` tool is available, call it — it forwards your
@@ -80,7 +86,7 @@ advisor). It's an escape hatch, not a routine step. No advisor? Leave a findings
 `release --status todo` so a stronger route can pick it up.
 
 Report mandatory data per ticket: claim result, changes, the exact verify command plus its full output tail,
-artifacts or commit hash, close confirmation, and every deliberately skipped or partial assigned item. **Report UP
+artifacts or the submitted commit hash, submit/close confirmation, and every deliberately skipped or partial assigned item. **Report UP
 only**: leave the final report before going idle, in your final message and own-ticket comments. Never SendMessage,
 guess agent names, or contact peers.{{EXTRA_NOTE}}
 {{TICKET_BRIEF}}

@@ -40,6 +40,7 @@ const BRIEF_KEYS = [
   'ref', 'title', 'status', 'priority', 'complexity', 'categoryId', 'categoryName', 'model', 'backend',
   'runsModel', 'runsLabel', 'executor', 'effort',
   'files', 'claim', 'blockedBy', 'comments', 'awaitingReply',
+  'submission', // pending ready-for-integration submission (SQ-398): null until an executor submits
 ].sort();
 
 // Seed once: one ticket with a fat body + a comment, one plain.
