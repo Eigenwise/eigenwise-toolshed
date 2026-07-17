@@ -834,17 +834,36 @@ function cmdSubmit(opts, positional) {
   const body = bodyFromOpts(opts, 'submit');
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`submit: no ticket "${idOrRef}" in ${meta.name}.`);
-  const scope = commitScope.validateCommitScope(process.cwd(), opts.commit, ticket.files);
+  const gitRef = opts.gitref || opts['git-ref'] || `refs/sidequest/${ticket.ref}`;
+  const range = commitScope.submissionRange(process.cwd(), {
+    commit: opts.commit,
+    gitRef,
+    upstream: 'origin/main',
+  });
+  if (!range.ok) {
+    fail(`submit: refused ${ticket.ref}; ${range.reason}${range.message ? `: ${range.message}` : ''}.`);
+  }
+  const duplicate = store.submissionsPayload(slug).tickets
+    .filter((entry) => entry.ref !== ticket.ref)
+    .find((entry) => {
+      const commits = Array.isArray(entry.submission.commits) && entry.submission.commits.length
+        ? entry.submission.commits
+        : [entry.submission.commit];
+      return commits.some((commit) => range.commits.includes(commit));
+    });
+  if (duplicate) fail(`submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`);
+  const scope = commitScope.validateCommitRangeScope(process.cwd(), range.commits, ticket.files);
   if (!scope.ok) {
-    if (scope.reason === 'missing_scope') fail(`submit: ${ticket.ref} has no declared file scope, so its commit cannot be admitted for integration.`);
-    if (scope.reason === 'outside_scope') fail(`submit: refused ${ticket.ref}; ${opts.commit} changes paths outside its declared scope: ${scope.outside.join(', ')}.`);
+    if (scope.reason === 'missing_scope') fail(`submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`);
+    if (scope.reason === 'outside_scope') fail(`submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scope.outside.join(', ')}.`);
     fail(`submit: could not inspect ${opts.commit} from this worktree: ${scope.message || scope.reason}`);
   }
   let res;
   try {
     res = store.submitTicket(slug, idOrRef, by, {
       commit: opts.commit,
-      gitRef: opts.gitref || opts['git-ref'],
+      gitRef,
+      range,
       verify: opts.verify,
       worktree: opts.worktree,
       force: !!opts.force,
@@ -889,6 +908,11 @@ function cmdPublish(opts, positional) {
   if (sub === 'queue') {
     const { slug, meta } = resolveProject(opts);
     const payload = store.submissionsPayload(slug);
+    for (const ticket of payload.tickets) {
+      ticket.rangeValidation = ticket.submission.base
+        ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission)
+        : { ok: false, reason: 'legacy_submission' };
+    }
     if (emit(Object.assign({ project: slug }, payload), false)) return;
     if (!payload.count) {
       console.log(`no submissions awaiting integration in ${meta.name}.`);
@@ -896,7 +920,12 @@ function cmdPublish(opts, positional) {
     }
     console.log(`${payload.count} submission(s) awaiting integration — ${meta.name}:`);
     for (const t of payload.tickets) {
-      console.log(`  ${t.ref}  ${t.submission.commit.slice(0, 12)} @ ${t.submission.gitRef}  (by ${t.submission.by}, ${t.submission.at})`);
+      const commits = Array.isArray(t.submission.commits) && t.submission.commits.length ? t.submission.commits : [t.submission.commit];
+      const paths = Array.isArray(t.submission.changedPaths) ? t.submission.changedPaths : [];
+      console.log(`  ${t.ref}  ${commits.length} commit(s), tip ${t.submission.commit.slice(0, 12)} @ ${t.submission.gitRef}  (by ${t.submission.by}, ${t.submission.at})`);
+      console.log(`      commits: ${commits.map((commit) => commit.slice(0, 12)).join(', ')}`);
+      console.log(`      paths: ${paths.join(', ') || '(legacy submission: unavailable)'}`);
+      if (!t.rangeValidation.ok) console.log(`      REJECTED: ${t.rangeValidation.reason}`);
       if (t.submission.verify) console.log(`      verify: ${t.submission.verify}`);
     }
     return;

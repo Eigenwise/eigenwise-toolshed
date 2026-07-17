@@ -1805,6 +1805,20 @@ const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 const SUBMISSION_GITREF_MAX = 200;
 const SUBMISSION_WORKTREE_MAX = 500;
 
+function submissionRangeMetadata(range, commit) {
+  if (!range) return null;
+  const base = String(range.base || '').trim().toLowerCase();
+  const upstream = String(range.upstream || '').trim();
+  const upstreamCommit = String(range.upstreamCommit || '').trim().toLowerCase();
+  const commits = Array.isArray(range.commits) ? range.commits.map((value) => String(value).trim().toLowerCase()) : [];
+  const changedPaths = Array.isArray(range.changedPaths) ? range.changedPaths.map((value) => String(value).trim().replace(/\\/g, '/')).filter(Boolean) : [];
+  if (!SUBMISSION_COMMIT_RE.test(base) || !upstream || !SUBMISSION_COMMIT_RE.test(upstreamCommit) || !commits.length
+    || commits.some((value) => !SUBMISSION_COMMIT_RE.test(value)) || commits[commits.length - 1] !== commit) {
+    throw new Error('invalid submission range metadata');
+  }
+  return { base, upstream, upstreamCommit, commits, changedPaths };
+}
+
 // A submission that has not been consumed by a done transition yet — the
 // ticket is parked for the publish transaction, not for another executor.
 function pendingSubmission(t) {
@@ -1835,6 +1849,7 @@ function submitTicket(slug, idOrRef, by, opts) {
   const worktree = opts.worktree != null && String(opts.worktree).trim()
     ? String(opts.worktree).trim().slice(0, SUBMISSION_WORKTREE_MAX)
     : null;
+  const range = submissionRangeMetadata(opts.range, commit);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
@@ -1846,7 +1861,7 @@ function submitTicket(slug, idOrRef, by, opts) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
     if ((!held || !held.by) && !opts.force) return { ok: false, reason: 'not_claimed', ticket: t };
-    t.submission = {
+    t.submission = Object.assign({
       by,
       at: new Date().toISOString(),
       commit,
@@ -1854,7 +1869,7 @@ function submitTicket(slug, idOrRef, by, opts) {
       verify,
       worktree,
       integratedAt: null,
-    };
+    }, range || {});
     t.claim = null;
     t.dispatchNonce = null;
     t.dispatchExecutor = null;

@@ -31,8 +31,10 @@ board (submissions stay parked — fail closed).
    wakeup. `--steal` only when `publish status` shows the holder stale (TTL expired or dead pid).
    Re-acquiring from the same session refreshes the lock — that is the crash-recovery path for your
    own interrupted transaction.
-2. **Read the queue**: `sidequest publish queue --json` — each entry carries the ref, submitted
-   commit, durable git ref, declared files, and the verify command the executor ran.
+2. **Read the queue**: `sidequest publish queue --json` — each entry carries the durable ref,
+   submission base, expected upstream, ordered commit range, full changed-path union, declared files,
+   and the verify command the executor ran. A legacy entry without range metadata stays parked until
+   its executor resubmits it; never guess a range from a tip hash.
 3. **Read each submitted handoff**: before integrating or closing a ticket, run
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
@@ -41,26 +43,33 @@ board (submissions stay parked — fail closed).
    tree: `git fetch origin` then `git worktree add <scratch>/sq-integrate origin/main --detach`.
    Never integrate in the shared session tree — pre-staged or dirty files there are exactly the
    contamination this flow exists to prevent.
-5. **Integrate each submission**, oldest first: `git cherry-pick <commit>` (the durable ref keeps
-   the commit reachable even after the executor worktree is cleaned). A conflict → abort the
-   cherry-pick, skip the ticket, and file a narrowly scoped integration ticket (below); keep
-   integrating the rest.
-6. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
+5. **Reconstruct and admit each submission before integration**. Resolve its durable ref and require
+   it still points to the submitted tip. Require `git merge-base --is-ancestor <base> origin/main`, then
+   compare `git rev-list --reverse <base>..<tip>` to the queue's ordered `commits` array exactly. Reject
+   an empty range, merge commit, divergent or unrelated history, a range containing a commit from another
+   queued ticket, or a changed-path union outside the ticket scope. Leave rejected submissions parked.
+6. **Integrate each admitted range**, oldest first: `git cherry-pick <commit-1> ... <commit-n>`. The
+   durable tip ref keeps every ancestor in that range reachable. Save `git diff --binary <base> <tip>`
+   before cherry-picking, then run `git apply --check --reverse <saved-patch>` in the integration worktree
+   after the range lands. That confirms the integrated tree contains the complete submitted diff. A
+   conflict or reverse-check failure means abort or rebuild the integration worktree, skip the ticket,
+   and file a narrowly scoped integration ticket; keep integrating the rest.
+7. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
    free version ONCE for the batch and bump BOTH `plugins/<name>/.claude-plugin/plugin.json` and the
    root `.claude-plugin/marketplace.json` (they must match) in one commit. Executors no longer bump
    anything, so versioning has exactly one writer: this step.
-7. **Reverify per ticket, post-integration**: run each integrated ticket's exact verify command
+8. **Reverify per ticket, post-integration**: run each integrated ticket's exact verify command
    (from the queue entry / ticket `--verify`) inside the integration worktree. A red here means the
-   commit does not survive integration: drop that ticket's commit (rebuild the worktree or
-   `git revert` it), file the integration ticket, continue with the green rest.
-8. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
+   commit does not survive integration: drop that ticket's range (rebuild the worktree or
+   `git revert` its commits), file the integration ticket, continue with the green rest.
+9. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
    (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
    plugins) so per-ticket-green but jointly-red seams are caught before the push.
-9. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
-   branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 7-8, push again. Then
-   confirm every integrated commit is reachable:
-   `git merge-base --is-ancestor <integrated-tip> origin/main` (after a fresh fetch).
-10. **Mark done + clean up**, only after reachability holds: for each shipped ticket
+10. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
+   branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 8-9, push again. Then
+   confirm every range commit is reachable:
+   `git merge-base --is-ancestor <commit> origin/main` (after a fresh fetch).
+11. **Mark done + clean up**, only after every range commit is reachable: for each shipped ticket
    `sidequest done <ref> --by <session-worker-id> --model <its stamped model> --effort <its effort>`
    with a closing comment naming the pushed commit (done consumes the submission — the ticket
    leaves the integration queue). Then delete its durable ref (`git update-ref -d

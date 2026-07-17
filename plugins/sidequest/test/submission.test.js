@@ -24,6 +24,7 @@ const store = require('../lib/store.js');
 const { makeCliRunner } = require('./_helpers.js');
 
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-project-'));
+const REMOTE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-remote-'));
 function git(args) {
   return execFileSync('git', args, { cwd: PROJECT_DIR, encoding: 'utf8', windowsHide: true }).trim();
 }
@@ -33,6 +34,18 @@ git(['config', 'user.email', 'sidequest-test@example.invalid']);
 fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'submission fixture\n');
 git(['add', '.']);
 git(['commit', '-m', 'base']);
+git(['branch', '-M', 'main']);
+execFileSync('git', ['init', '--bare', REMOTE_DIR], { encoding: 'utf8', windowsHide: true });
+git(['remote', 'add', 'origin', REMOTE_DIR]);
+git(['push', '-u', 'origin', 'main']);
+let branchSeq = 0;
+function cleanBranch() {
+  git(['checkout', '-f', '-B', `submission-${++branchSeq}`, 'origin/main']);
+  git(['clean', '-fd']);
+}
+function pin(ticket, commit) {
+  git(['update-ref', `refs/sidequest/${ticket.ref}`, commit]);
+}
 const { slug } = store.ensureProject(PROJECT_DIR);
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR }, { cwd: PROJECT_DIR });
@@ -159,6 +172,7 @@ test('CLI: scoped commit excludes a foreign staged path and keeps it staged', ()
 });
 
 test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence comment, publish queue lists it', () => {
+  cleanBranch();
   const t = addTicket('cli submit round-trip');
   assert.strictEqual(runCli(['claim', t.ref, '--by', 'cli-worker']).status, 0);
 
@@ -167,6 +181,7 @@ test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence commen
   git(['add', 'lib/fixture.js']);
   git(['commit', '-m', 'submission fixture']);
   const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
   const submitted = runCli([
     'submit', t.ref, '--by', 'cli-worker', '--commit', commit,
     '--verify', 'node --test plugins/sidequest/test/submission.test.js',
@@ -177,6 +192,9 @@ test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence commen
 
   const after = store.getTicket(slug, t.ref);
   assert.strictEqual(after.submission.verify, 'node --test plugins/sidequest/test/submission.test.js');
+  assert.deepStrictEqual(after.submission.commits, [commit]);
+  assert.deepStrictEqual(after.submission.changedPaths, ['lib/fixture.js']);
+  assert.strictEqual(after.submission.base, git(['rev-parse', 'origin/main']));
   assert.ok(after.comments.some((c) => /READY_FOR_INTEGRATION evidence body/.test(c.body)));
 
   const queue = cliJson(['publish', 'queue', '--json']);
@@ -190,4 +208,93 @@ test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence commen
   const cleared = runCli(['submit', t.ref, '--clear', '-s', 'todo']);
   assert.strictEqual(cleared.status, 0, cleared.stderr + cleared.stdout);
   assert.strictEqual(store.getTicket(slug, t.ref).submission, null);
+});
+
+test('CLI: SQ-406-shaped two-commit submissions retain implementation and tests in order', () => {
+  cleanBranch();
+  const t = addTicket('SQ-406-shaped range', { files: ['lib', 'test'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'range-worker']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(PROJECT_DIR, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'implementation.js'), 'module.exports = true;\n');
+  git(['add', 'lib/implementation.js']);
+  git(['commit', '-m', 'implementation']);
+  const implementation = git(['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'implementation.test.js'), 'test fixture\n');
+  git(['add', 'test/implementation.test.js']);
+  git(['commit', '-m', 'tests']);
+  const tests = git(['rev-parse', 'HEAD']);
+  pin(t, tests);
+
+  const submitted = runCli(['submit', t.ref, '--by', 'range-worker', '--commit', tests, '--verify', 'node --test plugins/sidequest/test/*.test.js']);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  const queue = cliJson(['publish', 'queue', '--json']);
+  const entry = queue.tickets.find((item) => item.ref === t.ref);
+  assert.deepStrictEqual(entry.submission.commits, [implementation, tests]);
+  assert.deepStrictEqual(entry.submission.changedPaths, ['lib/implementation.js', 'test/implementation.test.js']);
+});
+
+test('CLI: hidden out-of-scope path in the first range commit is refused', () => {
+  cleanBranch();
+  const t = addTicket('hidden first commit scope', { files: ['lib/allowed.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'scope-worker']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'foreign\n');
+  git(['add', 'foreign.js']);
+  git(['commit', '-m', 'hidden foreign path']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'allowed.js'), 'allowed\n');
+  git(['add', 'lib/allowed.js']);
+  git(['commit', '-m', 'allowed tip']);
+  const tip = git(['rev-parse', 'HEAD']);
+  pin(t, tip);
+
+  const submitted = runCli(['submit', t.ref, '--by', 'scope-worker', '--commit', tip]);
+  assert.strictEqual(submitted.status, 1);
+  assert.match(submitted.stderr + submitted.stdout, /foreign\.js/);
+  assert.ok(store.getTicket(slug, t.ref).claim, 'failed range validation keeps the claim');
+  assert.strictEqual(runCli(['release', t.ref, '--by', 'scope-worker']).status, 0);
+});
+
+test('CLI: unrelated durable-ref history is refused', () => {
+  cleanBranch();
+  const t = addTicket('unrelated submission', { files: ['lib/unrelated.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'unrelated-worker']).status, 0);
+  git(['checkout', '--orphan', `unrelated-${++branchSeq}`]);
+  git(['rm', '-rf', '.']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'unrelated.js'), 'unrelated\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'unrelated root']);
+  const tip = git(['rev-parse', 'HEAD']);
+  pin(t, tip);
+
+  const submitted = runCli(['submit', t.ref, '--by', 'unrelated-worker', '--commit', tip]);
+  assert.strictEqual(submitted.status, 1);
+  assert.match(submitted.stderr + submitted.stdout, /unrelated_history/);
+  assert.strictEqual(runCli(['release', t.ref, '--by', 'unrelated-worker']).status, 0);
+});
+
+test('CLI: a range containing another queued ticket commit is refused', () => {
+  cleanBranch();
+  const first = addTicket('first queued submission', { files: ['lib/first.js'] });
+  assert.strictEqual(runCli(['claim', first.ref, '--by', 'first-worker']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'first.js'), 'first\n');
+  git(['add', 'lib/first.js']);
+  git(['commit', '-m', 'first ticket']);
+  const firstTip = git(['rev-parse', 'HEAD']);
+  pin(first, firstTip);
+  assert.strictEqual(runCli(['submit', first.ref, '--by', 'first-worker', '--commit', firstTip]).status, 0);
+
+  const second = addTicket('second includes first', { files: ['lib'] });
+  assert.strictEqual(runCli(['claim', second.ref, '--by', 'second-worker']).status, 0);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'second.js'), 'second\n');
+  git(['add', 'lib/second.js']);
+  git(['commit', '-m', 'second ticket']);
+  const secondTip = git(['rev-parse', 'HEAD']);
+  pin(second, secondTip);
+  const submitted = runCli(['submit', second.ref, '--by', 'second-worker', '--commit', secondTip]);
+  assert.strictEqual(submitted.status, 1);
+  assert.match(submitted.stderr + submitted.stdout, new RegExp(first.ref));
+  assert.strictEqual(runCli(['release', second.ref, '--by', 'second-worker']).status, 0);
 });
