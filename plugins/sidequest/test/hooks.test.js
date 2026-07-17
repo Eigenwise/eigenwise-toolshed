@@ -33,16 +33,17 @@ const BUDGET = {
 
 // Run a hook with the given stdin payload and return the injected
 // additionalContext string (or '' when the hook stays silent).
-function runHookOutput(script, payload) {
+function runHookOutput(script, payload, envOverrides) {
   const out = execFileSync(process.execPath, [script], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
+    env: { ...process.env, ...(envOverrides || {}) },
   });
   return out.trim() ? JSON.parse(out) : null;
 }
 
-function runHook(script, payload) {
-  const parsed = runHookOutput(script, payload);
+function runHook(script, payload, envOverrides) {
+  const parsed = runHookOutput(script, payload, envOverrides);
   if (!parsed) return '';
   return (parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext) || '';
 }
@@ -505,7 +506,17 @@ test('session-start: source=compact gets the terse re-grounding block, not the f
   assert.ok(ctx.includes('pulse ref'), 'resume must point to the compact liveness read');
   assert.ok(ctx.includes('list --status doing'), 'CLI doing-list must remain an explicit fallback');
   assert.ok(!ctx.includes('external tracker'), 'must NOT be the full block on compact');
-  assert.ok(ctx.length <= BUDGET.compact, `compact block is ${ctx.length} chars — budget is ${BUDGET.compact}`);
+  assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `compact block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
+});
+
+test('session-start: compact byte budget ignores a long plugin path', () => {
+  const ctx = runHook(
+    SESSION,
+    { session_id: 't', source: 'compact' },
+    { CLAUDE_PLUGIN_ROOT: 'C:/sidequest/' + 'deep-install-root/'.repeat(100) }
+  );
+  assert.ok(ctx.includes('node "${CLAUDE_PLUGIN_ROOT}/bin/sidequest.js"'), 'CLI fallback must use the stable plugin-root variable');
+  assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `compact block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
 });
 
 test('session-start: source=startup still gets the full block', () => {

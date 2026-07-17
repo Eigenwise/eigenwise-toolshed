@@ -119,7 +119,7 @@ function main() {
 
   if (nudgeOff()) process.exit(0);
 
-  const cli = `node "${path.join(pluginRoot(), 'bin', 'sidequest.js')}"`;
+  const cli = 'node "${CLAUDE_PLUGIN_ROOT}/bin/sidequest.js"';
 
   // This hook intentionally fires on EVERY SessionStart source (startup, resume,
   // clear, compact) rather than filtering any of them out: standing context does
