@@ -1879,7 +1879,7 @@
     var boardName = canProject ? currentBoardName() : "This board";
     if (projectLabel) projectLabel.textContent = "";
     box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Shared defaults</button>' +
-      '<button type="button" class="scope-board" data-scope="project"' + (state.categoryScope === "project" ? ' class="active"' : '') + (canProject ? '' : ' disabled') + ' title="' + esc(boardName) + '">' + esc(boardName) + '</button>';
+      '<button type="button" data-scope="project" class="scope-board' + (state.categoryScope === "project" ? ' active' : '') + '"' + (canProject ? '' : ' disabled') + ' title="' + esc(boardName) + '">' + esc(boardName) + '</button>';
     box.querySelectorAll('[data-scope]').forEach(function (button) { button.addEventListener("click", function () {
       if (button.disabled) return;
       state.categoryScope = button.dataset.scope;
