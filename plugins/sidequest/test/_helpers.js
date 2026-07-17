@@ -7,10 +7,10 @@ const assert = require('node:assert');
 const { spawnSync } = require('child_process');
 
 // A CLI runner bound to a bin path and env overrides.
-function makeCliRunner(bin, envOverrides) {
+function makeCliRunner(bin, envOverrides, options) {
   function runCli(args) {
     const env = Object.assign({}, process.env, envOverrides || {});
-    const res = spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env });
+    const res = spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env, cwd: (options && options.cwd) || process.cwd() });
     return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
   }
   function cliJson(args) {

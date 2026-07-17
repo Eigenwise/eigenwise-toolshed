@@ -178,6 +178,7 @@ ticket. **Never start work on a ticket you haven't successfully claimed**, even 
 ```bash
 sidequest next --by <you>              # atomically claim the top-priority available ticket
 sidequest claim SQ-3 --by <you>        # or claim a specific one
+sidequest commit SQ-3 --by <you> --message "scope-safe commit"  # commits only declared ticket paths; foreign staged paths remain untouched
 sidequest submit SQ-3 --by <you> --commit <hash> --verify "<cmd>"   # executor terminal for repo-changing work:
                                        # park the verified LOCAL commit READY_FOR_INTEGRATION (no push, no versions)
 sidequest done SQ-3 --by <you> --model <model> --effort <level>   # finish + stamp who/what worked it
@@ -317,7 +318,9 @@ and fallback chain, documented in [references/routing-details.md](references/rou
    `agent` immediately from the returned `spawn` object. There is no registration announcement or
    watcher-lag wait. Use `dispatch <ref> --ephemeral` (or `{ephemeral:true}` in MCP) only when a
    cross-session handoff needs a self-contained temporary executor; that path still waits for the
-   generated type to register, and any session may adopt it.
+   generated type to register, and any session may adopt it. Tickets with declared files return
+   `isolation: "worktree"` in `spawn`; pass it unchanged. `--shared-tree` / `{sharedTree:true}` is an
+   escape hatch only for a task that depends on uncommitted local state, and its reason belongs in the ticket comment before spawning.
    - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with
      `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are
      unattended workers; never omit bypass or their ordinary Bash calls prompt into the lead session.

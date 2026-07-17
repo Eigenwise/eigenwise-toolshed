@@ -1282,10 +1282,8 @@ function normalizeLabels(labels) {
   return out.slice(0, 12);
 }
 
-// A ticket's declared file scope: the repo-relative paths (or directory
-// prefixes) it expects to touch. Purely declarative — nothing enforces it —
-// but it lets readyWaves() partition ready work into parallel-safe waves
-// mechanically instead of the orchestrator eyeballing "no shared files".
+// A ticket's declared file scope drives wave planning and gates repository commits
+// submitted through the Sidequest executor path.
 function normalizeFiles(files) {
   if (!files) return [];
   const arr = Array.isArray(files) ? files : String(files).split(',');

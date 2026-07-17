@@ -30,6 +30,7 @@ const { spawn } = require('child_process');
 const store = require('../lib/store');
 const agentsync = require('../lib/agentsync');
 const work = require('../lib/work');
+const commitScope = require('../lib/commit-scope');
 
 /* ------------------------------------------------------------------ *
  *  Arg parsing
@@ -72,7 +73,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'ephemeral', 'clear', 'steal']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'ephemeral', 'clear', 'steal', 'shared-tree']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -787,6 +788,28 @@ function cmdDone(opts, positional) {
   else reportClaimFailure('complete', idOrRef, res, meta);
 }
 
+function cmdCommit(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('commit: pass a ticket ref, e.g. sidequest commit SQ-3 --by me --message "fix the thing".');
+  if (!opts.message) fail('commit: pass --message for the scoped commit.');
+  const { slug, meta } = resolveProject(opts);
+  const ticket = store.getTicket(slug, idOrRef);
+  const by = workerId(opts);
+  if (!ticket) fail(`commit: no ticket "${idOrRef}" in ${meta.name}.`);
+  if (!ticket.claim || ticket.claim.by !== by) fail(`commit: ${ticket.ref} must be claimed by "${by}" before committing.`);
+  const result = commitScope.commitScoped(process.cwd(), opts.message, ticket.files);
+  if (!result.ok) {
+    if (result.reason === 'missing_scope') fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
+    if (result.reason === 'outside_scope') fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(', ')}.`);
+    fail(`commit: git failed: ${result.message || result.reason}`);
+  }
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ project: slug, ref: ticket.ref, commit: result.commit, paths: result.paths }, null, 2) + '\n');
+    return;
+  }
+  console.log(`✓ ${ticket.ref} committed ${result.commit.slice(0, 12)} (${result.paths.join(', ')})`);
+}
+
 // Executor terminal for repo-changing tickets: park verified, committed work as
 // READY_FOR_INTEGRATION instead of publishing it. The orchestrator's publish
 // transaction (references/publishing.md) integrates, versions, reverifies,
@@ -809,6 +832,14 @@ function cmdSubmit(opts, positional) {
     return;
   }
   const body = bodyFromOpts(opts, 'submit');
+  const ticket = store.getTicket(slug, idOrRef);
+  if (!ticket) fail(`submit: no ticket "${idOrRef}" in ${meta.name}.`);
+  const scope = commitScope.validateCommitScope(process.cwd(), opts.commit, ticket.files);
+  if (!scope.ok) {
+    if (scope.reason === 'missing_scope') fail(`submit: ${ticket.ref} has no declared file scope, so its commit cannot be admitted for integration.`);
+    if (scope.reason === 'outside_scope') fail(`submit: refused ${ticket.ref}; ${opts.commit} changes paths outside its declared scope: ${scope.outside.join(', ')}.`);
+    fail(`submit: could not inspect ${opts.commit} from this worktree: ${scope.message || scope.reason}`);
+  }
   let res;
   try {
     res = store.submitTicket(slug, idOrRef, by, {
@@ -1311,10 +1342,11 @@ function cmdDispatch(opts, positional) {
   } catch (err) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
+  const isolation = agentsync.ticketIsolation(prepared.ticket, !!opts['shared-tree']);
   if (ephemeral) {
     let created;
     try {
-      created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId });
+      created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId, isolation });
     } catch (err) {
       fail(`dispatch: ${(err && err.message) || err}`);
     }
@@ -1344,7 +1376,7 @@ function cmdDispatch(opts, positional) {
     agent,
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
-    spawn: { subagent_type: agent, name: agent, mode: 'bypassPermissions' },
+    spawn: Object.assign({ subagent_type: agent, name: agent, mode: 'bypassPermissions' }, isolation ? { isolation } : {}),
     briefing,
     guidance: `Instant: spawn ${agent} (already registered) with the briefing as its prompt; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}. No registration wait.`,
   }, null, 2) + '\n');
@@ -1374,6 +1406,7 @@ function cmdNativeAgent(opts, positional) {
     spawnModel: resolved.model,
     effort: ticket.effort,
     runtime: resolved.runsModel,
+    isolation: agentsync.ticketIsolation(ticket, !!opts['shared-tree']),
     sessionId,
   });
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, ref: ticket.ref, prompt: work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`) }, created), null, 2) + '\n');
@@ -1874,6 +1907,7 @@ Working the board safely (multi-agent):
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>]   claim the best available ticket (highest priority first)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
+  sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
     executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
     (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).
@@ -1900,8 +1934,8 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--ephemeral] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: default (instant) returns the briefing + token to spawn the ticket's stable executor with no registration wait; --ephemeral writes a per-ticket definition for cross-session adoption
-  sidequest native-agent <SQ-n> [--prompt "task"] [--json]  return an already-registered native Agent spawn spec + bounded prompt
+  sidequest dispatch <SQ-n> [--ephemeral] [--shared-tree] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: declared-file tickets run in worktrees by default; --shared-tree is only for uncommitted-state dependencies
+  sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]  return an already-registered native Agent spawn spec + bounded prompt
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
     \`sidequest work\`/\`drain\` are disabled because they cannot invoke Agent and never start a separate Claude process.
@@ -2040,6 +2074,9 @@ async function main() {
     case 'complete':
     case 'finish':
       cmdDone(opts, positional);
+      break;
+    case 'commit':
+      cmdCommit(opts, positional);
       break;
     case 'submit':
       cmdSubmit(opts, positional);

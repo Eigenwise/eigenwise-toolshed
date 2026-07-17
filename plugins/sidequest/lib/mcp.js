@@ -691,6 +691,7 @@ const TOOLS = [
         project: PROJECT_PROP,
         session: { type: 'string' },
         ephemeral: { type: 'boolean', description: 'Write a unique per-ticket executor definition (legacy path) instead of instant dispatch. Use for cross-session adoption; costs the watcher-registration wait.' },
+        sharedTree: { type: 'boolean', description: 'Escape hatch for a ticket that depends on uncommitted local state. Declared-file tickets otherwise run in isolated worktrees.' },
       },
       required: ['ref'],
     },
@@ -698,8 +699,9 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const ephemeral = !!args.ephemeral;
       const prepared = store.prepareDispatch(slug, args.ref, { ephemeral });
+      const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
       if (ephemeral) {
-        const created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId: sessionOf(args) });
+        const created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId: sessionOf(args), isolation });
         return {
           project: slug,
           ref: prepared.ticket.ref,
@@ -719,7 +721,7 @@ const TOOLS = [
         agent,
         tokenPrefix: prepared.token.slice(0, 12),
         token: prepared.token,
-        spawn: { subagent_type: agent, name: agent, mode: 'bypassPermissions' },
+        spawn: Object.assign({ subagent_type: agent, name: agent, mode: 'bypassPermissions' }, isolation ? { isolation } : {}),
         briefing: agentsync.renderTicketBriefing(prepared.ticket, prepared.token),
         guidance: `Instant: spawn ${agent} (already registered) with the returned briefing as its prompt; it claims ${prepared.ticket.ref} with executor ${agent} and the token. No registration wait.`,
       };
@@ -735,6 +737,7 @@ const TOOLS = [
         project: PROJECT_PROP,
         prompt: { type: 'string', description: 'The bounded ticket-execution prompt augmented with stored anchors and verify command.' },
         session: { type: 'string' },
+        sharedTree: { type: 'boolean', description: 'Escape hatch for a ticket that depends on uncommitted local state. Declared-file tickets otherwise run in isolated worktrees.' },
       },
       required: ['ref', 'prompt'],
     },
@@ -750,6 +753,7 @@ const TOOLS = [
         spawnModel: resolved.model,
         effort: ticket.effort,
         runtime: resolved.runsModel,
+        isolation: agentsync.ticketIsolation(ticket, !!args.sharedTree),
         sessionId: sessionOf(args),
       });
       return Object.assign({

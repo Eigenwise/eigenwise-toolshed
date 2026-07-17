@@ -299,6 +299,15 @@ function renderTicketBriefing(ticket, nonce) {
   return stripExecFrontmatter(source);
 }
 
+function ticketIsolation(ticket, sharedTree) {
+  return !sharedTree && Array.isArray(ticket && ticket.files) && ticket.files.length ? 'worktree' : null;
+}
+
+function agentSpawn(name, isolation, model, agentType) {
+  return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions' },
+    isolation ? { isolation } : {}, model ? { model } : {});
+}
+
 function createTicketExecutor(ticket, opts) {
   opts = opts || {};
   const rawNonce = opts.nonce;
@@ -337,7 +346,7 @@ function createTicketExecutor(ticket, opts) {
   return {
     name,
     file,
-    spawn: { subagent_type: name, name, mode: 'bypassPermissions' },
+    spawn: agentSpawn(name, opts.isolation),
     cleanup: { name, sessionId: opts.sessionId || null },
   };
 }
@@ -355,11 +364,7 @@ function createNativeAgent(spec, opts) {
       name,
       file: null,
       fallback: true,
-      spawn: Object.assign({
-        subagent_type: String(spec.agentType),
-        name,
-        mode: 'bypassPermissions',
-      }, model ? { model } : {}),
+      spawn: agentSpawn(name, spec.isolation, model, String(spec.agentType)),
       cleanup: { name, sessionId: spec.sessionId || null },
     };
   }
@@ -397,11 +402,7 @@ function createNativeAgent(spec, opts) {
   return {
     name,
     file,
-    spawn: {
-      subagent_type: name,
-      name,
-      mode: 'bypassPermissions',
-    },
+    spawn: agentSpawn(name, spec.isolation),
     cleanup: { name, sessionId: spec.sessionId || null },
   };
 }
@@ -525,6 +526,7 @@ module.exports = {
   cleanupNativeAgents,
   nativeAgentName,
   nativeAgentSource,
+  ticketIsolation,
   syncExecAgents,
   defaultAgentsDir,
 };

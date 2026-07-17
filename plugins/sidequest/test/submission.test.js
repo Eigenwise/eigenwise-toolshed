@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -23,9 +24,18 @@ const store = require('../lib/store.js');
 const { makeCliRunner } = require('./_helpers.js');
 
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-project-'));
+function git(args) {
+  return execFileSync('git', args, { cwd: PROJECT_DIR, encoding: 'utf8', windowsHide: true }).trim();
+}
+git(['init']);
+git(['config', 'user.name', 'Sidequest Test']);
+git(['config', 'user.email', 'sidequest-test@example.invalid']);
+fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'submission fixture\n');
+git(['add', '.']);
+git(['commit', '-m', 'base']);
 const { slug } = store.ensureProject(PROJECT_DIR);
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
-const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR });
+const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR }, { cwd: PROJECT_DIR });
 
 const COMMIT = 'abc1234def5678abc1234def5678abc1234def56';
 
@@ -132,12 +142,33 @@ test('brief and pulse surface a pending submission', () => {
   assert.strictEqual(pulse.claim, null);
 });
 
+test('CLI: scoped commit excludes a foreign staged path and keeps it staged', () => {
+  const t = addTicket('cli scoped commit', { files: ['lib/cli-scoped.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'scope-worker']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'cli-scoped.js'), 'scoped\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'foreign\n');
+  git(['add', '.']);
+
+  const committed = runCli(['commit', t.ref, '--by', 'scope-worker', '--message', 'scoped fixture']);
+  assert.strictEqual(committed.status, 0, committed.stderr + committed.stdout);
+  assert.equal(git(['show', '--format=', '--name-only', 'HEAD']), 'lib/cli-scoped.js');
+  assert.equal(git(['diff', '--cached', '--name-only']), 'foreign.js');
+  assert.strictEqual(runCli(['release', t.ref, '--by', 'scope-worker']).status, 0);
+  git(['reset', '--', 'foreign.js']);
+});
+
 test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence comment, publish queue lists it', () => {
   const t = addTicket('cli submit round-trip');
   assert.strictEqual(runCli(['claim', t.ref, '--by', 'cli-worker']).status, 0);
 
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'submitted fixture\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'submission fixture']);
+  const commit = git(['rev-parse', 'HEAD']);
   const submitted = runCli([
-    'submit', t.ref, '--by', 'cli-worker', '--commit', COMMIT,
+    'submit', t.ref, '--by', 'cli-worker', '--commit', commit,
     '--verify', 'node --test plugins/sidequest/test/submission.test.js',
     '-m', 'READY_FOR_INTEGRATION evidence body',
   ]);

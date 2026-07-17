@@ -138,7 +138,7 @@ test('CLI-only board archive tools are absent from MCP', () => {
 test('dispatch is instant by default (stable executor + briefing + token); ephemeral writes a per-ticket def', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['ephemeral', 'project', 'ref', 'session']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['ephemeral', 'project', 'ref', 'session', 'sharedTree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
@@ -186,6 +186,21 @@ test('native_agent carries ticket anchors and verify command through its stable 
     clearCatalog();
   }
 });
+
+test('native_agent isolates declared-file tickets unless shared-tree is requested', () => {
+  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
+  try {
+    store.setCategory({ id: 'native-worktree', name: 'Native Worktree', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+    const added = callTool('add', { title: 'worktree dispatch', category: 'native-worktree', files: ['plugins/sidequest'] });
+    const isolated = callHandler('native_agent', { ref: added.ref, prompt: 'Implement the ticket.' });
+    const shared = callHandler('native_agent', { ref: added.ref, prompt: 'Implement the ticket.', sharedTree: true });
+    assert.equal(isolated.spawn.isolation, 'worktree');
+    assert.equal(shared.spawn.isolation, undefined);
+  } finally {
+    clearCatalog();
+  }
+});
+
 test('an unknown method is a JSON-RPC method-not-found error', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 3, method: 'does/not/exist' });
   assert.ok(resp.error, 'returns an error object');

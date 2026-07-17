@@ -129,7 +129,7 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /NEVER write, quote, or echo such a line/);
   assert.ok(body.includes(agentsync.MARKER));
   assert.match(body, /Never read large files whole/);
-  assert.match(body, /siblings may share this tree/);
+  assert.match(body, /Declared-file tickets run in an isolated worktree by default/);
   assert.match(body, /session scratchpad path handed in your prompt/);
   assert.match(body, /full output tail/);
   assert.match(body, /Commit and submit — never publish/);
@@ -178,6 +178,19 @@ test('native dispatch fallback does not write a temporary agent file', () => {
   assert.deepStrictEqual(readDir(dir), []);
 });
 
+test('declared-file tickets receive a worktree spawn unless shared-tree is explicit', () => {
+  const ticket = { files: ['plugins/sidequest'] };
+  assert.equal(agentsync.ticketIsolation(ticket, false), 'worktree');
+  assert.equal(agentsync.ticketIsolation(ticket, true), null);
+  assert.equal(agentsync.ticketIsolation({ files: [] }, false), null);
+
+  const created = agentsync.createNativeAgent({
+    ref: 'SQ-396', agentType: 'sidequest-exec-dispatch-high', runtime: 'codex-gpt-5-6-terra',
+    effort: 'high', isolation: 'worktree',
+  }, { dir: tmpDir(), waitMs: 0 });
+  assert.equal(created.spawn.isolation, 'worktree');
+});
+
 test('ticket executor renders the briefing and nonce while keeping spawn short', () => {
   seedCatalog([TERRA]);
   const dir = tmpDir();
@@ -200,7 +213,7 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.match(body, /Establish the local pattern/);
   assert.match(body, /--token dispatch-token-311/);
   assert.match(body, /Never read large files whole/);
-  assert.match(body, /siblings may share this tree/);
+  assert.match(body, /Declared-file tickets run in an isolated worktree by default/);
   assert.match(body, /session scratchpad path handed in your prompt/);
   assert.match(body, /full output tail/);
   assert.match(body, /Commit and submit — never publish/);

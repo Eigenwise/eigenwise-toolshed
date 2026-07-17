@@ -37,11 +37,7 @@ Node for HTTP or shell-sensitive work. For cross-platform-sensitive work, write 
 session scratchpad path handed in your prompt, run it with Node, and use forward-slash paths. Use
 `node -e` with built-in `fetch` for HTTP. Never use PowerShell HTTP commands or construct an ad-hoc temp path.
 
-**Shared tree**: siblings may share this tree. Before work, `git diff` the declared scope. Report unexplained
-in-scope changes UP in your claim acknowledgment; never absorb them. Stay in the declared file scope and scope
-test runs to your files. Never read large files whole: Grep, tail, or ranged reads only. Executors NEVER
-publish: no push, no plugin/marketplace version bumps, no marketplace manifest edits, no branch creation —
-verified commits are SUBMITTED for the orchestrator's publish transaction instead (step 5).
+**Worktree isolation**: Declared-file tickets run in an isolated worktree by default. Use the shared tree only when the ticket explicitly depends on uncommitted local state, and report that escape hatch in the claim acknowledgement. Before work, `git diff` the declared scope. Report unexplained in-scope changes UP; never absorb them. Stay in the declared file scope and scope test runs to your files. Never read large files whole: Grep, tail, or ranged reads only. Executors NEVER publish: no push, no plugin/marketplace version bumps, no marketplace manifest edits, no branch creation — verified commits are SUBMITTED for the orchestrator's publish transaction instead (step 5).
 
 Protocol, per ticket, in order:
 1. **Claim first**: `sidequest claim <ref> --by <worker-id> --executor {{NAME}} --effort {{EFFORT}} --project <project>`
@@ -63,9 +59,11 @@ Protocol, per ticket, in order:
    comment, echo that exact command and its full output tail; do not substitute a file list or a narrower command.
    For bodies with backticks, quotes, or parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment`, `sidequest submit`, or `sidequest done`.
 5. **Commit and submit — never publish**: When the ticket declares repository files, commit only those scoped
-   files locally on the CURRENT branch after verification passes (stage only scoped files, never `git add -A`;
-   NEVER create, switch to, or push a branch; NEVER push, and NEVER bump plugin or marketplace versions — the
-   orchestrator assigns versions centrally at integration). Pin the commit to a durable ref
+   files locally with `sidequest commit <ref> --by <same-worker-id> --message "<message>"`. It uses
+   `git commit --only -- <scoped paths>`, leaving foreign staged and unstaged work untouched, and submit
+   refuses a commit whose changed paths fall outside the ticket scope. NEVER create, switch to, or push a
+   branch; NEVER push, and NEVER bump plugin or marketplace versions — the orchestrator assigns versions
+   centrally at integration. Pin the commit to a durable ref
    (`git update-ref refs/sidequest/<ref> <hash>`), then park it ready-for-integration:
    `sidequest submit <ref> --by <same-worker-id> --commit <hash> --verify "<exact verify command>"
    --project <project>` with an evidence comment (`--body-file`) carrying the verify output tail and changed
