@@ -95,11 +95,16 @@ Then carry out the additions and removals you identified in Step 3:
 
 ### Step 5 — Re-record state
 
-Rewrite `.claude/.codebase-info/.map-state.json`:
+Rewrite `.claude/.codebase-info/.map-state.json` after the final document edits:
 - `mappedAt`: today's date
 - `gitCommit`: current `git rev-parse HEAD` (or `null` if not a git repo)
 - `documents`: the current set of docs (reflecting any added/removed)
+- `hashes`: SHA-256 hashes of the exact final contents of `INDEX.md` and every listed document
 - keep `tool` and bump `version` to match the plugin if needed
+
+Stage the final document contents first, then atomically replace `.map-state.json`. A manual edit or
+interrupted write can leave hashes stale; that is safe because hooks hash live files and treat the
+manifest only as a consistency check.
 
 Then summarize for the user: which docs you updated, created, or removed, and why. Remind them to
 commit the changes so the team and future sessions stay in sync.

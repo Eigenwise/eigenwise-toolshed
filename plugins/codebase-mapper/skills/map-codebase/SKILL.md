@@ -145,12 +145,19 @@ precisely:
   "version": "2.1.0",
   "mappedAt": "YYYY-MM-DD",
   "gitCommit": "<full HEAD SHA, or null if not a git repo>",
-  "documents": ["architecture.md", "tech-landscape.md", "..."]
+  "documents": ["architecture.md", "tech-landscape.md", "..."],
+  "hashes": {
+    "INDEX.md": "<SHA-256 of the exact file contents>",
+    "architecture.md": "<SHA-256 of the exact file contents>"
+  }
 }
 ```
 
 Get the SHA with `git rev-parse HEAD` (use `null` if the project isn't a git repo). List exactly the
-documents you created.
+documents you created. Hash `INDEX.md` and every listed document from its exact final contents. Write
+the documents and `.map-state.json` as one map update: stage the final document contents first, then
+atomically replace the state file so a hook can only ever see either old hashes or a safely detectable
+stale manifest.
 
 Finally, tell the user the map is ready, remind them to **commit `.claude/.codebase-info/`** so their
 team and every future session share it, and note that the plugin's hook will surface it

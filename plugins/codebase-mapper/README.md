@@ -99,20 +99,20 @@ The usual set is `INDEX.md`, `architecture.md`, `tech-landscape.md`, `directory-
 `entry-points.md`, `modules.md`, `communication.md`, `database.md`, `dependencies.md`, `patterns.md`,
 `coding-style.md`, `docker.md`, and `onboarding.md`. A project with no database or containers gets no
 `database.md` or `docker.md`, and a project with a major aspect none of those cover gets a doc of its
-own (say `ml-pipeline.md`). There is also a `.map-state.json` the update skill uses to detect what
-changed since the last map.
+own (say `ml-pipeline.md`). `.map-state.json` records the last mapped commit, document list, and a
+SHA-256 hash manifest. Hooks always hash the live files, so manual edits and stale manifests are
+noticed without trusting stale state.
 
 `INDEX.md` is the compact hub that gets injected at session start; the detailed docs are read on demand.
 
 ## Auto-loading
 
-A bundled, Node-based `SessionStart` hook runs `hooks/inject-context.js` and injects `INDEX.md` at the
-start of each session when a map exists, so Claude starts oriented. SessionStart also fires on resume
-and after a compaction, so the map comes back once context has been trimmed.
+A bundled, Node-based `SessionStart` hook runs `hooks/inject-context.js` and injects the compact
+`INDEX.md` once on startup, resume, clear, and compaction. Its per-session hash ledger also records the
+focused documents currently represented by that index, so an unchanged prompt adds no map context.
 
-A companion Node-based `UserPromptSubmit` hook runs `hooks/remind.js` and re-surfaces a short reminder
-every six prompts. Both hooks are silent in projects that have no map, never break a prompt on errors,
-and neither touches your `CLAUDE.md`.
+`UserPromptSubmit` only emits a bounded instruction when a map file's live hash changes, naming exactly
+the document to reread. Separate session ledgers keep concurrent sessions independent.
 
 Commit `.claude/.codebase-info/` so the whole team and every future session share the map.
 
