@@ -103,7 +103,7 @@ test('CLI project category layers stay isolated and expose effective origins', (
 
   run = cli('category', 'edit', 'general', '--project', project, '--name', 'Local general');
   assert.equal(run.result.status, 0, run.result.stderr);
-  assert.equal(run.body.localRow.kind, 'OVERRIDE');
+  assert.equal(run.body.localRow.kind, 'DETACH');
   assert.equal(run.body.effective.name, 'Local general');
 
   run = cli('category', 'disable', 'mechanical', '--project', project);
@@ -113,7 +113,7 @@ test('CLI project category layers stay isolated and expose effective origins', (
   run = cli('category', 'list', '--project', project);
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.categories.find((entry) => entry.id === 'project-only').origin, 'project');
-  assert.equal(run.body.categories.find((entry) => entry.id === 'general').origin, 'overridden');
+  assert.equal(run.body.categories.find((entry) => entry.id === 'general').origin, 'detached');
   assert.equal(run.body.categories.find((entry) => entry.id === 'mechanical').origin, 'disabled');
 
   run = cli('category', 'list', '--project', second);
@@ -148,50 +148,37 @@ test('CLI category list defaults to the current project taxonomy and supports gl
   assert.ok(globalBody.categories.some((entry) => entry.id === 'mechanical' && entry.origin === 'global'));
 });
 
-test('CLI category detach and relink expose project link states and warnings', () => {
-  const scoped = path.join(home, 'detach-project');
+test('CLI category edit forks a board category, and reset returns it to the shared default', () => {
+  const scoped = path.join(home, 'fork-project');
   fs.mkdirSync(scoped, { recursive: true });
 
   let run = cli('category', 'edit', 'mechanical', '--project', scoped, '--name', 'Local mechanical');
-  assert.equal(run.result.status, 0, run.result.stderr);
-
-  run = cli('category', 'list', '--project', scoped);
-  assert.equal(run.result.status, 0, run.result.stderr);
-  let category = run.body.categories.find((entry) => entry.id === 'mechanical');
-  assert.equal(category.linkState, 'overridden');
-  assert.deepEqual(category.changedFields, ['name', 'route']);
-
-  run = cli('category', 'detach', 'mechanical', '--project', scoped);
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.localRow.kind, 'DETACH');
 
   run = cli('category', 'list', '--project', scoped);
   assert.equal(run.result.status, 0, run.result.stderr);
-  category = run.body.categories.find((entry) => entry.id === 'mechanical');
+  const category = run.body.categories.find((entry) => entry.id === 'mechanical');
   assert.equal(category.linkState, 'detached');
-  assert.ok(run.body.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'mechanical'));
+  assert.equal(category.name, 'Local mechanical');
+  assert.deepEqual(run.body.warnings, []); // a forked board copy is normal, not a warning
 
   const plain = spawnSync(process.execPath, [BIN, 'category', 'list', '--project', scoped], { encoding: 'utf8', env });
   assert.equal(plain.status, 0, plain.stderr);
-  assert.match(plain.stdout, /pinned/);
-  assert.match(plain.stdout, /is pinned and also exists as a shared default/);
+  assert.match(plain.stdout, /customized/);
 
-  run = cli('category', 'relink', 'mechanical', '--project', scoped);
+  run = cli('category', 'reset', 'mechanical', '--project', scoped);
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.localRow, null);
   assert.equal(run.body.effective.name, 'Mechanical change');
 });
 
-test('MCP category detach and relink expose project link states and warnings', () => {
+test('MCP category edit forks a board category, and relink resets it to the shared default', () => {
   const mcp = freshMcp();
   const scoped = process.env.CLAUDE_PROJECT_DIR;
   fs.mkdirSync(scoped, { recursive: true });
 
   let result = call(mcp, 'category_edit', { project: scoped, id: 'mechanical', name: 'Local mechanical' });
-  assert.deepEqual(Object.keys(result).sort(), ['id', 'localRow', 'ok', 'project']);
-  assert.equal(result.localRow.kind, 'OVERRIDE');
-
-  result = call(mcp, 'category_detach', { project: scoped, id: 'mechanical' });
   assert.deepEqual(Object.keys(result).sort(), ['id', 'localRow', 'ok', 'project']);
   assert.equal(result.localRow.kind, 'DETACH');
 
@@ -199,7 +186,7 @@ test('MCP category detach and relink expose project link states and warnings', (
   const category = result.categories.find((entry) => entry.id === 'mechanical');
   assert.equal(category.linkState, 'detached');
   assert.equal(category.origin, 'detached');
-  assert.ok(result.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'mechanical'));
+  assert.deepEqual(result.warnings, []);
 
   result = call(mcp, 'category_relink', { project: scoped, id: 'mechanical' });
   assert.deepEqual(result, { ok: true, project: result.project, id: 'mechanical', localRow: null });

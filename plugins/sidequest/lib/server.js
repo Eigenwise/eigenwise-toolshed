@@ -221,14 +221,6 @@ function categoriesPayload(project) {
   };
 }
 
-function categoryOverride(base, incoming) {
-  const patch = {};
-  for (const key of ['name', 'description', 'contract', 'route', 'fallback']) {
-    if (JSON.stringify(base[key]) !== JSON.stringify(incoming[key])) patch[key] = incoming[key];
-  }
-  return patch;
-}
-
 // Stories for one project, each annotated with how many (non-archived) tickets
 // belong to it and which board it lives on — the shape the dashboard's story
 // legend/filter and the "All boards" aggregate consume.
@@ -467,7 +459,10 @@ async function handle(req, res) {
           contract: body.contract,
           enabled: body.enabled !== false,
         };
-        store.setProjectCategory(project, id, global ? 'OVERRIDE' : 'ADD', global ? categoryOverride(global, data) : data);
+        // A board category is always a full, independent copy: editing it never
+        // tracks the shared default afterwards. Fork on top of a shared default
+        // (DETACH), or add a board-only category when none exists (ADD).
+        store.setProjectCategory(project, id, global ? 'DETACH' : 'ADD', data);
         const payload = categoriesPayload(project);
         sendJson(res, 201, { category: payload.categories.find((category) => category.id === id), warnings: payload.warnings });
         return;
@@ -545,8 +540,10 @@ async function handle(req, res) {
             const data = Object.assign({}, current || {}, body, { id, enabled: body.enabled !== false });
             delete data.project;
             delete data.disable;
-            if (global) store.setProjectCategory(project, id, 'OVERRIDE', categoryOverride(global, data));
-            else store.setProjectCategory(project, id, 'ADD', data);
+            // Editing a board category always forks it into a full, independent
+            // copy (DETACH) that stops tracking the shared default; a board-only
+            // category with no shared default stays an ADD.
+            store.setProjectCategory(project, id, global ? 'DETACH' : 'ADD', data);
           }
           const payload = categoriesPayload(project);
           sendJson(res, 200, { category: payload.categories.find((category) => category.id === id), warnings: payload.warnings });

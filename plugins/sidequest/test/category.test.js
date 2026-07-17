@@ -156,7 +156,7 @@ test('deleting a global category auto-pins the customizations that depend on it'
   assert.equal(store.getCategories({ project: other }).some((category) => category.id === 'coding.normal'), false);
 });
 
-test('detached categories snapshot the merged view, shadow globals, survive deletion, and relink', () => {
+test('detached categories snapshot the merged view, survive deletion, and relink', () => {
   const { store, slug } = freshStore();
   store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', {
     name: 'Local coding',
@@ -172,11 +172,11 @@ test('detached categories snapshot the merged view, shadow globals, survive dele
     kind: detached.kind,
     data: detached.data,
   }]);
-  assert.deepEqual(store.getProjectCategories(slug).warnings, [
-    { kind: 'shadows-global', id: 'coding.normal' },
-  ]);
+  // A forked category coexisting with its shared default is the normal state, not a warning.
+  assert.deepEqual(store.getProjectCategories(slug).warnings, []);
   assert.throws(() => store.detachCategory(slug, 'coding.normal'), /already detached/);
-  assert.throws(() => store.detachCategory(slug, 'general'), /cannot be detached/);
+  assert.equal(store.detachCategory(slug, 'general').kind, 'DETACH'); // general is forkable too
+  store.removeProjectCategory(slug, 'general');
   assert.throws(() => store.detachCategory(slug, 'missing'), /does not resolve/);
 
   store.setCategory('coding.normal', { name: 'Global rename', route: { model: 'opus', effort: 'high' } });

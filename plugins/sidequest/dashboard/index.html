@@ -1817,15 +1817,9 @@
     var id = category ? category.id : "";
     var isGlobal = categoryProject() === "all";
     var boardName = currentBoardName();
-    var layerKind = category && category.layer && category.layer.kind;
-    var pinnable = !isGlobal && !create && category && (!layerKind || layerKind === "OVERRIDE" || (layerKind === "DETACH" && category.layer.base));
-    var pinned = layerKind === "DETACH";
     var banner = isGlobal
       ? '<div class="category-scope-banner shared"><b>Shared default</b><span>' + (create ? "New category, available to every board." : "Editing the shared default. Applies to every board that hasn’t customized this category.") + '</span></div>'
-      : '<div class="category-scope-banner board"><b>' + esc(boardName) + '</b><span>' + (create ? "New category for this board only." : "Customizing for this board only. Other boards keep the shared default.") + '</span></div>';
-    var pinToggle = pinnable
-      ? '<label class="category-switch"><input data-field="pin" type="checkbox"' + (pinned ? " checked" : "") + ' /><span><strong>Pin this copy</strong><small>Stop following the shared default entirely. Keeps these values even if the shared default is later renamed or removed.</small></span></label>'
-      : '';
+      : '<div class="category-scope-banner board"><b>' + esc(boardName) + '</b><span>' + (create ? "New category for this board only." : "Saving makes this board its own copy. It stops following the shared default; other boards are unaffected.") + '</span></div>';
       var data = routingCatalog.categoryDraftAvailable ? '<div class="category-draft"><input type="text" data-category-draft placeholder="Describe the category in one sentence" /><button type="button" data-draft-category>Draft</button><small>Draft fills the form for review. It never saves on its own.</small></div>' : '';
     return '<div class="category-edit">' +
       banner +
@@ -1848,7 +1842,6 @@
       '<div class="category-form-section">' +
         '<label class="category-field"><span>Executor instructions</span><textarea data-field="contract">' + esc(category ? category.contract : "") + '</textarea><small>Injected into the executor’s prompt for every ticket in this category.</small></label>' +
         (isGlobal ? '<label class="category-switch"><input data-field="enabled" type="checkbox"' + (!category || category.enabled ? ' checked' : '') + ' /><span><strong>Enabled</strong><small>Available for ticket routing.</small></span></label>' : '') +
-        pinToggle +
       '</div>' +
       '<div class="category-actions"><button type="button" data-save-category="' + esc(id) + '">' + (create ? 'Add category' : 'Save changes') + '</button><button type="button" data-cancel-category>Cancel</button></div>' +
       '</div>';
@@ -1856,7 +1849,6 @@
   function categoryPayload(form) {
     var fallbackStep = form.querySelector('[data-fallback-step]');
     var hasFallback = fallbackStep && !fallbackStep.hidden;
-    var pinField = form.querySelector('[data-field="pin"]');
     return {
       id: form.querySelector('[data-field="id"]') && form.querySelector('[data-field="id"]').value.trim(),
       name: form.querySelector('[data-field="name"]').value.trim(),
@@ -1864,8 +1856,7 @@
       route: { model: form.querySelector('[data-field="model"]').value, effort: form.querySelector('[data-field="effort"]').value },
       fallback: hasFallback ? { model: form.querySelector('[data-field="fallback-model"]').value, effort: form.querySelector('[data-field="fallback-effort"]').value } : null,
       contract: form.querySelector('[data-field="contract"]').value.trim(),
-      enabled: !form.querySelector('[data-field="enabled"]') || form.querySelector('[data-field="enabled"]').checked,
-      pin: pinField ? pinField.checked : null
+      enabled: !form.querySelector('[data-field="enabled"]') || form.querySelector('[data-field="enabled"]').checked
     };
   }
   function currentBoardName() {
@@ -1924,7 +1915,7 @@
       // whose shared default was removed) can only be deleted, not reset.
       var localOnly = layerKind === "ADD" || (layerKind === "DETACH" && !layer.base);
       var customized = layerKind === "OVERRIDE" || (layerKind === "DETACH" && layer.base);
-      var label = layerKind === "ADD" ? "ADDED HERE" : layerKind === "OVERRIDE" ? "CUSTOMIZED" : layerKind === "DETACH" ? "PINNED" : layerKind === "DISABLE" ? "DISABLED HERE" : "";
+      var label = layerKind === "ADD" ? "ADDED HERE" : (layerKind === "OVERRIDE" || layerKind === "DETACH") ? "CUSTOMIZED" : layerKind === "DISABLE" ? "DISABLED HERE" : "";
       var actions;
       if (disabled) {
         actions = '<button type="button" data-reenable-category>Re-enable here</button>';
@@ -1939,10 +1930,9 @@
         }
       }
       var restoreNote = !projectScope || disabled ? ""
-        : layerKind === "OVERRIDE" ? '<p class="category-restore-note"><b>Reset to shared default</b> drops this board’s changes and brings back the shared values.</p>'
-        : layerKind === "DETACH" && layer.base ? '<p class="category-restore-note"><b>Pinned.</b> This category ignores the shared default until you reset it.</p>'
+        : customized ? '<p class="category-restore-note"><b>This board’s own copy.</b> It no longer follows the shared default — reset to follow it again.</p>'
         : layerKind === "DETACH" && !layer.base ? '<p class="category-restore-note"><b>Local to this board.</b> Its shared default was removed, so it no longer follows one.</p>' : "";
-      var badgeClass = layerKind === "OVERRIDE" ? " delta" : layerKind === "DETACH" ? " detached" : "";
+      var badgeClass = (layerKind === "OVERRIDE" || layerKind === "DETACH") ? " detached" : "";
       row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + badgeClass + '">' + label + '</span>' : '') + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
         '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
         '<span class="category-usage">' + category.usageCount + ' tickets</span></summary>' +
@@ -2008,17 +1998,12 @@
     form.querySelector('[data-save-category]').addEventListener("click", function () {
       var payload = categoryPayload(form);
       if (!payload.name || (!id && !payload.id)) { toast("A category id and name are required"); return; }
-      var pin = payload.pin;
-      delete payload.pin;
       var project = categoryProject();
       if (project !== "all") payload.project = project;
       var path = id ? "/api/categories/" + encodeURIComponent(id) + (project !== "all" ? "?project=" + encodeURIComponent(project) : "") : "/api/categories";
-      // Saving in board scope writes a customization (OVERRIDE). If "Pin this
-      // copy" is checked, follow up by pinning (DETACH) so it stops tracking the
-      // shared default. Unchecking is handled by the customize write itself.
-      mutate(id ? "PATCH" : "POST", path, payload).then(function () {
-        if (pin && project !== "all" && id) return mutate("POST", "/api/categories/" + encodeURIComponent(id) + "/detach", { project: state.current });
-      }).then(function () { toast(id ? "Category saved" : "Category added"); return loadCategories(); }).then(function () { renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }).catch(function (e) { toast("Category failed: " + e.message); });
+      // Saving in board scope forks the category into that board's own copy
+      // (the server writes a full DETACH), so it stops following the shared default.
+      mutate(id ? "PATCH" : "POST", path, payload).then(function () { toast(id ? "Category saved" : "Category added"); return loadCategories(); }).then(function () { renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }).catch(function (e) { toast("Category failed: " + e.message); });
     });
   }
   function populateCategorySelect() {

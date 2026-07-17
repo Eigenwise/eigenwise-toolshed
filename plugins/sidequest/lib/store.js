@@ -443,11 +443,12 @@ function projectCategoryRows(project) {
 function projectCategoryWarnings(project) {
   const globalIds = new Set(db.listRows(database(), 'categories').map((category) => String(category && category.id || '').trim().toLowerCase()));
   const warnings = [];
+  // A board's customized category (DETACH) intentionally coexists with its
+  // shared default — that's the normal forked state, not a warning. Only a
+  // legacy OVERRIDE whose shared default is gone is worth flagging.
   for (const row of projectCategoryRows(project)) {
     if (row.kind === 'OVERRIDE' && !globalIds.has(row.id)) {
       warnings.push({ kind: 'dangling-override', id: row.id, project });
-    } else if (row.kind === 'DETACH' && globalIds.has(row.id)) {
-      warnings.push({ kind: 'shadows-global', id: row.id });
     }
   }
   return warnings;
@@ -617,7 +618,6 @@ function setProjectCategory(project, id, kind, data) {
     if (global) throw new Error(`Project category ADD "${normalizedId}" collides with a global category.`);
     normalizedData = normalizeFullProjectCategory(normalizedId, normalizedKind, data);
   } else if (normalizedKind === 'DETACH') {
-    if (normalizedId === 'general') throw new Error('Category "general" cannot be detached.');
     normalizedData = normalizeFullProjectCategory(normalizedId, normalizedKind, data);
   } else if (normalizedKind === 'OVERRIDE') {
     if (!global) throw new Error(`Project category OVERRIDE "${normalizedId}" requires a global category.`);
@@ -640,7 +640,6 @@ function detachCategory(project, id) {
   const normalizedProject = String(project || '').trim();
   const normalizedId = normalizeCategoryId(id);
   if (!normalizedProject || !normalizedId) throw new Error('Project and category id are required.');
-  if (normalizedId === 'general') throw new Error('Category "general" cannot be detached.');
   const existing = projectCategoryRows(normalizedProject).find((row) => row.id === normalizedId);
   if (existing && existing.kind === 'DETACH') throw new Error(`Project category "${normalizedId}" is already detached.`);
   const category = getCategory(normalizedId, { project: normalizedProject });

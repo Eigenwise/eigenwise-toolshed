@@ -417,17 +417,12 @@ function cmdCategory(opts, positional) {
         console.log(`${category.id}  disabled here  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})`);
         continue;
       }
-      const state = category.linkState === 'overridden'
-        ? `  customized (${category.changedFields.join(', ')})`
-        : category.linkState === 'detached'
-          ? '  pinned'
-          : '';
+      const state = (category.linkState === 'overridden' || category.linkState === 'detached') ? '  customized' : '';
       console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})${state}`);
       for (const warning of category.warnings) console.log(`  ! ${warning}`);
     }
     for (const warning of layer.warnings) {
       if (warning.kind === 'dangling-override') console.log(`  ! ${warning.id} customization in ${warning.project} has no shared default`);
-      else if (warning.kind === 'shadows-global') console.log(`  ! ${warning.id} is pinned and also exists as a shared default`);
       else console.log(`  ! ${String(warning)}`);
     }
     return;
@@ -487,9 +482,11 @@ function cmdCategory(opts, positional) {
       const existing = store.getCategory(id, { project: slug });
       if (!existing) fail(`category edit: no effective category "${id}" in ${meta.name}`);
       const patch = patchFor(existing);
+      // Editing a board category forks it into a full, independent copy that no
+      // longer follows the shared default (DETACH); a board-only category stays ADD.
+      const kind = row && row.kind === 'ADD' ? 'ADD' : 'DETACH';
       try {
-        if (row && row.kind === 'ADD') store.setProjectCategory(slug, id, 'ADD', Object.assign({}, existing, patch, { id }));
-        else store.setProjectCategory(slug, id, 'OVERRIDE', patch);
+        store.setProjectCategory(slug, id, kind, Object.assign({}, existing, patch, { id }));
       } catch (error) { fail(`category edit: ${error.message}`); }
     } else {
       const existing = store.getCategory(id);

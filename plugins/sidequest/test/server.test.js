@@ -236,10 +236,10 @@ test('category endpoints project scope preserves global taxonomy and reports loc
   const local = await requestJson(started.port, 'POST', '/api/categories', { project: one, id: 'music', name: 'Music', description: 'Local', contract: '', route: { model: 'opus', effort: 'high' }, fallback: null, enabled: true });
   assert.strictEqual(local.status, 201);
   assert.strictEqual(local.body.category.layer.kind, 'ADD');
-  const override = await requestJson(started.port, 'PATCH', `/api/categories/coding?project=${one}`, { route: { model: 'opus', effort: 'high' } });
-  assert.strictEqual(override.status, 200);
-  assert.strictEqual(override.body.category.layer.kind, 'OVERRIDE');
-  assert.deepStrictEqual(override.body.category.layer.data, { route: { model: 'opus', effort: 'high' } });
+  const forked = await requestJson(started.port, 'PATCH', `/api/categories/coding?project=${one}`, { route: { model: 'opus', effort: 'high' } });
+  assert.strictEqual(forked.status, 200);
+  assert.strictEqual(forked.body.category.layer.kind, 'DETACH'); // editing a board category forks it
+  assert.deepStrictEqual(forked.body.category.route, { model: 'opus', effort: 'high' });
   const disabled = await requestJson(started.port, 'PATCH', `/api/categories/coding?project=${one}`, { disable: true });
   assert.strictEqual(disabled.status, 200);
   assert.strictEqual(disabled.body.category.disabled, true);
@@ -255,7 +255,7 @@ test('category endpoints project scope preserves global taxonomy and reports loc
   const detached = await requestJson(started.port, 'POST', '/api/categories/coding/detach', { project: one });
   assert.strictEqual(detached.status, 200);
   assert.strictEqual(detached.body.category.linkState, 'detached');
-  assert.ok(detached.body.warnings.some((warning) => warning.kind === 'shadows-global' && warning.id === 'coding'));
+  assert.deepStrictEqual(detached.body.warnings, []); // a forked copy is not a warning
 
   const relinked = await requestJson(started.port, 'POST', '/api/categories/coding/relink', { project: one });
   assert.strictEqual(relinked.status, 200);

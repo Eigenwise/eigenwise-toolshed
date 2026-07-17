@@ -819,7 +819,7 @@ const TOOLS = [
   },
   {
     name: 'category_edit',
-    description: 'Customize a category for one board (pass project) or edit the shared default for every board (omit project). With project, your changes are saved as this board\'s customization and other boards keep the shared default; enabled false disables the category on this board and enabled true clears that local disable. Without project you are rewriting the shared default that every uncustomized board inherits.',
+    description: 'Customize a category for one board (pass project) or edit the shared default for every board (omit project). With project, editing forks the category into that board\'s own independent copy that no longer follows the shared default; other boards are unaffected. enabled false disables it on that board and enabled true clears that local disable; reset with category_relink to follow the shared default again. Without project you rewrite the shared default that every board without its own copy inherits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -850,9 +850,10 @@ const TOOLS = [
       if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
       if (args.project != null) {
         const prior = localRow();
-        const row = prior && prior.kind === 'ADD'
-          ? store.setProjectCategory(slug, id, 'ADD', Object.assign({}, existing, patch, { id }))
-          : store.setProjectCategory(slug, id, 'OVERRIDE', patch);
+        // Editing a board category forks it into a full, independent copy that no
+        // longer follows the shared default (DETACH); a board-only category stays ADD.
+        const kind = prior && prior.kind === 'ADD' ? 'ADD' : 'DETACH';
+        const row = store.setProjectCategory(slug, id, kind, Object.assign({}, existing, patch, { id }));
         return { ok: true, project: slug, id, localRow: { id: row.id, kind: row.kind } };
       }
       if (args.enabled !== undefined) patch.enabled = args.enabled;
@@ -862,7 +863,7 @@ const TOOLS = [
   },
   {
     name: 'category_detach',
-    description: 'Pin a board\'s category so it stops following the shared default, keeping its current values even if the shared default is later renamed or removed. Advanced fork: normal category_edit already keeps a board\'s own changes, so pin only to freeze against future shared-default edits.',
+    description: 'Fork a board\'s category into an independent copy without other edits, so it stops following the shared default. Usually unnecessary: category_edit already forks a board category on any change; use this only to fork one as-is.',
     inputSchema: {
       type: 'object',
       properties: { project: PROJECT_PROP, id: { type: 'string' } },

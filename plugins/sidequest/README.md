@@ -149,9 +149,8 @@ can name Claude runtimes or Codex models discovered through [codex-gateway](../c
 ```bash
 sidequest category list
 sidequest add -t "Fix the checkout error" --category debugging
-sidequest category edit coding.normal --route-model codex-gpt-5-6-terra --route-effort high   # global, or --project . to customize one board
-sidequest category reset coding.normal --project .                                            # drop this board's customization
-sidequest category pin coding.normal --project .                                              # freeze this board's copy (hard fork)
+sidequest category edit coding.normal --route-model codex-gpt-5-6-terra --route-effort high   # shared default, or --project . to fork it for one board
+sidequest category reset coding.normal --project .                                            # drop this board's copy, follow the shared default again
 sidequest category add release-check --name "Release checks" --description "Focused release verification" \
   --contract "Run the named checks and report failures." \
   --route-model sonnet --route-effort medium \
@@ -164,11 +163,11 @@ tries the category fallback, then the required global fallback, and reports a wa
 was skipped. The CLI, MCP surfaces, and dashboard expose the same category CRUD operations and usage counts.
 
 Categories live in a shared default policy. Pick a board to customize a category just for it: editing a
-category on a board saves your changes as a local customization and leaves every other board on the shared
-default. **Reset** drops that customization and follows the shared default again. **Pin** freezes a board's
-copy so it ignores later shared-default renames or removal — normal customizing already keeps your own
-changes, so pin is only for a hard fork. Deleting a shared default auto-pins the boards that customized it,
-so a board is never stranded without one. `general` cannot be removed or disabled.
+category on a board forks it into that board's own copy. The fork stops following the shared default
+entirely — later edits to the shared default won't reach it — and other boards are untouched. **Reset**
+drops the board's copy so it follows the shared default again. Deleting a shared default leaves any board
+that forked it with its working copy, so a board is never stranded. `general` cannot be removed or disabled,
+but a board can fork it like any other.
 
 Tickets keep their category ID as policy, so changing a category updates the next dispatch without rewriting
 existing tickets. New tickets should use `--category` so the dispatch intent is explicit. Routed work stays in
