@@ -6,7 +6,7 @@ const path = require('path');
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 const CATALOG_SOURCES = [
-  { source: 'codex-gateway', relPath: path.join('codex-gateway', 'catalog.json') },
+  { source: 'codex-gateway', relPath: path.join('codex-gateway', 'catalog.json'), schemas: new Set([2, 3]) },
 ];
 
 function discoveryRoots() {
@@ -25,6 +25,13 @@ function readJsonSafe(file) {
   }
 }
 
+function catalogModels(data, schemas) {
+  if (!data || typeof data !== 'object') return [];
+  const schema = data.schemaVersion ?? data.schema;
+  if (!schemas.has(schema) || !Array.isArray(data.models)) return [];
+  return data.models;
+}
+
 function validateEntry(raw, source) {
   if (!raw || typeof raw !== 'object') return null;
   const slug = typeof raw.slug === 'string' ? raw.slug.trim().toLowerCase() : '';
@@ -39,9 +46,9 @@ function discoverExternalModels() {
   const out = [];
   const seen = new Set();
   for (const root of discoveryRoots()) {
-    for (const { source, relPath } of CATALOG_SOURCES) {
+    for (const { source, relPath, schemas } of CATALOG_SOURCES) {
       const data = readJsonSafe(path.join(root, relPath));
-      const models = data && Array.isArray(data.models) ? data.models : [];
+      const models = catalogModels(data, schemas);
       for (const raw of models) {
         const entry = validateEntry(raw, source);
         const key = entry && `${entry.source}:${entry.slug}`;

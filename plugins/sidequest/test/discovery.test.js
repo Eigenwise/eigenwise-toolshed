@@ -12,11 +12,11 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = empty;
 const discovery = require('../lib/discovery.js');
 const store = require('../lib/store.js');
 
-function writeCatalog(models) {
+function writeCatalog(models, catalog = { schema: 2 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-'));
   const dir = path.join(root, 'codex-gateway');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ schema: 2, models }));
+  fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ ...catalog, models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
 }
 
@@ -38,6 +38,22 @@ test('discovery validates concrete catalog identity and drops routing hints', ()
   assert.deepEqual(discovery.discoverExternalModels(), [{
     slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', source: 'codex-gateway',
   }]);
+});
+
+test('discovery accepts catalog v3 during the v2 migration window', () => {
+  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }], {
+    schemaVersion: 3,
+    source: 'codex-gateway',
+    updatedAt: new Date().toISOString(),
+  });
+  assert.deepEqual(discovery.discoverExternalModels(), [{
+    slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', source: 'codex-gateway',
+  }]);
+});
+
+test('discovery ignores future catalog schemas', () => {
+  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }], { schemaVersion: 4 });
+  assert.deepEqual(discovery.discoverExternalModels(), []);
 });
 
 test('concrete discovered route resolves while an absent route is unavailable', () => {

@@ -297,7 +297,24 @@ test('dispatch route ignores markers echoed through tool_result blocks end-to-en
   assert.equal(forwarded.length, 1);
 });
 
-test('buildCatalog excludes the dispatch model', () => {
+test('buildCatalog publishes the v3 concrete-model contract without routing policy', () => {
   const catalog = gw.buildCatalog(['claude-codex-auto', 'claude-codex-gpt-5.6-terra']);
-  assert.deepEqual(catalog.models.map((model) => model.id), ['claude-codex-gpt-5.6-terra']);
+  assert.equal(catalog.schemaVersion, 3);
+  assert.equal(catalog.source, 'codex-gateway');
+  assert.deepEqual(catalog.models, [{
+    slug: 'codex-gpt-5-6-terra',
+    id: 'claude-codex-gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+  }]);
+});
+
+test('writeCatalogFile refuses to replace a future schema', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-write-guard-'));
+  const file = path.join(dir, 'catalog.json');
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 4, models: [] }));
+  assert.throws(
+    () => gw.writeCatalogFile(file, gw.buildCatalog(['claude-codex-gpt-5.6-terra'])),
+    /refusing to overwrite catalog schema 4.*supports schema 3.*upgrade required/,
+  );
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { schemaVersion: 4, models: [] });
 });

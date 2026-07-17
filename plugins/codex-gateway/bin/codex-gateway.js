@@ -882,27 +882,13 @@ function dispatchRouteFromMessages(messages) {
 
 const CATALOG_PATH = path.join(STATE, 'catalog.json');
 const CATALOG_STALE_MS = 5 * 60 * 1000;
-const TIERS = new Set(['haiku', 'sonnet', 'opus', 'fable']);
+const CATALOG_SCHEMA_VERSION = 3;
 
-// The catalog is what sidequest reads to offer Codex models as ladder-tier
-// backends. It carries the GPT-5.6 family only — the three flagship models a
-// user actually maps onto a tier. The /model picker (fed by the shim's
-// /v1/models) still sees all of DEFAULT_MODELS; this narrowing is catalog-only.
+// The catalog is what Switchboard reads to offer concrete Codex models. It
+// carries the GPT-5.6 family only — the three flagship models a user actually
+// maps onto a route. The /model picker (fed by the shim's /v1/models) still
+// sees all of DEFAULT_MODELS; this narrowing is catalog-only.
 const CATALOG_FAMILY = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
-
-// A suggested tier per catalog model: the dashboard shows it as the dropdown's
-// default hint. It is NOT applied — the user assigns each tier's backend. Terra
-// reads closest to opus, Sol sits above opus toward fable, Luna is haiku-class.
-const SUGGESTED_TIER = {
-  'gpt-5.6-terra': 'opus',
-  'gpt-5.6-sol': 'fable',
-  'gpt-5.6-luna': 'haiku',
-};
-
-function suggestedTierFor(base) {
-  const t = SUGGESTED_TIER[base];
-  return TIERS.has(t) ? t : null;
-}
 
 function baseFromId(id) {
   return id.slice(PREFIX.length).replace(/\[1m\]$/, '');
@@ -952,9 +938,30 @@ function buildCatalog(ids) {
     .filter((id) => CATALOG_FAMILY.has(baseFromId(id)))
     .map((id) => {
       const base = baseFromId(id);
-      return { slug: slugFor(base, used), id, label: labelFor(base), suggestedTier: suggestedTierFor(base) };
+      return { slug: slugFor(base, used), id, label: labelFor(base) };
     });
-  return { schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(), models };
+  return { schemaVersion: CATALOG_SCHEMA_VERSION, source: 'codex-gateway', updatedAt: new Date().toISOString(), models };
+}
+
+function readJsonFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function catalogSchemaVersion(catalog) {
+  if (!catalog || typeof catalog !== 'object') return null;
+  const version = catalog.schemaVersion ?? catalog.schema;
+  return Number.isInteger(version) && version > 0 ? version : null;
+}
+
+function writeCatalogFile(catalogPath, catalog) {
+  const existing = readJsonFile(catalogPath);
+  const storedVersion = catalogSchemaVersion(existing);
+  if (storedVersion != null && storedVersion > CATALOG_SCHEMA_VERSION) {
+    throw new Error(`refusing to overwrite catalog schema ${storedVersion} at ${catalogPath}; this gateway supports schema ${CATALOG_SCHEMA_VERSION}, upgrade required`);
+  }
+  const tempPath = `${catalogPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(catalog, null, 2) + '\n');
+  fs.renameSync(tempPath, catalogPath);
 }
 
 async function fetchShimModelIds() {
@@ -975,12 +982,12 @@ async function writeCatalog() {
   if (!ids.length) return null;
   const catalog = buildCatalog(ids);
   mkdirs();
-  fs.writeFileSync(CATALOG_PATH, JSON.stringify(catalog, null, 2) + '\n');
+  writeCatalogFile(CATALOG_PATH, catalog);
   return catalog;
 }
 
 function readCatalog() {
-  try { return JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8')); } catch { return null; }
+  return readJsonFile(CATALOG_PATH);
 }
 
 async function catalogCommand() {
@@ -1697,7 +1704,9 @@ module.exports = {
   parseSemver,
   semverLt,
   MIN_PROXY_VERSION,
+  CATALOG_SCHEMA_VERSION,
   buildCatalog,
+  writeCatalogFile,
   dispatchModelFromRawBody,
   dispatchRouteFromMessages,
 };
