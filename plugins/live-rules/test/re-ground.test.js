@@ -115,3 +115,38 @@ test('legacy monolithic files migrate into atomic files without changing selecto
   assert.strictEqual(loaded.stale, false);
   assert.deepStrictEqual(rules.selectForPrompt(loaded.rules, { promptText: 'please deploy', cwdRel: '' }).map((entry) => entry.rule.description), ['Always', 'Deploy']);
 });
+
+test('SessionStart migrates legacy rules once without changing grounded content', () => {
+  const dir = project();
+  const state = path.join(dir, 'state');
+  const legacy = path.join(dir, '.claude', 'live-rules.md');
+  fs.writeFileSync(legacy, '---\ndescription: Always\n---\nKeep this exact rule.\n');
+  assert.match(hook(startHook, dir, state, { session_id: 'one', source: 'startup' }), /Keep this exact rule/);
+  assert.strictEqual(fs.readFileSync(legacy, 'utf8'), '---\ndescription: Always\n---\nKeep this exact rule.\n');
+  assert.strictEqual(rules.migrateLegacyRules(dir), false);
+});
+
+test('interrupted temp state, an active lock, and future manifests never replace trusted data', () => {
+  const dir = project();
+  const legacy = path.join(dir, '.claude', 'live-rules.md');
+  fs.writeFileSync(legacy, 'Legacy rule.\n');
+  fs.mkdirSync(path.join(dir, '.claude', 'live-rules.tmp-interrupted'));
+  assert.strictEqual(rules.migrateLegacyRules(dir), true);
+  assert.ok(fs.existsSync(path.join(dir, '.claude', 'live-rules.tmp-interrupted')));
+  const future = path.join(dir, '.claude', 'live-rules', 'manifest.json');
+  fs.writeFileSync(future, JSON.stringify({ version: 99, rules: [] }) + '\n');
+  assert.strictEqual(rules.migrateLegacyRules(dir), false);
+  assert.strictEqual(JSON.parse(fs.readFileSync(future, 'utf8')).version, 99);
+  assert.match(hook(startHook, dir, path.join(dir, 'state'), { session_id: 'future', source: 'startup' }), /newer schema/);
+});
+
+test('stale migration locks recover while fresh locks serialize concurrent starts', () => {
+  const dir = project();
+  fs.writeFileSync(path.join(dir, '.claude', 'live-rules.md'), 'Locked rule.\n');
+  const lock = path.join(dir, '.claude', 'live-rules.migration.lock');
+  fs.writeFileSync(lock, 'active\n');
+  assert.strictEqual(rules.migrateLegacyRules(dir), false);
+  const old = new Date(Date.now() - 61 * 1000);
+  fs.utimesSync(lock, old, old);
+  assert.strictEqual(rules.migrateLegacyRules(dir), true);
+});

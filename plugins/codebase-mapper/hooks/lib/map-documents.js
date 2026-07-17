@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const migrationLock = require('./migration-lock');
 
 const MAP_DIR_PARTS = ['.claude', '.codebase-info'];
 const INDEX_NAME = 'INDEX.md';
@@ -51,6 +52,9 @@ function listDocuments(directory, relative = '') {
 }
 
 function stateStatus(state, documents) {
+  if (state && typeof state.schemaVersion === 'number' && state.schemaVersion > 1) {
+    return { migratable: false, stale: false, future: true };
+  }
   if (!state || !Array.isArray(state.documents)) return { migratable: true, stale: false };
   if (!state.hashes || typeof state.hashes !== 'object' || Array.isArray(state.hashes)) {
     return { migratable: true, stale: false };
@@ -98,4 +102,55 @@ function mapHashes(documents) {
   return Object.fromEntries(documents.map((entry) => [entry.relative, entry.hash]));
 }
 
-module.exports = { INDEX_NAME, MAP_DIR_PARTS, STATE_NAME, hashContent, loadMap, mapDirectory, mapHashes, safeDocumentPath };
+function mapSchema(projectDir) {
+  const state = readJson(path.join(mapDirectory(projectDir), STATE_NAME));
+  if (!state) return 'legacy';
+  if (typeof state.schemaVersion === 'number' && state.schemaVersion > 1) return 'future';
+  return state.hashes && typeof state.hashes === 'object' && !Array.isArray(state.hashes) ? 'current' : 'legacy';
+}
+
+function backupState(statePath) {
+  if (!fs.existsSync(statePath)) return;
+  const backup = statePath + '.legacy.json';
+  if (!fs.existsSync(backup)) fs.copyFileSync(statePath, backup);
+}
+
+function validMigratedState(state, map) {
+  if (!state || state.schemaVersion !== 1 || !Array.isArray(state.documents) || !state.hashes || typeof state.hashes !== 'object') return false;
+  const expected = map.documents.filter((entry) => entry.relative !== INDEX_NAME).map((entry) => entry.relative).sort();
+  if (state.documents.length !== expected.length || state.documents.some((entry, index) => entry !== expected[index])) return false;
+  return map.documents.every((entry) => state.hashes[entry.relative] === entry.hash);
+}
+
+function migrateLegacyMap(projectDir) {
+  if (mapSchema(projectDir) !== 'legacy') return false;
+  const directory = mapDirectory(projectDir);
+  const lockPath = directory + '.migration.lock';
+  try {
+    const result = migrationLock.withMigrationLock(lockPath, () => {
+      if (mapSchema(projectDir) !== 'legacy') return { migrated: false };
+      const map = loadMap(projectDir);
+      if (!map || !map.index) return { migrated: false };
+      const statePath = path.join(directory, STATE_NAME);
+      const legacyState = readJson(statePath);
+      const nextState = {
+        ...(legacyState && typeof legacyState === 'object' && !Array.isArray(legacyState) ? legacyState : {}),
+        schemaVersion: 1,
+        documents: map.documents.filter((entry) => entry.relative !== INDEX_NAME).map((entry) => entry.relative).sort(),
+        hashes: mapHashes(map.documents),
+      };
+      const temp = statePath + '.tmp-' + process.pid + '-' + crypto.randomBytes(6).toString('hex');
+      fs.writeFileSync(temp, JSON.stringify(nextState, null, 2) + '\n');
+      const validated = readJson(temp);
+      if (!validMigratedState(validated, loadMap(projectDir))) throw new Error('Codebase map migration validation failed');
+      backupState(statePath);
+      fs.renameSync(temp, statePath);
+      return { migrated: true };
+    });
+    return Boolean(result.migrated);
+  } catch (_) {
+    return false;
+  }
+}
+
+module.exports = { INDEX_NAME, MAP_DIR_PARTS, STATE_NAME, hashContent, loadMap, mapDirectory, mapHashes, migrateLegacyMap, safeDocumentPath };

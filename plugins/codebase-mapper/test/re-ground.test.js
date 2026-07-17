@@ -107,11 +107,44 @@ test('startup resume compact and clear each restore the compact index once', () 
   }
 });
 
-test('existing maps without hashes remain loadable until their next update', () => {
+test('legacy maps gain a hash manifest on SessionStart without changing documents', () => {
   const directory = project();
   const state = path.join(directory, 'state');
-  fs.writeFileSync(path.join(directory, '.claude', '.codebase-info', '.map-state.json'), JSON.stringify({ documents: ['architecture.md', 'modules.md'] }) + '\n');
+  const statePath = path.join(directory, '.claude', '.codebase-info', '.map-state.json');
+  const before = fs.readFileSync(path.join(directory, '.claude', '.codebase-info', 'architecture.md'), 'utf8');
+  fs.writeFileSync(statePath, JSON.stringify({ documents: ['architecture.md', 'modules.md'] }) + '\n');
   const output = text(hook(startHook, directory, state, { session_id: 'one', source: 'startup' }));
-  assert.match(output, /no hash manifest yet/);
-  assert.strictEqual(hook(promptHook, directory, state, { session_id: 'one' }), '');
+  assert.match(output, /INDEX\.md/);
+  const migrated = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(migrated.schemaVersion, 1);
+  assert.deepStrictEqual(migrated.hashes, documents.mapHashes(documents.loadMap(directory).documents));
+  assert.strictEqual(fs.readFileSync(path.join(directory, '.claude', '.codebase-info', 'architecture.md'), 'utf8'), before);
+  assert.ok(fs.existsSync(statePath + '.legacy.json'));
+});
+
+test('current maps no-op while future state and interrupted temps stay untouched', () => {
+  const directory = project();
+  const statePath = path.join(directory, '.claude', '.codebase-info', '.map-state.json');
+  const current = fs.readFileSync(statePath, 'utf8');
+  assert.strictEqual(documents.migrateLegacyMap(directory), false);
+  assert.strictEqual(fs.readFileSync(statePath, 'utf8'), current);
+  fs.writeFileSync(statePath, JSON.stringify({ schemaVersion: 99, hashes: {} }) + '\n');
+  fs.writeFileSync(statePath + '.tmp-interrupted', 'partial\n');
+  assert.strictEqual(documents.migrateLegacyMap(directory), false);
+  assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).schemaVersion, 99);
+  assert.match(text(hook(startHook, directory, path.join(directory, 'state'), { session_id: 'future', source: 'startup' })), /newer schema/);
+  assert.ok(fs.existsSync(statePath + '.tmp-interrupted'));
+});
+
+test('stale map migration locks recover while fresh locks serialize concurrent starts', () => {
+  const directory = project();
+  const statePath = path.join(directory, '.claude', '.codebase-info', '.map-state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ documents: ['architecture.md', 'modules.md'] }) + '\n');
+  const lock = path.join(directory, '.claude', '.codebase-info.migration.lock');
+  fs.writeFileSync(lock, 'active\n');
+  assert.strictEqual(documents.migrateLegacyMap(directory), false);
+  const old = new Date(Date.now() - 61 * 1000);
+  fs.utimesSync(lock, old, old);
+  assert.strictEqual(documents.migrateLegacyMap(directory), true);
+  assert.strictEqual(documents.migrateLegacyMap(directory), false);
 });

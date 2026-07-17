@@ -31,6 +31,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const migrationLock = require('./migration-lock');
 
 // Stay safely under Claude Code's 10,000-char cap on injected context; the
 // header plus the system-reminder wrapping eat into that budget too.
@@ -519,30 +520,88 @@ function renderRuleFile(data, body) {
   return lines.length ? '---\n' + lines.join('\n') + '\n---\n' + String(body || '').trim() + '\n' : String(body || '').trim() + '\n';
 }
 
+function validateAtomicDirectory(directory, manifest) {
+  if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.rules)) return false;
+  for (const entry of manifest.rules) {
+    if (!entry || !isSafeRulePath(entry.path)) return false;
+    try {
+      if (hashContent(fs.readFileSync(path.join(directory, entry.path), 'utf8')) !== entry.hash) return false;
+    } catch (_) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function writeAtomicRuleSet(projectDir, ruleFiles) {
   const destination = getAtomicRulesDir(projectDir);
   if (fs.existsSync(destination)) throw new Error('Atomic live-rules directory already exists');
   const temp = destination + '.tmp-' + process.pid + '-' + crypto.randomBytes(6).toString('hex');
-  fs.mkdirSync(path.join(temp, 'rules'), { recursive: true });
-  const entries = ruleFiles.map((item, index) => {
-    const relative = 'rules/' + String(index + 1).padStart(3, '0') + '.md';
-    const content = item.content;
-    fs.writeFileSync(path.join(temp, relative), content);
-    return { path: relative, hash: hashContent(content), description: item.rule.description, globs: item.rule.globs, dirs: item.rule.dirs, prompt: item.rule.prompts, enabled: item.rule.enabled };
-  });
-  const manifest = { version: 1, rules: entries };
-  const manifestTemp = path.join(temp, ATOMIC_MANIFEST + '.tmp');
-  fs.writeFileSync(manifestTemp, JSON.stringify(manifest, null, 2) + '\n');
-  fs.renameSync(manifestTemp, path.join(temp, ATOMIC_MANIFEST));
-  fs.renameSync(temp, destination);
-  return manifest;
+  try {
+    fs.mkdirSync(path.join(temp, 'rules'), { recursive: true });
+    const entries = ruleFiles.map((item, index) => {
+      const relative = 'rules/' + String(index + 1).padStart(3, '0') + '.md';
+      const content = item.content;
+      fs.writeFileSync(path.join(temp, relative), content);
+      return { path: relative, hash: hashContent(content), description: item.rule.description, globs: item.rule.globs, dirs: item.rule.dirs, prompt: item.rule.prompts, enabled: item.rule.enabled };
+    });
+    const manifest = { version: 1, rules: entries };
+    if (!validateAtomicDirectory(temp, manifest)) throw new Error('Atomic live-rules validation failed');
+    fs.writeFileSync(path.join(temp, ATOMIC_MANIFEST), JSON.stringify(manifest, null, 2) + '\n');
+    if (!validateAtomicDirectory(temp, JSON.parse(fs.readFileSync(path.join(temp, ATOMIC_MANIFEST), 'utf8')))) throw new Error('Atomic live-rules manifest validation failed');
+    fs.renameSync(temp, destination);
+    return manifest;
+  } catch (error) {
+    try {
+      fs.rmSync(temp, { recursive: true, force: true });
+    } catch (_) {
+      // A later SessionStart ignores this unmarked sibling and retries safely.
+    }
+    throw error;
+  }
+}
+
+function atomicSchema(projectDir) {
+  const destination = getAtomicRulesDir(projectDir);
+  if (!fs.existsSync(destination)) return 'missing';
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(getManifestFile(projectDir), 'utf8'));
+  } catch (_) {
+    return 'untrusted';
+  }
+  if (typeof manifest.version === 'number' && manifest.version > 1) return 'future';
+  if (manifest.version !== 1 || !Array.isArray(manifest.rules)) return 'untrusted';
+  for (const entry of manifest.rules) {
+    if (!entry || !isSafeRulePath(entry.path) || !fs.existsSync(path.join(destination, entry.path))) return 'untrusted';
+  }
+  return 'current';
+}
+
+function archiveUntrustedAtomicDirectory(projectDir) {
+  const destination = getAtomicRulesDir(projectDir);
+  fs.renameSync(destination, destination + '.untrusted-' + process.pid + '-' + crypto.randomBytes(4).toString('hex'));
 }
 
 function migrateLegacyRules(projectDir) {
-  if (loadAtomicRules(projectDir) || !fs.existsSync(getRulesFile(projectDir))) return false;
-  const rules = loadLegacyRules(projectDir);
-  writeAtomicRuleSet(projectDir, rules.map((rule) => ({ rule, content: renderRuleFile({ description: rule.description, globs: rule.globs, dirs: rule.dirs, prompt: rule.prompts, priority: rule.priority, enabled: rule.enabled, include: rule.includes }, rule.body) })));
-  return true;
+  const legacy = getRulesFile(projectDir);
+  if (!fs.existsSync(legacy)) return false;
+  const status = atomicSchema(projectDir);
+  if (status === 'current' || status === 'future') return false;
+  const lockPath = path.join(projectDir, '.claude', 'live-rules.migration.lock');
+  try {
+    const result = migrationLock.withMigrationLock(lockPath, () => {
+      const nextStatus = atomicSchema(projectDir);
+      if (nextStatus === 'current' || nextStatus === 'future') return { migrated: false };
+      if (nextStatus === 'untrusted') archiveUntrustedAtomicDirectory(projectDir);
+      const rules = loadLegacyRules(projectDir);
+      writeAtomicRuleSet(projectDir, rules.map((rule) => ({ rule, content: renderRuleFile({ description: rule.description, globs: rule.globs, dirs: rule.dirs, prompt: rule.prompts, priority: rule.priority, enabled: rule.enabled, include: rule.includes }, rule.body) })));
+      return { migrated: true };
+    });
+    return Boolean(result.migrated);
+  } catch (_) {
+    return false;
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -737,6 +796,7 @@ module.exports = {
   getManifestFile,
   hashContent,
   loadRuleSet,
+  atomicSchema,
   migrateLegacyRules,
   writeAtomicRuleSet,
   resolveIncludePath,

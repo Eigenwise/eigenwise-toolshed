@@ -44,6 +44,11 @@ function main() {
   // README's promise that they survive compaction would silently break.
   const data = lib.readStdin();
   const projectDir = lib.getProjectDir(data);
+  lib.migrateLegacyRules(projectDir);
+  if (lib.atomicSchema(projectDir) === 'future') {
+    lib.emit('SessionStart', 'Live Rules uses a newer schema. Preserve its files and update the plugin before changing its metadata.');
+    process.exit(0);
+  }
 
   const ruleSet = lib.loadRuleSet(projectDir);
   if (!ruleSet.rules.length) process.exit(0);
