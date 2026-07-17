@@ -861,7 +861,7 @@ function cmdSubmit(opts, positional) {
   let res;
   try {
     res = store.submitTicket(slug, idOrRef, by, {
-      commit: opts.commit,
+      commit: range.commit,
       gitRef,
       range,
       verify: opts.verify,
