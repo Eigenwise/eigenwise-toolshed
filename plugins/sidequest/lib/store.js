@@ -2133,11 +2133,9 @@ function deleteStory(slug, idOrRef) {
  * ------------------------------------------------------------------ */
 
 const COMMENT_KINDS = ['comment', 'question'];
-// The hard storage cap for a single comment body. A body over this used to be
-// silently sliced to fit (SQ-173), so the tail of a long note vanished with no
-// signal to the caller. addComment now rejects an over-cap body instead of
-// truncating, so the write is either stored whole or fails loudly.
-const COMMENT_BODY_MAX = 4000;
+// Comments are durable cross-actor handoffs. Storage allows a useful evidence
+// report; agentsync independently bounds what reaches an executor prompt.
+const COMMENT_BODY_MAX = 16000;
 
 function newCommentId() {
   return 'c_' + Date.now().toString(36) + '_' + crypto.randomBytes(3).toString('hex');

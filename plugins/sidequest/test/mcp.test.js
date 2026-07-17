@@ -333,26 +333,21 @@ test('SQ-174: an author-supplied NUL (a NUL-separated key in prose) is stripped,
   assert.strictEqual(stored, 'dedup key: source +  + slug (works)', 'only the NUL is removed; surrounding spaces stay');
 });
 
-test('SQ-173: an over-cap comment is rejected, not silently truncated', () => {
-  const added = callTool('add', { title: 'over cap', complexity: 1, why: 'confirm the MCP comment tool rejects a body past the 4k cap instead of cutting it' });
+test('SQ-404: long handoff comments are stored whole and still have a clear cap', () => {
+  const added = callTool('add', { title: 'long handoff', complexity: 1, why: 'confirm durable evidence can outlast the bounded executor digest' });
   const ref = added.ref;
 
-  // A body one char over the cap must fail loudly, and nothing may be stored.
-  const tooLong = 'x'.repeat(4001);
-  const rejected = callTool('comment', { ref, body: tooLong });
-  assert.strictEqual(rejected.ok, false, 'the write is rejected');
-  assert.strictEqual(rejected.reason, 'too_long');
-  assert.strictEqual(rejected.max, 4000, 'the error names the cap');
-  assert.strictEqual(rejected.length, 4001, 'the error names the actual length');
-  const back = callTool('comments', { ref });
-  assert.strictEqual(back.comments.length, 0, 'no truncated comment leaked into storage');
+  const handoff = 'x'.repeat(5481);
+  const stored = callTool('comment', { ref, body: handoff });
+  assert.strictEqual(stored.ok, true, 'a useful long handoff stores whole');
+  assert.strictEqual(callTool('comments', { ref }).comments[0].body.length, 5481);
 
-  // A body exactly at the cap still stores whole (the boundary is inclusive).
-  const atCap = 'y'.repeat(4000);
-  const ok = callTool('comment', { ref, body: atCap });
-  assert.strictEqual(ok.ok, true, 'a body exactly at the cap stores');
-  const back2 = callTool('comments', { ref });
-  assert.strictEqual(back2.comments[0].body.length, 4000, 'stored whole, not cut');
+  const tooLong = 'x'.repeat(16001);
+  const rejected = callTool('comment', { ref, body: tooLong });
+  assert.strictEqual(rejected.ok, false, 'the storage cap still rejects oversized bodies');
+  assert.strictEqual(rejected.reason, 'too_long');
+  assert.strictEqual(rejected.max, 16000, 'the error names the expanded cap');
+  assert.strictEqual(rejected.length, 16001, 'the error names the actual length');
 });
 
 test('claim requires a worker id (no shared-identity default)', () => {

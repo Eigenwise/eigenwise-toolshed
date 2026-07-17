@@ -589,7 +589,7 @@ const TOOLS = [
   },
   {
     name: 'comment',
-    description: 'Add a note-to-self comment to a ticket (a progress note, decision, or spike finding). Does NOT pause — use ask for a question that needs the human.',
+    description: 'Add a durable cross-actor handoff: decisions, non-obvious constraints, recurring ruled-out approaches, integration risks, verification evidence, or concise findings. Do not post routine progress narration or self-logs. Does NOT pause — use ask for a question that needs the human.',
     inputSchema: {
       type: 'object',
       properties: { ref: { type: 'string' }, project: PROJECT_PROP, body: { type: 'string' }, by: { type: 'string' } },

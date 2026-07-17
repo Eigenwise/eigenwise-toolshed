@@ -33,30 +33,34 @@ board (submissions stay parked — fail closed).
    own interrupted transaction.
 2. **Read the queue**: `sidequest publish queue --json` — each entry carries the ref, submitted
    commit, durable git ref, declared files, and the verify command the executor ran.
-3. **Create a clean integration worktree** from the current remote main, never from any working
+3. **Read each submitted handoff**: before integrating or closing a ticket, run
+   `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
+   full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
+   ticket, or leave the submission parked. Do not cherry-pick until the thread is understood.
+4. **Create a clean integration worktree** from the current remote main, never from any working
    tree: `git fetch origin` then `git worktree add <scratch>/sq-integrate origin/main --detach`.
    Never integrate in the shared session tree — pre-staged or dirty files there are exactly the
    contamination this flow exists to prevent.
-4. **Integrate each submission**, oldest first: `git cherry-pick <commit>` (the durable ref keeps
+5. **Integrate each submission**, oldest first: `git cherry-pick <commit>` (the durable ref keeps
    the commit reachable even after the executor worktree is cleaned). A conflict → abort the
    cherry-pick, skip the ticket, and file a narrowly scoped integration ticket (below); keep
    integrating the rest.
-5. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
+6. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
    free version ONCE for the batch and bump BOTH `plugins/<name>/.claude-plugin/plugin.json` and the
    root `.claude-plugin/marketplace.json` (they must match) in one commit. Executors no longer bump
    anything, so versioning has exactly one writer: this step.
-6. **Reverify per ticket, post-integration**: run each integrated ticket's exact verify command
+7. **Reverify per ticket, post-integration**: run each integrated ticket's exact verify command
    (from the queue entry / ticket `--verify`) inside the integration worktree. A red here means the
    commit does not survive integration: drop that ticket's commit (rebuild the worktree or
    `git revert` it), file the integration ticket, continue with the green rest.
-7. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
+8. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
    (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
    plugins) so per-ticket-green but jointly-red seams are caught before the push.
-8. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
-   branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 6-7, push again. Then
+9. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
+   branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 7-8, push again. Then
    confirm every integrated commit is reachable:
    `git merge-base --is-ancestor <integrated-tip> origin/main` (after a fresh fetch).
-9. **Mark done + clean up**, only after reachability holds: for each shipped ticket
+10. **Mark done + clean up**, only after reachability holds: for each shipped ticket
    `sidequest done <ref> --by <session-worker-id> --model <its stamped model> --effort <its effort>`
    with a closing comment naming the pushed commit (done consumes the submission — the ticket
    leaves the integration queue). Then delete its durable ref (`git update-ref -d

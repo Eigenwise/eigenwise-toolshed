@@ -306,8 +306,13 @@ invoke the current conversation's Agent tool.
 
 ## Comments & questions
 
-Every ticket has a comment thread. Claude leaves a **comment** as a note-to-self, or a **question**
-when it needs your input — and a question is the signal to *pause and wait for your reply*, not guess.
+Every ticket has a durable cross-actor handoff thread. A **comment** carries decisions, non-obvious constraints,
+recurring ruled-out approaches, integration risks, verification evidence, or concise findings. Skip routine
+progress narration, self-logs, and full green logs. A **question** requests your input and is the signal to
+*pause and wait for your reply*, not guess.
+
+Stored comments can hold longer evidence from `--body-file`; executor dispatch only carries a bounded recent
+excerpt, so read `sidequest comments SQ-3` before acting on a handoff.
 
 ```bash
 sidequest comment SQ-3 -m "Reusing the SQ-1 examples here."          # a note

@@ -35,6 +35,20 @@ function configure(store, id, route, fallback) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
+test('SQ-404: dispatch comments stay bounded while preserving a handoff cue', () => {
+  const digest = agentsync.ticketCommentsDigest([
+    { by: 'investigator', body: `Decision: use the durable thread. ${'x'.repeat(5481)}` },
+    { by: 'reviewer', kind: 'question', body: 'Integration risk: confirm the handoff before cherry-picking.' },
+    { by: 'worker', body: 'Verification: node --test plugins/sidequest/test/*.test.js passed.' },
+    { by: 'worker', body: 'Changed paths: plugins/sidequest/lib/agentsync.js.' },
+    { by: 'older-worker', body: 'Older context.' },
+  ]);
+  assert.ok(digest.length <= agentsync.COMMENT_DIGEST_MAX_CHARS, 'the executor prompt cannot absorb the full thread');
+  assert.match(digest, /read the full thread/i);
+  assert.match(digest, /Integration risk/);
+  assert.doesNotMatch(digest, /x{1000}/);
+});
+
 test('generation-two marker cannot be mistaken for the legacy marker', () => {
   assert.ok(!agentsync.MARKER.includes(agentsync.LEGACY_MARKER));
 });
@@ -131,7 +145,9 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /Never read large files whole/);
   assert.match(body, /Declared-file tickets run in an isolated worktree by default/);
   assert.match(body, /session scratchpad path handed in your prompt/);
-  assert.match(body, /full output tail/);
+  assert.match(body, /relevant tail or failure excerpt/);
+  assert.match(body, /cross-actor handoffs, not a work diary/);
+  assert.match(body, /Do not post routine progress narration or self-logs/);
   assert.match(body, /Commit and submit — never publish/);
   assert.match(body, /sidequest submit <ref>/);
   assert.match(body, /NEVER push, and NEVER bump plugin or marketplace versions/);
@@ -215,7 +231,9 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.match(body, /Never read large files whole/);
   assert.match(body, /Declared-file tickets run in an isolated worktree by default/);
   assert.match(body, /session scratchpad path handed in your prompt/);
-  assert.match(body, /full output tail/);
+  assert.match(body, /relevant tail or failure excerpt/);
+  assert.match(body, /cross-actor handoffs, not a work diary/);
+  assert.match(body, /Do not post routine progress narration or self-logs/);
   assert.match(body, /Commit and submit — never publish/);
   assert.match(body, /sidequest submit <ref>/);
   assert.match(body, /NEVER push, and NEVER bump plugin or marketplace versions/);

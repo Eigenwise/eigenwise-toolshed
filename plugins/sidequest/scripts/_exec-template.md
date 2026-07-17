@@ -55,9 +55,15 @@ Protocol, per ticket, in order:
    commit useful increments as you finish them so a hard stop cannot strand the work. Bounce back early
    (release + findings) when the work is clearly bigger than the briefing. Do not grind toward the cap;
    keep additions tight enough for the briefing byte budgets.
+
+   **Comments are cross-actor handoffs, not a work diary.** Leave only decisions, non-obvious constraints,
+   ruled-out approaches likely to recur, integration risks, exact verification command/result, and concise
+   findings. Do not post routine progress narration or self-logs.
 4. **Verify** the ticket's exact named check/test/reproduction before declaring success. In the closing
-   comment, echo that exact command and its full output tail; do not substitute a file list or a narrower command.
-   For bodies with backticks, quotes, or parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment`, `sidequest submit`, or `sidequest done`.
+   comment, give the exact command, exit/result counts, the relevant tail or failure excerpt, changed paths,
+   and integration risks. Do not dump an entire green test log. For bodies with backticks, quotes, or
+   parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment`,
+   `sidequest submit`, or `sidequest done`.
 5. **Commit and submit — never publish**: When the ticket declares repository files, commit only those scoped
    files locally with `sidequest commit <ref> --by <same-worker-id> --message "<message>"`. It uses
    `git commit --only -- <scoped paths>`, leaving foreign staged and unstaged work untouched, and submit
@@ -66,8 +72,8 @@ Protocol, per ticket, in order:
    centrally at integration. Pin the commit to a durable ref
    (`git update-ref refs/sidequest/<ref> <hash>`), then park it ready-for-integration:
    `sidequest submit <ref> --by <same-worker-id> --commit <hash> --verify "<exact verify command>"
-   --project <project>` with an evidence comment (`--body-file`) carrying the verify output tail and changed
-   paths. Submitting releases your claim and ends the ticket for you: the orchestrator integrates, reverifies,
+   --project <project>` with a concise evidence comment (`--body-file`): exact command, exit/result counts,
+   relevant tail or failure excerpt, changed paths, and integration risks. Submitting releases your claim and ends the ticket for you: the orchestrator integrates, reverifies,
    pushes, and marks done. Do not call `sidequest done` on a ticket that changed repository files.
 6. **Record findings as a comment** for investigations or substantive changes: evidence (`file:line`), what
    you ruled out, fix, and verification. Markdown uses real newlines, never literal `\n`.
@@ -83,8 +89,8 @@ context to a stronger reviewer model (a genuine escalation even when your orches
 advisor). It's an escape hatch, not a routine step. No advisor? Leave a findings comment and
 `release --status todo` so a stronger route can pick it up.
 
-Report mandatory data per ticket: claim result, changes, the exact verify command plus its full output tail,
-artifacts or the submitted commit hash, submit/close confirmation, and every deliberately skipped or partial assigned item. **Report UP
+Report mandatory data per ticket: claim result, changes, the exact verify command with concise result counts and
+relevant output excerpt, artifacts or the submitted commit hash, submit/close confirmation, and every deliberately skipped or partial assigned item. **Report UP
 only**: leave the final report before going idle, in your final message and own-ticket comments. Never SendMessage,
 guess agent names, or contact peers.{{EXTRA_NOTE}}
 {{TICKET_BRIEF}}

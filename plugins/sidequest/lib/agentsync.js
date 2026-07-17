@@ -228,13 +228,26 @@ function waitForNativeAgentReload(waitMs) {
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+const COMMENT_DIGEST_MAX_CHARS = 2400;
+const COMMENT_DIGEST_MAX_COMMENTS = 4;
+const COMMENT_DIGEST_BODY_MAX_CHARS = 500;
+
+function clippedText(value, max, suffix) {
+  const text = String(value || '');
+  return text.length <= max ? text : `${text.slice(0, max - suffix.length)}${suffix}`;
+}
+
 function ticketCommentsDigest(comments) {
   if (!Array.isArray(comments) || !comments.length) return '(No ticket comments were recorded.)';
-  return comments.map((comment) => {
-    const by = comment && comment.by ? ` by ${comment.by}` : '';
-    const body = comment && comment.body ? comment.body : String(comment || '');
-    return `- Comment${by}: ${body}`;
-  }).join('\n');
+  const selected = comments.slice(-COMMENT_DIGEST_MAX_COMMENTS).reverse();
+  const entries = selected.map((comment) => {
+    const kind = comment && comment.kind === 'question' ? 'Question' : 'Comment';
+    const by = clippedText(comment && comment.by ? comment.by : 'unknown', 80, '…');
+    const body = clippedText(comment && comment.body ? comment.body : String(comment || ''), COMMENT_DIGEST_BODY_MAX_CHARS, '… [read the full thread]');
+    return `- ${kind} by ${by}: ${body}`;
+  });
+  if (comments.length > selected.length) entries.push(`- ${comments.length - selected.length} earlier comment(s) omitted; read the full thread.`);
+  return clippedText(entries.join('\n'), COMMENT_DIGEST_MAX_CHARS, '\n[Digest truncated; read the full thread.]');
 }
 
 function ticketBrief(ticket, nonce, marker) {
@@ -247,7 +260,7 @@ function ticketBrief(ticket, nonce, marker) {
     `Description:\n${ticket.description || '(No additional description was recorded.)'}`,
     `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
-    `Comments digest:\n${ticketCommentsDigest(ticket.comments)}`,
+    `Comments digest (bounded handoff context; read the full thread before acting on unresolved risks or questions):\n${ticketCommentsDigest(ticket.comments)}`,
     `Category executor instructions:\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
     'Dispatch claim guard:',
     `Claim this ticket with \`--token ${nonce}\`. A token refusal means this agent was spawned before its definition registered or is not the prepared dispatch. Stop and report that refusal.`,
@@ -524,6 +537,8 @@ module.exports = {
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
   execMaxTurns,
+  ticketCommentsDigest,
+  COMMENT_DIGEST_MAX_CHARS,
   routeMarker,
   renderDispatchAgent,
   renderExecAgent,

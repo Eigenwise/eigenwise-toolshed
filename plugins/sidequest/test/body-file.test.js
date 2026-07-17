@@ -31,6 +31,16 @@ test('comment reads markdown unchanged from --body-file', () => {
   assert.strictEqual(stored.body, body);
 });
 
+test('comment body-file stores a 5,481-character handoff whole', () => {
+  const ref = ticket('long comment body-file fixture');
+  const body = `Decision: keep the full evidence on the ticket.\n\n${'x'.repeat(5432)}`;
+  assert.strictEqual(body.length, 5481);
+  cliJson(['comment', ref, '--body-file', bodyFile('long-comment.md', body), '--json']);
+
+  const stored = cliJson(['comments', ref, '--json']).comments.at(-1);
+  assert.strictEqual(stored.body, body);
+});
+
 test('done reads --body-file into its closing comment before completing', () => {
   const ref = ticket('done body-file fixture');
   cliJson(['claim', ref, '--by', 'body-file-worker', '--json']);

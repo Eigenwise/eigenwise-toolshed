@@ -202,10 +202,12 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at a verified local commit and
 `submit` it (durable ref `refs/sidequest/<SQ-n>`, claim released, ticket parked in `doing` awaiting
-integration — `pulse`/`list --brief` show the `submission`, and `ready` excludes it). The orchestrator
-then runs the serialized publish transaction — publish lock, clean integration worktree, central
-version assignment, per-ticket reverify, batch seam check, push, reachability check, `done` — from
-[references/publishing.md](references/publishing.md). Never mark a submitted ticket done without
+integration — `pulse`/`list --brief` show the `submission`, and `ready` excludes it). The orchestrator then runs the serialized publish transaction — publish lock, clean integration worktree,
+full submitted-ticket comment-thread read, central version assignment, per-ticket reverify, batch seam check, push,
+reachability check, `done` — from
+[references/publishing.md](references/publishing.md). Before integrating or closing a submitted ticket, read
+`sidequest comments <ref> --json`; resolve or explicitly act on any unresolved risk or question. The queue entry
+and its verify field are not substitutes for that handoff. Never mark a submitted ticket done without
 integrating it, and never re-dispatch one (its claim is refused as `submitted`; clear the submission
 first if the work must genuinely be redone).
 
@@ -235,13 +237,11 @@ tokens), never transcripts. Once a ticket is cut with a self-contained spec, its
 within-ticket work end to end — don't pull ticket-internal digging back up here.
 
 **The shape is a LOOP, not a hand-off.** Orchestrator spawns a wave → executors return terse reports
-*quickly* and submit verified commits → orchestrator re-runs each ticket's exact assigned verify
-command, publishes the wave's submissions in one transaction
-([references/publishing.md](references/publishing.md)), re-plans, spawns the next wave. Do not accept an executor's file list as proof of coverage. Done comments
-echo the exact command and full output tail so a narrowed verify is visible at a glance. Many short
-round-trips beat one long autonomous run. **Verify by artifact, not by claim** — an executor report cites the
-actual verification output (the test line, the diff), and you spot-check it; cap how much you fan out
-in parallel at what you can actually verify. The failure mode to prevent is the executor
+*quickly* and submit verified commits → orchestrator reads each submitted thread, re-runs the assigned verify,
+publishes the wave in one transaction ([references/publishing.md](references/publishing.md)), re-plans, and
+spawns the next wave. Do not accept an executor's file list as proof of coverage. Submission comments carry
+concise verification evidence: exact command, exit/result counts, and a relevant tail or failure excerpt. You
+spot-check it; cap how much you fan out in parallel at what you can actually verify. The failure mode to prevent is the executor
 mini-session: a worker that runs for ten minutes re-discovering context, broadening scope, and
 re-verifying the world. You prevent it from the spawn side:
 
@@ -352,14 +352,17 @@ and fallback chain, documented in [references/routing-details.md](references/rou
 ## Comments & questions
 
 ```bash
-sidequest comment SQ-3 -m "Reused the SQ-1 fixtures here."   # note-to-self: keep working, no pause
-sidequest ask     SQ-3 -m "Cover the v2 API too?"            # addressed to the USER: needs a reply
-sidequest comments SQ-3                                       # read the thread
+sidequest comment SQ-3 -m "Decision: reuse the SQ-1 fixtures; no API change."  # durable handoff, keep working
+sidequest ask     SQ-3 -m "Cover the v2 API too?"                               # addressed to the USER: needs a reply
+sidequest comments SQ-3                                                           # read the thread
 ```
 
-- **Write findings back as a comment after any investigation or substantive change** — root cause
-  with evidence (`file:line`), what you ruled out, the fix, how you verified. The orchestrator report
-  dies with its context; the comment is the durable record.
+- **Comments are cross-actor handoffs, not diary entries.** Keep decisions, non-obvious constraints,
+  ruled-out approaches likely to recur, integration risks, exact verification command/result, and concise
+  findings. Skip routine progress narration, self-logs, and whole green test output.
+- **Write findings back after an investigation or substantive change** — root cause with evidence (`file:line`),
+  what you ruled out, the fix, and how you verified. The orchestrator report dies with its context; the
+  comment is the durable record.
 - **An `ask` posts the question but does not itself pause** — follow it with `sidequest await SQ-3`
   (blocks up to 120s; `--timeout 900 --poll 10` for longer). `await` exits 0 with the reply text, 1 on
   timeout. **Never continue past your own unanswered question** — on timeout, `await` again or tell

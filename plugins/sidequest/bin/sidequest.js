@@ -1964,7 +1964,7 @@ Reminders (fires into the notification queue/bell inbox when the dashboard serve
   sidequest unremind <id|SQ-n>                      cancel a pending reminder
 
 Comments:
-  sidequest comment <id|SQ-n> (-m "body" | --body-file path) [--by who] [--kind comment|question]   a note-to-self; keep going
+  sidequest comment <id|SQ-n> (-m "body" | --body-file path) [--by who] [--kind comment|question]   durable cross-actor handoff; keep going
   sidequest ask <id|SQ-n> -m "question?" [--by who]   post a question — then AWAIT it, don't just continue
   sidequest comments <id|SQ-n> [--json]            list a ticket's comment thread
   sidequest await <id|SQ-n> [--timeout secs=120] [--poll secs=5]   block until the human replies (or times out)
