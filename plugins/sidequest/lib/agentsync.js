@@ -303,9 +303,17 @@ function ticketIsolation(ticket, sharedTree) {
   return !sharedTree && Array.isArray(ticket && ticket.files) && ticket.files.length ? 'worktree' : null;
 }
 
-function agentSpawn(name, isolation, model, agentType) {
+function withProjectIdentity(prompt, projectPath) {
+  const text = String(prompt || '').trim();
+  if (!text) throw new Error('Agent spawn prompt is required.');
+  const project = String(projectPath || '').trim();
+  if (!project) return text;
+  return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
+}
+
+function agentSpawn(name, isolation, model, agentType, prompt) {
   return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions' },
-    isolation ? { isolation } : {}, model ? { model } : {});
+    isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
 }
 
 function createTicketExecutor(ticket, opts) {
@@ -346,7 +354,7 @@ function createTicketExecutor(ticket, opts) {
   return {
     name,
     file,
-    spawn: agentSpawn(name, opts.isolation),
+    spawn: agentSpawn(name, opts.isolation, resolved.model, undefined, opts.prompt),
     cleanup: { name, sessionId: opts.sessionId || null },
   };
 }
@@ -364,7 +372,7 @@ function createNativeAgent(spec, opts) {
       name,
       file: null,
       fallback: true,
-      spawn: agentSpawn(name, spec.isolation, model, String(spec.agentType)),
+      spawn: agentSpawn(name, spec.isolation, model, String(spec.agentType), spec.prompt),
       cleanup: { name, sessionId: spec.sessionId || null },
     };
   }
@@ -402,7 +410,7 @@ function createNativeAgent(spec, opts) {
   return {
     name,
     file,
-    spawn: agentSpawn(name, spec.isolation),
+    spawn: agentSpawn(name, spec.isolation, spec.spawnModel, undefined, spec.prompt),
     cleanup: { name, sessionId: spec.sessionId || null },
   };
 }
@@ -526,6 +534,8 @@ module.exports = {
   cleanupNativeAgents,
   nativeAgentName,
   nativeAgentSource,
+  withProjectIdentity,
+  agentSpawn,
   ticketIsolation,
   syncExecAgents,
   defaultAgentsDir,

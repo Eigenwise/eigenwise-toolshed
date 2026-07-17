@@ -30,6 +30,7 @@ const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-nocatalog-'
 process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
 const mcp = require('../lib/mcp.js');
+const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 
 // Write a fake codex-gateway catalog (mirrors test/discovery.test.js) so a
@@ -166,6 +167,23 @@ test('dispatch is instant by default (stable executor + briefing + token); ephem
   assert.equal(store.getTicket(slug, addedEphemeral.ref).dispatchExecutor, ephemeral.agent);
 });
 
+test('dispatch returns a complete Claude worktree spawn spec', () => {
+  store.setCategory({ id: 'dispatch-fable', name: 'Dispatch Fable', route: { model: 'fable', effort: 'xhigh' } });
+  const added = callTool('add', { title: 'complete instant spawn', category: 'dispatch-fable', files: ['plugins/sidequest'] });
+  const dispatched = callTool('dispatch', { ref: added.ref });
+
+  assert.deepStrictEqual(dispatched.spawn, {
+    subagent_type: 'sidequest-exec-xhigh',
+    name: 'sidequest-exec-xhigh',
+    mode: 'bypassPermissions',
+    isolation: 'worktree',
+    model: 'fable',
+    prompt: agentsync.withProjectIdentity(dispatched.briefing, PROJ),
+  });
+  assert.equal(dispatched.effort, 'xhigh');
+  assert.equal(dispatched.projectPath, PROJ);
+});
+
 test('native_agent carries ticket anchors and verify command through its stable fallback', () => {
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
   try {
@@ -185,6 +203,24 @@ test('native_agent carries ticket anchors and verify command through its stable 
   } finally {
     clearCatalog();
   }
+});
+
+test('native_agent returns a complete Claude worktree spawn spec', () => {
+  store.setCategory({ id: 'native-fable', name: 'Native Fable', route: { model: 'fable', effort: 'xhigh' } });
+  const added = callTool('add', { title: 'complete native spawn', category: 'native-fable', files: ['plugins/sidequest'] });
+  const native = callHandler('native_agent', { ref: added.ref, prompt: 'Implement the ticket.' });
+
+  assert.deepStrictEqual(native.spawn, {
+    subagent_type: 'sidequest-exec-xhigh',
+    name: 'sidequest-native-' + added.ref.toLowerCase() + '-fable',
+    mode: 'bypassPermissions',
+    isolation: 'worktree',
+    model: 'fable',
+    prompt: native.prompt,
+  });
+  assert.equal(native.effort, 'xhigh');
+  assert.equal(native.projectPath, PROJ);
+  assert.match(native.spawn.prompt, new RegExp(`--project "${PROJ.replace(/\\/g, '\\\\')}"`));
 });
 
 test('native_agent isolates declared-file tickets unless shared-tree is requested', () => {

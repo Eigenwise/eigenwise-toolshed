@@ -700,30 +700,37 @@ const TOOLS = [
       const ephemeral = !!args.ephemeral;
       const prepared = store.prepareDispatch(slug, args.ref, { ephemeral });
       const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
+      const briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
+      const prompt = agentsync.withProjectIdentity(briefing, meta.path);
+      const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
       if (ephemeral) {
-        const created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId: sessionOf(args), isolation });
+        const created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId: sessionOf(args), isolation, prompt });
         return {
           project: slug,
+          projectPath: meta.path,
           ref: prepared.ticket.ref,
+          effort: prepared.ticket.effort,
           mode: 'ephemeral',
           agent: created.name,
           tokenPrefix: prepared.token.slice(0, 12),
           token: prepared.token,
           spawn: created.spawn,
-          guidance: `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then spawn ${created.name} and claim ${prepared.ticket.ref} with executor ${created.name} and the returned token.`,
+          guidance: `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${created.name} and the returned token.`,
         };
       }
       const agent = prepared.ticket.dispatchExecutor;
       return {
         project: slug,
+        projectPath: meta.path,
         ref: prepared.ticket.ref,
+        effort: prepared.ticket.effort,
         mode: 'instant',
         agent,
         tokenPrefix: prepared.token.slice(0, 12),
         token: prepared.token,
-        spawn: Object.assign({ subagent_type: agent, name: agent, mode: 'bypassPermissions' }, isolation ? { isolation } : {}),
-        briefing: agentsync.renderTicketBriefing(prepared.ticket, prepared.token),
-        guidance: `Instant: spawn ${agent} (already registered) with the returned briefing as its prompt; it claims ${prepared.ticket.ref} with executor ${agent} and the token. No registration wait.`,
+        spawn: agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt),
+        briefing,
+        guidance: `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token. No registration wait.`,
       };
     },
   },
@@ -747,6 +754,7 @@ const TOOLS = [
       if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
       if (!ticket.model || !ticket.effort) throw new Error(`native_agent: ${ticket.ref} has no routable model and effort.`);
       const resolved = store.resolveExec(ticket.model, ticket.effort);
+      const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, args.prompt), meta.path);
       const created = agentsync.createNativeAgent({
         ref: ticket.ref,
         agentType: resolved.agent || `sidequest-exec-${ticket.effort || 'low'}`,
@@ -755,11 +763,14 @@ const TOOLS = [
         runtime: resolved.runsModel,
         isolation: agentsync.ticketIsolation(ticket, !!args.sharedTree),
         sessionId: sessionOf(args),
+        prompt,
       });
       return Object.assign({
         project: slug,
+        projectPath: meta.path,
         ref: ticket.ref,
-        prompt: work.executorPrompt(ticket, args.prompt),
+        effort: ticket.effort,
+        prompt,
       }, created);
     },
   },

@@ -1333,7 +1333,7 @@ function cmdUnarchive(opts, positional) {
 function cmdDispatch(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('dispatch: pass a ticket ref, e.g. sidequest dispatch SQ-12.');
-  const { slug } = resolveProject(opts);
+  const { slug, meta } = resolveProject(opts);
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   const ephemeral = !!opts.ephemeral;
   let prepared;
@@ -1343,42 +1343,49 @@ function cmdDispatch(opts, positional) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
   const isolation = agentsync.ticketIsolation(prepared.ticket, !!opts['shared-tree']);
-  if (ephemeral) {
-    let created;
-    try {
-      created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId, isolation });
-    } catch (err) {
-      fail(`dispatch: ${(err && err.message) || err}`);
-    }
-    process.stdout.write(JSON.stringify({
-      project: slug,
-      ref: prepared.ticket.ref,
-      mode: 'ephemeral',
-      agent: created.name,
-      tokenPrefix: prepared.token.slice(0, 12),
-      token: prepared.token,
-      spawn: created.spawn,
-      guidance: `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then spawn ${created.name} and claim ${prepared.ticket.ref} with --executor ${created.name} --token ${prepared.token}.`,
-    }, null, 2) + '\n');
-    return;
-  }
   let briefing;
   try {
     briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
   } catch (err) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
+  const prompt = agentsync.withProjectIdentity(briefing, meta.path);
+  const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
+  if (ephemeral) {
+    let created;
+    try {
+      created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId, isolation, prompt });
+    } catch (err) {
+      fail(`dispatch: ${(err && err.message) || err}`);
+    }
+    process.stdout.write(JSON.stringify({
+      project: slug,
+      projectPath: meta.path,
+      ref: prepared.ticket.ref,
+      effort: prepared.ticket.effort,
+      mode: 'ephemeral',
+      agent: created.name,
+      tokenPrefix: prepared.token.slice(0, 12),
+      token: prepared.token,
+      spawn: created.spawn,
+      guidance: `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${created.name} --token ${prepared.token}.`,
+    }, null, 2) + '\n');
+    return;
+  }
   const agent = prepared.ticket.dispatchExecutor;
+  const spawn = agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt);
   process.stdout.write(JSON.stringify({
     project: slug,
+    projectPath: meta.path,
     ref: prepared.ticket.ref,
+    effort: prepared.ticket.effort,
     mode: 'instant',
     agent,
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
-    spawn: Object.assign({ subagent_type: agent, name: agent, mode: 'bypassPermissions' }, isolation ? { isolation } : {}),
+    spawn,
     briefing,
-    guidance: `Instant: spawn ${agent} (already registered) with the briefing as its prompt; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}. No registration wait.`,
+    guidance: `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}. No registration wait.`,
   }, null, 2) + '\n');
 }
 
@@ -1394,12 +1401,13 @@ function cmdNativeAgent(opts, positional) {
 
   const idOrRef = positional[0];
   if (!idOrRef) fail('native-agent: pass a ticket ref, e.g. sidequest native-agent SQ-12 --json.');
-  const { slug } = resolveProject(opts);
+  const { slug, meta } = resolveProject(opts);
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`native-agent: no ticket "${idOrRef}".`);
   if (!ticket.model || !ticket.effort) fail(`native-agent: ${ticket.ref} has no routable model and effort.`);
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
+  const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`), meta.path);
   const created = agentsync.createNativeAgent({
     ref: ticket.ref,
     agentType: resolved.agent || `sidequest-exec-${ticket.effort || 'low'}`,
@@ -1408,8 +1416,9 @@ function cmdNativeAgent(opts, positional) {
     runtime: resolved.runsModel,
     isolation: agentsync.ticketIsolation(ticket, !!opts['shared-tree']),
     sessionId,
+    prompt,
   });
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, ref: ticket.ref, prompt: work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`) }, created), null, 2) + '\n');
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectPath: meta.path, ref: ticket.ref, effort: ticket.effort, prompt }, created), null, 2) + '\n');
 }
 
 // `sidequest models sync-agents` — regenerate the runtime

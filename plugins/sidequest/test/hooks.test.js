@@ -157,6 +157,22 @@ function fixtureTicket(title, model, effort) {
   return store.createTicket(slug, { title, category, source: 'cli' });
 }
 
+test('pre-tool hook keeps a complete Claude worktree spawn valid outside its board cwd', () => {
+  const ticket = fixtureTicket('SQ-399 worktree spawn regression', 'fable', 'xhigh');
+  const unregisteredWorktree = path.join(os.tmpdir(), 'sq-unregistered-worktree');
+  const original = {
+    subagent_type: 'sidequest-exec-xhigh',
+    name: 'sq399-worktree',
+    mode: 'bypassPermissions',
+    isolation: 'worktree',
+    model: 'fable',
+    prompt: `Implement ${ticket.ref}. --project "${path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board')}"`,
+  };
+  const out = runHookOutput(FORCE_BYPASS, { tool_name: 'Agent', cwd: unregisteredWorktree, tool_input: original });
+
+  assert.deepStrictEqual(out.hookSpecificOutput.updatedInput, original);
+  assert.equal(out.hookSpecificOutput.permissionDecision, undefined);
+});
 test('pre-tool hook: builtin exec without a model injects the resolved Claude model from a prompt ref', () => {
   const t = fixtureTicket('SQ-232 inject fixture', 'sonnet', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
