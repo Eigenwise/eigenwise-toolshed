@@ -8,23 +8,26 @@ const test = require('node:test');
 
 const {
   gatewayCommand,
-  installedToolshedPlugins,
+  installedPlugins,
+  marketplacesFor,
   parseArgs,
   runUpdate,
   updateCommand,
 } = require('../bin/update-toolshed.js');
 
 const registry = {
+  version: 1,
   plugins: {
     'sidequest@eigenwise-toolshed': [
-      { scope: 'user', version: '1.0.0' },
-      { scope: 'project', projectPath: 'C:/work/project', version: '1.0.0' },
-      { scope: 'local', projectPath: 'C:/work/local', version: '1.0.0' },
+      { scope: 'user', version: '1.0.0', gitCommitSha: 'user-sha' },
+      { scope: 'project', projectPath: 'C:/work/project', version: '1.0.0', installPath: 'C:/cache/sidequest', gitCommitSha: 'project-sha' },
+      { scope: 'local', projectPath: 'C:/work/local', version: '1.0.0', installPath: 'C:/cache/sidequest', gitCommitSha: 'local-sha' },
     ],
     'codex-gateway@eigenwise-toolshed': [
-      { scope: 'user', installPath: 'C:/cache/codex-gateway/0.2.0', lastUpdated: '2026-07-17T12:00:00Z' },
+      { scope: 'user', installPath: 'C:/cache/codex-gateway/0.2.0', lastUpdated: '2026-07-17T12:00:00Z', gitCommitSha: 'gateway-sha' },
     ],
-    'other@another-marketplace': [{ scope: 'user' }],
+    'other@another-marketplace': [{ scope: 'user', installPath: 'C:/cache/other', gitCommitSha: 'other-sha' }],
+    'managed@managed-marketplace': [{ scope: 'managed', installPath: 'C:/cache/managed', gitCommitSha: 'managed-sha' }],
   },
 };
 
@@ -39,10 +42,12 @@ function withRegistry(value, callback) {
   }
 }
 
-test('enumerates every toolshed install and excludes other marketplaces', () => {
-  const installs = installedToolshedPlugins(registry);
-  assert.equal(installs.length, 4);
+test('enumerates every user, project, and local install across marketplaces', () => {
+  const installs = installedPlugins(registry);
+  assert.equal(installs.length, 5);
+  assert.deepEqual(marketplacesFor(registry), ['another-marketplace', 'eigenwise-toolshed', 'managed-marketplace']);
   assert.deepEqual(installs.map((install) => install.id), [
+    'other@another-marketplace',
     'codex-gateway@eigenwise-toolshed',
     'sidequest@eigenwise-toolshed',
     'sidequest@eigenwise-toolshed',
@@ -62,7 +67,7 @@ test('routes project and local updates through the recorded project directory', 
 });
 
 test('uses the installed codex-gateway setup and doctor commands', () => {
-  const installs = installedToolshedPlugins(registry);
+  const installs = installedPlugins(registry);
   const setup = gatewayCommand(installs, 'setup');
   const doctor = gatewayCommand(installs, 'doctor');
 
@@ -71,7 +76,7 @@ test('uses the installed codex-gateway setup and doctor commands', () => {
   assert.equal(doctor.args.at(-1), 'doctor');
 });
 
-test('dry-run reports commands without executing them', () => withRegistry(registry, (registryFile) => {
+test('dry-run refreshes every marketplace and reports every plugin scope without executing', () => withRegistry(registry, (registryFile) => {
   const calls = [];
   const lines = [];
   const result = runUpdate({
@@ -86,7 +91,11 @@ test('dry-run reports commands without executing them', () => withRegistry(regis
 
   assert.equal(result.ok, true);
   assert.equal(calls.length, 0);
-  assert.match(lines.join('\n'), /plugin.*marketplace.*update/);
+  assert.match(lines.join('\n'), /marketplace.*update.*another-marketplace/);
+  assert.match(lines.join('\n'), /marketplace.*update.*eigenwise-toolshed/);
+  assert.match(lines.join('\n'), /marketplace.*update.*managed-marketplace/);
+  assert.match(lines.join('\n'), /other@another-marketplace \(user\)/);
+  assert.match(lines.join('\n'), /sidequest@eigenwise-toolshed \(project, C:\/work\/project\)/);
   assert.match(lines.join('\n'), /codex-gateway setup/);
 }));
 
@@ -115,8 +124,10 @@ test('continues after failures and returns every failed operation', () => withRe
   });
 
   assert.equal(failed.ok, false);
-  assert.equal(failed.failures.length, 7);
+  assert.equal(failed.failures.length, 10);
+  assert.match(failed.failures.join('\n'), /another-marketplace marketplace/);
   assert.match(failed.failures.join('\n'), /eigenwise-toolshed marketplace/);
+  assert.match(failed.failures.join('\n'), /other@another-marketplace/);
   assert.match(failed.failures.join('\n'), /codex-gateway setup/);
   assert.match(failed.failures.join('\n'), /codex-gateway doctor/);
 }));

@@ -10,6 +10,7 @@ const path = require('node:path');
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_CLAUDE_CODE_VERSION = '2.1.0';
 const MIN_NODE_VERSION = '22.5.0';
+const OFFICIAL_MARKETPLACE = 'claude-plugins-official';
 const seenStates = new Set();
 
 function readJson(file) {
@@ -123,7 +124,32 @@ function createDebouncer(states = seenStates) {
 
 const defaultDebouncer = createDebouncer();
 
-function installedFreshness(instances, marketplaces, now, manifestFor) {
+function autoUpdateEnabled(name, entry) {
+  return entry?.autoUpdate === true || (name === OFFICIAL_MARKETPLACE && entry?.autoUpdate !== false);
+}
+
+function sourcePath(source) {
+  if (typeof source !== 'string' || path.isAbsolute(source)) return null;
+  const relative = path.normalize(source).replace(/^\.([\\/])/, '');
+  return relative && !relative.startsWith(`..${path.sep}`) && relative !== '..' ? relative.replace(/\\/g, '/') : null;
+}
+
+function sourceFreshness(instance, plugin, entry, runGit = (args) => childProcess.spawnSync('git', args, { encoding: 'utf8', timeout: 1000, windowsHide: true })) {
+  const source = sourcePath(plugin?.source);
+  if (!instance?.gitCommitSha || !source || !entry?.installLocation) return 'unknown';
+  try {
+    const ancestry = runGit(['-C', entry.installLocation, 'merge-base', '--is-ancestor', instance.gitCommitSha, 'HEAD']);
+    if (ancestry.status !== 0) return 'unknown';
+    const result = runGit(['-C', entry.installLocation, 'diff', '--quiet', `${instance.gitCommitSha}..HEAD`, '--', source]);
+    if (result.status === 0) return 'fresh';
+    if (result.status === 1) return 'behind';
+  } catch (_) {
+    // The cache is only evidence when its local git data can prove freshness.
+  }
+  return 'unknown';
+}
+
+function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness = sourceFreshness) {
   const problems = [];
   const manifests = new Map();
   const names = [...new Set(instances.map((instance) => pluginIdParts(instance.id)?.marketplace).filter(Boolean))];
@@ -134,7 +160,7 @@ function installedFreshness(instances, marketplaces, now, manifestFor) {
       problems.push(`${name} marketplace is not registered locally`);
       continue;
     }
-    if (entry.autoUpdate !== true) problems.push(`${name} auto-update is off`);
+    if (!autoUpdateEnabled(name, entry)) problems.push(`${name} auto-update is off`);
 
     const age = Date.parse(entry.lastUpdated || '');
     if (!Number.isFinite(age) || now - age > CACHE_MAX_AGE_MS) {
@@ -147,20 +173,28 @@ function installedFreshness(instances, marketplaces, now, manifestFor) {
       problems.push(`${name} marketplace cache is missing, installed freshness is unknown`);
       continue;
     }
-    manifests.set(name, new Map((manifest.plugins || []).map((plugin) => [plugin.name, plugin.version])));
+    manifests.set(name, new Map((manifest.plugins || []).map((plugin) => [plugin.name, plugin])));
   }
 
   for (const instance of instances) {
     const parts = pluginIdParts(instance.id);
     if (!parts || !manifests.has(parts.marketplace)) continue;
-    const cachedVersion = manifests.get(parts.marketplace).get(parts.name);
-    if (!cachedVersion) {
-      problems.push(`${instance.id} is absent from its cached marketplace manifest`);
+    const plugin = manifests.get(parts.marketplace).get(parts.name);
+    if (!plugin) {
+      problems.push(`${instance.id} freshness is unknown because it is missing from its cached marketplace manifest`);
       continue;
     }
-    if (compareVersions(instance.version, cachedVersion) === -1) {
-      problems.push(`${instance.id} ${instance.version} is behind cached ${cachedVersion}`);
+
+    if (plugin.version) {
+      const comparison = compareVersions(instance.version, plugin.version);
+      if (comparison === -1) problems.push(`${instance.id} ${instance.version} is behind cached ${plugin.version}`);
+      else if (comparison === null) problems.push(`${instance.id} freshness is unknown because its version cannot be compared`);
+      continue;
     }
+
+    const freshness = gitFreshness(instance, plugin, marketplaces[parts.marketplace]);
+    if (freshness === 'behind') problems.push(`${instance.id} is behind its cached source`);
+    else if (freshness === 'unknown') problems.push(`${instance.id} freshness is unknown because its cached source cannot be compared`);
   }
 
   return problems;
@@ -214,6 +248,7 @@ function audit(options = {}) {
   const now = options.now ?? Date.now();
   const instances = pluginInstances(registry);
   const manifestFor = options.manifestFor || ((_name, entry) => marketplaceManifest(entry));
+  const gitFreshness = options.gitFreshness || sourceFreshness;
   const checkGateway = options.checkGateway || localGatewayCheck;
   const versions = options.versions || {
     node: process.version,
@@ -222,7 +257,7 @@ function audit(options = {}) {
   const boards = options.boards || sidequestBoards(home);
   const mappings = boardMappings(boards, instances);
   const problems = [
-    ...installedFreshness(instances, marketplaces, now, manifestFor),
+    ...installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness),
     ...gatewayFreshness(instances, checkGateway),
     ...requiredVersions(versions),
     ...mappings.problems,
@@ -260,7 +295,9 @@ module.exports = {
   CACHE_MAX_AGE_MS,
   MIN_CLAUDE_CODE_VERSION,
   MIN_NODE_VERSION,
+  OFFICIAL_MARKETPLACE,
   audit,
+  autoUpdateEnabled,
   boardMappings,
   compareVersions,
   createDebouncer,
@@ -268,5 +305,6 @@ module.exports = {
   gatewayFreshness,
   installedFreshness,
   pluginInstances,
+  sourceFreshness,
   warning,
 };

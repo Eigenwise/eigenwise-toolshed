@@ -8,6 +8,7 @@ const {
   audit,
   createDebouncer,
   emitWarning,
+  sourceFreshness,
 } = require('../hooks/session-start-freshness.js');
 
 const now = Date.parse('2026-07-17T12:00:00Z');
@@ -52,7 +53,7 @@ test('enumerates every board and maps it to its Sidequest project install', () =
   assert.match(result.problems.join('\n'), /Sidequest board Two has no Sidequest install/);
 });
 
-test('finds stale and missing installs across marketplaces', () => {
+test('finds stale versions and marks absent manifest entries as unknown', () => {
   const input = fixture({
     registry: {
       plugins: {
@@ -69,7 +70,85 @@ test('finds stale and missing installs across marketplaces', () => {
 
   const result = audit(input);
   assert.match(result.problems.join('\n'), /sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0/);
-  assert.match(result.problems.join('\n'), /missing@other-marketplace is absent from its cached marketplace manifest/);
+  assert.match(result.problems.join('\n'), /missing@other-marketplace freshness is unknown/);
+  assert.doesNotMatch(result.problems.join('\n'), /absent from/);
+});
+
+test('honors the official marketplace default and third-party explicit settings', () => {
+  const result = audit(fixture({
+    registry: {
+      plugins: {
+        'official@claude-plugins-official': [{ scope: 'user', version: '1.0.0' }],
+        'third-party@other-marketplace': [{ scope: 'user', version: '1.0.0' }],
+      },
+    },
+    marketplaces: {
+      'claude-plugins-official': { lastUpdated: new Date(now).toISOString() },
+      'other-marketplace': { autoUpdate: false, lastUpdated: new Date(now).toISOString() },
+    },
+    manifestFor: (name) => ({ plugins: [{ name: name === 'claude-plugins-official' ? 'official' : 'third-party', version: '1.0.0' }] }),
+  }));
+
+  assert.doesNotMatch(result.problems.join('\n'), /claude-plugins-official auto-update is off/);
+  assert.match(result.problems.join('\n'), /other-marketplace auto-update is off/);
+});
+
+test('compares rolling plugins against only their cached source path', () => {
+  const calls = [];
+  const freshness = sourceFreshness(
+    { gitCommitSha: 'installed-sha' },
+    { source: './plugins/rolling' },
+    { installLocation: 'C:/cache/marketplace' },
+    (args) => {
+      calls.push(args);
+      return { status: 0 };
+    },
+  );
+
+  assert.equal(freshness, 'fresh');
+  assert.deepEqual(calls, [
+    ['-C', 'C:/cache/marketplace', 'merge-base', '--is-ancestor', 'installed-sha', 'HEAD'],
+    ['-C', 'C:/cache/marketplace', 'diff', '--quiet', 'installed-sha..HEAD', '--', 'plugins/rolling'],
+  ]);
+});
+
+test('does not call an unrelated cached git history stale', () => {
+  const freshness = sourceFreshness(
+    { gitCommitSha: 'unrelated-sha' },
+    { source: './plugins/rolling' },
+    { installLocation: 'C:/cache/marketplace' },
+    () => ({ status: 1 }),
+  );
+
+  assert.equal(freshness, 'unknown');
+});
+
+test('does not flag rolling plugins that match their cached source', () => {
+  const result = audit(fixture({
+    registry: {
+      plugins: {
+        'rolling@other-marketplace': [{ scope: 'user', gitCommitSha: 'installed-sha' }],
+      },
+    },
+    manifestFor: () => ({ plugins: [{ name: 'rolling', source: './plugins/rolling' }] }),
+    gitFreshness: () => 'fresh',
+  }));
+
+  assert.deepEqual(result.problems, []);
+});
+
+test('reports rolling plugin freshness as unknown when local git cannot prove it', () => {
+  const result = audit(fixture({
+    registry: {
+      plugins: {
+        'rolling@other-marketplace': [{ scope: 'user', gitCommitSha: 'installed-sha' }],
+      },
+    },
+    manifestFor: () => ({ plugins: [{ name: 'rolling', source: './plugins/rolling' }] }),
+    gitFreshness: () => 'unknown',
+  }));
+
+  assert.match(result.problems.join('\n'), /rolling@other-marketplace freshness is unknown/);
 });
 
 test('reports stale marketplace caches without claiming remote freshness', () => {
