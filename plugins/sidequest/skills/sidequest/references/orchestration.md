@@ -39,7 +39,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Use event-driven wakeups.** Executors are background teammates, so `TaskOutput` cannot resolve their names (`No task found`) and polling is banned regardless. After spawning, end the turn. Its stop notification is the only wakeup. On the next natural wakeup, whether a stop notification, user message, or other task notification, make opportunistic liveness checks for work that has run about 5–8 minutes or longer. Never hold a session open with foreground or background `sleep`, blocking `TaskOutput` as a delay, or busy-wait loops. A turn with nothing to do ends. At every wakeup, diff board state with `changes --since <iso>` before deciding what to do next.
 - **Clear verified workers.** An executor stop notification is a cleanup trigger: pulse the ticket, verify its done comment, board state, and git result, then call `TaskStop` in one motion. Executors deliberately kept alive mid-ticket get the same treatment at their next natural wakeup. Sweep ALL finished executors, not just the one that notified, so session exit only stops live work.
 
-- **Reports stay terse:** what changed, files/lines, verification output, and close confirmation.
+- **Reports stay terse:** what changed, files/lines, verification output, and close confirmation. Confirm a done commit is reachable from `origin/main` before trusting a shipped report.
 
 - Parallelism costs tokens and orchestration overhead — a couple of parallel investigations or an
   executor wave where sizes justify it, not a swarm for everything.
