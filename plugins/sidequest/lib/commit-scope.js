@@ -8,21 +8,64 @@ function normalizeScope(scope) {
     .replace(/\\/g, '/')
     .replace(/^\.\//, '')
     .replace(/\/\*\*$/, '')
-    .replace(/\/+$/, '')
-    .toLowerCase();
+    .replace(/\/+$/, '');
+}
+
+function scopeKey(scope) {
+  const normalized = normalizeScope(scope);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 function scopedPaths(files) {
-  return [...new Set((Array.isArray(files) ? files : []).map(normalizeScope).filter(Boolean))];
+  const paths = [];
+  const seen = new Set();
+  for (const file of Array.isArray(files) ? files : []) {
+    const scope = normalizeScope(file);
+    const key = scopeKey(scope);
+    if (scope && !seen.has(key)) {
+      seen.add(key);
+      paths.push(scope);
+    }
+  }
+  return paths;
 }
 
 function isInScope(file, files) {
-  const path = normalizeScope(file);
-  return scopedPaths(files).some((scope) => path === scope || path.startsWith(`${scope}/`));
+  const path = scopeKey(file);
+  return scopedPaths(files).some((scope) => {
+    const key = scopeKey(scope);
+    return path === key || path.startsWith(`${key}/`);
+  });
 }
 
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+}
+
+function repoRoot(cwd) {
+  return git(cwd, ['rev-parse', '--show-toplevel']).trim();
+}
+
+function trackedPaths(cwd) {
+  return git(cwd, ['ls-files', '--full-name', '-z'])
+    .split('\0')
+    .filter(Boolean)
+    .map((file) => file.replace(/\\/g, '/'));
+}
+
+function canonicalScope(scope, paths) {
+  const normalized = normalizeScope(scope);
+  const key = scopeKey(normalized);
+  const matchingPath = paths.find((file) => {
+    const fileKey = scopeKey(file);
+    return fileKey === key || fileKey.startsWith(`${key}/`);
+  });
+  return matchingPath ? matchingPath.slice(0, normalized.length) : normalized;
+}
+
+function canonicalScopedPaths(cwd, files) {
+  const paths = trackedPaths(cwd);
+  return scopedPaths(files).map((scope) => canonicalScope(scope, paths));
 }
 
 function commitPaths(cwd, commit) {
@@ -49,9 +92,11 @@ function commitScoped(cwd, message, files) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: 'missing_scope' };
   try {
-    git(cwd, ['commit', '--only', '-m', String(message || ''), '--', ...scopes]);
-    const commit = git(cwd, ['rev-parse', 'HEAD']).trim();
-    const validation = validateCommitScope(cwd, commit, scopes);
+    const root = repoRoot(cwd);
+    const canonicalScopes = canonicalScopedPaths(root, scopes);
+    git(root, ['commit', '--only', '-m', String(message || ''), '--', ...canonicalScopes]);
+    const commit = git(root, ['rev-parse', 'HEAD']).trim();
+    const validation = validateCommitScope(root, commit, scopes);
     return Object.assign({ commit }, validation);
   } catch (err) {
     return { ok: false, reason: 'git_error', message: err.message };

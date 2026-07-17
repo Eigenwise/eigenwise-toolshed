@@ -38,6 +38,28 @@ test('scoped commit leaves another executor’s staged file in the shared index'
   assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
 });
 
+test('scoped commit preserves an uppercase tracked path from a nested directory', () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'README.md'), 'changed\n');
+  git(root, ['add', 'README.md']);
+
+  const committed = commitScope.commitScoped(path.join(root, 'plugins', 'sidequest'), 'preserve README case', ['README.md']);
+  assert.equal(committed.ok, true, committed.message);
+  assert.deepEqual(committed.paths, ['README.md']);
+  assert.equal(git(root, ['show', '--format=', '--name-only', 'HEAD']), 'README.md');
+});
+
+test('Windows scope matching emits canonical tracked casing', { skip: process.platform !== 'win32' }, () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'README.md'), 'changed\n');
+  git(root, ['add', 'README.md']);
+
+  const committed = commitScope.commitScoped(path.join(root, 'plugins', 'sidequest'), 'canonical README case', ['readme.md']);
+  assert.equal(committed.ok, true, committed.message);
+  assert.deepEqual(committed.paths, ['README.md']);
+  assert.equal(git(root, ['show', '--format=', '--name-only', 'HEAD']), 'README.md');
+});
+
 test('out-of-scope commits are refused before submission', () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
