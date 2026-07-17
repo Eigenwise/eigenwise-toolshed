@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.29.0",
+  "version": "3.30.0",
   "plugins": [
     {
       "name": "codex-gateway",

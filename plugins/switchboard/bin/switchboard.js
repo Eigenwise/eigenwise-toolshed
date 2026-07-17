@@ -20,10 +20,15 @@
  */
 
 const ladder = require('../lib/ladder');
+const migration = require('../lib/migrate');
 
 function fail(msg) {
   console.error(`switchboard: ${msg}`);
   process.exit(1);
+}
+
+function legacyNotice() {
+  console.warn('switchboard: numeric ladder commands are deprecated and only affect legacy prefs. Run "switchboard migrate --dry-run" to preview category-cap migration.');
 }
 
 /* ------------------------------------------------------------------ *
@@ -46,6 +51,7 @@ function printLadder(rungs) {
 }
 
 function cmdModels(json) {
+  if (!json) legacyNotice();
   const prefs = ladder.getModelPrefs();
   const routing = prefs.routing !== false;
   const rungs = ladder.routingLadder(prefs);
@@ -60,6 +66,7 @@ function cmdModels(json) {
     process.stdout.write(
       JSON.stringify(
         {
+          legacy: true,
           routing,
           bias: prefs.routingBias,
           enabled: ladder.VALID_MODELS.filter((m) => prefs[m]),
@@ -99,13 +106,14 @@ const BIAS_MAX = ladder.ROUTING_BIAS_MAX;
 // otherwise be swallowed by a generic --flag parser.
 function cmdBias(rawArgs) {
   const json = rawArgs.includes('--json');
+  if (!json) legacyNotice();
   const valueArgs = rawArgs.filter((a) => a !== '--json');
 
   if (valueArgs.length === 0) {
     const prefs = ladder.getModelPrefs();
     const rungs = ladder.routingLadder(prefs);
     if (json) {
-      process.stdout.write(JSON.stringify({ bias: prefs.routingBias, ladder: rungs }, null, 2) + '\n');
+      process.stdout.write(JSON.stringify({ legacy: true, bias: prefs.routingBias, ladder: rungs }, null, 2) + '\n');
       return;
     }
     console.log(`Bias: ${prefs.routingBias}  (${biasLabel(prefs.routingBias)})`);
@@ -122,7 +130,7 @@ function cmdBias(rawArgs) {
   const prefs = ladder.setModelPrefs({ routingBias: n });
   const rungs = ladder.routingLadder(prefs);
   if (json) {
-    process.stdout.write(JSON.stringify({ bias: prefs.routingBias, ladder: rungs }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ legacy: true, bias: prefs.routingBias, ladder: rungs }, null, 2) + '\n');
     return;
   }
   console.log(`✓ Bias set to ${prefs.routingBias}  (${biasLabel(prefs.routingBias)})`);
@@ -133,13 +141,14 @@ function cmdBias(rawArgs) {
 // score maps to under the current prefs. Doesn't touch disk.
 function cmdRoute(rawArgs) {
   const json = rawArgs.includes('--json');
+  if (!json) legacyNotice();
   const valueArgs = rawArgs.filter((a) => a !== '--json');
   if (valueArgs.length !== 1) fail('route: pass a single complexity score 1-10, e.g. switchboard route 6');
   const c = ladder.coerceComplexity(valueArgs[0]);
   if (!c) fail(`route: "${valueArgs[0]}" is not a valid complexity — pass an integer 1-10`);
   const routing = ladder.deriveRouting(c);
   if (json) {
-    process.stdout.write(JSON.stringify({ complexity: c, model: routing.model, effort: routing.effort }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ legacy: true, complexity: c, model: routing.model, effort: routing.effort }, null, 2) + '\n');
     return;
   }
   console.log(`C${c} → ${routing.model}${routing.effort ? '·' + routing.effort : ''}`);
@@ -153,6 +162,7 @@ function cmdRoute(rawArgs) {
 // target — a guard can override a request (e.g. disabling every tier at
 // once), and that's worth surfacing rather than silently swallowing.
 function cmdSetTargets(targets, enabled) {
+  legacyNotice();
   const verb = enabled ? 'enable' : 'disable';
   if (!targets.length) fail(`${verb}: pass at least one target — a tier (e.g. haiku) or a model.effort pair (e.g. opus.medium)`);
 
@@ -194,10 +204,24 @@ function cmdSetTargets(targets, enabled) {
 // `switchboard routing on|off` — the master switch. Off means switchboard
 // scores nothing; the caller is on its own for model/effort choices.
 function cmdRouting(args) {
+  legacyNotice();
   const sub = args[0];
   if (sub !== 'on' && sub !== 'off') fail('routing: pass "on" or "off", e.g. switchboard routing off');
   const prefs = ladder.setModelPrefs({ routing: sub === 'on' });
   console.log(`Routing: ${prefs.routing ? 'on' : 'off'}`);
+}
+
+function cmdMigrate(args) {
+  const dryRun = args.length === 1 && args[0] === '--dry-run';
+  const apply = args.length === 1 && args[0] === '--apply';
+  if (!dryRun && !apply) fail('migrate: pass exactly --dry-run or --apply');
+  let result;
+  try {
+    result = apply ? migration.applyMigration() : migration.previewMigration();
+  } catch (error) {
+    fail(error.message);
+  }
+  process.stdout.write(JSON.stringify(Object.assign({ applied: apply }, result), null, 2) + '\n');
 }
 
 function help() {
@@ -209,10 +233,14 @@ Usage:
   switchboard route <complexity> [--json]  derive one score's routing, e.g. switchboard route 6
   switchboard enable <target...>           turn on a tier or model.effort pair, e.g. switchboard enable opus.medium
   switchboard disable <target...>          turn off a tier or model.effort pair, e.g. switchboard disable fable
-  switchboard routing on|off               master switch — off means switchboard scores nothing
+  switchboard routing on|off               legacy numeric-routing master switch
+  switchboard migrate --dry-run|--apply    preview or apply legacy prefs migration
   switchboard help                         this message
 
-Prefs live under SWITCHBOARD_HOME (default ~/.claude/switchboard/prefs.json).`);
+Legacy prefs live under SWITCHBOARD_HOME (default ~/.claude/switchboard/prefs.json).
+Category config lives at ~/.claude/toolshed/switchboard.json and .claude/switchboard.json.
+For test/CI, SWITCHBOARD_CONFIG_USER_FILE, SWITCHBOARD_CONFIG_PROJECT_FILE, and
+SWITCHBOARD_CONFIG_OVERRIDES provide explicit temporary layers.`);
 }
 
 function main() {
@@ -240,6 +268,9 @@ function main() {
       break;
     case 'disable':
       cmdSetTargets(rest, false);
+      break;
+    case 'migrate':
+      cmdMigrate(rest);
       break;
     case 'routing':
       cmdRouting(rest);
