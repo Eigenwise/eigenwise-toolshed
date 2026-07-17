@@ -10,12 +10,12 @@
 *Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
 
 **Developer-friendly, live rules for Claude Code.** Keep your rules in one Markdown file
-(`.claude/live-rules.md` by default, or anywhere you like), and a pair of bundled hooks re-inject the
-ones that apply, right when they apply: global rules and prompt-keyword rules on every prompt,
-path/glob and directory rules the moment Claude is about to edit a matching file. The hooks read the
-file fresh every time, so editing a rule takes effect on the **next prompt, with no restart**. That
-is the "live" part: the rules are re-asserted every turn, so they do not get buried and forgotten as
-a session grows.
+(`.claude/live-rules.md` by default, or anywhere you like), and bundled hooks re-inject the
+ones that apply, right when they apply: global and prompt-keyword rules on every prompt, directory
+rules when the working directory or edited file is inside a matching folder, and path/glob rules right
+before Claude edits a matching file. The hooks read the file fresh every time, so editing a rule takes
+effect on the **next prompt, with no restart**. That is the "live" part: the rules are re-asserted every
+turn, so they do not get buried and forgotten as a session grows.
 
 It is the same idea behind [codebase-mapper](../codebase-mapper) (a hook that re-injects context so
 it stays salient), pointed at a different job: instead of a map of your codebase, it injects **your

@@ -64,9 +64,10 @@ switchboard models
 
 ![switchboard models output: routing on, tiers, per-model efforts, and the ten-rung ladder](docs/models.png)
 
-Read it bottom-up: the ladder is the whole contract. A task scored C3 runs on `sonnet·high`. A C8
-runs on `fable·high`. The tier and effort lists above it are what the ladder is built from, and
-everything is yours to shape:
+Read it bottom-up: the ladder is the whole contract. With the defaults, a task scored C3 runs on
+`sonnet·medium` and C8 runs on `fable·medium`; the exact rung depends on the enabled tiers, each
+tier's effort row, and bias. Haiku contributes a single effort-free rung. The tier and effort lists
+above it are what the ladder is built from, and everything is yours to shape:
 
 ```bash
 switchboard route 6            # what would a C6 get right now?

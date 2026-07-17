@@ -10,10 +10,10 @@
 *Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
 
 **Your ChatGPT/Codex subscription models, in Claude Code's `/model` picker.** Open `/model`, see
-"GPT-5.6-sol (Codex)" next to your Anthropic models, and switch mid-session. Codex requests are
-billed to your ChatGPT Plus/Pro plan through OpenAI's own OAuth (no API key); Claude requests
-keep flowing to api.anthropic.com with your normal claude.ai login. Both subscriptions, one
-harness.
+"GPT-5.6 Sol (Codex)" next to your Anthropic models, and switch mid-session. Codex requests use
+your ChatGPT Plus/Pro subscription through Codex's own OAuth sign-in, not an OpenAI API key or
+pay-per-token API account. Claude requests keep flowing to api.anthropic.com with your normal
+claude.ai login. Both subscriptions, one harness.
 
 ## How it works
 
@@ -34,7 +34,10 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
   `claude` or `anthropic`. So the shim advertises the proxy's models as `claude-codex-<id>`
   with readable display names, strips the prefix on the way through, and passes every
   non-Codex request to api.anthropic.com byte-for-byte (your claude.ai auth, prompt caching,
-  and beta headers are untouched).
+  and beta headers are untouched). The built-in picker catalog includes `gpt-5.6-sol`,
+  `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
+  `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`; override it with
+  `~/.claude/codex-gateway/models.json` if you need a different list.
 - A **SessionStart hook** keeps both processes alive so a wired session never starts against a
   dead port.
 - codex-gateway also publishes a small model catalog (`catalog.json`, next to its state) carrying the
@@ -70,8 +73,22 @@ node <plugin>/bin/codex-gateway.js login   # ChatGPT sign-in in your browser (if
 node <plugin>/bin/codex-gateway.js setup   # finishes the wiring after sign-in
 ```
 
-Model discovery needs Claude Code v2.1.129+. Re-running `setup` later is also how you upgrade
-the proxy.
+### Verify the install
+
+After restarting Claude Code, run the health check and model listing from the plugin directory:
+
+```bash
+node <plugin>/bin/codex-gateway.js doctor
+node <plugin>/bin/codex-gateway.js models
+```
+
+`doctor` should show the proxy binary, a successful Codex auth status, both local ports, a written
+catalog, and user settings wired to the shim. `models` should return `claude-codex-*` rows. Then
+open `/model` and select a row labeled `From gateway`. If the rows are missing, check that Claude
+Code is v2.1.129 or newer, restart once more, and run `models` to confirm the shim has a catalog.
+
+Model discovery needs Claude Code v2.1.129+. Re-running `setup` later downloads the latest proxy
+release and is the upgrade path.
 
 ## Commands
 
@@ -165,34 +182,32 @@ note for the routing side.
 ## The fine print
 
 - **Context windows**: Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this
-  gateway routes to, not the pay-per-token API) has a real 272k window, but the gateway advertises a reduced
-  245k as `max_input_tokens` so Claude Code auto-compacts with headroom before the real limit. Override the advertised value with the `CODEX_GATEWAY_CONTEXT_WINDOW` env var (a token count) to tune compaction timing without a republish. Those ids deliberately have no `[1m]` suffix. `[1m]` is a
-  local Claude Code promise that delays compaction to roughly 1M tokens; the shim strips it before
-  forwarding, so keep it off every selected Codex model, including the top-level `model` setting,
-  and use it only for genuine Claude models. Claude models (opus/sonnet/fable, with or without
-  `[1m]`) keep their OWN separate native windows and compaction limits; the shim forwards them
-  byte-identically to Anthropic and never applies Codex window advertisement or error rewriting to
-  them. The env block pins the real 1M aliases (`ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]`,
-  `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`, `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5[1m]`)
-  so a gateway session on any of them gets its true 1M window instead of Claude Code's 200k gateway
-  default; haiku stays unpinned (it's 200k). On
-  context overflow the shim emits HTTP 413 `request_too_large` (matching claude-code-proxy 0.1.14+,
-  which first shipped that mapping) so Claude Code runs its built-in compact-and-retry path instead
-  of stopping on the proxy's raw 5xx; an upstream 413 passes through untouched, and an older proxy's
-  differently-shaped context error is normalized to the same 413. Do NOT set a global
-  `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to Claude passthrough models too. Version 0.4.4
-  rewrites stale pre-0.4.2 `[1m]` Codex rows in Claude Code's gateway-model cache in place and
-  serves the built-in rows immediately during shim startup, so the model picker always has a valid
-  fallback. Restart Claude Code once after upgrading so an already-open session reloads its picker.
-  Version 0.4.2 removes the old global `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` override when it
-  rewrites settings. Legacy typed Codex ids ending in `[1m]` still route, but new sessions should
-  select the unsuffixed picker rows. Loading a huge reference skill (e.g. `claude-api`, ~800k chars)
-  in a single turn can spike Codex context past the point compaction can recover from, so pull large
-  references incrementally on Codex models.
+  gateway routes to, not the pay-per-token API) has a measured 370k input ceiling. The shim advertises
+  `370000` as `max_input_tokens` by default; override it with `CODEX_GATEWAY_CONTEXT_WINDOW` when
+  tuning a machine-specific setup. Claude Code currently uses its own 200k gateway budget for these
+  discovered `claude-codex-*` rows, so the backend's HTTP 413 `request_too_large` response is the
+  recovery signal for context overflow. The shim normalizes older proxy context errors to the same
+  413 (proxy 0.1.14+ emits it natively). Those ids deliberately have no `[1m]` suffix. `[1m]` is a
+  local Claude Code promise that delays compaction, so keep it off every selected Codex model,
+  including the top-level `model` setting, and use it only for genuine Claude models. Claude models
+  (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows and compaction
+  limits; the shim forwards them byte-identically to Anthropic and never applies Codex window
+  advertisement or error rewriting to them. The env block pins the real 1M aliases
+  (`ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]`,
+  `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`,
+  `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5[1m]`) so a gateway session on any of them gets its
+  true 1M window instead of Claude Code's 200k gateway default; haiku stays unpinned (it's 200k).
+  Do NOT set a global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to Claude passthrough models too.
+  Version 0.4.4 rewrites stale pre-0.4.2 `[1m]` Codex rows in Claude Code's gateway-model cache in
+  place and serves the built-in rows immediately during shim startup, so restart Claude Code once
+  after upgrading to reload an already-open picker. Legacy typed Codex ids ending in `[1m]` still
+  route, but new sessions should select the unsuffixed picker rows. Loading a huge reference skill
+  (e.g. `claude-api`, ~800k chars) in a single turn can spike Codex context past the point compaction
+  can recover from, so pull large references incrementally on Codex models.
 - **Model quality of life**: typed selection works too: `/model claude-codex-gpt-5.4`, any string
   passes through on a custom base URL. The advertised list itself is yours to edit:
-  `~/.claude/codex-gateway/models.json`, one id per array entry (claude-code-proxy v0.1.10 has no
-  `/v1/models` of its own; if a later version grows one, the shim prefers it automatically).
+  `~/.claude/codex-gateway/models.json`, one id per array entry. The proxy has no `/v1/models`
+  route of its own; the shim owns discovery and prefers a future proxy route automatically.
 - **Reasoning display**: the Codex backend doesn't send thinking blocks back, so you get
   answers without the visible reasoning stream on Codex models. Upstream limitation.
 - **Plan-mode tools are hidden from Codex models.** GPT models call `EnterPlanMode` /

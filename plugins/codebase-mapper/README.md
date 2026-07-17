@@ -14,10 +14,10 @@ A self-maintaining **codebase map** for Claude Code: small Markdown docs under
 of each session so Claude starts already knowing the layout instead of grepping around blind.
 
 You install one plugin, run one skill, and get a map generated from your actual code: a compact
-`INDEX.md` hub plus the detailed docs your project warrants. A bundled hook puts that hub in front of
-Claude when a session starts, and a second skill keeps the docs current as the code changes. So every
-session starts oriented, and **the map maintains itself** instead of going stale the week after you
-write it.
+`INDEX.md` hub plus the detailed docs your project warrants. A bundled `SessionStart` hook puts that
+hub in front of Claude when a session starts, and the `update-codebase-map` skill refreshes the docs
+when code changes. The hook also tells Claude when a documentation check is due, so the map is easy to
+keep current instead of going stale the week after you write it.
 
 ## Where it came from: live-rules
 
@@ -66,8 +66,8 @@ skills that build and maintain the map for you:
   `map-codebase` skill).
 - **Keeps it current** as the code changes, adding and pruning docs as the project grows (the
   `update-codebase-map` skill).
-- **Loads it at the start of each session** through its own bundled hook, so you do not need live-rules
-  installed at all.
+- **Loads it at the start of each session** through its bundled `SessionStart` hook, and periodically
+  reminds Claude through its `UserPromptSubmit` hook, so you do not need live-rules installed at all.
 
 So the choice is about reuse. For one repo where you will maintain the docs yourself, use live-rules
 and the rule above. When you want the map generated for you, kept in sync automatically, and the same
@@ -106,13 +106,12 @@ changed since the last map.
 
 ## Auto-loading
 
-A bundled, Node-based `SessionStart` hook injects `INDEX.md` at the start of each session when a map
-exists, so Claude starts oriented and keeps consulting and updating it as you work. SessionStart also
-fires on resume and after a compaction, so the map comes back once context has been trimmed.
+A bundled, Node-based `SessionStart` hook runs `hooks/inject-context.js` and injects `INDEX.md` at the
+start of each session when a map exists, so Claude starts oriented. SessionStart also fires on resume
+and after a compaction, so the map comes back once context has been trimmed.
 
-Because a once-per-session inject would fade as the conversation grows, a companion `UserPromptSubmit`
-hook re-surfaces a short reminder every few prompts (not every message), so the map stays salient
-without repeating the full instruction each turn. Both hooks are silent in projects that have no map,
+A companion Node-based `UserPromptSubmit` hook runs `hooks/remind.js` and re-surfaces a short reminder
+every six prompts. Both hooks are silent in projects that have no map, never break a prompt on errors,
 and neither touches your `CLAUDE.md`.
 
 Commit `.claude/.codebase-info/` so the whole team and every future session share the map.
