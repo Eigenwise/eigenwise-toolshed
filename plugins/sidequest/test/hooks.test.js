@@ -783,7 +783,7 @@ test('subagent-stop: long-run threshold settings do not suppress a held-claim ve
 
 // Registered LAST: creates extra fixture categories, which would otherwise grow
 // the taxonomy line inside earlier byte-budget assertions.
-test('pre-tool hook: dispatch executor batch mixing stamped models is denied; same-model batch passes', () => {
+test('pre-tool hook: dispatch executor rejects conflicting route markers and ignores prose sibling refs', () => {
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-dispatch-catalog-'));
   fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({
@@ -795,16 +795,21 @@ test('pre-tool hook: dispatch executor batch mixing stamped models is denied; sa
   }));
   const a = fixtureTicket('SQ-347 dispatch batch A', 'codex-gpt-5-6-terra', 'high');
   const b = fixtureTicket('SQ-347 dispatch batch B', 'codex-gpt-5-6-sol', 'high');
+  const proseSibling = runForceBypassWithEnv(
+    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-prose', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nPrior ${b.ref} had a sol route. --project "${slug}"` },
+    { SIDEQUEST_DISCOVERY_DIRS: catalog }
+  );
+  assert.ok(!proseSibling.hookSpecificOutput.permissionDecision, 'a prose sibling ref must not create a mixed batch');
+  assert.equal(proseSibling.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
   const mixed = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-mixed', prompt: `batch ${a.ref} and ${b.ref} --project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-5-6-sol effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.equal(mixed.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /route marker/);
   assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /Split the batch/);
-  const c = fixtureTicket('SQ-347 dispatch batch C', 'codex-gpt-5-6-terra', 'high');
   const same = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-same', prompt: `batch ${a.ref} and ${c.ref} --project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-same', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: SQ-999\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.ok(!same.hookSpecificOutput.permissionDecision, 'a same-model batch must not be denied');

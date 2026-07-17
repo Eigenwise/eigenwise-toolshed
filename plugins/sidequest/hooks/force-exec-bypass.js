@@ -86,29 +86,17 @@ function resolveStampedModel(input) {
 }
 
 // A shared dispatch executor (sidequest-exec-dispatch-<effort>) runs the model
-// named by the ONE route marker in its spawn prompt — a batch mixing tickets
-// stamped with different models would silently run every ticket on the last
-// marker's model. Only a proven conflict denies; unresolvable refs pass through
-// (the gateway's missing-marker 400 is the loud backstop).
+// named by the ONE route marker in its spawn prompt. The gateway uses the last
+// marker it sees, so conflicting markers are the only batch shape that can
+// silently run tickets on the wrong model. This mirrors the gateway marker grammar.
+const ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
+
 function dispatchBatchConflict(input) {
   const prompt = input && input.tool_input && input.tool_input.prompt;
-  const refs = extractRefs(prompt);
-  if (refs.length < 2) return null;
-  let store;
-  try {
-    store = require(path.join(pluginRoot(), 'lib', 'store.js'));
-  } catch (_) {
-    return null;
-  }
-  const projectArg = extractProjectArg(prompt) || input.cwd || process.env.CLAUDE_PROJECT_DIR;
-  const found = projectArg ? store.findProject(projectArg) : { ok: false };
-  if (!found.ok) return null;
-  const runtimes = new Set();
-  for (const ref of refs) {
-    const ticket = store.getTicket(found.slug, ref);
-    if (ticket && ticket.exec && ticket.exec.runsModel) runtimes.add(ticket.exec.runsModel);
-  }
-  return runtimes.size > 1 ? [...runtimes] : null;
+  if (typeof prompt !== 'string' || !prompt) return null;
+  const models = new Set();
+  for (const match of prompt.matchAll(ROUTE_MARKER_RE)) models.add(match[1]);
+  return models.size > 1 ? [...models] : null;
 }
 
 function denyReason(res, type) {
