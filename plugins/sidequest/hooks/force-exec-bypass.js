@@ -21,7 +21,6 @@ const BUILTIN_EXECUTORS = new Set([
   'sidequest-exec-low', 'sidequest-exec-medium', 'sidequest-exec-high',
   'sidequest-exec-xhigh', 'sidequest-exec-max',
 ]);
-const SPECIALIZED_LOOKUP_AGENTS = new Set(['explore', 'claude-code-guide', 'web-researcher']);
 // Keep this aligned with TICKET_PREFIX in lib/agentsync.js without loading the generator and store on every Agent call.
 const TICKET_EXECUTOR_PREFIX = 'sidequest-ticket-';
 
@@ -31,21 +30,9 @@ function isPinnedSidequestExecutor(type) {
     || (type.startsWith('sidequest-exec-') && !BUILTIN_EXECUTORS.has(type));
 }
 
-function isSpecializedLookupAgent(type) {
-  return SPECIALIZED_LOOKUP_AGENTS.has(type.toLowerCase());
-}
-
-function isQuickReadOnlyScout(prompt) {
-  if (typeof prompt !== 'string') return false;
-  return /^\[sidequest-scout\](?:\s|$)/i.test(prompt)
-    && /\b(?:quick|brief|short)\b/i.test(prompt)
-    && /\bread[ -]?only\b/i.test(prompt)
-    && /\b(?:no edits?|no writes?|no changes?|do not (?:edit|write|change))\b/i.test(prompt);
-}
-
-function scoutDenyReason(type) {
+function agentDenyReason(type) {
   return `sidequest: ${type || 'custom'} Agent launches need a ticket and fresh dispatch briefing. ` +
-    'Only explicit quick read-only scouts may bypass that: start with `[sidequest-scout]` and state quick, read-only, and no edits/writes.';
+    'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. For delegated exploration, research, review, or analysis, file a ticket, route it, dispatch it, and spawn the returned executor.';
 }
 
 const REF_RE = /\bSQ-\d+\b/gi;
@@ -186,12 +173,11 @@ function main() {
     || type.startsWith('sidequest-native-')
     || type.startsWith(TICKET_EXECUTOR_PREFIX);
   if (!isExec) {
-    if (isSpecializedLookupAgent(type) || isQuickReadOnlyScout(prompt)) return;
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: scoutDenyReason(type),
+        permissionDecisionReason: agentDenyReason(type),
       },
     }));
     return;

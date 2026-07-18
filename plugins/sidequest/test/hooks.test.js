@@ -93,29 +93,22 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
 });
 
-test('pre-tool hook: blocks unmarked custom agents but permits explicit quick scouts and lookup agents', () => {
-  const custom = runHookOutput(FORCE_BYPASS, {
-    tool_name: 'Agent',
-    tool_input: { subagent_type: 'stats5', isolation: 'worktree', prompt: 'Trace the full leak path and validate every finding.' },
-  });
-  assert.equal(custom.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(custom.hookSpecificOutput.permissionDecisionReason, /ticket and fresh dispatch briefing/);
-
-  const scout = runHookOutput(FORCE_BYPASS, {
-    tool_name: 'Agent',
-    tool_input: {
-      subagent_type: 'code-explorer',
-      isolation: 'worktree',
-      prompt: '[sidequest-scout]\nQuick read-only scout. Make no edits or writes. Return concise file pointers.',
-    },
-  });
-  assert.strictEqual(scout, null, 'an explicit quick read-only scout remains allowed');
-
-  const lookup = runHookOutput(FORCE_BYPASS, {
-    tool_name: 'Agent',
-    tool_input: { subagent_type: 'Explore', isolation: 'worktree', prompt: 'Locate the current hook contract.' },
-  });
-  assert.strictEqual(lookup, null, 'built-in read-only lookup agents remain allowed');
+test('pre-tool hook: denies non-executor Agent launches and gives the direct-tool and ticket flow', () => {
+  for (const [subagent_type, prompt] of [
+    ['Explore', 'Locate the current hook contract.'],
+    ['claude-code-guide', 'Check the current Agent-tool documentation.'],
+    ['web-researcher', 'Research the latest routing guidance.'],
+    ['code-explorer', '[sidequest-scout]\nQuick read-only scout. Make no edits or writes. Return concise file pointers.'],
+  ]) {
+    const out = runHookOutput(FORCE_BYPASS, {
+      tool_name: 'Agent',
+      tool_input: { subagent_type, isolation: 'worktree', prompt },
+    });
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', subagent_type);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /ticket and fresh dispatch briefing/);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /Read, Glob, Grep, or WebFetch inline/);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /file a ticket, route it, dispatch it/);
+  }
 });
 
 test('pre-tool hook keeps built-in executor model but removes overrides for pinned Codex, native, and ticket executors', () => {
@@ -515,7 +508,9 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.match(ctx, /verify command, or the artifact\/answer/, 'done is a verify command for a change or an artifact/answer for an investigation');
   assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the routed model');
   assert.match(ctx, /substantive investigations and changes are board tickets/, 'must preserve ticket-first substantive work');
-  assert.match(ctx, /quick read-only `\[sidequest-scout\]`/, 'must name the narrow scout escape hatch');
+  assert.match(ctx, /Every Agent launch uses that executor/, 'must require every Agent launch to use a dispatched executor');
+  assert.match(ctx, /Read, Glob, Grep, or WebFetch inline/, 'must give tiny lookups direct tools');
+  assert.match(ctx, /delegated exploration, research, review, or analysis gets a ticket first/, 'must route delegated work through the board');
   assert.ok(ctx.includes('fresh `dispatch`'), 'must require a fresh dispatch result');
   assert.ok(ctx.includes('exact stable executor, briefing, and token'), 'must use the exact instant dispatch result');
   assert.match(ctx, /Dispatch is instant: no registration\/watcher wait/, 'must replace the registration wait flow');
@@ -544,7 +539,7 @@ test('session-start: carries runtime resource and worker reporting coordination'
 test('session-start: flags enumerated deliverables as a decomposition smell (design→wave)', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.match(ctx, /several deliverables .* is a smell/, 'a ticket owning several enumerated deliverables must read as a smell');
-  assert.match(ctx, /scout that pins the shared contract/, 'must prefer a cheap scout that pins the shared contract');
+  assert.match(ctx, /ticketed planning investigation that pins the shared contract/, 'must use a ticketed investigation to pin the shared contract');
   assert.match(ctx, /wave fanning the pieces out/, 'then a wave that fans the deliverables out to parallel sub-agents');
 });
 
@@ -628,7 +623,8 @@ test('session-start: compact and resume preserve the minimum ticket and executor
     assert.ok(ctx.includes('Reload the Sidequest skill'), `${source} must reload the skill`);
     assert.match(ctx, /Substantive work needs a board ticket/, `${source} must preserve ticket-first work`);
     assert.match(ctx, /fresh dispatch's exact token-gated executor and briefing/, `${source} must preserve exact dispatch execution`);
-    assert.match(ctx, /quick read-only `\[sidequest-scout\]`/, `${source} must preserve the narrow scout escape hatch`);
+    assert.match(ctx, /Every Agent launch must use that executor/, `${source} must require dispatch for every Agent launch`);
+    assert.match(ctx, /Read, Glob, Grep, or WebFetch inline/, `${source} must name direct lookup tools`);
     assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), `${source} must prefer the MCP doing-list read`);
     assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
     assert.ok(ctx.includes('never TaskOutput them'), `${source} must ban native Agent TaskOutput polling`);
@@ -694,7 +690,13 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(readme, /marker-triggered capture/);
   assert.doesNotMatch(readme, /native_agent/);
   assert.match(readme, /Default dispatch is instant/);
-  assert.match(readme, /\[sidequest-scout\]/);
+  assert.doesNotMatch(readme, /\[sidequest-scout\]/);
+  for (const file of [
+    path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'),
+    path.join(pluginRoot, 'skills', 'sidequest', 'references', 'orchestration.md'),
+  ]) {
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /\[sidequest-scout\]|\bscouts?\b/i, `${file} must not teach scout bypasses`);
+  }
 });
 
 /* ------------------------------------------------------------------ *

@@ -11,11 +11,10 @@ When several tickets are **ready and independent**, work them in parallel — on
 all spawned in a **single message** (true parallel). This is safe precisely because claiming is
 atomic: each subagent claims a different ticket, and any race just sends the loser onward.
 
-- **Name every worker.** Each concurrent subagent gets a unique `name` (lowercase-hyphens, e.g.
+- **Name every worker.** Each concurrent executor gets a unique `name` (lowercase-hyphens, e.g.
   `exec-sq12`). Naming makes it addressable: it shows in the fleet view (filter `a:<name>`) and is
-  resumable via `SendMessage {to: name}` with its history intact. Never spawn an anonymous worker.
-  Built-in Explore/Plan agents are one-shot and NOT resumable — when a scout's work must be picked
-  back up, use a general-purpose or custom named agent (e.g. `code-explorer`) instead.
+  resumable via `SendMessage {to: name}` with its history intact. Every Agent launch must be a freshly
+  dispatched Sidequest executor.
 - **Tie the `name` to the `--by` id** — both unique and session-scoped for the same worker, so the
   agent is addressable and its board activity is stamped by the same identity. The `--by` must be
   genuinely random per session (not the ticket ref, not a fixed label): a second session fanning out
@@ -130,16 +129,12 @@ reflexively go synchronous to save money, and do not answer the wakeup cost by w
   anyway: with teams on, every spawn is a background teammate regardless of `run_in_background: false`,
   which is no loss if you wanted the steering.)
 
-## Scouting
+## Discovery and research
 
-Scout before decomposing only when the surface is genuinely unfamiliar AND large: one or two
-read-only explorers, each on a distinct subsystem or open question, spawned together. A scout returns
-**compressed findings** — a pointer list or short summary (~1–2k tokens), never its reading
-transcript. The output feeds your ticket boundaries — guessing boundaries on a big unknown codebase
-produces tickets that collide.
-For a codebase you already know, or a task whose files you can name, skip the scout and just read the
-files. A substantive investigation (root-cause hunt, spike) is different from a scout: it gets a
-ticket, and its findings get commented back (see the main skill).
+For a codebase you already know, or a task whose files you can name, use direct `Read`, `Glob`, `Grep`, or
+`WebFetch` inline. Any delegated exploration, research, review, or domain analysis requires a ticket first;
+route and dispatch it, then spawn the returned executor. Its comment supplies concise findings that inform the
+next ticket boundaries. Workflow agents remain governed by their Workflow contract.
 
 ## Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
 
