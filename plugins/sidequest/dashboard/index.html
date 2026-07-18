@@ -432,24 +432,44 @@
   .card .story-top { position: absolute; left: 0; right: 0; top: 0; height: 3px; }
   .storychip { font-family: var(--mono); font-size: 10px; display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px 1px 6px; border-radius: var(--radius-sm); border: 1px solid transparent; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-  .category-settings { grid-column: 1 / 3; display: flex; flex-direction: column; min-height: 0; background: linear-gradient(90deg, var(--gold-soft), transparent 45%); }
-  .category-settings .cat-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 18px 17px 12px; border-bottom: 1px solid var(--line-soft); }
+  .category-settings { grid-column: 1 / 3; display: flex; flex-direction: column; min-height: 0; }
+  .category-settings .cat-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 18px 17px 14px; border-bottom: 1px solid var(--line-soft); }
   .category-settings .cat-head-copy { min-width: 0; }
   .category-settings h3 { margin: 0; font-family: var(--serif); font-size: 20px; font-weight: 500; color: var(--text); }
-  .category-settings p { margin: 4px 0 0; font-size: 13px; line-height: 1.45; color: var(--text-faint); }
-  .category-scope-wrap { display: flex; align-items: center; gap: 10px; flex: none; }
-  .category-scope-project { max-width: 175px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 11px var(--sans); color: var(--text-dim); }
-  .category-scope { display: inline-flex; padding: 2px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 999px; }
-  .category-scope button { cursor: pointer; border: 0; border-radius: 999px; padding: 5px 10px; color: var(--text-faint); background: transparent; font: 700 10px var(--mono); letter-spacing: .03em; }
-  .category-scope button.active { color: var(--bg); background: var(--gold-bright); }
-  .category-scope button.scope-board { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-settings p { margin: 5px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-faint); max-width: 52ch; }
+  /* Scope = which layer you're editing: the global shared defaults, or one
+     board's own overrides. The label frames the segmented control as a mode. */
+  .category-scope-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: none; }
+  .category-scope-label { font: 700 9.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); }
+  .category-scope-project { display: none; }
+  .category-scope { display: inline-flex; padding: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; }
+  .category-scope button { cursor: pointer; border: 0; border-radius: 999px; padding: 6px 13px; color: var(--text-dim); background: transparent; font: 700 10.5px var(--mono); letter-spacing: .02em; transition: color .12s, background .12s; }
+  .category-scope button:not(.active):not(:disabled):hover { color: var(--text); }
+  .category-scope button.active { color: var(--card); background: var(--gold-bright); box-shadow: 0 1px 2px rgba(28,30,43,.18); }
+  .category-scope button:disabled { opacity: .4; cursor: default; }
+  .category-scope button.scope-board { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Group headers that split the list into the global layer vs. one board's
+     own layer. Local = purple (board), inherited/global = quiet grey. */
+  .cat-group + .cat-group { margin-top: 20px; }
+  .cat-group-head { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
+  .cat-group-eyebrow { font: 700 10.5px var(--mono); letter-spacing: .11em; text-transform: uppercase; white-space: nowrap; }
+  .cat-group-count { font: 700 10px var(--mono); color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--line-soft); padding: 1px 7px; border-radius: 999px; }
+  .cat-group-line { flex: 1 1 auto; height: 1px; background: var(--line-soft); }
+  .cat-group.local .cat-group-eyebrow { color: #6554a6; }
+  .cat-group.inherited .cat-group-eyebrow, .cat-group.global .cat-group-eyebrow { color: var(--text-faint); }
+  .cat-group-hint { margin: 6px 0 11px; font-size: 11.5px; line-height: 1.45; color: var(--text-faint); max-width: 60ch; }
+  .cat-group-body { display: flex; flex-direction: column; gap: 7px; }
+  .cat-empty { margin: 4px 0 2px; padding: 13px 14px; border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--panel); font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+  .cat-empty b { color: var(--text); font-weight: 650; }
   .category-scope-banner { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; padding: 9px 11px; border-radius: var(--radius-sm); font-size: 11.5px; line-height: 1.4; color: var(--text-dim); border: 1px solid var(--line-soft); background: var(--bg); }
   .category-scope-banner b { flex: none; font: 700 9px var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: 2px 6px; border-radius: 999px; }
   .category-scope-banner.shared b { color: var(--gold-bright); background: var(--gold-soft); border: 1px solid var(--gold-line); }
   .category-scope-banner.board b { color: #6554a6; background: rgba(101,84,166,.11); border: 1px solid rgba(101,84,166,.38); }
-  .category-layer { margin-left: auto; font: 700 9px var(--mono); letter-spacing: .04em; padding: 2px 5px; border: 1px solid var(--line); border-radius: 999px; color: var(--gold-bright); background: var(--gold-soft); }
+  .category-layer { font: 700 8.5px var(--mono); letter-spacing: .06em; padding: 2px 6px; border: 1px solid var(--gold-line); border-radius: 999px; color: var(--gold-bright); background: var(--gold-soft); vertical-align: 2px; }
   .category-layer.delta { color: var(--text-dim); background: var(--bg); }
   .category-layer.detached { color: #6554a6; border-color: rgba(101,84,166,.38); background: rgba(101,84,166,.11); }
+  .category-layer.added { color: #6554a6; border-color: rgba(101,84,166,.42); background: rgba(101,84,166,.13); }
+  .category-layer.disabledhere { color: var(--text-faint); border-color: var(--line); background: var(--panel-2); }
   .category-row.disabled { opacity: .55; border-style: dashed; }
   .category-delta { margin-top: 12px; padding: 10px; border: 1px solid var(--gold-line); border-left: 3px solid var(--gold); background: linear-gradient(90deg, var(--gold-soft), var(--bg) 68%); }
   .category-delta-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
@@ -462,22 +482,25 @@
   .category-delta-value::after { content: " · shared default on hover"; color: var(--text-faint); font-weight: 400; }
   .category-restore-note { margin: 10px 0 -3px; color: var(--text-faint); font-size: 11px; }
   .category-restore-note b { color: var(--text-dim); font-weight: 650; }
-  .category-list { padding: 11px 14px 18px; max-height: none; overflow: visible; display: flex; flex-direction: column; gap: 7px; }
-  .category-row { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--panel); }
-  .category-row.off { opacity: .58; }
-  .category-row > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: minmax(220px, 1.35fr) minmax(280px, 1.7fr) auto; align-items: center; gap: 16px; padding: 13px 15px; }
+  .category-list { padding: 13px 15px 18px; max-height: none; overflow: visible; display: flex; flex-direction: column; }
+  /* The left rail encodes the row's layer: quiet grey = following the global
+     default, indigo = customized here, purple = added/local to this board. */
+  .category-row { border: 1px solid var(--line-soft); border-left: 3px solid var(--rail, var(--line-soft)); border-radius: var(--radius-sm); background: var(--card); }
+  .category-row.off { opacity: .62; }
+  .category-row > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: minmax(180px, 1.25fr) minmax(230px, 1.5fr) auto auto; align-items: center; gap: 14px; padding: 11px 14px; border-radius: 1px; }
+  .category-row > summary:hover { background: var(--card-2); }
   .category-row > summary::-webkit-details-marker { display: none; }
-  .category-row > summary::after { content: "+"; grid-column: 4; color: var(--text-faint); font: 22px/1 var(--serif); }
-  .category-row[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--card); }
+  .category-row > summary::after { content: "+"; grid-column: 4; color: var(--text-faint); font: 18px/1 var(--serif); width: 14px; text-align: center; }
+  .category-row[open] > summary { border-bottom: 1px solid var(--line-soft); background: var(--card-2); }
   .category-row[open] > summary::after { content: "−"; }
-  .category-row-name { min-width: 0; font-size: 18px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .category-row-id { margin-top: 3px; font: 13px var(--mono); color: var(--text-faint); }
-  .category-usage { font: 13px var(--mono); color: var(--gold-bright); white-space: nowrap; }
-  .category-route-live { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-  .category-route-live span { flex: none; font: 700 12.5px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--gold-bright); }
-  .category-route-live code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 15px var(--mono); color: var(--text); }
-  .category-row-body { padding: 16px 17px 18px; }
-  .category-row-detail { font-size: 15px; line-height: 1.5; color: var(--text-faint); }
+  .category-row-name { min-width: 0; font-size: 14.5px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: baseline; gap: 7px; }
+  .category-row-id { margin-top: 3px; font: 11px var(--mono); color: var(--text-faint); }
+  .category-usage { font: 11px var(--mono); color: var(--text-faint); white-space: nowrap; text-align: right; }
+  .category-route-live { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .category-route-live span { flex: none; font: 700 9.5px var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--text-faint); }
+  .category-route-live code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 12px var(--mono); color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); padding: 3px 8px; border-radius: var(--radius-sm); }
+  .category-row-body { padding: 15px 16px 17px; }
+  .category-row-detail { font-size: 13px; line-height: 1.55; color: var(--text-dim); }
   .category-route-warning { margin-top: 10px; padding: 8px 9px; border: 1px solid rgba(181,74,72,.26); background: rgba(181,74,72,.06); color: var(--high); font-size: 11.5px; line-height: 1.4; }
   .category-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
   .category-actions button, .category-add button { cursor: pointer; font-family: var(--sans); font-size: 11.5px; color: var(--text-dim); background: var(--card); border: 1px solid var(--line-soft); padding: 5px 9px; border-radius: var(--radius-sm); }
@@ -514,7 +537,11 @@
   .category-draft button { cursor: pointer; font: 700 11px var(--sans); color: var(--bg); background: var(--gold-bright); border: 1px solid var(--gold-bright); border-radius: var(--radius-sm); padding: 5px 10px; }
   .category-draft small { grid-column: 1 / -1; color: var(--text-dim); font-size: 10.5px; }
   @media (max-width: 700px) { .category-settings .cat-head { align-items: start; flex-direction: column; } .category-row > summary { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; } .category-route-live { grid-column: 1 / -1; } .category-row > summary::after { grid-column: 2; grid-row: 1; } }
-  .category-add summary { cursor: pointer; font-size: 11.5px; color: var(--text-dim); }
+  .category-add { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+  .category-add summary { cursor: pointer; font: 700 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--gold-bright); list-style: none; }
+  .category-add summary::-webkit-details-marker { display: none; }
+  .category-add summary::before { content: "+ "; }
+  .category-add[open] summary::before { content: "− "; }
   /* Story field in the ticket editor: a swatch beside the select, and the
      inline "new story" panel with a palette picker. */
   .story-select-row { display: flex; align-items: center; gap: 9px; }
@@ -751,7 +778,7 @@
                 <div class="fallback-control" id="globalFallbackControl"></div>
               </section>
               <section class="category-settings" aria-labelledby="categoriesTitle">
-                <div class="cat-head"><div class="cat-head-copy"><h3 id="categoriesTitle">Categories</h3><p>Choose where each kind of work runs. Edit the shared defaults, or switch to a board to customize a category just for it.</p></div><div class="category-scope-wrap"><span class="category-scope-project" id="categoryScopeProject"></span><div class="category-scope" id="categoryScope" role="group" aria-label="Category scope"></div></div></div>
+                <div class="cat-head"><div class="cat-head-copy"><h3 id="categoriesTitle">Categories</h3><p>Each kind of work routes to a model. Global defaults apply to every board; switch to a board to override, add, or switch off a category just for it.</p></div><div class="category-scope-wrap"><span class="category-scope-label">Editing</span><span class="category-scope-project" id="categoryScopeProject"></span><div class="category-scope" id="categoryScope" role="group" aria-label="Category layer"></div></div></div>
                 <div class="category-list" id="categoryList"></div>
               </section>
             </div>
@@ -1874,8 +1901,8 @@
     var canProject = state.current !== "all";
     var boardName = canProject ? currentBoardName() : "This board";
     if (projectLabel) projectLabel.textContent = "";
-    box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Shared defaults</button>' +
-      '<button type="button" data-scope="project" class="scope-board' + (state.categoryScope === "project" ? ' active' : '') + '"' + (canProject ? '' : ' disabled') + ' title="' + esc(boardName) + '">' + esc(boardName) + '</button>';
+    box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Global defaults</button>' +
+      '<button type="button" data-scope="project" class="scope-board' + (state.categoryScope === "project" ? ' active' : '') + '"' + (canProject ? '' : ' disabled') + ' title="' + esc(canProject ? boardName : "Open a board to edit its own categories") + '">' + esc(boardName) + '</button>';
     box.querySelectorAll('[data-scope]').forEach(function (button) { button.addEventListener("click", function () {
       if (button.disabled) return;
       state.categoryScope = button.dataset.scope;
@@ -1903,16 +1930,18 @@
     categoryScopeControls();
     box.innerHTML = "";
     var projectScope = categoryProject() !== "all";
-    // Deleting a shared default now auto-pins the boards that customized it
-    // (see removeCategory in store.js), so a category can no longer be left
-    // stranded without one. Skip any legacy dangling rows defensively.
-    state.categories.filter(function (category) { return !category.dangling; }).forEach(function (category) {
+    var boardName = currentBoardName();
+    var refresh = function (message) { return loadCategories().then(function () { toast(message); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }); };
+    // A category is "local" to this board when it carries a board layer — an
+    // override, a board-only add, a detach, or a disable — or is switched off here.
+    var isLocal = function (category) { return !!(category.layer && category.layer.kind) || category.disabled; };
+
+    function buildRow(category) {
       var layer = category.layer;
       var disabled = category.disabled;
-      var row = el("div", "category-row" + (category.enabled && !disabled ? "" : " off") + (disabled ? " disabled" : ""));
+      var row = el("details", "category-row" + (category.enabled && !disabled ? "" : " off") + (disabled ? " disabled" : ""));
       row.dataset.id = category.id;
       var effective = category.resolved || routingCatalog.globalFallback;
-      var categoryFallback = category.fallback;
       var globalFallback = category.globalFallback || routingCatalog.globalFallback;
       var degraded = (category.warnings || []).length > 0;
       var layerKind = layer && layer.kind;
@@ -1921,6 +1950,14 @@
       var localOnly = layerKind === "ADD" || (layerKind === "DETACH" && !layer.base);
       var customized = layerKind === "OVERRIDE" || (layerKind === "DETACH" && layer.base);
       var label = layerKind === "ADD" ? "ADDED HERE" : (layerKind === "OVERRIDE" || layerKind === "DETACH") ? "CUSTOMIZED" : layerKind === "DISABLE" ? "DISABLED HERE" : "";
+      // The left rail colour mirrors the layer badge so the split reads at a
+      // glance: purple = board-local, indigo = customized, grey = inherited.
+      var rail = "var(--line-soft)";
+      if (localOnly) rail = "#6554a6";
+      else if (customized) rail = "var(--gold)";
+      if (disabled) rail = "var(--line)";
+      row.style.setProperty("--rail", rail);
+      row.open = projectScope && (!!layerKind || disabled);
       var actions;
       if (disabled) {
         actions = '<button type="button" data-reenable-category>Re-enable here</button>';
@@ -1937,7 +1974,7 @@
       var restoreNote = !projectScope || disabled ? ""
         : customized ? '<p class="category-restore-note"><b>This board’s own copy.</b> It no longer follows the shared default — reset to follow it again.</p>'
         : layerKind === "DETACH" && !layer.base ? '<p class="category-restore-note"><b>Local to this board.</b> Its shared default was removed, so it no longer follows one.</p>' : "";
-      var badgeClass = (layerKind === "OVERRIDE" || layerKind === "DETACH") ? " detached" : "";
+      var badgeClass = layerKind === "ADD" ? " added" : (layerKind === "OVERRIDE" || layerKind === "DETACH") ? " detached" : layerKind === "DISABLE" ? " disabledhere" : "";
       row.innerHTML = '<summary><div><div class="category-row-name">' + esc(category.name) + (label ? '<span class="category-layer' + badgeClass + '">' + label + '</span>' : '') + '</div><div class="category-row-id">' + esc(category.id) + '</div></div>' +
         '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
         '<span class="category-usage">' + category.usageCount + ' tickets</span></summary>' +
@@ -1945,7 +1982,6 @@
         (degraded ? '<div class="category-route-warning"><strong>Route changed:</strong> ' + esc((category.warnings || []).join(' ')) + '</div>' : '') +
         categoryDelta(category) + restoreNote +
         '<div class="category-actions">' + actions + '</div></div>';
-      var refresh = function (message) { return loadCategories().then(function () { toast(message); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }); };
       var edit = row.querySelector('[data-edit-category]');
       if (edit) edit.addEventListener("click", function (e) {
         e.stopPropagation();
@@ -1965,8 +2001,39 @@
       });
       var disable = row.querySelector('[data-disable-category]');
       if (disable) disable.addEventListener("click", function () { mutate("PATCH", "/api/categories/" + encodeURIComponent(category.id) + "?project=" + encodeURIComponent(state.current), { disable: true }).then(function () { return refresh(category.name + " disabled here"); }).catch(function (e) { toast("Category failed: " + e.message); }); });
-      box.appendChild(row);
-    });
+      return row;
+    }
+
+    function appendGroup(kind, eyebrow, hint, list) {
+      var group = el("div", "cat-group " + kind);
+      group.innerHTML = '<div class="cat-group-head"><span class="cat-group-eyebrow">' + esc(eyebrow) + '</span><span class="cat-group-count">' + list.length + '</span><span class="cat-group-line"></span></div>' +
+        (hint ? '<p class="cat-group-hint">' + hint + '</p>' : '');
+      var body = el("div", "cat-group-body");
+      list.forEach(function (category) { body.appendChild(buildRow(category)); });
+      group.appendChild(body);
+      box.appendChild(group);
+    }
+
+    // Deleting a shared default now auto-pins the boards that customized it
+    // (see removeCategory in store.js), so a category can no longer be left
+    // stranded without one. Skip any legacy dangling rows defensively.
+    var cats = state.categories.filter(function (category) { return !category.dangling; });
+    if (projectScope) {
+      var local = cats.filter(isLocal);
+      var inherited = cats.filter(function (category) { return !isLocal(category); });
+      if (local.length) {
+        appendGroup("local", "Local to " + boardName, "Overrides, additions, and switched-off categories that apply to this board only. Other boards are unaffected.", local);
+      } else {
+        var empty = el("div", "cat-group local");
+        empty.innerHTML = '<div class="cat-group-head"><span class="cat-group-eyebrow">Local to ' + esc(boardName) + '</span><span class="cat-group-count">0</span><span class="cat-group-line"></span></div>' +
+          '<div class="cat-empty">Nothing overridden yet. <b>' + esc(boardName) + '</b> follows every global default below — edit or disable one to make it local to this board.</div>';
+        box.appendChild(empty);
+      }
+      appendGroup("inherited", "Inherited from global", "Following the shared defaults. Editing one here creates a board-local copy; the global default stays untouched.", inherited);
+    } else {
+      appendGroup("global", "Global categories", "Shared defaults. Every board inherits these unless it overrides them.", cats);
+    }
+
     var add = el("details", "category-add");
     add.innerHTML = '<summary>Add category' + (projectScope ? ' to this board' : '') + '</summary>' + categoryForm(null, true);
     wireCategoryForm(add.querySelector('.category-edit'), null);
