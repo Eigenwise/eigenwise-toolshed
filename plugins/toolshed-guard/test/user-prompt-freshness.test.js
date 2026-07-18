@@ -99,9 +99,30 @@ test('only exact maintenance prompts bypass the guard', () => {
 const completeTaskNotification = `<task-notification>
 <task-id>agent-a73d9245832c778d2</task-id>
 <tool-use-id>toolu_01D2s5bnLL6LWzYm1Qf7PsK7</tool-use-id>
+<output-file>C:/Users/kenny/AppData/Local/Temp/claude/agent-result.txt</output-file>
 <status>completed</status>
 <summary>Agent "sidequest-sq-452" completed</summary>
+<note>Result written to the output file.</note>
 <result>Submitted SQ-452.</result>
+<usage>
+  <input-tokens>1032</input-tokens>
+  <output-tokens>418</output-tokens>
+</usage>
+<worktree>
+  <path>C:/dev/eigenwise-public/eigenwise-toolshed/.claude/worktrees/agent-a73d9245832c778d2</path>
+  <branch>agent-a73d9245832c778d2</branch>
+</worktree>
+</task-notification>`;
+
+const reorderedTaskNotification = `<task-notification>
+<note>Result written to the output file.</note>
+<usage><input-tokens>1032</input-tokens></usage>
+<summary>Agent "sidequest-sq-452" completed</summary>
+<status>completed</status>
+<worktree><path>C:/dev/eigenwise-public/eigenwise-toolshed</path></worktree>
+<task-id>agent-a73d9245832c778d2</task-id>
+<output-file>C:/Users/kenny/AppData/Local/Temp/claude/agent-result.txt</output-file>
+<tool-use-id>toolu_01D2s5bnLL6LWzYm1Qf7PsK7</tool-use-id>
 </task-notification>`;
 
 test('complete native Agent task notifications bypass without registry or fetch work', async () => {
@@ -123,10 +144,18 @@ test('task notification tags only bypass a complete whole-prompt envelope', asyn
   const directory = tempDirectory();
   const { registryFile, stateFile } = files(directory);
   writeStateAtomic(fs, stateFile, stateForManifest(manifest('2.0.0'), JSON.stringify(manifest('2.0.0')), null, 100, '"first"'));
+  assert.equal(isTaskNotificationPrompt(reorderedTaskNotification), true);
   const invalid = [
     `Please handle this.\n${completeTaskNotification}`,
     `${completeTaskNotification}\nPlease handle this.`,
     completeTaskNotification.replace('</task-notification>', ''),
+    completeTaskNotification.replace('<task-id>agent-a73d9245832c778d2</task-id>\n', ''),
+    completeTaskNotification.replace('<tool-use-id>toolu_01D2s5bnLL6LWzYm1Qf7PsK7</tool-use-id>\n', ''),
+    completeTaskNotification.replace('<status>completed</status>\n', ''),
+    completeTaskNotification.replace('<summary>Agent "sidequest-sq-452" completed</summary>\n', ''),
+    completeTaskNotification.replace('<note>Result written to the output file.</note>', '<unknown>Result written to the output file.</unknown>'),
+    completeTaskNotification.replace('\n<task-id>', '\nUser prose\n<task-id>'),
+    completeTaskNotification.replace('Agent "sidequest-sq-452" completed', 'Agent <embedded>sidequest-sq-452</embedded> completed'),
     `quoted ${completeTaskNotification} in a user prompt`,
   ];
   for (const prompt of invalid) {
