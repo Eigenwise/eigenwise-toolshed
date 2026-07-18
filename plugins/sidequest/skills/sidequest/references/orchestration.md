@@ -40,14 +40,41 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Executor prompts stay lean and cannot narrow the ticket**: add only the ref, worker id, claim/done commands, stamped effort/model, and logistics the ticket does not carry. The ticket contract is authoritative and must travel in full, unchanged scope. If the plan changed, update the ticket before dispatching. **Anti-pattern: dispatch narrower than ticket.** In Cantizans SQ-87, the ticket required extracting the done block across every lesson route and two commits, while the dispatch limited work to intervals as a reference. The executor bounced correctly, then the orchestrator had to re-plan. Never create that contradiction.
 - **Record wave links from board results.** Never write an `SQ-n` ref you did not read back from a board response. File related tickets first, collect their returned refs, then use `update` or, preferably, `link` (`blocks`, `depends-on`, or `related`) to record relationships. Links are board data, so they stay correct without prose cross-references.
 - **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state. Until `pulse` is available, read claim age, comments, and `git log`. If several tickets need checking, use `changes --since <iso>` for the `{tickets:[...]}` delta, sorted oldest first.
-- **Escalate without wake-up nudges.** When a natural wakeup shows that an executor has no claim and no commit past the 2–3 minute grace period, stop it and respawn it once with the same briefing. If a Claude-routed executor dies immediately with a model-access or API error, do not respawn that route: its model likely left the plan. Flip the category route to its recorded fallback with one category edit, then redispatch. Never both message the old executor and spawn a replacement for one ticket. A respawn that still produces no claim is a user-visible failure: surface it, do not try a third spawn, and do not pull substantial work inline by default. `SendMessage` is for new information such as a scope change or unblock, never a "wake up" poke.
-- **Use event-driven wakeups.** Executors are background teammates, so `TaskOutput` cannot resolve their names (`No task found`) and polling is banned regardless. After spawning, end the turn. Its stop notification is the only wakeup. On the next natural wakeup, whether a stop notification, user message, or other task notification, make opportunistic liveness checks for work that has run about 5–8 minutes or longer. Never hold a session open with foreground or background `sleep`, blocking `TaskOutput` as a delay, or busy-wait loops. A turn with nothing to do ends. At every wakeup, diff board state with `changes --since <iso>` before deciding what to do next.
+- **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
+  replacing it. Preserve a verified commit, or recover the declared-scope diff, then read the ticket and
+  its thread again before deciding whether a replacement is needed. Never overwrite stranded work by
+  blindly redispatching. When a natural wakeup shows that an executor has no claim and no commit past the
+  2–3 minute grace period, stop it and respawn it once with the same briefing. If a Claude-routed executor
+  dies immediately with a model-access or API error, do not respawn that route: its model likely left the
+  plan. Flip the category route to its recorded fallback with one category edit, then redispatch. Never
+  both message the old executor and spawn a replacement for one ticket. A respawn that still produces no
+  claim is a user-visible failure: surface it, do not try a third spawn, and do not pull substantial work
+  inline by default. `SendMessage` is for new information such as a scope change or unblock, never a
+  "wake up" poke.
+- **Use steerable background execution by default.** Executors are background teammates, so `TaskOutput`
+  cannot resolve their names (`No task found`) and polling is banned regardless. After spawning, end the
+  turn. Its stop notification is the only wakeup. On the next natural wakeup, whether a stop notification,
+  user message, or other task notification, make opportunistic liveness checks for work that has run about
+  5–8 minutes or longer. Never hold a session open with foreground or background `sleep`, blocking
+  `TaskOutput` as a delay, or busy-wait loops. A turn with nothing to do ends. At every wakeup, diff board
+  state with `changes --since <iso>` before deciding what to do next. Use synchronous execution only for a
+  tight wave where blindness is acceptable.
 - **Clear verified workers.** An executor stop notification is a cleanup trigger: pulse the ticket, verify its done or submission comment, board state, and git result, then call `TaskStop` in one motion. A `READY_FOR_INTEGRATION` verdict additionally queues the ticket for the publish transaction ([publishing.md](publishing.md)) — publish the wave's submissions in one batch; never respawn an executor for a submitted ticket. Executors deliberately kept alive mid-ticket get the same treatment at their next natural wakeup. Sweep ALL finished executors, not just the one that notified, so session exit only stops live work.
 
 - **Reports stay terse:** what changed, files/lines, verification output, and close confirmation. A repo-changing executor reports a SUBMITTED commit, never a push — the orchestrator's publish transaction is what makes it reachable from `origin/main`, and the ticket goes done only after that reachability check passes.
 
 - Parallelism costs tokens and orchestration overhead — a couple of parallel investigations or an
   executor wave where sizes justify it, not a swarm for everything.
+
+## Natural orchestrator checkpoints
+
+At every natural wakeup, do a short self-check before launching more work. Check payload and context bloat
+(first trim raw reports or reopen only the ticket comments you need), lingering workers (pulse and clear
+finished workers), route anomalies (the fresh ticket `exec` object, claim token, executor, effort, and
+unchanged dispatch briefing), and board hygiene (stale claims, submitted tickets, unanswered questions,
+and blocked work). These are event-driven checks, not a polling loop. File or release the smallest
+follow-up when something is off; do not let the main thread silently accumulate dead workers or stale
+board state.
 
 ## Orchestration cost: keep the lead cheap to wake
 
@@ -186,9 +213,11 @@ and `done` or `release` clears the dispatch guard for either mode. An Agent ackn
 token are visible. A missing claim means diagnose or respawn, never wait for a completion notification.
 Never trust a worker's self-reported identity. The token-gated claim and the dispatch response are the evidence.
 
-## Native Agent dispatch
+## Routed Agent dispatch
 
-All routed execution stays in the current conversation. Call `native_agent`, pass its returned spawn
-object unchanged to Agent, and call `native_agent_cleanup` when the executor finishes. `sidequest work`
-and MCP `dispatch` are disabled because they cannot invoke Agent and must never start a separate Claude
-process.
+All routed execution stays in the current conversation. Call `dispatch <ref>` through the CLI or MCP,
+then pass its exact stable executor, `spawn` object, and complete `briefing` unchanged to Agent. The
+executor claims using the returned token, its exact executor name, and the stamped effort. The claim guard
+is the proof that the right route ran. For Codex, preserve the briefing's one route marker unchanged so the
+gateway receives the resolved model and effort; never add, rewrite, or combine markers. Dispatch is the
+current board interface for routed work.

@@ -165,8 +165,10 @@ but a board can fork it like any other.
 
 Tickets keep their category ID as policy, so changing a category updates the next dispatch without rewriting
 existing tickets. New tickets should use `--category` so the dispatch intent is explicit. Routed work stays in
-the current Claude Code conversation: sidequest returns an already-registered native Agent executor, then the
-conversation invokes it through Agent.
+the current Claude Code conversation: Sidequest returns its stable native Agent executor, then the
+conversation invokes it through Agent. Sidequest owns this routing boundary. Do not recreate a standalone
+Switchboard. Any future extraction must be a shared library imported by Sidequest, with Sidequest still
+owning ticket routing and execution.
 
 ## File scopes & parallel waves
 
@@ -185,9 +187,10 @@ executor per ticket, one wave at a time. Tickets without a declared scope never 
 Claude falls back to judgment for those. Cards show a small 📁 count, and the ticket editor has a
 comma-separated **Files** field.
 
-This pairs with category routing into a planning doctrine the skill teaches: **cut work along file
-boundaries and shape stories as design → parallel wave(s) → integrate** — the thinking stays on the top
-model, the labor gets cheap and wide.
+This pairs with category routing into a planning doctrine the skill teaches: scope work by affected
+surfaces, not just anchor files. A storage change commonly includes the store, CLI, MCP, skill/docs, and
+applicable full tests. Declare every surface, then shape stories as design → parallel wave(s) → integrate.
+The thinking stays on the top model, the labor gets cheap and wide.
 
 ## Reminders
 
@@ -252,31 +255,29 @@ how to verify — never a manager's one-liner. The category route and fallback c
 executor runs the work, so precision substitutes for model capability.
 
 ```bash
-sidequest next --by <you>          # atomically claim the top-priority available ticket
-sidequest claim SQ-3 --by <you>    # or claim a specific one
-sidequest done SQ-3 --by <you>     # finished: mark done + release the claim
-sidequest release SQ-3 --by <you>  # drop it unfinished (optionally --status todo)
+sidequest dispatch SQ-3                              # returns exact executor, briefing, spawn fields, token
+sidequest claim SQ-3 --by <worker> --executor <exact-executor> --effort <stamped-effort> --token <token>
+sidequest commit SQ-3 --by <worker> --message "scoped change"  # only declared ticket paths
+sidequest submit SQ-3 --by <worker> --commit <hash> --verify "<exact command>"
 ```
 
-- **Claim before work, always.** The claim is the atomic check that the ticket is *still there and still
-  free*. If it fails — already claimed by someone else, already done, or deleted — the CLI says so and
-  exits non-zero, and you just don't work it. That's the whole guarantee: **it never hurts if another
-  agent picked it up first.** You never re-do their work, even for a ticket you filed yourself moments
-  ago.
-- **`--by`** is your worker id (a session id or a short label); use a stable one so you can finish what
-  you claimed. Concurrent workers must use distinct ids.
-- **Expensive orchestrator, cheap executors.** Claude's main thread (usually the priciest model)
-  plans and integrates; the actual work routes through each category's concrete model and fallback chain as
-  **short, bounded executor runs** that report back fast. Several small same-route tickets batch into one
-  executor, independent tickets run as a parallel wave, and only trivial one-step changes happen inline.
-- **Crash-safe.** A claim left by a worker that crashed or wandered off becomes reclaimable after a
-  timeout (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). On the dashboard, a claimed ticket shows a green
-  "working" chip with the worker's id (muted once the claim goes stale).
-- **Claims free themselves when a session ends.** A bundled `SessionEnd` hook releases every ticket a
-  session left mid-work (still in **Doing**) straight back to **To do** the moment that session ends — so a
-  dependent doesn't wait out the full 60-minute TTL just because you closed the terminal. It's
-  session-scoped and safe: it only touches that session's own claims, and the TTL stays the backstop for
-  anything the hook never saw. Nothing to configure.
+- **Routed repo lifecycle:** dispatch → token claim → scoped commit → submit → orchestrator publish. The
+  executor uses the exact dispatch executor and unchanged briefing. The token and claim guard prove the
+  resolved route; the executor pins `refs/sidequest/SQ-n`, never pushes or assigns release versions.
+  `submit` parks the verified local commit for the orchestrator's serialized publish transaction.
+- **Direct claim/done is narrow.** Use `next --direct` or `claim --direct`, followed by `done`, only for
+  intentional inline work or non-repository work. Routed repository work ends with `submit`.
+- **Claim before work, always.** The claim is the atomic check that the ticket is still free. If it fails,
+  don't work the ticket.
+- **`--by`** is a unique worker id. Concurrent workers must use distinct ids.
+- **Steerable background execution is the default.** The orchestrator plans and integrates; short bounded
+  executors do the labor. Synchronous runs are only for a tight wave when blindness is acceptable.
+- **Crash-safe salvage.** A dead worker becomes reclaimable after `SIDEQUEST_CLAIM_TTL_MIN` (default 60
+  min), but inspect its worktree and preserve a verified commit or in-scope diff before releasing and
+  redispatching. SessionEnd releases its own claims; TTL is the backstop for anything the hook never saw.
+- **Release versions stay central.** The orchestrator alone assigns matching versions in both
+  `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` during publish. Executors never edit
+  manifests or bump versions.
 
 ## Fan out over independent tickets
 
@@ -292,17 +293,19 @@ sidequest ready [--json] [--brief]   # the fan-out set: unclaimed, unblocked, no
                                      # --brief: compact tickets, no bodies (the cheap orchestration read; implies --json)
 ```
 
-Each subagent `claim`s a different ticket (distinct `--by`) → does the work → `done`; if a claim loses
-a race it just moves on, so two agents never collide. Only **independent** tickets are parallelized —
+Each routed subagent dispatches, token-claims, does the scoped work, commits, and submits; if a claim
+loses a race it just moves on, so two agents never collide. Only **independent** tickets are parallelized —
 anything that shares files or has a `depends-on` link stays sequential (blocked tickets aren't even in
 `ready`). The bundled hook and skill make this the default behavior, not an afterthought.
 
 ## Native routed execution
 
 Routed tickets run through the current Claude Code conversation only. Call `sidequest dispatch SQ-n` (or
-MCP `dispatch`) to return the ticket's stable executor, complete briefing, spawn fields, and claim token,
-then invoke that exact spawn spec with Agent. Default dispatch is instant: it does not wait for a
-registration announcement. `sidequest work`/`drain` cannot invoke the current conversation's Agent tool.
+MCP `dispatch`) to return the ticket's exact stable executor, complete briefing, spawn fields, and claim
+token, then invoke that exact spawn spec with Agent. Pass the briefing unchanged, including its one Codex
+route marker when present. The executor must claim with that token, exact executor, and stamped effort.
+Default dispatch is instant: it does not wait for a registration announcement. `sidequest work`/`drain`
+cannot invoke the current conversation's Agent tool.
 
 Generic/custom background agents are only for a quick read-only scout whose prompt starts with
 `[sidequest-scout]` and explicitly says quick, read-only, and no edits/writes. The bundled Agent hook denies
@@ -386,7 +389,7 @@ string (no shell-quoting). It registers automatically when the plugin loads; you
 
 The **CLI is still the human interface** and does everything the tools do plus `dashboard`/`serve`. The
 category taxonomy and route shape are the same across CLI, MCP, and dashboard. Routed execution uses
-`native-agent` plus the current conversation's Agent tool. The two board surfaces act on the same boards.
+`dispatch`, then the current conversation's exact Agent spawn. The two board surfaces act on the same boards.
 
 ## CLI
 
@@ -405,12 +408,12 @@ node <plugin>/bin/sidequest.js global-fallback --model sonnet --effort medium
 node <plugin>/bin/sidequest.js models                               # categories, routes, and fallback chain
 node <plugin>/bin/sidequest.js next --category coding.normal --by <you>  # claim work by category route
 node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
-node <plugin>/bin/sidequest.js native-agent SQ-3 [--prompt "task"] [--json] # return the registered executor + bounded prompt
-node <plugin>/bin/sidequest.js native-agent cleanup --name <name> # remove a legacy temporary definition
+node <plugin>/bin/sidequest.js dispatch SQ-3 [--ephemeral]   # exact routed executor, briefing, spawn, token
 node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
-node <plugin>/bin/sidequest.js claim SQ-3 --by <you>          # take a ticket to work (atomic; --force to steal)
-node <plugin>/bin/sidequest.js next --by <you>                # claim the top-priority available ticket
-node <plugin>/bin/sidequest.js done SQ-3 --by <you>           # finish + release  (release = drop unfinished)
+node <plugin>/bin/sidequest.js claim SQ-3 --by <worker> --direct # intentional inline or non-repo work
+node <plugin>/bin/sidequest.js commit SQ-3 --by <worker> --message "scoped change"
+node <plugin>/bin/sidequest.js submit SQ-3 --by <worker> --commit <hash> --verify "<exact command>"
+node <plugin>/bin/sidequest.js done SQ-3 --by <worker>       # direct inline or non-repo work only
 node <plugin>/bin/sidequest.js link SQ-4 depends-on SQ-3      # dependencies (blocks | depends-on | related)
 node <plugin>/bin/sidequest.js comment SQ-3 -m "note"         # ask = question (pause + await the reply)
 node <plugin>/bin/sidequest.js archive --done                # tuck away all done  ·  unarchive <ref> restores
@@ -443,6 +446,8 @@ Each ticket gets a short human ref (`SQ-1`, `SQ-2`, …) and each story a `US-1`
 
 Storage runs on Node's built-in `node:sqlite`, so there's no native dependency to build — but it needs
 **Node 22.5+**. WAL mode is on, so the dashboard reading and an agent writing don't block each other.
+After a schema-bumping Sidequest upgrade, a loaded MCP server or old session can still write the old store
+shape. Reload plugins before writing; until then, write through the new CLI and use MCP only for reads.
 
 **Upgrading from the JSON store.** Older builds kept one JSON file per ticket and story plus
 `meta.json`, `model-prefs.json`, and friends. The first time a newer build opens your home it migrates

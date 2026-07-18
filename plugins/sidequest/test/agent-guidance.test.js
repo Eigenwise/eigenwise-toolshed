@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
+const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
 const skill = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
 const publishing = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'publishing.md'), 'utf8');
@@ -56,4 +57,30 @@ test('shared-tree guidance detects foreign staging and absorbed scope patches', 
   assert.match(executorTemplate, /`git apply --check --reverse --cached <saved-patch>` proves it was absorbed/);
   assert.match(executorTemplate, /must be restored with `git apply --cached <saved-patch>`/);
   assert.match(executorTemplate, /If it includes any path outside the declared scope, treat it as foreign work: do not commit/);
+});
+
+test('complete Sidequest doctrine stays shipped and current', () => {
+  assert.match(skill, /Cut along affected surfaces/);
+  assert.match(skill, /store, CLI, MCP surface, skill\/docs, and applicable full test directory/);
+  assert.match(readme, /scope work by affected\nsurfaces/);
+  assert.match(skill, /~\/.claude\/sidequest\/sidequest\.db/);
+  assert.match(readme, /loaded MCP server or old session can still write the old store/);
+  assert.match(skill, /Do not recreate a standalone Switchboard/);
+  assert.match(readme, /Do not recreate a standalone\nSwitchboard/);
+  assert.match(orchestration, /Salvage before redispatch/);
+  assert.match(skill, /Executors bounce back, they don't grind/);
+  assert.match(skill, /release \+ report fast/);
+  assert.match(orchestration, /payload and context bloat/);
+  assert.match(orchestration, /lingering workers/);
+  assert.match(orchestration, /route anomalies/);
+  assert.match(orchestration, /board hygiene/);
+  assert.match(orchestration, /steerable background execution by default/i);
+  assert.match(readme, /\*\*Routed repo lifecycle:\*\* dispatch → token claim → scoped commit → submit →\s+orchestrator publish/);
+  assert.match(readme, /matching versions in both\n  `\.claude-plugin\/plugin\.json` and `\.claude-plugin\/marketplace\.json`/);
+  assert.match(orchestration, /exact executor name, and the stamped effort/);
+  assert.match(orchestration, /never add, rewrite, or combine markers/);
+  for (const source of [readme, skill, orchestration]) {
+    assert.doesNotMatch(source, new RegExp('native' + '_agent', 'i'));
+    assert.doesNotMatch(source, new RegExp(['MCP `dispatch`', ' are disabled'].join(''), 'i'));
+  }
 });
