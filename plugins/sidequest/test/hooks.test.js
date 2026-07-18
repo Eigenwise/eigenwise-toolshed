@@ -890,17 +890,18 @@ test('dispatch ledger records an authoritative launch, agent bind, and claim ack
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const projectPath = store.readMeta(slug).path;
   const prompt = `Work ${ticket.ref} --project "${projectPath}" --token ${prepared.token}`;
-  runHookOutput(FORCE_BYPASS, {
+  const launch = runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
     tool_name: 'Agent',
     tool_input: { subagent_type: prepared.ticket.dispatchExecutor, name: 'dispatch-ledger', prompt },
   });
+  const agentName = launch.hookSpecificOutput.updatedInput.name;
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'launched');
   runHookOutput(SUBAGENT_START, {
     session_id: sessionId,
     agent_type: prepared.ticket.dispatchExecutor,
     agent_id: 'native-launch-1',
-    agent_name: 'dispatch-ledger',
+    agent_name: agentName,
   });
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, 'native-launch-1');
   assert.equal(store.claimTicket(slug, ticket.ref, 'dispatch-worker', {
@@ -911,7 +912,63 @@ test('dispatch ledger records an authoritative launch, agent bind, and claim ack
   const pulse = store.pulsePayload(slug, ticket.ref);
   assert.equal(pulse.dispatch.outcome, 'claimed');
   assert.equal(pulse.dispatch.tokenPrefix, prepared.token.slice(0, 12));
-  assert.equal(pulse.dispatch.agentName, 'dispatch-ledger');
+  assert.equal(pulse.dispatch.agentName, agentName);
+});
+
+test('concurrent same-type dispatches isolate launch, bind, claim, and stop by token-derived native identity', () => {
+  const first = addEffortTicket('first same-type dispatch', 'high');
+  const second = addEffortTicket('second same-type dispatch', 'high');
+  const sessionId = `concurrent-${++sqSeq}`;
+  const projectPath = store.readMeta(slug).path;
+  const preparedFirst = store.prepareDispatch(slug, first.ref, { sessionId });
+  const preparedSecond = store.prepareDispatch(slug, second.ref, { sessionId });
+  const launches = [preparedFirst, preparedSecond].map((prepared) => runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: prepared.ticket.dispatchExecutor,
+      name: 'sidequest-exec-dispatch-high',
+      prompt: `Work ${prepared.ticket.ref} --project "${projectPath}" --token ${prepared.token}`,
+    },
+  }));
+  const names = launches.map((launch) => launch.hookSpecificOutput.updatedInput.name);
+  assert.notEqual(names[0], names[1]);
+  assert.match(names[0], new RegExp(`${first.ref.toLowerCase()}-${preparedFirst.token.slice(0, 12)}$`));
+  assert.match(names[1], new RegExp(`${second.ref.toLowerCase()}-${preparedSecond.token.slice(0, 12)}$`));
+
+  for (const [index, prepared] of [preparedFirst, preparedSecond].entries()) {
+    runHookOutput(SUBAGENT_START, {
+      session_id: sessionId,
+      agent_type: prepared.ticket.dispatchExecutor,
+      agent_id: `native-concurrent-${index + 1}`,
+      agent_name: names[index],
+    });
+    assert.equal(store.getTicket(slug, prepared.ticket.ref).dispatch.agentId, `native-concurrent-${index + 1}`);
+    assert.equal(store.claimTicket(slug, prepared.ticket.ref, `concurrent-worker-${index + 1}`, {
+      sessionId,
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+  }
+
+  const firstStop = runHook(SUBAGENT_STOP, {
+    session_id: sessionId,
+    agent_type: preparedFirst.ticket.dispatchExecutor,
+    agent_id: 'native-concurrent-1',
+    agent_name: names[0],
+  });
+  assert.match(firstStop, new RegExp(`HOLDING ${first.ref} claim`));
+  assert.equal(store.getTicket(slug, first.ref).dispatch.outcome, 'stopped_claimed');
+  assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'claimed');
+
+  const secondStop = runHook(SUBAGENT_STOP, {
+    session_id: sessionId,
+    agent_type: preparedSecond.ticket.dispatchExecutor,
+    agent_id: 'native-concurrent-2',
+    agent_name: names[1],
+  });
+  assert.match(secondStop, new RegExp(`HOLDING ${second.ref} claim`));
+  assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'stopped_claimed');
 });
 
 test('session start reconciles a reload-lost launch once and leaves it ready to respawn', () => {

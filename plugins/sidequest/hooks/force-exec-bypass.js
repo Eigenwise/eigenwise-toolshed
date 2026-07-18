@@ -77,7 +77,15 @@ function extractDispatchToken(prompt) {
   return match ? match[1] : null;
 }
 
-function recordAuthoritativeLaunch(input, type) {
+function dispatchAgentName(input) {
+  const toolInput = input && input.tool_input;
+  const refs = extractRefs(toolInput && toolInput.prompt);
+  const token = extractDispatchToken(toolInput && toolInput.prompt);
+  if (refs.length !== 1 || !token) return null;
+  return `sidequest-${refs[0].toLowerCase()}-${token.slice(0, 12)}`;
+}
+
+function recordAuthoritativeLaunch(input, type, agentName) {
   const toolInput = input && input.tool_input;
   const prompt = toolInput && toolInput.prompt;
   const refs = extractRefs(prompt);
@@ -93,7 +101,7 @@ function recordAuthoritativeLaunch(input, type) {
       token,
       executor: type,
       sessionId,
-      agentName: toolInput.name,
+      agentName: agentName || toolInput.name,
     });
   } catch (_) {
     // A launch ledger must never block the Agent call.
@@ -206,6 +214,8 @@ function main() {
   }
 
   const updatedInput = { ...toolInput, mode: 'bypassPermissions' };
+  const launchAgentName = dispatchAgentName(input);
+  if (launchAgentName) updatedInput.name = launchAgentName;
 
   if (isPinnedSidequestExecutor(type)) {
     if (type.startsWith('sidequest-exec-dispatch-')) {
@@ -238,7 +248,7 @@ function main() {
     }
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, 'model');
     if (hadModel) delete updatedInput.model;
-    recordAuthoritativeLaunch(input, type);
+    recordAuthoritativeLaunch(input, type, launchAgentName);
     process.stdout.write(JSON.stringify({
       ...(hadModel
         ? { systemMessage: `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` }
@@ -255,7 +265,7 @@ function main() {
     const res = resolveStampedModel(input);
     if (res.status === 'ok') {
       updatedInput.model = res.model;
-      recordAuthoritativeLaunch(input, type);
+      recordAuthoritativeLaunch(input, type, launchAgentName);
       process.stdout.write(JSON.stringify({
         systemMessage: `sidequest: ${type} spawned without a model — injected "${res.model}" from ${res.refs.join(', ')}'s resolved category route. Always pass model: exec.model on Claude routes.`,
         hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
@@ -276,14 +286,14 @@ function main() {
   // an unnoticed divergence from the named ticket(s)' resolved concrete model.
   const res = resolveStampedModel(input);
   if (res.status === 'ok' && res.model !== toolInput.model) {
-    recordAuthoritativeLaunch(input, type);
+    recordAuthoritativeLaunch(input, type, launchAgentName);
     process.stdout.write(JSON.stringify({
       systemMessage: `sidequest: ${type} was spawned with model "${toolInput.model}" but ${res.refs.join(', ')} resolves to "${res.model}" — kept the caller's value; confirm the cap is deliberate.`,
       hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
     }));
     return;
   }
-  recordAuthoritativeLaunch(input, type);
+  recordAuthoritativeLaunch(input, type, launchAgentName);
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
   }));

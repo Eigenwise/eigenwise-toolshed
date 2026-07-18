@@ -1770,7 +1770,7 @@ function bindDispatchAgent(sessionId, executor, agentId, agentName) {
   });
 }
 
-function markDispatchStopped(sessionId, executor, agentId) {
+function markDispatchStopped(sessionId, executor, agentId, agentName) {
   if (!sessionId || !executor) return { ok: false, reason: 'missing_identity' };
   const matches = [];
   for (const project of listProjects({ all: true })) {
@@ -1778,6 +1778,7 @@ function markDispatchStopped(sessionId, executor, agentId) {
       const state = dispatchState(ticket);
       if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor)) continue;
       if (agentId && state.agentId && state.agentId !== String(agentId)) continue;
+      if (agentName && state.agentName && state.agentName !== String(agentName)) continue;
       if (state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed') {
         matches.push({ slug: project.slug, id: ticket.id });
       }
@@ -1791,6 +1792,7 @@ function markDispatchStopped(sessionId, executor, agentId) {
       return { ok: false, reason: 'not_found' };
     }
     if (agentId) state.agentId = String(agentId);
+    if (agentName) state.agentName = String(agentName);
     setDispatchTerminal(t, t.claim && t.claim.by ? 'stopped_claimed' : 'failed', 'subagent-stop');
     if (!t.claim || !t.claim.by) {
       t.dispatchNonce = null;
@@ -3364,9 +3366,12 @@ function reconcileSession(sessionId, opts) {
 // an unknown/absent session. Fail-soft: any hiccup degrades to []. Like the rest of
 // the registry it is a convenience over the TTL, never a source of truth about
 // whether a claim is valid. Shape: [{ slug, ticketId, ref, by, at, status, held }].
-function sessionClaims(sessionId) {
+function sessionClaims(sessionId, opts) {
   const out = [];
   if (!sessionId) return out;
+  const agentId = opts && opts.agentId ? String(opts.agentId) : null;
+  const agentName = opts && opts.agentName ? String(opts.agentName) : null;
+  const executor = opts && opts.executor ? String(opts.executor) : null;
   let claims = [];
   try {
     withWorkersLock(() => {
@@ -3384,6 +3389,10 @@ function sessionClaims(sessionId) {
     try {
       const t = getTicket(c.slug, c.ticketId);
       if (t) {
+        const state = dispatchState(t);
+        if (agentName && (!state || state.agentName !== agentName)) continue;
+        if (agentName && agentId && state.agentId !== agentId) continue;
+        if (agentName && executor && state.executor !== executor) continue;
         ref = t.ref;
         status = t.status;
         held = !!(t.claim && t.claim.by && (!c.by || t.claim.by === c.by));

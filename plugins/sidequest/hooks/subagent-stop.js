@@ -139,6 +139,7 @@ function main() {
   const data = readStdin();
   if (!data) process.exit(0);
   const agentId = String(data.agent_id || data.agentId || '');
+  const agentName = String(data.agent_name || data.agentName || data.name || '');
   clearNearTurnCapCounter(agentId);
 
   // Our own additionalContext re-fires SubagentStop with this set. Never drive our
@@ -163,14 +164,18 @@ function main() {
   }
 
   try {
-    store.markDispatchStopped(String(sessionId), agentType, agentId || null);
+    store.markDispatchStopped(String(sessionId), agentType, agentId || null, agentName || null);
   } catch (_) {
     // The stop verdict below still tells the parent what to do.
   }
 
   let claims;
   try {
-    claims = store.sessionClaims(String(sessionId));
+    claims = store.sessionClaims(String(sessionId), {
+      agentId: agentId || null,
+      agentName: agentName || null,
+      executor: agentType || null,
+    });
   } catch (_) {
     process.exit(0);
   }
