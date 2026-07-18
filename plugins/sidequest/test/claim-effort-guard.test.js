@@ -12,6 +12,7 @@ const DISCOVERY_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-ca
 const catalogDir = path.join(DISCOVERY_ROOT, 'codex-gateway');
 fs.mkdirSync(catalogDir, { recursive: true });
 fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
+  schemaVersion: 3, source: 'codex-gateway',
   models: [{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }],
 }));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;

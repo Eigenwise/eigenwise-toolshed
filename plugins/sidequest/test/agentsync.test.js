@@ -27,7 +27,7 @@ function readDir(dir) { return fs.readdirSync(dir).filter((file) => file.endsWit
 function seedCatalog(models) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-'));
   fs.mkdirSync(path.join(dir, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'codex-gateway', 'catalog.json'), JSON.stringify({ source: 'codex-gateway', models }));
+  fs.writeFileSync(path.join(dir, 'codex-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'codex-gateway', models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
 }
 function clearCatalog() { process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR; }
@@ -243,6 +243,21 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
     subagent_type: created.name, name: created.name, mode: 'bypassPermissions',
   });
   assert.ok(JSON.stringify(created.spawn).length < 200);
+});
+
+test('ticket executor preserves v2 catalog migration input', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-v2-catalog-'));
+  const catalog = path.join(root, 'codex-gateway');
+  fs.mkdirSync(catalog, { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'catalog.json'), JSON.stringify({
+    schema: 2, source: 'codex-gateway', models: [TERRA],
+  }));
+  process.env.SIDEQUEST_DISCOVERY_DIRS = root;
+  const created = agentsync.createTicketExecutor({
+    ref: 'SQ-412', title: 'Catalog migration', model: TERRA.slug, effort: 'high',
+    dispatchExecutor: 'sidequest-ticket-sq-412-gpt-5-6-terra-a1b2c3d4', category: {},
+  }, { nonce: 'catalog-v2-token', sessionId: 'session-412', dir: tmpDir(), waitMs: 0 });
+  assert.match(fs.readFileSync(created.file, 'utf8'), /^model: claude-codex-gpt-5\.6-terra\[1m\]$/m);
 });
 
 test('ticket executors use a fresh prepared name and prune a superseded definition', () => {

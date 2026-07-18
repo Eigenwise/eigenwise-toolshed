@@ -12,7 +12,7 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = empty;
 const discovery = require('../lib/discovery.js');
 const store = require('../lib/store.js');
 
-function writeCatalog(models, catalog = { schema: 2 }) {
+function writeCatalog(models, catalog = { schemaVersion: 3, source: 'codex-gateway' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-'));
   const dir = path.join(root, 'codex-gateway');
   fs.mkdirSync(dir, { recursive: true });
@@ -40,9 +40,9 @@ test('discovery validates concrete catalog identity and drops routing hints', ()
   }]);
 });
 
-test('discovery accepts catalog v3 during the v2 migration window', () => {
+test('discovery accepts catalog v2 migration input', () => {
   writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }], {
-    schemaVersion: 3,
+    schema: 2,
     source: 'codex-gateway',
     updatedAt: new Date().toISOString(),
   });

@@ -41,7 +41,7 @@ function writeCatalogRaw(dir, body) {
 }
 function seedCatalog(models) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-catalog-'));
-  writeCatalogRaw(dir, JSON.stringify({ schema: 2, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }));
+  writeCatalogRaw(dir, JSON.stringify({ schemaVersion: 3, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
   return dir;
 }
