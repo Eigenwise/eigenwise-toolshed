@@ -1900,17 +1900,45 @@ function releaseTicket(slug, idOrRef, by, opts) {
     // vacuously pass the ownership check below and opts.status would stomp the
     // ticket straight back to "todo", silently un-completing finished work.
     // Mirrors claimTicket's own "done" refusal just above.
-    if (t.status === 'done' && !opts.force) return { ok: false, reason: 'done', ticket: t };
+    if (t.status === 'done' && !opts.force) {
+      const completion = t.completion;
+      const key = completion && [t.id, completion.claimAt || completion.at, by, 'done'].join(':');
+      if (opts.status === 'done' && completion && completion.key === key && completion.by === by && completion.state === 'done') {
+        const comment = Array.isArray(t.comments) && completion.commentId
+          ? t.comments.find((entry) => entry.id === completion.commentId) || null
+          : null;
+        return { ok: true, idempotent: true, ticket: t, comment };
+      }
+      return { ok: false, reason: 'done', ticket: t };
+    }
     const held = t.claim;
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
+    const now = new Date().toISOString();
+    let comment = null;
     t.claim = null;
     setDispatchTerminal(t, opts.status === 'done' ? 'done' : 'released', opts.source || 'cli');
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
     if (opts.workedBy) t.workedBy = opts.workedBy; // self-reported provenance stamp (done transition only)
+    if (t.status === 'done') {
+      t.completion = {
+        key: [t.id, held && held.at ? held.at : now, by, 'done'].join(':'),
+        by,
+        state: 'done',
+        claimAt: held && held.at ? held.at : null,
+        at: now,
+        commentId: null,
+      };
+      if (opts.completionComment) {
+        if (!Array.isArray(t.comments)) t.comments = [];
+        comment = createComment(opts.completionComment, now);
+        t.comments.push(comment);
+        t.completion.commentId = comment.id;
+      }
+    }
     // Completing a submitted ticket is the publish transaction consuming the
     // submission — stamp it integrated (kept as provenance) so the ticket
     // leaves the ready-for-integration queue the moment it goes done.
@@ -1919,14 +1947,15 @@ function releaseTicket(slug, idOrRef, by, opts) {
     }
     t.lastEventType = 'status';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
-    t.updatedAt = new Date().toISOString();
+    t.updatedAt = now;
     putTicket(slug, t);
     // Drop this claim from the session registry — it's no longer outstanding, so a
     // later reconcile of the same session won't try to touch it (keyed on the
     // ticket, so a blank `by` on the done doesn't matter). No-op without a session id.
     if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
-    return { ok: true, ticket: t };
+    if (comment) queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
+    return { ok: true, ticket: t, comment };
   });
 }
 
@@ -1964,7 +1993,18 @@ function makeWorkedBy(input) {
 function completeTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   const workedBy = makeWorkedBy({ model: opts.model, effort: opts.effort, by });
-  return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, { status: 'done', workedBy }));
+  let completionComment = null;
+  if (opts.body != null && String(opts.body).trim()) {
+    completionComment = prepareComment({ by, body: opts.body, kind: 'comment', source: opts.source || 'cli' });
+    if (!completionComment.ok) {
+      throw new Error(`completion comment ${completionComment.reason}`);
+    }
+  }
+  return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, {
+    status: 'done',
+    workedBy,
+    completionComment,
+  }));
 }
 
 /* ------------------------------------------------------------------ *
@@ -2352,32 +2392,46 @@ function stripControlChars(s) {
   return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
-function addComment(slug, idOrRef, fields) {
+function prepareComment(fields) {
   fields = fields || {};
   const body = stripControlChars(String(fields.body || '')).trim();
   if (!body) return { ok: false, reason: 'empty' };
   if (body.length > COMMENT_BODY_MAX) {
     return { ok: false, reason: 'too_long', max: COMMENT_BODY_MAX, length: body.length };
   }
+  return {
+    ok: true,
+    by: String(fields.by || 'agent'),
+    kind: COMMENT_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : 'comment',
+    body,
+    source: fields.source ? String(fields.source) : 'cli',
+  };
+}
+
+function createComment(fields, at) {
+  return {
+    id: newCommentId(),
+    by: fields.by,
+    kind: fields.kind,
+    body: fields.body,
+    source: fields.source,
+    at: at || new Date().toISOString(),
+  };
+}
+
+function addComment(slug, idOrRef, fields) {
+  const prepared = prepareComment(fields);
+  if (!prepared.ok) return prepared;
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: 'not_found' };
     if (!Array.isArray(t.comments)) t.comments = [];
-    const kind = COMMENT_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : 'comment';
-    const source = fields.source ? String(fields.source) : 'cli';
-    const comment = {
-      id: newCommentId(),
-      by: String(fields.by || 'agent'),
-      kind,
-      body, // over-cap bodies are rejected above, never silently truncated
-      source, // 'cli' (agent) or 'dashboard' (the human) — who needsResponse() listens for
-      at: new Date().toISOString(),
-    };
+    const comment = createComment(prepared);
     t.comments.push(comment);
-    t.lastEventType = kind === 'question' ? 'question' : 'comment';
-    t.lastEventSource = source;
+    t.lastEventType = comment.kind === 'question' ? 'question' : 'comment';
+    t.lastEventSource = comment.source;
     t.updatedAt = comment.at;
     putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource, { commentBody: comment.body });

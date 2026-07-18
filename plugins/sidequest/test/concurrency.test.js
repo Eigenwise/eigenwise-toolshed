@@ -109,3 +109,26 @@ test('concurrent CLI claim loser waits for a contended winner commit', async () 
     assert.strictEqual(losers[0].payload.reason, 'claimed', `round ${index} loser must wait for the winner result`);
   }
 });
+
+test('concurrent done retries share one terminal comment', async () => {
+  const target = await addTicket('done race target');
+  const ref = target.ticket.ref;
+  const by = 'done-race-worker';
+  const body = 'Concurrent close evidence: `node --test` passed.';
+  const claimed = await claimTicket(ref, by);
+  assert.strictEqual(claimed.payload.ok, true);
+
+  const calls = await Promise.all([
+    runCli(['done', ref, '--by', by, '--body', body, '--json']),
+    runCli(['done', ref, '--by', by, '--body', body, '--json']),
+  ]);
+  assert.ok(calls.every((result) => result.status === 0), `done race failed: ${calls.map((result) => result.stderr).join('\n')}`);
+  const completions = calls.map((result, index) => parseJson(result, `done race ${index}`));
+  assert.strictEqual(completions.filter((result) => result.idempotent === true).length, 1);
+  assert.strictEqual(completions.filter((result) => result.idempotent !== true).length, 1);
+
+  const commentsResult = await runCli(['comments', ref, '--json']);
+  assert.strictEqual(commentsResult.status, 0, commentsResult.stderr);
+  const comments = parseJson(commentsResult, 'done race comments').comments;
+  assert.strictEqual(comments.filter((comment) => comment.body === body && comment.by === by).length, 1);
+});

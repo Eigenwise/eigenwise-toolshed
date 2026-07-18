@@ -772,15 +772,14 @@ function cmdDone(opts, positional) {
       source: opts.source || 'cli',
       model: opts.model,
       effort: opts.effort,
+      body,
       sessionId: sessionId(opts),
     });
   } catch (e) {
     fail(`done: ${(e && e.message) || e}`);
   }
-  if (res.ok) {
+  if (res.ok && !res.idempotent) {
     closeDispatchExecutor(ticket);
-    const comment = addBodyComment(slug, idOrRef, by, body, opts.source || 'cli');
-    if (comment && !comment.ok) fail(`done: completed ${idOrRef}, but couldn't add closing comment: ${comment.reason}`);
   }
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
