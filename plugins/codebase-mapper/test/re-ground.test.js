@@ -96,15 +96,31 @@ test('concurrent sessions keep independent map ledgers', () => {
   assert.match(text(hook(promptHook, directory, state, { session_id: 'second' })), /architecture\.md/);
 });
 
-test('startup resume compact and clear each restore the compact index once', () => {
+test('SessionStart scopes re-grounding to its source and preserves seen documents', () => {
   const directory = project();
   const state = path.join(directory, 'state');
-  for (const source of ['startup', 'resume', 'compact', 'clear']) {
-    const output = text(hook(startHook, directory, state, { session_id: 'one', source }));
-    assert.match(output, new RegExp('SESSIONSTART \\(' + source + '\\)'));
-    assert.match(output, /Read focused docs as needed/);
-    assert.strictEqual(hook(promptHook, directory, state, { session_id: 'one' }), '');
-  }
+  const startup = text(hook(startHook, directory, state, { session_id: 'one', source: 'startup' }));
+  assert.match(startup, /SESSIONSTART \(startup\)/);
+  assert.match(startup, /Read focused docs as needed/);
+  assert.match(startup, /Read only map document\(s\) relevant to the current request/);
+  assert.match(startup, /no map read is needed/);
+  assert.match(startup, /Never re-read a document already read this session unless this hook names it as changed/);
+  assert.strictEqual(hook(promptHook, directory, state, { session_id: 'one' }), '');
+
+  assert.strictEqual(hook(startHook, directory, state, { session_id: 'one', source: 'resume' }), '');
+
+  fs.writeFileSync(path.join(directory, '.claude', '.codebase-info', 'architecture.md'), '# Architecture\n\nVersion two.\n');
+  const compact = text(hook(startHook, directory, state, { session_id: 'one', source: 'compact' }));
+  assert.match(compact, /SESSIONSTART \(compact\)/);
+  assert.match(compact, /Read focused docs as needed/);
+  const changedAfterCompact = text(hook(promptHook, directory, state, { session_id: 'one' }));
+  assert.match(changedAfterCompact, /architecture\.md/);
+
+  fs.writeFileSync(path.join(directory, '.claude', '.codebase-info', 'architecture.md'), '# Architecture\n\nVersion three.\n');
+  const resumedChange = text(hook(startHook, directory, state, { session_id: 'one', source: 'resume' }));
+  assert.match(resumedChange, /SessionStart \(resume\)/);
+  assert.match(resumedChange, /architecture\.md/);
+  assert.doesNotMatch(resumedChange, /modules\.md/);
 });
 
 test('legacy maps gain a hash manifest on SessionStart without changing documents', () => {
