@@ -1,6 +1,6 @@
 {
   "name": "toolshed-guard",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Block prompts while installed Toolshed plugins are stale; install once at user scope.",
   "author": {
     "name": "Eigenwise",
