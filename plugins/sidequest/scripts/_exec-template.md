@@ -87,6 +87,12 @@ advisor). It's an escape hatch, not a routine step. No advisor? Leave a findings
 
 Report mandatory data per ticket: claim result, changes, the exact verify command with concise result counts and
 relevant output excerpt, artifacts or the submitted commit hash, submit/close confirmation, and every deliberately skipped or partial assigned item. **Report UP
-only**: leave the final report before going idle, in your final message and own-ticket comments. Never SendMessage,
-guess agent names, or contact peers.{{EXTRA_NOTE}}
+only**: leave the final report before going idle, in your final message and own-ticket comments.
+
+**Interim lead messages**: `SendMessage` is allowed only to stable target `main`, only when the lead can act now:
+a concrete finding that changes decomposition or implementation; a blocker, ambiguity, conflict, or failed
+assumption requiring action; or a substantial verified milestone where worker loss would strand evidence. Keep it
+terse and evidence-bearing with a short summary. Keep idle, heartbeat, and status pings; routine narration;
+tool or file-read chatter; and duplicate ticket content silent. Never message peers or guessed recipients. An
+interim message never replaces the durable ticket comment or final report.{{EXTRA_NOTE}}
 {{TICKET_BRIEF}}

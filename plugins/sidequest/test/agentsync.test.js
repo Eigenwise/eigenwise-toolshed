@@ -152,7 +152,10 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /sidequest submit <ref>/);
   assert.match(body, /NEVER push, and NEVER bump plugin or marketplace versions/);
   assert.match(body, /pass `--body-file <path>`/);
-  assert.match(body, /Never SendMessage/);
+  assert.match(body, /`SendMessage` is allowed only to stable target `main`/);
+  assert.match(body, /concrete finding that changes decomposition or implementation/);
+  assert.match(body, /Never message peers or guessed recipients/);
+  assert.match(body, /idle, heartbeat, and status pings/);
 });
 
 test('sync keeps stable executors when category policy is remapped', () => {
@@ -238,7 +241,10 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.match(body, /sidequest submit <ref>/);
   assert.match(body, /NEVER push, and NEVER bump plugin or marketplace versions/);
   assert.match(body, /pass `--body-file <path>`/);
-  assert.match(body, /Never SendMessage/);
+  assert.match(body, /`SendMessage` is allowed only to stable target `main`/);
+  assert.match(body, /concrete finding that changes decomposition or implementation/);
+  assert.match(body, /Never message peers or guessed recipients/);
+  assert.match(body, /idle, heartbeat, and status pings/);
   assert.deepStrictEqual(created.spawn, {
     subagent_type: created.name, name: created.name, mode: 'bypassPermissions',
   });
