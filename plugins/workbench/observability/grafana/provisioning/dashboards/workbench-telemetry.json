@@ -1,0 +1,44 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [{ "expr": "sum by (workbench_measurement_quality) (count_over_time({service_name=\"workbench-observer\"} | json [5m]))", "refId": "A" }],
+      "title": "Telemetry observations by quality",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "showHeader": true },
+      "targets": [{ "expr": "{service_name=\"workbench-observer\"} | json | line_format `{{.workbench_event_id}} {{.workbench_source}} {{.workbench_request_id}}`", "refId": "A" }],
+      "title": "Trace-linked ledger evidence",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "id": 3,
+      "options": { "showHeader": true },
+      "targets": [{ "query": "{ resource.service.name = \"workbench-observer\" }", "queryType": "traceql", "refId": "A" }],
+      "title": "Trace exploration",
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["workbench", "observability", "demo"],
+  "templating": { "list": [] },
+  "time": { "from": "now-7d", "to": "now" },
+  "title": "Workbench telemetry demo",
+  "uid": "workbench-telemetry-demo",
+  "version": 1
+}

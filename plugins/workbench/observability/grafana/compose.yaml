@@ -1,0 +1,19 @@
+services:
+  lgtm:
+    image: grafana/otel-lgtm:0.11.0
+    container_name: workbench-otel-lgtm-demo
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:14318:4318"
+    volumes:
+      - workbench-lgtm-data:/data
+      - ./provisioning/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards:ro
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      WORKBENCH_DEMO_RETENTION_HOURS: "168"
+    restart: "no"
+
+volumes:
+  workbench-lgtm-data:
+    name: workbench-lgtm-demo-data

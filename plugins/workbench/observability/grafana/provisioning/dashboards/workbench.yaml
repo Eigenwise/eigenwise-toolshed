@@ -1,0 +1,11 @@
+apiVersion: 1
+providers:
+  - name: workbench
+    orgId: 1
+    folder: Workbench
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /otel-lgtm/grafana/conf/provisioning/dashboards
