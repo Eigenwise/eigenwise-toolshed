@@ -269,7 +269,7 @@ function warning(problems) {
   if (!problems.length) return '';
   const shown = problems.slice(0, 5);
   const extra = problems.length > shown.length ? `; +${problems.length - shown.length} more` : '';
-  return `Toolshed freshness: ${shown.join('; ')}${extra}. Run /update-toolshed to refresh caches and update deliberately.`;
+  return `Toolshed local health: ${shown.join('; ')}${extra}. Cached version signals are advisory; the prompt guard decides release freshness. Run /update-toolshed for deliberate updates.`;
 }
 
 function emitWarning(problems, debouncer = defaultDebouncer) {

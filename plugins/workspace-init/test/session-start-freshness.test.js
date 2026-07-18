@@ -196,7 +196,7 @@ test('collapses multiple problems into one actionable warning', () => {
     'one', 'two', 'three', 'four', 'five', 'six',
   ], createDebouncer(new Set()));
 
-  assert.match(message, /^Toolshed freshness: /);
+  assert.match(message, /^Toolshed local health: /);
   assert.match(message, /\+1 more/);
   assert.match(message, /Run \/update-toolshed/);
   assert.equal(message.split('\n').length, 1);

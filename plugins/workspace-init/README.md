@@ -67,6 +67,16 @@ restart). Once the plugins are live, it continues: builds the map, brings up the
 checks that the live-rules and map hooks are actually injecting. You watch it work end to end rather
 than trusting that the files were written correctly.
 
+## Toolshed update guard
+
+`toolshed-guard` owns the prompt freshness check. Install it once at user scope so the guard covers every project:
+
+```text
+/plugin install toolshed-guard@eigenwise-toolshed --scope user
+```
+
+When it blocks a stale install, run `/update-toolshed`, then `/reload-plugins` or restart Claude Code and resubmit the prompt. See [toolshed-guard](../toolshed-guard/README.md) for the emergency override and offline behavior.
+
 ## The self-improvement loop
 
 Every workspace it sets up gets a baked-in **self-improvement rule**: after you finish a chunk of work,

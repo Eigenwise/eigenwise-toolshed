@@ -32,7 +32,15 @@ Use this to show every command without changing anything:
 node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js" --dry-run
 ```
 
-## Reload boundary
+## Update guard and reload boundary
+
+`toolshed-guard` runs the prompt freshness check for active Toolshed plugins. Install it once at user scope:
+
+```sh
+claude plugin install toolshed-guard@eigenwise-toolshed --scope user
+```
+
+When the guard knows an active install is behind, it blocks the prompt before Claude sees it. Run this updater, then `/reload-plugins` or restart Claude Code and resubmit the prompt. The guard allows `/update-toolshed`, `/reload-plugins`, and exact `/plugin` maintenance commands so recovery works. For an emergency only, start Claude Code with `EIGENWISE_TOOLSHED_FRESHNESS_BYPASS=1`; remove that override once updates are possible.
 
 An update does not replace the plugin code already loaded by an open Claude Code session. Tell the user
 exactly what the updater reports: run `/reload-plugins` in each affected session, or restart Claude Code
