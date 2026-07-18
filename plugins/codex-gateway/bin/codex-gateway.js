@@ -829,6 +829,52 @@ function gatewayModel(id) {
 }
 
 const ROUTE_MARKER_RE = /\[(switchboard-route|sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
+const configuredDispatchCacheTtlMs = Number(process.env.CODEX_GATEWAY_DISPATCH_CACHE_TTL_MS);
+const DISPATCH_CACHE_TTL_MS = Number.isFinite(configuredDispatchCacheTtlMs) && configuredDispatchCacheTtlMs > 0
+  ? configuredDispatchCacheTtlMs
+  : 4 * 60 * 60 * 1000;
+const configuredDispatchCacheMaxSessions = Number(process.env.CODEX_GATEWAY_DISPATCH_CACHE_MAX_SESSIONS);
+const DISPATCH_CACHE_MAX_SESSIONS = Number.isInteger(configuredDispatchCacheMaxSessions) && configuredDispatchCacheMaxSessions > 0
+  ? configuredDispatchCacheMaxSessions
+  : 500;
+
+class DispatchSessionRouteCache {
+  constructor({ ttlMs = DISPATCH_CACHE_TTL_MS, maxSessions = DISPATCH_CACHE_MAX_SESSIONS, now = Date.now } = {}) {
+    this.ttlMs = ttlMs;
+    this.maxSessions = maxSessions;
+    this.now = now;
+    this.routes = new Map();
+  }
+
+  get(sessionId) {
+    if (!sessionId) return null;
+    const entry = this.routes.get(sessionId);
+    if (!entry) return null;
+    const now = this.now();
+    if (now - entry.lastUsedAt >= this.ttlMs) {
+      this.routes.delete(sessionId);
+      return null;
+    }
+    entry.lastUsedAt = now;
+    this.routes.delete(sessionId);
+    this.routes.set(sessionId, entry);
+    return { model: entry.model, effort: entry.effort };
+  }
+
+  set(sessionId, route) {
+    if (!sessionId || !route) return;
+    const now = this.now();
+    for (const [key, entry] of this.routes) {
+      if (now - entry.lastUsedAt < this.ttlMs) break;
+      this.routes.delete(key);
+    }
+    this.routes.delete(sessionId);
+    this.routes.set(sessionId, { model: route.model, effort: route.effort, lastUsedAt: now });
+    while (this.routes.size > this.maxSessions) {
+      this.routes.delete(this.routes.keys().next().value);
+    }
+  }
+}
 
 function routeMarkersInText(text, markers = []) {
   const matcher = new RegExp(ROUTE_MARKER_RE);
@@ -853,8 +899,8 @@ function dispatchModelFromRawBody(raw) {
 // The legitimate marker lives in the dispatch briefing, so only user-authored
 // text counts. tool_result blocks can echo marker-shaped text from a fixture,
 // log, or diff and must not influence the next request's route (SQ-375).
-function dispatchRouteFromMessages(messages) {
-  if (!Array.isArray(messages)) return null;
+function dispatchRouteMarkersFromMessages(messages) {
+  if (!Array.isArray(messages)) return [];
   const markers = [];
   for (const message of messages) {
     if (!message || message.role !== 'user') continue;
@@ -870,7 +916,11 @@ function dispatchRouteFromMessages(messages) {
       }
     }
   }
-  return onlyRoute(markers);
+  return markers;
+}
+
+function dispatchRouteFromMessages(messages) {
+  return onlyRoute(dispatchRouteMarkersFromMessages(messages));
 }
 
 // ------------------------------------------------------------ model catalog
@@ -1048,6 +1098,7 @@ function runShim() {
     data: [...DEFAULT_MODELS, 'auto'].map(gatewayModel),
   };
   const counters = { models: 0, codex: 0, anthropic: 0 };
+  const dispatchRoutes = new DispatchSessionRouteCache();
   const sentrySessions = new Map();
   const compactTriggerIsFixed = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0;
   let compactTrigger = CODEX_COMPACT_TRIGGER;
@@ -1058,6 +1109,11 @@ function runShim() {
   const compatState = { hostsDetected: false, hostsLine: null, port80Bound: false, reason: null };
   const anthropicBypass = createHostsBypassResolver();
 
+  function requestSessionId(req) {
+    const sessionId = req.headers['x-claude-code-session-id'];
+    return typeof sessionId === 'string' && sessionId ? sessionId : null;
+  }
+
   // A local audit trail for which model went where. This is intentionally a
   // small, fixed schema, never a dump of the request: prompts, messages, tools,
   // auth, and arbitrary headers are all excluded. Claude Code currently sends a
@@ -1065,7 +1121,7 @@ function runShim() {
   // caller correlation value.
   function requestRouteLog(req, backend, model, pathOnly, via = null, effort = null) {
     if (!REQUEST_ROUTE_LOG) return;
-    const sessionId = req.headers['x-claude-code-session-id'];
+    const sessionId = requestSessionId(req);
     const entry = {
       at: new Date().toISOString(),
       backend,
@@ -1073,7 +1129,7 @@ function runShim() {
       path: pathOnly,
       ...(via ? { via } : {}),
       ...(effort ? { effort } : {}),
-      ...(typeof sessionId === 'string' && sessionId ? { sessionId } : {}),
+      ...(sessionId ? { sessionId } : {}),
     };
     try {
       mkdirs();
@@ -1084,9 +1140,7 @@ function runShim() {
   }
 
   function codexSessionId(req) {
-    if (!CODEX_SENTRY_ENABLED) return null;
-    const sessionId = req.headers['x-claude-code-session-id'];
-    return typeof sessionId === 'string' && sessionId ? sessionId : null;
+    return CODEX_SENTRY_ENABLED ? requestSessionId(req) : null;
   }
 
   function sentrySession(sessionId) {
@@ -1516,17 +1570,30 @@ function runShim() {
           if (typeof parsed.model === 'string' && parsed.model.startsWith(PREFIX)) {
             const advertisedModel = parsed.model;
             const requestedBase = parsed.model.slice(PREFIX.length).replace(/\[1m\]$/, '');
-            const dispatchRoute = requestedBase === 'auto' ? dispatchRouteFromMessages(parsed.messages) : null;
-            if (requestedBase === 'auto' && !dispatchRoute) {
-              const body = JSON.stringify({
-                type: 'error',
-                error: {
-                  type: 'invalid_request_error',
-                  message: 'codex-gateway: dispatch model requires exactly one [switchboard-route model=...] marker in the conversation; [sidequest-route ...] remains temporarily accepted for compatibility; redispatch the ticket',
-                },
-              });
-              res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
-              return res.end(body);
+            let dispatchRoute = null;
+            let dispatchVia = null;
+            if (requestedBase === 'auto') {
+              const markers = dispatchRouteMarkersFromMessages(parsed.messages);
+              const sessionId = requestSessionId(req);
+              if (markers.length === 1) {
+                dispatchRoute = markers[0];
+                dispatchRoutes.set(sessionId, dispatchRoute);
+                dispatchVia = 'dispatch';
+              } else if (markers.length === 0) {
+                dispatchRoute = dispatchRoutes.get(sessionId);
+                if (dispatchRoute) dispatchVia = 'dispatch-cached';
+              }
+              if (!dispatchRoute) {
+                const body = JSON.stringify({
+                  type: 'error',
+                  error: {
+                    type: 'invalid_request_error',
+                    message: 'codex-gateway: dispatch model requires exactly one [switchboard-route model=...] marker in the conversation; [sidequest-route ...] remains temporarily accepted for compatibility; redispatch the ticket',
+                  },
+                });
+                res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+                return res.end(body);
+              }
             }
             // Accept legacy typed ids from pre-0.4.2 sessions even though new
             // discovery rows are unsuffixed.
@@ -1544,7 +1611,7 @@ function runShim() {
               parsed.tools = parsed.tools.filter((t) => !PLAN_TOOLS.includes(t && t.name));
             }
             counters.codex++;
-            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchRoute ? 'dispatch' : null, dispatchRoute ? dispatchRoute.effort : null);
+            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, dispatchRoute ? dispatchRoute.effort : null);
             const sessionId = codexSessionId(req);
             if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId)) return;
             // claude.ai credentials never leave this machine toward the proxy
@@ -1706,6 +1773,7 @@ module.exports = {
   CATALOG_SCHEMA_VERSION,
   buildCatalog,
   writeCatalogFile,
+  DispatchSessionRouteCache,
   dispatchModelFromRawBody,
   dispatchRouteFromMessages,
 };
