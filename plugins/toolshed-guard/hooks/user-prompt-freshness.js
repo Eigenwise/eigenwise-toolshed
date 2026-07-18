@@ -88,6 +88,11 @@ function isMaintenancePrompt(prompt) {
   return /^claude\s+plugin\s+update\s+[\w.-]+@eigenwise-toolshed(?:\s+--scope\s+(?:user|project|local))?$/i.test(value);
 }
 
+function isTaskNotificationPrompt(prompt) {
+  const fields = String(prompt || '').match(/^\s*<task-notification>\s*<task-id>[^<\s][^<]*<\/task-id>\s*<tool-use-id>[^<\s][^<]*<\/tool-use-id>\s*<status>(?:completed|failed|stopped)<\/status>\s*<summary>[^<\s][\s\S]*?<\/summary>(?:\s*(?:<result>[\s\S]*?<\/result>|<usage>[\s\S]*?<\/usage>|<output-file>[\s\S]*?<\/output-file>))*\s*<\/task-notification>\s*$/);
+  return Boolean(fields);
+}
+
 function readJson(fileSystem, file) {
   try {
     return JSON.parse(fileSystem.readFileSync(file, 'utf8'));
@@ -286,7 +291,7 @@ function stateFileFor(dataDirectory = process.env.CLAUDE_PLUGIN_DATA) {
 }
 
 async function decide(input, options = {}) {
-  if (process.env.EIGENWISE_TOOLSHED_FRESHNESS_BYPASS === '1' || isMaintenancePrompt(input?.prompt)) return '';
+  if (process.env.EIGENWISE_TOOLSHED_FRESHNESS_BYPASS === '1' || isMaintenancePrompt(input?.prompt) || isTaskNotificationPrompt(input?.prompt)) return '';
   const fileSystem = options.fileSystem || fs;
   const registryFile = options.registryFile || path.join(options.home || os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
   const instances = activeInstances(readJson(fileSystem, registryFile) || {}, input?.cwd, options.platform);
@@ -325,6 +330,7 @@ module.exports = {
   decide,
   failedState,
   isMaintenancePrompt,
+  isTaskNotificationPrompt,
   loadedPluginVersion,
   outputFor,
   parseSemver,

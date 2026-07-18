@@ -11,6 +11,7 @@ const {
   compareSemver,
   decide,
   isMaintenancePrompt,
+  isTaskNotificationPrompt,
   readState,
   refreshDue,
   stateForManifest,
@@ -63,6 +64,45 @@ test('known stale blocks with the exact structured output contract', async () =>
 test('only exact maintenance prompts bypass the guard', () => {
   for (const prompt of ['/update-toolshed', '/update-toolshed --dry-run', '/reload-plugins', '/reload-plugins --force', '/plugin', '/plugin update sidequest@eigenwise-toolshed', '/plugin marketplace update eigenwise-toolshed', 'claude plugin marketplace update eigenwise-toolshed', 'claude plugin update sidequest@eigenwise-toolshed --scope user']) assert.equal(isMaintenancePrompt(prompt), true, prompt);
   for (const prompt of ['please run /update-toolshed', '/update-toolshed; work on this', '/reload-plugins and fix it', 'claude plugin update sidequest@eigenwise-toolshed --scope user && rm -rf x', 'I said /plugin update']) assert.equal(isMaintenancePrompt(prompt), false, prompt);
+});
+
+const completeTaskNotification = `<task-notification>
+<task-id>agent-a73d9245832c778d2</task-id>
+<tool-use-id>toolu_01D2s5bnLL6LWzYm1Qf7PsK7</tool-use-id>
+<status>completed</status>
+<summary>Agent "sidequest-sq-452" completed</summary>
+<result>Submitted SQ-452.</result>
+</task-notification>`;
+
+test('complete native Agent task notifications bypass without registry or fetch work', async () => {
+  let reads = 0;
+  let fetches = 0;
+  const result = await decide({ prompt: completeTaskNotification, cwd: 'C:\\dev\\project' }, {
+    fileSystem: { readFileSync: () => { reads += 1; throw new Error('must not read'); } },
+    registryFile: 'unreadable-registry',
+    stateFile: 'unreadable-state',
+    fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); },
+  });
+  assert.equal(result, '');
+  assert.equal(reads, 0);
+  assert.equal(fetches, 0);
+  assert.equal(isTaskNotificationPrompt(completeTaskNotification), true);
+});
+
+test('task notification tags only bypass a complete whole-prompt envelope', async () => {
+  const directory = tempDirectory();
+  const { registryFile, stateFile } = files(directory);
+  writeStateAtomic(fs, stateFile, stateForManifest(manifest('2.0.0'), JSON.stringify(manifest('2.0.0')), null, 100, '"first"'));
+  const invalid = [
+    `Please handle this.\n${completeTaskNotification}`,
+    `${completeTaskNotification}\nPlease handle this.`,
+    completeTaskNotification.replace('</task-notification>', ''),
+    `quoted ${completeTaskNotification} in a user prompt`,
+  ];
+  for (const prompt of invalid) {
+    assert.equal(isTaskNotificationPrompt(prompt), false, prompt);
+    assert.match(await decide({ prompt, cwd: 'C:\\dev\\project' }, { registryFile, stateFile, platform: 'win32', now: () => 101 }), /"decision":"block"/);
+  }
 });
 
 test('selects user and overlapping project installs, excluding unrelated marketplaces', () => {
