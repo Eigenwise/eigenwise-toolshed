@@ -21,6 +21,7 @@
 
 const ladder = require('../lib/ladder');
 const migration = require('../lib/migrate');
+const categories = require('../lib/mcp');
 
 function fail(msg) {
   console.error(`switchboard: ${msg}`);
@@ -204,6 +205,17 @@ function cmdSetTargets(targets, enabled) {
 // `switchboard routing on|off` — the master switch. Off means switchboard
 // scores nothing; the caller is on its own for model/effort choices.
 function cmdRouting(args) {
+  if (args[0] === 'resolve') {
+    const requestIndex = args.indexOf('--request');
+    if (requestIndex === -1 || !args[requestIndex + 1]) fail('routing resolve: pass --request <json>.');
+    try {
+      const request = JSON.parse(args[requestIndex + 1]);
+      printResult(categories.resolve(request), true);
+      return;
+    } catch (error) {
+      fail(`routing resolve: ${error.message}`);
+    }
+  }
   legacyNotice();
   const sub = args[0];
   if (sub !== 'on' && sub !== 'off') fail('routing: pass "on" or "off", e.g. switchboard routing off');
@@ -224,18 +236,151 @@ function cmdMigrate(args) {
   process.stdout.write(JSON.stringify(Object.assign({ applied: apply }, result), null, 2) + '\n');
 }
 
+function printResult(value, json) {
+  if (json) {
+    process.stdout.write(JSON.stringify(value, null, 2) + '\n');
+    return;
+  }
+  if (Array.isArray(value.categories)) {
+    for (const category of value.categories) {
+      console.log(`${category.enabled ? '✓' : '✗'} ${category.id.padEnd(24)} ${category.name} (${value.states[category.id] || 'unknown'})`);
+    }
+    for (const warning of value.warnings || []) console.warn(`warning: ${warning}`);
+    return;
+  }
+  process.stdout.write(JSON.stringify(value, null, 2) + '\n');
+}
+
+function parseOptions(args) {
+  const options = {};
+  const positional = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith('--')) {
+      positional.push(arg);
+      continue;
+    }
+    const [rawKey, inline] = arg.slice(2).split('=', 2);
+    const key = rawKey.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+    if (inline !== undefined) {
+      options[key] = inline;
+    } else if (args[index + 1] && !args[index + 1].startsWith('--')) {
+      options[key] = args[index + 1];
+      index += 1;
+    } else {
+      options[key] = true;
+    }
+  }
+  return { options, positional };
+}
+
+function routeFromOptions(options, prefix = '') {
+  const modelKey = prefix ? `${prefix}Model` : 'model';
+  const effortKey = prefix ? `${prefix}Effort` : 'effort';
+  if (options[modelKey] === undefined && options[effortKey] === undefined) return undefined;
+  return { model: options[modelKey], effort: options[effortKey] };
+}
+
+function categoryPayload(id, options, existing) {
+  const route = routeFromOptions(options) || (existing && existing.route);
+  const fallback = options.noFallback ? null : (routeFromOptions(options, 'fallback') || (existing ? existing.fallback : null));
+  return {
+    id,
+    name: options.name === undefined ? existing && existing.name : options.name,
+    description: options.description === undefined ? existing && existing.description : options.description,
+    contract: options.contract === undefined ? existing && existing.contract : options.contract,
+    route,
+    fallback,
+    enabled: options.enabled === undefined ? (existing ? existing.enabled : true) : options.enabled !== 'false',
+  };
+}
+
+function cmdCategory(args) {
+  const sub = args[0];
+  const { options, positional } = parseOptions(args.slice(1));
+  const project = options.project !== undefined;
+  const projectPath = project ? (options.project === true ? process.cwd() : options.project) : undefined;
+  const json = options.json === true;
+  try {
+    if (sub === 'list') return printResult(categories.listCategories({ projectPath, global: options.global === true, includeDisabled: options.disabled !== false }), json);
+    if (sub === 'show') return printResult(categories.showCategory({ id: positional[0], projectPath, global: options.global === true }), json);
+    if (sub === 'add') return printResult(categories.addCategory({ category: categoryPayload(positional[0], options), projectPath, project }), json);
+    if (sub === 'edit') {
+      const existing = categories.showCategory({ id: positional[0], projectPath, global: !project }).category;
+      return printResult(categories.editCategory({ id: positional[0], patch: categoryPayload(existing.id, options, existing), projectPath, project }), json);
+    }
+    if (sub === 'disable') return printResult(categories.disableCategory({ id: positional[0], projectPath, project }), json);
+    if (sub === 'remove') return printResult(categories.removeCategory({ id: positional[0], projectPath, project }), json);
+    if (sub === 'detach') {
+      if (!project) fail('category detach: pass --project <path> to create a project-local copy.');
+      return printResult(categories.detachCategory({ id: positional[0], projectPath }), json);
+    }
+    if (sub === 'relink' || sub === 'reset') {
+      if (!project) fail(`category ${sub}: pass --project <path> to remove a project-local override.`);
+      return printResult(categories.relinkCategory({ id: positional[0], projectPath }), json);
+    }
+    fail('category: use list, show, add, edit, disable, remove, detach, relink, or reset.');
+  } catch (error) {
+    fail(`category ${sub}: ${error.message}`);
+  }
+}
+
+function cmdFallback(args) {
+  const { options } = parseOptions(args);
+  const project = options.project !== undefined;
+  const projectPath = project ? (options.project === true ? process.cwd() : options.project) : undefined;
+  try {
+    const route = routeFromOptions(options);
+    printResult(route === undefined ? categories.getFallback({ projectPath }) : categories.setFallback({ route: options.clear ? null : route, projectPath, project }), options.json === true);
+  } catch (error) {
+    fail(`fallback: ${error.message}`);
+  }
+}
+
+function cmdResolve(args) {
+  const { options, positional } = parseOptions(args);
+  try {
+    printResult(categories.resolve({ categoryId: positional[0], projectPath: options.project === true ? process.cwd() : options.project, consumer: options.consumer }), options.json === true);
+  } catch (error) {
+    fail(`resolve: ${error.message}`);
+  }
+}
+
+function cmdConfigSurface(name, args) {
+  const { options } = parseOptions(args);
+  try {
+    const projectPath = options.project === true ? process.cwd() : options.project;
+    const value = name === 'available'
+      ? categories.availableModels({ projectPath })
+      : name === 'contract'
+        ? categories.contract()
+        : categories.doctor({ projectPath });
+    printResult(value, options.json === true);
+  } catch (error) {
+    fail(`${name}: ${error.message}`);
+  }
+}
+
 function help() {
   console.log(`switchboard — complexity-scored model/effort routing
 
 Usage:
-  switchboard models [--json]              routing state, tiers, per-model efforts, and the ladder
-  switchboard bias [<int>] [--json]        read (no arg) or set (-5..5) the routing bias dial
-  switchboard route <complexity> [--json]  derive one score's routing, e.g. switchboard route 6
-  switchboard enable <target...>           turn on a tier or model.effort pair, e.g. switchboard enable opus.medium
-  switchboard disable <target...>          turn off a tier or model.effort pair, e.g. switchboard disable fable
-  switchboard routing on|off               legacy numeric-routing master switch
-  switchboard migrate --dry-run|--apply    preview or apply legacy prefs migration
-  switchboard help                         this message
+  switchboard category list|show|add|edit|disable|remove [args]  category policy management
+  switchboard category detach|relink|reset <id> --project <path>  project overlays
+  switchboard fallback [--model <model> --effort <effort>]         global fallback
+  switchboard available [--project <path>] [--json]               models and effort caps
+  switchboard resolve <category> [--project <path>] [--json]      explain every route attempt
+  switchboard contract [--json]                                   routing contract breadcrumb
+  switchboard doctor [--project <path>] [--json]                  config and catalog checks
+  switchboard migrate --dry-run|--apply                           preview or apply legacy migration
+
+Deprecated numeric-ladder compatibility commands:
+  switchboard models [--json]
+  switchboard bias [<int>] [--json]
+  switchboard route <complexity> [--json]
+  switchboard enable|disable <target...>
+  switchboard routing on|off
+  switchboard routing resolve --request <json>                    contract-compatible resolver
 
 Legacy prefs live under SWITCHBOARD_HOME (default ~/.claude/switchboard/prefs.json).
 Category config lives at ~/.claude/toolshed/switchboard.json and .claude/switchboard.json.
@@ -254,6 +399,24 @@ function main() {
 
   const rest = argv.slice(1);
   switch (cmd) {
+    case 'category':
+      cmdCategory(rest);
+      break;
+    case 'fallback':
+      cmdFallback(rest);
+      break;
+    case 'available':
+      cmdConfigSurface('available', rest);
+      break;
+    case 'resolve':
+      cmdResolve(rest);
+      break;
+    case 'contract':
+      cmdConfigSurface('contract', rest);
+      break;
+    case 'doctor':
+      cmdConfigSurface('doctor', rest);
+      break;
     case 'models':
       cmdModels(rest.includes('--json'));
       break;
