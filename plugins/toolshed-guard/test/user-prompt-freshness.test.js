@@ -207,6 +207,31 @@ test('offline refresh preserves a proven stale block and the updated registry cl
   assert.equal(await decide({ prompt: 'continue', cwd: 'C:\\dev\\project' }, options), '');
 });
 
+test('only an exact forced reload clears a registry-proven reload requirement', async () => {
+  const directory = tempDirectory();
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  const stateFile = path.join(directory, 'data', 'remote-freshness.json');
+  const reloadStateFile = path.join(directory, 'data', 'reload-required.json');
+  const remote = { name: 'eigenwise-toolshed', version: '0.3.0', plugins: [{ name: 'toolshed-guard', version: '0.3.0' }] };
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'toolshed-guard@eigenwise-toolshed': [{ scope: 'user', version: '0.2.0' }] } }));
+  writeStateAtomic(fs, stateFile, stateForManifest(remote, JSON.stringify(remote), null, 100, '"first"'));
+  const input = { prompt: 'continue', cwd: 'C:\\dev\\project', session_id: 'session-forced-reload' };
+  const options = { registryFile, stateFile, reloadStateFile, platform: 'win32', now: () => 101 };
+
+  assert.match(await decide(input, options), /toolshed-guard 0\.2\.0 -> 0\.3\.0/);
+  assert.equal(await decide({ ...input, prompt: '/reload-plugins --force' }, options), '');
+  assert.match(await decide(input, options), /still needs a reload after detecting toolshed-guard 0\.2\.0/);
+  assert.equal(await decide({ ...input, prompt: completeTaskNotification }, options), '');
+  assert.match(await decide(input, options), /still needs a reload after detecting toolshed-guard 0\.2\.0/);
+
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'toolshed-guard@eigenwise-toolshed': [{ scope: 'user', version: '0.3.0' }] } }));
+  assert.equal(await decide({ ...input, prompt: '/reload-plugins' }, options), '');
+  assert.match(await decide(input, options), /Run \/reload-plugins --force or restart Claude Code/);
+  assert.match(await decide({ ...input, prompt: '/reload-plugins --force && continue' }, options), /still needs a reload after detecting toolshed-guard 0\.2\.0/);
+  assert.equal(await decide({ ...input, prompt: '/reload-plugins --force' }, options), '');
+  assert.equal(await decide(input, options), '');
+});
+
 test('reload requirement survives registry update until the next SessionStart boundary', async () => {
   const directory = tempDirectory();
   const { registryFile, stateFile } = files(directory);
