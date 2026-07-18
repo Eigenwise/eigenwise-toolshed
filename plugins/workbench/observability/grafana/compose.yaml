@@ -8,10 +8,11 @@ services:
     volumes:
       - workbench-lgtm-data:/data
       - ./provisioning/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards:ro
+      - ./provisioning/loki-config.yaml:/otel-lgtm/loki-config.yaml:ro
+      - ./provisioning/tempo-config.yaml:/otel-lgtm/tempo-config.yaml:ro
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      WORKBENCH_DEMO_RETENTION_HOURS: "168"
     restart: "no"
 
 volumes:
