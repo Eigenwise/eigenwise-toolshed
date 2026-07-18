@@ -29,6 +29,8 @@ test('workflow guidance suggests a documented Claude Code script shape', () => {
   assert.match(orchestration, /built with `agent\(\)` and `pipeline\(\)`/);
   assert.doesNotMatch(orchestration, /`parallel\(\)`/);
   assert.match(orchestration, /`pipeline\(tickets, ticket => agent\(ticket\.prompt, \{ label: ticket\.ref \}\)\)`/);
+  assert.match(skill, /File and dispatch substantial research or workflow work before invoking it/);
+  assert.match(skill, /A routed claim without the prepared dispatch token\nis refused/);
 });
 
 test('ephemeral dispatch guidance prevents registration wait stalls', () => {

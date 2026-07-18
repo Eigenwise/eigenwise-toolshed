@@ -108,7 +108,8 @@ function effortDrift(slug, idOrRef, claimedEffort) {
   };
 }
 
-function executorDrift(slug, idOrRef, claimedEffort, executorName, token) {
+function executorDrift(slug, idOrRef, claimedEffort, executorName, token, direct) {
+  if (direct) return null;
   const effort = effortDrift(slug, idOrRef, claimedEffort);
   if (effort) return effort;
   const t = store.getTicket(slug, idOrRef);
@@ -480,7 +481,7 @@ const TOOLS = [
   },
   {
     name: 'claim',
-    description: 'Atomically claim a ticket before working it (moves it to doing). Fails if gone/done/claimed. For Codex routes, pass executor from the ticket\'s authoritative runtime so generic executors are refused. by must be a UNIQUE per-worker id. Pass effort (the executor\'s baked level) to be refused if it doesn\'t match the resolved route. Never work a ticket whose claim did not return ok:true.',
+    description: 'Atomically claim a ticket before working it (moves it to doing). Fails if gone/done/claimed. Category-routed work requires a prepared dispatch token and its exact executor. direct:true is an auditable inline bypass, only for intentional direct work. by must be a UNIQUE per-worker id. Pass effort (the executor\'s baked level) to be refused if it doesn\'t match the resolved route. Never work a ticket whose claim did not return ok:true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -489,8 +490,9 @@ const TOOLS = [
         by: { type: 'string', description: 'Unique per-worker id (e.g. claude-<8 hex>).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         executor: { type: 'string', description: 'Exact executor name from the ticket runtime; proves a Codex route uses its backend-specific generated executor.' },
-        token: { type: 'string', description: 'Dispatch nonce required by tickets prepared for an ephemeral executor.' },
-        force: { type: 'boolean', description: 'Steal a live claim — only when certain.' },
+        token: { type: 'string', description: 'Dispatch nonce required for every category-routed executor claim.' },
+        direct: { type: 'boolean', description: 'Explicitly record a direct inline bypass of the ticket route. Do not use for routed executor work.' },
+        force: { type: 'boolean', description: 'Steal a live claim only when certain.' },
         session: { type: 'string' },
       },
       required: ['ref', 'by'],
@@ -498,9 +500,9 @@ const TOOLS = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'claim');
-      const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token);
+      const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token, !!args.direct);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
-      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
+      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
       return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
     },
   },
@@ -527,6 +529,7 @@ const TOOLS = [
         model: { type: 'string', description: 'Filter to a resolved Claude runtime or discovered Codex model slug.' },
         category: { type: 'string', description: 'Filter to a category ID.' },
         priority: { type: 'string', enum: store.VALID_PRIORITY },
+        direct: { type: 'boolean', description: 'Explicitly allow direct inline claims of category-routed tickets.' },
         session: { type: 'string' },
       },
       required: ['by'],
@@ -535,7 +538,7 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'next');
       requireKnownModelFilter('next', args.model);
-      const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, source: 'mcp', sessionId: sessionOf(args) });
+      const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, direct: !!args.direct, source: 'mcp', sessionId: sessionOf(args) });
       return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
     },
   },

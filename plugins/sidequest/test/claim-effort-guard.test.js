@@ -72,7 +72,8 @@ test('Codex category routes reject a generic executor even when effort matches',
   assert.notEqual(rejected.status, 0);
   assert.match(rejected.stdout + rejected.stderr, new RegExp(expected));
   assert.equal(ticket(ref).status, 'todo');
-  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', derived.effort, '--executor', expected]).ok, true);
+  const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, ref);
+  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', derived.effort, '--executor', expected, '--token', prepared.token]).ok, true);
 });
 
 test('a category-route effort mismatch refuses the claim without mutation', () => {
@@ -100,19 +101,45 @@ test('JSON mismatch reports the category-resolved model and effort', () => {
   assert.equal(payload.claimedEffort, wrong);
 });
 
-test('matching the category-resolved effort claims cleanly', () => {
+test('a category-routed claim requires a prepared token even with its resolved executor and effort', () => {
   const ref = seed('guard.claude');
   const derived = ticket(ref);
-  const claim = cliJson(['claim', ref, '--by', 'w1', '--effort', derived.effort]);
-  assert.equal(claim.ok, true);
+  const rejected = runCli(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', derived.exec.agent, '--json']);
+  assert.notEqual(rejected.status, 0);
+  assert.equal(JSON.parse(rejected.stdout).reason, 'dispatch_required');
+  assert.equal(ticket(ref).status, 'todo');
+  const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, ref);
+  const claim = cliJson(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', derived.exec.agent, '--token', prepared.token]);
   assert.equal(claim.ticket.status, 'doing');
 });
 
-test('omitting effort remains compatible with callers that do not prove an executor tier', () => {
+test('the store requires a dispatch nonce, rejects a wrong one, and accepts its prepared executor', () => {
   const ref = seed('guard.claude');
-  const claim = cliJson(['claim', ref, '--by', 'w1']);
-  assert.equal(claim.ok, true);
-  assert.equal(claim.ticket.status, 'doing');
+  const slug = store.ensureProject(PROJ).slug;
+  const routed = store.getTicket(slug, ref);
+  const missing = store.claimTicket(slug, ref, 'store-no-token', { executor: routed.exec.agent, effort: routed.effort });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, 'dispatch_required');
+  const prepared = store.prepareDispatch(slug, ref);
+  const wrong = store.claimTicket(slug, ref, 'store-wrong-token', { token: 'wrong-token', executor: prepared.ticket.dispatchExecutor });
+  assert.equal(wrong.ok, false);
+  assert.equal(wrong.reason, 'token');
+  const accepted = store.claimTicket(slug, ref, 'store-prepared', { token: prepared.token, executor: prepared.ticket.dispatchExecutor });
+  assert.equal(accepted.ok, true);
+});
+
+test('an explicit direct claim records the bypass on no-file routed research work', () => {
+  const ref = cliJson(['add', '-t', 'research fixture', '--category', 'guard.claude']).ticket.ref;
+  const before = ticket(ref);
+  assert.deepEqual(before.files, []);
+  const claim = cliJson(['claim', ref, '--by', 'inline-worker', '--direct']);
+  assert.equal(claim.ticket.directClaim.model, before.model);
+  assert.equal(claim.ticket.directClaim.effort, before.effort);
+  const pulse = cliJson(['pulse', ref]);
+  assert.equal(pulse.direct.by, 'inline-worker');
+  assert.equal(pulse.direct.model, before.model);
+  const brief = cliJson(['list', '--brief']).tickets.find((candidate) => candidate.ref === ref);
+  assert.equal(brief.direct.by, 'inline-worker');
 });
 
 test('instant dispatch targets the stable executor, gates the claim, and clears on done and release without deleting the stable def', () => {
@@ -160,8 +187,8 @@ test('claims sweep marks stale claims, audits release, and leaves fresh claims a
   const slug = store.ensureProject(PROJ).slug;
   const staleRef = seed('guard.claude');
   const freshRef = seed('guard.claude');
-  assert.equal(store.claimTicket(slug, staleRef, 'stale-worker').ok, true);
-  assert.equal(store.claimTicket(slug, freshRef, 'fresh-worker').ok, true);
+  assert.equal(store.claimTicket(slug, staleRef, 'stale-worker', { direct: true }).ok, true);
+  assert.equal(store.claimTicket(slug, freshRef, 'fresh-worker', { direct: true }).ok, true);
   const stale = store.getTicket(slug, staleRef);
   stale.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
   stale.updatedAt = stale.claim.at;
@@ -253,7 +280,7 @@ test('an unavailable primary uses the category fallback effort for the guard', (
   const wrong = runCli(['claim', ref, '--by', 'w1', '--effort', 'high']);
   assert.notEqual(wrong.status, 0);
   assert.match(wrong.stdout + wrong.stderr, /sidequest-exec-medium/);
-  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium']).ok, true);
+  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct']).ok, true);
 });
 
 test('a concrete Haiku category keeps its configured effort guard', () => {
@@ -263,5 +290,5 @@ test('a concrete Haiku category keeps its configured effort guard', () => {
   assert.equal(derived.effort, 'medium');
   const wrong = runCli(['claim', ref, '--by', 'w1', '--effort', 'high']);
   assert.notEqual(wrong.status, 0);
-  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium']).ok, true);
+  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct']).ok, true);
 });

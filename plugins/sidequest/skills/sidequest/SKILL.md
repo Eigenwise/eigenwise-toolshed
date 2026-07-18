@@ -164,7 +164,7 @@ sidequest rm SQ-3                 # delete
 
 Add `--json` to read data instead of showing it. Add `--brief` on `list`/`ready` (it implies
 `--json`) for the compact shape: ref, title, status, priority, complexity, category ID/name, model, effort,
-files, claim, `blockedBy`, a pending `submission` (or null), a `comments` count, and `awaitingReply`. No description bodies, no thread
+files, claim, a prominent `direct` bypass record (or null), `blockedBy`, a pending `submission` (or null), a `comments` count, and `awaitingReply`. No description bodies, no thread
 contents. **Default to `--brief` for routine orchestration reads**; drop it only when you actually
 need bodies. "Close / mark done / ship it" → `--status done`. "Start / in progress" → `--status
 doing`.
@@ -176,8 +176,8 @@ The board may be shared — other sessions or teammates can be working it too. A
 ticket. **Never start work on a ticket you haven't successfully claimed**, even one you just filed.
 
 ```bash
-sidequest next --by <you>              # atomically claim the top-priority available ticket
-sidequest claim SQ-3 --by <you>        # or claim a specific one
+sidequest next --by <you> --direct     # explicitly claim the top routed ticket for direct inline work
+sidequest claim SQ-3 --by <you> --direct # explicit inline bypass; routed executor claims use dispatch tokens
 sidequest commit SQ-3 --by <you> --message "scope-safe commit"  # commits only declared ticket paths; foreign staged paths remain untouched
 sidequest submit SQ-3 --by <you> --commit <hash> --verify "<cmd>"   # executor terminal for repo-changing work:
                                        # park the verified LOCAL commit READY_FOR_INTEGRATION (no push, no versions)
@@ -226,6 +226,12 @@ ticket's stamped model**. Inline only a genuinely trivial one-step change (a one
 where the spawn round-trip costs more than the work itself. Never pull substantial or parallel work
 inline to save orchestration cost: that just moves the whole execution onto this expensive thread at
 full context, which costs more than the wakeups it was meant to save.
+
+**File and dispatch substantial research or workflow work before invoking it.** The executor owns the
+research, investigation, or workflow after the ticket exists. Do not start a workflow in the main session,
+then file or claim a ticket around work already underway. A routed claim without the prepared dispatch token
+is refused. `--direct` is the narrow, auditable inline escape hatch for a genuinely direct task; `pulse` and
+board reads show the bypassed route.
 
 **The orchestrator keeps the thinking; each executor owns its ticket.** Decision-level investigation
 — root-causing across findings, deciding the decomposition, writing the specs, reviewing and
@@ -314,7 +320,9 @@ and fallback chain, documented in [references/routing-details.md](references/rou
    executor name are authoritative. **All routed work dispatches through the native Agent tool**
    (`exec.dispatch` is `native-agent` on every route). For a ticket, `dispatch <ref>` (CLI) or the
    matching MCP tool is **instant by default**: it returns the stable per-model `agent`, a complete
-   `briefing` to use as the spawn prompt, and the token-gated claim details. Spawn that exact stable
+   `briefing` to use as the spawn prompt, and the token-gated claim details. A category-routed executor
+   claim without that prepared token is refused, even when it supplies the expected executor and effort.
+   Spawn that exact stable
    `agent` immediately from the returned `spawn` object. There is no registration announcement or
    watcher-lag wait. Use `dispatch <ref> --ephemeral` (or `{ephemeral:true}` in MCP) only when a
    cross-session handoff needs a self-contained temporary executor; that path still waits for the

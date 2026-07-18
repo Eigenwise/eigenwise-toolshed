@@ -293,7 +293,7 @@ test('claim -> comment -> done return compact acknowledgements', () => {
   const ref = added.ref;
   const ticket = store.getTicket(added.project, ref);
 
-  const claim = callTool('claim', { ref, by: 'mcp-worker-1' });
+  const claim = callTool('claim', { ref, by: 'mcp-worker-1', direct: true });
   assert.deepStrictEqual(Object.keys(claim).sort(), ['claim', 'ok', 'project', 'ref', 'status']);
   assert.strictEqual(claim.status, 'doing');
 
@@ -368,6 +368,20 @@ test('MCP claim passes prepared dispatch token and executor through to the store
   assert.strictEqual(refused.reason, 'token');
   const accepted = callTool('claim', { ref: added.ref, by: 'mcp-with-token', token: prepared.token, executor: prepared.ticket.dispatchExecutor });
   assert.strictEqual(accepted.ok, true);
+});
+
+test('MCP blocks no-dispatch routed claims and records an explicit direct research bypass', () => {
+  const added = callTool('add', { title: 'no-file research', category: 'mechanical' });
+  const ticket = store.getTicket(added.project, added.ref);
+  assert.deepStrictEqual(ticket.files, []);
+  const refused = callTool('claim', { ref: added.ref, by: 'mcp-routed', effort: ticket.effort, executor: ticket.exec.agent });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'dispatch_required');
+  const direct = callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true });
+  assert.strictEqual(direct.ok, true);
+  const pulse = callTool('pulse', { ref: added.ref });
+  assert.strictEqual(pulse.direct.by, 'mcp-inline');
+  assert.strictEqual(pulse.direct.model, ticket.model);
 });
 
 test('MCP claim rejects a generic executor for a Codex route', () => {

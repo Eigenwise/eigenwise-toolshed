@@ -1231,6 +1231,7 @@ function createTicket(slug, fields) {
     claim: null,               // { by, at } when an agent has claimed it to work on
     dispatchNonce: null,
     dispatchExecutor: null,
+    directClaim: null,
     assignee: normalizeAssignee(fields.assignee), // who it's assigned to (usually the human "you"); distinct from an agent claim
     archived: false,           // hidden from the board (kept, restorable) once true
     archivedAt: null,
@@ -1816,6 +1817,10 @@ function reconcileLaunchedDispatches(sessionId, opts) {
 // Atomically claim a ticket for worker `by`. Refuses (ok:false) if the ticket is
 // gone, already done, or actively claimed by someone else, unless that claim is
 // stale or opts.force; on success it moves the ticket to "doing" unless opts.status is false.
+function isRoutedTicket(ticket) {
+  return Boolean(ticket && ticket.model && ticket.effort && ticket.exec);
+}
+
 function claimTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || 'agent');
@@ -1826,8 +1831,10 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (!t) return { ok: false, reason: 'not_found' };
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
-    if (t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
-    if (t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
+    if (opts.direct && t.dispatchNonce) return { ok: false, reason: 'direct_conflict', ticket: t };
+    if (!opts.direct && t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
+    if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
+    if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     // Submitted work awaits the orchestrator's publish transaction, not another
     // executor: re-claiming it would fork the already-verified commit. The
@@ -1839,6 +1846,16 @@ function claimTicket(slug, idOrRef, by, opts) {
     }
     const now = new Date().toISOString();
     t.claim = { by, at: now };
+    if (opts.direct && isRoutedTicket(t)) {
+      t.directClaim = {
+        by,
+        at: now,
+        model: t.model,
+        effort: t.effort,
+        executor: opts.executor ? String(opts.executor) : null,
+        source: opts.source ? String(opts.source) : 'store',
+      };
+    }
     const state = dispatchState(t);
     if (state) {
       state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
@@ -2170,7 +2187,7 @@ function claimNext(slug, by, opts) {
       return String(a.createdAt).localeCompare(String(b.createdAt));
     });
   for (const cand of candidates) {
-    const res = claimTicket(slug, cand.id, by, { source: opts.source, sessionId: opts.sessionId });
+    const res = claimTicket(slug, cand.id, by, { direct: !!opts.direct, source: opts.source, sessionId: opts.sessionId });
     if (res.ok) return res;
     // Lost the race or it changed under us — try the next candidate.
   }
@@ -2536,6 +2553,7 @@ function briefTicket(slug, t, opts) {
     runsLabel: t.exec ? t.exec.runsLabel : null,
     executor: t.exec ? t.exec.agent : null,
     effort: t.effort || null,
+    direct: t.directClaim || null,
     files: Array.isArray(t.files) ? t.files : [],
     claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
     blockedBy,
@@ -2681,6 +2699,7 @@ function pulsePayload(slug, idOrRef) {
     ref: ticket.ref,
     title: ticket.title,
     status: ticket.status,
+    direct: ticket.directClaim || null,
     claim: claimPulse(ticket.claim, Date.now()),
     comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
     lastComment: lastCommentPulse(ticket),

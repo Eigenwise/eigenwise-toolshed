@@ -73,7 +73,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'ephemeral', 'clear', 'steal', 'shared-tree']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'ephemeral', 'clear', 'steal', 'shared-tree', 'direct']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -589,6 +589,8 @@ function reportClaimFailure(action, idOrRef, res, meta) {
     busy: `${idOrRef} is locked by another claim right now — retry in a moment.`,
     empty: `no available tickets in ${meta.name}.`,
     submitted: `${idOrRef} is READY_FOR_INTEGRATION (submitted commit awaiting the publish transaction) — integrate it, or clear the submission before re-claiming.`,
+    dispatch_required: `${idOrRef} is category-routed and must be prepared with sidequest dispatch before an executor can claim it. Use --direct only for an intentional inline bypass.`,
+    direct_conflict: `${idOrRef} already has a prepared dispatch. Claim it with that token and executor, or release and re-plan before using --direct.`,
     not_claimed: `${idOrRef} is not claimed by anyone — claim it before submitting (a submit is the terminal act of a claimed run).`,
     no_submission: `${idOrRef} has no submission to clear.`,
   };
@@ -645,7 +647,8 @@ function validateModelFilter(action, opts) {
   return false;
 }
 
-function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token) {
+function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token, direct) {
+  if (direct) return null;
   const effortDrift = effortDriftReason(slug, idOrRef, claimedEffort);
   if (effortDrift) return effortDrift;
   const t = store.getTicket(slug, idOrRef);
@@ -691,7 +694,7 @@ function cmdClaim(opts, positional) {
   const { slug, meta } = resolveProject(opts);
   const by = workerId(opts);
   // Guard before claiming so a wrong-tier claim leaves the ticket untouched.
-  const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor, opts.token);
+  const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor, opts.token, !!opts.direct);
   if (drift) {
     process.exitCode = 1;
     if (opts.json) {
@@ -701,7 +704,7 @@ function cmdClaim(opts, positional) {
     }
     return;
   }
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts) });
   const warnings = res.ok ? claimPlanningWarnings(res.ticket, meta.path) : [];
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, { warnings }), null, 2) + '\n');
@@ -1008,7 +1011,7 @@ function cmdNext(opts) {
   const { slug, meta } = resolveProject(opts);
   if (!validateModelFilter('next', opts)) return;
   const by = workerId(opts);
-  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, direct: !!opts.direct, source: opts.source || 'cli', sessionId: sessionId(opts) });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -1961,8 +1964,8 @@ Usage:
 
 Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
-  sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level]   atomically take a ticket (fails if gone/done/claimed; a prepared dispatch requires its nonce; --effort must match the resolved route or the claim is refused as wrong-executor)
-  sidequest next [--by who] [-p priority] [--model <model>] [--category <id>]   claim the best available ticket (highest priority first)
+  sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level] [--direct]   atomically take a ticket (category-routed executor claims require a prepared nonce and exact executor; --direct records an intentional inline bypass)
+  sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
