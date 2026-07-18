@@ -6,6 +6,10 @@ const {
   ROUTE_SOURCES,
   ROUTING_CONTRACT_VERSION,
 } = require('./schema.js');
+const { DEFAULT_CATEGORIES, DEFAULT_GLOBAL_FALLBACK } = require('./category-defaults.js');
+const { resolveCategories } = require('./categories.js');
+const { createModelCatalog } = require('./catalog.js');
+const { resolveCategoryRoute } = require('./resolve.js');
 
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -106,6 +110,61 @@ function validateRoutingResult(value) {
   return { valid: errors.length === 0, errors };
 }
 
+function invalidResolution(warnings) {
+  return {
+    contractVersion: ROUTING_CONTRACT_VERSION,
+    status: 'unrouted',
+    category: null,
+    attempts: [],
+    warnings,
+  };
+}
+
+function optionOr(options, key, fallback) {
+  return Object.hasOwn(options, key) ? options[key] : fallback;
+}
+
+function resolveRoutingRequest(request, options = {}) {
+  const checked = validateRoutingRequest(request);
+  if (!checked.valid) return invalidResolution(checked.errors);
+
+  const config = options.config && typeof options.config === 'object' ? options.config : {};
+  if (Object.hasOwn(config, 'schemaVersion') && config.schemaVersion !== CONFIG_SCHEMA_VERSION) {
+    return invalidResolution([`Switchboard config schemaVersion ${config.schemaVersion} is unsupported; expected ${CONFIG_SCHEMA_VERSION}.`]);
+  }
+  if (config.routing === false) return invalidResolution(['Switchboard category routing is disabled.']);
+
+  const categoryLayers = options.categories !== undefined
+    ? { shipped: options.categories }
+    : {
+        shipped: optionOr(options, 'shippedCategories', DEFAULT_CATEGORIES),
+        global: optionOr(options, 'globalCategories', config.categories || null),
+        project: optionOr(options, 'projectCategories', null),
+      };
+  const effective = resolveCategories(categoryLayers);
+  const modelCatalog = options.modelCatalog && typeof options.modelCatalog.checkRoute === 'function'
+    ? options.modelCatalog
+    : createModelCatalog({
+        gatewayCatalog: optionOr(options, 'gatewayCatalog', null),
+        allowedModels: optionOr(options, 'allowedModels', config.allowedModels),
+        allowedRoutes: optionOr(options, 'allowedRoutes', config.allowedRoutes),
+        userAllowedModels: optionOr(options, 'userAllowedModels', undefined),
+        userAllowedRoutes: optionOr(options, 'userAllowedRoutes', undefined),
+        projectAllowedModels: optionOr(options, 'projectAllowedModels', undefined),
+        projectAllowedRoutes: optionOr(options, 'projectAllowedRoutes', undefined),
+      });
+  const result = resolveCategoryRoute({
+    categoryId: request.categoryId,
+    categories: effective.byId,
+    globalFallback: optionOr(options, 'globalFallback', Object.hasOwn(config, 'globalFallback') ? config.globalFallback : DEFAULT_GLOBAL_FALLBACK),
+    catalog: modelCatalog,
+    warnings: effective.warnings,
+  });
+  const valid = validateRoutingResult(result);
+  if (!valid.valid) throw new Error(`Switchboard produced an invalid routing result: ${valid.errors.join(' ')}`);
+  return result;
+}
+
 function validateRegistryBreadcrumb(value) {
   const errors = [];
   const keys = ['schemaVersion', 'name', 'version', 'root', 'capabilities', 'routing', 'ui'];
@@ -151,6 +210,7 @@ function routingPanelData({ categories, globalFallback, availableModels, warning
 
 module.exports = {
   createRegistryBreadcrumb,
+  resolveRoutingRequest,
   routingPanelData,
   validateCategory,
   validateRegistryBreadcrumb,
