@@ -7,10 +7,6 @@ const os = require('node:os');
 const path = require('node:path');
 
 const GATEWAY_MARKETPLACE = 'eigenwise-toolshed';
-const LEGACY_PLUGIN_IDS = new Set([
-  'workspace-init@eigenwise-toolshed',
-  'toolshed-guard@eigenwise-toolshed',
-]);
 const UPDATE_SCOPES = new Set(['user', 'project', 'local']);
 
 function parseArgs(argv) {
@@ -95,21 +91,6 @@ function updateCommand(instance, claude) {
   };
 }
 
-function uninstallCommand(instance, claude) {
-  return {
-    command: claude,
-    args: ['plugin', 'uninstall', instance.id, '--scope', instance.scope],
-    cwd: instance.scope === 'user' ? undefined : instance.projectPath,
-    label: `${instance.id} (${instance.scope}${instance.projectPath ? `, ${instance.projectPath}` : ''})`,
-  };
-}
-
-function legacyCleanupCommands(instances, claude) {
-  return instances
-    .filter((instance) => LEGACY_PLUGIN_IDS.has(instance.id))
-    .map((instance) => uninstallCommand(instance, claude));
-}
-
 function marketplaceCommand(marketplace, claude) {
   return {
     command: claude,
@@ -155,16 +136,6 @@ function reloadAdvice(instances) {
   if (instances.some((instance) => instance.scope === 'user')) lines.push('User scope: reload every open Claude Code session.');
   for (const project of projects) lines.push(`Project/local scope: reload sessions open in ${project}.`);
   return lines;
-}
-
-function reportLegacyCleanup(instances, claude, report) {
-  const commands = legacyCleanupCommands(instances, claude);
-  if (commands.length === 0) return;
-
-  report('\nLegacy plugin cleanup: after Workbench is installed and sessions are reloaded, uninstall these deprecated installs:');
-  for (const command of commands) {
-    report(`- ${commandText(command)}${command.cwd ? `\n  cwd: ${command.cwd}` : ''}`);
-  }
 }
 
 function execute(command, options, run, report) {
@@ -218,7 +189,6 @@ function runUpdate({ registryFile = registryPath(), options, run = defaultRun, r
     }
   }
 
-  reportLegacyCleanup(instances, options.claude, report);
   for (const line of reloadAdvice(instances)) report(line);
   if (failures.length > 0) report(`\nCompleted with ${failures.length} failure(s): ${failures.join(', ')}`);
   else report('\nCompleted successfully.');
@@ -254,15 +224,12 @@ if (require.main === module) main();
 
 module.exports = {
   GATEWAY_MARKETPLACE,
-  LEGACY_PLUGIN_IDS,
   gatewayCommand,
   installedPlugins,
-  legacyCleanupCommands,
   marketplaceCommand,
   marketplacesFor,
   parseArgs,
   registryPath,
   runUpdate,
-  uninstallCommand,
   updateCommand,
 };

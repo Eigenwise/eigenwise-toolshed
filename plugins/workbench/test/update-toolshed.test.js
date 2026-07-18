@@ -9,7 +9,6 @@ const test = require('node:test');
 const {
   gatewayCommand,
   installedPlugins,
-  legacyCleanupCommands,
   marketplacesFor,
   parseArgs,
   runUpdate,
@@ -65,40 +64,6 @@ test('routes project and local updates through the recorded project directory', 
   assert.equal(project.cwd, 'C:/work/project');
   assert.equal(local.cwd, 'C:/work/local');
   assert.equal(user.cwd, undefined);
-});
-
-test('reports exact cleanup commands for every legacy install scope', () => {
-  const commands = legacyCleanupCommands([
-    { id: 'workspace-init@eigenwise-toolshed', scope: 'user' },
-    { id: 'toolshed-guard@eigenwise-toolshed', scope: 'project', projectPath: 'C:/work/legacy' },
-    { id: 'toolshed-guard@eigenwise-toolshed', scope: 'local', projectPath: 'C:/work/local' },
-  ], 'claude');
-
-  assert.deepEqual(commands.map((command) => command.args), [
-    ['plugin', 'uninstall', 'workspace-init@eigenwise-toolshed', '--scope', 'user'],
-    ['plugin', 'uninstall', 'toolshed-guard@eigenwise-toolshed', '--scope', 'project'],
-    ['plugin', 'uninstall', 'toolshed-guard@eigenwise-toolshed', '--scope', 'local'],
-  ]);
-  assert.deepEqual(commands.map((command) => command.cwd), [undefined, 'C:/work/legacy', 'C:/work/local']);
-
-  const lines = [];
-  withRegistry({
-    version: 1,
-    plugins: {
-      'workspace-init@eigenwise-toolshed': [{ scope: 'user' }],
-      'toolshed-guard@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/legacy' }],
-    },
-  }, (registryFile) => runUpdate({
-    registryFile,
-    options: { claude: 'claude', dryRun: false, check: true },
-    run: () => ({ ok: true }),
-    report: (line) => lines.push(line),
-  }));
-
-  assert.match(lines.join('\n'), /Legacy plugin cleanup/);
-  assert.match(lines.join('\n'), /workspace-init@eigenwise-toolshed/);
-  assert.match(lines.join('\n'), /toolshed-guard@eigenwise-toolshed/);
-  assert.match(lines.join('\n'), /cwd: C:\/work\/legacy/);
 });
 
 test('uses the installed codex-gateway setup and doctor commands', () => {

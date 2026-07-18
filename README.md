@@ -18,8 +18,6 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 | Plugin | What it does |
 |--------|--------------|
 | [**workbench**](./plugins/workbench) | The one user-scope install for workspace setup, Toolshed updates, health checks, retrospectives, and the freshness guard. Use `/init-workspace`, `/update-toolshed`, `/workbench-doctor`, and `/retro`. |
-| [**workspace-init**](./plugins/workspace-init) | Migration shell for existing installs. Install Workbench instead. |
-| [**toolshed-guard**](./plugins/toolshed-guard) | Migration shell for existing installs. Workbench owns freshness checks now. |
 | [**codebase-mapper**](./plugins/codebase-mapper) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
 | [**live-rules**](./plugins/live-rules) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
 | [**sidequest**](./plugins/sidequest) | A Trello-light quest log for Claude Code. Side issues you mention mid-task get captured as tickets on the spot, with pasted images attached, then managed on a live, self-hosted Kanban dashboard spanning every project you work in. Category-based routing picks a concrete model and reasoning effort per ticket, with category and global fallbacks. |
@@ -42,7 +40,7 @@ Quickest start: install **workbench** at user scope, reload, then in any project
 
 ## Why workbench?
 
-Workbench owns the workspace lifecycle in one user-scope install. It sets up project-side configuration, updates Toolshed plugins, checks local health, runs retrospectives, and covers freshness checks. The old `workspace-init` and `toolshed-guard` marketplace rows remain as migration shells for existing installs.
+Workbench owns the workspace lifecycle in one user-scope install. It sets up project-side configuration, updates Toolshed plugins, checks local health, runs retrospectives, and covers freshness checks.
 
 ## Why codebase-mapper?
 

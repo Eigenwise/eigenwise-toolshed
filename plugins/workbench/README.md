@@ -37,7 +37,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js" --check
 node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js"
 ```
 
-After updates, reload every session that had an affected plugin loaded. Workbench also reports legacy `workspace-init@eigenwise-toolshed` and `toolshed-guard@eigenwise-toolshed` installs with the exact uninstall command for their recorded scope and project directory.
+After updates, reload every session that had an affected plugin loaded.
 
 ## License
 
