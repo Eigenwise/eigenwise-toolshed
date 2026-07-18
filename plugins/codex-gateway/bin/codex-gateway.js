@@ -60,6 +60,10 @@ const ANTHROPIC_UPSTREAM = process.env.CODEX_GATEWAY_ANTHROPIC_UPSTREAM || 'http
 // picks this up at its next natural restart. See requestRouteLog below.
 const REQUEST_ROUTE_LOG = process.env.CODEX_GATEWAY_REQUEST_LOG !== '0';
 const REQUEST_ROUTE_LOG_PATH = process.env.CODEX_GATEWAY_REQUEST_LOG_PATH || path.join(LOGS, 'request-routes.jsonl');
+const ROUTE_TELEMETRY_ENABLED = process.env.CLAUDE_CODE_PROPAGATE_TRACEPARENT === '1';
+const ROUTE_TELEMETRY_TIMEOUT_MS = 500;
+const TRACE_HEADERS = ['traceparent', 'tracestate', 'baggage'];
+const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cookie'];
 
 // ---------------------------------------------------- RC-compatibility mode
 //
@@ -1092,6 +1096,170 @@ function createHostsBypassResolver({ resolve4, resolve6, ttlMs = 5 * 60 * 1000 }
   return { lookup, resolve };
 }
 
+function loopbackTelemetryEndpoint() {
+  if (!ROUTE_TELEMETRY_ENABLED) return null;
+  const explicit = process.env.CODEX_GATEWAY_TELEMETRY_ENDPOINT;
+  if (explicit === '0') return null;
+  let raw = explicit || process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+  let appendTracesPath = false;
+  if (!raw && process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+    raw = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    appendTracesPath = true;
+  }
+  if (!raw) raw = 'http://127.0.0.1:4318/v1/traces';
+  try {
+    const endpoint = new URL(raw);
+    const hostname = endpoint.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const loopback = hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+    if (!loopback || !['http:', 'https:'].includes(endpoint.protocol)) return null;
+    if (hostname === 'localhost') endpoint.hostname = '127.0.0.1';
+    if (appendTracesPath) endpoint.pathname = `${endpoint.pathname.replace(/\/$/, '')}/v1/traces`;
+    endpoint.search = '';
+    endpoint.hash = '';
+    return endpoint;
+  } catch {
+    return null;
+  }
+}
+
+function parseIncomingTraceparent(headers) {
+  if (!ROUTE_TELEMETRY_ENABLED) return null;
+  const value = headers.traceparent;
+  if (typeof value !== 'string') return null;
+  const match = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})(-[0-9a-f-]+)?$/.exec(value.trim());
+  if (!match || match[1] === 'ff' || (match[1] === '00' && match[5])) return null;
+  if (/^0{32}$/.test(match[2]) || /^0{16}$/.test(match[3])) return null;
+  return { traceId: match[2], parentSpanId: match[3], flags: parseInt(match[4], 16) };
+}
+
+function safeMetadataId(value, maxLength = 128) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > maxLength) return null;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]*$/.test(value) ? value : null;
+}
+
+function otlpAttribute(key, value) {
+  if (value == null) return null;
+  if (typeof value === 'boolean') return { key, value: { boolValue: value } };
+  if (typeof value === 'number') {
+    if (Number.isInteger(value)) return { key, value: { intValue: String(value) } };
+    return { key, value: { doubleValue: value } };
+  }
+  return { key, value: { stringValue: String(value) } };
+}
+
+function postRouteSpan(endpoint, span) {
+  if (!endpoint) return;
+  try {
+    const body = JSON.stringify({
+      resourceSpans: [{
+        resource: { attributes: [otlpAttribute('service.name', 'codex-gateway')] },
+        scopeSpans: [{
+          scope: { name: 'eigenwise.codex-gateway' },
+          spans: [span],
+        }],
+      }],
+    });
+    const client = endpoint.protocol === 'https:' ? https : http;
+    const telemetryReq = client.request(endpoint, {
+      method: 'POST',
+      agent: false,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      },
+    }, (telemetryRes) => telemetryRes.resume());
+    telemetryReq.on('socket', (socket) => socket.unref());
+    telemetryReq.on('error', () => {});
+    telemetryReq.setTimeout(ROUTE_TELEMETRY_TIMEOUT_MS, () => telemetryReq.destroy());
+    telemetryReq.end(body);
+  } catch {}
+}
+
+function routeStatus(statusCode, override) {
+  if (override) return override;
+  if (!Number.isInteger(statusCode)) return 'upstream_error';
+  if (statusCode >= 500) return 'server_error';
+  if (statusCode >= 400) return 'client_error';
+  return 'ok';
+}
+
+function buildRouteTelemetry(req) {
+  const endpoint = loopbackTelemetryEndpoint();
+  if (!endpoint) return { setRoute() {}, finish() {} };
+  const incoming = parseIncomingTraceparent(req.headers);
+  const traceId = incoming?.traceId || crypto.randomBytes(16).toString('hex');
+  const spanId = crypto.randomBytes(8).toString('hex');
+  const parentSpanId = incoming?.parentSpanId || null;
+  const routeId = crypto.randomUUID();
+  const sessionId = safeMetadataId(requestHeader(req, 'x-claude-code-session-id'));
+  const startedAt = BigInt(Date.now()) * 1000000n;
+  const started = process.hrtime.bigint();
+  let route = {};
+  let finished = false;
+  return {
+    setRoute(nextRoute) {
+      route = { ...nextRoute };
+    },
+    finish(statusCode, statusOverride = null) {
+      if (finished) return;
+      finished = true;
+      try {
+        const elapsed = process.hrtime.bigint() - started;
+        const durationMs = Number(elapsed) / 1000000;
+        const status = routeStatus(statusCode, statusOverride);
+        const attributes = [
+          otlpAttribute('source', 'codex-gateway'),
+          otlpAttribute('source_event_id', routeId),
+          otlpAttribute('source_schema', '1'),
+          otlpAttribute('event_name', 'codex_gateway.route'),
+          otlpAttribute('route_id', routeId),
+          otlpAttribute('trace_id', traceId),
+          otlpAttribute('span_id', spanId),
+          otlpAttribute('parent_span_id', parentSpanId),
+          otlpAttribute('trace_linked', !!incoming),
+          otlpAttribute('session_id', sessionId),
+          otlpAttribute('selected_model', safeMetadataId(route.selectedModel)),
+          otlpAttribute('effective_model', safeMetadataId(route.effectiveModel)),
+          otlpAttribute('backend', ['codex', 'anthropic'].includes(route.backend) ? route.backend : null),
+          otlpAttribute('effort', ['low', 'medium', 'high', 'xhigh', 'max'].includes(route.effort) ? route.effort : null),
+          otlpAttribute('fallback', route.fallback === true),
+          otlpAttribute('via', ['direct', 'dispatch', 'dispatch-cached'].includes(route.via) ? route.via : null),
+          otlpAttribute('status', status),
+          otlpAttribute('status_code', Number.isInteger(statusCode) ? statusCode : null),
+          otlpAttribute('duration_ms', durationMs),
+        ].filter(Boolean);
+        const endedAt = startedAt + elapsed;
+        postRouteSpan(endpoint, {
+          traceId,
+          spanId,
+          ...(parentSpanId ? { parentSpanId } : {}),
+          ...(incoming ? { flags: incoming.flags } : {}),
+          name: 'codex-gateway.route',
+          kind: 2,
+          startTimeUnixNano: startedAt.toString(),
+          endTimeUnixNano: endedAt.toString(),
+          attributes,
+          events: [{ timeUnixNano: endedAt.toString(), name: 'codex-gateway.route', attributes }],
+          status: { code: status === 'ok' ? 1 : 2 },
+        });
+      } catch {}
+    },
+  };
+}
+
+function createRouteTelemetry(req) {
+  try {
+    return buildRouteTelemetry(req);
+  } catch {
+    return { setRoute() {}, finish() {} };
+  }
+}
+
+function requestHeader(req, name) {
+  const value = req.headers[name];
+  return typeof value === 'string' ? value : null;
+}
+
 function runShim() {
   let modelCache = {
     at: 0,
@@ -1379,11 +1547,11 @@ function runShim() {
     arm();
   }
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null) {
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null) {
     const url = new URL(clientReq.url, target);
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
-    for (const h of ['host', 'connection', 'content-length', 'keep-alive', ...extraHeaderDrop]) delete headers[h];
+    for (const h of ['host', 'connection', 'content-length', 'keep-alive', ...TRACE_HEADERS, ...extraHeaderDrop]) delete headers[h];
     if (body != null) headers['content-length'] = Buffer.byteLength(body);
     const reqOptions = {
       method: clientReq.method,
@@ -1396,6 +1564,9 @@ function runShim() {
       reqOptions.lookup = anthropicBypass.lookup;
     }
     const upReq = (isHttps ? https : http).request(url, reqOptions, (upRes) => {
+      upRes.once('end', () => routeTelemetry?.finish(upRes.statusCode));
+      upRes.once('aborted', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted'));
+      upRes.once('error', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_error'));
       const resHeaders = { ...upRes.headers };
       for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
       if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) {
@@ -1523,6 +1694,7 @@ function runShim() {
     });
     upReq.setTimeout(3600000, () => upReq.destroy(new Error('upstream timeout')));
     upReq.on('error', (e) => {
+      routeTelemetry?.finish(502, 'upstream_error');
       if (clientRes.headersSent) return clientRes.destroy();
       clientRes.writeHead(502, { 'content-type': 'application/json' });
       clientRes.end(JSON.stringify({
@@ -1558,15 +1730,18 @@ function runShim() {
 
     // buffer the body so we can route on the model field; forward original
     // bytes untouched on the Anthropic path (prompt caching keys on them)
+    const routeTelemetry = createRouteTelemetry(req);
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
       const raw = chunks.length ? Buffer.concat(chunks) : null;
       let requestedModel = null;
+      let requestedEffort = null;
       if (raw && pathOnly.startsWith('/v1/messages')) {
         try {
           const parsed = JSON.parse(raw.toString());
           requestedModel = typeof parsed.model === 'string' ? parsed.model : null;
+          requestedEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : null;
           if (typeof parsed.model === 'string' && parsed.model.startsWith(PREFIX)) {
             const advertisedModel = parsed.model;
             const requestedBase = parsed.model.slice(PREFIX.length).replace(/\[1m\]$/, '');
@@ -1591,6 +1766,15 @@ function runShim() {
                     message: 'codex-gateway: dispatch model requires exactly one [switchboard-route model=...] marker in the conversation; [sidequest-route ...] remains temporarily accepted for compatibility; redispatch the ticket',
                   },
                 });
+                routeTelemetry.setRoute({
+                  selectedModel: advertisedModel,
+                  effectiveModel: null,
+                  backend: 'codex',
+                  effort: null,
+                  fallback: false,
+                  via: 'dispatch',
+                });
+                routeTelemetry.finish(400, 'invalid_route');
                 res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
                 return res.end(body);
               }
@@ -1611,18 +1795,38 @@ function runShim() {
               parsed.tools = parsed.tools.filter((t) => !PLAN_TOOLS.includes(t && t.name));
             }
             counters.codex++;
-            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, dispatchRoute ? dispatchRoute.effort : null);
+            const effectiveEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : requestedEffort;
+            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, effectiveEffort);
+            routeTelemetry.setRoute({
+              selectedModel: advertisedModel,
+              effectiveModel: parsed.model,
+              backend: 'codex',
+              effort: effectiveEffort,
+              fallback: false,
+              via: dispatchVia || 'direct',
+            });
             const sessionId = codexSessionId(req);
-            if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId)) return;
+            if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId)) {
+              routeTelemetry.finish(413);
+              return;
+            }
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              JSON.stringify(parsed), ['authorization', 'x-api-key'], true, !keepPlanTools, sessionId, advertisedModel);
+              JSON.stringify(parsed), AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, routeTelemetry);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }
       counters.anthropic++;
       requestRouteLog(req, 'anthropic', requestedModel, pathOnly);
-      forward(req, res, ANTHROPIC_UPSTREAM, raw);
+      routeTelemetry.setRoute({
+        selectedModel: requestedModel,
+        effectiveModel: requestedModel,
+        backend: 'anthropic',
+        effort: requestedEffort,
+        fallback: false,
+        via: 'direct',
+      });
+      forward(req, res, ANTHROPIC_UPSTREAM, raw, [], false, false, null, null, routeTelemetry);
     });
   }
 

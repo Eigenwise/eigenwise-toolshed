@@ -116,8 +116,17 @@ writes request bodies, prompts, tool payloads, authorization, or arbitrary heade
 {"at":"...","backend":"anthropic","model":"claude-fable-5","path":"/v1/messages","sessionId":"..."}
 ```
 
-After changing either variable, restart the gateway (`stop`, then `start`) so its detached shim gets
-the new environment.
+The route log is created with mode `0600` and keeps its fixed metadata-only schema.
+
+### Trace-linked route telemetry
+
+When `CLAUDE_CODE_PROPAGATE_TRACEPARENT=1`, the shim emits one OTLP/HTTP JSON span and event per routed request. A valid incoming W3C `traceparent` becomes the span's parent. Missing or invalid context produces an unlinked root span instead, so route evidence remains available without inventing a request link.
+
+The fixed payload contains only route ID, trace/span/parent IDs, safe session ID, selected and effective model, backend, effort, fallback, `via`, bounded status, and gateway-observed duration. It never includes request or response bodies, prompts, tools, arbitrary headers, credentials, `tracestate`, baggage, or error text. Incoming trace headers are consumed and removed before both upstream routes. Claude credentials are also removed before the Codex proxy; the Anthropic passthrough keeps only the credential it needs for Anthropic itself. No incoming auth header is copied to telemetry.
+
+Telemetry defaults to `http://127.0.0.1:4318/v1/traces`. `CODEX_GATEWAY_TELEMETRY_ENDPOINT` can point it at another loopback OTLP endpoint, while `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_ENDPOINT` are accepted as fallbacks. Non-loopback endpoints are ignored, `CODEX_GATEWAY_TELEMETRY_ENDPOINT=0` disables export, and connection, timeout, encoding, or collector failures never change the routed response.
+
+After changing any of these variables, restart the gateway (`stop`, then `start`) so its detached shim gets the new environment.
 
 ## RC-compatibility mode (restoring `/remote-control`)
 
