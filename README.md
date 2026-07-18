@@ -17,7 +17,9 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 
 | Plugin | What it does |
 |--------|--------------|
-| [**workspace-init**](./plugins/workspace-init) | Start here. Sets up a project's `.claude/` end to end: a short interview, then a populated `settings.json`, a tailored `live-rules.md`, a codebase map, and structure notes, wired around the plugin-reload boundary and verified firing. Orchestrates the other three plus the built-ins, and bakes in a self-improvement loop so the setup keeps sharpening itself. |
+| [**workbench**](./plugins/workbench) | The one user-scope install for workspace setup, Toolshed updates, health checks, retrospectives, and the freshness guard. Use `/init-workspace`, `/update-toolshed`, `/workbench-doctor`, and `/retro`. |
+| [**workspace-init**](./plugins/workspace-init) | Migration shell for existing installs. Install Workbench instead. |
+| [**toolshed-guard**](./plugins/toolshed-guard) | Migration shell for existing installs. Workbench owns freshness checks now. |
 | [**codebase-mapper**](./plugins/codebase-mapper) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
 | [**live-rules**](./plugins/live-rules) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
 | [**sidequest**](./plugins/sidequest) | A Trello-light quest log for Claude Code. Side issues you mention mid-task get captured as tickets on the spot, with pasted images attached, then managed on a live, self-hosted Kanban dashboard spanning every project you work in. Category-based routing picks a concrete model and reasoning effort per ticket, with category and global fallbacks. |
@@ -28,7 +30,7 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install workspace-init@eigenwise-toolshed
+/plugin install workbench@eigenwise-toolshed --scope user
 /plugin install codebase-mapper@eigenwise-toolshed
 /plugin install live-rules@eigenwise-toolshed
 /plugin install sidequest@eigenwise-toolshed
@@ -36,29 +38,11 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 
 Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.
 
-Quickest start: install **workspace-init**, reload, then in any project just ask *"set up a Claude workspace here"*. It sets the other three up for you.
+Quickest start: install **workbench** at user scope, reload, then in any project ask *"set up a Claude workspace here"*. Workbench owns setup, updates, health, retrospectives, and the freshness guard.
 
-## Why workspace-init?
+## Why workbench?
 
-The other three plugins each set up one thing. workspace-init sets up the whole workspace, and wires
-them together for you. You install it, ask it to set up a workspace in a project, and it:
-
-- **Interviews you** briefly about what the project is and what stack it's on (proposing defaults from
-  what it detects, so you mostly confirm).
-- **Writes `.claude/settings.json`** enabling the right plugins for that stack (the toolshed core plus
-  a language server, a frontend or docs plugin, and so on), then **pauses at the reload boundary** so
-  the plugins actually load.
-- **Writes a tailored `.claude/live-rules.md`** (craft baseline plus stack-specific rules) and short
-  structure notes, and delegates the codebase map to codebase-mapper and `CLAUDE.md` to the built-in
-  `/init`.
-- **Verifies it end to end** in the same session: it watches the live-rules and map hooks actually
-  fire and brings up the sidequest board, instead of trusting that the files came out right.
-
-It works on any stack and on new or existing projects, and it stays generic: the logic is
-stack-agnostic, the choices come from a small reference catalog it consults and extends. Every
-workspace it sets up also gets a **self-improvement loop** baked in, a live rule that nudges you to
-turn friction into a durable fix (a new rule, a map update, a fresh skill) so the setup keeps getting
-better the more you use it. The [plugin README](./plugins/workspace-init) has the full walkthrough.
+Workbench owns the workspace lifecycle in one user-scope install. It sets up project-side configuration, updates Toolshed plugins, checks local health, runs retrospectives, and covers freshness checks. The old `workspace-init` and `toolshed-guard` marketplace rows remain as migration shells for existing installs.
 
 ## Why codebase-mapper?
 
