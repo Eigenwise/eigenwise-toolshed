@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Complexity-scored model and effort routing for Claude Code. Score any task 1-10 and switchboard derives which model tier should work it and at what reasoning effort, on a user-tunable capability ladder (bias dial, per-model effort allowlist), then runs it in a named executor subagent at exactly that tier.",
   "author": {
     "name": "Eigenwise",
