@@ -19,7 +19,7 @@ idle, two tickets describe the same work from different sessions, or a real chun
 repo with no ticket ever filed for it. This skill runs that check end to end: sweep, categorize, act on
 what's safe, ask about what isn't, apply the answers, report.
 
-**Reference workflow this is modeled on:** the 2026-07-07 temporal-RL grooming pass — 17 tickets closed
+**Reference pass this is modeled on:** the 2026-07-07 temporal-RL grooming pass — 17 tickets closed
 with evidence-bearing notes, several stale claims released, and new frontier tickets filed with
 `depends-on` links for the work that had already been decided but never ticketed. That's the shape a good
 pass takes: mostly mechanical cleanup, a handful of real judgment calls surfaced to the user, nothing

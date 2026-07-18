@@ -1,7 +1,6 @@
-# Orchestration: fan-out, workflows, and agent teams
+# Orchestration: fan-out and agent teams
 
-Read this when you're about to run more than a couple of executors at once, when agent teams is on,
-or when a workflow might fit. The baseline
+Read this when you're about to run more than a couple of executors at once or when agent teams is on. The baseline
 delegation rule (route execution down to each ticket's stamped cheap model as short bounded runs,
 batch small same-model tickets, fan out over independent waves, inline only trivial one-steps) lives
 in the main skill — this file is the detail on the bigger shapes.
@@ -96,7 +95,7 @@ reflexively go synchronous to save money, and do not answer the wakeup cost by w
   ([multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)).
   But synchronous is *blind*: the lead sleeps until the batch finishes, so you cannot watch progress,
   redirect a drifting worker, or kill a runaway — you pay for the whole batch and learn the outcome at
-  the end. Many workflows reasonably refuse that trade and stay background/steerable. If you do reach
+  the end. Many runs reasonably refuse that trade and stay background/steerable. If you do reach
   for it, wave SIZE is the dial: one big synchronous wave is cheapest and blindest; small synchronous
   waves ("spawn wave, wait, re-run `ready`, repeat") give a steering checkpoint between each. Fit it to
   work that barely needs steering — tight, verify-gated tickets whose executors bounce back on
@@ -114,36 +113,6 @@ produces tickets that collide.
 For a codebase you already know, or a task whose files you can name, skip the scout and just read the
 files. A substantive investigation (root-cause hunt, spike) is different from a scout: it gets a
 ticket, and its findings get commented back (see the main skill).
-
-## Workflows (opt-in — you propose, the user approves)
-
-The default parallelizer is named-subagent fan-out — always available, turn-by-turn, supervised. A
-**Claude Code Workflow** built with `agent()` and `pipeline()` is the heavier tool for a larger,
-repeatable, or deterministic run: results stay in script variables, only the final output returns.
-
-- **Sizing** (by the story's complexity): small <5 · medium <15 · large <50, within the runtime cap
-  of 16 concurrent / 1000 total per run.
-- **Gated**: you don't launch one on your own — the user opts in (an "ultracode" prompt, or an
-  explicit ask). But you usually judge better than the user when one would genuinely help, so **when
-  it would, SUGGEST it** via `AskUserQuestion`: why it fits, the rough scale, the token cost, and a
-  script shape such as `pipeline(tickets, ticket => agent(ticket.prompt, { label: ticket.ref, model: ticket.exec.apiModel, effort: ticket.effort }))`.
-  Raising the option is how the opt-in happens; staying silent when a workflow would clearly help is
-  the mistake.
-- Typical fits: a wave of 6+ same-shaped executor tickets, a repeatable migrate/verify sweep, a
-  find→verify review structure.
-
-### Workflows on routed tickets
-
-Dispatch-first stays the default: a routed executor owns the ticket's work. Use a Workflow harness only
-when its phases and in-memory results are genuinely the right shape. Take `exec` and `effort` from the
-routed ticket or dispatch payload, then pin every `agent()` call with `model: ticket.exec.apiModel` and
-`effort: ticket.effort`. `runsModel` is the board slug or display runtime, while `apiModel` is the
-catalog-derived API id the Agent runtime accepts. The `model` field in `phases` metadata is display-only;
-it does not set an `agent()` model.
-
-A workflow script written during this session is not in the startup registry. Run that file with
-`Workflow({ scriptPath: "..." })`, not `Workflow({ name: "..." })`; `name` only resolves scripts found
-when Claude Code started.
 
 ## Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
 

@@ -23,8 +23,7 @@ Detail that used to live inline here is split into reference files — **read th
 situation calls for it**:
 
 - [references/orchestration.md](references/orchestration.md) — fan-out waves, orchestration cost
-  (keeping the lead cheap to wake), workflows (opt-in, sizing), agent-teams caveats, spike tickets,
-  native Agent dispatch.
+  (keeping the lead cheap to wake), agent-teams caveats, spike tickets, native Agent dispatch.
 - [references/routing-details.md](references/routing-details.md) — category routes, fallback resolution,
   legacy complexity bands, and a worked dispatch example.
 - [references/routing-guide.md](references/routing-guide.md) — model and effort guidance for choosing
@@ -114,7 +113,7 @@ sidequest add -t "Contact form does not send" -d "Submit does nothing; no email 
 1. Read the live taxonomy with `category_list` (MCP) or `sidequest category list --json` (CLI). Match the
    work to each category's description, choose the narrowest fit, and stamp its ID with `--category`.
    A plausibly matching project-scoped category wins over any global row because it exists for that
-   project's distinct work. Classify by the deliverable, not by whether the workflow involves code or
+   project's distinct work. Classify by the deliverable, not by whether the task involves code or
    tooling. Categories are board data: never copy a category table or ID list into a prompt or skill.
 2. If the request is too underspecified to classify safely, use the taxonomy's fallback category or file
    it unclassified only when the API explicitly permits that. Reclassify once concrete evidence exists.
@@ -227,8 +226,8 @@ where the spawn round-trip costs more than the work itself. Never pull substanti
 inline to save orchestration cost: that just moves the whole execution onto this expensive thread at
 full context, which costs more than the wakeups it was meant to save.
 
-**File and dispatch substantial research or workflow work before invoking it.** The executor owns the
-research, investigation, or workflow after the ticket exists. Do not start a workflow in the main session,
+**File and dispatch substantial research or implementation before invoking it.** The executor owns the
+research, investigation, or implementation after the ticket exists. Do not start work in the main session,
 then file or claim a ticket around work already underway. A routed claim without the prepared dispatch token
 is refused. `--direct` is the narrow, auditable inline escape hatch for a genuinely direct task; `pulse` and
 board reads show the bypassed route.
@@ -278,8 +277,8 @@ Before a large
 fan-out, check `sidequest list --status doing --brief --json` — claims under a `--by` you don't
 recognize mean another session may be working the board; flag it to the user first.
 
-The main thread's job is decompose, score, spec, spawn, integrate. Larger orchestration shapes
-(workflows — opt-in, you propose rather than launch — and agent-teams caveats):
+The main thread's job is decompose, score, spec, spawn, integrate. Larger orchestration guidance,
+including agent-teams caveats:
 [references/orchestration.md](references/orchestration.md). The serialized publish transaction that
 ships submitted executor commits: [references/publishing.md](references/publishing.md).
 

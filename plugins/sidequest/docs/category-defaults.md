@@ -1,6 +1,6 @@
 # Default category taxonomy
 
-These are the shipped defaults for category routing. The dispatcher receives each **Classifier description** verbatim, so classify the requested work rather than its title, urgency, or a requested model. Pick the narrowest matching row. A plausibly matching project-scoped category wins over any global row, and classification follows the deliverable rather than whether the workflow involves code or tooling.
+These are the shipped defaults for category routing. The dispatcher receives each **Classifier description** verbatim, so classify the requested work rather than its title, urgency, or a requested model. Pick the narrowest matching row. A plausibly matching project-scoped category wins over any global row, and classification follows the deliverable rather than whether the process involves code or tooling.
 
 Each primary route is a concrete backend pin. Fallbacks default to none. The global fallback handles degradation when a concrete backend is unavailable, and a per-category fallback remains an explicit user option.
 
@@ -23,7 +23,7 @@ Each primary route is a concrete backend pin. Fallbacks default to none. The glo
 
 ## Why these defaults
 
-- Anthropic positions Haiku 4.5 for fast, economical, high-volume straightforward work and sub-agent tasks; Sonnet 5 for coding, agents, analysis, and enterprise workflows; Opus 4.8 for complex autonomous coding, research, and systems work; and Fable 5 for the most demanding long-running agents. [A1], [A3]
+- Anthropic positions Haiku 4.5 for fast, economical, high-volume straightforward work and sub-agent tasks; Sonnet 5 for coding, agents, analysis, and enterprise processes; Opus 4.8 for complex autonomous coding, research, and systems work; and Fable 5 for the most demanding long-running agents. [A1], [A3]
 - Anthropic recommends `high` as the normal intelligence-sensitive baseline, `xhigh` for hard coding and agentic work, and lower effort for routine or cost-sensitive work. `max` is deliberately absent because it is for exceptional, measured cases. [A2]
 - OpenAI describes Luna as the clear, repeatable, high-volume model; Terra as the everyday tool-using workhorse; and Sol for complex, open-ended work that needs extra analysis, judgment, or polish. [O1], [O2]
 
