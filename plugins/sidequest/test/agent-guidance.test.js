@@ -37,3 +37,13 @@ test('ephemeral dispatch guidance prevents registration wait stalls', () => {
   assert.match(orchestration, /Never end a turn waiting for registration/);
   assert.match(orchestration, /Any session\nmay adopt an unspawned prepared definition/);
 });
+
+test('shared-tree guidance detects foreign staging and absorbed scope patches', () => {
+  assert.match(executorTemplate, /immediately after claiming and before work, inspect `git diff --cached --name-only`/);
+  assert.match(executorTemplate, /any staged path outside the declared scope is foreign work/);
+  assert.match(executorTemplate, /save the declared-scope staged patch with `git diff --cached --binary -- <declared-scope> > <scratchpad>\/scope\.patch`/);
+  assert.match(executorTemplate, /git log --format="%H\|%an\|%ae\|%s" <pre-sync-head>\.\.HEAD -- <declared-scope>/);
+  assert.match(executorTemplate, /`git apply --check --reverse --cached <saved-patch>` proves it was absorbed/);
+  assert.match(executorTemplate, /must be restored with `git apply --cached <saved-patch>`/);
+  assert.match(executorTemplate, /If it includes any path outside the declared scope, treat it as foreign work: do not commit/);
+});
