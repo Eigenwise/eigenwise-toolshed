@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.73.0",
+  "version": "3.74.0",
   "plugins": [
     {
       "name": "workbench",
@@ -54,7 +54,7 @@
       "name": "workspace-init",
       "source": "./plugins/workspace-init",
       "description": "Deprecated: install workbench@eigenwise-toolshed --scope user. Set up a Claude Code workspace for any project, new or existing: a short interview, then a populated .claude/ (settings.json, tailored live-rules, a codebase map, structure notes) wired around the plugin-reload boundary and verified end to end. Orchestrates the other toolshed plugins and the built-ins instead of reinventing them, and bakes in a self-improvement loop (plus an on-demand retro skill) so the workspace keeps getting better as you work.",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "author": {
         "name": "Eigenwise"
       },

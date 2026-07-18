@@ -1,6 +1,6 @@
 {
   "name": "workspace-init",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Deprecated migration notice for workspace-init users moving to Workbench.",
   "author": {
     "name": "Eigenwise",
