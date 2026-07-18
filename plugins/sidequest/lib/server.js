@@ -19,6 +19,7 @@ const path = require('path');
 const url = require('url');
 const { spawn, spawnSync } = require('child_process');
 const store = require('./store');
+const switchboard = require('./discovery');
 
 const DASHBOARD_HTML = path.join(__dirname, '..', 'dashboard', 'index.html');
 
@@ -158,6 +159,62 @@ function draftCategory(sentence, project) {
     });
   });
 }
+function switchboardHostSettings(host, projectPath) {
+  return {
+    contract: { contractVersion: 1, path: host.discovery.adapterPath },
+    effective: host.api.listCategories({ projectPath }),
+    global: host.api.listCategories({ projectPath, global: true }),
+    availability: host.api.availableModels({ projectPath }),
+    fallback: host.api.getFallback({ projectPath }),
+    doctor: host.api.doctor({ projectPath }),
+  };
+}
+
+function switchboardCategoryPatch(body) {
+  return {
+    name: String(body.name || ''),
+    description: String(body.description || ''),
+    contract: String(body.contract || ''),
+    route: body.route,
+    fallback: body.fallback === undefined ? null : body.fallback,
+    enabled: body.enabled !== false,
+  };
+}
+
+function mutateSwitchboardCategory(host, id, action, body) {
+  const projectPath = body.projectPath;
+  if (action === 'detach') return host.api.detachCategory({ id, projectPath });
+  if (action === 'relink' || action === 'reset') return host.api.relinkCategory({ id, projectPath });
+  if (action === 'disable') return host.api.disableCategory({ id, projectPath, project: body.scope === 'project' });
+  if (action === 'save') return host.api.editCategory({ id, patch: switchboardCategoryPatch(body), projectPath, project: body.scope === 'project' });
+  throw new Error(`Unknown Switchboard category action "${action}".`);
+}
+
+function switchboardPanelHostHtml() {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Switchboard routing</title></head><body><div id="switchboard-panel"></div><script src="/api/switchboard/panel.js"></script><script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var projectPath = params.get('projectPath') || '';
+  var scope = params.get('scope') === 'global' ? 'global' : 'project';
+  function request(endpoint, init) {
+    var target = endpoint.indexOf('/api/') === 0 ? '/api/switchboard/host/' + endpoint.slice(5) : endpoint;
+    return fetch(target, init).then(function (response) {
+      return response.json().then(function (value) {
+        if (!response.ok) throw new Error(value.error || 'Request failed');
+        if (init && init.method && init.method !== 'GET') parent.postMessage({ type: 'sidequest-switchboard-mutated' }, location.origin);
+        return value;
+      });
+    });
+  }
+  if (!window.SwitchboardPanel || typeof window.SwitchboardPanel.createPanel !== 'function') {
+    document.getElementById('switchboard-panel').textContent = 'Switchboard routing panel contract is unavailable.';
+    return;
+  }
+  var panel = window.SwitchboardPanel.createPanel({ element: document.getElementById('switchboard-panel'), request: request, projectPath: projectPath, scope: scope });
+  panel.refresh().catch(function (error) { document.getElementById('switchboard-panel').textContent = error.message; });
+}());
+</script></body></html>`;
+}
 
 
 function aggregateTickets(archivedOnly) {
@@ -202,9 +259,14 @@ function categoriesPayload(project) {
       const category = effectiveById.get(id) || base || (layer && (layer.kind === 'ADD' || layer.kind === 'DETACH') ? layer.data : null);
       if (!category) return null;
       const resolved = store.resolveCategoryRoute(category);
+      const switchboardComparison = store.compareSwitchboardRoute(category, {
+        project: project && project !== 'all' ? project : null,
+        sidequest: resolved,
+      });
       return Object.assign({}, category, {
         usageCount: usage[id] || 0,
         resolved: { model: resolved.model, effort: resolved.effort },
+        switchboardComparison,
         warnings: resolved.warnings.concat(local.warnings.filter((warning) => warning.id === id)),
         layer: layer && { kind: layer.kind, data: layer.data, base },
         disabled: Boolean(layer && layer.kind === 'DISABLE'),
@@ -267,6 +329,29 @@ async function handle(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/switchboard/panel') {
+    const host = switchboard.loadSwitchboardHost();
+    if (!host.available) {
+      sendText(res, 404, host.reason || 'Switchboard routing panel host is unavailable.', 'text/plain; charset=utf-8');
+      return;
+    }
+    sendText(res, 200, switchboardPanelHostHtml(), 'text/html; charset=utf-8');
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/switchboard/panel.js') {
+    const host = switchboard.loadSwitchboardHost();
+    if (!host.available) {
+      sendText(res, 404, host.reason || 'Switchboard routing panel host is unavailable.', 'text/plain; charset=utf-8');
+      return;
+    }
+    fs.readFile(host.panel.file, (error, data) => {
+      if (error) sendText(res, 404, 'Switchboard routing panel is unavailable.', 'text/plain; charset=utf-8');
+      else sendText(res, 200, data, 'text/javascript; charset=utf-8');
+    });
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/favicon.ico') {
     res.writeHead(204);
     res.end();
@@ -276,6 +361,114 @@ async function handle(req, res) {
   // --- Health / handshake ---
   if (req.method === 'GET' && pathname === '/api/health') {
     sendJson(res, 200, { ok: true, name: 'sidequest', pid: process.pid, startedAt: START_TIME, version: PLUGIN_VERSION });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/switchboard/status') {
+    const project = q.project && q.project !== 'all' ? String(q.project) : null;
+    if (project && !store.readMeta(project)) {
+      sendJson(res, 404, { error: 'unknown project' });
+      return;
+    }
+    const adoption = store.switchboardAdoptionStatus(project);
+    const host = switchboard.loadSwitchboardHost();
+    adoption.panel = {
+      available: host.available,
+      contractVersion: host.available ? 1 : null,
+      reason: host.available ? null : host.reason,
+    };
+    sendJson(res, 200, adoption);
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/switchboard/export') {
+    let body;
+    try { body = await readJsonBody(req); } catch (_) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    try {
+      const scope = body.scope === 'project' ? 'project' : 'global';
+      const project = scope === 'project' ? String(body.project || '') : null;
+      if (scope === 'project' && (!project || !store.readMeta(project))) {
+        sendJson(res, 400, { error: 'Project export requires an explicit registered Sidequest board.' });
+        return;
+      }
+      sendJson(res, 200, store.exportSwitchboardRouting({ scope, project, apply: body.apply === true, previewHash: body.previewHash }));
+    } catch (error) {
+      sendJson(res, 409, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/switchboard/host/settings') {
+    const host = switchboard.loadSwitchboardHost();
+    if (!host.available) {
+      sendJson(res, 503, { error: host.reason });
+      return;
+    }
+    try { sendJson(res, 200, switchboardHostSettings(host, q.projectPath || undefined)); }
+    catch (error) { sendJson(res, 409, { error: error.message }); }
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/switchboard/host/resolve') {
+    const host = switchboard.loadSwitchboardHost();
+    if (!host.available) {
+      sendJson(res, 503, { error: host.reason });
+      return;
+    }
+    try {
+      const result = host.api.resolve({ categoryId: q.category, projectPath: q.projectPath || undefined, consumer: 'sidequest-dashboard' });
+      const checked = switchboard.validateSwitchboardRoutingResult(result);
+      if (!checked.valid) throw new Error(`Switchboard host returned an invalid contract v1 result: ${checked.errors.join(' ')}`);
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, 409, { error: error.message });
+    }
+    return;
+  }
+
+  if ((req.method === 'PUT' || req.method === 'POST') && pathname === '/api/switchboard/host/fallback') {
+    const host = switchboard.loadSwitchboardHost();
+    if (!host.available) {
+      sendJson(res, 503, { error: host.reason });
+      return;
+    }
+    let body;
+    try { body = await readJsonBody(req); } catch (_) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    try {
+      const result = host.api.setFallback({ route: body.route === null ? null : body.route, projectPath: body.projectPath, project: body.scope === 'project' });
+      switchboard.clearSwitchboardCache();
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, 409, { error: error.message });
+    }
+    return;
+  }
+
+  const switchboardCategoryAction = /^\/api\/switchboard\/host\/categories\/([^/]+)\/(save|detach|relink|reset|disable)$/.exec(pathname);
+  if (req.method === 'POST' && switchboardCategoryAction) {
+    const host = switchboard.loadSwitchboardHost();
+    if (!host.available) {
+      sendJson(res, 503, { error: host.reason });
+      return;
+    }
+    let body;
+    try { body = await readJsonBody(req); } catch (_) {
+      sendJson(res, 400, { error: 'bad JSON body' });
+      return;
+    }
+    try {
+      const result = mutateSwitchboardCategory(host, switchboardCategoryAction[1], switchboardCategoryAction[2], body);
+      switchboard.clearSwitchboardCache();
+      sendJson(res, 200, { result, settings: switchboardHostSettings(host, body.projectPath) });
+    } catch (error) {
+      sendJson(res, 409, { error: error.message });
+    }
     return;
   }
 

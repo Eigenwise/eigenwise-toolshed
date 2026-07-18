@@ -19,8 +19,23 @@ fs.mkdirSync(path.join(switchboardRoot, 'lib'), { recursive: true });
 fs.mkdirSync(path.join(switchboardRoot, 'dashboard'), { recursive: true });
 fs.mkdirSync(projectRoot, { recursive: true });
 fs.writeFileSync(path.join(switchboardRoot, 'lib', 'contract.js'), 'module.exports = {};\n');
-fs.writeFileSync(path.join(switchboardRoot, 'lib', 'mcp.js'), 'module.exports = {};\n');
-fs.writeFileSync(path.join(switchboardRoot, 'dashboard', 'panel.js'), 'window.SwitchboardPanel = {};\n');
+fs.writeFileSync(path.join(switchboardRoot, 'lib', 'mcp.js'), `
+const category = { id: 'general', name: 'General', description: 'General work.', contract: 'Work the task.', route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true };
+const routed = (id) => ({ contractVersion: 1, status: 'routed', category: { id, contract: category.contract }, route: { model: 'sonnet', effort: 'high', source: 'primary' }, dispatch: { kind: 'native', spawnModel: 'sonnet' }, attempts: [], warnings: [] });
+module.exports = {
+  listCategories: ({ global } = {}) => ({ schemaVersion: 1, scope: global ? 'global' : 'effective', categories: [category], states: { general: 'inherited' }, warnings: [] }),
+  availableModels: () => ({ catalogSchemaVersion: 3, status: 'available', models: [{ model: 'sonnet', label: 'Claude Sonnet', available: true }], warnings: [] }),
+  getFallback: () => ({ fallback: { model: 'sonnet', effort: 'high' } }),
+  doctor: () => ({ ok: true }),
+  resolve: ({ categoryId }) => routed(categoryId),
+  editCategory: () => ({ category }),
+  detachCategory: () => ({ category }),
+  relinkCategory: () => ({ category }),
+  disableCategory: () => ({ category }),
+  setFallback: ({ route }) => ({ fallback: route })
+};
+`);
+fs.writeFileSync(path.join(switchboardRoot, 'dashboard', 'panel.js'), 'window.SwitchboardPanel = { createPanel: function () {} };\n');
 fs.writeFileSync(path.join(switchboardRoot, 'bin', 'switchboard.js'), `
 const requestIndex = process.argv.indexOf('--request');
 const request = JSON.parse(process.argv[requestIndex + 1]);
@@ -50,10 +65,12 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = discoveryRoot;
 process.env.SWITCHBOARD_CONFIG_USER_FILE = userConfig;
 process.env.SWITCHBOARD_CONFIG_PROJECT_FILE = projectConfig;
 process.env.SIDEQUEST_SWITCHBOARD_CACHE_MS = '0';
+process.env.SIDEQUEST_NO_HOT_RECYCLE = '1';
 
 const discovery = require('../lib/discovery.js');
 const store = require('../lib/store.js');
 const mcp = require('../lib/mcp.js');
+const server = require('../lib/server.js');
 
 const project = store.ensureProject(projectRoot).slug;
 const general = store.setCategory({
@@ -173,6 +190,54 @@ test('MCP exposes comparison diagnostics and guarded export', () => {
   });
   assert.equal(refused.result.isError, true);
   assert.match(refused.result.content[0].text, /explicit board/);
+});
+
+test('dashboard host serves status, panel, and contract-v1 proxy without cutting over', { concurrency: false }, async (t) => {
+  process.env.SQ_FAKE_SWITCHBOARD_MODEL = 'sonnet';
+  discovery.clearSwitchboardCache();
+  const started = await server.start(46000 + Math.floor(Math.random() * 1000));
+  t.after(() => started.server.close());
+
+  const statusResponse = await fetch(`${started.url}/api/switchboard/status?project=${encodeURIComponent(project)}`);
+  assert.equal(statusResponse.status, 200);
+  const status = await statusResponse.json();
+  assert.equal(status.authoritative, 'sidequest');
+  assert.equal(status.panel.available, true);
+
+  const panelResponse = await fetch(`${started.url}/api/switchboard/panel.js`);
+  assert.equal(panelResponse.status, 200);
+  assert.match(await panelResponse.text(), /createPanel/);
+  const panelHostResponse = await fetch(`${started.url}/api/switchboard/panel?scope=project&projectPath=${encodeURIComponent(projectRoot)}`);
+  assert.equal(panelHostResponse.status, 200);
+  assert.match(await panelHostResponse.text(), /sidequest-switchboard-mutated/);
+
+  const settingsResponse = await fetch(`${started.url}/api/switchboard/host/settings?projectPath=${encodeURIComponent(projectRoot)}`);
+  assert.equal(settingsResponse.status, 200);
+  const settings = await settingsResponse.json();
+  assert.equal(settings.effective.categories[0].id, 'general');
+  assert.equal(settings.contract.contractVersion, 1);
+
+  const resolveResponse = await fetch(`${started.url}/api/switchboard/host/resolve?category=general&projectPath=${encodeURIComponent(projectRoot)}`);
+  assert.equal(resolveResponse.status, 200);
+  assert.equal((await resolveResponse.json()).route.model, 'sonnet');
+
+  const saveResponse = await fetch(`${started.url}/api/switchboard/host/categories/general/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scope: 'project', projectPath: projectRoot, name: 'General', description: 'General work.', contract: 'Work the task.', route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true }),
+  });
+  assert.equal(saveResponse.status, 200);
+});
+
+test('dashboard exposes migration diagnostics and mounts the panel only after host status succeeds', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  assert.match(html, /id="switchboardAdoption" hidden/);
+  assert.match(html, /Sidequest still decides every route in this release/);
+  assert.match(html, /data-switchboard-preview="global"/);
+  assert.match(html, /data-switchboard-apply="project" disabled/);
+  assert.match(html, /\/api\/switchboard\/status/);
+  assert.match(html, /panelAvailable = status\.panel && status\.panel\.available/);
+  assert.match(html, /Comparison mismatch:/);
 });
 
 test('export refuses an incompatible existing Switchboard schema without changing it', () => {

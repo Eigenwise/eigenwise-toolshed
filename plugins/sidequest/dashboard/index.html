@@ -204,6 +204,20 @@
   .settings-panel .sp-col { padding: 10px 17px 20px; min-width: 0; border-left: 1px solid var(--line-soft); }
   .settings-panel .sp-col .pop-head:first-child { padding-top: 10px; }
   .routing-panel { padding: 16px 18px 14px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(90deg, var(--gold-soft), transparent 62%); }
+  .switchboard-adoption { padding: 14px 18px; border-bottom: 1px solid var(--line-soft); background: var(--indigo-soft); }
+  .switchboard-adoption[hidden] { display: none; }
+  .switchboard-adoption-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .switchboard-adoption h3 { margin: 0; font-family: var(--serif); font-size: 18px; font-weight: 500; }
+  .switchboard-adoption p { margin: 4px 0 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.45; }
+  .switchboard-state { flex: none; padding: 4px 7px; border: 1px solid var(--indigo-line); border-radius: 999px; color: var(--indigo-bright); font: 9.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  .switchboard-state.warn { border-color: var(--high); color: var(--high); background: var(--warn-soft); }
+  .switchboard-diagnostics { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--indigo); background: var(--card); color: var(--text-dim); font-size: 11.5px; line-height: 1.5; }
+  .switchboard-export-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .switchboard-export-actions .btn { min-height: 31px; padding: 0 9px; font-size: 10px; }
+  .switchboard-panel-details { margin-top: 10px; border: 1px solid var(--indigo-line); background: var(--card); }
+  .switchboard-panel-details[hidden] { display: none; }
+  .switchboard-panel-details summary { cursor: pointer; padding: 9px 10px; color: var(--indigo-bright); font: 10.5px var(--mono); letter-spacing: .04em; text-transform: uppercase; }
+  .switchboard-panel-frame { display: block; width: 100%; height: min(620px, 70vh); border: 0; border-top: 1px solid var(--line-soft); background: var(--bg); }
   .routing-head { display: flex; align-items: flex-start; gap: 16px; }
   .routing-head h3 { margin: 0; font-family: var(--serif); font-size: 19px; font-weight: 500; }
   .routing-head p { margin: 3px 0 0; color: var(--text-faint); font-size: 11.5px; }
@@ -746,6 +760,17 @@
           </div>
           <div class="sp-grid">
             <div>
+              <section class="switchboard-adoption" id="switchboardAdoption" hidden aria-labelledby="switchboardAdoptionTitle">
+                <div class="switchboard-adoption-head"><div><h3 id="switchboardAdoptionTitle">Switchboard comparison</h3><p>Sidequest still decides every route in this release. Switchboard runs alongside it so you can inspect mismatches before cutover.</p></div><span class="switchboard-state" id="switchboardState">Checking</span></div>
+                <div class="switchboard-diagnostics" id="switchboardDiagnostics" role="status" aria-live="polite"></div>
+                <div class="switchboard-export-actions">
+                  <button class="btn btn-ghost" type="button" data-switchboard-preview="global">Preview global export</button>
+                  <button class="btn btn-ghost" type="button" data-switchboard-apply="global" disabled>Apply global export</button>
+                  <button class="btn btn-ghost" type="button" data-switchboard-preview="project">Preview project export</button>
+                  <button class="btn btn-ghost" type="button" data-switchboard-apply="project" disabled>Apply project export</button>
+                </div>
+                <details class="switchboard-panel-details" id="switchboardPanelDetails" hidden><summary>Open Switchboard comparison settings</summary><iframe class="switchboard-panel-frame" id="switchboardPanelFrame" title="Switchboard routing settings"></iframe></details>
+              </section>
               <section class="routing-panel" aria-labelledby="routingTitle">
                 <div class="routing-head"><div><h3 id="routingTitle">Global fallback</h3><p>Used only when a category route cannot run.</p></div></div>
                 <div class="fallback-control" id="globalFallbackControl"></div>
@@ -1030,7 +1055,9 @@
     unreadQuestions: 0,       // server-wide unread questions (drives the red bell cue)
     inboxTab: "all",           // inbox category filter: "all" | "needs" | "activity"
     categories: [],
-    categoryScope: "global"
+    categoryScope: "global",
+    switchboardStatus: null,
+    switchboardPreviews: {}
   };
   var lastSig = "";
   var lastUnread = null;      // previous unread count, to know when the bell badge should "pop"
@@ -1096,6 +1123,85 @@
       if (!r.ok) return r.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.error || ("HTTP " + r.status)); });
       return r.json();
     });
+  }
+
+  function currentProjectMeta() {
+    if (state.current === "all") return null;
+    return state.projects.filter(function (project) { return project.slug === state.current; })[0] || null;
+  }
+  function renderSwitchboardAdoption() {
+    var section = $("switchboardAdoption");
+    var status = state.switchboardStatus;
+    if (!section || !status) { if (section) section.hidden = true; return; }
+    section.hidden = false;
+    var available = status.discovery && status.discovery.available;
+    var stateBadge = $("switchboardState");
+    stateBadge.textContent = available ? "Comparison on" : (status.discovery && status.discovery.status || "Unavailable");
+    stateBadge.classList.toggle("warn", !available || (status.mismatches || []).length > 0);
+
+    var lines = [];
+    if (!available) {
+      lines = (status.discovery && status.discovery.diagnostics || []).slice(0, 2);
+    } else {
+      lines.push((status.mismatches || []).length
+        ? status.mismatches.length + " route mismatch" + (status.mismatches.length === 1 ? "" : "es") + ": " + status.mismatches.join(", ") + ". Sidequest remains authoritative."
+        : "Both resolvers currently agree for every effective category.");
+      var globalMigration = status.migration && status.migration.global;
+      if (globalMigration && globalMigration.available) lines.push(globalMigration.pending ? "Global export is pending for " + globalMigration.changedIds.length + " categor" + (globalMigration.changedIds.length === 1 ? "y" : "ies") + "." : "Global Switchboard export is current.");
+      var projectMigration = status.migration && status.migration.project;
+      if (projectMigration && projectMigration.available) lines.push(projectMigration.pending ? "This board has a pending project export to " + projectMigration.target + "." : "This board's project export is current.");
+      if (status.panel && !status.panel.available && status.panel.reason) lines.push("Routing panel unavailable: " + status.panel.reason);
+      (status.diagnostics || []).slice(0, 2).forEach(function (diagnostic) { if (lines.indexOf(diagnostic) === -1) lines.push(diagnostic); });
+    }
+    $("switchboardDiagnostics").textContent = lines.join(" ");
+
+    section.querySelectorAll("[data-switchboard-preview], [data-switchboard-apply]").forEach(function (button) {
+      var scope = button.getAttribute("data-switchboard-preview") || button.getAttribute("data-switchboard-apply");
+      var projectAction = scope === "project";
+      button.hidden = projectAction && state.current === "all";
+      button.disabled = !available || (button.hasAttribute("data-switchboard-apply") && !state.switchboardPreviews[scope]);
+    });
+
+    var details = $("switchboardPanelDetails");
+    var panelAvailable = status.panel && status.panel.available;
+    details.hidden = !panelAvailable;
+    if (panelAvailable) {
+      var projectMeta = currentProjectMeta();
+      var projectPath = projectMeta && projectMeta.path || "";
+      var src = "/api/switchboard/panel?scope=" + (projectPath ? "project" : "global") + "&projectPath=" + encodeURIComponent(projectPath);
+      var frame = $("switchboardPanelFrame");
+      if (frame.dataset.src !== src) { frame.dataset.src = src; frame.src = src; }
+    }
+  }
+  function loadSwitchboardAdoption() {
+    var project = state.current === "all" ? "all" : state.current;
+    return api("/api/switchboard/status?project=" + encodeURIComponent(project)).then(function (status) {
+      state.switchboardStatus = status;
+      renderSwitchboardAdoption();
+    }).catch(function () {
+      state.switchboardStatus = null;
+      renderSwitchboardAdoption();
+    });
+  }
+  function runSwitchboardExport(scope, apply) {
+    var preview = state.switchboardPreviews[scope];
+    if (apply && !preview) return;
+    if (apply && !confirm("Apply the reviewed " + scope + " export to Switchboard? Sidequest routing stays authoritative.")) return;
+    var payload = { scope: scope, apply: apply };
+    if (scope === "project") payload.project = state.current;
+    if (apply) payload.previewHash = preview.previewHash;
+    api("/api/switchboard/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(function (result) {
+      if (apply) {
+        delete state.switchboardPreviews[scope];
+        toast(result.applied ? "Switchboard export applied" : "Switchboard export was already current");
+        var frame = $("switchboardPanelFrame");
+        if (frame && frame.src) frame.src = frame.src.split("&refresh=")[0] + "&refresh=" + Date.now();
+      } else {
+        state.switchboardPreviews[scope] = result;
+        toast(result.changed ? "Export preview ready: " + result.changedIds.length + " categories change" : "Export preview is already current");
+      }
+      return loadSwitchboardAdoption();
+    }).catch(function (error) { toast("Switchboard export failed: " + error.message); });
   }
   function slugOf(t) { return t._slug || t.project || (state.current !== "all" ? state.current : null); }
   function assetUrl(t, file) { return "/api/asset/" + encodeURIComponent(slugOf(t)) + "/" + encodeURIComponent(t.id) + "/" + encodeURIComponent(file); }
@@ -1910,6 +2016,8 @@
       var categoryFallback = category.fallback;
       var globalFallback = category.globalFallback || routingCatalog.globalFallback;
       var degraded = (category.warnings || []).length > 0;
+      var comparison = category.switchboardComparison;
+      var comparisonMismatch = comparison && comparison.status === "mismatch";
       var layerKind = layer && layer.kind;
       // A category with no shared default behind it (a board-only ADD, or a pin
       // whose shared default was removed) can only be deleted, not reset.
@@ -1937,7 +2045,8 @@
         '<div class="category-route-live"><span>Runs on</span><code>' + esc(routeLabelFor(effective.model, effective.effort)) + '</code></div>' +
         '<span class="category-usage">' + category.usageCount + ' tickets</span></summary>' +
         '<div class="category-row-body"><div class="category-row-detail">' + esc(category.description || "No classifier description") + '</div>' +
-        (degraded ? '<div class="category-route-warning"><strong>Route changed:</strong> ' + esc((category.warnings || []).join(' ')) + '</div>' : '') + categoryDelta(category) + restoreNote +
+        (degraded ? '<div class="category-route-warning"><strong>Route changed:</strong> ' + esc((category.warnings || []).join(' ')) + '</div>' : '') +
+        (comparisonMismatch ? '<div class="category-route-warning"><strong>Comparison mismatch:</strong> ' + esc((comparison.diagnostics || ["Switchboard resolved a different route."])[0]) + '</div>' : '') + categoryDelta(category) + restoreNote +
         '<div class="category-actions">' + actions + '</div></div>';
       var refresh = function (message) { return loadCategories().then(function () { toast(message); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); }); };
       var edit = row.querySelector('[data-edit-category]');
@@ -3171,6 +3280,16 @@
     $("markAllReadBtn").addEventListener("click", function (e) { e.stopPropagation(); markAllNotificationsRead(); });
     $("inboxTabs").addEventListener("click", function (e) { var b = e.target.closest("button[data-tab]"); if (b) setInboxTab(b.dataset.tab); });
 
+    settingsPop.querySelectorAll("[data-switchboard-preview]").forEach(function (button) { button.addEventListener("click", function () { runSwitchboardExport(button.dataset.switchboardPreview, false); }); });
+    settingsPop.querySelectorAll("[data-switchboard-apply]").forEach(function (button) { button.addEventListener("click", function () { runSwitchboardExport(button.dataset.switchboardApply, true); }); });
+    window.addEventListener("message", function (event) {
+      if (event.origin === location.origin && event.data && event.data.type === "sidequest-switchboard-mutated") {
+        state.switchboardPreviews = {};
+        loadSwitchboardAdoption();
+        loadCategories().then(renderCategorySettings);
+      }
+    });
+
     $("settingsBtn").addEventListener("click", function (e) {
       e.stopPropagation();
       closeSort(); closeAssign(); closeStory(); closeInbox();
@@ -3178,7 +3297,7 @@
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
       $("settingsBtn").setAttribute("aria-expanded", opening ? "true" : "false");
-      if (opening) { renderProjectNotifySettings(); renderGlobalFallback(); renderCategorySettings(); }
+      if (opening) { renderProjectNotifySettings(); renderGlobalFallback(); renderCategorySettings(); loadSwitchboardAdoption(); }
     });
     settingsPop.addEventListener("mousedown", function (e) { if (e.target === settingsPop) closeSettings(); });
     document.addEventListener("click", function (e) {
