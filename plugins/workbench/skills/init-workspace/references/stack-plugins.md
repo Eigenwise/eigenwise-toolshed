@@ -1,169 +1,150 @@
-# Stack → plugins catalog
+# Stack → installable plugin catalog
 
-Which plugins to enable in `.claude/settings.json`, keyed by stack. Lift the config blocks directly.
-This catalog is a **starting point** — when you meet a stack it doesn't cover, add the right plugins
-and then extend this file (that's a self-improvement move).
+Use this catalog to build the Workbench bootstrap plan. It contains only plugins with a current,
+reproducible marketplace source. The bootstrap helper installs plugins with `claude plugin install`;
+do not copy these IDs into `enabledPlugins` yourself.
 
-## The core (always)
+## Core
 
-`codebase-mapper` and `live-rules` on every workspace; `sidequest` unless the user opts out. Always
-emit the toolshed `extraKnownMarketplaces` block so the marketplace resolves regardless of the user's
-global state.
+Select these for every codebase:
+
+| Plugin | Marketplace source | Role |
+|---|---|---|
+| `codebase-mapper@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Codebase map and injected index |
+| `live-rules@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Scoped, live workspace rules |
+| `sidequest@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Work board, unless the user opts out |
+
+The helper installs the toolshed marketplace at project scope. Preserve its portable
+`extraKnownMarketplaces` declaration only when the plugin CLI did not already make it visible in
+`.claude/settings.json`:
 
 ```json
 {
-  "enabledPlugins": {
-    "codebase-mapper@eigenwise-toolshed": true,
-    "live-rules@eigenwise-toolshed": true,
-    "sidequest@eigenwise-toolshed": true
-  },
-  "extraKnownMarketplaces": {
-    "eigenwise-toolshed": {
-      "source": { "source": "github", "repo": "Eigenwise/eigenwise-toolshed" }
-    }
+  "eigenwise-toolshed": {
+    "source": { "source": "github", "repo": "Eigenwise/eigenwise-toolshed" }
   }
 }
 ```
 
-## The marketplace-source caveat (read before writing sources)
+## Official marketplace
 
-A plugin id is `name@marketplace`. To enable a plugin, the harness has to know that marketplace. Two
-of them have **confirmed** github sources you can safely write:
+`claude-plugins-official` is available automatically. Do not add an
+`extraKnownMarketplaces` entry for it. If Claude Code reports it missing, add
+`anthropics/claude-plugins-official`, then retry the failed install.
 
-| Marketplace | Source block |
-|-------------|--------------|
-| `eigenwise-toolshed` | `{ "source": "github", "repo": "Eigenwise/eigenwise-toolshed" }` |
-| `cloudflare` | `{ "source": "github", "repo": "cloudflare/skills" }` |
+Propose these only when they fit the project:
 
-`claude-plugins-official` is always known — it never needs an `extraKnownMarketplaces` entry.
+| Plugin | Best fit |
+|---|---|
+| `context7@claude-plugins-official` | Live, version-correct library and framework docs |
+| `frontend-design@claude-plugins-official` | Frontend or web UI work |
+| `playwright@claude-plugins-official` | Browser-driven verification |
+| `security-guidance@claude-plugins-official` | Projects where automatic code-change security review is wanted |
+| `code-review@claude-plugins-official` | Projects that want the official review workflow |
 
-The rest (`claude-ai-workshop`, `svelte`, `claude-code-lsps`, and any project-specific one) are
-commonly registered at the **user's global level**, and their exact source repo isn't something to
-guess. So when you want a plugin from one of those:
+## Stack extras
 
-- Add it to `enabledPlugins` (harmless if the marketplace is already known globally), **but**
-- **Don't invent an `extraKnownMarketplaces` source for it.** Instead tell the user: "I enabled
-  `svelte@svelte`; if it doesn't resolve after reload, run `/plugin marketplace add <the svelte
-  marketplace>` once." A wrong source block breaks resolution; a missing one just means the user adds
-  the marketplace once by hand.
+### Frontend / web
 
-Rule of thumb: **write a source block only for `eigenwise-toolshed` and `cloudflare`.** For everything
-else, enable and note.
+Propose `context7`, `frontend-design`, `playwright`, and `security-guidance` when they match the
+project and team. For TypeScript projects, offer the official TypeScript LSP below.
 
-## Near-universal add-on
+### Cloudflare-deployed
 
-- `context7@claude-plugins-official` — live, version-correct docs for libraries/frameworks/CLIs.
-  Useful on almost any real project. Propose it by default.
-
-## Frontend / web (Svelte, React, Vue, static sites)
+Add `cloudflare@cloudflare` only for a Cloudflare project. Its portable marketplace source is:
 
 ```json
 {
-  "enabledPlugins": {
-    "context7@claude-plugins-official": true,
-    "frontend-design@claude-plugins-official": true,
-    "vscode-langservers@claude-code-lsps": true,
-    "playwright@claude-plugins-official": true,
-    "security-guidance@claude-plugins-official": true
+  "cloudflare": {
+    "source": { "source": "github", "repo": "cloudflare/skills" }
   }
 }
 ```
 
-- `svelte@svelte` — Svelte-specific (only for Svelte projects; source registered at user level).
-- `better-frontend@claude-ai-workshop` — frontend build help (source at user level).
-- `posthog@claude-plugins-official` — only if the project uses PostHog analytics.
-- `vscode-langservers@claude-code-lsps` — HTML/CSS/JSON/TS langserver bundle (source at user level).
-- `playwright@claude-plugins-official` — browser-driven testing/verification.
+### Svelte
 
-## Cloudflare-deployed
-
-Add on top of the frontend set:
+Add `svelte@svelte` only for a Svelte project. Its portable marketplace source is:
 
 ```json
 {
-  "enabledPlugins": { "cloudflare@cloudflare": true },
-  "extraKnownMarketplaces": {
-    "cloudflare": { "source": { "source": "github", "repo": "cloudflare/skills" } }
+  "svelte": {
+    "source": { "source": "github", "repo": "sveltejs/ai-tools" }
   }
 }
 ```
 
-## Python / ML / data
+### Python / ML / data
 
-```json
-{
-  "enabledPlugins": {
-    "context7@claude-plugins-official": true,
-    "pyright-lsp@claude-plugins-official": true,
-    "code-review@claude-plugins-official": true
-  }
-}
-```
+Propose `context7`, `pyright-lsp`, and optionally `code-review`. ML projects may also choose
+`enableAllProjectMcpServers: true` or named `.mcp.json` servers as non-plugin settings when those
+servers are already part of the project.
 
-Python projects usually also want a `permissions.allow` block in `settings.local.json` for their
-tooling (see "settings keys" below): `uv run/sync/add`, `ruff`, `ty`/`pyright`, `pytest`, plus read-only
-git. ML projects often add `enableAllProjectMcpServers: true` and MCP servers like `deepwiki` for
-framework docs.
+### Backend / library
 
-## General / backend / library (no special stack)
+Start with the core and `context7`; offer the relevant official LSP from the table below. Do not add
+plugins merely because a stack is technically present.
 
-Core three only, plus `context7` and a language server for the language in use
-(`pyright-lsp` for Python, and so on). Don't pile on plugins a project won't use.
+### Not a codebase
 
-## Not-a-codebase (wiki, notes, docs, content)
+Use `live-rules`, and offer `sidequest` if the user wants content tracking. Skip `codebase-mapper`,
+language servers, and development plugins.
 
-`live-rules` (for writing-voice and structure rules) and optionally `sidequest` (to track content
-work). **Skip `codebase-mapper`** — there's no code to map. Skip language servers and dev plugins.
+## Official LSP plugins and binary preflight
 
-## LSPs
+Each official LSP plugin needs its language-server executable on `PATH`. Add the matching
+`preflight` entry to the bootstrap plan, run its check before installation, and only report the hint.
+Never install system packages or run a package manager for the user.
 
-Two mechanisms:
+| Language | Plugin ID | Check | Install hint |
+|---|---|---|---|
+| C/C++ | `clangd-lsp@claude-plugins-official` | `clangd --version` | Install `clangd` with the platform package manager |
+| C# | `csharp-lsp@claude-plugins-official` | `csharp-ls --version` | `dotnet tool install --global csharp-ls` |
+| Go | `gopls-lsp@claude-plugins-official` | `gopls version` | `go install golang.org/x/tools/gopls@latest` |
+| Java | `jdtls-lsp@claude-plugins-official` | `jdtls --version` | Install `jdtls` with the platform package manager |
+| Kotlin | `kotlin-lsp@claude-plugins-official` | `kotlin-language-server --version` | Install `kotlin-language-server` with the platform package manager |
+| Lua | `lua-lsp@claude-plugins-official` | `lua-language-server --version` | Install `lua-language-server` with the platform package manager |
+| PHP | `php-lsp@claude-plugins-official` | `intelephense --version` | `npm install -g intelephense` |
+| Python | `pyright-lsp@claude-plugins-official` | `pyright-langserver --version` | `npm install -g pyright` |
+| Ruby | `ruby-lsp@claude-plugins-official` | `ruby --version` (3.0+) | `gem install ruby-lsp` |
+| Rust | `rust-analyzer-lsp@claude-plugins-official` | `rust-analyzer --version` | `rustup component add rust-analyzer` |
+| Swift | `swift-lsp@claude-plugins-official` | `sourcekit-lsp --version` | Install the Swift toolchain for the platform |
+| TypeScript | `typescript-lsp@claude-plugins-official` | `typescript-language-server --version` | `npm install -g typescript-language-server typescript` |
 
-**(a) An official langserver plugin** — just enable it, no extra config:
-`pyright-lsp@claude-plugins-official` (Python), `vscode-langservers@claude-code-lsps` (web bundle).
+A missing binary is a warning, not an automatic installer failure. The user can install it, continue
+knowing the LSP cannot work until the binary exists, or drop the plugin. After reload, confirm the
+binary is still on `PATH` and that the language server responds.
 
-**(b) No official plugin exists → a local marketplace plugin declaring `lspServers`.** For a language
-server with no ready plugin (e.g. Tailwind CSS), author a local marketplace under
-`.claude/local-marketplace/` with a plugin whose `marketplace.json` entry carries an `lspServers` map:
+## Portable marketplace sources
 
-```json
-{
-  "name": "tailwindcss-lsp",
-  "version": "0.1.0",
-  "source": "./tailwindcss-lsp",
-  "lspServers": {
-    "tailwindcss": {
-      "command": "npx",
-      "args": ["-y", "--package=@tailwindcss/language-server", "tailwindcss-language-server", "--stdio"],
-      "transport": "stdio",
-      "extensionToLanguage": { ".svelte": "svelte", ".html": "html", ".css": "css", ".ts": "typescript" },
-      "startupTimeout": 60000,
-      "maxRestarts": 3
-    }
-  }
-}
-```
+Use only these sources in bootstrap plans. They are reproducible and safe to write for collaborators:
 
-On Windows, wrap the command as `"command": "cmd", "args": ["/c", "npx", ...]`. Only reach for a local
-LSP when there's a real need; most projects are covered by (a). Don't set this up unprompted.
+| Marketplace | Source |
+|---|---|
+| `eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` |
+| `cloudflare` | `cloudflare/skills` |
+| `svelte` | `sveltejs/ai-tools` |
+| `claude-community` | `anthropics/claude-plugins-community` |
+| `claude-plugins-official` | Automatically available; no source declaration |
 
-## Other `settings.json` keys worth knowing
+Do not recommend a plugin whose marketplace source is unavailable to the bootstrap helper. Do not
+create an ad hoc local marketplace during workspace initialization.
 
-- **`$schema`** — `"https://json.schemastore.org/claude-code-settings.json"` for `settings.json` gives
-  editor validation. Optional but nice.
-- **`permissions`** — usually in `settings.local.json` (per-user, gitignored), an `allow` array of
-  `Bash(...)` / `PowerShell(...)` / `mcp__...` entries to cut permission prompts for a project's common
-  commands. Consider seeding a small one for the detected tooling (or point the user at the
-  `fewer-permission-prompts` skill).
-- **`hooks`** — a project can register its own `SessionStart`/`UserPromptSubmit`/`Stop`/`PreToolUse`
-  hooks here. The `init-workspace` skill itself ships **no** project hooks (the self-improvement loop is a live rule, not a
-  hook), but a project may want its own later.
-- **`enableAllProjectMcpServers`** (bool) and **`enabledMcpjsonServers`** (array, e.g. `["deepwiki"]`)
-  — for projects that ship `.mcp.json` servers.
+## Non-plugin settings
 
-## `settings.json` vs `settings.local.json`
+The plan's `settingsMerge` can carry settings that the plugin CLI does not own:
 
-- `settings.json` — committed, team-shared. Put `enabledPlugins`, `extraKnownMarketplaces`, project
-  hooks here.
-- `settings.local.json` — gitignored, per-user. Put `permissions` and personal plugin toggles here so
-  they don't force choices on teammates. (Make sure `.claude/settings.local.json` is gitignored.)
+- **`$schema`** — `"https://json.schemastore.org/claude-code-settings.json"` for editor validation.
+- **`hooks`** — project hooks the user already wants. `init-workspace` itself adds no project hooks.
+- **`enableAllProjectMcpServers`** and **`enabledMcpjsonServers`** — only for project-owned MCP
+  servers the user selected.
+
+Keep `permissions` in `settings.local.json` (per-user and gitignored), not in the team-shared plan.
+Merge these non-plugin settings only after the helper reports a successful install. Preserve existing
+user values instead of replacing them.
+
+## Scope
+
+The plan defaults selected workspace plugins to project scope. Use local scope only when the user
+explicitly asks for a personal install in this repository. Use user scope only when the user explicitly
+requests a cross-project install and confirms it in the plan. Workbench itself remains user-scoped and
+never appears in generated project settings.

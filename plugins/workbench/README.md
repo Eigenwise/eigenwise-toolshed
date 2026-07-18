@@ -21,7 +21,7 @@ Reload plugins or restart Claude Code after installing.
 
 ## Skills
 
-- **`init-workspace`** sets up a project-side `.claude/` directory through a short interview. It generates settings, rules, structure notes, and a codebase map where appropriate. Generated `enabledPlugins` never includes Workbench itself.
+- **`init-workspace`** is the one bootstrap entrypoint for a project-side `.claude/` directory. It runs a short stack interview, proposes core and stack plugins, installs the selected plugins at project scope by default, then writes rules, structure notes, and a codebase map where appropriate. It asks for one reload and verifies every selected plugin works. Workbench stays user-scoped and never appears in generated project settings.
 - **`update-toolshed`** refreshes marketplaces, updates recorded user, project, and local installs, checks the Codex gateway, and prints reload advice. Run it first with `--check` for a read-only report.
 - **`workbench-doctor`** is the read-only health check. It combines updater check mode with the session health audit and reports the next useful repair step.
 - **`retro`** reviews recurring session friction and proposes small, durable workspace improvements.
