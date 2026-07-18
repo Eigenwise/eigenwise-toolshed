@@ -311,6 +311,53 @@ test('peer-guard: a main-thread SendMessage (no agent_type) is allowed', () => {
   assert.strictEqual(runGuardPeer({ tool_input: { to: 'reviewer', message: 'assign' } }), null);
 });
 
+test('peer-guard: terminal dispatch blocks delayed steering before delivery', () => {
+  const ticket = addEffortTicket('terminal executor cannot be revived', 'high');
+  const sessionId = `terminal-message-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executorName = 'finished-dispatch-worker';
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName: executorName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, 'terminal-agent-id', executorName).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'terminal-worker', {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.completeTicket(slug, ticket.ref, 'terminal-worker', { sessionId }).ok, true);
+
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.claim, null, 'done clears the worker claim before a message can arrive');
+  assert.equal(after.dispatch.agentName, executorName, 'done retains the mapped executor for terminal cleanup');
+  assert.equal(after.dispatch.outcome, 'done');
+  assert.ok(after.dispatch.terminalAt);
+
+  const out = runGuardPeer({ tool_input: { to: executorName, message: 'one more thing' } });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /queued steering message/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Redispatch/);
+});
+
+test('peer-guard: an active dispatch still accepts main-thread steering', () => {
+  const ticket = addEffortTicket('active executor accepts steering', 'high');
+  const sessionId = `active-message-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executorName = 'active-dispatch-worker';
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName: executorName,
+  }).ok, true);
+
+  assert.strictEqual(runGuardPeer({ tool_input: { to: executorName, message: 'please check the test' } }), null);
+});
+
 test('peer-guard: a non-sidequest subagent messaging a peer is allowed', () => {
   assert.strictEqual(runGuardPeer({ agent_type: 'code-reviewer', tool_input: { to: 'researcher', message: 'hi' } }), null);
 });

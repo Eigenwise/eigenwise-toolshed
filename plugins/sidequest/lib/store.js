@@ -1672,6 +1672,21 @@ function dispatchState(ticket) {
   return ticket && ticket.dispatch && typeof ticket.dispatch === 'object' ? ticket.dispatch : null;
 }
 
+function terminalDispatchTarget(agentName) {
+  const target = String(agentName || '').trim();
+  if (!target) return null;
+  let terminal = null;
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || state.agentName !== target) continue;
+      if (!state.terminalAt) return null;
+      terminal = { slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt };
+    }
+  }
+  return terminal;
+}
+
 function setDispatchTerminal(ticket, outcome, source) {
   const state = dispatchState(ticket);
   if (!state) return;
@@ -3455,6 +3470,7 @@ module.exports = {
   prepareDispatch,
   recordDispatchLaunch,
   bindDispatchAgent,
+  terminalDispatchTarget,
   markDispatchStopped,
   reconcileLaunchedDispatches,
   claimTicket,

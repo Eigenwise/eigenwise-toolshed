@@ -10,17 +10,18 @@
  * loop: a reviewer scoped to one file re-woken ~6x by an unrelated executor's
  * SQ-70 message. This hook denies that at the tool boundary.
  *
- * PreToolUse stdin carries `agent_type` ONLY when the caller is a subagent (it's
- * absent on main-thread calls — docs: agent-sdk/hooks). So the guard is precise:
- *   - No agent_type (main thread / orchestrator) -> allow. The orchestrator may
- *     message anyone; it owns routing.
- *   - agent_type is a `sidequest-` executor AND the target isn't `main` -> deny.
- *     Report up (final message + ticket comments), never sideways to a peer.
- *   - Anything else -> allow.
+ * A terminal dispatch is a hard lifecycle boundary too. The board keeps the mapped
+ * executor name after completion so this hook can deny a delayed main-thread or
+ * peer message before Claude Code delivers it and wakes a finished worker. Later
+ * work must use a fresh dispatch, which gets a fresh briefing and route marker.
  *
- * Fail-soft by construction: a missing/garbage payload, or an absent agent_type,
- * yields NO output (allow). The guard can only ever fire on a genuine executor
- * peer-message, so a wrong assumption degrades to a no-op, never a false block.
+ * PreToolUse stdin carries `agent_type` ONLY when the caller is a subagent (it's
+ * absent on main-thread calls — docs: agent-sdk/hooks). The terminal-target check
+ * applies to every caller. Otherwise only `sidequest-` executors are denied when
+ * messaging a target other than `main`.
+ *
+ * Fail-soft by construction: a missing/garbage payload, an unknown target, or a
+ * failed store lookup yields NO output (allow).
  *
  * Design constraints (shared with the rest of the toolshed):
  *   - Node stdlib only, cross-platform.
@@ -28,6 +29,26 @@
  */
 
 const fs = require('fs');
+const path = require('path');
+
+function terminalDispatchTarget(agentName) {
+  try {
+    const root = process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
+    return require(path.join(root, 'lib', 'store.js')).terminalDispatchTarget(agentName);
+  } catch (_) {
+    return null;
+  }
+}
+
+function deny(reason) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  }));
+}
 
 function main() {
   const raw = fs.readFileSync(0, 'utf8');
@@ -37,22 +58,25 @@ function main() {
   if (String(input.tool_name || '') !== 'SendMessage') return;
 
   const agentType = String(input.agent_type || input.agentType || '');
-  if (!agentType.startsWith('sidequest-')) return; // main thread / non-executor -> allow
 
   const toRaw = input.tool_input && input.tool_input.to;
   const to = String(toRaw == null ? '' : toRaw).trim();
+  const terminal = terminalDispatchTarget(to);
+  if (terminal) {
+    deny(
+      `sidequest: ${terminal.ref} is terminal (${terminal.outcome}) and executor "${to}" is closed. ` +
+      'Drop this queued steering message so it cannot wake a finished executor. Redispatch the ticket for later work; TaskStop the mapped executor if it is still listed.'
+    );
+    return;
+  }
+  if (!agentType.startsWith('sidequest-')) return; // main thread / non-executor -> allow
   if (to.toLowerCase() === 'main') return; // reporting up to the main conversation is allowed
 
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason:
-        `sidequest: an executor (${agentType}) may not message another agent` +
-        (to ? ` ("${to}")` : '') +
-        '. Executors report UP — put it in your final message to the orchestrator, or a comment on your own ticket, and let the orchestrator route anything another ticket\'s owner needs. Do not nudge peers.',
-    },
-  }));
+  deny(
+    `sidequest: an executor (${agentType}) may not message another agent` +
+    (to ? ` ("${to}")` : '') +
+    '. Executors report UP — put it in your final message to the orchestrator, or a comment on your own ticket, and let the orchestrator route anything another ticket\'s owner needs. Do not nudge peers.'
+  );
 }
 
 try {
