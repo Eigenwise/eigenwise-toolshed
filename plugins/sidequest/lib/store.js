@@ -1651,6 +1651,22 @@ function stableExecutorName(ticket) {
 // ride the spawn prompt with no def write and no registration wait. opts.ephemeral
 // keeps the legacy behavior — a unique per-ticket executor name whose self-contained
 // definition any session can later adopt.
+function dispatchTokenPrefix(token) {
+  return token ? String(token).slice(0, 12) : null;
+}
+
+function dispatchState(ticket) {
+  return ticket && ticket.dispatch && typeof ticket.dispatch === 'object' ? ticket.dispatch : null;
+}
+
+function setDispatchTerminal(ticket, outcome, source) {
+  const state = dispatchState(ticket);
+  if (!state) return;
+  state.outcome = outcome;
+  state.terminalAt = new Date().toISOString();
+  state.terminalSource = source || 'store';
+}
+
 function prepareDispatch(slug, idOrRef, opts) {
   opts = opts || {};
   const found = getTicket(slug, idOrRef);
@@ -1658,18 +1674,136 @@ function prepareDispatch(slug, idOrRef, opts) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+    const now = new Date().toISOString();
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
     t.dispatchExecutor = opts.ephemeral ? dispatchExecutorName(t) : stableExecutorName(t);
-    t.updatedAt = new Date().toISOString();
+    t.dispatch = {
+      sessionId: opts.sessionId ? String(opts.sessionId) : null,
+      tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+      executor: t.dispatchExecutor,
+      preparedAt: now,
+      launchedAt: null,
+      claimedAt: null,
+      terminalAt: null,
+      outcome: 'prepared',
+    };
+    t.updatedAt = now;
     putTicket(slug, t);
     return { ok: true, ticket: t, token: t.dispatchNonce, ephemeral: !!opts.ephemeral };
   });
 }
 
+function recordDispatchLaunch(slug, idOrRef, opts) {
+  opts = opts || {};
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+      return { ok: false, reason: 'not_prepared' };
+    }
+    const state = dispatchState(t);
+    if (!state) return { ok: false, reason: 'missing_state' };
+    const now = new Date().toISOString();
+    state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
+    state.agentName = opts.agentName ? String(opts.agentName) : state.agentName || null;
+    state.launchedAt = state.launchedAt || now;
+    state.outcome = 'launched';
+    t.updatedAt = now;
+    putTicket(slug, t);
+    return { ok: true, ticket: t };
+  });
+}
+
+function bindDispatchAgent(sessionId, executor, agentId, agentName) {
+  if (!sessionId || !executor || !agentId) return { ok: false, reason: 'missing_identity' };
+  const matches = [];
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor) || state.outcome !== 'launched') continue;
+      if (agentName && state.agentName && state.agentName !== String(agentName)) continue;
+      if (state.agentId && state.agentId !== String(agentId)) continue;
+      matches.push({ slug: project.slug, id: ticket.id });
+    }
+  }
+  if (matches.length !== 1) return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
+  return withTicketLock(matches[0].slug, matches[0].id, () => {
+    const t = getTicket(matches[0].slug, matches[0].id);
+    const state = dispatchState(t);
+    if (!state || state.outcome !== 'launched' || state.sessionId !== String(sessionId) || state.executor !== String(executor)) {
+      return { ok: false, reason: 'not_found' };
+    }
+    state.agentId = String(agentId);
+    state.agentName = agentName ? String(agentName) : state.agentName || null;
+    t.updatedAt = new Date().toISOString();
+    putTicket(matches[0].slug, t);
+    return { ok: true, ticket: t };
+  });
+}
+
+function markDispatchStopped(sessionId, executor, agentId) {
+  if (!sessionId || !executor) return { ok: false, reason: 'missing_identity' };
+  const matches = [];
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor)) continue;
+      if (agentId && state.agentId && state.agentId !== String(agentId)) continue;
+      if (state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed') {
+        matches.push({ slug: project.slug, id: ticket.id });
+      }
+    }
+  }
+  if (matches.length !== 1) return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
+  return withTicketLock(matches[0].slug, matches[0].id, () => {
+    const t = getTicket(matches[0].slug, matches[0].id);
+    const state = dispatchState(t);
+    if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor)) {
+      return { ok: false, reason: 'not_found' };
+    }
+    if (agentId) state.agentId = String(agentId);
+    setDispatchTerminal(t, t.claim && t.claim.by ? 'stopped_claimed' : 'failed', 'subagent-stop');
+    if (!t.claim || !t.claim.by) {
+      t.dispatchNonce = null;
+      t.dispatchExecutor = null;
+    }
+    t.updatedAt = new Date().toISOString();
+    putTicket(matches[0].slug, t);
+    return { ok: true, ticket: t };
+  });
+}
+
+function reconcileLaunchedDispatches(sessionId, opts) {
+  const reconciled = [];
+  if (!sessionId) return { ok: true, reconciled };
+  const source = opts && opts.source ? String(opts.source) : 'session-start';
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || state.sessionId !== String(sessionId) || state.outcome !== 'launched' || (ticket.claim && ticket.claim.by)) continue;
+      const res = withTicketLock(project.slug, ticket.id, () => {
+        const t = getTicket(project.slug, ticket.id);
+        const current = dispatchState(t);
+        if (!current || current.sessionId !== String(sessionId) || current.outcome !== 'launched' || (t.claim && t.claim.by)) {
+          return { ok: false };
+        }
+        setDispatchTerminal(t, 'failed', source);
+        t.dispatchNonce = null;
+        t.dispatchExecutor = null;
+        t.updatedAt = new Date().toISOString();
+        putTicket(project.slug, t);
+        return { ok: true, ticket: t };
+      });
+      if (res && res.ok) reconciled.push(res.ticket.ref);
+    }
+  }
+  return { ok: true, reconciled };
+}
+
 // Atomically claim a ticket for worker `by`. Refuses (ok:false) if the ticket is
-// gone, already done, or actively claimed by someone else — unless that claim is
-// stale or opts.force is set. On success sets claim and moves it to "doing"
-// (unless opts.status === false).
+// gone, already done, or actively claimed by someone else, unless that claim is
+// stale or opts.force; on success it moves the ticket to "doing" unless opts.status is false.
 function claimTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || 'agent');
@@ -1689,7 +1823,14 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
       return { ok: false, reason: 'claimed', ticket: t, claim: held };
     }
-    t.claim = { by, at: new Date().toISOString() };
+    const now = new Date().toISOString();
+    t.claim = { by, at: now };
+    const state = dispatchState(t);
+    if (state) {
+      state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
+      state.claimedAt = now;
+      state.outcome = 'claimed';
+    }
     if (opts.status !== false) t.status = coerceStatus(opts.status || 'doing', t.status);
     t.lastEventType = 'status';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
@@ -1727,6 +1868,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
     t.claim = null;
+    setDispatchTerminal(t, opts.status === 'done' ? 'done' : 'released', opts.source || 'cli');
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
@@ -1871,6 +2013,7 @@ function submitTicket(slug, idOrRef, by, opts) {
       integratedAt: null,
     }, range || {});
     t.claim = null;
+    setDispatchTerminal(t, 'submitted', opts.source || 'cli');
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     t.status = 'doing'; // ready-for-integration parks in doing, never done
@@ -2522,6 +2665,19 @@ function pulsePayload(slug, idOrRef) {
     lastComment: lastCommentPulse(ticket),
     dispatchExecutor: ticket.dispatchExecutor || null,
     dispatchNonce: ticket.dispatchNonce || null,
+    dispatch: dispatchState(ticket) ? {
+      sessionId: dispatchState(ticket).sessionId || null,
+      tokenPrefix: dispatchState(ticket).tokenPrefix || null,
+      executor: dispatchState(ticket).executor || null,
+      agentId: dispatchState(ticket).agentId || null,
+      agentName: dispatchState(ticket).agentName || null,
+      preparedAt: dispatchState(ticket).preparedAt || null,
+      launchedAt: dispatchState(ticket).launchedAt || null,
+      claimedAt: dispatchState(ticket).claimedAt || null,
+      terminalAt: dispatchState(ticket).terminalAt || null,
+      terminalSource: dispatchState(ticket).terminalSource || null,
+      outcome: dispatchState(ticket).outcome || null,
+    } : null,
     submission: ticket.submission || null,
     git: gitPulse(meta && meta.path, ticket.files),
   };
@@ -3202,6 +3358,10 @@ module.exports = {
   dispatchExecutorName,
   stableExecutorName,
   prepareDispatch,
+  recordDispatchLaunch,
+  bindDispatchAgent,
+  markDispatchStopped,
+  reconcileLaunchedDispatches,
   claimTicket,
   releaseTicket,
   completeTicket,

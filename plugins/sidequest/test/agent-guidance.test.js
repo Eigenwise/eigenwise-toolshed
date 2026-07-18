@@ -38,6 +38,13 @@ test('ephemeral dispatch guidance prevents registration wait stalls', () => {
   assert.match(orchestration, /Any session\nmay adopt an unspawned prepared definition/);
 });
 
+test('dispatch guidance requires board confirmation after an Agent launch', () => {
+  assert.match(orchestration, /Agent acknowledgement means only\n`launched`/);
+  assert.match(orchestration, /Pulse the ticket immediately/);
+  assert.match(orchestration, /missing claim means diagnose or respawn/);
+});
+
+
 test('shared-tree guidance detects foreign staging and absorbed scope patches', () => {
   assert.match(executorTemplate, /immediately after claiming and before work, inspect `git diff --cached --name-only`/);
   assert.match(executorTemplate, /any staged path outside the declared scope is foreign work/);

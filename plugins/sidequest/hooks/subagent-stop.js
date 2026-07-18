@@ -162,6 +162,12 @@ function main() {
     process.exit(0); // can't load the store -> nothing to check
   }
 
+  try {
+    store.markDispatchStopped(String(sessionId), agentType, agentId || null);
+  } catch (_) {
+    // The stop verdict below still tells the parent what to do.
+  }
+
   let claims;
   try {
     claims = store.sessionClaims(String(sessionId));

@@ -53,6 +53,35 @@ function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
 }
 
+function extractDispatchToken(prompt) {
+  if (typeof prompt !== 'string' || !prompt) return null;
+  const match = prompt.match(/--token\s+([^\s`"']+)/);
+  return match ? match[1] : null;
+}
+
+function recordAuthoritativeLaunch(input, type) {
+  const toolInput = input && input.tool_input;
+  const prompt = toolInput && toolInput.prompt;
+  const refs = extractRefs(prompt);
+  const token = extractDispatchToken(prompt);
+  const projectArg = extractProjectArg(prompt) || input.cwd || process.env.CLAUDE_PROJECT_DIR;
+  const sessionId = input.session_id || input.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID;
+  if (refs.length !== 1 || !token || !projectArg || !sessionId) return;
+  try {
+    const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+    const found = store.findProject(projectArg);
+    if (!found.ok) return;
+    store.recordDispatchLaunch(found.slug, refs[0], {
+      token,
+      executor: type,
+      sessionId,
+      agentName: toolInput.name,
+    });
+  } catch (_) {
+    // A launch ledger must never block the Agent call.
+  }
+}
+
 // Resolve the ticket ref(s) named in a builtin executor's prompt to the single
 // concrete Claude runtime their category route resolved to. lib/store.js is lazy-required
 // here (not at module scope) so the hook's dominant traffic — non-sidequest agents, and
@@ -180,6 +209,7 @@ function main() {
     }
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, 'model');
     if (hadModel) delete updatedInput.model;
+    recordAuthoritativeLaunch(input, type);
     process.stdout.write(JSON.stringify({
       ...(hadModel
         ? { systemMessage: `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` }
@@ -196,6 +226,7 @@ function main() {
     const res = resolveStampedModel(input);
     if (res.status === 'ok') {
       updatedInput.model = res.model;
+      recordAuthoritativeLaunch(input, type);
       process.stdout.write(JSON.stringify({
         systemMessage: `sidequest: ${type} spawned without a model — injected "${res.model}" from ${res.refs.join(', ')}'s resolved category route. Always pass model: exec.model on Claude routes.`,
         hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
@@ -216,12 +247,14 @@ function main() {
   // an unnoticed divergence from the named ticket(s)' resolved concrete model.
   const res = resolveStampedModel(input);
   if (res.status === 'ok' && res.model !== toolInput.model) {
+    recordAuthoritativeLaunch(input, type);
     process.stdout.write(JSON.stringify({
       systemMessage: `sidequest: ${type} was spawned with model "${toolInput.model}" but ${res.refs.join(', ')} resolves to "${res.model}" — kept the caller's value; confirm the cap is deliberate.`,
       hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
     }));
     return;
   }
+  recordAuthoritativeLaunch(input, type);
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
   }));

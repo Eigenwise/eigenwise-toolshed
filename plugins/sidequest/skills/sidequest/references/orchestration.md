@@ -193,8 +193,10 @@ loading or use `/reload-plugins` as directed. A route with no stable executor, s
 `--ephemeral`; instant dispatch will explain that fallback.
 
 Re-dispatch rotates the token while the stable executor name remains fixed. A stale token is refused,
-and `done` or `release` clears the dispatch guard for either mode. Never trust a worker's self-reported
-identity. The token-gated claim and the dispatch response are the evidence.
+and `done` or `release` clears the dispatch guard for either mode. An Agent acknowledgement means only
+`launched`. Pulse the ticket immediately and report it as running only after the holder and dispatch
+token are visible. A missing claim means diagnose or respawn, never wait for a completion notification.
+Never trust a worker's self-reported identity. The token-gated claim and the dispatch response are the evidence.
 
 ## Native Agent dispatch
 

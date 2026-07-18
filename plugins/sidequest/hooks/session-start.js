@@ -93,7 +93,17 @@ function provisionExecAgents() {
   }
 }
 
-// Set SIDEQUEST_NUDGE=off to skip injected SessionStart context.
+function reconcileLostLaunches(data) {
+  try {
+    const sessionId = data && (data.session_id || data.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID);
+    const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+    const result = store.reconcileLaunchedDispatches(sessionId, { source: 'session-start' });
+    return result && Array.isArray(result.reconciled) ? result.reconciled : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 function nudgeOff() {
   const v = String(process.env.SIDEQUEST_NUDGE || '').trim().toLowerCase();
   return v === 'off' || v === '0' || v === 'false' || v === 'no';
@@ -113,9 +123,11 @@ function main() {
   // Keep the runtime Codex exec agents in sync on every real session start. This
   // runs regardless of SIDEQUEST_NUDGE (it's provisioning, not a nudge).
   const syncResult = provisionExecAgents();
-  const restartNotice = syncResult && syncResult.written > 0
-    ? require(path.join(pluginRoot(), 'lib', 'agentsync.js')).RESTART_NOTICE
-    : '';
+  const lostLaunches = reconcileLostLaunches(data);
+  const restartNotice = [
+    syncResult && syncResult.written > 0 ? require(path.join(pluginRoot(), 'lib', 'agentsync.js')).RESTART_NOTICE : '',
+    lostLaunches.length ? `sidequest: ${lostLaunches.join(', ')} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : '',
+  ].filter(Boolean).join('\n');
 
   if (nudgeOff()) process.exit(0);
 
@@ -131,7 +143,7 @@ function main() {
     emit(
       '=== sidequest (active — context restored) ===\n' +
         'Context was just compacted/resumed. Reload the Sidequest skill before acting. Use mcp__plugin_sidequest_board__list with status=doing FIRST to re-check in-flight claims; only if MCP is unavailable, fall back to `' + cli + ' list --status doing`.\n' +
-        'Board truth beats idle pings: pulse ref, inspect claim age, comments, git. Discipline: taxonomy, stamp, render executor, wait for `New agent types are now available: <name>`, spawn `exec.agent`, claim its token. `reason:token`: TaskStop, wait, respawn. No announcement: stable executor. Verify `transcript/meta.json` + token claim, never self-report. Codex omits model; Claude passes it.\n' ,
+        'Board truth beats idle pings: pulse ref, inspect claim age, comments, git. Agent acknowledgement means launched, not running: pulse immediately and announce running only after its holder/token claim appears. Missing claim: diagnose or respawn. Codex omits model; Claude passes it.\n' ,
       restartNotice
     );
     process.exit(0);
@@ -146,7 +158,7 @@ function main() {
       'One ticket owning several deliverables (CLI + wiring + tests) is a smell: use a cheap scout that pins the shared contract, then a wave fanning the pieces out. ' +
       'The spec carries exact anchors, contract or question, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. Even with an external tracker (Jira), use sidequest as the local execution layer.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
-      '• Route execution DOWN: stamp, render the per-ticket definition, wait for `New agent types are now available: <name>`, then spawn the already-registered `exec.agent`; pass its token and `model: exec.model` (Codex omits model). `reason:token`: TaskStop, wait, respawn; no announcement: stable executor. Verify `transcript/meta.json` + token claim, never self-report. Use `bypassPermissions`; Do not use `native_agent`. Inline only trivial one-step.\n' +
+      '• Route execution DOWN: stamp, render the per-ticket definition, wait for `New agent types are now available: <name>`, then spawn the already-registered `exec.agent`; pass its token and `model: exec.model` (Codex omits model). Agent acknowledgement only means launched: pulse immediately and call it running only after the token claim is visible. Missing claim: diagnose or respawn. Use `bypassPermissions`; Do not use `native_agent`. Inline only trivial one-step.\n' +
       '• Keep runs SHORT and bounded; the ticket is the spec; bounce back fast and verify artifacts.\n' +
       '• Batch small SAME-model tickets into ONE executor; parallelize only independent tickets.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +

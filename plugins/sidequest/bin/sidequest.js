@@ -1367,7 +1367,7 @@ function cmdDispatch(opts, positional) {
   const ephemeral = !!opts.ephemeral;
   let prepared;
   try {
-    prepared = store.prepareDispatch(slug, idOrRef, { ephemeral });
+    prepared = store.prepareDispatch(slug, idOrRef, { ephemeral, sessionId });
   } catch (err) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }

@@ -20,6 +20,7 @@ const database = db.openDb(SIDEQUEST_HOME);
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const SESSION = path.join(HOOKS, 'session-start.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
+const SUBAGENT_START = path.join(HOOKS, 'subagent-start.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
@@ -788,6 +789,77 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   );
   assert.ok(!same.hookSpecificOutput.permissionDecision, 'a same-model batch must not be denied');
   assert.equal(same.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
+
+test('dispatch ledger records an authoritative launch, agent bind, and claim acknowledgement', () => {
+  const ticket = addEffortTicket('dispatch launch acknowledgement', 'high');
+  const sessionId = `launch-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const projectPath = store.readMeta(slug).path;
+  const prompt = `Work ${ticket.ref} --project "${projectPath}" --token ${prepared.token}`;
+  runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    tool_name: 'Agent',
+    tool_input: { subagent_type: prepared.ticket.dispatchExecutor, name: 'dispatch-ledger', prompt },
+  });
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'launched');
+  runHookOutput(SUBAGENT_START, {
+    session_id: sessionId,
+    agent_type: prepared.ticket.dispatchExecutor,
+    agent_id: 'native-launch-1',
+    agent_name: 'dispatch-ledger',
+  });
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, 'native-launch-1');
+  assert.equal(store.claimTicket(slug, ticket.ref, 'dispatch-worker', {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.dispatch.outcome, 'claimed');
+  assert.equal(pulse.dispatch.tokenPrefix, prepared.token.slice(0, 12));
+  assert.equal(pulse.dispatch.agentName, 'dispatch-ledger');
+});
+
+test('session start reconciles a reload-lost launch once and leaves it ready to respawn', () => {
+  const ticket = addEffortTicket('reload before claim', 'high');
+  const sessionId = `reload-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName: 'lost-native-task',
+  }).ok, true);
+  const first = runHook(SESSION, { session_id: sessionId, source: 'resume' });
+  assert.match(first, new RegExp(`${ticket.ref} launched but never claimed`));
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.status, 'todo');
+  assert.equal(after.dispatch.outcome, 'failed');
+  assert.equal(after.dispatchNonce, null);
+  assert.deepStrictEqual(store.reconcileLaunchedDispatches(sessionId, { source: 'session-start' }).reconciled, []);
+  const second = runHook(SESSION, { session_id: sessionId, source: 'resume' });
+  assert.ok(!second.includes('launched but never claimed'));
+});
+
+test('subagent stop marks a launch that never claimed as failed', () => {
+  const ticket = addEffortTicket('stop before claim', 'high');
+  const sessionId = `stop-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const context = runHook(SUBAGENT_STOP, {
+    session_id: sessionId,
+    agent_type: prepared.ticket.dispatchExecutor,
+    agent_id: 'native-stop-1',
+  });
+  assert.match(context, /without ever claiming/);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.dispatch.outcome, 'failed');
+  assert.equal(after.dispatchNonce, null);
 });
 
 test('pre-tool hook: dispatch executor requires a canonical route marker without affecting markerless executor types', () => {
