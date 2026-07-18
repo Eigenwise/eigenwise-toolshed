@@ -23,6 +23,16 @@
         ]
       },
       {
+        "matcher": "TaskOutput",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-task-output.js\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "SendMessage",
         "hooks": [
           {

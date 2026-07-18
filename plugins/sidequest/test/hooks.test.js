@@ -25,6 +25,7 @@ const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
+const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 
 const BUDGET = {
   session: 2850,
@@ -155,6 +156,40 @@ test('pre-tool hook: malformed input fails soft', () => {
     env: process.env,
   });
   assert.strictEqual(out, '');
+});
+
+test('task-output guard: blocks Sidequest native task identities and dispatched names', () => {
+  const reason = 'native Agent results arrive automatically. Use pulse <ref> / changes --since for liveness. Use TaskStop only after terminal board evidence.';
+  const direct = runHookOutput(GUARD_TASK_OUTPUT, {
+    tool_name: 'TaskOutput', tool_input: { task_id: 'sidequest-exec-dispatch-high@session-abc' },
+  });
+  assert.equal(direct.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(direct.hookSpecificOutput.permissionDecisionReason, new RegExp(reason.replace(/[<>]/g, '\\$&')));
+
+  const ticket = fixtureTicket('task-output mapped launch', 'sonnet', 'high');
+  const sessionId = `task-output-${Date.now()}`;
+  const agentName = 'friendly-launch-name';
+  const agentId = 'native-task@session-sidequest-guard';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor, agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName).ok, true);
+
+  for (const tool_input of [{ task_id: agentName }, { id: agentId }]) {
+    const out = runHookOutput(GUARD_TASK_OUTPUT, { session_id: sessionId, tool_name: 'TaskOutput', tool_input });
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  }
+});
+
+test('task-output guard: leaves background task IDs and malformed unrelated input alone', () => {
+  for (const tool_input of [
+    { task_id: 'build-123' },
+    { id: 'unrelated-SQ-439-process' },
+    { task_id: {} },
+  ]) {
+    assert.strictEqual(runHookOutput(GUARD_TASK_OUTPUT, { tool_name: 'TaskOutput', tool_input }), null);
+  }
 });
 
 test('pre-tool hook warns a sidequest executor once near its turn backstop', () => {
@@ -486,6 +521,8 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.match(ctx, /Dispatch is instant: no registration\/watcher wait/, 'must replace the registration wait flow');
   assert.ok(ctx.includes('do not use `native_agent`'), 'must reject temporary native dispatch for normal execution');
   assert.ok(ctx.includes('bypassPermissions'), 'must require unattended executors to launch in bypass');
+  assert.ok(ctx.includes('Native Agent results arrive automatically: never TaskOutput them.'), 'must ban invalid native Agent TaskOutput polling');
+  assert.ok(ctx.includes('pulse ref / changes --since; TaskStop only after terminal board evidence'), 'must give the board-based liveness and stop rule');
   assert.ok(ctx.includes('SHORT'), 'must demand short, bounded executor runs');
   assert.ok(ctx.includes('bounce back'), 'must tell executors to bounce back, not wander');
   assert.ok(ctx.includes('ONE executor'), 'must carry the batch-small-tickets rule');
@@ -594,6 +631,8 @@ test('session-start: compact and resume preserve the minimum ticket and executor
     assert.match(ctx, /quick read-only `\[sidequest-scout\]`/, `${source} must preserve the narrow scout escape hatch`);
     assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), `${source} must prefer the MCP doing-list read`);
     assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
+    assert.ok(ctx.includes('never TaskOutput them'), `${source} must ban native Agent TaskOutput polling`);
+    assert.ok(ctx.includes('changes --since; TaskStop only after terminal board evidence'), `${source} must retain the board-based liveness and stop rule`);
     assert.ok(ctx.includes('list --status doing'), `${source} must retain the CLI fallback`);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
     assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `${source} block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
@@ -647,6 +686,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
   assert.ok(config.hooks.PreToolUse.some((entry) => entry.matcher === 'Agent'
     && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
+  assert.ok(config.hooks.PreToolUse.some((entry) => entry.matcher === 'TaskOutput'
+    && entry.hooks.some((hook) => hook.command.includes('guard-task-output.js'))), 'the TaskOutput guard must be registered');
 
   const readme = fs.readFileSync(path.join(pluginRoot, 'README.md'), 'utf8');
   assert.doesNotMatch(readme, /per-prompt "use sidequest" reminder/);

@@ -142,8 +142,8 @@ function main() {
   if (source === 'compact' || source === 'resume') {
     emit(
       '=== sidequest (active — context restored) ===\n' +
-        'Context was just compacted/resumed. Reload the Sidequest skill before acting. Substantive work needs a board ticket, then fresh dispatch\'s exact token-gated executor and briefing. Generic/custom agents only explicit quick read-only `[sidequest-scout]` with no edits; Agent gate denies the rest. Use mcp__plugin_sidequest_board__list with status=doing FIRST to re-check in-flight claims; only if MCP is unavailable, fall back to `' + cli + ' list --status doing`.\n' +
-        'Board truth beats idle pings: pulse ref, inspect claim age, comments, git. Agent acknowledgement means launched, not running: pulse immediately and announce running only after its holder/token claim appears. Missing claim: diagnose or respawn. Codex omits model; Claude passes it.\n' ,
+        'Context restored. Reload the Sidequest skill before acting. Substantive work needs a board ticket, then fresh dispatch\'s exact token-gated executor and briefing. Generic/custom agents: only quick read-only `[sidequest-scout]` with no edits; Agent gate denies the rest. Use mcp__plugin_sidequest_board__list with status=doing FIRST; if MCP is unavailable, `' + cli + ' list --status doing`.\n' +
+        'Native Agent results arrive automatically: never TaskOutput them. For liveness use pulse ref / changes --since; TaskStop only after terminal board evidence. Agent acknowledgement means launched, not running: confirm its holder/token claim. Codex omits model; Claude passes it.\n' ,
       restartNotice
     );
     process.exit(0);
@@ -151,14 +151,11 @@ function main() {
 
   emit(
     '=== sidequest (active) ===\n' +
-      'This project tracks work on the sidequest board. Reload the Sidequest skill before acting. Plan multi-part requests as independently checkable ATOMIC ' +
-      'tickets (stamp a live-taxonomy category; classify against ids shown and fetch the list if ambiguous; complexity + why are legacy fallback). ' +
-      'Atomic = one piece a single agent finishes and checks: a change, or an investigation, spike, or review. ' +
-      'Split for parallelism: independent tickets fan out; keep tightly coupled work together. ' +
-      'One ticket owning several deliverables (CLI + wiring + tests) is a smell: use a cheap scout that pins the shared contract, then a wave fanning the pieces out. ' +
-      'The spec carries exact anchors, contract or question, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. Even with an external tracker (Jira), use sidequest as the local execution layer.\n' +
+      'Reload the Sidequest skill before acting. Plan multi-part requests as independently checkable ATOMIC tickets. ' +
+      'Atomic = one change, investigation, spike, or review a single agent finishes and checks. Split for parallelism: independent tickets fan out; keep tightly coupled work together. ' +
+      'Specs need exact anchors, contract, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. One ticket owning several deliverables (CLI + wiring + tests) is a smell: use a scout that pins the shared contract, then a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest locally.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
-      '• Route execution DOWN: substantive investigations and changes are board tickets, then fresh `dispatch` returns the exact stable executor, briefing, and token to spawn immediately. Dispatch is instant: no registration/watcher wait. Generic/custom agents are only explicit quick read-only `[sidequest-scout]` runs with no edits; the Agent gate denies the rest. Agent acknowledgement only means launched: pulse immediately and call it running only after the token claim is visible. Missing claim: diagnose or respawn. Inline only trivial one-step work. Claude passes `model: exec.model`; Codex omits it. Use `bypassPermissions`; do not use `native_agent`.\n' +
+      '• Route execution DOWN: substantive investigations and changes are board tickets, then fresh `dispatch` returns the exact stable executor, briefing, and token to spawn immediately. Dispatch is instant: no registration/watcher wait. Generic/custom agents are only explicit quick read-only `[sidequest-scout]` runs with no edits; the Agent gate denies the rest. Native Agent results arrive automatically: never TaskOutput them. For liveness use pulse ref / changes --since; TaskStop only after terminal board evidence. Agent acknowledgement only means launched: pulse immediately and call it running only after the token claim is visible. Missing claim: diagnose or respawn. Inline only trivial one-step work. Claude passes `model: exec.model`; Codex omits it. Use `bypassPermissions`; do not use `native_agent`.\n' +
       '• Keep runs SHORT and bounded; the ticket is the spec; bounce back fast and verify artifacts.\n' +
       '• Batch small SAME-model tickets into ONE executor; parallelize only independent tickets.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +

@@ -210,6 +210,7 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
   preserving that work, release it with `sidequest release SQ-3 --by <dead-worker-id> --status todo`,
   re-read the ticket, and spawn one replacement. Do not force a fresh claim while a live-looking worker
   may return.
+- Native Agent results arrive automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. For liveness, use `pulse <ref>` / `changes --since`; use `TaskStop` only after terminal board evidence.
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at a verified local commit and
 `submit` it (durable ref `refs/sidequest/<SQ-n>`, claim released, ticket parked in `doing` awaiting
