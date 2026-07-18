@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.51.0",
+  "version": "3.52.0",
   "plugins": [
     {
       "name": "codex-gateway",
       "source": "./plugins/codex-gateway",
       "description": "Your ChatGPT/Codex subscription models in Claude Code's /model picker. A local gateway routes claude-codex-* models to OpenAI's Codex backend (via claude-code-proxy) and everything else to api.anthropic.com, so you switch between Claude and GPT-5.x mid-session like any other model. No OpenAI API key.",
-      "version": "0.13.0",
+      "version": "0.14.0",
       "author": {
         "name": "Eigenwise"
       },
@@ -128,7 +128,7 @@
       "name": "switchboard",
       "source": "./plugins/switchboard",
       "description": "Complexity-scored model and effort routing for Claude Code. Score any task 1-10 and switchboard derives which model tier should work it and at what reasoning effort, on a user-tunable capability ladder (bias dial, per-model effort allowlist), then runs it in a named executor subagent at exactly that tier.",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "author": {
         "name": "Eigenwise"
       },
