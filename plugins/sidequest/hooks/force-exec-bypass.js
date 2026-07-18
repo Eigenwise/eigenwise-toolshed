@@ -22,9 +22,12 @@ const BUILTIN_EXECUTORS = new Set([
   'sidequest-exec-xhigh', 'sidequest-exec-max',
 ]);
 const SPECIALIZED_LOOKUP_AGENTS = new Set(['explore', 'claude-code-guide', 'web-researcher']);
+// Keep this aligned with TICKET_PREFIX in lib/agentsync.js without loading the generator and store on every Agent call.
+const TICKET_EXECUTOR_PREFIX = 'sidequest-ticket-';
 
 function isPinnedSidequestExecutor(type) {
   return type.startsWith('sidequest-native-')
+    || type.startsWith(TICKET_EXECUTOR_PREFIX)
     || (type.startsWith('sidequest-exec-') && !BUILTIN_EXECUTORS.has(type));
 }
 
@@ -179,7 +182,9 @@ function main() {
   if (!toolInput || typeof toolInput !== 'object') return;
   const type = String(toolInput.subagent_type || '');
   const prompt = toolInput.prompt;
-  const isExec = type.startsWith('sidequest-exec-') || type.startsWith('sidequest-native-');
+  const isExec = type.startsWith('sidequest-exec-')
+    || type.startsWith('sidequest-native-')
+    || type.startsWith(TICKET_EXECUTOR_PREFIX);
   if (!isExec) {
     if (isSpecializedLookupAgent(type) || isQuickReadOnlyScout(prompt)) return;
     process.stdout.write(JSON.stringify({

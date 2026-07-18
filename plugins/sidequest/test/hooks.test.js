@@ -117,7 +117,7 @@ test('pre-tool hook: blocks unmarked custom agents but permits explicit quick sc
   assert.strictEqual(lookup, null, 'built-in read-only lookup agents remain allowed');
 });
 
-test('pre-tool hook keeps built-in executor model but removes overrides for pinned Codex and native executors', () => {
+test('pre-tool hook keeps built-in executor model but removes overrides for pinned Codex, native, and ticket executors', () => {
   const codex = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', model: 'fable', name: 'sq210-codex' },
@@ -132,6 +132,13 @@ test('pre-tool hook keeps built-in executor model but removes overrides for pinn
   });
   assert.equal(native.hookSpecificOutput.updatedInput.model, undefined);
   assert.equal(native.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
+  const ticketExecutor = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-ticket-sq-584-haiku-b37fffcb', model: 'sonnet', name: 'sq584-ticket' },
+  });
+  assert.equal(ticketExecutor.hookSpecificOutput.updatedInput.model, undefined);
+  assert.equal(ticketExecutor.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
 
   const builtIn = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
