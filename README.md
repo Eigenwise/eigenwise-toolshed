@@ -131,26 +131,20 @@ Manage it all from chat ("make a ticket for X", "close SQ-3", "what's open") or 
 
 ## Why switchboard?
 
-Handing a task to a subagent usually means picking a model by feel, and that feel is inconsistent:
-the same task gets opus one day and sonnet the next, for no real reason. switchboard replaces the
-feel with a score:
+Switchboard is the standalone category router. It classifies delegated work, resolves a primary model
+and effort, checks availability, and records each fallback attempt. Categories carry the work contract,
+so routing stays tied to the job instead of a model pick made by feel.
 
-- You score the task's **complexity (1-10)**, honestly, against an absolute scale: a one-line lookup
-  is a 1, a novel multi-file refactor is a 6-7, frontier research is a 9-10. You never pick the model
-  directly.
-- switchboard **derives** the model tier and reasoning effort from that score on one merged,
-  capability-ranked ladder, not flat per-tier bands, so `sonnet·xhigh` can rank above `opus·medium`.
-- The work runs in a **named executor subagent** pinned to exactly that tier and effort, so the
-  routing actually lands instead of staying a suggestion.
-- A **bias dial** (`-5` frugal to `+5` generous) and a **per-model effort allowlist** let you tune how
-  eagerly scores escalate, without ever touching the anchors: complexity 1 and 10 always land the
-  same rungs.
-- `max` effort is held back on purpose, only the very top of the scale reaches it, same spirit as
-  using max sparingly for the genuinely hardest work.
+- Category routes can fall back to a category route, a global fallback, and then hardwired `sonnet/high`.
+- User and project config layers can narrow the allowed models and routes without inventing models that
+  are not available.
+- The CLI, MCP server, and local settings UI all use the same versioned resolver contract.
+- Numeric complexity routing remains for one release as a migration window. It is deprecated and does
+  not change category policy.
 
-It's the same routing engine sidequest uses internally, shared by copy, packaged standalone for
-anyone who wants the ladder without a ticket board. The [plugin README](./plugins/switchboard) has
-the full CLI and the ladder mechanics.
+[sidequest](./plugins/sidequest) adds the ticket board and workflow. Its current comparison mode can
+show Switchboard's category result beside board routing while the cutover remains separate. The
+[plugin README](./plugins/switchboard) has the category, config, CLI, MCP, and migration details.
 
 ## About
 

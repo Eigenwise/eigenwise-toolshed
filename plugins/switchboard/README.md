@@ -3,18 +3,10 @@
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Fswitchboard%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
-[![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
 *Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
 
-**Score the task, not the model.** Claude scores each piece of work for complexity (1 to 10),
-switchboard turns that score into a model tier and a reasoning effort, and the work runs in a
-named executor subagent at exactly that tier. Nobody hand-picks models anymore: the score is the
-only knob, and a user-tunable ladder does the rest.
-
-![Claude scoring a task C6, deriving opus·high, and launching a named executor at that tier](docs/route-and-spawn.png)
+Switchboard routes delegated work by **category**. A category describes the work, names the model and effort that should handle it, and can include a category fallback. The resolver checks available models, then tries the category route, category fallback, global fallback, and finally hardwired `sonnet/high`.
 
 ## Install
 
@@ -23,150 +15,88 @@ only knob, and a user-tunable ladder does the rest.
 /plugin install switchboard@eigenwise-toolshed
 ```
 
-Then run `/reload-plugins` (or restart Claude Code). That brings in the skill, five executor
-agents, and the CLI. No dependencies, no build step: it's Node stdlib only (Claude Code already
-ships Node), cross-platform.
+Run `/reload-plugins` or restart Claude Code. Switchboard is standalone, uses Node's standard library, and has no build step or external dependency.
 
-## The idea
+## How routing works
 
-A Claude session is one fixed model. It can't change its own model mid-run, so every task it does
-inline runs at whatever tier your session happens to be. That's laborer work at orchestrator
-prices, or a genuinely hard problem on an underpowered model. Both waste something.
+The bundled skill classifies a request before delegation. It sends a category id to Switchboard, rather than asking Claude to pick a model by feel. The default categories cover common work such as debugging, coding, documentation, architecture, testing, research, and data visualization. Run `switchboard category list` to see the exact set installed in this release.
 
-Switchboard splits the decision in two:
+Every category has:
 
-- **Claude scores complexity, out loud.** 1 to 10 against a task-shape scale anchored to
-  Anthropic's own model positioning (1-2 is subagent-shaped work where the spec says everything,
-  3-5 is daily coding, 6-7 is complex agentic work with a shared contract, 8-10 is
-  larger-than-a-sitting or research-grade), with a one-line motivation naming the actual files
-  and moving parts. Shapes are project-portable where "feels hard" isn't — that's what makes the
-  scale absolute. Stating it visibly is the honesty mechanism: no silent scoring, no picking a
-  tier first and backfilling a number.
-- **The ladder picks the rung.** Your enabled tiers and efforts form one capability-ranked
-  sequence of model×effort rungs, the score maps onto it, and the task runs in a
-  `switchboard-exec-<effort>` subagent with the derived model. Change your prefs and the same
-  score routes differently tomorrow. Claude's scoring never has to change.
+- a primary `model` and `effort` route;
+- an optional category fallback;
+- a short contract for the executor;
+- an enabled flag.
 
-## Getting started
+A route is accepted only when the selected model is available. If the primary is unavailable, the resolver records the failed attempt and walks the fallback chain. An unrouted result explains every failed attempt instead of silently choosing a model.
 
-Give the CLI a short name first (adjust the path to where your marketplace puts plugins; see
-"Where things live" below):
+## Configuration and model caps
+
+Configuration layers are applied in this order:
+
+```text
+shipped defaults < user < project < environment/test overrides
+```
+
+The user file is `~/.claude/toolshed/switchboard.json`. A project override is `.claude/switchboard.json` in that project. `SWITCHBOARD_CONFIG_HOME`, `SWITCHBOARD_CONFIG_USER_FILE`, and `SWITCHBOARD_CONFIG_PROJECT_FILE` are available for isolated installs and tests. `SWITCHBOARD_CONFIG_OVERRIDES` accepts a JSON layer.
+
+Project settings can narrow the models and routes that may be used. They cannot add a model that is absent from the discovered catalog. The resolver only uses a route when its model and effort are allowed and available. `general` is always present and cannot be disabled.
+
+Set a global fallback with `switchboard fallback --model <model> --effort <effort>`. Use `switchboard doctor` to check schema, categories, catalog availability, and fallback health.
+
+## CLI
+
+The CLI lives at `bin/switchboard.js`. A shell alias is convenient:
 
 ```bash
 alias switchboard='node "$HOME/.claude/plugins/marketplaces/eigenwise-toolshed/plugins/switchboard/bin/switchboard.js"'
 ```
 
-Now look at your ladder:
-
-```bash
-switchboard models
+```text
+switchboard open [--port <port>]                              local routing settings
+switchboard category list|show|add|edit|disable|remove [args] category policy
+switchboard category detach|relink|reset <id> --project <path> project overlays
+switchboard fallback [--model <model> --effort <effort>]      global fallback
+switchboard available [--project <path>] [--json]             models and effort caps
+switchboard resolve <category> [--project <path>] [--json]   route and fallback attempts
+switchboard contract [--json]                                routing contract
+switchboard doctor [--project <path>] [--json]               health checks
 ```
 
-![switchboard models output: routing on, tiers, per-model efforts, and the ten-rung ladder](docs/models.png)
-
-Read it bottom-up: the ladder is the whole contract. With the defaults, a task scored C3 runs on
-`sonnet·medium` and C8 runs on `fable·medium`; the exact rung depends on the enabled tiers, each
-tier's effort row, and bias. Haiku contributes a single effort-free rung. The tier and effort lists
-above it are what the ladder is built from, and everything is yours to shape:
+Use `--json` where supported for scripts. The stable integration command is:
 
 ```bash
-switchboard route 6            # what would a C6 get right now?
-switchboard disable haiku      # drop a tier entirely
-switchboard disable opus.medium  # or just one model·effort rung
-switchboard bias -2            # hold cheaper rungs longer before escalating
+node bin/switchboard.js routing resolve --request '{"contractVersion":1,"categoryId":"debugging"}'
 ```
 
-That's the whole setup. From here you just hand Claude work. When you give it something worth
-delegating, the bundled skill makes it score the task in its reply, ask switchboard for the rung,
-and spawn the executor, like the session at the top of this page. Two guards mean you can't
-configure yourself into a corner: at least one tier always stays enabled, and every enabled tier
-keeps at least one effort.
+## MCP
 
-If you want routing gone for a while, `switchboard routing off` switches the whole thing off, and
-Claude works inline like before.
+The plugin also exposes typed MCP tools for category policy and routing. The tool names are `category_list`, `category_show`, `category_add`, `category_edit`, `category_disable`, `category_remove`, `category_detach`, `category_relink`, `category_reset`, `global_fallback`, `available_models`, `routing_resolve`, `routing_contract`, `doctor`, and `migrate`.
 
-## The ladder
+MCP and CLI use the same resolver and config files. The CLI is the compatibility boundary; `lib/contract.js` validates requests and results for in-process consumers.
 
-Routing isn't per-tier bands, it's one merged, capability-ranked sequence. Tiers overlap and cross
-over: `sonnet·xhigh` outranks `opus·low`, because a cheaper model thinking harder often beats a
-pricier one thinking less. Rungs are ordered by measured capability, wherever that lands them.
-The rankings follow published benchmarks: the sonnet/opus boundary genuinely overlaps, while
-fable sits strictly above opus at every effort, so the ladder models the two boundaries
-differently instead of pretending the gaps are equal.
+## Settings UI
 
-`max` effort sits outside the normal spread on purpose. Only complexity 10 reaches it (9 too, at
-the most generous bias), matching Anthropic's own guidance to use max sparingly, for the hardest
-work only. Normal day-to-day coding lands 1 to 7, and that's by design: 9s and 10s should be rare.
+`switchboard open` starts the local routing settings server. It shows effective categories, inheritance state, model availability, and warnings. Global settings live in the user file. Project edits are overlays, with detach/relink controls when a project needs its own complete category row.
 
-## The bias dial
+## Migrating numeric routing
 
-The score is Claude's honest read of the task. How eagerly scores climb toward pricier rungs is
-your call, and that's what bias is: `-5` frugal to `+5` generous, gamma-curving the score-to-rung
-mapping.
+Older Switchboard versions stored a complexity ladder in `~/.claude/switchboard/prefs.json`. Numeric commands still exist for one release as a compatibility window, but they are deprecated and only affect those legacy preferences. They do not change category routes.
 
-![The same ladder at bias -3 and bias +3: frugal stretches sonnet to C6, generous reaches fable by C6](docs/bias.png)
-
-The two ends never move: complexity 1 always gets the cheapest enabled rung and complexity 10
-always gets the top one, at any bias. You're bending the middle of the curve, and open work
-re-routes the moment you change it. Nothing is baked in at scoring time.
-
-## The executors
-
-Five bundled agents, `switchboard-exec-low` through `switchboard-exec-max`, one per effort rung.
-Reasoning effort can only be pinned in an agent's frontmatter, so effort lives in the agent file
-and the model is passed at spawn time; the two compose. Every spawn also gets a unique name
-(`exec-auth-refactor`, not "agent 3"), which keeps it addressable and trackable, in fleet view and
-as a teammate under agent teams.
-
-An executor does exactly the delegated task, verifies the way the spawn prompt specifies, and
-reports back concretely. If the work turns out to be beyond its tier, it escalates through the
-`advisor` tool when one is available instead of thrashing, and otherwise stops and says exactly
-where it got stuck so the orchestrator can re-route.
-
-One rule the skill enforces on the orchestrator side: the session caps the model. A sonnet
-session that derives `opus·high` spawns `switchboard-exec-high` at `model: sonnet`. The cap
-lowers the model and keeps the effort.
-
-All five agent files are generated from `scripts/_exec-template.md`; run
-`scripts/gen-exec-agents.js` to regenerate after an edit rather than hand-editing five copies.
-
-## CLI
+Preview migration before writing the new user config:
 
 ```bash
-switchboard models [--json]          # routing state, tiers, per-model efforts, live ladder
-switchboard bias [<int>] [--json]    # read (no arg) or set (-5..5) the bias dial
-switchboard route <c> [--json]       # derive one score's model/effort, e.g. route 6
-switchboard enable <target...>       # turn on a tier (haiku) or a model.effort pair (opus.medium)
-switchboard disable <target...>      # turn one off, same target shape
-switchboard routing on|off           # master switch; off means switchboard stands down
+switchboard migrate --dry-run
+switchboard migrate --apply
 ```
 
-Every command that changes something prints the reshaped ladder, so you always see what your
-change did.
-
-## Where things live
-
-- **The plugin:** wherever your marketplace checkout put it; the CLI is `bin/switchboard.js`
-  inside it. Claude resolves this itself via `${CLAUDE_PLUGIN_ROOT}`, the alias above is only for
-  your own shell.
-- **Your prefs:** one JSON file, `~/.claude/switchboard/prefs.json` (override the directory with
-  the `SWITCHBOARD_HOME` env var). Tiers, the per-model effort matrix, bias, and the master
-  switch. Delete it to reset to defaults: everything on, bias 0.
+Migration carries over routing state, enabled model tiers, and effort allowlists. The old `routingBias` value has no category equivalent and is reported as ignored. Migration refuses to overwrite an existing category config. Remove or archive the old prefs after checking the migrated result.
 
 ## Relation to sidequest
 
-[sidequest](../sidequest) is this same routing engine plus a ticket board on top; switchboard is
-the routing alone, for anyone who wants the ladder without a board. The engine is shared **by
-copy**, not by dependency: each plugin carries its own `lib/ladder.js` and its own invariant
-tests, and each plugin's tests are the source of truth for changes to its copy.
+[sidequest](../sidequest) adds a ticket board, claims, persistence, and dashboard workflows. Switchboard is the standalone category router and works without a board. Sidequest can use Switchboard's versioned routing contract when both plugins are installed.
 
-## Support
-
-switchboard is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
-
-| Ko-fi | GitHub Sponsors |
-|:-----:|:---------------:|
-| <a href="https://ko-fi.com/eigenwise"><img height="32" alt="Support me on Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg"></a> | <a href="https://github.com/sponsors/Eigenwise"><img height="32" alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a> |
+Sidequest's comparison mode is still active. It lets users compare Switchboard's category result with the board's current routing; it does not mean the Sidequest cutover is complete. The two plugins keep their own tests and remain independently usable during the comparison window.
 
 ## License
 
