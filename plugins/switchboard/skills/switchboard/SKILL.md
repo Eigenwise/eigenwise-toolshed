@@ -1,154 +1,119 @@
 ---
 name: switchboard
 description: >-
-  Complexity-scored routing for delegated work: "what model should handle this", "route this to
-  the right model", "score this task", "delegate this", "spawn a worker for this", "run this on a
-  cheaper model". Use proactively whenever you're about to hand a discrete task to a subagent —
-  don't just run it on the session model, score it and let switchboard derive the tier.
+  Category-based routing for delegated work. Use proactively before handing a discrete task to a
+  subagent: classify it against the effective category descriptions, resolve its route, and dispatch
+  the stable executor the route requires.
 ---
 
 # switchboard
 
 ## What it does
 
-You score a task's **complexity (1-10) honestly**; switchboard derives the model and reasoning
-effort from one capability-ranked ladder, shaped by the user's tier/effort preferences, and the
-task runs in a **named executor subagent at exactly that tier**. You never pick the model or
-effort directly — the score is the only knob you turn.
+Switchboard routes a delegated task by **category**, not a numeric difficulty score. The effective
+category descriptions are the classifier. Pick exactly one category, resolve it through routing
+contract v1, then dispatch the resulting provider-neutral route to the matching stable executor.
 
-## The forcing function
+The category supplies two things that must travel with the task:
 
-There's nothing to file here to force honesty up front, so the rule is procedural instead:
-**before spawning, state the score and a one-line motivation** — referencing the actual work (files,
-moving parts, unknowns), not restating the number — **in your visible reply**. Only then run
-`switchboard route <score>` and spawn what it says. Scoring silently, or picking the tier you
-wanted and backfilling a score to match, is exactly the failure mode this exists to prevent.
-
-## The task-shape scale
-
-The scale is **absolute** because it's anchored to **task shapes** — Anthropic's own published
-descriptions of which work each tier is for — not to how hard the task feels in this repo.
-"Feels hard" varies by codebase; "a multi-file feature with a contract several consumers must
-respect" is the same shape anywhere. Score by matching the shape, and say the shape in your
-motivation. Full official grounding (quotes, per-model effort guidance, sources):
-[references/routing-guide.md](references/routing-guide.md).
-
-Each band maps to a rung on the ladder (below) and an orchestration shape. Bands are scoring
-anchors, not routing promises — crossovers mean a 6 can legitimately land `sonnet·xhigh`.
-
-- **1-2 — subagent-shaped** (haiku's official bucket: "sub-agent tasks, high-volume,
-  cost-sensitive"): the executor discovers nothing; the spec says everything. A fact lookup, a
-  summary, a mechanical edit with exact anchors, a rename with known sites, a config bump.
-  → inline (1) or a single named subagent.
-- **3-5 — daily-coding-shaped** (sonnet's bucket: "daily coding tasks"): the everyday unit of
-  work. A function / endpoint / component against a known pattern, a scoped bugfix with a
-  reproduction in hand, a single-area feature with a few edge cases. Judgment inside one area, no
-  cross-cutting contract. → a single named subagent, or a small **named fan-out** if it splits
-  into independent pieces.
-- **6-7 — complex-agentic-shaped** (opus's bucket: "complex agentic coding"): a multi-file
-  feature, a contract several consumers must respect, a cross-cutting refactor whose edits must
-  land together. → decompose and fan out named executors over the independent pieces; if the
-  fan-out is sizable/repeatable, **propose a small-medium workflow** (<5-<15) if your environment
-  has one.
-- **8-10 — larger-than-a-sitting-shaped** (fable's bucket): unknown-root-cause debugging across a
-  system, architecture design under real constraints, research-grade work with no established
-  solution. **10 is the frontier end** (developing new models, RL training), not "a hard day."
-  → design → parallel named-executor wave → integrate; propose a medium-large workflow (<15-<50).
-
-Normal day-to-day coding legitimately lands **1-7**. Scores of **9-10 firing rarely is intended**
-— the top rung (`·max` effort) is reserved for genuinely extreme work, per Anthropic's own "reserve
-max for genuinely frontier problems." If a task straddles two bands, score lower and write the
-tighter spec — a well-specified task drops a band; a vague one climbs.
-
-## One score, three coupled outputs
-
-The same complexity score drives three things at once, not just a model name:
-
-1. **Model** — which tier works it (haiku < sonnet < opus < fable, capability-ranked, not a flat
-   per-tier band — `sonnet·xhigh` can outrank `opus·low`).
-2. **Effort** — how hard that model thinks (low/medium/high/xhigh/max).
-3. **Orchestration shape** — a low, serial score → a single NAMED subagent. The moment there's
-   independent work that can run at once → parallelize it, **by default as named-subagent
-   fan-out** (spawn several named subagents in one message — always available). A **workflow** is
-   a heavier tool for a larger, repeatable, or deterministic run — it is **gated**: you don't
-   launch one on your own, the user opts in. You usually judge better than the user when one
-   would help, so when you think so, **propose it** (e.g. via `AskUserQuestion`): explain *why*
-   it fits, the rough scale, and the token cost, and let them pick. Staying silent when a
-   workflow would clearly help is the mistake — but so is launching one uninvited. Default to
-   named-subagent fan-out; propose a workflow only when the shape genuinely calls for it.
-
-## Bias is the user's dial, not yours
-
-You always score complexity honestly against the task-shape scale above — bias tunes only **how
-eagerly** those scores escalate to pricier rungs, never what you score. The user sets it with
-`switchboard bias <n>` (`-5` frugal … `0` neutral … `+5` generous), gamma-curving the score→rung
-map. Extremes stay invariant: complexity 1 always hits the cheapest rung and 10 the top rung at
-any bias.
+- its route, including model, effort, fallback result, and provider-neutral dispatch instructions
+- its executor contract, which defines the category-specific standard for the work
 
 ## Decision procedure
 
-1. `switchboard models --json` once per session (or when prefs might have changed). If
-   `routing` is `false`, stand down — work inline, derived tags are informational only.
-2. Score the task and state the score + one-line motivation in your reply (the forcing function
-   above).
-3. `switchboard route <score> --json` to get that score's `model`/`effort` — or read the ladder
-   once from the `models` call if you're routing a whole batch.
-4. Cap at your own tier if the ladder tops out above you (`fable > opus > sonnet > haiku`), and
-   only spawn models that actually exist in your environment.
-5. Pick the orchestration shape by complexity (single named subagent / named fan-out in one
-   message / propose a workflow) — see the scale above.
-6. Spawn `subagent_type: switchboard-exec-<derived effort>` **with** `model: <derived tier>`
-   **and** a unique lowercase-hyphen `name:` (e.g. `exec-auth-refactor`). A haiku-derived
-   task has no effort axis: spawn a plain agent with `model: haiku`, still named. Include how to
-   verify in the spawn prompt — executors verify the way you specify, not a default of their own.
+1. List the effective taxonomy for the target project before classifying:
 
-There's no safety net here catching a mismatch after the fact. Matching the derived effort to the
-exec name is entirely on you: **re-derive right before each spawn, never carry an effort across a
-fan-out.** It's easy to pair the wrong exec with the wrong task when several scores are in flight
-at once.
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/bin/switchboard.js" category list --project "$PWD" --json
+   ```
 
-*Worked example:* session = sonnet, complexity scored 6 for "refactor the auth middleware to
-support two token formats" → `switchboard route 6` → `opus·high`. The ladder tops out above the
-session, so cap the **model** at sonnet and keep the derived **effort**. State: "C6, opus·high
-capped to sonnet·high — touches three call sites and a shared token-parsing helper." Spawn:
-`Agent(subagent_type: "switchboard-exec-high", model: "sonnet", name: "exec-auth-refactor",
-prompt: "<task> — verify by running the auth test suite")`.
+   Read every enabled category's `id`, `name`, `description`, and `contract`. This response is the
+   complete effective classifier, including user and project overrides. Do not use a memorized or
+   shipped-only category list.
 
-## Agent-teams / teammate notes
+2. Choose **exactly one** enabled category by matching the task to its `description`. State the
+   category ID and a one-line reason tied to that description before spawning. Do not blend
+   categories, score the task, or choose a route by intuition. Use `general` only when no specific
+   description fits or the task is genuinely underspecified.
 
-If agent teams are on, the same executor spawns as a teammate instead of a plain subagent — the
-rules above don't change, but two things do:
+3. Resolve the chosen category through contract v1:
 
-- **Model never inherits the lead** — always pass `model: <tier>` explicitly, same as a subagent.
-- **Effort may inherit the lead's reasoning effort** instead of what the named exec implies. Spawn
-  the correctly-named executor anyway (its frontmatter pins the effort); if it matters, also state
-  the effort in the spawn prompt.
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/bin/switchboard.js" resolve <category-id> --project "$PWD" --json
+   ```
 
-A **generic or unnamed teammate throws the routing away** — it's not a switchboard executor, just
-a bare background agent with a task description. Every worker, subagent or teammate, is a named
-`switchboard-exec-<effort>` with its own unique `name`.
+   The result must have `contractVersion: 1` and `status: "routed"`. Read the resolved
+   `category.contract`, `route`, `dispatch`, `attempts`, and `warnings`. A fallback route is still
+   authoritative when resolution selected it. If the result is unrouted, malformed, or has an
+   unsupported contract version, do not spawn. Report the warnings and stop or clarify the task.
 
-## The ~95/5 rule
+4. Dispatch from `dispatch`, never from `route.model` directly:
 
-Route by default, even when the derived tier equals yours — spawning still isolates context and
-composes the effort level, which the main thread can't do for itself mid-run. Only genuinely
-trivial one-step changes (complexity 1-2, a single obvious edit) stay in the main thread. "It's
-easier to just do it here" is exactly the reflex this rule exists to catch.
+   - `kind: "native"`: pass `model: dispatch.spawnModel` to the agent spawn.
+   - `kind: "gateway-marker"`: pass `model: dispatch.spawnModel` and put `dispatch.marker` as the
+     first line of the executor prompt, byte-for-byte. Do not turn the gateway model into a direct
+     `model:` value.
+
+5. Spawn `subagent_type: switchboard-exec-<route.effort>` with a unique lowercase-hyphen `name`.
+   These five stable executors pin their effort in frontmatter: `low`, `medium`, `high`, `xhigh`,
+   and `max`. Re-resolve each independent task before spawning it. A route without one of those
+   effort values cannot use this executor protocol, so report it instead of substituting a generic
+   agent or silently changing effort.
+
+6. Give the executor a complete packet:
+
+   ```text
+   <dispatch.marker when present>
+   Task: <the concrete delegated task>
+   Category: <resolved category id>
+   Category contract: <resolved category.contract>
+   Verification: <exact check or reproduction to run>
+   ```
+
+   The category contract is part of the task, not optional background. Keep the work bounded to the
+   task, but require the executor to satisfy that contract and run the supplied verification.
+
+## Spawn shape
+
+```js
+Agent({
+  subagent_type: `switchboard-exec-${resolution.route.effort}`,
+  model: resolution.dispatch.spawnModel,
+  name: 'exec-unique-task-name',
+  prompt: [
+    resolution.dispatch.kind === 'gateway-marker' ? resolution.dispatch.marker : null,
+    `Task: ${task}`,
+    `Category: ${resolution.category.id}`,
+    `Category contract: ${resolution.category.contract}`,
+    `Verification: ${verify}`,
+  ].filter(Boolean).join('\n'),
+})
+```
+
+The marker is only for `gateway-marker` dispatch. Native dispatches have no marker. Do not put a
+raw provider-specific model ID in the prompt, override the resolved effort, or use an unnamed or
+generic worker.
+
+## Parallel work
+
+Classify and resolve each independent task separately, then spawn the resulting named executors in
+one message. A shared category does not make two tasks one route. For coupled work, keep it in one
+packet only when the category contract and verification need one executor to own the whole result.
+
+## Legacy compatibility
+
+`models`, `bias`, `route <complexity>`, `enable`, `disable`, and `routing` remain available only for
+manual compatibility. This skill never calls them and never uses C1-C10 scoring.
 
 ## CLI reference
 
 Invoke as `node "${CLAUDE_PLUGIN_ROOT}/bin/switchboard.js" <cmd>`.
 
-- `models [--json]` — routing state, enabled tiers, per-model effort matrix, and the live ladder.
-- `bias [<int>] [--json]` — read (no arg) or set (`-5`..`5`) the bias dial, then print the
-  reshaped ladder.
-- `route <complexity> [--json]` — derive one score's `model`/`effort` under current prefs.
-- `enable <target...>` / `disable <target...>` — toggle a tier (`haiku`) or a model.effort pair
-  (`opus.medium`).
-- `routing on|off` — master switch; off means switchboard scores nothing.
+- `category list --project <path> [--json]` — effective categories and classifier descriptions.
+- `category show <id> --project <path> [--json]` — one effective category.
+- `resolve <id> --project <path> [--json]` — contract-v1 route resolution with attempts and warnings.
+- `available --project <path> [--json]` — configured model catalog and effort caps.
+- `contract [--json]` — contract registry breadcrumb.
+- `doctor --project <path> [--json]` — configuration and catalog checks.
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/switchboard.js" models --json     # check routing is on, read the ladder
-node "${CLAUDE_PLUGIN_ROOT}/bin/switchboard.js" route 6           # C6 → opus·high (example)
-node "${CLAUDE_PLUGIN_ROOT}/bin/switchboard.js" bias -2           # nudge the ladder frugal
-```
+See [references/routing-guide.md](references/routing-guide.md) when a category boundary is unclear.

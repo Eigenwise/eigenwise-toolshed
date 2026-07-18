@@ -1,146 +1,109 @@
-# Routing guide: what Anthropic actually says about model and effort choice
+# Routing guide: category classification and dispatch
 
-This is the grounding for the complexity scale — Anthropic's own published guidance on which model
-tier fits which work and how hard it should think, distilled with direct quotes and sources. Read it
-when you're unsure how to score a task, when the user asks why something routed where it did, or when
-the derived rung looks wrong to you.
+Switchboard is a category router. It does not estimate a task on a C1-C10 scale. The effective
+category set is the only classifier, and each category carries an executor contract as well as a
+route.
 
-The core idea: **you score a task by matching its SHAPE to Anthropic's own model positioning**, not by
-judging how hard it feels in this particular repo. "Feels hard" is relative to the codebase; "a
-multi-file feature with a contract several consumers must respect" is the same shape in any codebase.
-That's what makes the scale absolute.
+## Start with the effective taxonomy
 
-> Kept in lockstep with the sidequest copy (`plugins/sidequest/skills/sidequest/references/`), same as
-> the ladder engine fork.
+Always fetch the effective categories for the project you are about to work in:
 
-## The official model matrix
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/switchboard.js" category list --project "$PWD" --json
+```
 
-From Anthropic's [Choosing the right model](https://platform.claude.com/docs/en/about-claude/models/choosing-a-model)
-and [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview):
+The response includes shipped categories plus user and project overlays. Its enabled `description`
+fields are the classifier descriptions. Read them all, select exactly one matching category, and
+carry its `contract` to the executor. Do not classify from this document's examples when the live
+list disagrees, and do not combine two categories into an invented hybrid.
 
-| Tier | Official positioning | Official example use |
-|---|---|---|
-| **haiku** (Haiku 4.5) | "The fastest model with near-frontier intelligence" | "Real-time applications, high-volume intelligent processing, cost-sensitive deployments needing strong reasoning, **sub-agent tasks**" |
-| **sonnet** (Sonnet 5) | "The best combination of speed and intelligence — frontier intelligence at scale, built for coding, agents, and enterprise workflows" | Code generation, agentic tool use, data analysis — Claude Code's alias docs call it the tier for "**daily coding tasks**" |
-| **opus** (Opus 4.8) | "For **complex agentic coding** and enterprise work" | Multi-hour autonomous coding agents, large-scale refactoring, complex systems engineering |
-| **fable** (Fable 5) | "Next-generation intelligence for long-running agents" — suited to tasks "**larger than a single sitting**" | Root-cause investigations, outage debugging, architecture decisions; "describe the outcome, not the steps... it verifies its own work with less prompting" |
+`general` is the safe fallback when the task is underspecified or no specific category fits. It is a
+prompt to clarify or inspect just enough to reclassify, not permission for broad work.
 
-Anthropic's default rule when unsure: "start with Claude Opus 4.8 for complex agentic coding and
-enterprise work. For workloads that need the highest available capability, use Claude Fable 5."
+## Boundary cues in the shipped taxonomy
 
-Pricing per MTok (in/out): haiku $1/$5 · sonnet $3/$15 · opus $5/$25 · fable $10/$50. Haiku is also
-the only tier without a 1M context window (200K) and without the effort parameter.
+These are cues, not a replacement for the effective list:
 
-## Per-model effort guidance (it is genuinely per model)
+- **mechanical**: explicit, tightly bounded, reversible change with no diagnosis or design choice.
+- **coding.easy**: a code change whose correct edit is obvious from an existing verbatim pattern.
+- **coding.normal**: a clear code destination that still needs conventional local engineering
+  judgment or coordinated edits.
+- **coding.hard**: an irreversible or adversarially important change without a clearly correct
+  existing pattern, especially API, security, data-integrity, or architecture tradeoffs.
+- **debugging**: an observed defect or unknown runtime cause. Reproduce and narrow before fixing.
+- **testing**: intended behavior is known and the work is focused verification, test repair, or test
+  addition. Unknown failure cause is debugging instead.
+- **spike-investigation**: answer a system-specific unknown by building or running something, then
+  recommend with evidence and remaining uncertainty.
+- **codebase-exploration**: map existing code without editing or recommending a new design.
+- **review-audit** and **security-audit**: evidence-backed findings, not an unsolicited rewrite;
+  security-audit is specifically vulnerability-focused.
+- **ui-frontend** and **dataviz**: user-facing visual work needs rendered-output validation.
+- **docs-writing**: supplied facts and clear audience; source-dependent questions belong in
+  **web-research** or **deep-research**.
+- **architecture-design**: system boundaries or cross-cutting direction with material tradeoffs.
 
-Anthropic's [effort docs](https://platform.claude.com/docs/en/build-with-claude/effort) and Claude
-Code's [model configuration](https://code.claude.com/docs/en/model-config) give DIFFERENT advice per
-tier — don't transfer one model's framing to another:
+Category descriptions may be customized. The live description wins over these cues.
 
-- **sonnet**: default `high`. "**xhigh effort: for the hardest coding and agentic tasks.**" `medium`
-  is "comparable to Sonnet 4.6 at high effort"; `low` is for high-volume / latency-sensitive work.
-- **opus**: default `high`, but for coding/agentic work the official starting point is `xhigh` —
-  "start with xhigh for coding and agentic use cases... step down only when you've measured that the
-  lower level holds quality."
-- **fable**: default `high`, and explicitly NOT xhigh-first: "**Start with high, the default, for most
-  tasks, use xhigh for the most capability-sensitive workloads... Lower effort settings on Claude
-  Fable 5 still perform well and often exceed xhigh performance on prior models.**"
-- **max** (any tier): "**Reserve max for genuinely frontier problems. On most workloads max adds
-  significant cost for relatively small quality gains, and on some... tasks it can lead to
-  overthinking.**" Claude Code's table adds: "prone to overthinking. Test before adopting broadly."
-- **haiku**: no effort parameter at all — the supported-models list excludes it. Haiku's cost/speed
-  lever is picking haiku itself.
+## Contract-v1 resolution
 
-And the line that justifies a merged model×effort ladder in the first place: "**Tuning effort is
-often a better lever than switching models.**"
+Resolve the chosen ID rather than reading its configured route yourself:
 
-## Where haiku fits (and why sonnet·low doesn't replace it)
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/switchboard.js" resolve <category-id> --project "$PWD" --json
+```
 
-Researched 2026-07: haiku stays Pareto-optimal for the bottom rungs — Sonnet 5 at low effort does
-not make it redundant.
+This is routing contract v1. Accept a result only when it has `contractVersion: 1` and
+`status: "routed"`. It returns:
 
-- **Capability**: Haiku 4.5 scores 73.3% SWE-bench Verified; Anthropic says it "rivals the reasoning
-  capabilities of our Sonnet 4.0 model". Enough for subagent-shaped work where the spec says
-  everything.
-- **Cost**: haiku is 3x cheaper on sticker ($1/$5 vs $3/$15), and the real gap is wider — Sonnet 5's
-  tokenizer emits ~1.0-1.35x more tokens for the same text, and its adaptive thinking spends more per
-  task.
-- **Speed**: haiku beats even Sonnet-5-low on both axes (≈91 vs ≈57 output tok/s; ≈1.0s vs ≈1.6s
-  time-to-first-token, per Artificial Analysis).
-- **Official scoping**: Anthropic pitches Sonnet 5's `low` for "high-volume or latency-sensitive
-  workloads... chat and non-coding use cases" — NOT as a coding tier. And their own suggested pattern
-  is the ladder's: "Sonnet [5] can break down a complex problem into multi-step plans, then
-  orchestrate a team of multiple Haiku 4.5s to complete subtasks in parallel."
+- `category.id` and `category.contract`: the specific execution standard
+- `route`: the selected route and its source, including any fallback selection
+- `dispatch`: the provider-neutral spawn instruction
+- `attempts` and `warnings`: why configured routes were skipped
 
-The crossover between haiku and sonnet is **task-complexity, not price**: mechanical, single-file,
-low-ambiguity work → haiku wins on cost and latency. The moment a subtask needs multi-step reasoning
-or cross-file judgment, the step up is `sonnet·medium` (≈ Sonnet 4.6 at high, per Anthropic) — there
-is no sweet spot where `sonnet·low` quietly does haiku's job at haiku's price. If you trust the
-official scoping, `sonnet·low` is a candidate to disable in the effort grid for a coding board.
+Fallback resolution is intentional policy. Use its returned category contract and dispatch exactly
+as returned. If the status is `unrouted`, the version is unsupported, or warnings make the task
+unsafe to route, report that result instead of guessing another model.
 
-Haiku's hard limits for agent work: 200K context (vs 1M elsewhere), 64K max output, no effort
-parameter, no adaptive thinking.
+For a direct contract consumer, submit `{ contractVersion: 1, categoryId }`; do not send a numeric
+complexity or pre-selected model.
 
-## How the ladder embodies this
+## Provider-neutral dispatch
 
-- **Crossovers are real**: the sonnet↔opus boundary overlaps (`sonnet·xhigh` outranks `opus·low`)
-  because published benchmarks show a mixed picture there. The opus↔fable boundary does NOT overlap —
-  every published benchmark has Fable 5 ahead of Opus 4.8, so `fable·low` ranks strictly above
-  `opus·xhigh`.
-- **Fable's rungs follow its own guidance**: `fable·high` is the workhorse top-of-scale rung,
-  `fable·xhigh` sits just under max for capability-sensitive scores, and `·max` fires only at
-  complexity 10 (9 at bias +5) — matching "high for most tasks, xhigh for the most
-  capability-sensitive, max for genuinely frontier problems."
-- **Bias and the allowlist stay the user's dials**: the guidance above shapes the neutral ladder; the
-  user's tier/effort toggles and bias slider reshape it. You never override either — if a derived rung
-  looks wrong for a task, re-score with a fresh motivation; don't hand-pick a tier.
+`route.model` identifies the resolved route. `dispatch` tells the spawning consumer how to launch it:
 
-## The task-shape scale
+| `dispatch.kind` | Spawn model | Prompt requirement |
+| --- | --- | --- |
+| `native` | `dispatch.spawnModel` | No routing marker. |
+| `gateway-marker` | `dispatch.spawnModel` | Begin the prompt with `dispatch.marker` unchanged. |
 
-Score by which official bucket the task's shape matches. The bands below are scoring anchors, not
-routing promises — the ladder, bias, and allowlist decide the actual rung, and crossovers mean e.g. a
-6 can legitimately land on `sonnet·xhigh`.
+Gateway dispatch lets the provider resolve the concrete backend without the skill knowing its
+provider-specific spawn mechanics. Never use the gateway route's model ID as the Agent `model:`.
 
-- **1–2 — subagent-shaped** (haiku's official bucket): the executor discovers nothing; the spec says
-  everything. A fact lookup, a summary, a mechanical edit with exact anchors, a rename with known
-  sites, a config bump, applying a given codemod.
-- **3–5 — daily-coding-shaped** (sonnet's bucket): the everyday unit of work. Implement a function /
-  endpoint / component against a known pattern, a scoped bugfix with a reproduction in hand, a
-  single-area feature with a few edge cases. Judgment inside one area; no cross-cutting contract.
-- **6–7 — complex-agentic-shaped** (opus's bucket): a multi-file feature, a contract several consumers
-  must respect, a cross-cutting refactor with coordinated edits that must land together, real
-  edge-case reasoning across boundaries.
-- **8–10 — larger-than-a-sitting-shaped** (fable's bucket): unknown-root-cause debugging across a
-  system, architecture design under real constraints, research-grade work with no established
-  solution. **10 is the frontier end** (developing new models, RL training), not "a hard day."
+## Stable executors
 
-Normal day-to-day coding legitimately lands 1–7. If a task straddles two bands, score lower and write
-the tighter spec — a well-specified task drops a band; a vague one climbs.
+The executor name is determined only by `route.effort`:
 
-## Honest caveats (what's official vs. what we run ahead of)
+```text
+switchboard-exec-low
+switchboard-exec-medium
+switchboard-exec-high
+switchboard-exec-xhigh
+switchboard-exec-max
+```
 
-- Anthropic's newest multi-agent guidance says **start simple**: "multi-agent implementations
-  typically use 3-10x more tokens than single-agent approaches", and their own examples run ONE tier
-  for orchestrator and subagents. Routing every subtask to a scored tier is more elaborate than
-  anything they document — the justification is cost control, not an official pattern.
-- The quantified evidence for capable-orchestrator + cheaper-executors (Opus 4 lead + Sonnet 4 subs
-  beating solo Opus 4 by 90.2%) is a **generation old**; no current-gen equivalent is published. The
-  Claude Code subagents doc does state the pattern directly: "control costs by routing tasks to
-  faster, cheaper models like Haiku."
-- Model self-selection (a model freely picking its own tier) is NOT a documented Anthropic pattern.
-  The documented primitives are plan-boundary switching (`opusplan`) and mid-task consultation (the
-  advisor tool). The scored-rubric approach here stays inside that: judgment happens against this
-  guide, the user's dials bound it.
+Each has fixed frontmatter effort. Pass the complete task packet, including `category.contract` and
+an exact verification command or reproduction. An unnamed or generic worker loses that effort
+contract. If a result has null or unknown effort, do not make up an executor or borrow a nearby
+one. Surface the incompatible route configuration.
 
-## Sources
+## Why categories replace scoring
 
-- Choosing the right model — platform.claude.com/docs/en/about-claude/models/choosing-a-model
-- Models overview — platform.claude.com/docs/en/about-claude/models/overview
-- Effort — platform.claude.com/docs/en/build-with-claude/effort
-- Claude Code model configuration — code.claude.com/docs/en/model-config
-- Create custom subagents — code.claude.com/docs/en/sub-agents
-- Multi-agent research system — anthropic.com/engineering/multi-agent-research-system
-- When to use multi-agent systems — claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them
-- Introducing Claude Haiku 4.5 — anthropic.com/news/claude-haiku-4-5
-- Prompting Claude Sonnet 5 — platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5
-- Artificial Analysis model pages (speed/cost-per-task data) — artificialanalysis.ai/models
+A numeric score encouraged agents to reason from a vague abstract difficulty scale, then select a
+model before reading the policy that defines the work. Categories make the meaningful distinction
+first: diagnosis versus verification, exploration versus implementation, reversible mechanical work
+versus hard design tradeoffs, and source-backed research versus repository investigation. The route
+and executor contract then follow from that explicit task shape.
+
+The old numeric commands remain for manual compatibility only. New Switchboard orchestration must
+not call them.
