@@ -690,7 +690,7 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(readme, /marker-triggered capture/);
   assert.doesNotMatch(readme, /native_agent/);
   assert.match(readme, /Default dispatch is instant/);
-  assert.doesNotMatch(readme, /\[sidequest-scout\]/);
+  assert.match(readme, /\[sidequest-scout\]/);
   for (const file of [
     path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'),
     path.join(pluginRoot, 'skills', 'sidequest', 'references', 'orchestration.md'),
