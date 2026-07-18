@@ -1,0 +1,33 @@
+{
+  "description": "workbench: report local freshness health and block proven stale prompts",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-freshness.js\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-freshness.js\" --session-start",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-freshness.js\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}
