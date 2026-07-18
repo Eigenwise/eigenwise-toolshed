@@ -266,6 +266,12 @@ async function handle(req, res) {
     return;
   }
 
+  // --- Health / handshake ---
+  if (req.method === 'GET' && pathname === '/api/health') {
+    sendJson(res, 200, { ok: true, name: 'sidequest', pid: process.pid, startedAt: START_TIME, version: PLUGIN_VERSION });
+    return;
+  }
+
   // --- Projects ---
   if (req.method === 'GET' && pathname === '/api/projects') {
     sendJson(res, 200, { projects: store.listProjects() });
