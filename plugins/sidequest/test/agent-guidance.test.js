@@ -49,6 +49,15 @@ test('dispatch guidance requires board confirmation after an Agent launch', () =
   assert.match(orchestration, /missing claim means diagnose or respawn/);
 });
 
+test('post-wave seam review stays scoped and event-driven', () => {
+  assert.match(orchestration, /Review seams once after a wave closes/);
+  assert.match(orchestration, /next natural wakeup, inspect one combined diff\/stat/);
+  assert.match(orchestration, /overlapping edits, shared interfaces\/contracts, duplicate\n  implementations, and incompatible assumptions/);
+  assert.match(orchestration, /proceed without a broad review/);
+  assert.match(orchestration, /narrowly scoped review-audit follow-up for the affected files/);
+  assert.match(orchestration, /do not reopen completed\n  tickets or rerun every ticket's verification/);
+});
+
 
 test('shared-tree guidance detects foreign staging and absorbed scope patches', () => {
   assert.match(executorTemplate, /immediately after claiming and before work, inspect `git diff --cached --name-only`/);

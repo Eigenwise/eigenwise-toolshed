@@ -32,6 +32,12 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   (started, reused, or stopped), files changed, blockers, cleanup performed, and verification output.
   Tickets with no declared scope never mechanically conflict, so eyeball whether they'd edit the same
   files before parallelizing them.
+- **Review seams once after a wave closes.** At the next natural wakeup, inspect one combined diff/stat
+  for the wave and only its cross-ticket seams: overlapping edits, shared interfaces/contracts, duplicate
+  implementations, and incompatible assumptions. If none exists, proceed without a broad review. If one
+  does, file a narrowly scoped review-audit follow-up for the affected files; do not reopen completed
+  tickets or rerun every ticket's verification. Keep this a short event-driven inspection, not a second
+  review pass.
 - **Executor prompts stay lean and cannot narrow the ticket**: add only the ref, worker id, claim/done commands, stamped effort/model, and logistics the ticket does not carry. The ticket contract is authoritative and must travel in full, unchanged scope. If the plan changed, update the ticket before dispatching. **Anti-pattern: dispatch narrower than ticket.** In Cantizans SQ-87, the ticket required extracting the done block across every lesson route and two commits, while the dispatch limited work to intervals as a reference. The executor bounced correctly, then the orchestrator had to re-plan. Never create that contradiction.
 - **Record wave links from board results.** Never write an `SQ-n` ref you did not read back from a board response. File related tickets first, collect their returned refs, then use `update` or, preferably, `link` (`blocks`, `depends-on`, or `related`) to record relationships. Links are board data, so they stay correct without prose cross-references.
 - **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state. Until `pulse` is available, read claim age, comments, and `git log`. If several tickets need checking, use `changes --since <iso>` for the `{tickets:[...]}` delta, sorted oldest first.
