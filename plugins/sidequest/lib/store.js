@@ -33,7 +33,12 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const db = require('./db.js');
 const { migrateIfNeeded } = require('./migrate.js');
-const { discoverExternalModels } = require('./discovery.js');
+const {
+  clearSwitchboardCache,
+  discoverExternalModels,
+  discoverSwitchboard,
+  resolveThroughSwitchboard,
+} = require('./discovery.js');
 
 /* ------------------------------------------------------------------ *
  *  Roots and path helpers
@@ -677,6 +682,202 @@ function resolveCategoryRoute(category) {
   return { model: route.model, effort: route.effort, exec: resolveExec(route.model, route.effort), warnings };
 }
 
+const switchboardComparisons = new Map();
+
+function compareSwitchboardRoute(category, opts) {
+  opts = opts || {};
+  const meta = opts.project ? readMeta(opts.project) : null;
+  const projectPath = opts.projectPath || (meta && meta.path) || null;
+  const sidequest = opts.sidequest || resolveCategoryRoute(category);
+  const outcome = resolveThroughSwitchboard({ categoryId: category && category.id, projectPath, consumer: 'sidequest' });
+  const comparison = {
+    categoryId: category && category.id,
+    mode: 'comparison',
+    authoritative: 'sidequest',
+    status: outcome.status,
+    match: null,
+    sidequest: { model: sidequest.model, effort: sidequest.effort },
+    switchboard: null,
+    diagnostics: (outcome.diagnostics || []).slice(),
+  };
+  if (outcome.result) {
+    comparison.switchboard = {
+      status: outcome.result.status,
+      route: outcome.result.route || null,
+      attempts: outcome.result.attempts || [],
+      warnings: outcome.result.warnings || [],
+    };
+  }
+  if (outcome.status === 'routed') {
+    comparison.match = outcome.result.route.model === sidequest.model && outcome.result.route.effort === sidequest.effort;
+    comparison.status = comparison.match ? 'match' : 'mismatch';
+    if (!comparison.match) {
+      comparison.diagnostics.unshift(`Switchboard resolved ${outcome.result.route.model}·${outcome.result.route.effort || 'default'} while Sidequest remains authoritative at ${sidequest.model}·${sidequest.effort || 'default'}.`);
+    }
+  }
+  switchboardComparisons.set(`${opts.project || projectPath || 'global'}:${category && category.id}`, comparison);
+  return comparison;
+}
+
+function switchboardRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stableSwitchboardJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSwitchboardJson).join(',')}]`;
+  if (!switchboardRecord(value)) return JSON.stringify(value);
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSwitchboardJson(value[key])}`).join(',')}}`;
+}
+
+function sortedSwitchboardCategories(categories) {
+  return Object.fromEntries(Object.keys(categories || {}).sort().map((id) => [id, categories[id]]));
+}
+
+function switchboardUserConfigPath() {
+  const override = process.env.SWITCHBOARD_CONFIG_USER_FILE;
+  if (override && String(override).trim()) return path.resolve(String(override).trim());
+  const home = process.env.SWITCHBOARD_CONFIG_HOME && String(process.env.SWITCHBOARD_CONFIG_HOME).trim()
+    ? path.resolve(String(process.env.SWITCHBOARD_CONFIG_HOME).trim())
+    : path.join(os.homedir(), '.claude', 'toolshed');
+  return path.join(home, 'switchboard.json');
+}
+
+function switchboardProjectConfigPath(projectPath) {
+  const override = process.env.SWITCHBOARD_CONFIG_PROJECT_FILE;
+  if (override && String(override).trim()) return path.resolve(String(override).trim());
+  return path.join(path.resolve(projectPath), '.claude', 'switchboard.json');
+}
+
+function readSwitchboardConfig(file) {
+  let value;
+  try {
+    value = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return {};
+    throw new Error(`Could not read Switchboard config at ${file}: ${error.message}`);
+  }
+  if (!switchboardRecord(value)) throw new Error(`Switchboard config at ${file} must be a JSON object.`);
+  if (value.schemaVersion !== 1) throw new Error(`Switchboard config at ${file} uses schemaVersion ${value.schemaVersion}; Sidequest export supports contract v1 only.`);
+  return value;
+}
+
+function switchboardGlobalRows() {
+  return Object.fromEntries(getCategories().map((category) => [category.id, category]));
+}
+
+function switchboardProjectRows(project) {
+  return Object.fromEntries(getProjectCategories(project).rows.map((row) => [row.id, {
+    kind: row.kind,
+    data: row.kind === 'DISABLE' ? {} : row.data,
+  }]));
+}
+
+function switchboardExportPlan({ scope, project } = {}) {
+  const discovered = discoverSwitchboard();
+  if (!discovered.available) throw new Error(`Switchboard contract v1 is unavailable. ${discovered.diagnostics.join(' ')}`);
+  const normalizedScope = scope === 'project' ? 'project' : 'global';
+  let projectPath = null;
+  let exported;
+  let target;
+  if (normalizedScope === 'project') {
+    const meta = project && readMeta(project);
+    if (!project || !meta || !meta.path) throw new Error('Project export requires an explicit registered Sidequest board.');
+    projectPath = meta.path;
+    target = switchboardProjectConfigPath(projectPath);
+    exported = switchboardProjectRows(project);
+  } else {
+    target = switchboardUserConfigPath();
+    exported = switchboardGlobalRows();
+  }
+  const current = readSwitchboardConfig(target);
+  const next = Object.assign({}, current, {
+    schemaVersion: 1,
+    categories: sortedSwitchboardCategories(Object.assign({}, switchboardRecord(current.categories) ? current.categories : {}, exported)),
+  });
+  if (normalizedScope === 'global') next.globalFallback = getRoutingFallback();
+  const changedIds = Object.keys(exported).filter((id) => stableSwitchboardJson(current.categories && current.categories[id]) !== stableSwitchboardJson(exported[id])).sort();
+  const changed = stableSwitchboardJson(current) !== stableSwitchboardJson(next);
+  const previewHash = crypto.createHash('sha256').update(stableSwitchboardJson({ target, next })).digest('hex');
+  return {
+    scope: normalizedScope,
+    project: normalizedScope === 'project' ? project : null,
+    projectPath,
+    target,
+    changed,
+    changedIds,
+    categoryCount: Object.keys(exported).length,
+    previewHash,
+    config: next,
+  };
+}
+
+function writeSwitchboardConfig(file, config, privateFile) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(config, null, 2) + '\n', { mode: privateFile ? 0o600 : 0o644 });
+    fs.renameSync(temporary, file);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (_) {}
+  }
+}
+
+function exportSwitchboardRouting({ scope, project, apply = false, previewHash } = {}) {
+  const plan = switchboardExportPlan({ scope, project });
+  if (apply && (!previewHash || previewHash !== plan.previewHash)) {
+    throw new Error('Switchboard export apply requires the matching previewHash from a fresh dry-run.');
+  }
+  if (apply && plan.changed) {
+    writeSwitchboardConfig(plan.target, plan.config, plan.scope === 'global');
+    clearSwitchboardCache();
+  }
+  return Object.assign({}, plan, { dryRun: !apply, applied: Boolean(apply && plan.changed) });
+}
+
+function switchboardMigrationSummary(scope, project) {
+  try {
+    const plan = switchboardExportPlan({ scope, project });
+    return {
+      available: true,
+      scope: plan.scope,
+      target: plan.target,
+      pending: plan.changed,
+      changedIds: plan.changedIds,
+      categoryCount: plan.categoryCount,
+      previewHash: plan.previewHash,
+    };
+  } catch (error) {
+    return { available: false, scope, pending: null, error: error.message };
+  }
+}
+
+function switchboardAdoptionStatus(project) {
+  const discovered = discoverSwitchboard();
+  const categories = getCategories(project ? { project } : undefined);
+  const comparisons = categories.map((category) => compareSwitchboardRoute(category, { project }));
+  const diagnostics = [...new Set(comparisons.flatMap((comparison) => comparison.diagnostics || []))];
+  return {
+    mode: 'comparison',
+    authoritative: 'sidequest',
+    discovery: {
+      available: discovered.available,
+      status: discovered.status,
+      contractVersion: discovered.contractVersion,
+      version: discovered.version || null,
+      registryPath: discovered.registryPath,
+      diagnostics: discovered.diagnostics,
+    },
+    panel: discovered.panel,
+    comparisons,
+    mismatches: comparisons.filter((comparison) => comparison.status === 'mismatch').map((comparison) => comparison.categoryId),
+    diagnostics,
+    migration: {
+      global: switchboardMigrationSummary('global'),
+      project: project ? switchboardMigrationSummary('project', project) : null,
+    },
+  };
+}
+
 function ticketCategory(ticket) {
   if (!ticket || ticket.category == null) return null;
   return typeof ticket.category === 'object' ? ticket.categoryId || ticket.category.id : String(ticket.category);
@@ -709,6 +910,7 @@ function applyDerivedRouting(t, opts) {
     }
     if (category) {
       const resolved = resolveCategoryRoute(category);
+      try { compareSwitchboardRoute(category, { project, sidequest: resolved }); } catch (_) {}
       if (!legacy) t.categoryId = requestedId;
       t.category = Object.assign({}, category, { projectedFromGeneral: fallback });
       t.model = resolved.model;
@@ -3429,6 +3631,10 @@ module.exports = {
   resolveModelId,
   resolveExec,
   resolveCategoryRoute,
+  compareSwitchboardRoute,
+  switchboardAdoptionStatus,
+  switchboardExportPlan,
+  exportSwitchboardRouting,
   classifyModelFilter,
   getRoutingFallback,
   setRoutingFallback,
