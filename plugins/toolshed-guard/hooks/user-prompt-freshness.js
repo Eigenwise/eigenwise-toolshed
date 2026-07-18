@@ -79,9 +79,14 @@ function activeInstances(registry, cwd, platform = process.platform) {
   return instances;
 }
 
+function hasPluginInstall(registry, name, scope) {
+  const installs = registry?.plugins?.[`${name}@${MARKETPLACE}`];
+  return Array.isArray(installs) && installs.some((install) => install && (!scope || install.scope === scope));
+}
+
 function isMaintenancePrompt(prompt) {
   const value = String(prompt || '').trim();
-  if (/^\/update-toolshed(?:\s+[\w.-]+)*$/i.test(value)) return true;
+  if (/^\/(?:workbench:)?update-toolshed(?:\s+[\w.-]+)*$/i.test(value)) return true;
   if (/^\/reload-plugins(?:\s+--force)?$/i.test(value)) return true;
   if (/^\/plugin$/i.test(value)) return true;
   if (/^\/plugin\s+(?:install|update|enable|disable|remove|uninstall)(?:\s+[^\s]+){0,4}$/i.test(value)) return true;
@@ -122,7 +127,7 @@ function staleInstances(instances, state) {
   });
 }
 
-function blockReason(instances, state) {
+function blockReason(instances, state, workspaceInitInstalled) {
   const stale = staleInstances(instances, state);
   if (!stale.length) return null;
   const shown = stale.slice(0, 4).map((instance) => {
@@ -130,7 +135,8 @@ function blockReason(instances, state) {
     return `${instance.name} ${instance.version} -> ${state.plugins[instance.name]} (${location})`;
   });
   const extra = stale.length > shown.length ? `; +${stale.length - shown.length} more` : '';
-  return `Toolshed update required before Claude works on this prompt. Outdated here: ${shown.join('; ')}${extra}. Run /update-toolshed, then /reload-plugins or restart Claude Code. This prompt was not sent to Claude. Update, reload, and /plugin maintenance paths remain allowed.`;
+  const recovery = workspaceInitInstalled ? '/update-toolshed' : '/plugin install workbench@eigenwise-toolshed --scope user';
+  return `Toolshed update required before Claude works on this prompt. Outdated here: ${shown.join('; ')}${extra}. Run ${recovery}, then /reload-plugins or restart Claude Code. This prompt was not sent to Claude. Update, reload, and /plugin maintenance paths remain allowed.`;
 }
 
 function reloadSessionId(input) {
@@ -346,7 +352,10 @@ async function decide(input, options = {}) {
   if (process.env.EIGENWISE_TOOLSHED_FRESHNESS_BYPASS === '1' || isMaintenancePrompt(input?.prompt) || isTaskNotificationPrompt(input?.prompt)) return '';
   const fileSystem = options.fileSystem || fs;
   const registryFile = options.registryFile || path.join(options.home || os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
-  const instances = activeInstances(readJson(fileSystem, registryFile) || {}, input?.cwd, options.platform);
+  const registry = readJson(fileSystem, registryFile) || {};
+  if (hasPluginInstall(registry, 'workbench', 'user')) return '';
+  const instances = activeInstances(registry, input?.cwd, options.platform);
+  const workspaceInitInstalled = hasPluginInstall(registry, 'workspace-init');
   const loadedVersion = loadedPluginVersion(fileSystem, options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT);
   const sessionId = reloadSessionId(input);
   const reloadStateFile = options.reloadStateFile || reloadStateFileFor(options.dataDirectory);
@@ -359,7 +368,7 @@ async function decide(input, options = {}) {
   if (!state || (state.freshUntil <= current && state.retryAfter <= current)) state = await refreshDue({ ...options, fileSystem, stateFile });
   const stale = staleInstances(instances, state);
   if (reloadStateFile) recordReloadRequired(fileSystem, reloadStateFile, sessionId, stale, current);
-  return blockOutput(blockReason(instances, state));
+  return blockOutput(blockReason(instances, state, workspaceInitInstalled));
 }
 
 function sessionStart(input, options = {}) {
@@ -398,6 +407,7 @@ module.exports = {
   compareSemver,
   decide,
   failedState,
+  hasPluginInstall,
   isMaintenancePrompt,
   isTaskNotificationPrompt,
   loadedPluginVersion,

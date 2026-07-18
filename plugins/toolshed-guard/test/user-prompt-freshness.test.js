@@ -60,10 +60,39 @@ test('known stale blocks with the exact structured output contract', async () =>
   const parsed = JSON.parse(result);
   assert.equal(parsed.decision, 'block');
   assert.match(parsed.reason, /workspace-init 1\.0\.0 -> 2\.0\.0/);
+  assert.match(parsed.reason, /Run \/update-toolshed/);
+});
+
+test('defers to a user-scoped Workbench install before checking stale state', async () => {
+  const directory = tempDirectory();
+  const { registryFile } = files(directory);
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'workspace-init@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }], 'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.1.0' }] } }));
+  let fetched = false;
+  const result = await decide({ prompt: 'work on this', cwd: 'C:\\dev\\project' }, { registryFile, stateFile: 'unreadable-state', platform: 'win32', fetchFn: async () => { fetched = true; throw new Error('must not fetch'); } });
+  assert.equal(result, '');
+  assert.equal(fetched, false);
+});
+
+test('does not defer to project-scoped Workbench installs', async () => {
+  const directory = tempDirectory();
+  const { registryFile, stateFile } = files(directory);
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'workspace-init@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }], 'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:\\dev\\project', version: '0.1.0' }] } }));
+  writeStateAtomic(fs, stateFile, stateForManifest(manifest('2.0.0'), JSON.stringify(manifest('2.0.0')), null, 100, '"first"'));
+  assert.match(await decide({ prompt: 'work on this', cwd: 'C:\\dev\\project' }, { registryFile, stateFile, platform: 'win32', now: () => 101 }), /"decision":"block"/);
+});
+
+test('stale installs without workspace-init direct users to install Workbench', async () => {
+  const directory = tempDirectory();
+  const { registryFile, stateFile } = files(directory, []);
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'toolshed-guard@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }] } }));
+  const remote = { name: 'eigenwise-toolshed', version: '3.0.0', plugins: [{ name: 'toolshed-guard', version: '2.0.0' }] };
+  writeStateAtomic(fs, stateFile, stateForManifest(remote, JSON.stringify(remote), null, 100, '"first"'));
+  const result = JSON.parse(await decide({ prompt: 'work on this', cwd: 'C:\\dev\\project' }, { registryFile, stateFile, platform: 'win32', now: () => 101 }));
+  assert.match(result.reason, /Run \/plugin install workbench@eigenwise-toolshed --scope user/);
 });
 
 test('only exact maintenance prompts bypass the guard', () => {
-  for (const prompt of ['/update-toolshed', '/update-toolshed --dry-run', '/reload-plugins', '/reload-plugins --force', '/plugin', '/plugin update sidequest@eigenwise-toolshed', '/plugin marketplace update eigenwise-toolshed', 'claude plugin marketplace update eigenwise-toolshed', 'claude plugin update sidequest@eigenwise-toolshed --scope user']) assert.equal(isMaintenancePrompt(prompt), true, prompt);
+  for (const prompt of ['/update-toolshed', '/workbench:update-toolshed', '/update-toolshed --dry-run', '/reload-plugins', '/reload-plugins --force', '/plugin', '/plugin install workbench@eigenwise-toolshed --scope user', '/plugin update sidequest@eigenwise-toolshed', '/plugin marketplace update eigenwise-toolshed', 'claude plugin marketplace update eigenwise-toolshed', 'claude plugin update sidequest@eigenwise-toolshed --scope user']) assert.equal(isMaintenancePrompt(prompt), true, prompt);
   for (const prompt of ['please run /update-toolshed', '/update-toolshed; work on this', '/reload-plugins and fix it', 'claude plugin update sidequest@eigenwise-toolshed --scope user && rm -rf x', 'I said /plugin update']) assert.equal(isMaintenancePrompt(prompt), false, prompt);
 });
 
