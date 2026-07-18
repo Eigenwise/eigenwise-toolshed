@@ -9,11 +9,6 @@
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-freshness.js\"",
             "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-freshness.js\" --session-start",
-            "timeout": 2
           }
         ]
       }

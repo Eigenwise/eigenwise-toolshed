@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.74.0",
+  "version": "3.75.0",
   "plugins": [
     {
       "name": "workbench",
       "source": "./plugins/workbench",
       "description": "Set up and maintain a Claude Code workspace: initialize project-side configuration, check and update Toolshed plugins, diagnose local health, and run retrospectives.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Eigenwise"
       },
@@ -147,7 +147,7 @@
       "name": "toolshed-guard",
       "source": "./plugins/toolshed-guard",
       "description": "Deprecated: install workbench@eigenwise-toolshed --scope user. Block prompts while installed Toolshed plugins are stale; install once at user scope.",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "author": {
         "name": "Eigenwise"
       },

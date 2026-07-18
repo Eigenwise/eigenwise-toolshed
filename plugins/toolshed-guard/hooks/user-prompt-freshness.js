@@ -8,8 +8,6 @@ const path = require('node:path');
 
 const MARKETPLACE = 'eigenwise-toolshed';
 const STATE_SCHEMA = 1;
-const RELOAD_STATE_SCHEMA = 1;
-const MAX_RELOAD_SESSIONS = 32;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const REFRESH_DEADLINE_MS = 1200;
 const LOCK_STALE_MS = 10 * 1000;
@@ -93,11 +91,6 @@ function isMaintenancePrompt(prompt) {
   if (/^\/plugin\s+marketplace\s+(?:add|update|remove)(?:\s+[^\s]+){0,3}$/i.test(value)) return true;
   if (/^claude\s+plugin\s+marketplace\s+update\s+eigenwise-toolshed$/i.test(value)) return true;
   return /^claude\s+plugin\s+update\s+[\w.-]+@eigenwise-toolshed(?:\s+--scope\s+(?:user|project|local))?$/i.test(value);
-}
-
-// UserPromptSubmit cannot observe reload success, so this exact command acknowledges registry-proven recovery.
-function isForcedPluginReloadPrompt(prompt) {
-  return /^\/reload-plugins\s+--force$/i.test(String(prompt || '').trim());
 }
 
 function isTaskNotificationPrompt(prompt) {
@@ -184,75 +177,12 @@ function blockReason(instances, state, workspaceInitInstalled) {
   });
   const extra = stale.length > shown.length ? `; +${stale.length - shown.length} more` : '';
   const recovery = workspaceInitInstalled ? '/update-toolshed' : '/plugin install workbench@eigenwise-toolshed --scope user';
-  return `Toolshed update required before Claude works on this prompt. Outdated here: ${shown.join('; ')}${extra}. Run ${recovery}, then /reload-plugins --force or restart Claude Code. This prompt was not sent to Claude. Update, reload, and /plugin maintenance paths remain allowed.`;
+  return `Toolshed update required before Claude works on this prompt. Outdated here: ${shown.join('; ')}${extra}. Run ${recovery}, then /reload-plugins or restart Claude Code. If ordinary reload is refused after plugin MCP state changes, retry with /reload-plugins --force. This prompt was not sent to Claude. Update, reload, and /plugin maintenance paths remain allowed.`;
 }
 
-function reloadSessionId(input) {
-  const value = String(input?.session_id || '');
-  return /^[A-Za-z0-9._-]{1,128}$/.test(value) ? value : null;
-}
-
-function validReloadState(value) {
-  if (!value || value.schema !== RELOAD_STATE_SCHEMA || !value.sessions || typeof value.sessions !== 'object' || Array.isArray(value.sessions)) return null;
-  const entries = Object.entries(value.sessions);
-  if (entries.length > MAX_RELOAD_SESSIONS) return null;
-  for (const [sessionId, required] of entries) {
-    if (!/^[A-Za-z0-9._-]{1,128}$/.test(sessionId) || !Number.isFinite(required?.requiredAt) || !Array.isArray(required.plugins) || !required.plugins.length || required.plugins.length > 16) return null;
-    if (required.plugins.some((plugin) => typeof plugin?.name !== 'string' || !parseSemver(plugin.version) || (plugin.requiredVersion !== undefined && !parseSemver(plugin.requiredVersion)))) return null;
-  }
-  return value;
-}
-
-function readReloadState(fileSystem, reloadStateFile) {
-  return validReloadState(readJson(fileSystem, reloadStateFile)) || { schema: RELOAD_STATE_SCHEMA, sessions: {} };
-}
-
-function writeReloadState(fileSystem, reloadStateFile, state) {
-  writeStateAtomic(fileSystem, reloadStateFile, state);
-}
-
-function recordReloadRequired(fileSystem, reloadStateFile, sessionId, stale, state, now) {
-  if (!sessionId || !stale.length) return;
-  const reloadState = readReloadState(fileSystem, reloadStateFile);
-  const sessions = { ...reloadState.sessions, [sessionId]: {
-    requiredAt: now,
-    plugins: stale.slice(0, 16).map(({ name, version }) => ({ name, version, requiredVersion: state?.plugins?.[name] || version })),
-  } };
-  const retained = Object.entries(sessions).sort(([, left], [, right]) => right.requiredAt - left.requiredAt).slice(0, MAX_RELOAD_SESSIONS);
-  writeReloadState(fileSystem, reloadStateFile, { schema: RELOAD_STATE_SCHEMA, sessions: Object.fromEntries(retained) });
-}
-
-function clearReloadRequired(fileSystem, reloadStateFile, sessionId) {
-  if (!sessionId) return;
-  const state = readReloadState(fileSystem, reloadStateFile);
-  if (!state.sessions[sessionId]) return;
-  const sessions = { ...state.sessions };
-  delete sessions[sessionId];
-  writeReloadState(fileSystem, reloadStateFile, { schema: RELOAD_STATE_SCHEMA, sessions });
-}
-
-function reloadRequirementsMet(instances, reloadState, sessionId, state) {
-  const required = sessionId ? reloadState?.sessions?.[sessionId] : null;
-  if (!required) return false;
-  return required.plugins.every((plugin) => {
-    const requiredVersion = plugin.requiredVersion || state?.plugins?.[plugin.name];
-    if (!parseSemver(requiredVersion) || (plugin.requiredVersion === undefined && compareSemver(plugin.version, requiredVersion) !== -1)) return false;
-    const installed = instances.filter((instance) => instance.name === plugin.name);
-    return installed.length > 0 && installed.every((instance) => {
-      const comparison = compareSemver(instance.version, requiredVersion);
-      return comparison !== null && comparison >= 0;
-    });
-  });
-}
-
-function reloadReason(instances, loadedVersion, reloadState, sessionId) {
-  const required = sessionId ? reloadState?.sessions?.[sessionId] : null;
-  if (required) {
-    const plugins = required.plugins.map(({ name, version }) => `${name} ${version}`).join(', ');
-    return `Toolshed plugins were updated, but this session still needs a reload after detecting ${plugins}. Run /reload-plugins --force or restart Claude Code, then resubmit this prompt. This prompt was not sent to Claude.`;
-  }
+function reloadReason(instances, loadedVersion) {
   const installed = instances.filter((instance) => instance.name === 'toolshed-guard').find((instance) => compareSemver(loadedVersion, instance.version) === -1);
-  return installed ? `Toolshed plugins were updated, but this session still loaded toolshed-guard ${loadedVersion} while the installed version is ${installed.version}. Run /reload-plugins --force or restart Claude Code, then resubmit this prompt. This prompt was not sent to Claude.` : null;
+  return installed ? `Toolshed plugins were updated, but this session still loaded toolshed-guard ${loadedVersion} while the installed version is ${installed.version}. Run /reload-plugins or restart Claude Code. If ordinary reload is refused after plugin MCP state changes, retry with /reload-plugins --force, then resubmit this prompt. This prompt was not sent to Claude.` : null;
 }
 
 function blockOutput(reason) {
@@ -409,13 +339,9 @@ function stateFileFor(dataDirectory = process.env.CLAUDE_PLUGIN_DATA) {
   return dataDirectory ? path.join(dataDirectory, 'remote-freshness.json') : null;
 }
 
-function reloadStateFileFor(dataDirectory = process.env.CLAUDE_PLUGIN_DATA) {
-  return dataDirectory ? path.join(dataDirectory, 'reload-required.json') : null;
-}
-
 async function decide(input, options = {}) {
-  const forcedPluginReload = isForcedPluginReloadPrompt(input?.prompt);
-  if (process.env.EIGENWISE_TOOLSHED_FRESHNESS_BYPASS === '1' || isTaskNotificationPrompt(input?.prompt) || (!forcedPluginReload && isMaintenancePrompt(input?.prompt))) return '';
+  if (isTaskNotificationPrompt(input?.prompt)) return '';
+  if (process.env.EIGENWISE_TOOLSHED_FRESHNESS_BYPASS === '1' || isMaintenancePrompt(input?.prompt)) return '';
   const fileSystem = options.fileSystem || fs;
   const registryFile = options.registryFile || path.join(options.home || os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
   const registry = readJson(fileSystem, registryFile) || {};
@@ -423,41 +349,21 @@ async function decide(input, options = {}) {
   const instances = activeInstances(registry, input?.cwd, options.platform);
   const workspaceInitInstalled = hasPluginInstall(registry, 'workspace-init');
   const loadedVersion = loadedPluginVersion(fileSystem, options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT);
-  const sessionId = reloadSessionId(input);
-  const reloadStateFile = options.reloadStateFile || reloadStateFileFor(options.dataDirectory);
-  const reloadState = reloadStateFile ? readReloadState(fileSystem, reloadStateFile) : null;
-  const stateFile = options.stateFile || stateFileFor(options.dataDirectory);
-  if (forcedPluginReload) {
-    const state = stateFile ? readState(fileSystem, stateFile) : null;
-    if (reloadStateFile && reloadRequirementsMet(instances, reloadState, sessionId, state)) clearReloadRequired(fileSystem, reloadStateFile, sessionId);
-    return '';
-  }
-  const reload = reloadReason(instances, loadedVersion, reloadState, sessionId);
+  const reload = reloadReason(instances, loadedVersion);
   if (reload) return blockOutput(reload);
+  const stateFile = options.stateFile || stateFileFor(options.dataDirectory);
   if (!stateFile) return '';
   let state = readState(fileSystem, stateFile);
   const current = (options.now || Date.now)();
   if (!state || (state.freshUntil <= current && state.retryAfter <= current)) state = await refreshDue({ ...options, fileSystem, stateFile });
-  const stale = staleInstances(instances, state);
-  if (reloadStateFile) recordReloadRequired(fileSystem, reloadStateFile, sessionId, stale, state, current);
   return blockOutput(blockReason(instances, state, workspaceInitInstalled));
-}
-
-function sessionStart(input, options = {}) {
-  if (!['startup', 'resume'].includes(input?.source)) return;
-  const fileSystem = options.fileSystem || fs;
-  const reloadStateFile = options.reloadStateFile || reloadStateFileFor(options.dataDirectory);
-  if (reloadStateFile) clearReloadRequired(fileSystem, reloadStateFile, reloadSessionId(input));
 }
 
 async function main() {
   try {
     const input = JSON.parse(fs.readFileSync(0, 'utf8'));
-    if (process.argv.includes('--session-start')) sessionStart(input);
-    else {
-      const output = await decide(input);
-      if (output) process.stdout.write(output);
-    }
+    const output = await decide(input);
+    if (output) process.stdout.write(output);
   } catch (_) {
     // Unknown local state and hook failures must not block a user prompt.
   }
@@ -468,14 +374,11 @@ if (require.main === module) main();
 module.exports = {
   BACKOFF_MS,
   CACHE_TTL_MS,
-  MAX_RELOAD_SESSIONS,
   MARKETPLACE,
   REFRESH_DEADLINE_MS,
-  RELOAD_STATE_SCHEMA,
   STATE_SCHEMA,
   activeInstances,
   blockReason,
-  clearReloadRequired,
   compareSemver,
   decide,
   failedState,
@@ -485,14 +388,9 @@ module.exports = {
   loadedPluginVersion,
   outputFor,
   parseSemver,
-  readReloadState,
   readState,
   refreshDue,
   reloadReason,
-  reloadRequirementsMet,
-  reloadSessionId,
-  reloadStateFileFor,
-  sessionStart,
   stateForManifest,
   staleInstances,
   writeStateAtomic,

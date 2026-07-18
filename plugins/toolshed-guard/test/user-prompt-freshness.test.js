@@ -14,7 +14,6 @@ const {
   isTaskNotificationPrompt,
   readState,
   refreshDue,
-  sessionStart,
   stateForManifest,
   writeStateAtomic,
 } = require('../hooks/user-prompt-freshness.js');
@@ -207,44 +206,29 @@ test('offline refresh preserves a proven stale block and the updated registry cl
   assert.equal(await decide({ prompt: 'continue', cwd: 'C:\\dev\\project' }, options), '');
 });
 
-test('only an exact forced reload clears a registry-proven reload requirement', async () => {
+test('registry updates and newly loaded hooks allow ordinary prompts without a reload latch', async () => {
   const directory = tempDirectory();
   const registryFile = path.join(directory, 'installed_plugins.json');
   const stateFile = path.join(directory, 'data', 'remote-freshness.json');
   const reloadStateFile = path.join(directory, 'data', 'reload-required.json');
+  const pluginRoot = path.join(directory, 'loaded');
   const remote = { name: 'eigenwise-toolshed', version: '0.3.0', plugins: [{ name: 'toolshed-guard', version: '0.3.0' }] };
+  const legacyReloadState = JSON.stringify({ schema: 1, sessions: { old: { requiredAt: 1, plugins: [{ name: 'toolshed-guard', version: '0.2.0', requiredVersion: '0.3.0' }] } } });
+  fs.mkdirSync(path.dirname(reloadStateFile), { recursive: true });
+  fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '0.2.0' }));
   fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'toolshed-guard@eigenwise-toolshed': [{ scope: 'user', version: '0.2.0' }] } }));
+  fs.writeFileSync(reloadStateFile, legacyReloadState);
   writeStateAtomic(fs, stateFile, stateForManifest(remote, JSON.stringify(remote), null, 100, '"first"'));
-  const input = { prompt: 'continue', cwd: 'C:\\dev\\project', session_id: 'session-forced-reload' };
-  const options = { registryFile, stateFile, reloadStateFile, platform: 'win32', now: () => 101 };
+  const input = { prompt: 'continue', cwd: 'C:\\dev\\project', session_id: 'session-ordinary-reload' };
+  const options = { registryFile, stateFile, reloadStateFile, pluginRoot, platform: 'win32', now: () => 101 };
 
   assert.match(await decide(input, options), /toolshed-guard 0\.2\.0 -> 0\.3\.0/);
-  assert.equal(await decide({ ...input, prompt: '/reload-plugins --force' }, options), '');
-  assert.match(await decide(input, options), /still needs a reload after detecting toolshed-guard 0\.2\.0/);
-  assert.equal(await decide({ ...input, prompt: completeTaskNotification }, options), '');
-  assert.match(await decide(input, options), /still needs a reload after detecting toolshed-guard 0\.2\.0/);
-
+  assert.equal(fs.readFileSync(reloadStateFile, 'utf8'), legacyReloadState);
   fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'toolshed-guard@eigenwise-toolshed': [{ scope: 'user', version: '0.3.0' }] } }));
-  assert.equal(await decide({ ...input, prompt: '/reload-plugins' }, options), '');
-  assert.match(await decide(input, options), /Run \/reload-plugins --force or restart Claude Code/);
-  assert.match(await decide({ ...input, prompt: '/reload-plugins --force && continue' }, options), /still needs a reload after detecting toolshed-guard 0\.2\.0/);
-  assert.equal(await decide({ ...input, prompt: '/reload-plugins --force' }, options), '');
+  fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '0.3.0' }));
   assert.equal(await decide(input, options), '');
-});
-
-test('reload requirement survives registry update until the next SessionStart boundary', async () => {
-  const directory = tempDirectory();
-  const { registryFile, stateFile } = files(directory);
-  const reloadStateFile = path.join(directory, 'data', 'reload-required.json');
-  writeStateAtomic(fs, stateFile, stateForManifest(manifest('2.0.0'), JSON.stringify(manifest('2.0.0')), null, 100, '"first"'));
-  const input = { prompt: 'continue', cwd: 'C:\\dev\\project', session_id: 'session-stale-sidequest' };
-  const options = { registryFile, stateFile, reloadStateFile, platform: 'win32', now: () => 101 };
-  assert.match(await decide(input, options), /workspace-init 1\.0\.0 -> 2\.0\.0/);
-  fs.writeFileSync(registryFile, JSON.stringify(registry([{ scope: 'user', version: '2.0.0' }])));
-  assert.equal(await decide({ ...input, prompt: '/reload-plugins' }, options), '');
-  assert.match(await decide(input, options), /still needs a reload after detecting workspace-init 1\.0\.0/);
-  sessionStart({ session_id: input.session_id, source: 'startup' }, { reloadStateFile });
-  assert.equal(await decide(input, options), '');
+  assert.equal(fs.readFileSync(reloadStateFile, 'utf8'), legacyReloadState);
 });
 
 test('an abandoned refresh lock recovers and only one fetch produces state', async () => {
@@ -269,5 +253,7 @@ test('loaded toolshed-guard older than the installed registry blocks until reloa
   let fetched = false;
   const result = await decide({ prompt: 'continue', cwd: 'C:\\dev\\project' }, { registryFile, stateFile, pluginRoot, platform: 'win32', fetchFn: async () => { fetched = true; return response(200, JSON.stringify(manifest())); } });
   assert.match(result, /still loaded toolshed-guard 1\.0\.0/);
+  assert.equal(await decide({ prompt: '/reload-plugins', cwd: 'C:\\dev\\project' }, { registryFile, stateFile, pluginRoot, platform: 'win32' }), '');
+  assert.equal(await decide({ prompt: '/reload-plugins --force', cwd: 'C:\\dev\\project' }, { registryFile, stateFile, pluginRoot, platform: 'win32' }), '');
   assert.equal(fetched, false);
 });
