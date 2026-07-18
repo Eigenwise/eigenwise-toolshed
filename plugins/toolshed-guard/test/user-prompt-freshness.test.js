@@ -14,6 +14,7 @@ const {
   isTaskNotificationPrompt,
   readState,
   refreshDue,
+  sessionStart,
   stateForManifest,
   writeStateAtomic,
 } = require('../hooks/user-prompt-freshness.js');
@@ -146,6 +147,21 @@ test('offline refresh preserves a proven stale block and the updated registry cl
   assert.match(await decide({ prompt: 'continue', cwd: 'C:\\dev\\project' }, options), /"decision":"block"/);
   fs.writeFileSync(registryFile, JSON.stringify(registry([{ scope: 'user', version: '2.0.0' }])));
   assert.equal(await decide({ prompt: 'continue', cwd: 'C:\\dev\\project' }, options), '');
+});
+
+test('reload requirement survives registry update until the next SessionStart boundary', async () => {
+  const directory = tempDirectory();
+  const { registryFile, stateFile } = files(directory);
+  const reloadStateFile = path.join(directory, 'data', 'reload-required.json');
+  writeStateAtomic(fs, stateFile, stateForManifest(manifest('2.0.0'), JSON.stringify(manifest('2.0.0')), null, 100, '"first"'));
+  const input = { prompt: 'continue', cwd: 'C:\\dev\\project', session_id: 'session-stale-sidequest' };
+  const options = { registryFile, stateFile, reloadStateFile, platform: 'win32', now: () => 101 };
+  assert.match(await decide(input, options), /workspace-init 1\.0\.0 -> 2\.0\.0/);
+  fs.writeFileSync(registryFile, JSON.stringify(registry([{ scope: 'user', version: '2.0.0' }])));
+  assert.equal(await decide({ ...input, prompt: '/reload-plugins' }, options), '');
+  assert.match(await decide(input, options), /still needs a reload after detecting workspace-init 1\.0\.0/);
+  sessionStart({ session_id: input.session_id, source: 'startup' }, { reloadStateFile });
+  assert.equal(await decide(input, options), '');
 });
 
 test('an abandoned refresh lock recovers and only one fetch produces state', async () => {
