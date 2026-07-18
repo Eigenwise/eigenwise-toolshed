@@ -12,11 +12,11 @@ const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-concurrency-projec
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const WORKER_COUNT = 12;
 
-function runCli(args) {
+function runCli(args, extraEnv) {
   const env = Object.assign({}, process.env, {
     SIDEQUEST_HOME,
     CLAUDE_PROJECT_DIR: PROJECT_DIR,
-  });
+  }, extraEnv);
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [BIN, ...args], {
       cwd: PROJECT_DIR,
@@ -55,9 +55,17 @@ async function addTicket(index) {
   return parseJson(result, `add ${index}`);
 }
 
-async function claimTicket(by) {
-  const result = await runCli(['claim', 'SQ-1', '--by', by, '--json']);
+async function claimTicket(ref, by, extraEnv) {
+  const result = await runCli(['claim', ref, '--by', by, '--json'], extraEnv);
   return { result, payload: parseJson(result, `claim ${by}`) };
+}
+
+async function claimDuringWriteContention(ref, index) {
+  const extraEnv = { SIDEQUEST_TEST_CLAIM_LOCK_DELAY_MS: '400' };
+  return Promise.all([
+    claimTicket(ref, `claim-contention-${index}-a`, extraEnv),
+    claimTicket(ref, `claim-contention-${index}-b`, extraEnv),
+  ]);
 }
 
 test('concurrent CLI writers keep sequential refs and claim exactly once', async () => {
@@ -82,10 +90,22 @@ test('concurrent CLI writers keep sequential refs and claim exactly once', async
     'parallel refs must be sequential',
   );
 
-  const claims = await Promise.all([claimTicket('claim-race-a'), claimTicket('claim-race-b')]);
+  const claims = await Promise.all([claimTicket('SQ-1', 'claim-race-a'), claimTicket('SQ-1', 'claim-race-b')]);
   const winners = claims.filter(({ payload }) => payload.ok === true);
   const losers = claims.filter(({ payload }) => payload.ok !== true);
   assert.strictEqual(winners.length, 1, 'exactly one concurrent claimant must win');
   assert.strictEqual(losers.length, 1, 'exactly one concurrent claimant must lose');
   assert.strictEqual(losers[0].payload.reason, 'claimed', 'loser must receive the not-claimable result');
+});
+
+test('concurrent CLI claim loser waits for a contended winner commit', async () => {
+  for (let index = 0; index < 4; index += 1) {
+    const target = await addTicket(`claim contention target ${index}`);
+    const claims = await claimDuringWriteContention(target.ticket.ref, index);
+    const winners = claims.filter(({ payload }) => payload.ok === true);
+    const losers = claims.filter(({ payload }) => payload.ok !== true);
+    assert.strictEqual(winners.length, 1, `round ${index} must have one claim winner`);
+    assert.strictEqual(losers.length, 1, `round ${index} must have one claim loser`);
+    assert.strictEqual(losers[0].payload.reason, 'claimed', `round ${index} loser must wait for the winner result`);
+  }
 });

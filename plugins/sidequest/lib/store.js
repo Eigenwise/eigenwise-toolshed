@@ -1563,12 +1563,19 @@ function busyWait(ms) {
   }
 }
 
+function testClaimLockDelayMs() {
+  const delay = Number(process.env.SIDEQUEST_TEST_CLAIM_LOCK_DELAY_MS);
+  return Number.isInteger(delay) && delay > 0 ? delay : 0;
+}
+
 // Acquire a short-lived exclusive lock for a ticket. A lock file older than a
 // few seconds is treated as abandoned (holder crashed mid-claim) and reclaimed,
 // so a crash can never permanently wedge a ticket.
 function acquireLock(lockPath) {
   const STALE_LOCK_MS = 5000;
-  for (let attempt = 0; attempt < 60; attempt++) {
+  const RETRY_MS = 5;
+  const MAX_ATTEMPTS = STALE_LOCK_MS / RETRY_MS;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
       const fd = fs.openSync(lockPath, 'wx');
       try {
@@ -1593,17 +1600,22 @@ function acquireLock(lockPath) {
       } catch (_) {
         continue; // lock vanished between open and stat: retry immediately
       }
-      busyWait(5);
+      busyWait(RETRY_MS);
     }
   }
   return false;
 }
 
 function releaseLock(lockPath) {
-  try {
-    fs.unlinkSync(lockPath);
-  } catch (_) {
-    /* ignore */
+  const RETRY_MS = 5;
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    try {
+      fs.unlinkSync(lockPath);
+      return;
+    } catch (error) {
+      if (!error || !['EACCES', 'EBUSY', 'EPERM'].includes(error.code)) return;
+      busyWait(RETRY_MS);
+    }
   }
 }
 
@@ -1809,9 +1821,11 @@ function claimTicket(slug, idOrRef, by, opts) {
   by = String(by || 'agent');
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  return withTicketLock(slug, found.id, () => {
+  const result = withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
+    const delay = testClaimLockDelayMs();
+    if (delay) busyWait(delay);
     if (t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
     if (t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
@@ -1842,6 +1856,13 @@ function claimTicket(slug, idOrRef, by, opts) {
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t };
   });
+  if (result.reason !== 'busy' || opts.force) return result;
+  const t = getTicket(slug, found.id);
+  const held = t && t.claim;
+  if (held && held.by && held.by !== by && !isClaimStale(held)) {
+    return { ok: false, reason: 'claimed', ticket: t, claim: held };
+  }
+  return result;
 }
 
 // Release a claim. Only the owner (or a stale claim) may release unless
