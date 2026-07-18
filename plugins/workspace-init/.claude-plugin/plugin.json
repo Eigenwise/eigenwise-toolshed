@@ -1,7 +1,7 @@
 {
   "name": "workspace-init",
   "version": "0.6.0",
-  "description": "Set up a Claude Code workspace for any project, new or existing: a short interview, then a populated .claude/ (settings.json, tailored live-rules, a codebase map, structure notes) wired around the plugin-reload boundary and verified end to end. Orchestrates the other toolshed plugins and the built-ins instead of reinventing them, and bakes in a self-improvement loop (plus an on-demand retro skill) so the workspace keeps getting better as you work.",
+  "description": "Deprecated migration notice for workspace-init users moving to Workbench.",
   "author": {
     "name": "Eigenwise",
     "email": "kenny@eigenwise.io"
