@@ -102,7 +102,7 @@ release and is the upgrade path.
 | `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
 | `env [--write-user\|--write-project\|--remove]` | Print or wire/unwire the Claude Code env block |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
-| `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility workflow, or read-only diagnosis |
+| `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility procedure, or read-only diagnosis |
 
 ### Trace unexpected model usage
 

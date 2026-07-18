@@ -74,9 +74,9 @@ back, or you kill the session that was about to use it.
 
 ## RC-compatibility mode (restoring `/remote-control`)
 
-For the confirmation-gated workflow, use the `remote-control-compatibility` skill. It manages the
+For the confirmation-gated procedure, use the `remote-control-compatibility` skill. It manages the
 plugin-marked hosts block, creates a backup before an elevated write, reconciles gateway mode, and
-checks the final state. Do not edit the hosts file outside that workflow.
+checks the final state. Do not edit the hosts file outside that procedure.
 
 Claude Code's `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the real
 Anthropic host, which conflicts with gateway routing. codex-gateway offers an opt-in, fully
@@ -123,7 +123,7 @@ agree).
 - **`doctor` shows `Not authenticated` right after an upgrade**: bumping the proxy binary (e.g.
   0.1.10 → 0.1.17 via `setup`) can invalidate the credential the old version accepted — the new
   binary reads it as not authenticated and `setup` stops before wiring. Fix: re-run `login`, then
-  `setup` again to finish. Until then every Codex model is down, so any workflow that routes to
+  `setup` again to finish. Until then every Codex model is down, so any run that routes to
   Codex (a whole sidequest board of Codex-tier tickets, for one) stalls entirely.
 - **No "From gateway" rows in /model**: discovery is off (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`
   missing), Claude Code < v2.1.129, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set (it
