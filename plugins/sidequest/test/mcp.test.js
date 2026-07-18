@@ -155,6 +155,8 @@ test('dispatch is instant by default (stable executor + briefing + token); ephem
     runsLabel: 'Terra', dispatch: 'native-agent',
   });
   assert.equal(instant.agent, 'sidequest-exec-dispatch-high');
+  assert.equal(instant.spawn.description, 'instant dispatch (Terra)');
+  assert.equal(instant.spawn.model, undefined);
   assert.equal(instant.spawn.subagent_type, instant.agent);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
   assert.match(instant.briefing, new RegExp(`--token ${instant.token}`));
@@ -181,6 +183,7 @@ test('dispatch returns a complete Claude worktree spawn spec', () => {
     subagent_type: 'sidequest-exec-xhigh',
     name: 'sidequest-exec-xhigh',
     mode: 'bypassPermissions',
+    description: 'complete instant spawn',
     isolation: 'worktree',
     model: 'fable',
     prompt: agentsync.withProjectIdentity(dispatched.briefing, PROJ),
@@ -201,6 +204,8 @@ test('native_agent carries ticket anchors and verify command through its stable 
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
     assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch-high');
+    assert.strictEqual(native.spawn.description, 'prompt context (Terra)');
+    assert.strictEqual(native.spawn.model, undefined);
     assert.match(native.prompt, /Authoritative ticket contract \(the task prompt may add logistics only; do not narrow this scope\):/);
     assert.match(native.prompt, /Title: prompt context/);
     assert.match(native.prompt, /Anchors:\nlib\/work\.js:14 executorPrompt/);
@@ -219,6 +224,7 @@ test('native_agent returns a complete Claude worktree spawn spec', () => {
     subagent_type: 'sidequest-exec-xhigh',
     name: 'sidequest-native-' + added.ref.toLowerCase() + '-fable',
     mode: 'bypassPermissions',
+    description: 'complete native spawn',
     isolation: 'worktree',
     model: 'fable',
     prompt: native.prompt,

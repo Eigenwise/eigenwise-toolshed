@@ -53,6 +53,14 @@ test('generation-two marker cannot be mistaken for the legacy marker', () => {
   assert.ok(!agentsync.MARKER.includes(agentsync.LEGACY_MARKER));
 });
 
+test('spawn descriptions are bounded and retain Codex route labels', () => {
+  const title = 'Make Sidequest own executor card labels '.repeat(4);
+  const codex = agentsync.spawnDescription({ title }, { backend: 'codex', runsLabel: TERRA.label });
+  assert.ok(codex.length <= 80);
+  assert.match(codex, /\(GPT-5\.6 Terra\)$/);
+  assert.equal(agentsync.spawnDescription({ title: 'Claude title' }, { backend: 'claude', runsLabel: 'Fable' }), 'Claude title');
+});
+
 test('sync protects generation-two executors from legacy marker GC and prunes legacy definitions', () => {
   const dir = tmpDir();
   const generationTwo = path.join(dir, 'sidequest-exec-dispatch-high.md');
@@ -247,8 +255,9 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.match(body, /idle, heartbeat, and status pings/);
   assert.deepStrictEqual(created.spawn, {
     subagent_type: created.name, name: created.name, mode: 'bypassPermissions',
+    description: 'Ship ephemeral agents (GPT-5.6 Terra)',
   });
-  assert.ok(JSON.stringify(created.spawn).length < 200);
+  assert.ok(JSON.stringify(created.spawn).length < 250);
 });
 
 test('ticket executor preserves v2 catalog migration input', () => {

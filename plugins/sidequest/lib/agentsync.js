@@ -324,9 +324,21 @@ function withProjectIdentity(prompt, projectPath) {
   return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
 }
 
-function agentSpawn(name, isolation, model, agentType, prompt) {
+const AGENT_DESCRIPTION_MAX_LENGTH = 80;
+
+function spawnDescription(ticket, resolved) {
+  const title = String(ticket && ticket.title || 'Sidequest ticket').replace(/\s+/g, ' ').trim();
+  const route = resolved && resolved.backend === 'codex'
+    ? String(resolved.runsLabel || resolved.runsModel || '').replace(/\s+/g, ' ').trim()
+    : '';
+  const suffix = route ? ` (${route})` : '';
+  const maxTitleLength = Math.max(1, AGENT_DESCRIPTION_MAX_LENGTH - suffix.length);
+  return `${title.slice(0, maxTitleLength).trimEnd()}${suffix}`.slice(0, AGENT_DESCRIPTION_MAX_LENGTH);
+}
+
+function agentSpawn(name, isolation, model, agentType, prompt, description) {
   return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions' },
-    isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
+    description ? { description } : {}, isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
 }
 
 function createTicketExecutor(ticket, opts) {
@@ -367,7 +379,7 @@ function createTicketExecutor(ticket, opts) {
   return {
     name,
     file,
-    spawn: agentSpawn(name, opts.isolation, resolved.model, undefined, opts.prompt),
+    spawn: agentSpawn(name, opts.isolation, resolved.model, undefined, opts.prompt, spawnDescription(ticket, resolved)),
     cleanup: { name, sessionId: opts.sessionId || null },
   };
 }
@@ -385,7 +397,7 @@ function createNativeAgent(spec, opts) {
       name,
       file: null,
       fallback: true,
-      spawn: agentSpawn(name, spec.isolation, model, String(spec.agentType), spec.prompt),
+      spawn: agentSpawn(name, spec.isolation, model, String(spec.agentType), spec.prompt, spec.description),
       cleanup: { name, sessionId: spec.sessionId || null },
     };
   }
@@ -423,7 +435,7 @@ function createNativeAgent(spec, opts) {
   return {
     name,
     file,
-    spawn: agentSpawn(name, spec.isolation, spec.spawnModel, undefined, spec.prompt),
+    spawn: agentSpawn(name, spec.isolation, spec.spawnModel, undefined, spec.prompt, spec.description),
     cleanup: { name, sessionId: spec.sessionId || null },
   };
 }
@@ -551,6 +563,7 @@ module.exports = {
   nativeAgentSource,
   withProjectIdentity,
   agentSpawn,
+  spawnDescription,
   ticketIsolation,
   syncExecAgents,
   defaultAgentsDir,

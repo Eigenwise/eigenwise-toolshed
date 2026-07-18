@@ -84,9 +84,10 @@ the board through `mcp__plugin_sidequest_board__list` with `status: doing` first
 only when MCP is unavailable.
 
 For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable executor,
-a complete `briefing`, a `spawn` object, and a token. Spawn that exact stable executor with the returned
-briefing unchanged. There is no registration announcement or watcher-lag wait. Claude routes pass the
-resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the backend. Use
+a complete `briefing`, a complete `spawn` object, and a token. Pass every supplied `spawn` field to
+Agent unchanged, including Sidequest's short `description`; do not paraphrase the card label. Claude
+routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the
+backend, while the supplied description includes the resolved route label. Use
 `dispatch <ref> --ephemeral` only for cross-session adoption. It creates a self-contained temporary
 executor definition, and that opt-in path waits for the generated type to register. Never end the turn waiting for registration: continue independent work or use a background timer to wake
 the session. Any

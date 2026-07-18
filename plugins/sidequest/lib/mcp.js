@@ -733,7 +733,7 @@ const TOOLS = [
         agent,
         tokenPrefix: prepared.token.slice(0, 12),
         token: prepared.token,
-        spawn: agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt),
+        spawn: agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt, agentsync.spawnDescription(prepared.ticket, resolved)),
         briefing,
         guidance: `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token. No registration wait.`,
       };
@@ -766,6 +766,7 @@ const TOOLS = [
         spawnModel: resolved.model,
         effort: ticket.effort,
         runtime: resolved.runsModel,
+        description: agentsync.spawnDescription(ticket, resolved),
         isolation: agentsync.ticketIsolation(ticket, !!args.sharedTree),
         sessionId: sessionOf(args),
         prompt,
