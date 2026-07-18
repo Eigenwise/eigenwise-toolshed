@@ -285,8 +285,11 @@ ships submitted executor commits: [references/publishing.md](references/publishi
 
 **A substantive investigation belongs on a ticket.** A root-cause hunt or "figure out how X works"
 spike gets filed, claimed, and its findings written back as a comment — that's the deliverable; an
-uncommented investigation gets redone by the next agent. A quick ephemeral scout doesn't need a
-ticket.
+uncommented investigation gets redone by the next agent. **The only no-ticket background escape hatch is a
+quick read-only scout:** its Agent prompt must start with `[sidequest-scout]` and explicitly say it is quick,
+read-only, and makes no edits/writes. Return concise findings, then stop. The bundled Agent hook rejects
+unmarked generic/custom background agents, including project-specific agent types; it still allows the
+built-in read-only lookup agents. A substantive scout becomes a ticket before it starts.
 
 ## Category-first routing (ENFORCED)
 

@@ -21,10 +21,28 @@ const BUILTIN_EXECUTORS = new Set([
   'sidequest-exec-low', 'sidequest-exec-medium', 'sidequest-exec-high',
   'sidequest-exec-xhigh', 'sidequest-exec-max',
 ]);
+const SPECIALIZED_LOOKUP_AGENTS = new Set(['explore', 'claude-code-guide', 'web-researcher']);
 
 function isPinnedSidequestExecutor(type) {
   return type.startsWith('sidequest-native-')
     || (type.startsWith('sidequest-exec-') && !BUILTIN_EXECUTORS.has(type));
+}
+
+function isSpecializedLookupAgent(type) {
+  return SPECIALIZED_LOOKUP_AGENTS.has(type.toLowerCase());
+}
+
+function isQuickReadOnlyScout(prompt) {
+  if (typeof prompt !== 'string') return false;
+  return /^\[sidequest-scout\](?:\s|$)/i.test(prompt)
+    && /\b(?:quick|brief|short)\b/i.test(prompt)
+    && /\bread[ -]?only\b/i.test(prompt)
+    && /\b(?:no edits?|no writes?|no changes?|do not (?:edit|write|change))\b/i.test(prompt);
+}
+
+function scoutDenyReason(type) {
+  return `sidequest: ${type || 'custom'} Agent launches need a ticket and fresh dispatch briefing. ` +
+    'Only explicit quick read-only scouts may bypass that: start with `[sidequest-scout]` and state quick, read-only, and no edits/writes.';
 }
 
 const REF_RE = /\bSQ-\d+\b/gi;
@@ -152,8 +170,19 @@ function main() {
   const toolInput = input && input.tool_input;
   if (!toolInput || typeof toolInput !== 'object') return;
   const type = String(toolInput.subagent_type || '');
+  const prompt = toolInput.prompt;
   const isExec = type.startsWith('sidequest-exec-') || type.startsWith('sidequest-native-');
-  if (!isExec) return;
+  if (!isExec) {
+    if (isSpecializedLookupAgent(type) || isQuickReadOnlyScout(prompt)) return;
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: scoutDenyReason(type),
+      },
+    }));
+    return;
+  }
 
   // CLAUDE_CODE_SUBAGENT_MODEL overrides BOTH a per-invocation model AND the agent's
   // frontmatter pin (docs: model-config). Nothing this hook can edit wins over it:

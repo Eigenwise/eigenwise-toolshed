@@ -299,10 +299,15 @@ anything that shares files or has a `depends-on` link stays sequential (blocked 
 
 ## Native routed execution
 
-Routed tickets run through the current Claude Code conversation only. Call `native_agent` (or
-`sidequest native-agent SQ-n`) to return the already-registered executor and bounded prompt, then invoke
-that spawn spec with Agent. `sidequest work`/`drain` and MCP `dispatch` are disabled because neither can
-invoke the current conversation's Agent tool.
+Routed tickets run through the current Claude Code conversation only. Call `sidequest dispatch SQ-n` (or
+MCP `dispatch`) to return the ticket's stable executor, complete briefing, spawn fields, and claim token,
+then invoke that exact spawn spec with Agent. Default dispatch is instant: it does not wait for a
+registration announcement. `sidequest work`/`drain` cannot invoke the current conversation's Agent tool.
+
+Generic/custom background agents are only for a quick read-only scout whose prompt starts with
+`[sidequest-scout]` and explicitly says quick, read-only, and no edits/writes. The bundled Agent hook denies
+other generic/custom launches and directs substantive work back to a ticket plus fresh dispatch. Built-in
+read-only lookup agents remain available.
 
 ## Comments & questions
 
@@ -455,15 +460,16 @@ Two optional environment variables (set them in `.claude/settings.json` under `e
 | `SIDEQUEST_AGENTS_DIR` | (see `SIDEQUEST_HOME`) | Explicit override for where the generated exec agents are written. Wins over the `SIDEQUEST_HOME` rule above. |
 | `SIDEQUEST_PORT` | `41730` | Preferred dashboard port. If taken, the next free port is used. |
 | `SIDEQUEST_CLAIM_TTL_MIN` | `60` | Minutes before an unrefreshed claim is treated as stale and another worker may take it over. |
-| `SIDEQUEST_NUDGE` | `on` | Set to `off` to silence the small per-prompt "use sidequest" reminder (the marker-triggered capture and board blocks still fire). |
+| `SIDEQUEST_NUDGE` | `on` | Set to `off` to silence SessionStart routing context. It does not disable the Agent execution gate. |
 
 ## Troubleshooting
 
 - **The board didn't open.** The launcher prints the URL — open it manually. Check the server is up
   with `node <plugin>/bin/sidequest.js projects` (it prints the board URL when the server is running),
   or restart it with `stop` then `dashboard`.
-- **A ticket didn't get filed.** The hook only *nudges*; Claude decides. If it was mid-task and busy,
-  just say "file that as a ticket". Nothing is ever auto-created for an on-task prompt.
+- **A ticket didn't get filed.** Sidequest never auto-creates tickets. File it explicitly, then dispatch
+  substantive work from that fresh ticket. The Agent gate only blocks unmarked generic/custom background
+  launches; it does not file work for you.
 - **Wrong board.** Tickets go to `$CLAUDE_PROJECT_DIR`. If you started Claude from a different folder
   than you expected, pass `--project` or move the ticket on the dashboard.
 - **Port already in use.** sidequest picks the next free port automatically and records it in

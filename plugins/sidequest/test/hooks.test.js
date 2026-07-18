@@ -76,7 +76,7 @@ function assertNoRetiredDoctrine(ctx, where) {
   }
 }
 
-test('pre-tool hook forces bypass on sidequest worktree executors only', () => {
+test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypass', () => {
   const original = {
     subagent_type: 'sidequest-exec-high',
     isolation: 'worktree',
@@ -90,12 +90,31 @@ test('pre-tool hook forces bypass on sidequest worktree executors only', () => {
     mode: 'bypassPermissions',
   });
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+});
 
-  const generic = runHookOutput(FORCE_BYPASS, {
+test('pre-tool hook: blocks unmarked custom agents but permits explicit quick scouts and lookup agents', () => {
+  const custom = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'code-explorer', isolation: 'worktree' },
+    tool_input: { subagent_type: 'stats5', isolation: 'worktree', prompt: 'Trace the full leak path and validate every finding.' },
   });
-  assert.strictEqual(generic, null, 'unrelated worktree agents keep their caller-selected permissions');
+  assert.equal(custom.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(custom.hookSpecificOutput.permissionDecisionReason, /ticket and fresh dispatch briefing/);
+
+  const scout = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: 'code-explorer',
+      isolation: 'worktree',
+      prompt: '[sidequest-scout]\nQuick read-only scout. Make no edits or writes. Return concise file pointers.',
+    },
+  });
+  assert.strictEqual(scout, null, 'an explicit quick read-only scout remains allowed');
+
+  const lookup = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', isolation: 'worktree', prompt: 'Locate the current hook contract.' },
+  });
+  assert.strictEqual(lookup, null, 'built-in read-only lookup agents remain allowed');
 });
 
 test('pre-tool hook keeps built-in executor model but removes overrides for pinned Codex and native executors', () => {
@@ -120,6 +139,15 @@ test('pre-tool hook keeps built-in executor model but removes overrides for pinn
   });
   assert.equal(builtIn.hookSpecificOutput.updatedInput.model, 'opus');
   assert.equal(builtIn.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
+
+test('pre-tool hook: malformed input fails soft', () => {
+  const out = execFileSync(process.execPath, [FORCE_BYPASS], {
+    input: '{"tool_input":',
+    encoding: 'utf8',
+    env: process.env,
+  });
+  assert.strictEqual(out, '');
 });
 
 test('pre-tool hook warns a sidequest executor once near its turn backstop', () => {
@@ -444,9 +472,12 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   }
   assert.match(ctx, /verify command, or the artifact\/answer/, 'done is a verify command for a change or an artifact/answer for an investigation');
   assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the routed model');
-  assert.ok(ctx.includes('exec.agent'), 'must use the ticket-provided persistent executor');
-  assert.ok(ctx.includes('already-registered'), 'must explain why it must not create a temporary agent at dispatch time');
-  assert.ok(ctx.includes('Do not use `native_agent`'), 'must reject temporary native dispatch for normal execution');
+  assert.match(ctx, /substantive investigations and changes are board tickets/, 'must preserve ticket-first substantive work');
+  assert.match(ctx, /quick read-only `\[sidequest-scout\]`/, 'must name the narrow scout escape hatch');
+  assert.ok(ctx.includes('fresh `dispatch`'), 'must require a fresh dispatch result');
+  assert.ok(ctx.includes('exact stable executor, briefing, and token'), 'must use the exact instant dispatch result');
+  assert.match(ctx, /Dispatch is instant: no registration\/watcher wait/, 'must replace the registration wait flow');
+  assert.ok(ctx.includes('do not use `native_agent`'), 'must reject temporary native dispatch for normal execution');
   assert.ok(ctx.includes('bypassPermissions'), 'must require unattended executors to launch in bypass');
   assert.ok(ctx.includes('SHORT'), 'must demand short, bounded executor runs');
   assert.ok(ctx.includes('bounce back'), 'must tell executors to bounce back, not wander');
@@ -546,15 +577,20 @@ test('session-start: category-route sync ignores retired prefs data', () => {
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
 });
-test('session-start: source=compact gets the terse re-grounding block, not the full nudge', () => {
-  const ctx = runHook(SESSION, { session_id: 't', source: 'compact' });
-  assert.match(ctx, /sidequest \(active — context restored\)/);
-  assert.ok(ctx.includes('Reload the Sidequest skill'), 'resume must reload the sidequest skill after compaction');
-  assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), 'resume must prefer the MCP doing-list read');
-  assert.ok(ctx.includes('pulse ref'), 'resume must point to the compact liveness read');
-  assert.ok(ctx.includes('list --status doing'), 'CLI doing-list must remain an explicit fallback');
-  assert.ok(!ctx.includes('external tracker'), 'must NOT be the full block on compact');
-  assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `compact block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
+test('session-start: compact and resume preserve the minimum ticket and executor policy', () => {
+  for (const source of ['compact', 'resume']) {
+    const ctx = runHook(SESSION, { session_id: 't', source });
+    assert.match(ctx, /sidequest \(active — context restored\)/);
+    assert.ok(ctx.includes('Reload the Sidequest skill'), `${source} must reload the skill`);
+    assert.match(ctx, /Substantive work needs a board ticket/, `${source} must preserve ticket-first work`);
+    assert.match(ctx, /fresh dispatch's exact token-gated executor and briefing/, `${source} must preserve exact dispatch execution`);
+    assert.match(ctx, /quick read-only `\[sidequest-scout\]`/, `${source} must preserve the narrow scout escape hatch`);
+    assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), `${source} must prefer the MCP doing-list read`);
+    assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
+    assert.ok(ctx.includes('list --status doing'), `${source} must retain the CLI fallback`);
+    assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
+    assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `${source} block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
+  }
 });
 
 test('session-start: compact byte budget ignores a long plugin path', () => {
@@ -582,7 +618,7 @@ test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   assert.strictEqual(out.trim(), '', 'should emit nothing when nudge is off');
 });
 
-test('ticket filing uses the skill, not an agent or UserPromptSubmit hook', () => {
+test('ticket filing stays explicit while the Agent gate enforces dispatch and docs match it', () => {
   const pluginRoot = path.join(__dirname, '..');
   const repoRoot = path.join(pluginRoot, '..', '..');
   const references = [
@@ -602,6 +638,15 @@ test('ticket filing uses the skill, not an agent or UserPromptSubmit hook', () =
   const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
   assert.strictEqual(config.hooks.UserPromptSubmit, undefined);
   assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
+  assert.ok(config.hooks.PreToolUse.some((entry) => entry.matcher === 'Agent'
+    && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
+
+  const readme = fs.readFileSync(path.join(pluginRoot, 'README.md'), 'utf8');
+  assert.doesNotMatch(readme, /per-prompt "use sidequest" reminder/);
+  assert.doesNotMatch(readme, /marker-triggered capture/);
+  assert.doesNotMatch(readme, /native_agent/);
+  assert.match(readme, /Default dispatch is instant/);
+  assert.match(readme, /\[sidequest-scout\]/);
 });
 
 /* ------------------------------------------------------------------ *
