@@ -43,12 +43,11 @@ function registry(plugins) {
 function writeFixture(directory, installed, remote) {
   const registryFile = path.join(directory, 'installed_plugins.json');
   const stateFile = path.join(directory, 'data', 'remote-freshness.json');
-  const reloadStateFile = path.join(directory, 'data', 'reload-required.json');
   fs.writeFileSync(registryFile, JSON.stringify(installed));
   const body = JSON.stringify(remote);
   const state = workbench.stateForManifest(remote, body, null, 100, '"migration"');
   workbench.writeStateAtomic(fs, stateFile, state);
-  return { registryFile, stateFile, reloadStateFile };
+  return { registryFile, stateFile };
 }
 
 function options(files, extra = {}) {
@@ -125,29 +124,31 @@ test('Workbench blocks when loaded code is older than the installed registry row
   }
 });
 
-test('reload-required state survives update and non-force reload, then clears at forced reload', async () => {
+test('stale Workbench registry state blocks until update, while reload commands bypass', async () => {
   const directory = tempDirectory();
   try {
+    const pluginRoot = path.join(directory, 'loaded-workbench');
+    fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '0.2.0' }));
     const files = writeFixture(directory, registry({
       'workbench@eigenwise-toolshed': [installed('workbench', 'user', '0.1.0')],
     }), manifest({ workbench: '0.2.0' }));
     const input = { prompt: 'continue', cwd: CWD, session_id: SESSION_ID };
-    const hookOptions = options(files);
+    const hookOptions = options(files, { pluginRoot });
+    const legacyReloadStateFile = path.join(directory, 'data', 'reload-required.json');
+    const legacyReloadState = JSON.stringify({ sessions: { [SESSION_ID]: { plugins: [{ name: 'workbench', requiredVersion: '0.2.0' }] } } });
+    fs.writeFileSync(legacyReloadStateFile, legacyReloadState);
 
     assert.match(await workbench.decide(input, hookOptions), /workbench 0\.1\.0 -> 0\.2\.0/);
-    const required = JSON.parse(fs.readFileSync(files.reloadStateFile, 'utf8'));
-    assert.equal(required.sessions[SESSION_ID].plugins[0].requiredVersion, '0.2.0');
 
     fs.writeFileSync(files.registryFile, JSON.stringify(registry({
       'workbench@eigenwise-toolshed': [installed('workbench', 'user', '0.2.0')],
     })));
-    assert.equal(await workbench.decide({ ...input, prompt: '/reload-plugins' }, hookOptions), '');
-    assert.match(await workbench.decide(input, hookOptions), /still needs a reload after detecting workbench 0\.1\.0/);
-    assert.ok(JSON.parse(fs.readFileSync(files.reloadStateFile, 'utf8')).sessions[SESSION_ID]);
-
-    assert.equal(await workbench.decide({ ...input, prompt: '/reload-plugins --force' }, hookOptions), '');
-    assert.deepEqual(JSON.parse(fs.readFileSync(files.reloadStateFile, 'utf8')).sessions, {});
     assert.equal(await workbench.decide(input, hookOptions), '');
+    assert.equal(fs.readFileSync(legacyReloadStateFile, 'utf8'), legacyReloadState);
+
+    assert.equal(await workbench.decide({ ...input, prompt: '/reload-plugins' }, hookOptions), '');
+    assert.equal(await workbench.decide({ ...input, prompt: '/reload-plugins --force' }, hookOptions), '');
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
