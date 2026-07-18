@@ -65,7 +65,7 @@ similar — detect each one's stack individually.
 | Containers | `Dockerfile`, `docker-compose*.yml`, `compose.yaml`, `.dockerignore` |
 | Orchestration | `k8s/`, `*.yaml` with `kind:`, `helm/`, `Chart.yaml`, `skaffold.yaml` |
 | Infra as code | `*.tf` (Terraform), `pulumi.*`, `cdk.json`, `serverless.yml`, `template.yaml` (SAM) |
-| CI/CD | `.github/workflows/`, `.gitlab-ci.yml`, `azure-pipelines.yml`, `Jenkinsfile`, `.circleci/` |
+| CI/CD | `.github/*/`, `.gitlab-ci.yml`, `azure-pipelines.yml`, `Jenkinsfile`, `.circleci/` |
 | Lint/format | `.eslintrc*`, `biome.json`, `.prettierrc*`, `ruff.toml`, `.flake8`, `rustfmt.toml`, `.editorconfig`, `.golangci.yml` |
 | Env/config | `.env.example`, `.env.*`, `config/`, `appsettings*.json` |
 | Migrations | `migrations/`, `db/migrate/`, `prisma/migrations/`, `alembic/`, `*.sql` |

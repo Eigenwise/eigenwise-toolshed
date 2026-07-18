@@ -73,7 +73,7 @@ Then map the remaining changes onto the existing documents:
 | Design patterns, error handling, test setup, config | `patterns.md` |
 | Linter/formatter config or naming conventions | `coding-style.md` |
 | Container/compose setup | `docker.md` |
-| Setup steps or common workflows | `onboarding.md` |
+| Setup steps or common processes | `onboarding.md` |
 | Project name/description, or any doc added/removed | `INDEX.md` |
 
 Prioritize structural changes (new/removed entry points, components, infra, data model) over cosmetic
