@@ -149,6 +149,11 @@ test('dispatch is instant by default (stable executor + briefing + token); ephem
   const addedInstant = callTool('add', { title: 'instant dispatch', category: 'dispatch-codex' });
   const instant = callTool('dispatch', { ref: addedInstant.ref, session: 'mcp-dispatch-session' });
   assert.equal(instant.mode, 'instant');
+  assert.deepEqual(instant.exec, {
+    agent: 'sidequest-exec-dispatch-high', model: null, backend: 'codex',
+    runsModel: 'codex-gpt-5-6-terra', apiModel: 'claude-codex-gpt-5.6-terra',
+    runsLabel: 'Terra', dispatch: 'native-agent',
+  });
   assert.equal(instant.agent, 'sidequest-exec-dispatch-high');
   assert.equal(instant.spawn.subagent_type, instant.agent);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));

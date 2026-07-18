@@ -31,7 +31,7 @@ test('resolveExec is keyed directly by concrete model and effort', () => {
   seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }]);
   assert.deepEqual(store.resolveExec('opus', 'high'), {
     agent: 'sidequest-exec-high', model: 'opus', spawnId: 'opus', backend: 'claude', slug: 'opus',
-    runsModel: 'opus', runsLabel: 'Claude Opus', dispatch: 'native-agent',
+    runsModel: 'opus', apiModel: 'opus', runsLabel: 'Claude Opus', dispatch: 'native-agent',
   });
   const codex = store.resolveExec('codex-gpt-test', 'xhigh');
   assert.equal(codex.agent, 'sidequest-exec-dispatch-xhigh');
@@ -39,6 +39,7 @@ test('resolveExec is keyed directly by concrete model and effort', () => {
   assert.equal(codex.spawnId, 'claude-codex-test');
   assert.equal(codex.dispatchModel, 'test');
   assert.equal(codex.runsModel, 'codex-gpt-test');
+  assert.equal(codex.apiModel, 'claude-codex-test');
 });
 
 test('v2 catalog migration still discovers concrete routes', () => {

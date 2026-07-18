@@ -713,6 +713,7 @@ const TOOLS = [
           projectPath: meta.path,
           ref: prepared.ticket.ref,
           effort: prepared.ticket.effort,
+          exec: prepared.ticket.exec,
           mode: 'ephemeral',
           agent: created.name,
           tokenPrefix: prepared.token.slice(0, 12),
@@ -727,6 +728,7 @@ const TOOLS = [
         projectPath: meta.path,
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
+        exec: prepared.ticket.exec,
         mode: 'instant',
         agent,
         tokenPrefix: prepared.token.slice(0, 12),
@@ -773,6 +775,7 @@ const TOOLS = [
         projectPath: meta.path,
         ref: ticket.ref,
         effort: ticket.effort,
+        exec: ticket.exec,
         prompt,
       }, created);
     },

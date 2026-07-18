@@ -87,6 +87,17 @@ test('executorPrompt refuses task context beyond the Windows-safe bound', () => 
   const t = ticket({ executorAnchors: 'anchor' });
   assert.throws(() => work.executorPrompt(t, 'x'.repeat(work.NATIVE_PROMPT_MAX)), /Windows-safe limit/);
 });
+
+test('CLI dispatch exposes the routed executor API model', () => {
+  store.setCategory({ id: 'api-model-dispatch', name: 'API model dispatch', route: { model: 'opus', effort: 'high' } });
+  const t = ticket({ category: 'api-model-dispatch' });
+  const res = runCli(['dispatch', t.ref]);
+  assert.strictEqual(res.status, 0, res.stderr);
+  const dispatched = JSON.parse(res.stdout);
+  assert.equal(dispatched.exec.runsModel, 'opus');
+  assert.equal(dispatched.exec.apiModel, 'opus');
+});
+
 test('CLI work refuses without launching a separate process', () => {
   const t = ticket();
   const res = runCli(['work', '--ref', t.ref]);

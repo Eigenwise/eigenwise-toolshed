@@ -1415,6 +1415,7 @@ function cmdDispatch(opts, positional) {
       projectPath: meta.path,
       ref: prepared.ticket.ref,
       effort: prepared.ticket.effort,
+      exec: prepared.ticket.exec,
       mode: 'ephemeral',
       agent: created.name,
       tokenPrefix: prepared.token.slice(0, 12),
@@ -1431,6 +1432,7 @@ function cmdDispatch(opts, positional) {
     projectPath: meta.path,
     ref: prepared.ticket.ref,
     effort: prepared.ticket.effort,
+    exec: prepared.ticket.exec,
     mode: 'instant',
     agent,
     tokenPrefix: prepared.token.slice(0, 12),
@@ -1470,7 +1472,7 @@ function cmdNativeAgent(opts, positional) {
     sessionId,
     prompt,
   });
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectPath: meta.path, ref: ticket.ref, effort: ticket.effort, prompt }, created), null, 2) + '\n');
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectPath: meta.path, ref: ticket.ref, effort: ticket.effort, exec: ticket.exec, prompt }, created), null, 2) + '\n');
 }
 
 // `sidequest models sync-agents` — regenerate the runtime

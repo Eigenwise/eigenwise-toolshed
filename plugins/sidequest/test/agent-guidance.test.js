@@ -28,7 +28,10 @@ test('planning guidance keeps Sidequest stories optional and distinct from Claud
 test('workflow guidance suggests a documented Claude Code script shape', () => {
   assert.match(orchestration, /built with `agent\(\)` and `pipeline\(\)`/);
   assert.doesNotMatch(orchestration, /`parallel\(\)`/);
-  assert.match(orchestration, /`pipeline\(tickets, ticket => agent\(ticket\.prompt, \{ label: ticket\.ref \}\)\)`/);
+  assert.match(orchestration, /`pipeline\(tickets, ticket => agent\(ticket\.prompt, \{ label: ticket\.ref, model: ticket\.exec\.apiModel, effort: ticket\.effort \}\)\)`/);
+  assert.match(orchestration, /every `agent\(\)` call with `model: ticket\.exec\.apiModel` and\n`effort: ticket\.effort`/);
+  assert.match(orchestration, /`phases` metadata is display-only/);
+  assert.match(orchestration, /`Workflow\(\{ scriptPath: "\.\.\." \}\)`, not `Workflow\(\{ name: "\.\.\." \}\)`/);
   assert.match(skill, /File and dispatch substantial research or workflow work before invoking it/);
   assert.match(skill, /A routed claim without the prepared dispatch token\nis refused/);
 });

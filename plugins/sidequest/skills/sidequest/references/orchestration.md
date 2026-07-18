@@ -120,11 +120,24 @@ repeatable, or deterministic run: results stay in script variables, only the fin
 - **Gated**: you don't launch one on your own — the user opts in (an "ultracode" prompt, or an
   explicit ask). But you usually judge better than the user when one would genuinely help, so **when
   it would, SUGGEST it** via `AskUserQuestion`: why it fits, the rough scale, the token cost, and a
-  script shape such as `pipeline(tickets, ticket => agent(ticket.prompt, { label: ticket.ref }))`.
+  script shape such as `pipeline(tickets, ticket => agent(ticket.prompt, { label: ticket.ref, model: ticket.exec.apiModel, effort: ticket.effort }))`.
   Raising the option is how the opt-in happens; staying silent when a workflow would clearly help is
   the mistake.
 - Typical fits: a wave of 6+ same-shaped executor tickets, a repeatable migrate/verify sweep, a
   find→verify review structure.
+
+### Workflows on routed tickets
+
+Dispatch-first stays the default: a routed executor owns the ticket's work. Use a Workflow harness only
+when its phases and in-memory results are genuinely the right shape. Take `exec` and `effort` from the
+routed ticket or dispatch payload, then pin every `agent()` call with `model: ticket.exec.apiModel` and
+`effort: ticket.effort`. `runsModel` is the board slug or display runtime, while `apiModel` is the
+catalog-derived API id the Agent runtime accepts. The `model` field in `phases` metadata is display-only;
+it does not set an `agent()` model.
+
+A workflow script written during this session is not in the startup registry. Run that file with
+`Workflow({ scriptPath: "..." })`, not `Workflow({ name: "..." })`; `name` only resolves scripts found
+when Claude Code started.
 
 ## Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
 

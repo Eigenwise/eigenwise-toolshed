@@ -339,13 +339,13 @@ function dispatchModelFor(id) {
 function execFromBackend(backend, effort) {
   if (backend.backend === 'codex') {
     const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
-    return { agent: `sidequest-exec-dispatch-${resolvedEffort}`, effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: 'codex', source: backend.source, slug: backend.slug, runsModel: backend.slug, runsLabel: backend.label || backend.slug, dispatch: 'native-agent' };
+    return { agent: `sidequest-exec-dispatch-${resolvedEffort}`, effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: 'codex', source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label || backend.slug, dispatch: 'native-agent' };
   }
   const runtime = backend.slug;
   if (runtime === 'haiku' || !effort) {
-    return { agent: null, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
+    return { agent: null, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, apiModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
   }
-  return { agent: `sidequest-exec-${effort}`, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
+  return { agent: `sidequest-exec-${effort}`, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, apiModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
 }
 
 function resolveExec(model, effort) {
@@ -683,7 +683,7 @@ function ticketCategory(ticket) {
 }
 
 function execProjection(exec) {
-  return { agent: exec.agent, model: exec.model, backend: exec.backend, runsModel: exec.runsModel, runsLabel: exec.runsLabel, dispatch: exec.dispatch };
+  return { agent: exec.agent, model: exec.model, backend: exec.backend, runsModel: exec.runsModel, apiModel: exec.apiModel, runsLabel: exec.runsLabel, dispatch: exec.dispatch };
 }
 
 function applyDerivedRouting(t, opts) {
@@ -2550,6 +2550,7 @@ function briefTicket(slug, t, opts) {
     model: t.model || null,
     backend: t.exec ? t.exec.backend : null,
     runsModel: t.exec ? t.exec.runsModel : null,
+    apiModel: t.exec ? t.exec.apiModel : null,
     runsLabel: t.exec ? t.exec.runsLabel : null,
     executor: t.exec ? t.exec.agent : null,
     effort: t.effort || null,
