@@ -828,17 +828,21 @@ function gatewayModel(id) {
   };
 }
 
-// Scan one text string for route markers, last-wins. `route` seeds the running
-// winner so a caller can thread it across several text fragments in order.
-function lastRouteInText(text, route = null) {
-  const marker = /\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
+const ROUTE_MARKER_RE = /\[(switchboard-route|sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
+
+function routeMarkersInText(text, markers = []) {
+  const matcher = new RegExp(ROUTE_MARKER_RE);
   let match;
-  while ((match = marker.exec(text))) route = { model: match[1], effort: match[2] || null };
-  return route;
+  while ((match = matcher.exec(text))) markers.push({ model: match[2], effort: match[3] || null });
+  return markers;
+}
+
+function onlyRoute(markers) {
+  return markers.length === 1 ? markers[0] : null;
 }
 
 function dispatchRouteFromRawBody(raw) {
-  return lastRouteInText(String(raw));
+  return onlyRoute(routeMarkersInText(String(raw)));
 }
 
 function dispatchModelFromRawBody(raw) {
@@ -846,32 +850,27 @@ function dispatchModelFromRawBody(raw) {
   return route ? route.model : null;
 }
 
-// Resolve the dispatch route from a request's messages, restricted to text a
-// human/orchestrator authored. The legitimate marker lives in the dispatch
-// briefing (first user message text), so only type:"text" blocks of role:"user"
-// messages count. tool_result blocks ride user-role messages in the Anthropic
-// format but carry echoed tool output — a fixture, log, or diff containing
-// marker-shaped text there must NOT hijack the next request's route (SQ-375:
-// that flipped a live executor onto an invalid upstream id and killed it).
-// Assistant-authored text never counts. Last-wins holds among the qualifiers.
+// The legitimate marker lives in the dispatch briefing, so only user-authored
+// text counts. tool_result blocks can echo marker-shaped text from a fixture,
+// log, or diff and must not influence the next request's route (SQ-375).
 function dispatchRouteFromMessages(messages) {
   if (!Array.isArray(messages)) return null;
-  let route = null;
+  const markers = [];
   for (const message of messages) {
     if (!message || message.role !== 'user') continue;
     const content = message.content;
     if (typeof content === 'string') {
-      route = lastRouteInText(content, route);
+      routeMarkersInText(content, markers);
       continue;
     }
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       if (block && block.type === 'text' && typeof block.text === 'string') {
-        route = lastRouteInText(block.text, route);
+        routeMarkersInText(block.text, markers);
       }
     }
   }
-  return route;
+  return onlyRoute(markers);
 }
 
 // ------------------------------------------------------------ model catalog
@@ -1523,7 +1522,7 @@ function runShim() {
                 type: 'error',
                 error: {
                   type: 'invalid_request_error',
-                  message: 'codex-gateway: dispatch model requires a [sidequest-route model=...] marker in the conversation; redispatch the ticket',
+                  message: 'codex-gateway: dispatch model requires exactly one [switchboard-route model=...] marker in the conversation; [sidequest-route ...] remains temporarily accepted for compatibility; redispatch the ticket',
                 },
               });
               res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
