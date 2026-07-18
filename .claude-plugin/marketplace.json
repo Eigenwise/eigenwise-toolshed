@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.71.0",
+  "version": "3.72.0",
   "plugins": [
     {
       "name": "codex-gateway",
@@ -127,7 +127,7 @@
       "name": "toolshed-guard",
       "source": "./plugins/toolshed-guard",
       "description": "Block prompts while installed Toolshed plugins are stale; install once at user scope.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Eigenwise"
       },
