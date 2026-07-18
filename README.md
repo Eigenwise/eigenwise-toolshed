@@ -21,7 +21,6 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 | [**codebase-mapper**](./plugins/codebase-mapper) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
 | [**live-rules**](./plugins/live-rules) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
 | [**sidequest**](./plugins/sidequest) | A Trello-light quest log for Claude Code. Side issues you mention mid-task get captured as tickets on the spot, with pasted images attached, then managed on a live, self-hosted Kanban dashboard spanning every project you work in. Category-based routing picks a concrete model and reasoning effort per ticket, with category and global fallbacks. |
-| [**switchboard**](./plugins/switchboard) | Complexity-scored model and effort routing. Score a task 1-10 and switchboard derives which model tier should run it and how hard it should think, then hands the work to a named executor subagent at exactly that tier. |
 
 *More tools will move into the shed over time.*
 
@@ -33,7 +32,6 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 /plugin install codebase-mapper@eigenwise-toolshed
 /plugin install live-rules@eigenwise-toolshed
 /plugin install sidequest@eigenwise-toolshed
-/plugin install switchboard@eigenwise-toolshed
 ```
 
 Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.
@@ -128,23 +126,6 @@ neither:
 
 Manage it all from chat ("make a ticket for X", "close SQ-3", "what's open") or the bundled CLI. The
 [plugin README](./plugins/sidequest) is the full userguide.
-
-## Why switchboard?
-
-Switchboard is the standalone category router. It classifies delegated work, resolves a primary model
-and effort, checks availability, and records each fallback attempt. Categories carry the work contract,
-so routing stays tied to the job instead of a model pick made by feel.
-
-- Category routes can fall back to a category route, a global fallback, and then hardwired `sonnet/high`.
-- User and project config layers can narrow the allowed models and routes without inventing models that
-  are not available.
-- The CLI, MCP server, and local settings UI all use the same versioned resolver contract.
-- Numeric complexity routing remains for one release as a migration window. It is deprecated and does
-  not change category policy.
-
-[sidequest](./plugins/sidequest) adds the ticket board and workflow. Its current comparison mode can
-show Switchboard's category result beside board routing while the cutover remains separate. The
-[plugin README](./plugins/switchboard) has the category, config, CLI, MCP, and migration details.
 
 ## About
 

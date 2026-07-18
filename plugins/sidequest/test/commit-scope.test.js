@@ -18,7 +18,7 @@ function repo() {
   git(root, ['config', 'user.name', 'Sidequest Test']);
   git(root, ['config', 'user.email', 'sidequest-test@example.invalid']);
   fs.mkdirSync(path.join(root, 'plugins', 'sidequest'), { recursive: true });
-  fs.mkdirSync(path.join(root, 'plugins', 'switchboard'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'plugins', 'other-plugin'), { recursive: true });
   fs.writeFileSync(path.join(root, 'README.md'), 'base\n');
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'base']);
@@ -28,13 +28,13 @@ function repo() {
 test('scoped commit leaves another executor’s staged file in the shared index', () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
-  fs.writeFileSync(path.join(root, 'plugins', 'switchboard', 'worker-b.js'), 'b\n');
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'worker-b.js'), 'b\n');
   git(root, ['add', '.']);
 
   const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest']);
   assert.equal(committed.ok, true);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
-  assert.equal(git(root, ['diff', '--cached', '--name-only']), 'plugins/switchboard/worker-b.js');
+  assert.equal(git(root, ['diff', '--cached', '--name-only']), 'plugins/other-plugin/worker-b.js');
   assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
 });
 
@@ -63,12 +63,12 @@ test('Windows scope matching emits canonical tracked casing', { skip: process.pl
 test('out-of-scope commits are refused before submission', () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
-  fs.writeFileSync(path.join(root, 'plugins', 'switchboard', 'worker-b.js'), 'b\n');
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'worker-b.js'), 'b\n');
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'contaminated']);
 
   const verdict = commitScope.validateCommitScope(root, 'HEAD', ['plugins/sidequest']);
   assert.equal(verdict.ok, false);
   assert.equal(verdict.reason, 'outside_scope');
-  assert.deepEqual(verdict.outside, ['plugins/switchboard/worker-b.js']);
+  assert.deepEqual(verdict.outside, ['plugins/other-plugin/worker-b.js']);
 });
