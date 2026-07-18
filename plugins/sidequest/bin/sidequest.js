@@ -815,6 +815,23 @@ function cmdCommit(opts, positional) {
 // transaction (references/publishing.md) integrates, versions, reverifies,
 // pushes, and marks done. --clear is the orchestrator's reset for a bounced
 // integration (drops the submission, optionally with -s todo).
+function verifyEmbedsWorktreeRoot(verify, worktreeRoot) {
+  if (typeof verify !== 'string' || !verify || !worktreeRoot) return false;
+  const normalize = (value) => String(value).replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+  const root = normalize(path.resolve(worktreeRoot));
+  const command = normalize(verify);
+  const caseInsensitive = /^[a-z]:\//i.test(root);
+  const comparableRoot = caseInsensitive ? root.toLowerCase() : root;
+  const comparableCommand = caseInsensitive ? command.toLowerCase() : command;
+  let offset = comparableCommand.indexOf(comparableRoot);
+  while (offset !== -1) {
+    const next = comparableCommand.charAt(offset + comparableRoot.length);
+    if (!next || next === '/' || !/[a-z0-9._-]/i.test(next)) return true;
+    offset = comparableCommand.indexOf(comparableRoot, offset + comparableRoot.length);
+  }
+  return false;
+}
+
 function cmdSubmit(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('submit: pass a ticket id or ref, e.g. sidequest submit SQ-3 --by me --commit <hash>');
@@ -834,6 +851,9 @@ function cmdSubmit(opts, positional) {
   const body = bodyFromOpts(opts, 'submit');
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`submit: no ticket "${idOrRef}" in ${meta.name}.`);
+  if (verifyEmbedsWorktreeRoot(opts.verify, store.nearestRepoRoot(process.cwd()))) {
+    fail(`submit: refused ${ticket.ref}; --verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
+  }
   const gitRef = opts.gitref || opts['git-ref'] || `refs/sidequest/${ticket.ref}`;
   const range = commitScope.submissionRange(process.cwd(), {
     commit: opts.commit,

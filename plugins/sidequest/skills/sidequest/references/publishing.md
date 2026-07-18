@@ -59,7 +59,8 @@ board (submissions stay parked — fail closed).
    root `.claude-plugin/marketplace.json` (they must match) in one commit. Executors no longer bump
    anything, so versioning has exactly one writer: this step.
 8. **Reverify per ticket, post-integration**: run each integrated ticket's exact verify command
-   (from the queue entry / ticket `--verify`) inside the integration worktree. A red here means the
+   (from the queue entry / ticket `--verify`) from the integration worktree root. Submission commands
+   must use repo-relative paths, so this is the same command the executor ran. A red here means the
    commit does not survive integration: drop that ticket's range (rebuild the worktree or
    `git revert` its commits), file the integration ticket, continue with the green rest.
 9. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in

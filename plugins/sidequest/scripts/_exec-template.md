@@ -59,7 +59,8 @@ Protocol, per ticket, in order:
    **Comments are cross-actor handoffs, not a work diary.** Leave only decisions, non-obvious constraints,
    ruled-out approaches likely to recur, integration risks, exact verification command/result, and concise
    findings. Do not post routine progress narration or self-logs.
-4. **Verify** the ticket's exact named check/test/reproduction before declaring success. In the closing
+4. **Verify** the ticket's exact named check/test/reproduction from the repo root. Keep every submitted
+   verification command repo-relative so it can run unchanged in the clean integration worktree. In the closing
    comment, give the exact command, exit/result counts, the relevant tail or failure excerpt, changed paths,
    and integration risks. Do not dump an entire green test log. For bodies with backticks, quotes, or
    parentheses, write the text to a scratchpad file and pass `--body-file <path>` to `sidequest comment`,

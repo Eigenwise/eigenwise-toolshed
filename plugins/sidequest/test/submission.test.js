@@ -210,6 +210,39 @@ test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence commen
   assert.strictEqual(store.getTicket(slug, t.ref).submission, null);
 });
 
+test('CLI: submit rejects worktree-bound verify commands and preserves portable commands', () => {
+  cleanBranch();
+  const t = addTicket('worktree-bound verify command');
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'verify-worker']).status, 0);
+
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'submitted fixture\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'verify fixture']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+
+  const windowsStyle = `${PROJECT_DIR.replace(/\//g, '\\')}\\lib\\fixture.js`;
+  const posixStyle = `${PROJECT_DIR.replace(/\\/g, '/')}/lib/fixture.js`;
+  for (const verify of [windowsStyle, posixStyle]) {
+    const rejected = runCli(['submit', t.ref, '--by', 'verify-worker', '--commit', commit, '--verify', `node --test ${verify}`]);
+    assert.strictEqual(rejected.status, 1, rejected.stderr + rejected.stdout);
+    assert.match(rejected.stderr + rejected.stdout, /run verification from the repo root and use repo-relative paths/i);
+    assert.ok(store.getTicket(slug, t.ref).claim, 'rejected submission keeps the claim');
+  }
+
+  if (process.platform === 'win32') {
+    const caseVariant = `${posixStyle.slice(0, 1).toLowerCase()}${posixStyle.slice(1).toUpperCase()}`;
+    const rejected = runCli(['submit', t.ref, '--by', 'verify-worker', '--commit', commit, '--verify', `node --test ${caseVariant}`]);
+    assert.strictEqual(rejected.status, 1, rejected.stderr + rejected.stdout);
+  }
+
+  const verify = 'C:\\tools\\node.exe --test lib/fixture.js --fixture C:\\fixtures\\submission.json';
+  const submitted = runCli(['submit', t.ref, '--by', 'verify-worker', '--commit', commit, '--verify', verify]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.verify, verify);
+});
+
 test('CLI: SQ-406-shaped two-commit submissions retain implementation and tests in order', () => {
   cleanBranch();
   const t = addTicket('SQ-406-shaped range', { files: ['lib', 'test'] });
