@@ -28,13 +28,13 @@ let ref;
 test('seed telemetry fixture', () => {
   const ticket = cliJson(['add', '-t', 'telemetry fixture', '--file', 'lib/tracked.js', '--complexity', '3', '--why', 'a routine tracked-file fixture for telemetry-read coverage', '--json']);
   ref = ticket.ticket.ref;
-  assert.strictEqual(runCli(['claim', ref, '--by', 'telemetry-worker']).status, 0);
+  assert.strictEqual(runCli(['claim', ref, '--by', 'telemetry-worker', '--direct']).status, 0);
   assert.strictEqual(runCli(['comment', ref, '--by', 'telemetry-worker', '-m', 'a recent telemetry note']).status, 0);
 });
 
 test('CLI and MCP pulse return the compact liveness shape with git activity', () => {
   const pulse = cliJson(['pulse', ref]);
-  assert.deepStrictEqual(Object.keys(pulse).sort(), ['claim', 'comments', 'dispatch', 'dispatchExecutor', 'dispatchNonce', 'git', 'lastComment', 'project', 'projectName', 'ref', 'status', 'submission', 'title']);
+  assert.deepStrictEqual(Object.keys(pulse).sort(), ['claim', 'comments', 'direct', 'dispatch', 'dispatchExecutor', 'dispatchNonce', 'git', 'lastComment', 'project', 'projectName', 'ref', 'status', 'submission', 'title']);
   assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'by']);
   assert.strictEqual(pulse.comments, 1);
   assert.deepStrictEqual(pulse.lastComment, { at: pulse.lastComment.at, by: 'telemetry-worker', kind: 'comment', body: 'a recent telemetry note' });

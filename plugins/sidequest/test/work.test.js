@@ -44,7 +44,7 @@ test('nativeDispatchRequired refuses non-todo tickets', () => {
 
 test('nativeDispatchRequired refuses claimed tickets', () => {
   const t = ticket();
-  const claimed = store.claimTicket(slug, t.ref, 'fixture-worker', { status: false });
+  const claimed = store.claimTicket(slug, t.ref, 'fixture-worker', { direct: true, status: false });
   assert.strictEqual(claimed.ok, true);
   assert.strictEqual(result(t.ref).reason, 'claimed');
 });

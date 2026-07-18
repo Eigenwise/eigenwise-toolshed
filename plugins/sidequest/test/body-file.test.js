@@ -43,7 +43,7 @@ test('comment body-file stores a 5,481-character handoff whole', () => {
 
 test('done reads --body-file into its closing comment before completing', () => {
   const ref = ticket('done body-file fixture');
-  cliJson(['claim', ref, '--by', 'body-file-worker', '--json']);
+  cliJson(['claim', ref, '--by', 'body-file-worker', '--direct', '--json']);
   const body = 'Shipped `abc1234` (all checks passed).';
   const done = cliJson(['done', ref, '--by', 'body-file-worker', '--body-file', bodyFile('done.md', body), '--json']);
   assert.strictEqual(done.ticket.status, 'done');

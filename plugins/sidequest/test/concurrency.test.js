@@ -56,7 +56,7 @@ async function addTicket(index) {
 }
 
 async function claimTicket(ref, by, extraEnv) {
-  const result = await runCli(['claim', ref, '--by', by, '--json'], extraEnv);
+  const result = await runCli(['claim', ref, '--by', by, '--direct', '--json'], extraEnv);
   return { result, payload: parseJson(result, `claim ${by}`) };
 }
 

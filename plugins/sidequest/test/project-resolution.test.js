@@ -191,7 +191,7 @@ test('CLI: name resolves to the right board (with real tickets), case-insensitiv
   assert.strictEqual(listByCase.project, realSlug);
 
   // claim/release round-trip through the name form.
-  const claim = cliJson(['claim', ref, '--by', 'sq86-test-worker', '--project', 'ROUNDTRIP-PROJECT']);
+  const claim = cliJson(['claim', ref, '--by', 'sq86-test-worker', '--direct', '--project', 'ROUNDTRIP-PROJECT']);
   assert.strictEqual(claim.ok, true);
   assert.strictEqual(claim.project, realSlug);
   assert.strictEqual(claim.ticket.status, 'doing');
