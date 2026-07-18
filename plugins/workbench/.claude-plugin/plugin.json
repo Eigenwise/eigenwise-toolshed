@@ -1,0 +1,19 @@
+{
+  "name": "workbench",
+  "version": "0.1.0",
+  "description": "Set up and maintain a Claude Code workspace: initialize project-side configuration, check and update Toolshed plugins, diagnose local health, and run retrospectives.",
+  "author": {
+    "name": "Eigenwise",
+    "email": "kenny@eigenwise.io"
+  },
+  "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/workbench",
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "license": "MIT",
+  "keywords": [
+    "workspace",
+    "setup",
+    "maintenance",
+    "health",
+    "retro"
+  ]
+}
