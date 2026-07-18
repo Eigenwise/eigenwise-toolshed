@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.61.0",
+  "version": "3.62.0",
   "plugins": [
     {
       "name": "codex-gateway",
@@ -18,7 +18,7 @@
       "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/codex-gateway",
       "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
       "license": "MIT",
-      "category": "workflow",
+      "category": "development",
       "keywords": [
         "codex",
         "openai",
@@ -41,7 +41,7 @@
       "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/workspace-init",
       "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
       "license": "MIT",
-      "category": "workflow",
+      "category": "productivity",
       "keywords": [
         "setup",
         "init",
@@ -64,7 +64,7 @@
       "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest",
       "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
       "license": "MIT",
-      "category": "workflow",
+      "category": "productivity",
       "keywords": [
         "tickets",
         "kanban",
@@ -73,7 +73,6 @@
         "issues",
         "todo",
         "dashboard",
-        "workflow",
         "hooks",
         "capture"
       ]
@@ -112,7 +111,7 @@
       "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/live-rules",
       "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
       "license": "MIT",
-      "category": "workflow",
+      "category": "development",
       "keywords": [
         "rules",
         "context",
