@@ -22,6 +22,7 @@
 const ladder = require('../lib/ladder');
 const migration = require('../lib/migrate');
 const categories = require('../lib/mcp');
+const server = require('../lib/server');
 
 function fail(msg) {
   console.error(`switchboard: ${msg}`);
@@ -361,10 +362,18 @@ function cmdConfigSurface(name, args) {
   }
 }
 
+function cmdOpen(args) {
+  const { options } = parseOptions(args);
+  server.start(options.port).then(({ url }) => {
+    console.log(`Switchboard settings: ${url}`);
+  }).catch((error) => fail(`open: ${error.message}`));
+}
+
 function help() {
   console.log(`switchboard — complexity-scored model/effort routing
 
 Usage:
+  switchboard open [--port <port>]                             open local routing settings
   switchboard category list|show|add|edit|disable|remove [args]  category policy management
   switchboard category detach|relink|reset <id> --project <path>  project overlays
   switchboard fallback [--model <model> --effort <effort>]         global fallback
@@ -399,6 +408,9 @@ function main() {
 
   const rest = argv.slice(1);
   switch (cmd) {
+    case 'open':
+      cmdOpen(rest);
+      break;
     case 'category':
       cmdCategory(rest);
       break;
