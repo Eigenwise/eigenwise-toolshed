@@ -953,6 +953,34 @@ const TOOLS = [
     },
   },
   {
+    name: 'switchboard_status',
+    description: 'Show Sidequest-to-Switchboard comparison mismatches, contract health, and pending global or project exports without changing authoritative routing.',
+    inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      return store.switchboardAdoptionStatus(slug);
+    },
+  },
+  {
+    name: 'switchboard_export',
+    description: 'Preview or apply Sidequest category export into Switchboard contract v1. Apply requires the previewHash returned by a prior dry-run; project scope also requires an explicit board.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP,
+        scope: { type: 'string', enum: ['global', 'project'] },
+        apply: { type: 'boolean' },
+        previewHash: { type: 'string' },
+      },
+      required: ['scope'],
+    },
+    handler(args) {
+      if (args.scope === 'project' && (!args.project || !String(args.project).trim())) throw new Error('switchboard_export: project scope requires an explicit board.');
+      const project = args.scope === 'project' ? resolveProject(args.project).slug : null;
+      return store.exportSwitchboardRouting({ scope: args.scope, project, apply: args.apply === true, previewHash: args.previewHash });
+    },
+  },
+  {
     name: 'models',
     description: 'Available models, global fallback, and the effective category taxonomy for project, including project-layer warnings.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },

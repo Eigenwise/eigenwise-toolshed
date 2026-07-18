@@ -53,6 +53,7 @@ process.env.SIDEQUEST_SWITCHBOARD_CACHE_MS = '0';
 
 const discovery = require('../lib/discovery.js');
 const store = require('../lib/store.js');
+const mcp = require('../lib/mcp.js');
 
 const project = store.ensureProject(projectRoot).slug;
 const general = store.setCategory({
@@ -142,6 +143,36 @@ test('explicit project export preserves Sidequest rollback rows', () => {
   const written = JSON.parse(fs.readFileSync(projectConfig, 'utf8'));
   assert.deepEqual(written.categories.custom, { kind: 'OVERRIDE', data: { route: { model: 'sonnet', effort: 'xhigh' } } });
   assert.deepEqual(store.getProjectCategories(project).rows, rowsBefore);
+});
+
+test('MCP exposes comparison diagnostics and guarded export', () => {
+  process.env.SQ_FAKE_SWITCHBOARD_MODEL = 'opus';
+  discovery.clearSwitchboardCache();
+  const names = mcp.toolDescriptors().map((tool) => tool.name);
+  assert.ok(names.includes('switchboard_status'));
+  assert.ok(names.includes('switchboard_export'));
+
+  const statusResponse = mcp.handleRequest({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'switchboard_status', arguments: { project: projectRoot } },
+  });
+  const status = JSON.parse(statusResponse.result.content[0].text);
+  assert.equal(status.authoritative, 'sidequest');
+  assert.ok(status.mismatches.includes('general'));
+
+  const exportResponse = mcp.handleRequest({
+    jsonrpc: '2.0', id: 2, method: 'tools/call',
+    params: { name: 'switchboard_export', arguments: { scope: 'global' } },
+  });
+  const preview = JSON.parse(exportResponse.result.content[0].text);
+  assert.equal(preview.dryRun, true);
+
+  const refused = mcp.handleRequest({
+    jsonrpc: '2.0', id: 3, method: 'tools/call',
+    params: { name: 'switchboard_export', arguments: { scope: 'project' } },
+  });
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.content[0].text, /explicit board/);
 });
 
 test('export refuses an incompatible existing Switchboard schema without changing it', () => {
