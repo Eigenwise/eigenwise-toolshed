@@ -7,8 +7,10 @@ const path = require('node:path');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const { flushOutbox } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
+const { otlpToObservations } = require('../lib/observability/otlp.js');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
+const OTLP_SIGNALS = Object.freeze({ '/v1/logs': 'logs', '/v1/traces': 'traces', '/v1/metrics': 'metrics' });
 
 function assertLoopbackHost(host) {
   if (!LOOPBACK_HOSTS.has(host)) throw new Error(`Observer host must be loopback, received ${host}.`);
@@ -91,6 +93,22 @@ function createObserver(options = {}) {
         const body = await readJson(request, maxBodyBytes);
         if (Array.isArray(body) && body.length === 0) throw requestError(400, 'empty_batch');
         const results = Array.isArray(body) ? store.ingestBatch(body) : [store.ingest(body)];
+        const rejected = results.some((result) => !result.accepted);
+        jsonResponse(response, rejected ? 422 : 200, {
+          committed: results.every((result) => result.committed),
+          results,
+        });
+        return;
+      }
+
+      if (request.method === 'POST' && OTLP_SIGNALS[url.pathname]) {
+        const body = await readJson(request, maxBodyBytes);
+        const observations = otlpToObservations(OTLP_SIGNALS[url.pathname], body, { projectId: options.projectId });
+        if (observations.length === 0) {
+          jsonResponse(response, 200, { committed: true, results: [] });
+          return;
+        }
+        const results = store.ingestBatch(observations);
         const rejected = results.some((result) => !result.accepted);
         jsonResponse(response, rejected ? 422 : 200, {
           committed: results.every((result) => result.committed),
