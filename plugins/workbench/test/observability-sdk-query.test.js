@@ -106,7 +106,6 @@ test('observeQuery consumes real SDK-shaped success messages without buffering t
   assert.equal(assistantUsage.length, 1);
   assert.equal(terminal.length, 1);
   assert.equal(assistantUsage[0].request_id, 'req-1');
-  assert.equal(assistantUsage[0].attributes.message_uuid, 'assistant-uuid-1');
   assert.deepEqual(assistantUsage[0].links, [{ relation: 'child_of', to_kind: 'tool', to_id: 'toolu_parent_1', method: 'direct_id', quality: 'exact_client' }]);
   assert.equal(terminal[0].session_id, 'session-1');
   assert.deepEqual(terminal[0].links, [{ relation: 'child_of', to_kind: 'tool', to_id: 'toolu_parent_1', method: 'direct_id', quality: 'exact_client' }]);

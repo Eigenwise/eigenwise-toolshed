@@ -135,14 +135,12 @@ function normalizeAssistantUsage(message, context = {}) {
   if (measurements.length === 0) return null;
 
   const sessionId = identifier(first(message.session_id, context.sessionId));
-  const messageUuid = identifier(message.uuid);
   const trace = parseTraceparent(context.traceparent) || {
     traceId: identifier(context.traceId),
     spanId: identifier(context.spanId),
   };
   const attributes = {};
   assign(attributes, 'model', identifier(message.message.model));
-  assign(attributes, 'message_uuid', messageUuid);
 
   const observation = {
     source: 'agent_sdk',
@@ -181,7 +179,6 @@ function normalizeTerminalResult(result, context = {}) {
   const attributes = {};
   assign(attributes, 'status', identifier(result.subtype));
   assign(attributes, 'stop_reason', identifier(result.stop_reason));
-  assign(attributes, 'message_uuid', messageUuid);
   const turns = nonNegative(result.num_turns);
   if (turns !== null) attributes.turns = turns;
 
