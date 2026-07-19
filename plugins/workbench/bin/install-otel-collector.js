@@ -102,7 +102,7 @@ function buildCollectorConfig(options = {}) {
       'filter/signals': {
         error_mode: 'ignore',
         // Keep only telemetry the ledger understands; drop everything else early.
-        logs: { log_record: ['not IsMatch(attributes["event.name"], "^(claude_code|agent_sdk)\\\\.")'] },
+        logs: { log_record: ['not IsMatch(attributes["event.name"], "^(claude_code|agent_sdk)\\\\.|^(mcp_server_connection|hook_execution_(start|complete))$")'] },
       },
       'transform/redact': {
         error_mode: 'ignore',
