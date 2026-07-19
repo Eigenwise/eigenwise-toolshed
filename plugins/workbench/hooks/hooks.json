@@ -63,6 +63,16 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/request-body-preflight.js\"",
+            "timeout": 3
+          }
+        ]
       }
     ],
     "PostToolUse": [
