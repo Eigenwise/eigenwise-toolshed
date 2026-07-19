@@ -9,9 +9,11 @@ const LOOPBACK = /^(?:https?:\/\/)?(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/
 // The pipeline processor order is a hard contract from SQ-471: bound memory first,
 // drop unwanted signals, strip content, then batch. Never insert a debug exporter.
 const REQUIRED_PROCESSOR_ORDER = Object.freeze(['memory_limiter', 'filter/signals', 'transform/redact', 'batch']);
+const REQUIRED_METRICS_PROCESSOR_ORDER = Object.freeze(['memory_limiter', 'filter/signals', 'transform/redact', 'deltatocumulative', 'batch']);
 const FORBIDDEN_EXPORTERS = Object.freeze(['debug', 'logging']);
 
 const PROJECT_LABEL_PROMOTION = 'set(attributes["project.id"], resource.attributes["project.id"]) where resource.attributes["project.id"] != nil';
+const REQUIRED_LOG_FILTER = 'not IsMatch(attributes["event.name"], "^(claude_code|agent_sdk|gateway)\\\\.|^(mcp_server_connection|hook_execution_(start|complete))$")';
 
 // Attribute keys the collector strips before anything leaves the process. Defense in
 // depth: the observer allowlists again, but content must never reach the wire.
@@ -54,8 +56,9 @@ function normalizeSinkExporter(value) {
     }
     normalizedHeaders[name] = headerValue;
   }
+  const pathname = url.pathname.replace(/\/+$/, '');
   return {
-    endpoint: url.toString(),
+    endpoint: `${url.origin}${pathname}`,
     headers: normalizedHeaders,
     allowRemote: !local,
   };
@@ -80,13 +83,15 @@ function buildCollectorConfig(options = {}) {
   if (sinkExporter) {
     exporters[SINK_EXPORTER] = {
       endpoint: sinkExporter.endpoint,
+      encoding: 'json',
+      compression: 'none',
       ...(Object.keys(sinkExporter.headers).length > 0 ? { headers: sinkExporter.headers } : {}),
     };
   }
 
-  const pipeline = (receivers, pipelineExporterNames) => ({
+  const pipeline = (receivers, pipelineExporterNames, processors = REQUIRED_PROCESSOR_ORDER) => ({
     receivers,
-    processors: [...REQUIRED_PROCESSOR_ORDER],
+    processors: [...processors],
     exporters: pipelineExporterNames,
   });
 
@@ -102,7 +107,7 @@ function buildCollectorConfig(options = {}) {
       'filter/signals': {
         error_mode: 'ignore',
         // Keep only telemetry the ledger understands; drop everything else early.
-        logs: { log_record: ['not IsMatch(attributes["event.name"], "^(claude_code|agent_sdk)\\\\.|^(mcp_server_connection|hook_execution_(start|complete))$")'] },
+        logs: { log_record: [REQUIRED_LOG_FILTER] },
       },
       'transform/redact': {
         error_mode: 'ignore',
@@ -110,6 +115,7 @@ function buildCollectorConfig(options = {}) {
         trace_statements: [{ context: 'span', statements: [...REDACTION_STATEMENTS] }],
         metric_statements: [{ context: 'datapoint', statements: [PROJECT_LABEL_PROMOTION, ...REDACTION_STATEMENTS] }],
       },
+      deltatocumulative: {},
       batch: { timeout: '5s', send_batch_size: 256 },
     },
     exporters,
@@ -119,7 +125,7 @@ function buildCollectorConfig(options = {}) {
       pipelines: {
         logs: pipeline(['otlp'], [...pipelineExporters]),
         traces: pipeline(['otlp'], [...pipelineExporters]),
-        metrics: pipeline(['otlp'], [...pipelineExporters]),
+        metrics: pipeline(['otlp'], [...pipelineExporters], REQUIRED_METRICS_PROCESSOR_ORDER),
       },
     },
   };
@@ -167,9 +173,15 @@ function validateCollectorConfig(config, options = {}) {
   if (declaredSink && !sinkExporter) {
     errors.push(`missing ${SINK_EXPORTER} exporter`);
   } else if (declaredSink && sinkExporter) {
-    if (endpointOf(sinkExporter) !== declaredSink.endpoint) {
+    const sinkEndpoint = endpointOf(sinkExporter);
+    if (typeof sinkEndpoint !== 'string' || sinkEndpoint.endsWith('/')) {
+      errors.push(`${SINK_EXPORTER} endpoint must not end with a slash`);
+    }
+    if (sinkEndpoint !== declaredSink.endpoint) {
       errors.push(`${SINK_EXPORTER} endpoint must match the declared sink endpoint`);
     }
+    if (sinkExporter.encoding !== 'json') errors.push(`${SINK_EXPORTER} encoding must be json`);
+    if (sinkExporter.compression !== 'none') errors.push(`${SINK_EXPORTER} compression must be none`);
     const actualHeaders = sinkExporter.headers || {};
     const declaredHeaders = declaredSink.headers || {};
     const sorted = (value) => JSON.stringify(Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))));
@@ -179,6 +191,11 @@ function validateCollectorConfig(config, options = {}) {
     if (declaredSink.allowRemote && sinkExporter.tls?.insecure === true) {
       errors.push(`${SINK_EXPORTER} cannot disable TLS verification for remote egress`);
     }
+  }
+
+  const signalFilter = config.processors?.['filter/signals']?.logs?.log_record;
+  if (JSON.stringify(signalFilter) !== JSON.stringify([REQUIRED_LOG_FILTER])) {
+    errors.push('filter/signals logs must retain claude_code, agent_sdk, and gateway events');
   }
 
   const redact = config.processors?.['transform/redact'];
@@ -205,8 +222,9 @@ function validateCollectorConfig(config, options = {}) {
   const expectedExporters = ['otlphttp/observer', ...(declaredSink ? [SINK_EXPORTER] : [])];
   for (const signal of ['logs', 'traces', 'metrics']) {
     const processors = pipelines[signal]?.processors;
-    if (JSON.stringify(processors) !== JSON.stringify(REQUIRED_PROCESSOR_ORDER)) {
-      errors.push(`pipeline ${signal} processor order must be ${REQUIRED_PROCESSOR_ORDER.join(',')}, got ${JSON.stringify(processors)}`);
+    const expectedProcessors = signal === 'metrics' ? REQUIRED_METRICS_PROCESSOR_ORDER : REQUIRED_PROCESSOR_ORDER;
+    if (JSON.stringify(processors) !== JSON.stringify(expectedProcessors)) {
+      errors.push(`pipeline ${signal} processor order must be ${expectedProcessors.join(',')}, got ${JSON.stringify(processors)}`);
     }
     const exporters = pipelines[signal]?.exporters;
     if (JSON.stringify(exporters) !== JSON.stringify(expectedExporters)) {
@@ -310,6 +328,7 @@ if (require.main === module) main();
 module.exports = {
   PROJECT_LABEL_PROMOTION,
   REDACTED_KEYS,
+  REQUIRED_METRICS_PROCESSOR_ORDER,
   REQUIRED_PROCESSOR_ORDER,
   SINK_EXPORTER,
   buildCollectorConfig,

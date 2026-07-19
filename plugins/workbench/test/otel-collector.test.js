@@ -9,9 +9,11 @@ const test = require('node:test');
 const {
   PROJECT_LABEL_PROMOTION,
   REDACTED_KEYS,
+  REQUIRED_METRICS_PROCESSOR_ORDER,
   REQUIRED_PROCESSOR_ORDER,
   SINK_EXPORTER,
   buildCollectorConfig,
+  normalizeSinkExporter,
   renderCollectorYaml,
   toYaml,
   validateCollectorConfig,
@@ -26,9 +28,10 @@ test('the default collector config is valid, loopback-only, and commits to the o
   assert.equal(config.exporters['otlphttp/observer'].encoding, 'json');
   assert.equal(config.exporters['otlphttp/observer'].compression, 'none');
   assert.equal(config.exporters['otlphttp/observer'].sending_queue.storage, 'file_storage/observer_queue');
-  for (const signal of ['logs', 'traces', 'metrics']) {
+  for (const signal of ['logs', 'traces']) {
     assert.deepEqual(config.service.pipelines[signal].processors, REQUIRED_PROCESSOR_ORDER);
   }
+  assert.deepEqual(config.service.pipelines.metrics.processors, REQUIRED_METRICS_PROCESSOR_ORDER);
 });
 
 test('fans every redacted signal out to an explicitly declared sink', () => {
@@ -39,16 +42,38 @@ test('fans every redacted signal out to an explicitly declared sink', () => {
   };
   const config = buildCollectorConfig({ sinkExporter });
   assert.deepEqual(validateCollectorConfig(config, { sinkExporter }), []);
-  assert.equal(config.exporters[SINK_EXPORTER].endpoint, 'https://otlp.example.test/');
+  assert.equal(config.exporters[SINK_EXPORTER].endpoint, 'https://otlp.example.test');
+  assert.equal(config.exporters[SINK_EXPORTER].encoding, 'json');
+  assert.equal(config.exporters[SINK_EXPORTER].compression, 'none');
   assert.equal(config.exporters[SINK_EXPORTER].headers.Authorization, 'Bearer private');
   for (const signal of ['logs', 'traces', 'metrics']) {
     assert.deepEqual(config.service.pipelines[signal].exporters, ['otlphttp/observer', SINK_EXPORTER]);
+  }
+  for (const signal of ['logs', 'traces']) {
     assert.deepEqual(config.service.pipelines[signal].processors, REQUIRED_PROCESSOR_ORDER);
   }
+  assert.deepEqual(config.service.pipelines.metrics.processors, REQUIRED_METRICS_PROCESSOR_ORDER);
 
   assert.ok(validateCollectorConfig(config).some((error) => error.includes('unexpected exporter')));
   config.exporters[SINK_EXPORTER].endpoint = 'https://other.example.test/';
-  assert.ok(validateCollectorConfig(config, { sinkExporter }).some((error) => error.includes('declared sink endpoint')));
+  const errors = validateCollectorConfig(config, { sinkExporter });
+  assert.ok(errors.some((error) => error.includes('must not end with a slash')));
+  assert.ok(errors.some((error) => error.includes('declared sink endpoint')));
+});
+
+test('normalizes sink endpoints without trailing slashes', () => {
+  assert.equal(normalizeSinkExporter({ endpoint: 'http://127.0.0.1:14318/' }).endpoint, 'http://127.0.0.1:14318');
+  assert.equal(normalizeSinkExporter({ endpoint: 'http://127.0.0.1:14318/otlp/' }).endpoint, 'http://127.0.0.1:14318/otlp');
+});
+
+test('validation requires JSON and uncompressed transport for the sink exporter', () => {
+  const sinkExporter = { endpoint: 'http://127.0.0.1:14318' };
+  const config = buildCollectorConfig({ sinkExporter });
+  config.exporters[SINK_EXPORTER].encoding = 'proto';
+  config.exporters[SINK_EXPORTER].compression = 'gzip';
+  const errors = validateCollectorConfig(config, { sinkExporter });
+  assert.ok(errors.some((error) => error.includes('encoding must be json')));
+  assert.ok(errors.some((error) => error.includes('compression must be none')));
 });
 
 test('promotes the project resource attribute to a metric datapoint label', () => {
@@ -81,6 +106,14 @@ test('validation rejects a reordered pipeline and a debug exporter', () => {
   const reordered = buildCollectorConfig();
   reordered.service.pipelines.logs.processors = ['batch', 'memory_limiter', 'filter/signals', 'transform/redact'];
   assert.ok(validateCollectorConfig(reordered).some((e) => e.includes('processor order')));
+
+  const metricsReordered = buildCollectorConfig();
+  metricsReordered.service.pipelines.metrics.processors = ['batch', 'memory_limiter', 'filter/signals', 'transform/redact', 'deltatocumulative'];
+  assert.ok(validateCollectorConfig(metricsReordered).some((e) => e.includes('processor order')));
+
+  const withoutGateway = buildCollectorConfig();
+  withoutGateway.processors['filter/signals'].logs.log_record = ['not IsMatch(attributes["event.name"], "^(claude_code|agent_sdk)\\\\.")'];
+  assert.ok(validateCollectorConfig(withoutGateway).some((e) => e.includes('gateway events')));
 
   const withDebug = buildCollectorConfig();
   withDebug.exporters.debug = { verbosity: 'detailed' };
@@ -134,8 +167,8 @@ test('renderCollectorYaml emits parseable-looking YAML with the right markers an
   assert.ok(yaml.includes('set(attributes[\\"project.id\\"], resource.attributes[\\"project.id\\"])'));
   assert.ok(yaml.includes('file_storage/observer_queue:'));
   assert.equal(/\n\s+debug:/.test(yaml), false);
-  // processors list renders inline in order.
-  assert.ok(yaml.includes('processors: ["memory_limiter", "filter/signals", "transform/redact", "batch"]'));
+  assert.ok(yaml.includes('deltatocumulative: {}'));
+  assert.ok(yaml.includes('processors: ["memory_limiter", "filter/signals", "transform/redact", "deltatocumulative", "batch"]'));
 });
 
 test('writeCollectorConfig writes a config file', (t) => {
