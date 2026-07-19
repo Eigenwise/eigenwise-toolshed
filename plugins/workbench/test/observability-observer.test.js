@@ -10,7 +10,7 @@ const { createObserver, assertLoopbackHost } = require('../bin/workbench-observe
 const { createOutboxDrainer, flushOutbox } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
-const { startFakeOtlpReceiver, startHangingOtlpReceiver, testSink } = require('./observability-test-support.js');
+const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
 
 const PROJECT_ID = 'a'.repeat(64);
 
@@ -359,13 +359,17 @@ test('exports sanitized OTLP only after acknowledgement and bounds retries witho
 test('outbox transport deadlines release the drainer for the next tick', async (t) => {
   const store = temporaryStore(t);
   store.ingest(requestObservation({ source_event_id: 'hanging-outbox' }));
-  const receiver = await startHangingOtlpReceiver();
-  t.after(() => receiver.close());
+  let sends = 0;
+  const hangingTransport = new Promise(() => {});
   const drainer = createOutboxDrainer(store, {
-    endpoint: receiver.endpoint,
+    endpoint: 'http://127.0.0.1:4319/v1/logs',
     timeoutMs: 25,
     baseDelayMs: 1,
     maxDelayMs: 1,
+    fetch: async () => {
+      sends += 1;
+      return hangingTransport;
+    },
   });
 
   const first = await drainer.flush();
@@ -374,7 +378,7 @@ test('outbox transport deadlines release the drainer for the next tick', async (
 
   const second = await drainer.flush();
   assert.deepEqual(second, { selected: 1, delivered: 0, failed: 1, exhausted: 0 });
-  assert.equal(receiver.requests.length, 2);
+  assert.equal(sends, 2);
 });
 
 test('observer binds only to loopback and acknowledges HTTP ingestion after commit', async (t) => {
