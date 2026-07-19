@@ -211,3 +211,77 @@ test('gateway OTLP becomes authoritative first-class usage across observer views
     'private accumulated history', 'private response', 'private credential', 'authorization',
   ]) assert.equal(persisted.includes(forbidden), false, `observer persisted ${forbidden}`);
 });
+
+test('gateway tool-result usage records land with their declared quality and no schema drops', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-toolresult-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'));
+  const receiver = await startFakeOtlpReceiver();
+  const observer = createObserver({
+    port: 0,
+    store,
+    projectId: PROJECT_ID,
+    hookSpoolFile: path.join(directory, 'hook-spool.jsonl'),
+    sink: testSink(receiver.endpoint),
+  });
+  const address = await observer.start();
+  t.after(async () => {
+    await observer.close();
+    await receiver.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const toolResultRecord = (id, quality) => ({
+    eventName: 'gateway.tool_result.usage',
+    observedAt: new Date('2026-07-19T20:00:02.000Z'),
+    attributes: {
+      source: 'codex_gateway',
+      source_event_id: `gateway-tool-result-${id}`,
+      source_schema: 'gateway-usage-v1',
+      'event.name': 'gateway.tool_result.usage',
+      event_name: 'gateway.tool_result.usage',
+      request_id: 'request-gateway',
+      client_request_id: 'client-gateway',
+      session_id: 'session-gateway',
+      agent_id: 'agent-gateway',
+      parent_agent_id: 'parent-gateway',
+      agent_role: 'executor',
+      model: 'claude-opus-4-8',
+      requested_model: 'claude-codex-auto',
+      backend: 'anthropic',
+      effort: 'max',
+      via: 'dispatch',
+      request_sequence: 8,
+      tool_use_id: `toolu_seam_${id}`,
+      tool_name: 'Read',
+      tool_result_tokens: 421,
+      tool_result_tokens_unit: 'tokens',
+      tool_result_tokens_quality: quality,
+    },
+  });
+
+  for (const [id, quality] of [['exact', 'derived_exact'], ['alloc', 'estimate'], ['bogus', 'not-a-quality']]) {
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(buildOtlpLogPayload(toolResultRecord(id, quality))),
+    });
+    assert.equal(response.status, 200);
+  }
+
+  const rows = store.database.prepare(
+    "SELECT o.tool_use_id, o.agent_id, m.name, m.unit, m.quality, m.value FROM observation o JOIN measurement m ON m.event_id = o.event_id WHERE o.event_name = 'gateway.tool_result.usage' ORDER BY o.tool_use_id",
+  ).all();
+  assert.equal(rows.length, 3);
+  const byToolUse = Object.fromEntries(rows.map((row) => [row.tool_use_id, row]));
+  assert.equal(byToolUse.toolu_seam_exact.quality, 'derived_exact');
+  assert.equal(byToolUse.toolu_seam_alloc.quality, 'estimate');
+  assert.equal(byToolUse.toolu_seam_bogus.quality, 'estimate');
+  for (const row of rows) {
+    assert.equal(row.name, 'tool_result_tokens');
+    assert.equal(row.unit, 'tokens');
+    assert.equal(row.value, 421);
+    assert.equal(row.agent_id, 'agent-gateway');
+  }
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
+});

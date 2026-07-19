@@ -94,6 +94,7 @@ const ALLOWED_EVENTS = Object.freeze([
   'sidequest.ticket',
   'codex_gateway.route',
   'gateway.token.usage',
+  'gateway.tool_result.usage',
   'gateway.limit.signal',
   'coverage_gap',
   'telemetry_conflict',
@@ -131,6 +132,7 @@ const ALLOWED_MEASUREMENTS = Object.freeze([
   'result_tokens',
   'tool_input_tokens_estimate',
   'tool_result_tokens_estimate',
+  'tool_result_tokens',
   'duration_ms',
   'active_time_ms',
   'blocked_ms',
@@ -319,6 +321,9 @@ const EVENT_ATTRIBUTES = Object.freeze({
   'gateway.token.usage': [
     'model', 'requested_model', 'backend', 'effort', 'via', 'status', 'status_code',
     'agent_role', 'request_id_source', 'response_mode', 'token_estimator', 'cache_attribution',
+  ],
+  'gateway.tool_result.usage': [
+    'model', 'requested_model', 'backend', 'effort', 'via', 'agent_role', 'tool_name',
   ],
   'gateway.limit.signal': [
     'model', 'requested_model', 'backend', 'effort', 'via', 'status', 'status_code',

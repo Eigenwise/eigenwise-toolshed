@@ -7,6 +7,7 @@ const {
   isAllowedMeasurementName,
   ATTRIBUTE_SPECS,
   EVENT_ATTRIBUTES,
+  MEASUREMENT_QUALITIES,
 } = require('./schema.js');
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@\[\]-]{0,254}$/;
@@ -38,6 +39,9 @@ const STRUCTURAL_ATTRIBUTE_KEYS = new Set([
   'trace_id', 'span_id', 'parent_span_id', 'workflow_run_id',
   'agent_id', 'parent_agent_id', 'tool_use_id', 'task_id', 'ticket_ref', 'route_id',
   'request_sequence', 'sequence',
+  // Measurement metadata the gateway sends alongside tool_result_tokens; consumed
+  // by measurementsFrom, not an attribute.
+  'tool_result_tokens_unit', 'tool_result_tokens_quality',
 ]);
 
 function identifier(value) {
@@ -109,7 +113,11 @@ function measurementUnit(name) {
   return 'tokens';
 }
 
-function measurementQuality(eventName, name) {
+function measurementQuality(eventName, name, flat) {
+  if (eventName === 'gateway.tool_result.usage' && name === 'tool_result_tokens') {
+    const declared = flat?.tool_result_tokens_quality;
+    return MEASUREMENT_QUALITIES.includes(declared) ? declared : 'estimate';
+  }
   if (eventName === 'codex_gateway.route' && name === 'duration_ms') return 'exact_client';
   if (eventName !== 'gateway.token.usage' && eventName !== 'gateway.limit.signal') {
     return name === 'cost_usd' ? 'estimate' : 'exact_provider';
@@ -161,7 +169,7 @@ function measurementsFrom(flat, scope, eventName = null) {
       value,
       unit: measurementUnit(name),
       scope,
-      quality: measurementQuality(eventName, name),
+      quality: measurementQuality(eventName, name, flat),
     });
   }
   return measurements;
