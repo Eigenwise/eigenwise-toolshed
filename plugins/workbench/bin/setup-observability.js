@@ -171,6 +171,11 @@ function startLgtm(dataDir, options = {}) {
   const docker = options.docker || 'docker';
   const spawn = options.spawnSync || spawnSync;
   const container = 'workbench-otel-lgtm-demo';
+  const grafanaSinkDir = path.resolve(__dirname, '..', 'observability', 'sinks', 'grafana');
+  const grafanaProvisioningDir = path.join(grafanaSinkDir, 'provisioning');
+  const grafanaDashboardsDir = path.join(grafanaSinkDir, 'dashboards');
+  const grafanaProvisioningTarget = '/otel-lgtm/grafana/conf/provisioning/dashboards';
+  const grafanaDashboardsTarget = '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards';
   const inspected = spawn(docker, ['inspect', '--format', '{{.State.Running}}', container], { encoding: 'utf8' });
   if (inspected.status === 0 && String(inspected.stdout).trim() === 'true') return { image: LGTM_IMAGE, dataDir, container };
   if (inspected.status === 0) {
@@ -179,9 +184,12 @@ function startLgtm(dataDir, options = {}) {
     return { image: LGTM_IMAGE, dataDir, container };
   }
   const args = [
-    'run', '--detach', '--name', container, '--restart', 'no',
+    'run', '--detach', '--name', container, '--restart', 'unless-stopped',
     '--publish', `${LOOPBACK}:3000:3000`, '--publish', `${LOOPBACK}:${LGTM_PORT}:4318`,
-    '--volume', 'workbench-lgtm-demo-data:/data', LGTM_IMAGE,
+    '--volume', 'workbench-lgtm-demo-data:/data',
+    '--volume', `${grafanaProvisioningDir}:${grafanaProvisioningTarget}:ro`,
+    '--volume', `${grafanaDashboardsDir}:${grafanaDashboardsTarget}:ro`,
+    LGTM_IMAGE,
   ];
   const result = spawn(docker, args, { encoding: 'utf8' });
   if (result.error || result.status !== 0) throw new Error('Docker could not start the pinned loopback-only LGTM container.');

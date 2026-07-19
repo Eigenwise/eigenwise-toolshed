@@ -1,0 +1,142 @@
+{
+  "uid": "claude-code-usage",
+  "title": "Claude Code Usage",
+  "tags": ["claude-code", "workbench", "tokens"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "project",
+        "label": "Project",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": { "query": "label_values(target_info{service_name=\"claude-code\"}, project_id)", "refId": "project" },
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total tokens",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Input tokens",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"input\"}[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Output tokens",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"output\"}[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Cost (USD)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "orange" } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_cost_usage_USD_total[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Tokens over time, by type",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{type}}", "expr": "sum by (type) (increase(claude_code_token_usage_tokens_total[$__rate_interval]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Tokens over time, by model",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{model}}", "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total[$__rate_interval]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Cost over time",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{project_id}}", "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total[$__rate_interval]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Usage by project",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "options": { "showHeader": true },
+      "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Cost" }, "properties": [ { "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 2 } ] } ] },
+      "targets": [
+        { "refId": "A", "format": "table", "instant": true, "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (project_id) (increase(claude_code_token_usage_tokens_total[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" },
+        { "refId": "B", "format": "table", "instant": true, "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        { "id": "organize", "options": { "renameByName": { "project_id": "Project", "Value #A": "Tokens", "Value #B": "Cost" } } }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Models in use (last 5m)",
+      "type": "bargauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true, "valueMode": "text", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{model}}", "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total[5m]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+      ]
+    }
+  ]
+}

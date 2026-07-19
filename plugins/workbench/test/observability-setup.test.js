@@ -22,6 +22,20 @@ const {
   verificationGuidance,
 } = require('../bin/setup-observability.js');
 
+const GRAFANA_SINK_DIR = path.join(path.resolve(__dirname, '..'), 'observability', 'sinks', 'grafana');
+
+test('bundles a valid Grafana provider for the Claude Code Usage dashboard', () => {
+  const provisioning = fs.readFileSync(path.join(GRAFANA_SINK_DIR, 'provisioning', 'workbench.yaml'), 'utf8');
+  const dashboard = JSON.parse(fs.readFileSync(path.join(GRAFANA_SINK_DIR, 'dashboards', 'claude-code-usage.json'), 'utf8'));
+
+  assert.match(provisioning, /^apiVersion: 1$/m);
+  assert.match(provisioning, /^providers:$/m);
+  assert.match(provisioning, /^    type: file$/m);
+  assert.match(provisioning, /^      path: \/otel-lgtm\/grafana\/conf\/provisioning\/workbench-dashboards$/m);
+  assert.equal(dashboard.uid, 'claude-code-usage');
+  assert.equal(dashboard.title, 'Claude Code Usage');
+});
+
 test('requires Claude Code v2.1.212 or newer', () => {
   assert.equal(compareVersions('2.1.212', MIN_CLAUDE_VERSION), 0);
   assert.equal(compareVersions('2.1.213', MIN_CLAUDE_VERSION), 1);
@@ -121,7 +135,11 @@ test('plans current-user application data and only starts LGTM on request', () =
     return args[0] === 'inspect' ? { status: 1, stdout: '' } : { status: 0, stdout: 'container' };
   } });
   assert.equal(lgtm.image, LGTM_IMAGE);
-  assert.deepEqual(calls[1][1].filter((argument) => argument.startsWith('127.0.0.1:')), ['127.0.0.1:3000:3000', '127.0.0.1:14318:4318']);
+  const runArgs = calls[1][1];
+  assert.deepEqual(runArgs.filter((argument) => argument.startsWith('127.0.0.1:')), ['127.0.0.1:3000:3000', '127.0.0.1:14318:4318']);
+  assert.equal(runArgs[runArgs.indexOf('--restart') + 1], 'unless-stopped');
+  assert.ok(runArgs.includes(`${path.join(GRAFANA_SINK_DIR, 'provisioning')}:/otel-lgtm/grafana/conf/provisioning/dashboards:ro`));
+  assert.ok(runArgs.includes(`${path.join(GRAFANA_SINK_DIR, 'dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
   const resumed = [];
   startLgtm(plan.dataDir, { spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: 'true' }; } });
   assert.equal(resumed.length, 1);
