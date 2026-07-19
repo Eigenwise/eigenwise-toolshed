@@ -105,15 +105,19 @@ function createObserver(options = {}) {
         const body = await readJson(request, maxBodyBytes);
         const observations = otlpToObservations(OTLP_SIGNALS[url.pathname], body, { projectId: options.projectId });
         if (observations.length === 0) {
-          jsonResponse(response, 200, { committed: true, results: [] });
+          jsonResponse(response, 200, {});
           return;
         }
         const results = store.ingestBatch(observations);
-        const rejected = results.some((result) => !result.accepted);
-        jsonResponse(response, rejected ? 422 : 200, {
-          committed: results.every((result) => result.committed),
-          results,
-        });
+        if (results.some((result) => !result.accepted)) {
+          jsonResponse(response, 422, { error: 'observation_rejected' });
+          return;
+        }
+        if (!results.every((result) => result.committed)) {
+          jsonResponse(response, 503, { error: 'commit_incomplete' });
+          return;
+        }
+        jsonResponse(response, 200, {});
         return;
       }
 

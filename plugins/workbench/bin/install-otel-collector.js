@@ -56,6 +56,8 @@ function buildCollectorConfig(options = {}) {
     exporters: {
       'otlphttp/observer': {
         endpoint: observerEndpoint,
+        encoding: 'json',
+        compression: 'none',
         tls: { insecure: true },
         sending_queue: { enabled: true, storage: 'file_storage/observer_queue' },
         retry_on_failure: { enabled: true },
@@ -92,6 +94,14 @@ function validateCollectorConfig(config) {
     if (!endpoint || !LOOPBACK.test(endpoint)) errors.push(`exporter ${name} must target loopback, got ${endpoint}`);
   }
 
+  const observerExporter = config.exporters?.['otlphttp/observer'];
+  if (!observerExporter) {
+    errors.push('missing otlphttp/observer exporter');
+  } else {
+    if (observerExporter.encoding !== 'json') errors.push('otlphttp/observer encoding must be json');
+    if (observerExporter.compression !== 'none') errors.push('otlphttp/observer compression must be none');
+  }
+
   if (!config.processors || !config.processors['transform/redact']) errors.push('missing transform/redact (content stripping) processor');
 
   const pipelines = config.service?.pipelines || {};
@@ -118,25 +128,51 @@ function quoteScalar(value) {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-function toYaml(value, indent = 0) {
+function inlineYaml(value) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    if (value.every((item) => typeof item !== 'object' || item === null)) {
+      return `[${value.map(quoteScalar).join(', ')}]`;
+    }
+    return null;
+  }
+  if (value && typeof value === 'object') return Object.keys(value).length === 0 ? '{}' : null;
+  return quoteScalar(value);
+}
+
+function yamlLines(value, indent) {
   const pad = '  '.repeat(indent);
   if (Array.isArray(value)) {
-    if (value.length === 0) return ' []';
-    if (value.every((item) => typeof item !== 'object' || item === null)) {
-      return ` [${value.map(quoteScalar).join(', ')}]`;
+    const lines = [];
+    for (const item of value) {
+      const inline = inlineYaml(item);
+      if (inline !== null) {
+        lines.push(`${pad}- ${inline}`);
+        continue;
+      }
+      const childPad = '  '.repeat(indent + 1);
+      const childLines = yamlLines(item, indent + 1);
+      lines.push(`${pad}- ${childLines[0].slice(childPad.length)}`);
+      lines.push(...childLines.slice(1));
     }
-    return '\n' + value.map((item) => `${pad}-${toYaml(item, indent + 1).replace(/^\n/, '')}`).join('\n');
+    return lines;
   }
+
   if (value && typeof value === 'object') {
-    const entries = Object.entries(value);
-    if (entries.length === 0) return ' {}';
-    return '\n' + entries.map(([key, child]) => {
-      const rendered = toYaml(child, indent + 1);
-      const joiner = rendered.startsWith('\n') || rendered.startsWith(' ') ? '' : ' ';
-      return `${pad}${key}:${joiner}${rendered}`;
-    }).join('\n');
+    const lines = [];
+    for (const [key, child] of Object.entries(value)) {
+      const inline = inlineYaml(child);
+      if (inline !== null) lines.push(`${pad}${key}: ${inline}`);
+      else lines.push(`${pad}${key}:`, ...yamlLines(child, indent + 1));
+    }
+    return lines;
   }
-  return ` ${quoteScalar(value)}`;
+
+  return [`${pad}${quoteScalar(value)}`];
+}
+
+function toYaml(value, indent = 0) {
+  return yamlLines(value, indent).join('\n');
 }
 
 function renderCollectorYaml(options = {}) {
