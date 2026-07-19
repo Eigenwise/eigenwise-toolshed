@@ -7,10 +7,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { createObserver, assertLoopbackHost } = require('../bin/workbench-observer.js');
-const { flushOutbox } = require('../lib/observability/outbox.js');
+const { createOutboxDrainer, flushOutbox } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
-const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
+const { startFakeOtlpReceiver, startHangingOtlpReceiver, testSink } = require('./observability-test-support.js');
 
 const PROJECT_ID = 'a'.repeat(64);
 
@@ -354,6 +354,27 @@ test('exports sanitized OTLP only after acknowledgement and bounds retries witho
     () => flushOutbox(store, { endpoint: 'http://127.0.0.1:14318/v1/logs', fetch: async () => ({ ok: true }) }),
     /Tests must use an explicit ephemeral receiver/,
   );
+});
+
+test('outbox transport deadlines release the drainer for the next tick', async (t) => {
+  const store = temporaryStore(t);
+  store.ingest(requestObservation({ source_event_id: 'hanging-outbox' }));
+  const receiver = await startHangingOtlpReceiver();
+  t.after(() => receiver.close());
+  const drainer = createOutboxDrainer(store, {
+    endpoint: receiver.endpoint,
+    timeoutMs: 25,
+    baseDelayMs: 1,
+    maxDelayMs: 1,
+  });
+
+  const first = await drainer.flush();
+  assert.deepEqual(first, { selected: 1, delivered: 0, failed: 1, exhausted: 0 });
+  assert.match(store.queryView('outbox_health')[0].last_error_code, /^transport_/);
+
+  const second = await drainer.flush();
+  assert.deepEqual(second, { selected: 1, delivered: 0, failed: 1, exhausted: 0 });
+  assert.equal(receiver.requests.length, 2);
 });
 
 test('observer binds only to loopback and acknowledges HTTP ingestion after commit', async (t) => {

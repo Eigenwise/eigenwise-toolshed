@@ -4,6 +4,7 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 const TEST_DEFAULT_PORTS = new Set([4318, 14318, 14319]);
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const FORBIDDEN_HEADERS = new Set(['content-length', 'content-type', 'host']);
+const DEFAULT_TIMEOUT_MS = 5_000;
 
 function assertOtlpUrl(value, options = {}) {
   const url = value instanceof URL ? value : new URL(value);
@@ -48,6 +49,35 @@ function retryTime(now, attempts, baseDelayMs, maxDelayMs) {
   return new Date(now.getTime() + delay).toISOString();
 }
 
+function positiveTimeout(value, fallback = DEFAULT_TIMEOUT_MS) {
+  const timeout = Number(value);
+  return Number.isFinite(timeout) && timeout > 0 ? timeout : fallback;
+}
+
+function requestSignal(signal, timeoutMs) {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
+
+function sendWithDeadline(send, endpoint, request, signal) {
+  const aborted = new Promise((_, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+  return Promise.race([Promise.resolve().then(() => send(endpoint, request)), aborted]);
+}
+
+function boundDuration(promise, timeoutMs) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
 async function flushOutbox(store, options = {}) {
   if (!store || typeof store.pendingOutbox !== 'function') throw new TypeError('A Workbench observability store is required.');
   if (options.enabled === false) {
@@ -66,16 +96,17 @@ async function flushOutbox(store, options = {}) {
   const rows = store.pendingOutbox({ limit: options.limit || 100, at: now.toISOString() });
   const result = { selected: rows.length, delivered: 0, failed: 0, exhausted: 0 };
   const headers = requestHeaders(options.headers);
+  const signal = requestSignal(options.signal, positiveTimeout(options.timeoutMs));
 
   for (const row of rows) {
     try {
-      const response = await send(endpoint, {
+      const response = await sendWithDeadline(send, endpoint, {
         method: 'POST',
         headers,
         body: row.payload_json,
         redirect: 'error',
-        signal: options.signal,
-      });
+        signal,
+      }, signal);
       if (response.ok) {
         store.acknowledgeOutbox([row.id]);
         result.delivered += 1;
@@ -107,10 +138,16 @@ async function flushOutbox(store, options = {}) {
 
 function createOutboxDrainer(store, options = {}) {
   let active = null;
+  const timeoutMs = positiveTimeout(options.timeoutMs);
+  const drainTimeoutMs = positiveTimeout(options.drainTimeoutMs, timeoutMs + 1_000);
   return {
     flush() {
-      if (!active) active = flushOutbox(store, options).finally(() => { active = null; });
-      return active;
+      if (active) return active;
+      const next = boundDuration(flushOutbox(store, options), drainTimeoutMs).finally(() => {
+        if (active === next) active = null;
+      });
+      active = next;
+      return next;
     },
   };
 }
