@@ -1,0 +1,245 @@
+'use strict';
+
+const { randomBytes, createHash } = require('node:crypto');
+
+const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
+const TRACEPARENT = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/;
+const ZERO_TRACE = '00000000000000000000000000000000';
+const ZERO_SPAN = '0000000000000000';
+
+function identifier(value) {
+  return typeof value === 'string' && SAFE_IDENTIFIER.test(value) ? value : null;
+}
+
+function first(...values) {
+  return values.find((value) => value !== undefined && value !== null);
+}
+
+function assign(target, key, value) {
+  if (value !== null && value !== undefined) target[key] = value;
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function finiteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function nonNegative(value) {
+  const number = finiteNumber(value);
+  return number !== null && number >= 0 ? number : null;
+}
+
+function isoTime(value, fallback) {
+  if (typeof value === 'string' && Number.isFinite(Date.parse(value))) return new Date(value).toISOString();
+  return fallback;
+}
+
+function parseTraceparent(value) {
+  if (typeof value !== 'string') return null;
+  const match = TRACEPARENT.exec(value.trim());
+  if (!match) return null;
+  const [, version, traceId, spanId, flags] = match;
+  if (version === 'ff' || traceId === ZERO_TRACE || spanId === ZERO_SPAN) return null;
+  return { version, traceId, spanId, flags, sampled: (parseInt(flags, 16) & 0x01) === 1 };
+}
+
+function formatTraceparent(traceId, spanId, sampled = true) {
+  return `00-${traceId}-${spanId}-${sampled ? '01' : '00'}`;
+}
+
+// Application-supplied workflow root: create a root span and a W3C traceparent to
+// inject into the SDK `query()` call so native children join by trace parentage.
+function createWorkflowRun(options = {}) {
+  const workflowRunId = identifier(first(options.workflowRunId, options.workflow_run_id));
+  const parent = parseTraceparent(first(options.traceparent, options.parentTraceparent));
+  const traceId = parent ? parent.traceId : randomBytes(16).toString('hex');
+  const spanId = randomBytes(8).toString('hex');
+  const sampled = parent ? parent.sampled : true;
+
+  const attributes = {};
+  const rootObservation = {
+    source: 'agent_sdk',
+    source_event_id: `agent_sdk_workflow_${traceId}_${spanId}`,
+    source_schema: 'agent-sdk-v1',
+    observed_at: isoTime(options.observedAt, new Date().toISOString()),
+    event_name: 'agent_sdk.terminal_result',
+    trace_id: traceId,
+    span_id: spanId,
+    attributes,
+  };
+  if (parent) rootObservation.parent_span_id = parent.spanId;
+  assign(rootObservation, 'workflow_run_id', workflowRunId);
+  assign(rootObservation, 'project_id', identifier(options.projectId));
+
+  return {
+    workflowRunId,
+    traceId,
+    spanId,
+    sampled,
+    traceparent: formatTraceparent(traceId, spanId, sampled),
+    rootObservation,
+  };
+}
+
+function usageMeasurements(usage, scope) {
+  if (!isPlainObject(usage)) return [];
+  const pairs = [
+    ['input_tokens', first(usage.input_tokens, usage.inputTokens)],
+    ['output_tokens', first(usage.output_tokens, usage.outputTokens)],
+    ['cache_read_tokens', first(usage.cache_read_input_tokens, usage.cacheReadInputTokens)],
+    ['cache_creation_tokens', first(usage.cache_creation_input_tokens, usage.cacheCreationInputTokens)],
+  ];
+  const measurements = [];
+  for (const [name, raw] of pairs) {
+    const value = nonNegative(raw);
+    if (value === null) continue;
+    measurements.push({ name, value, unit: 'tokens', scope, quality: 'exact_client' });
+  }
+  return measurements;
+}
+
+function costMeasurement(raw, scope) {
+  const value = nonNegative(raw);
+  if (value === null) return null;
+  return { name: 'cost_usd', value, unit: 'usd', scope, quality: 'estimate' };
+}
+
+// Per-model breakdown from the terminal result: one assistant_usage observation per
+// model, at run scope so it never duplicates per-request usage from api_request events.
+function modelUsageObservations(result, base) {
+  const breakdown = first(result.modelUsage, result.model_usage);
+  if (!isPlainObject(breakdown)) return [];
+  const observations = [];
+  for (const [rawModel, usage] of Object.entries(breakdown)) {
+    const model = identifier(rawModel);
+    if (!model || !isPlainObject(usage)) continue;
+    const measurements = usageMeasurements(usage, 'run');
+    const cost = costMeasurement(first(usage.costUSD, usage.cost_usd), 'run');
+    if (cost) measurements.push(cost);
+    if (measurements.length === 0) continue;
+    observations.push({
+      ...base,
+      source_event_id: `${base.source_event_id}_model_${createHash('sha256').update(model).digest('hex').slice(0, 16)}`,
+      event_name: 'agent_sdk.assistant_usage',
+      attributes: { model },
+      measurements,
+    });
+  }
+  return observations;
+}
+
+function runLink(relation, kind, id, method, quality) {
+  const safeId = identifier(id);
+  if (!safeId) return null;
+  return { relation, to_kind: kind, to_id: safeId, method, quality };
+}
+
+// Normalize the SDK/Workflow terminal `result` message into canonical observations.
+// Metadata only: never reads prompt, response, tool content, cwd, transcript, or env.
+function normalizeTerminalResult(result, context = {}) {
+  if (!isPlainObject(result)) throw new TypeError('An SDK terminal result object is required.');
+
+  const sessionId = identifier(first(result.session_id, result.sessionId, context.sessionId));
+  const messageUuid = identifier(first(result.uuid, result.messageUuid, result.message_uuid));
+  const workflowRunId = identifier(first(context.workflowRunId, context.workflow_run_id, result.workflow_run_id));
+  const trace = parseTraceparent(context.traceparent) || {
+    traceId: identifier(context.traceId),
+    spanId: identifier(context.spanId),
+  };
+
+  const attributes = {};
+  assign(attributes, 'status', identifier(first(result.subtype, result.status)));
+  assign(attributes, 'stop_reason', identifier(first(result.stop_reason, result.stopReason)));
+  const turns = nonNegative(first(result.num_turns, result.numTurns));
+  if (turns !== null) attributes.turns = turns;
+
+  const measurements = [];
+  const duration = nonNegative(first(result.duration_ms, result.durationMs));
+  if (duration !== null) measurements.push({ name: 'duration_ms', value: duration, unit: 'ms', scope: 'run', quality: 'exact_client' });
+  // API duration is time the run spent blocked on the provider; distinct measurement name.
+  const apiDuration = nonNegative(first(result.duration_api_ms, result.durationApiMs));
+  if (apiDuration !== null) measurements.push({ name: 'blocked_ms', value: apiDuration, unit: 'ms', scope: 'run', quality: 'exact_client' });
+  // Aggregate usage at run scope is a completeness check; request-scope usage lives on
+  // api_request events, so run scope here never double-counts them.
+  for (const measurement of usageMeasurements(first(result.usage, result.totalUsage), 'run')) measurements.push(measurement);
+  const cost = costMeasurement(first(result.total_cost_usd, result.totalCostUsd), 'run');
+  if (cost) measurements.push(cost);
+
+  const observedAt = isoTime(context.observedAt, new Date().toISOString());
+  const sourceSeed = first(messageUuid, sessionId, trace.spanId, 'agent_sdk_result');
+  const terminal = {
+    source: 'agent_sdk',
+    source_event_id: `agent_sdk_result_${createHash('sha256').update(String(sourceSeed)).digest('hex').slice(0, 32)}`,
+    source_schema: 'agent-sdk-v1',
+    observed_at: observedAt,
+    event_name: 'agent_sdk.terminal_result',
+    attributes,
+  };
+  if (measurements.length > 0) terminal.measurements = measurements;
+  assign(terminal, 'project_id', identifier(context.projectId));
+  assign(terminal, 'session_id', sessionId);
+  assign(terminal, 'workflow_run_id', workflowRunId);
+  assign(terminal, 'trace_id', identifier(trace.traceId));
+  assign(terminal, 'span_id', identifier(trace.spanId));
+
+  const links = [];
+  // Missing parent/workflow IDs are left unlinked rather than guessed.
+  const workflowLink = runLink('belongs_to', 'workflow', workflowRunId, 'application_supplied', 'exact');
+  if (workflowLink) links.push(workflowLink);
+  const parentToolUse = runLink('child_of', 'tool', first(context.parentToolUseId, context.parent_tool_use_id), 'direct_id', 'exact_client');
+  if (parentToolUse) links.push(parentToolUse);
+  if (links.length > 0) terminal.links = links;
+
+  const base = {
+    source: 'agent_sdk',
+    source_event_id: terminal.source_event_id,
+    source_schema: 'agent-sdk-v1',
+    observed_at: observedAt,
+    event_name: 'agent_sdk.assistant_usage',
+  };
+  assign(base, 'project_id', identifier(context.projectId));
+  assign(base, 'session_id', sessionId);
+  assign(base, 'workflow_run_id', workflowRunId);
+  assign(base, 'trace_id', identifier(trace.traceId));
+
+  return [terminal, ...modelUsageObservations(result, base)];
+}
+
+// Send observations to the loopback observer with a hard timeout, fail-open, and
+// without keeping the event loop alive for short headless runs.
+async function flushObservations(observations, options = {}) {
+  const list = Array.isArray(observations) ? observations.filter(isPlainObject) : [];
+  if (list.length === 0) return { sent: 0, ok: true };
+  const url = typeof options.url === 'string' ? options.url : 'http://127.0.0.1:14319/v1/observations';
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 1500;
+  const fetchImpl = options.fetch || globalThis.fetch;
+  if (typeof fetchImpl !== 'function') return { sent: 0, ok: false, error: 'no_fetch' };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  try {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(list),
+      signal: controller.signal,
+    });
+    return { sent: list.length, ok: response.ok === true, status: response.status };
+  } catch (error) {
+    return { sent: 0, ok: false, error: error && error.name === 'AbortError' ? 'timeout' : 'unreachable' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+module.exports = {
+  createWorkflowRun,
+  flushObservations,
+  formatTraceparent,
+  normalizeTerminalResult,
+  parseTraceparent,
+};
