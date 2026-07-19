@@ -474,9 +474,14 @@ test('home-delete guard: allows forced non-recursive and continued scoped delete
   "C:\\scratchpad\\logs"`,
     `rm -rf "C:\\scratchpad\\observability" \\
   "C:\\scratchpad\\logs"`,
-    'rm -rf C:\\scratchpad\\observability /',
   ]) {
     assert.strictEqual(runHomeDeleteGuard('Bash', command), null, command);
+  }
+});
+
+test('home-delete guard: a lone forward slash is still the drive root', () => {
+  for (const command of ['rm -rf /', 'rm -rf C:\\scratchpad\\observability /']) {
+    assert.equal(runHomeDeleteGuard('Bash', command).hookSpecificOutput.permissionDecision, 'deny', command);
   }
 });
 

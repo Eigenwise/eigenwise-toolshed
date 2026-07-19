@@ -22,7 +22,9 @@ function isProtectedPath(command) {
   return command
     .replace(/["']/g, '')
     .split(/\s+/)
-    .filter((target) => target !== '\\' && target !== '/' && path.isAbsolute(target))
+    // A lone backslash is a shell line continuation, not a target; a lone
+    // forward slash has no continuation meaning and stays a protected root.
+    .filter((target) => target !== '\\' && path.isAbsolute(target))
     .map((target) => normalizePath(path.resolve(target)))
     .some((target) => protectedRoots.some((root) => root === target || root.startsWith(`${target}${path.sep}`)));
 }
