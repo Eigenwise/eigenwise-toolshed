@@ -88,13 +88,14 @@
     {
       "id": 6,
       "title": "Tokens over time, by model",
+      "description": "Exact provider tokens by resolved gateway model, including cache reads and writes.",
       "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "loki", "uid": "loki" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{model}}", "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__rate_interval]))" }
+        { "refId": "A", "datasource": { "type": "loki", "uid": "loki" }, "legendFormat": "{{workbench_attribute_model}}", "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_tokens_value [$__rate_interval])) + sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_output_tokens_value [$__rate_interval])) + sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_read_tokens_value [$__rate_interval])) + sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_tokens_value [$__rate_interval]))" }
       ]
     },
     {
@@ -128,14 +129,15 @@
     },
     {
       "id": 9,
-      "title": "Models in use (last 5m)",
+      "title": "Models in use",
+      "description": "Exact provider tokens by resolved gateway model over the selected time range.",
       "type": "bargauge",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": { "type": "loki", "uid": "loki" },
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
       "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true, "valueMode": "text", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{model}}", "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[5m]))" }
+        { "refId": "A", "queryType": "instant", "instant": true, "datasource": { "type": "loki", "uid": "loki" }, "legendFormat": "{{workbench_attribute_model}}", "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_tokens_value [$__range])) + sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_output_tokens_value [$__range])) + sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_read_tokens_value [$__range])) + sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_tokens_value [$__range]))" }
       ]
     },
     {"id":10,"title":"Token volume by provider / backend","description":"Exact token telemetry grouped by provider and backend.","type":"bargauge","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":7,"w":12,"x":0,"y":26},"options":{"orientation":"horizontal","displayMode":"gradient","showUnfilled":true,"valueMode":"text","reduceOptions":{"calcs":["lastNotNull"]}},"fieldConfig":{"defaults":{"unit":"short","color":{"mode":"continuous-GrYlRd"}},"overrides":[]},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"legendFormat":"{{provider}} / {{backend}}","expr":"sum by (provider, backend) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))"}]},

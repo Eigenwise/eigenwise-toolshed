@@ -231,7 +231,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
   for (const title of [
-    'Tokens over time, by type', 'Tokens over time, by model', 'Token volume by provider / backend',
+    'Tokens over time, by type', 'Tokens over time, by model', 'Models in use', 'Token volume by provider / backend',
     'Tool activity by name', 'MCP activity by server / tool', 'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
     'Hook execution activity / failures', 'Subagent lifecycle activity',
@@ -239,6 +239,21 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.match(byTitle.get('MCP activity by server / tool').description, /frequency only/i);
   assert.match(byTitle.get('MCP activity by server / tool').description, /token attribution is unavailable/i);
   assert.match(byTitle.get('Token volume by provider / backend').targets[0].expr, /provider, backend/);
+
+  for (const title of ['Tokens over time, by model', 'Models in use']) {
+    const panel = byTitle.get(title);
+    assert.equal(panel.datasource.type, 'loki');
+    assert.match(panel.description, /resolved gateway model/i);
+    assert.match(panel.targets[0].legendFormat, /workbench_attribute_model/);
+    for (const measurement of ['input', 'output', 'cache_read', 'cache_creation']) {
+      assert.match(panel.targets[0].expr, new RegExp(`workbench_measurement_${measurement}_tokens_value`));
+    }
+    assert.match(panel.targets[0].expr, /gateway\.token\.usage/);
+    assert.match(panel.targets[0].expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
+  }
+  assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /\[\$__rate_interval\]/);
+  assert.match(byTitle.get('Models in use').targets[0].expr, /\[\$__range\]/);
+  assert.equal(byTitle.get('Models in use').targets[0].instant, true);
 
   const lokiExpressions = dashboard.panels
     .flatMap((panel) => panel.targets || [])
