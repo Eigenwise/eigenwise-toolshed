@@ -9,6 +9,7 @@ const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const CLAUDE_PREFIX = 'sidequest-exec-';
 const DISPATCH_PREFIX = 'sidequest-exec-dispatch-';
 const TICKET_PREFIX = 'sidequest-sq-';
+const LEGACY_TICKET_PREFIX = 'sidequest-ticket-';
 
 function isEffort(value) {
   return typeof value === 'string' && EFFORTS.includes(value);
@@ -29,6 +30,7 @@ function stableDispatchName(effort) {
 //   'codex_dispatch' — a stable dispatch executor (carries effort)
 //   'claude_builtin' — a stable Claude executor (carries effort)
 //   'ticket'         — a per-ticket dispatch/temp name Sidequest tolerates on claims
+//   'legacy_ticket'  — a retired per-ticket executor, tolerated for lifecycle cleanup only
 //   'unknown'        — anything else (fail-soft; never throws)
 function classify(name) {
   if (typeof name !== 'string' || !name) return { kind: 'unknown', effort: null };
@@ -46,6 +48,7 @@ function classify(name) {
     return { kind: 'ticket', effort: null };
   }
   if (name.startsWith(TICKET_PREFIX)) return { kind: 'ticket', effort: null };
+  if (name.startsWith(LEGACY_TICKET_PREFIX)) return { kind: 'legacy_ticket', effort: null };
   return { kind: 'unknown', effort: null };
 }
 
@@ -53,6 +56,7 @@ module.exports = {
   CLAUDE_PREFIX,
   DISPATCH_PREFIX,
   EFFORTS,
+  LEGACY_TICKET_PREFIX,
   TICKET_PREFIX,
   classify,
   isEffort,

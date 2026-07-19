@@ -125,28 +125,17 @@ test('pre-tool hook: generic agents get direct-tool guidance and Sidequest-shape
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, /\[sidequest-scout\]/);
 });
 
-test('pre-tool hook keeps built-in executor model but removes overrides for pinned Codex, native, and ticket executors', () => {
-  const codex = runHookOutput(FORCE_BYPASS, {
+test('pre-tool hook keeps builtin models and strips a stable dispatch executor model', () => {
+  const dispatch = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', model: 'fable', name: 'sq210-codex' },
+    tool_input: {
+      subagent_type: 'sidequest-exec-dispatch-high', model: 'fable', name: 'sq210-dispatch',
+      prompt: 'work SQ-210\n[sidequest-route model=codex-gpt-5-6-terra effort=high]',
+    },
   });
-  assert.equal(codex.hookSpecificOutput.updatedInput.model, undefined);
-  assert.equal(codex.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
-  assert.match(codex.systemMessage, /removed the Agent model override/);
-
-  const native = runHookOutput(FORCE_BYPASS, {
-    tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-native-sq-210-gpt-5-6-terra', model: 'sonnet', name: 'sq210-native' },
-  });
-  assert.equal(native.hookSpecificOutput.updatedInput.model, undefined);
-  assert.equal(native.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
-
-  const ticketExecutor = runHookOutput(FORCE_BYPASS, {
-    tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-ticket-sq-584-haiku-b37fffcb', model: 'sonnet', name: 'sq584-ticket' },
-  });
-  assert.equal(ticketExecutor.hookSpecificOutput.updatedInput.model, undefined);
-  assert.equal(ticketExecutor.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  assert.equal(dispatch.hookSpecificOutput.updatedInput.model, undefined);
+  assert.equal(dispatch.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  assert.match(dispatch.systemMessage, /removed the Agent model override/);
 
   const builtIn = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
@@ -154,6 +143,12 @@ test('pre-tool hook keeps built-in executor model but removes overrides for pinn
   });
   assert.equal(builtIn.hookSpecificOutput.updatedInput.model, 'opus');
   assert.equal(builtIn.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
+  for (const subagent_type of ['sidequest-native-sq-210-gpt-5-6-terra', 'sidequest-ticket-sq-584-haiku-b37fffcb']) {
+    const out = runHookOutput(FORCE_BYPASS, { tool_name: 'Agent', tool_input: { subagent_type, prompt: 'work SQ-210' } });
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /not a recognized ticket executor/);
+  }
 });
 
 test('pre-tool hook: malformed input fails soft', () => {
@@ -298,11 +293,14 @@ test('pre-tool hook: builtin exec spawned WITH a model that mismatches the resol
   assert.match(out.systemMessage, /model "opus" but .* resolves to "sonnet"/);
 });
 
-test('pre-tool hook: pinned Codex-style executor still strips model even when a ref resolves', () => {
-  const t = fixtureTicket('SQ-232 pinned-passthrough fixture', 'codex-gpt-5-6-terra', 'high');
+test('pre-tool hook: stable dispatch executor strips model even when a ref resolves', () => {
+  const t = fixtureTicket('SQ-232 dispatch passthrough fixture', 'codex-gpt-5-6-terra', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', model: 'fable', name: 'w-pinned', prompt: `work ${t.ref} --project "${slug}"` },
+    tool_input: {
+      subagent_type: 'sidequest-exec-dispatch-high', model: 'fable', name: 'w-dispatch',
+      prompt: `work ${t.ref} --project "${slug}"\n[sidequest-route model=codex-gpt-5-6-terra effort=high]`,
+    },
   });
   assert.equal(out.hookSpecificOutput.updatedInput.model, undefined);
   assert.equal(out.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
@@ -326,9 +324,9 @@ function runForceBypassWithEnv(toolInput, envOverrides) {
   return out.trim() ? JSON.parse(out) : null;
 }
 
-test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a pinned Codex executor spawn', () => {
+test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a dispatch executor spawn', () => {
   const out = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', name: 'sq-env-codex', prompt: 'work SQ-1' },
+    { subagent_type: 'sidequest-exec-dispatch-high', name: 'sq-env-codex', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
     { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }
   );
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
@@ -347,7 +345,7 @@ test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a builtin executor sp
 
 test('pre-tool hook: an unset CLAUDE_CODE_SUBAGENT_MODEL leaves the spawn alone', () => {
   const out = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', model: 'fable', name: 'sq-env-off', prompt: 'work SQ-1' },
+    { subagent_type: 'sidequest-exec-dispatch-high', model: 'fable', name: 'sq-env-off', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
     { CLAUDE_CODE_SUBAGENT_MODEL: '' }
   );
   assert.ok(!out.hookSpecificOutput.permissionDecision, 'no override -> no deny');
@@ -959,6 +957,18 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   assert.equal(same.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
 });
 
+test('pre-tool hook: dispatch executor rejects a route marker with different effort', () => {
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-mismatch',
+      prompt: 'work SQ-377\n[sidequest-route model=codex-gpt-5-6-terra effort=medium]',
+    },
+  });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /executor effort "high" does not match route marker effort "medium"/);
+});
+
 test('dispatch ledger records an authoritative launch, agent bind, and claim acknowledgement', () => {
   const ticket = addEffortTicket('dispatch launch acknowledgement', 'high');
   const sessionId = `launch-${++sqSeq}`;
@@ -1087,7 +1097,14 @@ test('subagent stop marks a launch that never claimed as failed', () => {
   assert.equal(after.dispatchNonce, null);
 });
 
-test('pre-tool hook: dispatch executor requires a canonical route marker without affecting markerless executor types', () => {
+test('subagent-stop: legacy ticket executors retain cleanup verdicts without becoming spawn targets', () => {
+  assert.strictEqual(
+    runHook(SUBAGENT_STOP, { session_id: 'sess-legacy-ticket', agent_type: 'sidequest-ticket-sq-584-haiku-b37fffcb' }),
+    'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec'
+  );
+});
+
+test('pre-tool hook: dispatch executor requires a canonical route marker and legacy executors cannot launch', () => {
   const missingMarker = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-no-marker', prompt: 'work SQ-377' },
@@ -1105,10 +1122,10 @@ test('pre-tool hook: dispatch executor requires a canonical route marker without
   assert.ok(!builtIn.hookSpecificOutput.permissionDecision, 'markerless builtin executors remain valid');
   assert.equal(builtIn.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
 
-  const pinned = runHookOutput(FORCE_BYPASS, {
+  const legacy = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-exec-codex-gpt-5-6-terra-high', name: 'w-pinned-no-marker', prompt: 'work SQ-377' },
+    tool_input: { subagent_type: 'sidequest-ticket-sq-584-haiku-b37fffcb', name: 'w-legacy', prompt: 'work SQ-377' },
   });
-  assert.ok(!pinned.hookSpecificOutput.permissionDecision, 'markerless pinned executors remain valid');
-  assert.equal(pinned.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  assert.equal(legacy.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(legacy.hookSpecificOutput.permissionDecisionReason, /not a recognized ticket executor/);
 });

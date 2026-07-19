@@ -53,6 +53,28 @@ function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
 }
 
+function fallbackClassify(type) {
+  const dispatch = /^sidequest-exec-dispatch-(low|medium|high|xhigh|max)$/.exec(type);
+  if (dispatch) return { kind: 'codex_dispatch', effort: dispatch[1] };
+  const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);
+  if (builtin) return { kind: 'claude_builtin', effort: builtin[1] };
+  if (/^sidequest-ticket-/.test(type)) return { kind: 'legacy_ticket', effort: null };
+  if (/^sidequest-(?:sq-|exec-)/.test(type)) return { kind: 'ticket', effort: null };
+  return { kind: 'unknown', effort: null };
+}
+
+function classifyExecutor(type) {
+  try {
+    return require(path.join(pluginRoot(), 'lib', 'exec-names.js')).classify(type);
+  } catch (_) {
+    return fallbackClassify(type);
+  }
+}
+
+function isKnownExecutor(classification) {
+  return classification.kind !== 'unknown';
+}
+
 // Minutes over which a single claimed run is worth flagging. Env-overridable;
 // a missing/garbage/non-positive value falls back to the effort-scaled default.
 function thresholdMs(effort) {
@@ -84,7 +106,7 @@ function commitHash(comment) {
   return match ? match[0] : null;
 }
 
-function stopVerdict(store, claims, agentType) {
+function stopVerdict(store, claims, classification) {
   const now = Date.now();
   for (const claim of claims) {
     if (!claim || claim.status !== 'done') continue;
@@ -121,7 +143,7 @@ function stopVerdict(store, claims, agentType) {
     return `exec stopped HOLDING ${label} claim (age ${mins}m), likely dead: release + respawn, then TaskStop it`;
   }
 
-  if (agentType.startsWith('sidequest-')) return 'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec';
+  if (isKnownExecutor(classification)) return 'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec';
   return null;
 }
 
@@ -151,7 +173,8 @@ function main() {
   // attributing a session claim to it is noise. An absent type stays permissive so
   // older Claude Code payloads (session id only) behave as before.
   const agentType = String(data.agent_type || data.agentType || '');
-  if (agentType && !agentType.startsWith('sidequest-')) process.exit(0);
+  const classification = classifyExecutor(agentType);
+  if (agentType && !isKnownExecutor(classification)) process.exit(0);
 
   const sessionId = data.session_id || data.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
   if (!sessionId) process.exit(0); // nothing to attribute a claim to
@@ -183,7 +206,7 @@ function main() {
 
   let verdict;
   try {
-    verdict = stopVerdict(store, claims, agentType);
+    verdict = stopVerdict(store, claims, classification);
   } catch (_) {
     process.exit(0);
   }

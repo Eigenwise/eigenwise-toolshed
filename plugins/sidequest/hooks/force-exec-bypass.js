@@ -17,17 +17,26 @@
 const fs = require('fs');
 const path = require('path');
 
-const BUILTIN_EXECUTORS = new Set([
-  'sidequest-exec-low', 'sidequest-exec-medium', 'sidequest-exec-high',
-  'sidequest-exec-xhigh', 'sidequest-exec-max',
-]);
-// Keep this aligned with TICKET_PREFIX in lib/agentsync.js without loading the generator and store on every Agent call.
-const TICKET_EXECUTOR_PREFIX = 'sidequest-ticket-';
+function fallbackClassify(type) {
+  const match = /^sidequest-exec-dispatch-(low|medium|high|xhigh|max)$/.exec(type);
+  if (match) return { kind: 'codex_dispatch', effort: match[1] };
+  const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);
+  if (builtin) return { kind: 'claude_builtin', effort: builtin[1] };
+  if (/^sidequest-ticket-/.test(type)) return { kind: 'legacy_ticket', effort: null };
+  if (/^sidequest-(?:sq-|exec-)/.test(type)) return { kind: 'ticket', effort: null };
+  return { kind: 'unknown', effort: null };
+}
 
-function isPinnedSidequestExecutor(type) {
-  return type.startsWith('sidequest-native-')
-    || type.startsWith(TICKET_EXECUTOR_PREFIX)
-    || (type.startsWith('sidequest-exec-') && !BUILTIN_EXECUTORS.has(type));
+function classifyExecutor(type) {
+  try {
+    return require(path.join(pluginRoot(), 'lib', 'exec-names.js')).classify(type);
+  } catch (_) {
+    return fallbackClassify(type);
+  }
+}
+
+function isCurrentExecutor(classification) {
+  return classification.kind === 'claude_builtin' || classification.kind === 'codex_dispatch';
 }
 
 function agentDenyReason(type) {
@@ -158,10 +167,10 @@ function resolveStampedModel(input) {
 // silently run tickets on the wrong model. This mirrors the gateway marker grammar.
 const ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
 
-function dispatchRouteModels(input) {
+function dispatchRouteMarkers(input) {
   const prompt = input && input.tool_input && input.tool_input.prompt;
   if (typeof prompt !== 'string' || !prompt) return [];
-  return [...new Set([...prompt.matchAll(ROUTE_MARKER_RE)].map((match) => match[1]))];
+  return [...prompt.matchAll(ROUTE_MARKER_RE)].map((match) => ({ model: match[1], effort: match[2] }));
 }
 
 function denyReason(res, type) {
@@ -190,11 +199,8 @@ function main() {
   const toolInput = input && input.tool_input;
   if (!toolInput || typeof toolInput !== 'object') return;
   const type = String(toolInput.subagent_type || '');
-  const prompt = toolInput.prompt;
-  const isExec = type.startsWith('sidequest-exec-')
-    || type.startsWith('sidequest-native-')
-    || type.startsWith(TICKET_EXECUTOR_PREFIX);
-  if (!isExec) {
+  const classification = classifyExecutor(type);
+  if (!isCurrentExecutor(classification)) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -230,34 +236,45 @@ function main() {
   const launchAgentName = dispatchAgentName(input);
   if (launchAgentName) updatedInput.name = launchAgentName;
 
-  if (isPinnedSidequestExecutor(type)) {
-    if (type.startsWith('sidequest-exec-dispatch-')) {
-      const routeModels = dispatchRouteModels(input);
-      if (!routeModels.length) {
-        process.stdout.write(JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'deny',
-            permissionDecisionReason:
-              'sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged.',
-          },
-        }));
-        return;
-      }
-      const conflict = routeModels.length > 1 ? routeModels : null;
-      if (conflict) {
-        process.stdout.write(JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'deny',
-            permissionDecisionReason:
-              `sidequest: this batch mixes tickets stamped with different models (${conflict.join(', ')}) under one ` +
-              `dispatch executor — every ticket would silently run on the last route marker's model. Split the batch ` +
-              `per model and re-spawn each with its own dispatch prompt.`,
-          },
-        }));
-        return;
-      }
+  if (classification.kind === 'codex_dispatch') {
+    const markers = dispatchRouteMarkers(input);
+    const routeModels = [...new Set(markers.map((marker) => marker.model))];
+    if (!routeModels.length) {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            'sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged.',
+        },
+      }));
+      return;
+    }
+    const mismatch = markers.find((marker) => marker.effort !== classification.effort);
+    if (mismatch) {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            `sidequest: dispatch executor effort "${classification.effort}" does not match route marker effort "${mismatch.effort}". Re-run dispatch and pass the returned spawn unchanged.`,
+        },
+      }));
+      return;
+    }
+    const conflict = routeModels.length > 1 ? routeModels : null;
+    if (conflict) {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            `sidequest: this batch mixes tickets stamped with different models (${conflict.join(', ')}) under one ` +
+            `dispatch executor — every ticket would silently run on the last route marker's model. Split the batch ` +
+            `per model and re-spawn each with its own dispatch prompt.`,
+        },
+      }));
+      return;
     }
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, 'model');
     if (hadModel) delete updatedInput.model;

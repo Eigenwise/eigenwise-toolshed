@@ -38,6 +38,10 @@ test('legacy ticket and temp names are tolerated, not unknown', () => {
   assert.strictEqual(classify('sidequest-exec-dispatch-486').kind, 'ticket');
 });
 
+test('legacy ticket executors retain lifecycle cleanup recognition', () => {
+  assert.deepStrictEqual(classify('sidequest-ticket-sq-584-haiku-b37fffcb'), { kind: 'legacy_ticket', effort: null });
+});
+
 test('non-sidequest and malformed names are unknown and never throw', () => {
   assert.deepStrictEqual(classify('general-purpose'), { kind: 'unknown', effort: null });
   assert.deepStrictEqual(classify(''), { kind: 'unknown', effort: null });
