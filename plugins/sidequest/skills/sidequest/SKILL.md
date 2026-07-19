@@ -215,11 +215,15 @@ Routed executors use the matching MCP tools instead. Their scoped `commit` recei
 **Repository publishing is the orchestrator's, alone.** Executors stop at a verified local commit and
 `submit` it (durable ref `refs/sidequest/<SQ-n>`, claim released, ticket parked in `doing` awaiting
 integration — `pulse`/`list --brief` show the `submission`, and `ready` excludes it). The orchestrator then runs the serialized publish transaction — publish lock, clean integration worktree,
-full submitted-ticket comment-thread read, central version assignment, per-ticket reverify, batch seam check, push,
-reachability check, `done` — from
+full submitted-ticket comment-thread read, central version assignment, per-ticket reverify, batch seam check,
+diff review, push, reachability check, `done` — from
 [references/publishing.md](references/publishing.md). Before integrating or closing a submitted ticket, read
 `sidequest comments <ref> --json`; resolve or explicitly act on any unresolved risk or question. The queue entry
-and its verify field are not substitutes for that handoff. Never mark a submitted ticket done without
+and its verify field are not substitutes for that handoff. **Green verification is necessary but never a review**:
+before pushing an integrated ticket, review its diff for correctness, scope-safety, and security — read it yourself
+for a small or mechanical change, or dispatch a `review-audit` executor (`security-audit` for a security-sensitive
+diff) for a substantial or cross-cutting one — and resolve or explicitly accept every finding before the push.
+Never mark a submitted ticket done without
 integrating it, and never re-dispatch one (its claim is refused as `submitted`; clear the submission
 first if the work must genuinely be redone).
 

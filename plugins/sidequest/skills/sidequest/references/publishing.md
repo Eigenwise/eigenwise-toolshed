@@ -3,8 +3,8 @@
 Executors never publish. A repo-changing executor ends at a verified LOCAL commit in its isolated
 worktree, pins it to a durable ref (`refs/sidequest/<SQ-n>`), and parks the ticket
 ready-for-integration with `sidequest submit` (claim released, status stays `doing`, no push, no
-version bumps). Publishing — integrating those commits, assigning versions, reverifying, pushing
-main, marking done — is ONE serialized transaction owned by the orchestrator. This file is that
+version bumps). Publishing — integrating those commits, assigning versions, reverifying, reviewing,
+pushing main, marking done — is ONE serialized transaction owned by the orchestrator. This file is that
 transaction.
 
 ## When to run it (event-driven, never polled)
@@ -66,11 +66,19 @@ board (submissions stay parked — fail closed).
 9. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
    (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
    plugins) so per-ticket-green but jointly-red seams are caught before the push.
-10. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
-   branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 8-9, push again. Then
+10. **Review the integrated diff — the gate before the push**. Green verification is necessary but is
+   NOT a review. For each integrated ticket, review the change for correctness, scope-safety, and
+   security. Read the diff yourself (`git diff <base>..HEAD -- <scope>`) for a small or mechanical
+   change; for a substantial, cross-cutting, or security-sensitive one, dispatch a `review-audit`
+   executor (or `security-audit`) on the integrated range and read its findings before continuing.
+   Resolve or explicitly accept every finding before pushing. A finding that needs rework is an
+   integration failure: drop that ticket's range, leave its submission parked, and file a scoped ticket
+   (see "Integration failures fail closed") — never push code you have only tested and not read.
+11. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
+   branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 8-10, push again. Then
    confirm every range commit is reachable:
    `git merge-base --is-ancestor <commit> origin/main` (after a fresh fetch).
-11. **Mark done + clean up**, only after every range commit is reachable: for each shipped ticket
+12. **Mark done + clean up**, only after every range commit is reachable: for each shipped ticket
    `sidequest done <ref> --by <session-worker-id> --model <its stamped model> --effort <its effort>`
    with a closing comment naming the pushed commit (done consumes the submission — the ticket
    leaves the integration queue). Then delete its durable ref (`git update-ref -d
