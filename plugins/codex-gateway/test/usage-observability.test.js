@@ -215,6 +215,43 @@ test('JSON capture emits exact identities, resolved route, measurements, and no 
   }
 });
 
+test('emits bounded per-server MCP tool token measurements', () => {
+  const requestPayload = {
+    system: 'system',
+    tools: [
+      { name: 'Read', description: 'native schema' },
+      { name: 'mcp__sidequest__claim', description: 'sidequest claim schema' },
+      { name: 'mcp__sidequest__done', description: 'sidequest done schema' },
+      { name: 'mcp__Browser-Tools__click', description: 'browser click schema' },
+    ],
+    messages: [{ role: 'user', content: 'hello' }],
+  };
+  const capture = createUsageCapture({ payload: requestPayload });
+  capture.setResponse(200, {});
+  capture.observeJson(JSON.stringify({ usage: { input_tokens: 1000, output_tokens: 1 } }));
+
+  const attributes = attributeMap(buildOtlpLogPayload(capture.finish()));
+  assert.ok(attributes.input_mcp_tools_sidequest_tokens > 0);
+  assert.ok(attributes.input_mcp_tools_browser_tools_tokens > 0);
+  assert.equal(
+    attributes.input_mcp_tools_sidequest_tokens + attributes.input_mcp_tools_browser_tools_tokens,
+    attributes.input_mcp_tools_tokens,
+  );
+  assert.ok(attributes.input_native_tools_tokens > 0);
+  assert.ok(Object.keys(attributes).length < 128);
+
+  const manyServers = inputAttribution(inputComposition({
+    tools: Array.from({ length: 25 }, (_, index) => ({
+      name: `mcp__server_${index}__tool`,
+      description: 'schema'.repeat(index + 1),
+    })),
+  }), { input_tokens: 1000 });
+  assert.equal(
+    Object.keys(manyServers).filter((name) => /^input_mcp_tools_server_\d+_tokens$/.test(name)).length,
+    20,
+  );
+});
+
 test('SSE capture merges usage without retaining stream content', () => {
   let emitted;
   const capture = createUsageCapture({

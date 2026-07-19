@@ -9,6 +9,8 @@ const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 500;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@\[\]-]{0,254}$/;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const MCP_SERVER_BYTES = Symbol('mcpServerBytes');
+const MAX_MCP_SERVER_MEASUREMENTS = 20;
 
 const RATE_LIMIT_HEADERS = Object.freeze({
   'anthropic-ratelimit-requests-limit': ['rate_limit_requests_limit', 'count'],
@@ -60,15 +62,26 @@ function toolResultBytes(value) {
   return Object.values(value).reduce((total, entry) => total + toolResultBytes(entry), 0);
 }
 
+function mcpServerName(tool) {
+  if (typeof tool?.name !== 'string') return null;
+  const match = /^mcp__(.+?)__/.exec(tool.name);
+  return match ? match[1].toLowerCase().replace(/[^a-z0-9_]/g, '_') : null;
+}
+
 function inputComposition(payload, requestBodyBytes = null) {
   const messages = Array.isArray(payload?.messages) ? payload.messages : [];
   const tools = Array.isArray(payload?.tools) ? payload.tools : [];
   const mcpTools = tools.filter((tool) => typeof tool?.name === 'string' && tool.name.startsWith('mcp__'));
   const nativeTools = tools.filter((tool) => !(typeof tool?.name === 'string' && tool.name.startsWith('mcp__')));
+  const mcpServerBytes = Object.create(null);
+  for (const tool of mcpTools) {
+    const server = mcpServerName(tool);
+    if (server) mcpServerBytes[server] = (mcpServerBytes[server] || 0) + serializedBytes(tool);
+  }
   const messageItemBytes = messages.map(serializedBytes);
   const firstMessageBytes = messageItemBytes[0] || 0;
   const historyBytes = messageItemBytes.slice(1).reduce((total, value) => total + value, 0);
-  return Object.freeze({
+  const composition = {
     request_body_bytes: numeric(requestBodyBytes) ?? serializedBytes(payload),
     input_system_bytes: serializedBytes(payload?.system),
     input_tools_bytes: serializedBytes(payload?.tools),
@@ -78,7 +91,9 @@ function inputComposition(payload, requestBodyBytes = null) {
     input_first_message_bytes: firstMessageBytes,
     input_history_bytes: historyBytes,
     input_tool_results_bytes: toolResultBytes(messages),
-  });
+  };
+  Object.defineProperty(composition, MCP_SERVER_BYTES, { value: Object.freeze(mcpServerBytes) });
+  return Object.freeze(composition);
 }
 
 function allocateLargestRemainder(total, weights) {
@@ -171,6 +186,14 @@ function inputAttribution(composition, usage) {
     native: composition.input_native_tools_bytes,
     mcp: composition.input_mcp_tools_bytes,
   });
+  const mcpServerBytes = composition[MCP_SERVER_BYTES] || {};
+  const mcpServerAllocations = allocateLargestRemainder(toolKindTokens.mcp, mcpServerBytes);
+  // 76 existing fields + 20 server fields = 96, leaving 32 below the collector's 128-attribute limit.
+  const mcpServerTokens = Object.fromEntries(Object.entries(mcpServerBytes)
+    .sort(([leftName, leftBytes], [rightName, rightBytes]) => rightBytes - leftBytes
+      || leftName.localeCompare(rightName))
+    .slice(0, MAX_MCP_SERVER_MEASUREMENTS)
+    .map(([server]) => [`input_mcp_tools_${server}_tokens`, mcpServerAllocations[server]]));
   let cacheReadRemaining = Math.floor(exact.cache_read_tokens || 0);
   const cacheRead = {};
   const fresh = {};
@@ -191,6 +214,7 @@ function inputAttribution(composition, usage) {
     input_tools_tokens: sectionTokens.tools,
     input_native_tools_tokens: toolKindTokens.native,
     input_mcp_tools_tokens: toolKindTokens.mcp,
+    ...mcpServerTokens,
     input_system_tokens: sectionTokens.system,
     input_first_message_tokens: sectionTokens.first_message,
     input_history_tokens: sectionTokens.history,
