@@ -402,7 +402,7 @@ function configurationChanges(before, after) {
 function deleteLocalObservabilityData(dataDir) {
   const files = [
     'observability.db', 'observability.db-shm', 'observability.db-wal', 'hook-spool.jsonl',
-    'observer.log', 'collector.log', 'observer.pid', 'collector.pid',
+    'observer.log', 'collector.log', 'observer.pid', 'collector.pid', 'observer.pid.json', 'collector.pid.json',
   ];
   for (const name of files) {
     try { fs.rmSync(path.join(dataDir, name), { force: true }); } catch {}
@@ -594,8 +594,6 @@ async function main() {
   }
 }
 
-if (require.main === module) main().catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
-
 module.exports = {
   COLLECTOR_VERSION,
   DEFAULT_PORTS,
@@ -631,3 +629,5 @@ module.exports = {
   verificationGuidance,
   verifyCommand,
 };
+
+if (require.main === module) main().catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });

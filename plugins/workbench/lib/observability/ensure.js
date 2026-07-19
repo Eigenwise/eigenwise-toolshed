@@ -54,6 +54,10 @@ function pidFile(dataDir, name) {
   return path.join(dataDir, `${name}.pid`);
 }
 
+function processRecordFile(dataDir, name) {
+  return path.join(dataDir, `${name}.pid.json`);
+}
+
 function readPid(filePath) {
   try {
     const pid = Number(fs.readFileSync(filePath, 'utf8').trim());
@@ -72,11 +76,37 @@ function processAlive(pid) {
   }
 }
 
+function readProcessRecord(dataDir, name) {
+  try {
+    const record = JSON.parse(fs.readFileSync(processRecordFile(dataDir, name), 'utf8'));
+    if (!record || typeof record !== 'object') return null;
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+function writeProcessRecord(dataDir, name, record) {
+  fs.writeFileSync(processRecordFile(dataDir, name), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
+function managedProcessNeedsRestart(name, dataDir, provenance, options = {}) {
+  const pid = readPid(pidFile(dataDir, name));
+  const alive = options.processAlive || processAlive;
+  if (!pid || !alive(pid)) return false;
+  const record = readProcessRecord(dataDir, name);
+  return !record
+    || record.pid !== pid
+    || record.pluginVersion !== provenance.pluginVersion
+    || record.scriptPath !== provenance.scriptPath;
+}
+
 function stopManagedProcess(name, dataDir, options = {}) {
   const filePath = pidFile(dataDir, name);
   const pid = readPid(filePath);
   if (!pid) {
     try { fs.rmSync(filePath, { force: true }); } catch {}
+    try { fs.rmSync(processRecordFile(dataDir, name), { force: true }); } catch {}
     return false;
   }
   try {
@@ -96,6 +126,7 @@ function stopManagedProcess(name, dataDir, options = {}) {
     }
   } finally {
     try { fs.rmSync(filePath, { force: true }); } catch {}
+    try { fs.rmSync(processRecordFile(dataDir, name), { force: true }); } catch {}
   }
   return true;
 }
@@ -135,6 +166,11 @@ function startManagedProcess(name, command, args, dataDir, options = {}) {
   }
   if (!child || !Number.isInteger(child.pid) || child.pid < 1) throw new Error(`Could not start the Workbench ${name}.`);
   fs.writeFileSync(pidFile(dataDir, name), `${child.pid}\n`, { encoding: 'utf8', mode: 0o600 });
+  writeProcessRecord(dataDir, name, {
+    pid: child.pid,
+    pluginVersion: options.pluginVersion,
+    scriptPath: options.scriptPath,
+  });
   if (typeof child.unref === 'function') child.unref();
   return child.pid;
 }
@@ -251,20 +287,42 @@ async function ensureObservability(options = {}) {
     const checkPort = options.checkPort || portListening;
     const startProcess = options.startProcess || startManagedProcess;
     const wait = options.waitForPort || waitForPort;
+    const observerScript = path.join(pluginRoot, 'bin', 'workbench-observer.js');
+    const processes = [
+      { name: 'observer', port: ports.observer, scriptPath: observerScript },
+      { name: 'collector', port: ports.collector, scriptPath: collectorBinary },
+    ];
+    for (const process of processes) {
+      if (await checkPort(process.port, options)
+        && managedProcessNeedsRestart(process.name, dataDir, {
+          pluginVersion: currentPluginVersion,
+          scriptPath: process.scriptPath,
+        }, options)) {
+        stopManagedProcess(process.name, dataDir, options);
+        await wait(process.port, false, options);
+      }
+    }
     if (!await checkPort(ports.observer, options)) {
-      const observerScript = path.join(pluginRoot, 'bin', 'workbench-observer.js');
       startProcess('observer', process.execPath, [
         observerScript,
         '--db', path.join(dataDir, 'observability.db'),
         '--host', LOOPBACK,
         '--port', String(ports.observer),
         '--config', configFile,
-      ], dataDir, options);
+      ], dataDir, {
+        ...options,
+        pluginVersion: currentPluginVersion,
+        scriptPath: observerScript,
+      });
       started.push('observer');
       await wait(ports.observer, true, options);
     }
     if (!await checkPort(ports.collector, options)) {
-      startProcess('collector', collectorBinary, ['--config', path.join(dataDir, 'otel-collector-config.yaml')], dataDir, options);
+      startProcess('collector', collectorBinary, ['--config', path.join(dataDir, 'otel-collector-config.yaml')], dataDir, {
+        ...options,
+        pluginVersion: currentPluginVersion,
+        scriptPath: collectorBinary,
+      });
       started.push('collector');
       await wait(ports.collector, true, options);
     }

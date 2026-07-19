@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -9,6 +10,7 @@ const setup = require('../bin/setup-observability.js');
 const {
   ensureObservability,
   launchEnsure,
+  startManagedProcess,
 } = require('../lib/observability/ensure.js');
 const { readObservabilityConfig, writeObservabilityConfig } = require('../observability/sinks/index.js');
 
@@ -199,4 +201,98 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
   assert.equal(result.dashboardDrift, true);
   assert.deepEqual(dockerCalls.map((call) => call[1][0]), ['inspect', 'rm', 'run']);
   assert.equal(readObservabilityConfig(configFile).observability.dashboardVersion, setup.pluginVersion());
+});
+
+test('start records the managed process provenance next to its PID', (t) => {
+  const dataDir = temporaryDirectory(t);
+  startManagedProcess('observer', process.execPath, ['--version'], dataDir, {
+    pluginVersion: '0.20.0',
+    scriptPath: 'C:\\workbench\\bin\\workbench-observer.js',
+    spawn() { return { pid: 101, unref() {} }; },
+  });
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'observer.pid.json'), 'utf8')), {
+    pid: 101,
+    pluginVersion: '0.20.0',
+    scriptPath: 'C:\\workbench\\bin\\workbench-observer.js',
+  });
+});
+
+test('ensure replaces a stale managed observer from the current plugin root', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'workbench-observer.js');
+  fs.writeFileSync(collectorBinary, 'test');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid'), '101\n');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid.json'), `${JSON.stringify({
+    pid: 101,
+    pluginVersion: '0.0.0',
+    scriptPath: 'C:\\old-workbench\\bin\\workbench-observer.js',
+  })}\n`);
+  writeObservabilityConfig(configFile, enabledConfig());
+  const started = [];
+  const killed = [];
+  let observerChecks = 0;
+
+  await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async (port) => {
+      if (port !== 15432) return false;
+      observerChecks += 1;
+      return observerChecks === 1;
+    },
+    processAlive: () => true,
+    killProcess(pid, name) { killed.push({ pid, name }); },
+    startProcess(name, command, args) { started.push({ name, command, args }); return 1000 + started.length; },
+    waitForPort: async () => true,
+  });
+
+  assert.deepEqual(killed, [{ pid: 101, name: 'observer' }]);
+  assert.equal(started[0].name, 'observer');
+  assert.equal(started[0].args[0], observerScript);
+});
+
+test('ensure adopts a fresh managed observer without restarting it', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'workbench-observer.js');
+  fs.writeFileSync(collectorBinary, 'test');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid'), '101\n');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid.json'), `${JSON.stringify({
+    pid: 101,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+  })}\n`);
+  writeObservabilityConfig(configFile, enabledConfig());
+
+  const result = await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async () => true,
+    processAlive: () => true,
+    startProcess() { throw new Error('fresh managed services must not restart'); },
+  });
+
+  assert.deepEqual(result.started, []);
+});
+
+test('setup disable runs without a circular dependency warning', (t) => {
+  const root = temporaryDirectory(t);
+  const projectDir = path.join(root, 'project');
+  fs.mkdirSync(projectDir);
+  const result = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'setup-observability.js'), '--disable'], {
+    cwd: projectDir,
+    env: { ...process.env, LOCALAPPDATA: root },
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
 });
