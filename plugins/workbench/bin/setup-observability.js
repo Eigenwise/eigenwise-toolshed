@@ -222,6 +222,11 @@ function parseArgs(argv) {
   return options;
 }
 
+function verificationGuidance() {
+  const tokenUsageReport = path.join(__dirname, 'token-usage-report.js');
+  return `Reload plugins once now, then verify: claude --version; curl http://${LOOPBACK}:${OBSERVER_PORT}/health; node "${tokenUsageReport}".\n`;
+}
+
 async function main() {
   const result = await setupObservability(parseArgs(process.argv.slice(2)));
   if (result.check) {
@@ -229,7 +234,7 @@ async function main() {
     return;
   }
   process.stdout.write(`Observability is prepared in ${result.dataDir}.\n`);
-  process.stdout.write('Reload plugins once now, then verify: claude --version; curl http://127.0.0.1:14319/health; node "${CLAUDE_PLUGIN_ROOT}/bin/token-usage-report.js".\n');
+  process.stdout.write(verificationGuidance());
   if (result.lgtm) process.stdout.write('LGTM is available at http://127.0.0.1:3000.\n');
 }
 
@@ -252,4 +257,5 @@ module.exports = {
   setupObservability,
   setupPlan,
   startLgtm,
+  verificationGuidance,
 };

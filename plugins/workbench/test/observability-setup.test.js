@@ -18,6 +18,7 @@ const {
   requireClaudeVersion,
   setupPlan,
   startLgtm,
+  verificationGuidance,
 } = require('../bin/setup-observability.js');
 
 test('requires Claude Code v2.1.212 or newer', () => {
@@ -25,6 +26,14 @@ test('requires Claude Code v2.1.212 or newer', () => {
   assert.equal(compareVersions('2.1.213', MIN_CLAUDE_VERSION), 1);
   assert.equal(compareVersions('2.1.211', MIN_CLAUDE_VERSION), -1);
   assert.throws(() => requireClaudeVersion('2.1.211'), /2\.1\.212\+/);
+});
+
+test('prints copy-pasteable observer verification guidance', () => {
+  const reportPath = path.join(path.resolve(__dirname, '..'), 'bin', 'token-usage-report.js');
+  assert.equal(
+    verificationGuidance(),
+    `Reload plugins once now, then verify: claude --version; curl http://127.0.0.1:14319/health; node "${reportPath}".\n`,
+  );
 });
 
 test('merges safe local OTLP settings and wraps an existing status line', () => {
