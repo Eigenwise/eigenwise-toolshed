@@ -5,11 +5,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { DEFAULT_PORTS, normalizeManagedConfig } = require('../bin/setup-observability.js');
 const { flushOutbox } = require('../lib/observability/outbox.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const grafana = require('../observability/sinks/grafana/index.js');
 const {
-  DEFAULT_PORTS,
   DEFAULT_SINK,
   SINK_IDS,
   normalizeObservabilityConfig,
@@ -65,15 +65,15 @@ test('registers the producer-agnostic sink contract', () => {
 });
 
 test('normalizes consent, dashboard, and all managed ports in one record', () => {
-  const fresh = normalizeObservabilityConfig({});
+  const fresh = normalizeManagedConfig({});
   assert.equal(fresh.observability.enabled, false);
   assert.equal(fresh.observability.dashboard, false);
   assert.deepEqual(fresh.observability.ports, DEFAULT_PORTS);
 
-  const migrated = normalizeObservabilityConfig({ observability: { sink: DEFAULT_SINK, sinks: {} } });
+  const migrated = normalizeManagedConfig({ observability: { sink: DEFAULT_SINK, sinks: {} } });
   assert.equal(migrated.observability.enabled, true);
   assert.equal(migrated.observability.dashboard, true);
-  assert.throws(() => normalizeObservabilityConfig({
+  assert.throws(() => normalizeManagedConfig({
     observability: {
       enabled: true,
       sink: 'none',
@@ -82,7 +82,7 @@ test('normalizes consent, dashboard, and all managed ports in one record', () =>
       sinks: {},
     },
   }), /ports must be distinct/);
-  assert.throws(() => normalizeObservabilityConfig({
+  assert.throws(() => normalizeManagedConfig({
     observability: { enabled: true, sink: 'none', dashboard: true, sinks: {} },
   }), /dashboard requires/);
 });

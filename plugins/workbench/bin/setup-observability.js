@@ -9,11 +9,10 @@ const { spawnSync } = require('node:child_process');
 const { renderCollectorYaml } = require('./install-otel-collector.js');
 const grafanaLgtm = require('../observability/sinks/grafana/index.js');
 const {
-  DEFAULT_PORTS,
   DEFAULT_SINK,
   SINK_IDS,
   defaultConfigPath,
-  normalizeObservabilityConfig,
+  normalizeObservabilityConfig: normalizeSinkConfig,
   readObservabilityConfig,
   resolveSink,
   setupSink,
@@ -24,10 +23,49 @@ const MIN_CLAUDE_VERSION = '2.1.212';
 const COLLECTOR_VERSION = '0.120.0';
 const LGTM_IMAGE = grafanaLgtm.IMAGE;
 const LOOPBACK = '127.0.0.1';
+const DEFAULT_PORTS = Object.freeze({ collector: 4318, observer: 14319, dashboard: 3000, dashboardOtlp: 14318 });
 const OBSERVER_PORT = DEFAULT_PORTS.observer;
 const COLLECTOR_PORT = DEFAULT_PORTS.collector;
 const STATUSLINE_MARKER = 'workbench-statusline.js';
 const MANAGED_DASHBOARD_CONTAINER = 'workbench-otel-lgtm';
+
+function managedPort(value, fallback, name) {
+  const port = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`observability.ports.${name} must be an integer from 1 to 65535.`);
+  }
+  return port;
+}
+
+function normalizeManagedConfig(value = {}, options = {}) {
+  const config = normalizeSinkConfig(value, options);
+  const input = value?.observability || {};
+  const state = config.observability;
+  const existingConsent = input.sink !== undefined || input.sinks !== undefined;
+  const enabled = state.enabled === undefined ? (options.defaultEnabled ?? existingConsent) : state.enabled;
+  if (typeof enabled !== 'boolean') throw new Error('observability.enabled must be a boolean.');
+  const dashboard = state.dashboard === undefined ? enabled && state.sink === DEFAULT_SINK : state.dashboard;
+  if (typeof dashboard !== 'boolean') throw new Error('observability.dashboard must be a boolean.');
+  if (dashboard && state.sink !== DEFAULT_SINK) throw new Error(`observability.dashboard requires the ${DEFAULT_SINK} sink.`);
+  const rawPorts = state.ports === undefined ? {} : state.ports;
+  if (!rawPorts || typeof rawPorts !== 'object' || Array.isArray(rawPorts)) throw new Error('observability.ports must be a JSON object.');
+  const ports = Object.fromEntries(Object.entries(DEFAULT_PORTS).map(([name, fallback]) => [name, managedPort(rawPorts[name], fallback, name)]));
+  if (new Set(Object.values(ports)).size !== Object.keys(ports).length) throw new Error('observability ports must be distinct.');
+  const rawProjects = state.projects === undefined ? [] : state.projects;
+  if (!Array.isArray(rawProjects) || rawProjects.some((project) => typeof project !== 'string' || !project.trim())) {
+    throw new Error('observability.projects must be an array of project paths.');
+  }
+  return {
+    ...config,
+    observability: { ...state, enabled, dashboard, ports, projects: [...new Set(rawProjects)] },
+  };
+}
+
+function readManagedConfig(filePath) {
+  return normalizeManagedConfig(readObservabilityConfig(filePath), {
+    defaultEnabled: fs.existsSync(filePath) ? undefined : false,
+  });
+}
 
 function observabilityEnvironment(ports = DEFAULT_PORTS) {
   const endpoint = `http://${LOOPBACK}:${ports.collector}`;
@@ -277,14 +315,14 @@ function setupPlan(options = {}) {
 function configuredSink(plan, options = {}) {
   const configExists = options.config !== undefined || fs.existsSync(plan.observabilityConfig);
   const existing = options.config
-    ? normalizeObservabilityConfig(options.config)
-    : readObservabilityConfig(plan.observabilityConfig);
+    ? normalizeManagedConfig(options.config)
+    : readManagedConfig(plan.observabilityConfig);
   const requestedDashboard = options.dashboard === undefined
     ? (options.lgtm ? true : undefined)
     : options.dashboard;
 
   if (options.disable) {
-    return normalizeObservabilityConfig({
+    return normalizeManagedConfig({
       ...existing,
       observability: {
         ...existing.observability,
@@ -327,7 +365,7 @@ function configuredSink(plan, options = {}) {
     };
   }
 
-  return normalizeObservabilityConfig({
+  return normalizeManagedConfig({
     ...existing,
     observability: {
       ...existing.observability,
@@ -374,7 +412,7 @@ function deleteLocalObservabilityData(dataDir) {
 
 async function setupObservability(options = {}) {
   const plan = setupPlan(options);
-  const before = readObservabilityConfig(plan.observabilityConfig);
+  const before = readManagedConfig(plan.observabilityConfig);
   const dashboardRelevant = !options.disable && options.dashboard !== false
     && (!options.sink || options.sink === DEFAULT_SINK);
   const available = dashboardRelevant ? dockerAvailable(options) : false;
@@ -439,7 +477,7 @@ async function setupObservability(options = {}) {
   }
 
   const settings = applySettings(plan.projectDir, { ...options, ports: config.observability.ports });
-  const managedConfig = normalizeObservabilityConfig({
+  const managedConfig = normalizeManagedConfig({
     ...config,
     observability: {
       ...config.observability,
@@ -560,6 +598,7 @@ if (require.main === module) main().catch((error) => { process.stderr.write(`${e
 
 module.exports = {
   COLLECTOR_VERSION,
+  DEFAULT_PORTS,
   LGTM_IMAGE,
   MANAGED_DASHBOARD_CONTAINER,
   MIN_CLAUDE_VERSION,
@@ -577,6 +616,7 @@ module.exports = {
   downloadCollector,
   ensureCollectorConfig,
   mergeObservabilitySettings,
+  normalizeManagedConfig,
   observabilityEnvironment,
   parseArgs,
   parseChecksum,
