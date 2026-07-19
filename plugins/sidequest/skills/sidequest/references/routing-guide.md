@@ -18,9 +18,9 @@ From Anthropic's [Choosing the right model](https://platform.claude.com/docs/en/
 | **opus** | Multi-file features, shared contracts, cross-cutting refactors, and complex agentic coding | Usually `high`; `xhigh` is the documented starting point for coding and agentic work |
 | **fable** | Root-cause investigations, architecture decisions, and work larger than one sitting | Start with `high`; use `xhigh` for model-sensitive work |
 
-`max` is for genuinely frontier problems and should stay rare. Effort is a category route field, not a
-second classification system. The live category description and contract remain authoritative over this
-general guidance.
+Normal category routes, including legacy complexity mapping, top out at `xhigh`. Reserve `max` for
+exceptional, genuinely frontier problems. Effort is a category route field, not a second classification
+system. The live category description and contract remain authoritative over this general guidance.
 
 ## Legacy complexity bands
 

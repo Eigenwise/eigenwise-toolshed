@@ -39,7 +39,9 @@ Protocol for each ticket:
    ticket threads when relevant. A question means pause for the human reply.
 3. **Do only the ticket work.** Comments are handoffs, not a diary. Record decisions, constraints,
    risks, verification evidence, or concise findings with `mcp__plugin_sidequest_board__comment`.
-4. **Verify** with the ticket's exact repo-relative command. Keep the useful result count and a short
+4. **Verify** with the ticket's exact repo-relative command.
+   On Windows with Node 22, use explicit test-file globs such as `plugins/<plugin>/test/*.test.js`, never a
+   bare test directory. Keep the useful result count and a short
    relevant excerpt for the closing evidence.
 5. **Commit and submit, never publish.** For repo changes, call
    `mcp__plugin_sidequest_board__commit` with `ref`, `by`, `message`, and this worktree's absolute root.

@@ -193,10 +193,12 @@ note for the routing side.
 - **Context windows**: Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this
   gateway routes to, not the pay-per-token API) has a measured 370k input ceiling. The shim advertises
   `370000` as `max_input_tokens` by default; override it with `CODEX_GATEWAY_CONTEXT_WINDOW` when
-  tuning a machine-specific setup. Claude Code currently uses its own 200k gateway budget for these
-  discovered `claude-codex-*` rows, so the backend's HTTP 413 `request_too_large` response is the
-  recovery signal for context overflow. The shim normalizes older proxy context errors to the same
-  413 (proxy 0.1.14+ emits it natively). Those ids deliberately have no `[1m]` suffix. `[1m]` is a
+  tuning a machine-specific setup. That advertised value is inert: Claude Code hardwires its own 200k
+  gateway budget for discovered `claude-codex-*` rows. The backend's HTTP 413 `request_too_large`
+  response is the recovery signal for context overflow. A genuine upstream 413 has no token counts, so
+  the sentry appends its recorded usage before passing it to Claude Code. The shim normalizes older
+  proxy context errors to the same 413 (proxy 0.1.14+ emits it
+  natively). Those ids deliberately have no `[1m]` suffix. `[1m]` is a
   local Claude Code promise that delays compaction, so keep it off every selected Codex model,
   including the top-level `model` setting, and use it only for genuine Claude models. Claude models
   (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows and compaction

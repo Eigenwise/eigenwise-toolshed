@@ -105,7 +105,8 @@ sidequest dashboard
 ```
 
 Idempotent — starts the local server if needed, opens the browser, prints the URL. **Report the URL.**
-Binds to `127.0.0.1` only.
+Binds to `127.0.0.1` only. To verify a server change, leave the shared board alone: run a test instance
+with a temporary `SIDEQUEST_HOME` on a distinct port.
 
 ## File a ticket
 
