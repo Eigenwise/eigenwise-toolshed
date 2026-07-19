@@ -606,22 +606,25 @@ function reportClaimFailure(action, idOrRef, res, meta) {
 // untouched (opus·max on a sonnet main loop still spawns exec-max), so a matching
 // effort is exactly the invariant a cap preserves. Returns a drift descriptor to
 // block the claim, or null when there's nothing to enforce: no `--effort` given,
-// routing off, no complexity (no derived tier), or a haiku ticket (no effort axis).
+// routing off, or no derived route.
 function effortDriftReason(slug, idOrRef, claimedEffort) {
   if (claimedEffort == null) return null;
   const t = store.getTicket(slug, idOrRef);
-  if (!t || !t.effort) return null;
+  if (!t) return null;
+  const derivedEffort = t.effort || (store.CLAUDE_RUNTIMES.includes(t.model) ? 'low' : null);
+  if (!derivedEffort) return null;
   const claimed = String(claimedEffort).toLowerCase();
-  if (claimed === t.effort) return null;
-  const execName = (t.exec && t.exec.agent) || `sidequest-exec-${t.effort}`;
+  if (claimed === derivedEffort) return null;
+  const resolved = store.resolveExec(t.model, derivedEffort);
+  const execName = (t.exec && t.exec.agent) || (resolved && resolved.agent) || `sidequest-exec-${derivedEffort}`;
   const modelHint = t.exec && t.exec.model ? ` (model ${t.exec.model})` : '';
   return {
     ref: t.ref,
     derivedModel: t.model,
-    derivedEffort: t.effort,
+    derivedEffort,
     claimedEffort: claimed,
     message:
-      `${t.ref} resolves to ${t.model}·${t.effort}, but you claimed as ${claimed} effort. ` +
+      `${t.ref} resolves to ${t.model}·${derivedEffort}, but you claimed as ${claimed} effort. ` +
       `Spawn ${execName}${modelHint} instead. Not claimed: the ticket stays free for the matching executor.`,
   };
 }

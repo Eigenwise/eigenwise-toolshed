@@ -56,6 +56,16 @@ test('discovery ignores future catalog schemas', () => {
   assert.deepEqual(discovery.discoverExternalModels(), []);
 });
 
+test('Claude runtimes resolve to their stable executor at every stamped effort', () => {
+  for (const model of store.CLAUDE_RUNTIMES) {
+    for (const effort of store.VALID_EFFORTS) {
+      const resolved = store.resolveExec(model, effort);
+      assert.equal(resolved.agent, `sidequest-exec-${effort}`);
+      assert.equal(resolved.model, model);
+    }
+  }
+});
+
 test('concrete discovered route resolves while an absent route is unavailable', () => {
   writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }]);
   assert.equal(store.resolveExec('codex-gpt-test', 'high').runsModel, 'codex-gpt-test');

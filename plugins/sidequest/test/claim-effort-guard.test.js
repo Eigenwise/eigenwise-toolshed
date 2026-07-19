@@ -257,15 +257,14 @@ test('dispatch --ephemeral writes a per-ticket definition for cross-session adop
   assert.match(fs.readFileSync(defFile, 'utf8'), new RegExp(`--token ${dispatched.token}`));
 });
 
-test('instant dispatch has no stable target for a haiku route and steers to --ephemeral', () => {
+test('instant dispatch sends Haiku through its stable executor with a Haiku spawn model', () => {
   const ref = seed('guard.haiku');
-  const res = runCli(['dispatch', ref]);
-  assert.notEqual(res.status, 0);
-  assert.match(res.stdout + res.stderr, /--ephemeral/);
-  // The ephemeral path still works for such a route.
-  const ephemeral = cliJson(['dispatch', ref, '--ephemeral']);
-  assert.equal(ephemeral.mode, 'ephemeral');
-  assert.match(ephemeral.agent, new RegExp(`^sidequest-ticket-${ref.toLowerCase()}-haiku-[a-f0-9]{8}$`));
+  const dispatched = cliJson(['dispatch', ref]);
+  assert.equal(dispatched.mode, 'instant');
+  assert.equal(dispatched.agent, 'sidequest-exec-medium');
+  assert.equal(dispatched.spawn.subagent_type, 'sidequest-exec-medium');
+  assert.equal(dispatched.spawn.model, 'haiku');
+  assert.equal(ticket(ref).dispatchExecutor, 'sidequest-exec-medium');
 });
 
 test('prepare dispatch rejects unknown ticket refs loudly', () => {

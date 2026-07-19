@@ -343,10 +343,8 @@ function execFromBackend(backend, effort) {
     return { agent: stableDispatchName(resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: 'codex', source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label || backend.slug, dispatch: 'native-agent' };
   }
   const runtime = backend.slug;
-  if (runtime === 'haiku' || !effort) {
-    return { agent: null, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, apiModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
-  }
-  return { agent: stableClaudeName(effort), model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, apiModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
+  const agent = effort ? stableClaudeName(effort) : null;
+  return { agent, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, apiModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: 'native-agent' };
 }
 
 function resolveExec(model, effort) {
@@ -1645,17 +1643,13 @@ function dispatchExecutorName(ticket) {
   return name;
 }
 
-// The STABLE, session-start-registered executor for a ticket's route (e.g.
-// sidequest-exec-xhigh, or the shared Codex sidequest-exec-dispatch-high whose
-// model the gateway resolves from the briefing's route marker).
-// Instant dispatch targets this instead of a fresh per-ticket definition: it is
-// already registered, so there is no watcher-registration wait and no def file.
-// A route with no stable executor (haiku, agent:null) has no instant target —
-// throw so the dispatch surface can steer the caller to --ephemeral.
+// The STABLE, session-start-registered executor for a ticket's route. Instant
+// dispatch targets it instead of a fresh per-ticket definition, so the briefing
+// and token ride the spawn prompt with no registration wait.
 function stableExecutorName(ticket) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
   const resolved = resolveExec(ticket.model, ticket.effort);
-  if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort} — dispatch with --ephemeral.`);
+  if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
   return resolved.agent;
 }
 
@@ -1704,6 +1698,11 @@ function prepareDispatch(slug, idOrRef, opts) {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
     const now = new Date().toISOString();
+    const backend = availableRoute(t.model);
+    if (backend && backend.backend === 'claude' && (t.effort == null || String(t.effort).trim() === '')) {
+      t.effort = 'low';
+      t.exec = execProjection(resolveExec(t.model, t.effort));
+    }
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
     t.dispatchExecutor = opts.ephemeral ? dispatchExecutorName(t) : stableExecutorName(t);
     t.dispatch = {

@@ -95,17 +95,20 @@ function requireBy(args, action) {
 function effortDrift(slug, idOrRef, claimedEffort) {
   if (claimedEffort == null) return null;
   const t = store.getTicket(slug, idOrRef);
-  if (!t || !t.effort) return null;
+  if (!t) return null;
+  const derivedEffort = t.effort || (store.CLAUDE_RUNTIMES.includes(t.model) ? 'low' : null);
+  if (!derivedEffort) return null;
   const claimed = String(claimedEffort).toLowerCase();
-  if (claimed === t.effort) return null;
-  const execName = (t.exec && t.exec.agent) || `sidequest-exec-${t.effort}`;
+  if (claimed === derivedEffort) return null;
+  const resolved = store.resolveExec(t.model, derivedEffort);
+  const execName = (t.exec && t.exec.agent) || (resolved && resolved.agent) || `sidequest-exec-${derivedEffort}`;
   return {
     reason: 'effort_mismatch',
     ref: t.ref,
     derivedModel: t.model,
-    derivedEffort: t.effort,
+    derivedEffort,
     claimedEffort: claimed,
-    message: `${t.ref} resolves to ${t.model}·${t.effort} — spawn ${execName}, not an exec-${claimed}. Claim refused.`,
+    message: `${t.ref} resolves to ${t.model}·${derivedEffort} — spawn ${execName}, not an exec-${claimed}. Claim refused.`,
   };
 }
 
