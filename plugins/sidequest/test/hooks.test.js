@@ -732,12 +732,23 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
 
 let sqSeq = 0;
 function addTicket(title) {
-  return store.createTicket(slug, {
-    title,
-    complexity: 3,
-    complexityWhy: 'fixture for the SubagentStop runaway-flag hook, single mechanical claim',
-    source: 'cli',
+  return addStopTicket(title);
+}
+
+function addStopTicket(title, fields) {
+  const category = `hooks-stop-${++fixtureSeq}`;
+  store.setCategory({
+    id: category,
+    name: category,
+    route: { model: 'sonnet', effort: 'high' },
+    fallback: null,
+    enabled: true,
   });
+  return store.createTicket(slug, Object.assign({
+    title,
+    category,
+    source: 'cli',
+  }, fields));
 }
 
 function addEffortTicket(title, effort) {
@@ -756,8 +767,26 @@ function addEffortTicket(title, effort) {
   });
 }
 
-// Backdate every claim the registry attributes to `sessionId` by `minutesAgo`, so
-// the claim's `at` reads as an old, long-running run without waiting real time.
+function claimStopTicket(ticket, sessionId, by) {
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const agentId = `stop-agent-${ticket.id}-${++sqSeq}`;
+  const agentName = `stop-executor-${ticket.id}-${sqSeq}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, by, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  return { session_id: sessionId, agent_type: prepared.ticket.dispatchExecutor, agent_id: agentId, agent_name: agentName };
+}
+
+// Backdate the claim's `at` without waiting real time.
 function backdateSessionClaims(sessionId, minutesAgo, effort) {
   const w = db.getRow(database, 'globals', 'workers');
   const at = new Date(Date.now() - minutesAgo * 60 * 1000).toISOString();
@@ -772,10 +801,10 @@ function backdateSessionClaims(sessionId, minutesAgo, effort) {
 test('subagent-stop: an over-threshold claim reports a dead-claim verdict', () => {
   const sess = `sess-long-${++sqSeq}`;
   const t = addTicket('runaway 28-min ticket');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-long', { direct: true, sessionId: sess }).ok, true);
+  const stop = claimStopTicket(t, sess, 'worker-long');
   backdateSessionClaims(sess, 28);
 
-  const ctx = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
+  const ctx = runHook(SUBAGENT_STOP, stop);
   assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, then TaskStop it`);
   assert.ok(ctx.length <= BUDGET.longrun, `stop verdict is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
   assert.ok(ctx.indexOf('\n') === -1, 'the verdict must stay ONE line');
@@ -787,8 +816,8 @@ test('subagent-stop: a held claim is classified regardless of claimed effort', (
   for (const effort of tiers) {
     const session = `sess-${effort}-${++sqSeq}`;
     const ticket = addEffortTicket(`${effort} stopped claim`, effort);
-    assert.strictEqual(store.claimTicket(slug, ticket.ref, `worker-${effort}`, { direct: true, sessionId: session }).ok, true);
-    const ctx = runHook(SUBAGENT_STOP, { session_id: session, agent_type: 'sidequest-exec-high' });
+    const stop = claimStopTicket(ticket, session, `worker-${effort}`);
+    const ctx = runHook(SUBAGENT_STOP, stop);
     assert.match(ctx, new RegExp(`^exec stopped HOLDING ${ticket.ref} claim`));
   }
 });
@@ -808,7 +837,7 @@ test('subagent-stop: stop_hook_active suppresses the note (no self-continuation 
 test('subagent-stop: a non-executor child (reviewer) is not nagged about a session claim', () => {
   const sess = `sess-reviewer-${++sqSeq}`;
   const t = addTicket('over-threshold executor claim, unrelated reviewer stops');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-rev', { direct: true, sessionId: sess }).ok, true);
+  const stop = claimStopTicket(t, sess, 'worker-rev');
   backdateSessionClaims(sess, 28);
   assert.strictEqual(
     runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'code-reviewer' }),
@@ -816,71 +845,53 @@ test('subagent-stop: a non-executor child (reviewer) is not nagged about a sessi
     'a reviewer shares the session id but never held the claim — it must stay silent'
   );
   // The same over-threshold claim still surfaces for the actual executor child.
-  const ctx = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
+  const ctx = runHook(SUBAGENT_STOP, stop);
   assert.ok(ctx.includes(t.ref), 'a sidequest executor child must still get the note');
 });
 
 test('subagent-stop: a repeated stop repeats the held-claim verdict until release', () => {
   const sess = `sess-dedupe-${++sqSeq}`;
   const t = addTicket('over-threshold claim reports every stop');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-dedupe', { direct: true, sessionId: sess }).ok, true);
+  const stop = claimStopTicket(t, sess, 'worker-dedupe');
   backdateSessionClaims(sess, 28);
   const expected = `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, then TaskStop it`;
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), expected);
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), expected);
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), expected);
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), expected);
 });
 
 test('subagent-stop: a stopped executor holding a fresh claim gets the dead-claim verdict', () => {
   const sess = `sess-fresh-${++sqSeq}`;
   const t = addTicket('quick ticket, just claimed');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-fresh', { direct: true, sessionId: sess }).ok, true);
-  const ctx = runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' });
+  const stop = claimStopTicket(t, sess, 'worker-fresh');
+  const ctx = runHook(SUBAGENT_STOP, stop);
   assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim \\(age 1m\\), likely dead: release \\+ respawn, then TaskStop it$`));
 });
 
 test('subagent-stop: a completed executor reports a clean stop from its done comment', () => {
   const sess = `sess-completed-${++sqSeq}`;
-  const t = store.createTicket(slug, {
-    title: 'completed ticket with commit note',
-    files: ['lib/fixture.js'],
-    complexity: 3,
-    complexityWhy: 'fixture for clean SubagentStop completion verdict coverage',
-    source: 'cli',
-  });
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-completed', { direct: true, sessionId: sess }).ok, true);
+  const t = addStopTicket('completed ticket with commit note', { files: ['lib/fixture.js'] });
+  const stop = claimStopTicket(t, sess, 'worker-completed');
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-completed', kind: 'comment', body: 'Shipped abc1234.', source: 'cli' }).ok, true);
   assert.strictEqual(store.completeTicket(slug, t.ref, 'worker-completed', {}).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done (abc1234); verify, then TaskStop this executor so it doesn't linger idle`);
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec stopped clean: ${t.ref} done (abc1234); verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
 test('subagent-stop: a completed file ticket without a hash is flagged', () => {
   const sess = `sess-no-hash-${++sqSeq}`;
-  const t = store.createTicket(slug, {
-    title: 'completed ticket without commit note',
-    files: ['lib/fixture.js'],
-    complexity: 3,
-    complexityWhy: 'fixture for missing commit hash completion verdict coverage',
-    source: 'cli',
-  });
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-no-hash', { direct: true, sessionId: sess }).ok, true);
+  const t = addStopTicket('completed ticket without commit note', { files: ['lib/fixture.js'] });
+  const stop = claimStopTicket(t, sess, 'worker-no-hash');
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-no-hash', kind: 'comment', body: 'Done and verified.', source: 'cli' }).ok, true);
   assert.strictEqual(store.completeTicket(slug, t.ref, 'worker-no-hash', {}).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }), `exec stopped clean: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec stopped clean: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
 test('subagent-stop: a submitted executor reports READY_FOR_INTEGRATION, not a dead claim', () => {
   const sess = `sess-submitted-${++sqSeq}`;
-  const t = store.createTicket(slug, {
-    title: 'submitted ticket awaiting the publish transaction',
-    files: ['lib/fixture.js'],
-    complexity: 3,
-    complexityWhy: 'fixture for the SubagentStop ready-for-integration verdict',
-    source: 'cli',
-  });
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-submitted', { direct: true, sessionId: sess }).ok, true);
+  const t = addStopTicket('submitted ticket awaiting the publish transaction', { files: ['lib/fixture.js'] });
+  const stop = claimStopTicket(t, sess, 'worker-submitted');
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-submitted', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
   assert.strictEqual(
-    runHook(SUBAGENT_STOP, { session_id: sess, agent_type: 'sidequest-exec-high' }),
+    runHook(SUBAGENT_STOP, stop),
     `exec stopped clean: ${t.ref} READY_FOR_INTEGRATION (abc1234def56); run the publish transaction (references/publishing.md), then TaskStop this executor`
   );
 });
@@ -888,29 +899,26 @@ test('subagent-stop: a submitted executor reports READY_FOR_INTEGRATION, not a d
 test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
   const sess = `sess-prior-owner-${++sqSeq}`;
   const t = addTicket('reclaimed ticket with stale prior owner entry');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-prior', { direct: true, sessionId: sess }).ok, true);
+  const stop = claimStopTicket(t, sess, 'worker-prior');
   backdateSessionClaims(sess, 28);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-prior', {}).ok, true);
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-current', { direct: true, sessionId: `sess-current-${sqSeq}` }).ok, true);
 
-  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: sess }), '', 'a prior owner must not be warned about another worker\'s live claim');
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), '', 'a prior owner must not be warned about another worker\'s live claim');
 });
-test('subagent-stop: a stopped executor without a claim gets a respawn verdict', () => {
-  assert.strictEqual(
-    runHook(SUBAGENT_STOP, { session_id: 'sess-nobody-here', agent_type: 'sidequest-exec-high' }),
-    'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec'
-  );
+test('subagent-stop: an unidentifiable executor stays silent', () => {
+  assert.strictEqual(runHook(SUBAGENT_STOP, { session_id: 'sess-nobody-here', agent_type: 'sidequest-exec-high' }), '');
   assert.strictEqual(runHook(SUBAGENT_STOP, {}), '', 'a bare payload with no session id stays silent');
 });
 
 test('subagent-stop: long-run threshold settings do not suppress a held-claim verdict', () => {
   const sess = `sess-tuned-${++sqSeq}`;
   const t = addEffortTicket('5-min high-effort stopped claim', 'high');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-tuned', { direct: true, sessionId: sess }).ok, true);
+  const stop = claimStopTicket(t, sess, 'worker-tuned');
   backdateSessionClaims(sess, 5);
 
   const out = execFileSync(process.execPath, [SUBAGENT_STOP], {
-    input: JSON.stringify({ session_id: sess, agent_type: 'sidequest-exec-high' }),
+    input: JSON.stringify(stop),
     encoding: 'utf8',
     env: { ...process.env, SIDEQUEST_LONG_RUN_MIN: '2' },
   });
@@ -1050,9 +1058,9 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
     session_id: sessionId,
     agent_type: preparedSecond.ticket.dispatchExecutor,
     agent_id: 'native-concurrent-2',
-    agent_name: names[1],
   });
   assert.match(secondStop, new RegExp(`HOLDING ${second.ref} claim`));
+  assert.doesNotMatch(secondStop, new RegExp(`${first.ref}.*(?:release \\+ respawn|TaskStop)`));
   assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'stopped_claimed');
 });
 
@@ -1086,10 +1094,12 @@ test('subagent stop marks a launch that never claimed as failed', () => {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, 'native-stop-1', 'stop-before-claim').ok, true);
   const context = runHook(SUBAGENT_STOP, {
     session_id: sessionId,
     agent_type: prepared.ticket.dispatchExecutor,
     agent_id: 'native-stop-1',
+    agent_name: 'stop-before-claim',
   });
   assert.match(context, /without ever claiming/);
   const after = store.getTicket(slug, ticket.ref);
@@ -1097,10 +1107,10 @@ test('subagent stop marks a launch that never claimed as failed', () => {
   assert.equal(after.dispatchNonce, null);
 });
 
-test('subagent-stop: legacy ticket executors retain cleanup verdicts without becoming spawn targets', () => {
+test('subagent-stop: legacy ticket executors without identity stay silent', () => {
   assert.strictEqual(
     runHook(SUBAGENT_STOP, { session_id: 'sess-legacy-ticket', agent_type: 'sidequest-ticket-sq-584-haiku-b37fffcb' }),
-    'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec'
+    ''
   );
 });
 

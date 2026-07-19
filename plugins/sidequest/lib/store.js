@@ -1970,8 +1970,8 @@ function markDispatchStopped(sessionId, executor, agentId, agentName) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
       if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor)) continue;
-      if (agentId && state.agentId && state.agentId !== String(agentId)) continue;
-      if (agentName && state.agentName && state.agentName !== String(agentName)) continue;
+      if (agentId && state.agentId !== String(agentId)) continue;
+      if (agentName && state.agentName !== String(agentName)) continue;
       if (state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed') {
         matches.push({ slug: project.slug, id: ticket.id });
       }
@@ -1985,7 +1985,10 @@ function markDispatchStopped(sessionId, executor, agentId, agentName) {
     const result = withTicketLock(match.slug, match.id, () => {
       const t = getTicket(match.slug, match.id);
       const state = dispatchState(t);
-      if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor)) {
+      if (!state || !['prepared', 'launched', 'claimed'].includes(state.outcome) ||
+        state.sessionId !== String(sessionId) || state.executor !== String(executor) ||
+        (agentId && state.agentId !== String(agentId)) ||
+        (agentName && state.agentName !== String(agentName))) {
         return { ok: false, reason: 'not_found' };
       }
       const now = new Date().toISOString();
@@ -3663,9 +3666,10 @@ function sessionClaims(sessionId, opts) {
       const t = getTicket(c.slug, c.ticketId);
       if (t) {
         const state = dispatchState(t);
-        if (agentName && (!state || state.agentName !== agentName)) continue;
-        if (agentName && agentId && state.agentId !== agentId) continue;
-        if (agentName && executor && state.executor !== executor) continue;
+        if ((agentId || agentName) && (!state ||
+          (agentId && state.agentId !== agentId) ||
+          (agentName && state.agentName !== agentName) ||
+          (executor && state.executor !== executor))) continue;
         ref = t.ref;
         status = t.status;
         held = !!(t.claim && t.claim.by && (!c.by || t.claim.by === c.by));

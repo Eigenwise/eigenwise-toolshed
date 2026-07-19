@@ -106,7 +106,7 @@ function commitHash(comment) {
   return match ? match[0] : null;
 }
 
-function stopVerdict(store, claims, classification) {
+function stopVerdict(store, claims, classification, dispatchStopped) {
   const now = Date.now();
   for (const claim of claims) {
     if (!claim || claim.status !== 'done') continue;
@@ -143,7 +143,7 @@ function stopVerdict(store, claims, classification) {
     return `exec stopped HOLDING ${label} claim (age ${mins}m), likely dead: release + respawn, then TaskStop it`;
   }
 
-  if (isKnownExecutor(classification)) return 'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec';
+  if (dispatchStopped && isKnownExecutor(classification)) return 'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec';
   return null;
 }
 
@@ -170,11 +170,12 @@ function main() {
 
   // The runaway note is about an EXECUTOR's claim. A non-executor child (reviewer,
   // explorer, plain teammate) shares the parent session id but never held it, so
-  // attributing a session claim to it is noise. An absent type stays permissive so
-  // older Claude Code payloads (session id only) behave as before.
+  // attributing a session claim to it is noise. Without a native identity, a stop
+  // event cannot safely distinguish sibling executors that share a session.
   const agentType = String(data.agent_type || data.agentType || '');
   const classification = classifyExecutor(agentType);
   if (agentType && !isKnownExecutor(classification)) process.exit(0);
+  if (!agentId && !agentName) process.exit(0);
 
   const sessionId = data.session_id || data.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
   if (!sessionId) process.exit(0); // nothing to attribute a claim to
@@ -186,10 +187,11 @@ function main() {
     process.exit(0); // can't load the store -> nothing to check
   }
 
+  let dispatchStopped = false;
   try {
-    store.markDispatchStopped(String(sessionId), agentType, agentId || null, agentName || null);
+    dispatchStopped = Boolean(store.markDispatchStopped(String(sessionId), agentType, agentId || null, agentName || null).ok);
   } catch (_) {
-    // The stop verdict below still tells the parent what to do.
+    // A verdict still has the claim's exact identity to work from.
   }
 
   let claims;
@@ -206,7 +208,7 @@ function main() {
 
   let verdict;
   try {
-    verdict = stopVerdict(store, claims, classification);
+    verdict = stopVerdict(store, claims, classification, dispatchStopped);
   } catch (_) {
     process.exit(0);
   }
