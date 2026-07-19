@@ -468,15 +468,49 @@ test('status validation fails loudly and directs deletion to remove', () => {
   assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
 });
 
-test('MCP remove matches the CLI rm permanent-delete semantics', () => {
-  const cliTicket = callTool('add', { title: 'CLI permanent removal', unclassified: true });
-  runCli(['rm', cliTicket.ref, '--project', cliTicket.project]);
-  assert.equal(store.getTicket(cliTicket.project, cliTicket.ref), null);
+test('CLI and MCP remove protect live claims but allow force and stale claims', () => {
+  const cliLive = callTool('add', { title: 'CLI live claim removal', unclassified: true });
+  assert.equal(store.claimTicket(cliLive.project, cliLive.ref, 'cli-live-worker', { direct: true }).ok, true);
+  assert.throws(
+    () => runCli(['rm', cliLive.ref, '--project', cliLive.project]),
+    (error) => /live-claimed by "cli-live-worker".*--force/.test(error.stderr)
+  );
+  assert.ok(store.getTicket(cliLive.project, cliLive.ref));
+  runCli(['rm', cliLive.ref, '--force', '--project', cliLive.project]);
+  assert.equal(store.getTicket(cliLive.project, cliLive.ref), null);
 
-  const mcpTicket = callTool('add', { title: 'MCP permanent removal', unclassified: true });
-  const removed = callTool('remove', { project: mcpTicket.project, ref: mcpTicket.ref });
-  assert.equal(removed.ok, true);
-  assert.equal(store.getTicket(mcpTicket.project, mcpTicket.ref), null);
+  const cliStale = callTool('add', { title: 'CLI stale claim removal', unclassified: true });
+  assert.equal(store.claimTicket(cliStale.project, cliStale.ref, 'cli-stale-worker', { direct: true }).ok, true);
+  const staleCliTicket = store.getTicket(cliStale.project, cliStale.ref);
+  staleCliTicket.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  const db = require('../lib/db.js');
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: staleCliTicket.id, project: cliStale.project, ref: staleCliTicket.ref, status: staleCliTicket.status,
+    archived: staleCliTicket.archived ? 1 : 0, ord: staleCliTicket.order, claim_by: staleCliTicket.claim.by, data: staleCliTicket,
+  });
+  runCli(['rm', cliStale.ref, '--project', cliStale.project]);
+  assert.equal(store.getTicket(cliStale.project, cliStale.ref), null);
+
+  const mcpLive = callTool('add', { title: 'MCP live claim removal', unclassified: true });
+  assert.equal(store.claimTicket(mcpLive.project, mcpLive.ref, 'mcp-live-worker', { direct: true }).ok, true);
+  const refused = callTool('remove', { project: mcpLive.project, ref: mcpLive.ref });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'claimed');
+  assert.equal(refused.claim.by, 'mcp-live-worker');
+  assert.ok(store.getTicket(mcpLive.project, mcpLive.ref));
+  assert.equal(callTool('remove', { project: mcpLive.project, ref: mcpLive.ref, force: true }).ok, true);
+  assert.equal(store.getTicket(mcpLive.project, mcpLive.ref), null);
+
+  const mcpStale = callTool('add', { title: 'MCP stale claim removal', unclassified: true });
+  assert.equal(store.claimTicket(mcpStale.project, mcpStale.ref, 'mcp-stale-worker', { direct: true }).ok, true);
+  const staleMcpTicket = store.getTicket(mcpStale.project, mcpStale.ref);
+  staleMcpTicket.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: staleMcpTicket.id, project: mcpStale.project, ref: staleMcpTicket.ref, status: staleMcpTicket.status,
+    archived: staleMcpTicket.archived ? 1 : 0, ord: staleMcpTicket.order, claim_by: staleMcpTicket.claim.by, data: staleMcpTicket,
+  });
+  assert.equal(callTool('remove', { project: mcpStale.project, ref: mcpStale.ref }).ok, true);
+  assert.equal(store.getTicket(mcpStale.project, mcpStale.ref), null);
 });
 
 test('MCP archive and unarchive match the CLI ticket archive lifecycle', () => {

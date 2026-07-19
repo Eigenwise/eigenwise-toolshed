@@ -8,7 +8,7 @@
  *   sidequest add -t "title" [-d desc] [-p priority] [-l label]... [-i image]... [-s status]
  *   sidequest list [--status todo] [--json]
  *   sidequest update <id|SQ-n> [-t] [-d] [-p] [-s] [-l ...] [-i ...]
- *   sidequest rm <id|SQ-n>
+ *   sidequest rm <id|SQ-n> [--force]
  *   sidequest comment <id|SQ-n> -m "body" [--by who] [--kind comment|question]
  *   sidequest ask <id|SQ-n> -m "question?" [--by who]
  *   sidequest comments <id|SQ-n> [--json]
@@ -544,9 +544,13 @@ function cmdRm(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('rm: pass a ticket id or ref, e.g. sidequest rm SQ-4');
   const { slug, meta } = resolveProject(opts);
-  const ok = store.deleteTicket(slug, idOrRef);
-  if (!ok) fail(`rm: no ticket "${idOrRef}" in ${meta.name}`);
-  console.log(`✓ removed ${idOrRef} from ${meta.name}`);
+  const ticket = store.getTicket(slug, idOrRef);
+  if (!ticket) fail(`rm: no ticket "${idOrRef}" in ${meta.name}`);
+  if (ticket.claim && ticket.claim.by && !store.isClaimStale(ticket.claim) && !opts.force) {
+    fail(`rm: ${ticket.ref} is live-claimed by "${ticket.claim.by}"; pass --force to permanently remove it.`);
+  }
+  if (!store.deleteTicket(slug, ticket.id)) fail(`rm: could not delete "${ticket.ref}" from ${meta.name}`);
+  console.log(`✓ removed ${ticket.ref} from ${meta.name}`);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1958,7 +1962,7 @@ Usage:
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
-  sidequest rm <id|SQ-n>
+  sidequest rm <id|SQ-n> [--force]
   sidequest projects [--archived] [--json]
   sidequest archive-board <board-ref>                  archive a board
   sidequest unarchive-board <board-ref>                restore an archived board

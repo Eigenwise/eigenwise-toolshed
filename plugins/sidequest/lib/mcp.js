@@ -213,7 +213,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   global_fallback: 'Read or set the global routing fallback.',
   models: 'Read models and category routes.',
   projects: 'List registered boards.',
-  remove: 'Permanently delete a ticket.',
+  remove: 'Permanently delete a ticket. Live claims require force:true.',
   unarchive: 'Restore an archived ticket.',
   unarchive_board: 'Restore an explicitly named board.',
   unlink: 'Remove links between two tickets.',
@@ -534,16 +534,23 @@ const TOOLS = [
   },
   {
     name: 'remove',
-    description: 'Permanently and irreversibly delete a ticket by ref, matching sidequest rm.',
+    description: 'Permanently and irreversibly delete a ticket by ref. Refuses a live claim unless force:true is passed.',
     inputSchema: {
       type: 'object',
-      properties: { ref: { type: 'string' }, project: PROJECT_PROP },
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        force: { type: 'boolean', description: 'Permanently remove a ticket with a live claim. Use only when certain.' },
+      },
       required: ['ref'],
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
+      if (ticket.claim && ticket.claim.by && !store.isClaimStale(ticket.claim) && !args.force) {
+        return { ok: false, project: slug, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
+      }
       const removed = { ref: ticket.ref, title: ticket.title };
       if (!store.deleteTicket(slug, ticket.id)) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
