@@ -35,6 +35,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { stableClaudeName, stableDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
 const store = require('./store.js');
 
@@ -134,7 +135,7 @@ function dispatchNote(effort) {
 
 function renderDispatchAgent(effort) {
   return renderExecAgent({
-    name: `sidequest-exec-dispatch-${effort}`,
+    name: stableDispatchName(effort),
     effort,
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
@@ -297,7 +298,7 @@ function renderTicketBriefing(ticket, nonce) {
   }
   const name = ticket && ticket.dispatchExecutor
     ? String(ticket.dispatchExecutor)
-    : ((ticket && ticket.exec && ticket.exec.agent) || `sidequest-exec-${(ticket && ticket.effort) || 'low'}`);
+    : ((ticket && ticket.exec && ticket.exec.agent) || stableClaudeName((ticket && ticket.effort) || 'low'));
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const marker = resolved && resolved.backend === 'codex' && resolved.dispatchModel
     ? routeMarker(resolved.dispatchModel, ticket.effort)
@@ -477,9 +478,9 @@ function syncExecAgents(_prefs, opts) {
   const dir = opts.dir || defaultAgentsDir();
   const wanted = new Map();
   for (const effort of EXEC_EFFORTS) {
-    wanted.set(`sidequest-exec-dispatch-${effort}.md`, renderDispatchAgent(effort));
-    wanted.set(`sidequest-exec-${effort}.md`, renderExecAgent({
-      name: `sidequest-exec-${effort}`,
+    wanted.set(`${stableDispatchName(effort)}.md`, renderDispatchAgent(effort));
+    wanted.set(`${stableClaudeName(effort)}.md`, renderExecAgent({
+      name: stableClaudeName(effort),
       effort,
       marker: MARKER,
     }));

@@ -365,3 +365,18 @@ test('ticket executors use the existing temporary cleanup lifecycle', () => {
   assert.equal(agentsync.cleanupNativeAgents({ staleBefore: Date.now() - 1, dir }).removed, 1);
   assert.ok(!fs.existsSync(stale.file));
 });
+
+test('every executor name syncExecAgents writes classifies to a stable kind', () => {
+  const { classify } = require('../lib/exec-names.js');
+  const dir = tmpDir();
+  agentsync.syncExecAgents(null, { dir });
+  const names = readDir(dir).map((file) => file.replace(/\.md$/, ''));
+  assert.ok(names.length > 0, 'sync must write executor definitions');
+  for (const name of names) {
+    const { kind } = classify(name);
+    assert.ok(
+      ['codex_dispatch', 'claude_builtin'].includes(kind),
+      `${name} did not classify to a stable kind (got ${kind})`,
+    );
+  }
+});
