@@ -1574,6 +1574,12 @@ function priorityRank(p) {
 }
 
 const DEFAULT_CLAIM_TTL_MIN = 60;
+const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
+
+function preparedDispatchTtlMs() {
+  const hours = Number(process.env.SIDEQUEST_PREPARED_DISPATCH_TTL_HOURS);
+  return (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_PREPARED_DISPATCH_TTL_HOURS) * 60 * 60 * 1000;
+}
 
 // How long a claim stays valid without being refreshed before another worker
 // may take it over (a crashed/abandoned worker must never wedge a ticket).
@@ -1729,6 +1735,23 @@ function setDispatchTerminal(ticket, outcome, source) {
   state.outcome = outcome;
   state.terminalAt = new Date().toISOString();
   state.terminalSource = source || 'store';
+  delete state.supersededTokens;
+}
+
+function dispatchTokenDigest(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function isSupersededDispatchToken(ticket, token) {
+  const state = dispatchState(ticket);
+  if (!state || !token || token === ticket.dispatchNonce) return false;
+  return Array.isArray(state.supersededTokens) && state.supersededTokens.some((entry) => entry.digest === dispatchTokenDigest(token));
+}
+
+function expiredPreparedDispatch(state, now) {
+  if (!state || state.outcome !== 'prepared' || state.terminalAt || state.launchedAt || state.boundAt || state.claimedAt) return false;
+  const preparedAt = Date.parse(state.preparedAt);
+  return Number.isFinite(preparedAt) && now - preparedAt > preparedDispatchTtlMs();
 }
 
 function prepareDispatch(slug, idOrRef, opts) {
@@ -1773,6 +1796,14 @@ function prepareDispatch(slug, idOrRef, opts) {
     }
     const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
     const attempts = current && Array.isArray(current.attempts) ? current.attempts.slice() : [];
+    const supersededTokens = current && Array.isArray(current.supersededTokens) ? current.supersededTokens.slice() : [];
+    if (current && !current.terminalAt && t.dispatchNonce) {
+      supersededTokens.push({
+        digest: dispatchTokenDigest(t.dispatchNonce),
+        tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+        at: now,
+      });
+    }
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
     t.dispatchExecutor = stableExecutorName(t);
     t.dispatch = {
@@ -1787,6 +1818,7 @@ function prepareDispatch(slug, idOrRef, opts) {
       terminalAt: null,
       outcome: 'prepared',
       ...(attempts.length ? { attempts } : {}),
+      ...(supersededTokens.length ? { supersededTokens: supersededTokens.slice(-8) } : {}),
       ...(recovery ? { recovery } : {}),
     };
     stampDispatchEvent(t, 'dispatch', now);
@@ -1852,6 +1884,11 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
       failure: { kind: 'claude_quota_exhausted', signature: failure.signature },
     };
     const attempts = (Array.isArray(state.attempts) ? state.attempts : []).concat(failedAttempt).slice(-8);
+    const supersededTokens = (Array.isArray(state.supersededTokens) ? state.supersededTokens : []).concat({
+      digest: dispatchTokenDigest(t.dispatchNonce),
+      tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+      at: now,
+    }).slice(-8);
     const recovery = {
       kind: 'claude_quota_exhausted',
       failedModel: failedExec.runsModel,
@@ -1877,6 +1914,7 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
       terminalAt: null,
       outcome: 'prepared',
       attempts,
+      supersededTokens,
       recovery,
     };
     t.model = fallback.model;
@@ -1975,11 +2013,12 @@ function reconcileLaunchedDispatches(sessionId, opts) {
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
-      if (!state || state.sessionId !== String(sessionId) || state.outcome !== 'launched' || (ticket.claim && ticket.claim.by)) continue;
+      // A bound agent has a durable runtime identity; only its terminal hook or claim lifecycle may retire it.
+      if (!state || state.sessionId !== String(sessionId) || state.outcome !== 'launched' || state.boundAt || (ticket.claim && ticket.claim.by)) continue;
       const res = withTicketLock(project.slug, ticket.id, () => {
         const t = getTicket(project.slug, ticket.id);
         const current = dispatchState(t);
-        if (!current || current.sessionId !== String(sessionId) || current.outcome !== 'launched' || (t.claim && t.claim.by)) {
+        if (!current || current.sessionId !== String(sessionId) || current.outcome !== 'launched' || current.boundAt || (t.claim && t.claim.by)) {
           return { ok: false };
         }
         setDispatchTerminal(t, 'failed', source);
@@ -2337,6 +2376,41 @@ function submissionsPayload(slug) {
   return { tickets, count: tickets.length };
 }
 
+// Expire only dispatches that remained prepared. Launched and bound dispatches are stateful work, not wall-clock leases.
+function sweepStaleDispatches(opts) {
+  opts = opts || {};
+  const source = opts.source ? String(opts.source) : 'sweep';
+  const now = Number.isFinite(Number(opts.now)) ? Number(opts.now) : Date.now();
+  const expired = [];
+  for (const project of listProjects({ all: true })) {
+    if (opts.project && project.slug !== opts.project) continue;
+    for (const ticket of listTickets(project.slug)) {
+      if (ticket.archived || ticket.status === 'done' || !expiredPreparedDispatch(dispatchState(ticket), now)) continue;
+      try {
+        const res = withTicketLock(project.slug, ticket.id, () => {
+          const current = getTicket(project.slug, ticket.id);
+          if (!current || !expiredPreparedDispatch(dispatchState(current), now)) return { ok: false };
+          setDispatchTerminal(current, 'expired', source);
+          current.dispatchNonce = null;
+          current.dispatchExecutor = null;
+          stampDispatchEvent(current, source);
+          putTicket(project.slug, current);
+          return { ok: true, ticket: current };
+        });
+        if (!res || !res.ok) continue;
+        expired.push({ project: project.slug, ref: res.ticket.ref });
+        addComment(project.slug, ticket.id, {
+          by: 'sidequest', kind: 'comment', source,
+          body: `Auto-expired prepared dispatch: it never launched within the ${Math.round(preparedDispatchTtlMs() / 3600000)} hour TTL.`,
+        });
+      } catch (_) {
+        // One inaccessible board must not prevent other stale dispatches from recovering.
+      }
+    }
+  }
+  return { ok: true, ttlMs: preparedDispatchTtlMs(), expired };
+}
+
 // Release claims that exceeded the shared TTL. Each release is locked and audited,
 // so a fresh replacement claim is never cleared by a stale snapshot.
 function sweepStaleClaims(opts) {
@@ -2360,7 +2434,8 @@ function sweepStaleClaims(opts) {
       }
     }
   }
-  return { ok: true, ttlMs: claimTtlMs(), released };
+  const dispatches = sweepStaleDispatches(opts);
+  return { ok: true, ttlMs: claimTtlMs(), released, expiredDispatches: dispatches.expired };
 }
 
 // True when a ticket may be handed to a worker running as tier `want`: either the
@@ -3675,6 +3750,7 @@ module.exports = {
   deleteTicket,
   stableExecutorName,
   prepareDispatch,
+  isSupersededDispatchToken,
   recordDispatchLaunch,
   recoverDispatchQuotaFailure,
   bindDispatchAgent,
@@ -3720,8 +3796,11 @@ module.exports = {
   listActive,
   isClaimStale,
   claimTtlMs,
+  preparedDispatchTtlMs,
   DEFAULT_CLAIM_TTL_MIN,
+  DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   sweepStaleClaims,
+  sweepStaleDispatches,
   normalizeLabels,
   NOTIFICATION_KINDS,
   listNotifications,

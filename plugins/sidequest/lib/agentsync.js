@@ -7,11 +7,9 @@
  * marked as owned by Sidequest. Reconciliation updates wanted files and prunes
  * stale marked files, while never touching an unmarked user-authored agent.
  *
- * Claude Code watches user agent definitions written mid-session, including
- * Codex frontmatter pins. Registration takes minutes and the harness announces
- * when a definition is ready. Spawning before that point silently runs a generic
- * agent, so per-ticket executors carry a dispatch nonce that turns that mistake
- * into a claim refusal. Deleting an agent definition hot-applies too.
+ * Claude Code loads the stable executor definitions at session start. A per-ticket
+ * dispatch nonce binds the briefing to its authoritative prepared dispatch and
+ * rejects stale holders after a re-dispatch.
  *
  * A registered agent file with a `model: <full-id>` frontmatter pin genuinely
  * runs through codex-gateway when spawned with the Agent `model` parameter
@@ -285,7 +283,7 @@ function ticketBrief(ticket, nonce, marker) {
     `Comments digest (bounded handoff context; read the full thread before acting on unresolved risks or questions):\n${ticketCommentsDigest(ticket.comments)}`,
     `Category executor instructions:\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
     'Dispatch claim guard:',
-    `Claim this ticket with \`--token ${nonce}\`. A token refusal means this agent was spawned before its definition registered or is not the prepared dispatch. Stop and report that refusal.`,
+    `Claim this ticket with \`--token ${nonce}\`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal.`,
   ];
   // Last on purpose: the gateway resolves the LAST marker in the conversation,
   // so this one outranks any marker-shaped text inside the ticket description.

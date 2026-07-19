@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -139,4 +139,77 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
   assert.equal(pulse.dispatch.state, 'done');
   assert.equal(pulse.dispatch.outcome, 'done');
   assert.equal(store.getTicket(slug, ticket.ref).lastEventType, 'dispatch');
+});
+
+test('prepared dispatches expire on the configured TTL with an audit comment', () => {
+  const ticket = createFixture('prepared expiry fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'prepared-expiry' });
+  const expiresAt = Date.parse(prepared.ticket.dispatch.preparedAt) + store.preparedDispatchTtlMs() + 1;
+
+  const swept = store.sweepStaleDispatches({ project: slug, now: expiresAt, source: 'test' });
+  assert.deepEqual(swept.expired.map((entry) => entry.ref), [ticket.ref]);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.dispatch.outcome, 'expired');
+  assert.equal(after.dispatchNonce, null);
+  assert.equal(after.dispatchExecutor, null);
+  assert.match(after.comments.at(-1).body, /Auto-expired prepared dispatch/);
+});
+
+test('reconciliation fails unbound launches and preserves bound agents', () => {
+  const unboundTicket = createFixture('unbound reload fixture');
+  const boundTicket = createFixture('bound reload fixture');
+  const sessionId = `restart-${Date.now()}`;
+  const unbound = store.prepareDispatch(slug, unboundTicket.ref, { sessionId });
+  const bound = store.prepareDispatch(slug, boundTicket.ref, { sessionId });
+  const executor = unbound.ticket.dispatchExecutor;
+
+  for (const prepared of [unbound, bound]) {
+    assert.equal(store.recordDispatchLaunch(slug, prepared.ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: prepared.ticket.ref,
+    }).ok, true);
+  }
+  assert.equal(store.bindDispatchAgent(sessionId, executor, 'bound-agent', boundTicket.ref).ok, true);
+
+  const reconciled = store.reconcileLaunchedDispatches(sessionId, { source: 'session-start' });
+  assert.deepEqual(reconciled.reconciled, [unboundTicket.ref]);
+  assert.equal(store.getTicket(slug, unboundTicket.ref).dispatch.outcome, 'failed');
+  const survived = store.getTicket(slug, boundTicket.ref);
+  assert.equal(survived.dispatch.boundAt != null, true);
+  assert.equal(survived.dispatch.outcome, 'launched');
+  assert.ok(survived.dispatchNonce);
+});
+
+test('re-dispatch supersedes stale tokens and terminal cleanup removes active credentials', () => {
+  const ticket = createFixture('superseded dispatch fixture');
+  const first = store.prepareDispatch(slug, ticket.ref, { sessionId: 'superseded' });
+  const second = store.prepareDispatch(slug, ticket.ref, { sessionId: 'superseded' });
+  assert.notEqual(first.token, second.token);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'stale-worker', {
+    token: first.token,
+    executor: first.ticket.dispatchExecutor,
+  }).reason, 'token');
+  const staleClaim = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), 'claim', ticket.ref,
+    '--project', PROJECT, '--by', 'stale-worker', '--token', first.token, '--executor', first.ticket.dispatchExecutor], {
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT },
+  });
+  assert.equal(staleClaim.status, 1);
+  assert.match(staleClaim.stdout, /dispatch was superseded by a newer preparation/);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'current-worker', {
+    token: second.token,
+    executor: second.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.completeTicket(slug, ticket.ref, 'current-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    source: 'test',
+  }).ok, true);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.dispatchNonce, null);
+  assert.equal(after.dispatchExecutor, null);
+  assert.equal(after.dispatch.terminalAt != null, true);
+  assert.equal(after.dispatch.supersededTokens, undefined);
 });

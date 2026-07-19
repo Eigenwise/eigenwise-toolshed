@@ -655,6 +655,13 @@ function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token, 
   const effortDrift = effortDriftReason(slug, idOrRef, claimedEffort);
   if (effortDrift) return effortDrift;
   const t = store.getTicket(slug, idOrRef);
+  if (t && store.isSupersededDispatchToken(t, token)) {
+    return {
+      reason: 'token',
+      ref: t.ref,
+      message: `${t.ref}'s dispatch was superseded by a newer preparation. Re-run sidequest dispatch and use its returned token.`,
+    };
+  }
   if (t && t.dispatchNonce && token === t.dispatchNonce && executorName !== t.dispatchExecutor) {
     return {
       reason: 'executor_mismatch',
@@ -1420,7 +1427,7 @@ function cmdDispatch(opts, positional) {
     spawn,
     guidance: prepared.recovery
       ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
-      : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}.`,
+      : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}.`,
   }, null, 2) + '\n');
 }
 
