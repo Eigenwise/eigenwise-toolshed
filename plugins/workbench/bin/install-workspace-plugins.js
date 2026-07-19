@@ -193,6 +193,7 @@ function defaultRun(command) {
     cwd: command.cwd,
     encoding: 'utf8',
     shell: false,
+    windowsHide: true,
   });
   return {
     ok: result.status === 0 && !result.error,

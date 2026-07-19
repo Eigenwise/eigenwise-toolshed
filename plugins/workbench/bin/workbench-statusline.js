@@ -125,7 +125,7 @@ function renderPassthrough(raw) {
   const command = process.env.WORKBENCH_STATUSLINE_RENDER;
   if (!command) return '';
   try {
-    const result = spawnSync(command, { input: raw, shell: true, encoding: 'utf8', timeout: 2000 });
+    const result = spawnSync(command, { input: raw, shell: true, encoding: 'utf8', timeout: 2000, windowsHide: true });
     return typeof result.stdout === 'string' ? result.stdout : '';
   } catch {
     return '';

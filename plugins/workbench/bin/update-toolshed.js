@@ -121,6 +121,7 @@ function defaultRun(command) {
     cwd: command.cwd,
     encoding: 'utf8',
     shell: false,
+    windowsHide: true,
   });
 
   return {

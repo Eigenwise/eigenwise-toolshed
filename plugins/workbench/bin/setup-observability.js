@@ -274,7 +274,7 @@ function ensureCollectorConfig(dataDir, sink, ports = DEFAULT_PORTS) {
 }
 
 function verifyCommand(command, args, spawn = spawnSync) {
-  const result = spawn(command, args, { encoding: 'utf8' });
+  const result = spawn(command, args, { encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed.`);
   return String(result.stdout || '').trim();
 }

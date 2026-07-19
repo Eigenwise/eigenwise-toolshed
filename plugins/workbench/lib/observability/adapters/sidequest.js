@@ -27,7 +27,7 @@ function writeCursor(file, serverTime) {
 
 function defaultChangesRunner({ sidequestBin, project, since }) {
   const args = [sidequestBin, 'changes', '--since', since, '--project', project, '--json'];
-  return JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
+  return JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8', windowsHide: true }));
 }
 
 function identifier(value) {

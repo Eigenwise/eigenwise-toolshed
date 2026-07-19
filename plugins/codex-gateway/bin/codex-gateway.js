@@ -204,7 +204,7 @@ function readPid(name) {
 }
 function killPid(pid) {
   if (!pid) return;
-  if (WIN) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+  if (WIN) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
   else { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
 }
 
@@ -214,6 +214,7 @@ function spawnDetached(name, command, cmdArgs, env) {
     detached: true,
     stdio: ['ignore', out, out],
     env: { ...process.env, ...env },
+    windowsHide: true,
   });
   fs.writeFileSync(pidFile(name), String(child.pid));
   child.unref();
@@ -489,7 +490,7 @@ function installScope() {
 }
 
 function isAuthed() {
-  const r = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000 });
+  const r = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
   return r.status === 0 && /account/i.test((r.stdout || '') + (r.stderr || ''));
 }
 
@@ -534,7 +535,7 @@ async function setup() {
   const tarBin = WIN
     ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
     : 'tar';
-  const tar = spawnSync(tarBin, ['-xf', assetName], { encoding: 'utf8', cwd: BIN_DIR });
+  const tar = spawnSync(tarBin, ['-xf', assetName], { encoding: 'utf8', cwd: BIN_DIR, windowsHide: true });
   if (tar.status !== 0) die(`extract failed: ${tar.stderr || tar.status}`);
   fs.rmSync(tmp);
   if (!fs.existsSync(PROXY_BIN)) {
@@ -546,7 +547,7 @@ async function setup() {
   }
   if (!WIN) fs.chmodSync(PROXY_BIN, 0o755);
 
-  const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8' });
+  const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true });
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
 
   // one-shot: start everything, and finish the wiring when auth already works
@@ -596,7 +597,7 @@ function semverLt(a, b) {
 function warnIfProxyOutdated() {
   try {
     const floor = parseSemver(MIN_PROXY_VERSION);
-    const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000 });
+    const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
     const got = parseSemver((v.stdout || '') + (v.stderr || ''));
     if (got && floor && semverLt(got, floor)) {
       console.error(`codex-gateway: claude-code-proxy ${got.join('.')} is older than ${MIN_PROXY_VERSION}; Codex context-overflow recovery needs the newer proxy. Run the codex-gateway skill setup to update (it downloads the latest).`);
@@ -763,9 +764,9 @@ async function syncCompatMode() {
 async function doctor() {
   log(`binary: ${fs.existsSync(PROXY_BIN) ? PROXY_BIN : 'MISSING (run setup)'}`);
   if (fs.existsSync(PROXY_BIN)) {
-    const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000 });
+    const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
     log(`version: ${(v.stdout || v.stderr || '').trim()}`);
-    const a = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000 });
+    const a = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
     log(`codex auth: ${((a.stdout || '') + (a.stderr || '')).trim().split('\n')[0] || '(no output)'}`);
   }
   const ok = await statusReport();
@@ -2112,7 +2113,7 @@ if (require.main === module) {
     case 'login': {
       if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
       const mode = flag('--device') ? 'device' : 'login';
-      const r = spawnSync(PROXY_BIN, ['codex', 'auth', mode], { stdio: 'inherit' });
+      const r = spawnSync(PROXY_BIN, ['codex', 'auth', mode], { stdio: 'inherit', windowsHide: true });
       if (r.status === 0) log(`signed in; run setup once more to finish wiring Claude Code`);
       process.exitCode = r.status == null ? 1 : r.status;
       break;
