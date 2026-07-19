@@ -22,6 +22,8 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const PROJ = path.join(os.tmpdir(), 'sq-mcp-fixtures', 'board');
 process.env.CLAUDE_PROJECT_DIR = PROJ;
+const MCP_SESSION_ID = `mcp-test-session-${process.pid}`;
+process.env.CLAUDE_CODE_SESSION_ID = MCP_SESSION_ID;
 // Start with no discovery root at all — a real machine (e.g. this one, with
 // codex-gateway installed) can have a genuine ~/.claude/codex-gateway/catalog.json,
 // which would otherwise leak real discovered slugs into these tests. The
@@ -72,6 +74,16 @@ function callHandler(name, args) {
 
 function gitAt(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function runForceBypass(payload) {
+  const hook = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
+  const output = execFileSync(process.execPath, [hook], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ, CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') },
+  });
+  return output.trim() ? JSON.parse(output) : null;
 }
 
 function createGitWorktree() {
@@ -223,7 +235,7 @@ test('CLI-only board archive tools are absent from MCP', () => {
 test('dispatch returns a stable executor, one spawn prompt, and a token', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref', 'session', 'sharedTree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref', 'sharedTree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
@@ -259,6 +271,58 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', () => 
   assert.equal(Object.hasOwn(adopted, 'briefing'), false);
   assert.match(adopted.spawn.prompt, new RegExp(`--token ${adopted.token}`));
   assert.doesNotMatch(JSON.stringify(adopted), /ephemeral/);
+});
+
+test('MCP dispatch records the runtime session and the Agent lifecycle binds it', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'mcp-runtime-session', name: 'MCP runtime session', route: { model: 'sonnet', effort: 'high' } });
+  const friendly = callTool('add', { title: 'friendly dispatch session', category: 'mcp-runtime-session' });
+  const omitted = callTool('add', { title: 'omitted dispatch session', category: 'mcp-runtime-session' });
+  const real = callTool('add', { title: 'runtime dispatch session', category: 'mcp-runtime-session' });
+
+  const friendlyDispatch = callTool('dispatch', { ref: friendly.ref, session: 'hh6-quant' });
+  callTool('dispatch', { ref: omitted.ref });
+  callTool('dispatch', { ref: real.ref, session: MCP_SESSION_ID });
+
+  for (const ref of [friendly.ref, omitted.ref, real.ref]) {
+    assert.equal(store.getTicket(slug, ref).dispatch.sessionId, MCP_SESSION_ID);
+  }
+
+  const launched = runForceBypass({
+    session_id: MCP_SESSION_ID,
+    cwd: PROJ,
+    tool_name: 'Agent',
+    tool_input: friendlyDispatch.spawn,
+  });
+  const agentName = launched.hookSpecificOutput.updatedInput.name;
+  let pulse = callTool('pulse', { ref: friendly.ref });
+  assert.equal(pulse.dispatch.state, 'launched');
+  assert.equal(pulse.dispatch.sessionId, MCP_SESSION_ID);
+  assert.ok(pulse.dispatch.launchedAt);
+
+  assert.equal(store.bindDispatchAgent(MCP_SESSION_ID, friendlyDispatch.agent, 'native-mcp-session-agent', agentName).ok, true);
+  pulse = callTool('pulse', { ref: friendly.ref });
+  assert.equal(pulse.dispatch.state, 'bound');
+  assert.equal(pulse.dispatch.agentId, 'native-mcp-session-agent');
+});
+
+test('MCP dispatch refuses a caller session label without runtime identity', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  const ticket = callTool('add', { title: 'missing runtime dispatch session', category: 'mcp-runtime-session' });
+  const runtime = process.env.CLAUDE_CODE_SESSION_ID;
+  const legacy = process.env.CLAUDE_SESSION_ID;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CLAUDE_SESSION_ID;
+  try {
+    const refused = callToolRaw('dispatch', { ref: ticket.ref, session: 'hh6-review' });
+    assert.ok(refused.isError);
+    assert.equal(refused.content[0].text, 'dispatch: MCP runtime session identity is unavailable. Reload Sidequest in Claude Code and retry; do not pass a session label.');
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch, null);
+  } finally {
+    process.env.CLAUDE_CODE_SESSION_ID = runtime;
+    if (legacy == null) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = legacy;
+  }
 });
 
 test('dispatch returns a complete Claude worktree spawn spec', () => {

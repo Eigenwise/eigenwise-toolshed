@@ -67,12 +67,23 @@ function resolveProject(projectArg) {
   return store.ensureProject(store.nearestRepoRoot(start));
 }
 
-// The session a claim is taken under (so a SessionEnd hook can release it fast).
-// The server process inherits CLAUDE_SESSION_ID from the runtime; an explicit
-// arg overrides. Null when neither is present (registry stays dormant, TTL covers).
-function sessionOf(args) {
-  const v = (args && args.session) || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+// The MCP server inherits its Claude Code session identity. Tool callers only
+// know labels, which cannot be used by the Agent lifecycle hooks.
+function runtimeSessionId() {
+  const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
   return String(v).trim() || null;
+}
+
+function sessionOf(args) {
+  return runtimeSessionId() || (args && String(args.session || '').trim()) || null;
+}
+
+function requireDispatchSession() {
+  const sessionId = runtimeSessionId();
+  if (!sessionId) {
+    throw new Error('dispatch: MCP runtime session identity is unavailable. Reload Sidequest in Claude Code and retry; do not pass a session label.');
+  }
+  return sessionId;
 }
 
 function workflowRecipe(slug, categoryId) {
@@ -853,14 +864,13 @@ const TOOLS = [
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        session: { type: 'string' },
         sharedTree: { type: 'boolean', description: 'Escape hatch for a ticket that depends on uncommitted local state. Declared-file tickets otherwise run in isolated worktrees.' },
       },
       required: ['ref'],
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const prepared = store.prepareDispatch(slug, args.ref, { sessionId: sessionOf(args) });
+      const prepared = store.prepareDispatch(slug, args.ref, { sessionId: requireDispatchSession() });
       const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
       const ticketPrompt = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
       const prompt = agentsync.withProjectIdentity(ticketPrompt, meta.path);
