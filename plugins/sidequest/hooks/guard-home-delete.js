@@ -9,7 +9,7 @@ function hasRecursiveDelete(command) {
   // {}() must anchor too: the 2026-07-16 wipe wrapped its Remove-Item in
   // `if (...) { ... }`, which a start/;&| anchor never sees.
   const deletes = /(?:^|[;&|{}()\n])\s*(?:[\w.-]+\s+)*(?:remove-item|rm|rmdir|rd|ri|del|erase)\b/i;
-  const recursive = /(?:--recursive\b|-r(?:[fivd]*\b)?|-f[rivd]*\b|-recurse\b|\/s\b)/i;
+  const recursive = /(?:--recursive\b|-[a-z]*r[a-z]*\b|-recurse\b|\/s\b)/i;
   return deletes.test(command) && recursive.test(command);
 }
 
@@ -22,7 +22,7 @@ function isProtectedPath(command) {
   return command
     .replace(/["']/g, '')
     .split(/\s+/)
-    .filter(path.isAbsolute)
+    .filter((target) => target !== '\\' && target !== '/' && path.isAbsolute(target))
     .map((target) => normalizePath(path.resolve(target)))
     .some((target) => protectedRoots.some((root) => root === target || root.startsWith(`${target}${path.sep}`)));
 }

@@ -467,6 +467,19 @@ test('home-delete guard: blocks a parent traversal from .claude', () => {
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
 });
 
+test('home-delete guard: allows forced non-recursive and continued scoped deletes', () => {
+  for (const command of [
+    'rm -f C:/Users/x/AppData/Local/Temp/observability/file',
+    `rm -f "C:\\scratchpad\\observability" \\
+  "C:\\scratchpad\\logs"`,
+    `rm -rf "C:\\scratchpad\\observability" \\
+  "C:\\scratchpad\\logs"`,
+    'rm -rf C:\\scratchpad\\observability /',
+  ]) {
+    assert.strictEqual(runHomeDeleteGuard('Bash', command), null, command);
+  }
+});
+
 test('home-delete guard: allows scratchpad deletion', () => {
   assert.strictEqual(runHomeDeleteGuard('PowerShell', 'Remove-Item -Recurse -Force C:\\scratchpad\\run-42'), null);
 });
