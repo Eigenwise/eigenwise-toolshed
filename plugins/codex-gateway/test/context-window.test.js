@@ -642,6 +642,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   // window instead of Claude Code's 200k gateway default.
   assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5[1m]');
   assert.equal(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '64000');
+  assert.equal(settings.env.ENABLE_TOOL_SEARCH, 'true');
   assert.equal(settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
 
@@ -650,6 +651,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   const after = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
   assert.equal(after.env?.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
   assert.equal(after.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
+  assert.equal(after.env?.ENABLE_TOOL_SEARCH, undefined);
   assert.equal(after.env?.USER_SETTING, 'keep-me');
 });
 

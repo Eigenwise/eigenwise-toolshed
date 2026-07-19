@@ -83,6 +83,9 @@ const HOSTS_BLOCK_LINE = `127.0.0.1 ${COMPAT_HOST}`;
 const STATIC_ENV_BLOCK = {
   CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
   CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+  // The Codex request path resolves deferred MCP tools before proxy translation.
+  // This opt-in restores Claude Code tool search for every gateway env write.
+  ENABLE_TOOL_SEARCH: 'true',
   // Gateway discovery only identifies models. Claude Code cannot verify a
   // third-party model's capacity from it, so ordinary gateway models use its
   // conservative 200k context budget. Pin the real Claude 1M models (opus,
@@ -1436,6 +1439,38 @@ function runShim() {
     return block && block.type === 'tool_use' && PLAN_TOOLS.includes(block.name);
   }
 
+  function renderCodexToolReferences(content, referencedTools) {
+    if (!Array.isArray(content)) return content;
+    return content.map((block) => {
+      if (!block || typeof block !== 'object') return block;
+      if (block.type === 'tool_reference' && typeof block.tool_name === 'string') {
+        referencedTools.add(block.tool_name);
+        return { type: 'text', text: `Tool reference: ${block.tool_name}` };
+      }
+      if (block.type !== 'tool_result' || !Array.isArray(block.content)) return block;
+      return { ...block, content: renderCodexToolReferences(block.content, referencedTools) };
+    });
+  }
+
+  function resolveCodexDeferredTools(request) {
+    const referencedTools = new Set();
+    if (Array.isArray(request.messages)) {
+      request.messages = request.messages.map((message) => {
+        if (!message || typeof message !== 'object' || !Array.isArray(message.content)) return message;
+        return { ...message, content: renderCodexToolReferences(message.content, referencedTools) };
+      });
+    }
+    if (!Array.isArray(request.tools)) return;
+    request.tools = request.tools.flatMap((tool) => {
+      if (!tool || typeof tool !== 'object') return [tool];
+      if (tool.defer_loading === true && !referencedTools.has(tool.name)) return [];
+      if (!Object.prototype.hasOwnProperty.call(tool, 'defer_loading')) return [tool];
+      const loadedTool = { ...tool };
+      delete loadedTool.defer_loading;
+      return [loadedTool];
+    });
+  }
+
   function rewriteResponseModel(value, advertisedModel) {
     if (!value || typeof value !== 'object') return value;
     if (Array.isArray(value)) {
@@ -1816,6 +1851,7 @@ function runShim() {
             if (dispatchRoute && dispatchRoute.effort) {
               parsed.output_config = { ...(parsed.output_config || {}), effort: dispatchRoute.effort };
             }
+            resolveCodexDeferredTools(parsed);
             // Non-Claude models call the plan-mode tools spuriously, and an
             // approved ExitPlanMode downgrades the session's permission mode
             // to acceptEdits instead of restoring it (anthropics/claude-code
