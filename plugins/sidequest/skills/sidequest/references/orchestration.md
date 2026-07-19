@@ -67,6 +67,13 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   `TaskOutput` as a delay, or busy-wait loops. A turn with nothing to do ends. At every wakeup, diff board
   state with `changes --since <iso>` before deciding what to do next. Use synchronous execution only for a
   tight wave where blindness is acceptable.
+- **No proxy waiters.** The polling ban covers indirect waits too. Never create a Bash, PowerShell,
+  `Monitor`, or cron task whose only purpose is to wait for a Sidequest executor or poll for its expected
+  report or artifact file (`until [ -f <report> ]; do ...; done`), and never block `TaskOutput` on such a
+  proxy task. That burns a model turn, keeps a dead-weight task alive, and hides the real executor
+  lifecycle. Native Agent completion arrives on its own; at natural wakeups use `changes --since` / `pulse`,
+  and read the artifact only after terminal board evidence. A genuine one-shot readiness watch for a local
+  server or build is fine; waiting on an executor through a side channel is not.
 - **Clear verified workers.** An executor stop notification is a cleanup trigger: pulse the ticket, verify its done or submission comment, board state, and git result, then call `TaskStop` in one motion. A `READY_FOR_INTEGRATION` verdict additionally queues the ticket for the publish transaction ([publishing.md](publishing.md)) — publish the wave's submissions in one batch; never respawn an executor for a submitted ticket. Executors deliberately kept alive mid-ticket get the same treatment at their next natural wakeup. Sweep ALL finished executors, not just the one that notified, so session exit only stops live work.
 
 - **Reports stay terse:** what changed, files/lines, verification output, and close confirmation. A repo-changing executor reports a SUBMITTED commit, never a push — the orchestrator's publish transaction is what makes it reachable from `origin/main`, and the ticket goes done only after that reachability check passes.

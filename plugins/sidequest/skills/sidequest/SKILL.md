@@ -211,7 +211,7 @@ sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --sta
   preserving that work, release it with `sidequest release SQ-3 --by <dead-worker-id> --status todo`,
   re-read the ticket, and spawn one replacement. Do not force a fresh claim while a live-looking worker
   may return.
-- Native Agent results arrive automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. For liveness, use `pulse <ref>` / `changes --since`; use `TaskStop` only after terminal board evidence.
+- Native Agent results arrive automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. For liveness, use `pulse <ref>` / `changes --since`; use `TaskStop` only after terminal board evidence. **Never proxy-wait** for an executor either: no Bash/PowerShell/`Monitor`/cron task whose only job is to wait for it or poll for its report/artifact file, and no blocking `TaskOutput` on that proxy. A one-shot readiness watch for a local server or build is fine; waiting on an executor through a side channel is not.
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at a verified local commit and
 `submit` it (durable ref `refs/sidequest/<SQ-n>`, claim released, ticket parked in `doing` awaiting

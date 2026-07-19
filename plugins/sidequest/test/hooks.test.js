@@ -518,6 +518,7 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.ok(ctx.includes('bypassPermissions'), 'must require unattended executors to launch in bypass');
   assert.ok(ctx.includes('Native Agent results arrive automatically: never TaskOutput them.'), 'must ban invalid native Agent TaskOutput polling');
   assert.ok(ctx.includes('pulse ref / changes --since; TaskStop only after terminal board evidence'), 'must give the board-based liveness and stop rule');
+  assert.ok(ctx.includes('Never proxy-wait'), 'must ban proxy waiters (side-channel Bash/Monitor/cron waits + blocking TaskOutput on a proxy)');
   assert.ok(ctx.includes('SHORT'), 'must demand short, bounded executor runs');
   assert.ok(ctx.includes('bounce back'), 'must tell executors to bounce back, not wander');
   assert.ok(ctx.includes('ONE executor'), 'must carry the batch-small-tickets rule');
