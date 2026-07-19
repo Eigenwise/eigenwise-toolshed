@@ -37,6 +37,7 @@ const https = require('node:https');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { createGatewayUsageEmitter } = require('../lib/usage-observability.js');
 
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'codex-gateway');
@@ -1323,6 +1324,11 @@ function runShim() {
   };
   const counters = { models: 0, codex: 0, anthropic: 0 };
   const dispatchRoutes = new DispatchSessionRouteCache();
+  const usageEmitter = createGatewayUsageEmitter();
+  const settingsWiring = wiredMode();
+  if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL) && !settingsWiring) {
+    console.error('codex-gateway: ANTHROPIC_BASE_URL is shell-only; wire it through user or project settings so background sessions stay metered');
+  }
   const sentrySessions = new Map();
   const compactTriggerIsFixed = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0;
   let compactTrigger = CODEX_COMPACT_TRIGGER;
@@ -1582,9 +1588,10 @@ function runShim() {
     };
   }
 
-  function createSseEventObserver(observe) {
+  function createSseEventObserver(observe, maxPendingBytes = 4 * 1024 * 1024, onOverflow = null) {
     const decoder = new StringDecoder('utf8');
     let pending = '';
+    let overflowed = false;
 
     function inspectFrame(frame) {
       const dataLine = frame.split(/\r?\n/).find((line) => line.startsWith('data:'));
@@ -1594,9 +1601,19 @@ function runShim() {
       try { observe(JSON.parse(raw)); } catch { /* pass malformed upstream data through untouched */ }
     }
 
+    function overflowIfNeeded() {
+      if (Buffer.byteLength(pending) <= maxPendingBytes) return false;
+      pending = '';
+      overflowed = true;
+      try { onOverflow?.(); } catch {}
+      return true;
+    }
+
     return {
       write(chunk) {
+        if (overflowed) return;
         pending += decoder.write(chunk);
+        if (overflowIfNeeded()) return;
         for (;;) {
           const match = /\r?\n\r?\n/.exec(pending);
           if (!match) break;
@@ -1605,8 +1622,9 @@ function runShim() {
         }
       },
       end() {
+        if (overflowed) return;
         pending += decoder.end();
-        if (pending) inspectFrame(pending);
+        if (!overflowIfNeeded() && pending) inspectFrame(pending);
       },
     };
   }
@@ -1637,8 +1655,9 @@ function runShim() {
     arm();
   }
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null) {
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null, usageCapture = null) {
     const url = new URL(clientReq.url, target);
+    if (usageCapture) clientRes.once('finish', () => usageCapture.finish());
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
     for (const h of ['host', 'connection', 'content-length', 'keep-alive', ...TRACE_HEADERS, ...extraHeaderDrop]) delete headers[h];
@@ -1654,6 +1673,7 @@ function runShim() {
       reqOptions.lookup = anthropicBypass.lookup;
     }
     const upReq = (isHttps ? https : http).request(url, reqOptions, (upRes) => {
+      usageCapture?.setResponse(upRes.statusCode, upRes.headers);
       upRes.once('end', () => routeTelemetry?.finish(upRes.statusCode));
       upRes.once('aborted', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted'));
       upRes.once('error', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_error'));
@@ -1671,7 +1691,10 @@ function runShim() {
             error: { type: 'api_error', message: 'codex-gateway shim: upstream response ended early' },
           }));
         };
-        upRes.on('data', (chunk) => chunks.push(chunk));
+        upRes.on('data', (chunk) => {
+          usageCapture?.noteResponseBytes(chunk.length);
+          chunks.push(chunk);
+        });
         upRes.on('error', failBufferedResponse);
         upRes.on('aborted', failBufferedResponse);
         upRes.on('end', () => {
@@ -1698,7 +1721,10 @@ function runShim() {
             error: { type: 'api_error', message: 'codex-gateway shim: upstream response ended early' },
           }));
         };
-        upRes.on('data', (c) => chunks.push(c));
+        upRes.on('data', (chunk) => {
+          usageCapture?.noteResponseBytes(chunk.length);
+          chunks.push(chunk);
+        });
         upRes.on('error', failBufferedResponse);
         upRes.on('aborted', failBufferedResponse);
         upRes.on('end', () => {
@@ -1729,7 +1755,10 @@ function runShim() {
       }
       if (advertisedModel && upRes.statusCode >= 400) {
         const chunks = [];
-        upRes.on('data', (chunk) => chunks.push(chunk));
+        upRes.on('data', (chunk) => {
+          usageCapture?.noteResponseBytes(chunk.length);
+          chunks.push(chunk);
+        });
         upRes.on('error', () => clientRes.destroy());
         upRes.on('aborted', () => clientRes.destroy());
         upRes.on('end', () => {
@@ -1746,13 +1775,22 @@ function runShim() {
         if (contentType.includes('text/event-stream')) {
           clientRes.writeHead(upRes.statusCode, resHeaders);
           keepSseAlive(upRes, clientRes);
+          const observeEvent = (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId) || usageCapture)
+            ? (event) => {
+              if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event);
+              usageCapture?.observeEvent(event);
+            }
+            : null;
           const filter = createCodexSseTransformer(
             (chunk) => clientRes.write(chunk),
-            (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) ? (event) => recordSentryUsage(sessionId, event) : null,
+            observeEvent,
             advertisedModel,
             filterPlanTools,
           );
-          upRes.on('data', (chunk) => filter.write(chunk));
+          upRes.on('data', (chunk) => {
+            usageCapture?.noteResponseBytes(chunk.length);
+            filter.write(chunk);
+          });
           upRes.on('end', () => { filter.end(); clientRes.end(); });
           upRes.on('error', () => clientRes.destroy());
           upRes.on('aborted', () => clientRes.destroy());
@@ -1763,7 +1801,9 @@ function runShim() {
         upRes.on('error', () => clientRes.destroy());
         upRes.on('aborted', () => clientRes.destroy());
         upRes.on('end', () => {
-          const filtered = rewriteCodexJson(Buffer.concat(chunks), advertisedModel, filterPlanTools);
+          const upstreamBody = Buffer.concat(chunks);
+          usageCapture?.observeJson(upstreamBody);
+          const filtered = rewriteCodexJson(upstreamBody, advertisedModel, filterPlanTools);
           resHeaders['content-length'] = filtered.length;
           clientRes.writeHead(upRes.statusCode, resHeaders);
           clientRes.end(filtered);
@@ -1771,14 +1811,30 @@ function runShim() {
         return;
       }
       const contentType = String(upRes.headers['content-type'] || '').toLowerCase();
+      const successful = upRes.statusCode >= 200 && upRes.statusCode < 300;
       clientRes.writeHead(upRes.statusCode, resHeaders);
-      if (normalizeContextErrors && upRes.statusCode >= 200 && upRes.statusCode < 300 && contentType.includes('text/event-stream')) {
-        keepSseAlive(upRes, clientRes);
-        if (CODEX_SENTRY_ENABLED && sessionId) {
-          const observer = createSseEventObserver((event) => recordSentryUsage(sessionId, event));
-          upRes.on('data', (chunk) => observer.write(chunk));
+      if (successful && contentType.includes('text/event-stream')) {
+        if (normalizeContextErrors) keepSseAlive(upRes, clientRes);
+        const observeSentry = normalizeContextErrors && CODEX_SENTRY_ENABLED && sessionId;
+        if (observeSentry || usageCapture) {
+          const observer = createSseEventObserver(
+            (event) => {
+              if (observeSentry) recordSentryUsage(sessionId, event);
+              usageCapture?.observeEvent(event);
+            },
+            usageEmitter.maxResponseBytes,
+            () => usageCapture?.markOverflow(),
+          );
+          upRes.on('data', (chunk) => {
+            usageCapture?.noteResponseBytes(chunk.length);
+            observer.write(chunk);
+          });
           upRes.on('end', () => observer.end());
         }
+      } else if (successful && usageCapture) {
+        upRes.on('data', (chunk) => usageCapture.observeChunk(chunk));
+      } else if (usageCapture) {
+        upRes.on('data', (chunk) => usageCapture.noteResponseBytes(chunk.length));
       }
       upRes.pipe(clientRes); // never buffer successful SSE: Claude Code needs the stream live
     });
@@ -1807,6 +1863,12 @@ function runShim() {
         models: modelCache.data.length,
         served: counters,
         compat: { ...compatState },
+        usage: {
+          enabled: usageEmitter.enabled,
+          endpoint: usageEmitter.endpoint,
+          maxResponseBytes: usageEmitter.maxResponseBytes,
+          settingsLevelBaseUrl: !!settingsWiring,
+        },
       }));
     }
 
@@ -1828,9 +1890,11 @@ function runShim() {
       const raw = chunks.length ? Buffer.concat(chunks) : null;
       let requestedModel = null;
       let requestedEffort = null;
+      let parsedPayload = null;
       if (raw && pathOnly.startsWith('/v1/messages')) {
         try {
           const parsed = JSON.parse(raw.toString());
+          parsedPayload = parsed;
           requestedModel = typeof parsed.model === 'string' ? parsed.model : null;
           requestedEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : null;
           if (typeof parsed.model === 'string' && parsed.model.startsWith(PREFIX)) {
@@ -1904,9 +1968,24 @@ function runShim() {
               routeTelemetry.finish(413);
               return;
             }
+            const forwardedBody = JSON.stringify(parsed);
+            const usageCapture = pathOnly === '/v1/messages' && usageEmitter.enabled
+              ? usageEmitter.start({
+                payload: parsed,
+                requestBodyBytes: Buffer.byteLength(forwardedBody),
+                requestHeaders: req.headers,
+                route: {
+                  requestedModel: advertisedModel,
+                  effectiveModel: parsed.model,
+                  backend: 'codex',
+                  effort: effectiveEffort,
+                  via: dispatchVia || 'direct',
+                },
+              })
+              : null;
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              JSON.stringify(parsed), AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, routeTelemetry);
+              forwardedBody, AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, routeTelemetry, usageCapture);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }
@@ -1920,7 +1999,21 @@ function runShim() {
         fallback: false,
         via: 'direct',
       });
-      forward(req, res, ANTHROPIC_UPSTREAM, raw, [], false, false, null, null, routeTelemetry);
+      const usageCapture = pathOnly === '/v1/messages' && usageEmitter.enabled && parsedPayload
+        ? usageEmitter.start({
+          payload: parsedPayload,
+          requestBodyBytes: raw.length,
+          requestHeaders: req.headers,
+          route: {
+            requestedModel,
+            effectiveModel: requestedModel,
+            backend: 'anthropic',
+            effort: requestedEffort,
+            via: 'direct',
+          },
+        })
+        : null;
+      forward(req, res, ANTHROPIC_UPSTREAM, raw, [], false, false, null, null, routeTelemetry, usageCapture);
     });
   }
 

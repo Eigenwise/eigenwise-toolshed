@@ -72,7 +72,7 @@ const OPTIONAL_IDENTIFIER_FIELDS = new Set(IDENTIFIER_FIELDS.filter((field) => !
 
 const LINK_FIELDS = new Set(['relation', 'to_kind', 'to_id', 'method', 'quality']);
 const MEASUREMENT_FIELDS = new Set(['name', 'value', 'unit', 'scope', 'quality']);
-const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
+const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@\[\]-]{0,254}$/;
 const SAFE_PROJECT_ID = /^(?:[a-f0-9]{32,128}|hmac:[A-Za-z0-9_-]{22,128})$/;
 const SAFE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.\[\]-]{0,127}$/;
 const SAFE_STATUS = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;

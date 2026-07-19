@@ -28,6 +28,7 @@ const OBSERVATION_COLUMNS = [
 ];
 
 const USAGE_EVENTS = new Set([
+  'gateway.token.usage',
   'claude_code.api_request',
   'agent_sdk.assistant_usage',
   'claude_code.llm_request',
@@ -135,7 +136,7 @@ function createStatements(database) {
       FROM observation o
       JOIN measurement m ON m.event_id = o.event_id
       WHERE o.request_id = ?
-        AND o.event_name IN ('claude_code.api_request', 'agent_sdk.assistant_usage', 'claude_code.llm_request')
+        AND o.event_name IN ('gateway.token.usage', 'claude_code.api_request', 'agent_sdk.assistant_usage', 'claude_code.llm_request')
         AND m.name IN ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens')
         AND m.scope IN ('request', 'attempt')
         AND m.value IS NOT NULL

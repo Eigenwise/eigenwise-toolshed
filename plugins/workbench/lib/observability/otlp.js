@@ -4,11 +4,12 @@ const { createHash } = require('node:crypto');
 const {
   ALLOWED_EVENTS,
   ALLOWED_MEASUREMENTS,
+  ALLOWED_SOURCES,
   ATTRIBUTE_SPECS,
   EVENT_ATTRIBUTES,
 } = require('./schema.js');
 
-const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
+const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@\[\]-]{0,254}$/;
 const SAFE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.[\]-]{0,127}$/;
 const SAFE_STATUS = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -28,15 +29,16 @@ const RESOURCE_ID_KEYS = Object.freeze({
 const MEASUREMENT_ALIASES = Object.freeze({
   'claude_code.token.usage': 'input_tokens',
   'claude_code.active_time.total': 'active_time_ms',
-  input_tokens: 'input_tokens',
-  output_tokens: 'output_tokens',
-  cache_read_tokens: 'cache_read_tokens',
-  cache_creation_tokens: 'cache_creation_tokens',
-  cost_usd: 'cost_usd',
   'claude_code.cost.usage': 'cost_usd',
-  duration_ms: 'duration_ms',
-  request_count: 'request_count',
 });
+
+const STRUCTURAL_ATTRIBUTE_KEYS = new Set([
+  'source', 'source_event_id', 'source_schema', 'event_name',
+  'project_id', 'session_id', 'claude_session_id', 'prompt_id', 'request_id', 'client_request_id',
+  'trace_id', 'span_id', 'parent_span_id', 'workflow_run_id',
+  'agent_id', 'parent_agent_id', 'tool_use_id', 'task_id', 'ticket_ref', 'route_id',
+  'request_sequence', 'sequence',
+]);
 
 function identifier(value) {
   return typeof value === 'string' && SAFE_IDENTIFIER.test(value) ? value : null;
@@ -91,6 +93,35 @@ function validAttribute(spec, value) {
   return false;
 }
 
+function measurementName(rawKey) {
+  const normalized = normalizeKey(rawKey);
+  return MEASUREMENT_ALIASES[rawKey] || MEASUREMENT_ALIASES[normalized]
+    || (ALLOWED_MEASUREMENTS.includes(normalized) ? normalized : null);
+}
+
+function measurementUnit(name) {
+  if (name === 'cost_usd') return 'usd';
+  if (name.endsWith('_bytes') || name === 'bytes_in' || name === 'bytes_out') return 'bytes';
+  if (name.endsWith('_ms')) return 'ms';
+  if (name.endsWith('_percent') || name === 'rate_limit_percent') return 'percent';
+  if (name.endsWith('_count') || name.endsWith('_requests')
+      || name.startsWith('rate_limit_requests_')) return 'count';
+  return 'tokens';
+}
+
+function measurementQuality(eventName, name) {
+  if (eventName === 'codex_gateway.route' && name === 'duration_ms') return 'exact_client';
+  if (eventName !== 'gateway.token.usage' && eventName !== 'gateway.limit.signal') {
+    return name === 'cost_usd' ? 'estimate' : 'exact_provider';
+  }
+  if (name.endsWith('_bytes') || name === 'duration_ms') return 'exact_client';
+  if (name === 'context_tokens') return 'derived_exact';
+  if (/^(?:input_(?:tools|native_tools|mcp_tools|system|first_message|history|tool_results)|cache_read_(?:tools|system|first_message|history)|fresh_(?:tools|system|first_message|history))_tokens$/.test(name)) {
+    return 'estimate';
+  }
+  return 'exact_provider';
+}
+
 // Keep only attributes the canonical schema allows for this event; report the rest
 // as dropped field NAMES (never values).
 function selectAttributes(eventName, flat, dropped) {
@@ -98,7 +129,13 @@ function selectAttributes(eventName, flat, dropped) {
   const attributes = {};
   for (const [rawKey, value] of Object.entries(flat)) {
     const key = normalizeKey(rawKey);
-    if (MEASUREMENT_ALIASES[rawKey] || MEASUREMENT_ALIASES[key]) continue;
+    if (measurementName(rawKey)) continue;
+    if (key === 'source' && allowed.has(key) && ATTRIBUTE_SPECS[key]) {
+      if (validAttribute(ATTRIBUTE_SPECS[key], value)) attributes[key] = value;
+      else dropped.add(key);
+      continue;
+    }
+    if (STRUCTURAL_ATTRIBUTE_KEYS.has(key)) continue;
     if (!allowed.has(key) || !ATTRIBUTE_SPECS[key]) {
       dropped.add(key);
       continue;
@@ -110,35 +147,61 @@ function selectAttributes(eventName, flat, dropped) {
   return attributes;
 }
 
-function measurementsFrom(flat, scope) {
+function measurementsFrom(flat, scope, eventName = null) {
   const measurements = [];
   const seen = new Set();
   for (const [rawKey, value] of Object.entries(flat)) {
-    const name = MEASUREMENT_ALIASES[rawKey] || MEASUREMENT_ALIASES[normalizeKey(rawKey)];
+    const name = measurementName(rawKey);
     if (!name || !ALLOWED_MEASUREMENTS.includes(name)) continue;
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue;
     if (seen.has(name)) continue;
     seen.add(name);
-    const unit = name === 'cost_usd' ? 'usd' : name.endsWith('_ms') ? 'ms' : name.endsWith('_count') ? 'count' : 'tokens';
-    const quality = name === 'cost_usd' ? 'estimate' : 'exact_provider';
-    measurements.push({ name, value, unit, scope, quality });
+    measurements.push({
+      name,
+      value,
+      unit: measurementUnit(name),
+      scope,
+      quality: measurementQuality(eventName, name),
+    });
   }
   return measurements;
 }
 
 function idColumns(flat, resourceIds) {
   const ids = { ...resourceIds };
-  const requestId = identifier(flat['request.id'] || flat.request_id);
-  if (requestId) ids.request_id = requestId;
-  const promptId = identifier(flat['prompt.id'] || flat.prompt_id);
-  if (promptId) ids.prompt_id = promptId;
-  const agentId = identifier(flat['agent.id'] || flat.agent_id);
-  if (agentId) ids.agent_id = agentId;
-  const toolUseId = identifier(flat['tool_use.id'] || flat.tool_use_id);
-  if (toolUseId) ids.tool_use_id = toolUseId;
-  const ticketRef = identifier(flat['ticket.ref'] || flat.ticket_ref);
-  if (ticketRef) ids.ticket_ref = ticketRef;
+  const mappings = [
+    [['session.id', 'claude.session.id', 'session_id'], 'session_id'],
+    [['prompt.id', 'prompt_id'], 'prompt_id'],
+    [['request.id', 'request_id'], 'request_id'],
+    [['client.request.id', 'client_request_id'], 'client_request_id'],
+    [['workflow.run.id', 'workflow_run_id'], 'workflow_run_id'],
+    [['agent.id', 'agent_id'], 'agent_id'],
+    [['parent.agent.id', 'parent_agent_id'], 'parent_agent_id'],
+    [['tool_use.id', 'tool_use_id'], 'tool_use_id'],
+    [['task.id', 'task_id'], 'task_id'],
+    [['ticket.ref', 'ticket_ref'], 'ticket_ref'],
+    [['route.id', 'route_id'], 'route_id'],
+  ];
+  for (const [keys, column] of mappings) {
+    const value = identifier(keys.map((key) => flat[key]).find((entry) => entry !== undefined));
+    if (value) ids[column] = value;
+  }
+  const sequence = flat.request_sequence ?? flat.sequence;
+  if (Number.isSafeInteger(sequence) && sequence >= 0) ids.sequence = sequence;
   return ids;
+}
+
+function canonicalSource(flat, fallback) {
+  const raw = typeof flat.source === 'string' ? flat.source.replace(/-/g, '_') : null;
+  return raw && ALLOWED_SOURCES.includes(raw) ? raw : fallback;
+}
+
+function canonicalSourceEventId(flat, fallback) {
+  return identifier(flat.source_event_id) || fallback;
+}
+
+function canonicalSourceSchema(flat) {
+  return identifier(flat.source_schema) || 'otlp-json-v1';
 }
 
 const EVENT_ALIASES = Object.freeze({
@@ -226,14 +289,16 @@ function convertLogs(root, options, observations, dropped) {
       const localDropped = new Set();
       const attributes = selectAttributes(eventName, canonicalFlat, localDropped);
       for (const key of localDropped) dropped.add(key);
-      const measurements = measurementsFrom(flat, 'request');
+      const measurements = measurementsFrom(flat, 'request', eventName);
       const ids = idColumns(flat, resourceIds);
       if (identifier(record.traceId) && HEX_TRACE.test(record.traceId)) ids.trace_id = record.traceId;
       if (identifier(record.spanId) && HEX_SPAN.test(record.spanId)) ids.span_id = record.spanId;
+      const fallbackSource = eventName.startsWith('gateway.') ? 'codex_gateway' : 'claude_code';
+      const fallbackSourceId = stableSourceId('log', [eventName, observedAt, ids, flat]);
       const observation = {
-        source: 'claude_code',
-        source_event_id: stableSourceId('log', [eventName, observedAt, ids, flat]),
-        source_schema: 'otlp-json-v1',
+        source: canonicalSource(flat, fallbackSource),
+        source_event_id: canonicalSourceEventId(flat, fallbackSourceId),
+        source_schema: canonicalSourceSchema(flat),
         observed_at: observedAt,
         event_name: eventName,
         attributes,
@@ -257,21 +322,25 @@ function convertTraces(root, options, observations, dropped) {
       const localDropped = new Set();
       const attributes = selectAttributes(eventName, flat, localDropped);
       for (const key of localDropped) dropped.add(key);
+      const measurements = measurementsFrom(flat, 'request', eventName);
       const ids = idColumns(flat, resourceIds);
       if (typeof span.traceId === 'string' && HEX_TRACE.test(span.traceId)) ids.trace_id = span.traceId;
       if (typeof span.spanId === 'string' && HEX_SPAN.test(span.spanId)) ids.span_id = span.spanId;
       // Trace parentage is carried by the parent_span_id column; the link table has no
       // span target kind, so the column is the join key for the agent/trace views.
       if (typeof span.parentSpanId === 'string' && HEX_SPAN.test(span.parentSpanId)) ids.parent_span_id = span.parentSpanId;
+      const fallbackSource = eventName === 'codex_gateway.route' ? 'codex_gateway' : 'claude_code';
+      const fallbackSourceId = stableSourceId('span', [eventName, ids.span_id || observedAt]);
       const observation = {
-        source: 'claude_code',
-        source_event_id: stableSourceId('span', [eventName, ids.span_id || observedAt]),
-        source_schema: 'otlp-json-v1',
+        source: canonicalSource(flat, fallbackSource),
+        source_event_id: canonicalSourceEventId(flat, fallbackSourceId),
+        source_schema: canonicalSourceSchema(flat),
         observed_at: observedAt,
         event_name: eventName,
         attributes,
         ...ids,
       };
+      if (measurements.length > 0) observation.measurements = measurements;
       if (options.projectId) observation.project_id = options.projectId;
       observations.push(observation);
     }
@@ -308,7 +377,7 @@ function convertMetrics(root, options, observations) {
         const raw = point.asInt !== undefined ? Number(point.asInt)
           : typeof point.asDouble === 'number' ? point.asDouble : null;
         if (raw !== null) named[metric.name] = activeTime ? raw * 1000 : raw;
-        const measurements = measurementsFrom(named, 'aggregate');
+        const measurements = measurementsFrom(named, 'aggregate', 'otel.metric');
         if (measurements.length === 0) { observations.push(coverageGap('unmapped_metric', observedAt, resourceIds)); continue; }
         const localDropped = new Set();
         const attributes = selectAttributes('otel.metric', metricAttributes, localDropped);

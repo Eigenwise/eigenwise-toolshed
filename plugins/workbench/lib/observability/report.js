@@ -13,6 +13,9 @@ const EXPLICITLY_UNAVAILABLE = Object.freeze([
   'subscription dollars',
   'provider invoice',
   'cache decision internals',
+  'exact per-section cache attribution',
+  'output source attribution',
+  'fast-mode and WebFetch domain-safety gateway usage',
   'hidden MCP usage',
   'per-file causal allocation',
 ]);
@@ -39,6 +42,9 @@ function requestLedger(store) {
     model: row.model || null,
     backend: row.backend || row.provider || null,
     effort: row.effort || null,
+    agent_id: row.agent_id || null,
+    parent_agent_id: row.parent_agent_id || null,
+    agent_role: row.agent_role || null,
     status: row.status || null,
     evidence: { event: row.evidence_event, source: row.evidence_source, quality: 'exact' },
     tokens: {
@@ -46,9 +52,124 @@ function requestLedger(store) {
       output: labeled(row.output_tokens, row.output_quality),
       cache_read: labeled(row.cache_read_tokens, row.cache_read_quality),
       cache_creation: labeled(row.cache_creation_tokens, row.cache_creation_quality),
+      context_total: labeled(row.context_tokens, row.context_quality),
+      thinking: labeled(row.thinking_tokens, row.thinking_quality),
+    },
+    bytes: {
+      request: labeled(row.request_body_bytes, row.request_body_quality),
+      response: labeled(row.response_body_bytes, row.response_body_quality),
     },
     latency_ms: labeled(row.duration_ms, row.duration_quality),
     cost_usd: labeled(row.cost_usd, row.cost_quality || 'estimate'),
+  }));
+}
+
+function sessionUsage(store) {
+  return store.queryView('session_rollup').map((row) => ({
+    session_id: row.session_id,
+    request_count: labeled(row.request_count, 'derived_exact'),
+    input_tokens: labeled(row.input_tokens, 'derived_exact'),
+    output_tokens: labeled(row.output_tokens, 'derived_exact'),
+    total_context_tokens: labeled(row.total_context_tokens, 'derived_exact'),
+    cache_read_tokens: labeled(row.cache_read_tokens, 'derived_exact'),
+    cache_creation_tokens: labeled(row.cache_creation_tokens, 'derived_exact'),
+    cache_read_ratio: labeled(row.cache_read_ratio, 'derived_exact'),
+    first_request_at: row.first_request_at || null,
+    last_request_at: row.last_request_at || null,
+  }));
+}
+
+function agentUsage(store) {
+  return store.queryView('agent_usage_rollup').map((row) => ({
+    session_id: row.session_id,
+    agent_role: row.agent_role,
+    agent_id: row.agent_id || null,
+    parent_agent_id: row.parent_agent_id || null,
+    request_count: labeled(row.request_count, 'derived_exact'),
+    input_tokens: labeled(row.input_tokens, 'derived_exact'),
+    output_tokens: labeled(row.output_tokens, 'derived_exact'),
+    total_context_tokens: labeled(row.total_context_tokens, 'derived_exact'),
+    cache_read_tokens: labeled(row.cache_read_tokens, 'derived_exact'),
+    cache_creation_tokens: labeled(row.cache_creation_tokens, 'derived_exact'),
+  }));
+}
+
+function inputComposition(store) {
+  return store.queryView('input_composition').map((row) => ({
+    session_id: row.session_id,
+    request_id: row.request_id,
+    agent_id: row.agent_id || null,
+    observed_at: row.observed_at,
+    model: row.model || null,
+    bytes: {
+      request: labeled(row.request_body_bytes, 'exact_client'),
+      system: labeled(row.system_bytes, 'exact_client'),
+      tools: labeled(row.tools_bytes, 'exact_client'),
+      native_tools: labeled(row.native_tools_bytes, 'exact_client'),
+      mcp_tools: labeled(row.mcp_tools_bytes, 'exact_client'),
+      messages: labeled(row.messages_bytes, 'exact_client'),
+      first_message: labeled(row.first_message_bytes, 'exact_client'),
+      history: labeled(row.history_bytes, 'exact_client'),
+      tool_results: labeled(row.tool_result_bytes, 'exact_client'),
+    },
+    estimated_tokens: {
+      system: labeled(row.system_tokens, 'estimate'),
+      tools: labeled(row.tools_tokens, 'estimate'),
+      native_tools: labeled(row.native_tools_tokens, 'estimate'),
+      mcp_tools: labeled(row.mcp_tools_tokens, 'estimate'),
+      first_message: labeled(row.first_message_tokens, 'estimate'),
+      history: labeled(row.history_tokens, 'estimate'),
+      tool_results: labeled(row.tool_result_tokens, 'estimate'),
+    },
+  }));
+}
+
+function cacheEconomics(store) {
+  return store.queryView('cache_economics').map((row) => ({
+    session_id: row.session_id,
+    request_id: row.request_id,
+    observed_at: row.observed_at,
+    model: row.model || null,
+    cache_read_tokens: labeled(row.cache_read_tokens, 'exact_provider'),
+    cache_creation_tokens: labeled(row.cache_creation_tokens, 'exact_provider'),
+    read_savings_base_input_tokens: labeled(row.read_savings_base_input_tokens, 'derived_exact'),
+    write_surcharge_base_input_tokens: labeled(row.write_surcharge_base_input_tokens, 'derived_exact'),
+    net_savings_base_input_tokens: labeled(row.net_savings_base_input_tokens, 'derived_exact'),
+    net_savings_usd: labeled(row.net_savings_usd, row.net_savings_usd === null ? 'unavailable' : 'derived_exact'),
+  }));
+}
+
+function limitSignals(store) {
+  return store.queryView('limit_signals').map((row) => ({
+    session_id: row.session_id,
+    request_id: row.request_id,
+    observed_at: row.observed_at,
+    model: row.model || null,
+    backend: row.backend || null,
+    status: row.status || null,
+    status_code: row.status_code,
+    requests: {
+      limit: labeled(row.requests_limit, 'exact_provider'),
+      remaining: labeled(row.requests_remaining, 'exact_provider'),
+      reset_at_ms: labeled(row.requests_reset_at_ms, 'exact_provider'),
+    },
+    input_tokens: {
+      limit: labeled(row.input_tokens_limit, 'exact_provider'),
+      remaining: labeled(row.input_tokens_remaining, 'exact_provider'),
+      reset_at_ms: labeled(row.input_tokens_reset_at_ms, 'exact_provider'),
+    },
+    output_tokens: {
+      limit: labeled(row.output_tokens_limit, 'exact_provider'),
+      remaining: labeled(row.output_tokens_remaining, 'exact_provider'),
+      reset_at_ms: labeled(row.output_tokens_reset_at_ms, 'exact_provider'),
+    },
+    combined_tokens: {
+      limit: labeled(row.tokens_limit, 'exact_provider'),
+      remaining: labeled(row.tokens_remaining, 'exact_provider'),
+      reset_at_ms: labeled(row.tokens_reset_at_ms, 'exact_provider'),
+    },
+    retry_after_ms: labeled(row.retry_after_ms, 'exact_provider'),
+    codex_throttle_used_percent: labeled(row.codex_throttle_used_percent, 'exact_provider'),
   }));
 }
 
@@ -164,7 +285,13 @@ function buildTokenUsageReport(store) {
   return {
     generated_at: new Date().toISOString(),
     quality_labels: ['exact', 'derived', 'estimated', 'inferred', 'unavailable'],
-    session_turn_ledger: requestLedger(store), context_timeline: contextTimeline(store),
+    session_turn_ledger: requestLedger(store),
+    session_usage: sessionUsage(store),
+    agent_usage: agentUsage(store),
+    input_composition: inputComposition(store),
+    context_timeline: contextTimeline(store),
+    cache_economics: cacheEconomics(store),
+    limit_signals: limitSignals(store),
     execution_tree: executionTree(store), tools: toolTable(store), route_comparison: routeComparison(store),
     ticket_usage: ticketUsage(store), coverage: coverage(store),
   };
@@ -181,6 +308,8 @@ function formatTokenUsageReport(report) {
     lines.push(`  input ${textValue(row.tokens.input)} | output ${textValue(row.tokens.output)} | cache read ${textValue(row.tokens.cache_read)} | cache creation ${textValue(row.tokens.cache_creation)} | latency ${textValue(row.latency_ms)} | cost ${textValue(row.cost_usd)}`);
     lines.push(`  evidence: ${row.evidence.source}/${row.evidence.event} (${row.evidence.quality})`);
   }
+  lines.push('', `Session usage (${report.session_usage.length})`, `Agent usage (${report.agent_usage.length})`, `Input composition (${report.input_composition.length})`);
+  lines.push(`Cache economics (${report.cache_economics.length})`, `Limit signals (${report.limit_signals.length})`);
   lines.push('', `Context timeline (${report.context_timeline.length})`);
   for (const row of report.context_timeline) lines.push(`${row.observed_at} context ${textValue(row.context_tokens)} / window ${textValue(row.context_window_tokens)} | occupancy ${textValue(row.occupancy)} | growth ${textValue(row.growth_tokens)} | compaction pre ${textValue(row.compaction.pre_tokens)} post ${textValue(row.compaction.post_tokens)}`);
   lines.push('', `Execution tree (${report.execution_tree.length})`, `Tools (${report.tools.length})`, `Route comparison (${report.route_comparison.length})`, `Ticket usage (${report.ticket_usage.length})`);

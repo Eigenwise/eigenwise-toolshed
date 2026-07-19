@@ -126,6 +126,14 @@ The fixed payload contains only route ID, trace/span/parent IDs, safe session ID
 
 Telemetry defaults to `http://127.0.0.1:4318/v1/traces`. `CODEX_GATEWAY_TELEMETRY_ENDPOINT` can point it at another loopback OTLP endpoint, while `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_ENDPOINT` are accepted as fallbacks. Non-loopback endpoints are ignored, `CODEX_GATEWAY_TELEMETRY_ENDPOINT=0` disables export, and connection, timeout, encoding, or collector failures never change the routed response.
 
+### Gateway-primary token usage
+
+The shim emits one `gateway.token.usage` OTLP log after each successful proxied `/v1/messages` response. Response token and cache buckets come straight from the provider. The log also carries the resolved model and effort, Claude Code's safe session/agent/parent IDs, exact serialized byte counts for system, tools, messages, history, and tool results, plus estimated token splits normalized to the exact full input total. A failed response emits `gateway.limit.signal` only when it includes useful rate-limit, retry, or Codex throttle headers.
+
+This is counts-only telemetry. Prompts, tool schemas, tool arguments, tool results, response text, credentials, arbitrary headers, baggage, and error text never enter the record. JSON and SSE inspection is bounded and fail-open, and the loopback POST runs after the client response finishes. `CODEX_GATEWAY_USAGE_ENDPOINT` overrides the default `http://127.0.0.1:4318/v1/logs`; set it to `0` to disable export. The standard OTLP logs and base endpoint variables work as fallbacks. See [the usage observability design](docs/usage-observability.md) for the field contract, cache math, dashboard views, and known gaps.
+
+`doctor` and `/healthz` report whether the gateway URL is wired through Claude Code settings. A shell-only `ANTHROPIC_BASE_URL` can miss background sessions, so the shim warns about it. Fast-mode availability and WebFetch domain-safety checks bypass the gateway. Output tokens have no source split, and per-section cache attribution stays estimated.
+
 After changing any of these variables, restart the gateway (`stop`, then `start`) so its detached shim gets the new environment.
 
 ## RC-compatibility mode (restoring `/remote-control`)
