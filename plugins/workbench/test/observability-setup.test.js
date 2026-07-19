@@ -8,6 +8,7 @@ const test = require('node:test');
 const {
   COLLECTOR_VERSION,
   LGTM_IMAGE,
+  MANAGED_DASHBOARD_CONTAINER,
   MIN_CLAUDE_VERSION,
   OBSERVABILITY_ENV,
   applySettings,
@@ -18,6 +19,8 @@ const {
   mergeObservabilitySettings,
   parseArgs,
   parseChecksum,
+  removeObservabilitySettings,
+  removeSettings,
   requireClaudeVersion,
   setupObservability,
   setupPlan,
@@ -85,10 +88,21 @@ test('preserves existing project settings when applying the setup', () => {
   try {
     const claudeDir = path.join(directory, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({ permissions: { allow: ['Read'] } }));
+    fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+      permissions: { allow: ['Read'] },
+      statusLine: { type: 'command', command: 'node inherited-statusline.js' },
+    }));
     const result = applySettings(directory, { workbenchRoot: 'C:/Workbench' });
-    assert.equal(result.settings.permissions.allow[0], 'Read');
+    const projectSettings = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8'));
+    assert.equal(projectSettings.permissions.allow[0], 'Read');
+    assert.equal(projectSettings.statusLine.command, 'node inherited-statusline.js');
+    assert.match(result.settingsPath, /settings\.local\.json$/);
     assert.match(result.settings.statusLine.command, /workbench-statusline\.js/);
+    assert.equal(result.settings.env.WORKBENCH_STATUSLINE_RENDER, 'node inherited-statusline.js');
+    removeSettings(directory);
+    const cleanedLocal = JSON.parse(fs.readFileSync(result.settingsPath, 'utf8'));
+    assert.equal(cleanedLocal.statusLine, undefined);
+    assert.equal(projectSettings.statusLine.command, 'node inherited-statusline.js');
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -164,6 +178,7 @@ test('stores sink selection separately from project settings', async (t) => {
     claudeVersion: MIN_CLAUDE_VERSION,
     environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
     spawnSync: () => ({ status: 0, stdout: process.version }),
+    ensure: async () => ({ enabled: true, started: [] }),
   });
 
   const config = JSON.parse(fs.readFileSync(result.observabilityConfig, 'utf8'));
@@ -194,4 +209,73 @@ test('configures generic OTLP from the private sink config and parses explicit C
     sinkEndpoint: 'https://otlp.example.test',
   });
   assert.throws(() => parseArgs(['--sink', 'unknown']), /Unknown observability sink/);
+});
+
+test('uses dashboard language, keeps the lgtm alias, and defaults bare setup from Docker', () => {
+  assert.deepEqual(parseArgs(['--dashboard']), { dashboard: true });
+  assert.deepEqual(parseArgs(['--lgtm']), { dashboard: true, lgtm: true });
+  assert.deepEqual(parseArgs([]), {});
+  const plan = setupPlan({ dataDir: 'C:/Workbench', projectDir: '.' });
+  const dashboard = configuredSink(plan, { config: {}, defaultDashboard: true });
+  assert.equal(dashboard.observability.enabled, true);
+  assert.equal(dashboard.observability.dashboard, true);
+  assert.equal(dashboard.observability.sink, 'grafana-lgtm');
+  assert.equal(dashboard.observability.sinks['grafana-lgtm'].container, MANAGED_DASHBOARD_CONTAINER);
+  const withoutDocker = configuredSink(plan, { config: {}, defaultDashboard: false });
+  assert.equal(withoutDocker.observability.enabled, true);
+  assert.equal(withoutDocker.observability.dashboard, false);
+  assert.equal(withoutDocker.observability.sink, 'none');
+
+  const disabledDashboard = configuredSink(plan, { config: dashboard, dashboard: false });
+  assert.equal(disabledDashboard.observability.dashboard, false);
+  assert.equal(disabledDashboard.observability.sink, 'none');
+  assert.throws(() => parseArgs(['--dashboard', '--sink', 'otlp']), /cannot be combined/);
+});
+
+test('removes only Workbench settings and restores a wrapped status line', () => {
+  const configured = mergeObservabilitySettings({
+    env: { KEEP_ME: 'yes' },
+    statusLine: { type: 'command', command: 'node custom-statusline.js' },
+  }, { workbenchRoot: 'C:/Workbench' });
+  const removed = removeObservabilitySettings(configured);
+  assert.deepEqual(removed.env, { KEEP_ME: 'yes' });
+  assert.equal(removed.statusLine.command, 'node custom-statusline.js');
+  for (const name of Object.keys(OBSERVABILITY_ENV)) assert.equal(Object.hasOwn(removed.env, name), false);
+});
+
+test('disable tears down managed runtime and keeps the consent record reconfigurable', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-disable-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const projectDir = path.join(directory, 'project');
+  const otherProjectDir = path.join(directory, 'other-project');
+  const dataDir = path.join(directory, 'data');
+  fs.mkdirSync(path.join(projectDir, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(otherProjectDir, '.claude'), { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'observability.json'), JSON.stringify({
+    observability: { enabled: true, sink: 'none', dashboard: false, projects: [otherProjectDir], sinks: {} },
+  }));
+  applySettings(projectDir, { workbenchRoot: 'C:/Workbench' });
+  applySettings(otherProjectDir, { workbenchRoot: 'C:/Workbench' });
+  let tornDown = false;
+
+  const result = await setupObservability({
+    projectDir,
+    dataDir,
+    disable: true,
+    dockerAvailable: false,
+    ensureModule: {
+      teardownRuntime: async () => { tornDown = true; return { observer: true, collector: true }; },
+    },
+  });
+
+  assert.equal(tornDown, true);
+  assert.equal(result.disabled, true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'observability.json'), 'utf8')).observability.enabled, false);
+  const localSettings = JSON.parse(fs.readFileSync(path.join(projectDir, '.claude', 'settings.local.json'), 'utf8'));
+  assert.equal(localSettings.env, undefined);
+  assert.equal(localSettings.statusLine, undefined);
+  const otherSettings = JSON.parse(fs.readFileSync(path.join(otherProjectDir, '.claude', 'settings.local.json'), 'utf8'));
+  assert.equal(otherSettings.env, undefined);
+  assert.equal(otherSettings.statusLine, undefined);
 });

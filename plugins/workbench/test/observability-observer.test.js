@@ -375,3 +375,38 @@ test('observer binds only to loopback and acknowledges HTTP ingestion after comm
   const health = await fetch(`${base}/health`);
   assert.equal((await health.json()).ok, true);
 });
+
+test('continuous outbox drain is fail-open and shares one in-flight flush', async (t) => {
+  const store = temporaryStore(t);
+  store.ingest(requestObservation({ source_event_id: 'continuous-outbox' }));
+  let fetchCalls = 0;
+  let releaseFetch;
+  const upstream = new Promise((resolve) => { releaseFetch = resolve; });
+  const observer = createObserver({
+    store,
+    host: '127.0.0.1',
+    port: 0,
+    hookSpoolFile: path.join(os.tmpdir(), `workbench-observer-spool-${process.pid}-outbox.jsonl`),
+    outboxIntervalMs: 60_000,
+    sink: {
+      id: 'test',
+      egress: 'loopback',
+      outbox: { enabled: true, endpoint: 'http://127.0.0.1:14318/v1/logs', headers: {}, allowRemote: false },
+    },
+    fetch: async () => {
+      fetchCalls += 1;
+      return upstream;
+    },
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+  while (fetchCalls === 0) await new Promise((resolve) => setImmediate(resolve));
+
+  const manualFlush = fetch(`http://127.0.0.1:${address.port}/v1/outbox/flush`, { method: 'POST' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetchCalls, 1);
+  releaseFetch({ ok: true, status: 200 });
+  assert.equal((await manualFlush).status, 200);
+  assert.equal(fetchCalls, 1);
+  assert.equal(store.queryView('outbox_health')[0].pending_count, 0);
+});

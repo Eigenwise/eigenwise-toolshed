@@ -7,7 +7,7 @@ const path = require('node:path');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const { drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { defaultSpoolPath } = require('../hooks/observability.js');
-const { flushOutbox } = require('../lib/observability/outbox.js');
+const { createOutboxDrainer } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { otlpToObservations } = require('../lib/observability/otlp.js');
 const {
@@ -109,6 +109,14 @@ function createObserver(options = {}) {
   const store = options.store || openObservabilityStore(options.databaseFile || defaultDatabaseFile(), {
     outboxEnabled: outbox.enabled,
   });
+  const outboxDrainer = createOutboxDrainer(store, {
+    enabled: outbox.enabled,
+    endpoint: outbox.endpoint,
+    headers: outbox.headers,
+    allowRemote: outbox.allowRemote,
+    fetch: options.fetch,
+    maxAttempts: options.maxOutboxAttempts,
+  });
 
   const server = http.createServer(async (request, response) => {
     try {
@@ -164,14 +172,7 @@ function createObserver(options = {}) {
       }
 
       if (request.method === 'POST' && url.pathname === '/v1/outbox/flush') {
-        const result = await flushOutbox(store, {
-          enabled: outbox.enabled,
-          endpoint: outbox.endpoint,
-          headers: outbox.headers,
-          allowRemote: outbox.allowRemote,
-          fetch: options.fetch,
-          maxAttempts: options.maxOutboxAttempts,
-        });
+        const result = await drainOutbox();
         jsonResponse(response, 200, result);
         return;
       }
@@ -186,6 +187,7 @@ function createObserver(options = {}) {
 
   let started = false;
   let spoolTimer = null;
+  let outboxTimer = null;
   let drainingSpool = false;
   const spoolPath = options.hookSpoolFile || process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath();
   const drainSpool = () => {
@@ -199,6 +201,9 @@ function createObserver(options = {}) {
       drainingSpool = false;
     }
   };
+  const drainOutbox = () => outbox.enabled
+    ? outboxDrainer.flush().catch(() => null)
+    : Promise.resolve(null);
   return {
     host,
     port,
@@ -218,6 +223,11 @@ function createObserver(options = {}) {
       drainSpool();
       spoolTimer = setInterval(drainSpool, Math.max(250, Number(options.hookSpoolIntervalMs) || 1000));
       if (typeof spoolTimer.unref === 'function') spoolTimer.unref();
+      if (outbox.enabled) {
+        void drainOutbox();
+        outboxTimer = setInterval(() => { void drainOutbox(); }, Math.max(250, Number(options.outboxIntervalMs) || 1000));
+        if (typeof outboxTimer.unref === 'function') outboxTimer.unref();
+      }
       return server.address();
     },
     async close() {
@@ -225,7 +235,12 @@ function createObserver(options = {}) {
         clearInterval(spoolTimer);
         spoolTimer = null;
       }
+      if (outboxTimer) {
+        clearInterval(outboxTimer);
+        outboxTimer = null;
+      }
       drainSpool();
+      await drainOutbox();
       if (started) {
         await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
         started = false;

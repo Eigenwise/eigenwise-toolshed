@@ -84,8 +84,7 @@ essays. Ask what you genuinely can't infer. A good compact set (adapt, don't rec
    default is project scope, local is only for an explicitly personal-per-repo choice, and user is
    only for an explicitly cross-project choice.
 6. **CLAUDE.md?** Do they want one seeded (you'll delegate to `/init`), or skip it?
-7. **Local telemetry?** Offer SQLite only, SQLite + optional loopback LGTM Docker viewer, or skip. Read
-   `references/observability.md` after they choose; do not ask for telemetry content settings, endpoints, or secrets.
+7. **Usage observability?** Ask whether to enable metadata-only usage observability. Say that it downloads a pinned Collector, edits project `settings.local.json`, and can add a local dashboard through Docker. Show the current state when it is already configured, then offer to keep it, change its sink/dashboard/ports, or disable it and keep/delete its data. Read `references/observability.md` before applying the answer.
 
 Use the `AskUserQuestion` tool for the choices with clear options (plugins, codebase-or-not,
 `CLAUDE.md` yes/no); ask the open ones (what is this, conventions) in plain text. If the user said
@@ -140,9 +139,7 @@ pre-reload artifacts.
 
 ### 2b. Optional local telemetry
 
-If the user chose telemetry, follow `references/observability.md` now. Run its setup helper after the plugin
-installer succeeds and before any reload request. On a partial telemetry failure, stop and give the exact
-rerun command. Do not request reload or claim the workspace setup completed.
+Use `references/observability.md` now for every observability answer, including reconfiguration or disable. Run the helper's check pass, show the current state and delta, then apply the confirmed change after the plugin installer succeeds and before any reload request. On a partial failure, stop and give the exact rerun command. Do not request reload or claim the workspace setup completed.
 
 ### 2c. Atomic live rules
 

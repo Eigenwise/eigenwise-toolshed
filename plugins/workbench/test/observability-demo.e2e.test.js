@@ -101,8 +101,11 @@ test('runs the disposable demo through setup, local OTLP, hooks, SDK, tools, rou
   const setup = await setupObservability({
     projectDir,
     dataDir,
+    sink: 'none',
+    dockerAvailable: false,
     claudeVersion: '2.1.212',
     environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
+    ensure: async () => ({ enabled: true, started: [] }),
   });
   const observerStore = openObservabilityStore(setup.databaseFile);
   const observer = createObserver({ store: observerStore, host: '127.0.0.1', port: 0, hookSpoolFile: path.join(dataDir, 'observer-hook-spool.jsonl') });
@@ -114,9 +117,11 @@ test('runs the disposable demo through setup, local OTLP, hooks, SDK, tools, rou
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  assert.equal(setup.settings.settings.customSetting, 'preserve-this');
-  assert.equal(setup.settings.settings.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
-  assert.equal(setup.settings.settings.env.OTEL_METRICS_INCLUDE_SESSION_ID, 'false');
+  const localSettings = JSON.parse(fs.readFileSync(path.join(projectDir, '.claude', 'settings.local.json'), 'utf8'));
+  const projectSettings = JSON.parse(fs.readFileSync(path.join(projectDir, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(projectSettings.customSetting, 'preserve-this');
+  assert.equal(localSettings.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
+  assert.equal(localSettings.env.OTEL_METRICS_INCLUDE_SESSION_ID, 'false');
   assert.match(fs.readFileSync(setup.collectorConfig, 'utf8'), /file_storage\/observer_queue/);
   assert.match(fs.readFileSync(setup.collectorConfig, 'utf8'), /sending_queue:/);
   assert.match(fs.readFileSync(setup.collectorConfig, 'utf8'), /retry_on_failure:/);
