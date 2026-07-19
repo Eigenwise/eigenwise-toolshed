@@ -16,7 +16,7 @@ const assert = require('node:assert');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { spawnSync } = require('child_process');
+const { spawnSync, execFileSync } = require('child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -70,6 +70,26 @@ function callHandler(name, args) {
   return tool.handler(args || {});
 }
 
+function gitAt(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function createGitWorktree() {
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq mcp worktree-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-remote-'));
+  gitAt(worktree, ['init']);
+  gitAt(worktree, ['config', 'user.name', 'Sidequest Test']);
+  gitAt(worktree, ['config', 'user.email', 'sidequest-test@example.invalid']);
+  fs.writeFileSync(path.join(worktree, 'README.md'), 'base\n');
+  gitAt(worktree, ['add', 'README.md']);
+  gitAt(worktree, ['commit', '-m', 'base']);
+  gitAt(worktree, ['branch', '-M', 'main']);
+  execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8', windowsHide: true });
+  gitAt(worktree, ['remote', 'add', 'origin', remote]);
+  gitAt(worktree, ['push', '-u', 'origin', 'main']);
+  return worktree;
+}
+
 test('initialize returns a protocol version, tools capability, and serverInfo', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
   assert.strictEqual(resp.result.protocolVersion, '2025-06-18', 'echoes the client-requested version');
@@ -85,7 +105,7 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'claim', 'sweepClaims', 'next', 'done', 'release', 'comment', 'ask', 'link', 'dispatch', 'category_edit', 'category_list']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'claim', 'sweepClaims', 'next', 'done', 'release', 'commit', 'submit', 'comment', 'ask', 'link', 'dispatch', 'category_edit', 'category_list']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['archive_board', 'unarchive_board', 'category_add', 'category_rm', 'global_fallback', 'unlink', 'assign', 'remove',
@@ -110,6 +130,70 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   assert.match(tools.find((tool) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool) => tool.name === 'dispatch').description, /instant/);
   assert.match(tools.find((tool) => tool.name === 'done').description, /actual model and effort/);
+});
+
+test('MCP commit and submit finish an isolated worktree without a PATH command', () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'MCP terminal lifecycle', files: ['lib/allowed.js'], complexity: 3,
+    complexityWhy: 'exercise the MCP commit and submit terminal worktree lifecycle',
+  });
+  const by = 'mcp-worktree-worker';
+  assert.equal(callTool('claim', { project, ref: ticket.ref, by, direct: true }).ok, true);
+
+  fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'lib', 'allowed.js'), 'allowed\n');
+  fs.writeFileSync(path.join(worktree, 'foreign.js'), 'foreign\n');
+  gitAt(worktree, ['add', '.']);
+  const explicitPath = process.platform === 'win32' ? worktree.replace(/\//g, '\\') : worktree;
+  const committed = callTool('commit', {
+    project, ref: ticket.ref, by, message: 'MCP scoped commit', worktree: explicitPath,
+  });
+  assert.ok(committed.commit, 'commit returns the local hash');
+  assert.deepEqual(committed.paths, ['lib/allowed.js']);
+  assert.equal(gitAt(worktree, ['diff', '--cached', '--name-only']), 'foreign.js', 'foreign staging remains intact');
+  gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
+
+  const submitted = callTool('submit', {
+    project, ref: ticket.ref, by, commit: committed.commit,
+    worktree: explicitPath, verify: 'node --test plugins/sidequest/test/mcp.test.js',
+    body: 'MCP terminal evidence',
+  });
+  assert.equal(submitted.ok, true);
+  assert.equal(submitted.submission.commit, committed.commit);
+  const after = store.getTicket(project, ticket.ref);
+  assert.equal(after.claim, null, 'submit releases the claim');
+  assert.ok(after.comments.some((comment) => comment.body === 'MCP terminal evidence'));
+
+  const malformed = store.createTicket(project, {
+    title: 'MCP malformed submission', files: ['lib/other.js'], complexity: 3,
+    complexityWhy: 'confirm malformed MCP submission input preserves the ticket claim',
+  });
+  assert.equal(callTool('claim', { project, ref: malformed.ref, by: 'mcp-bad-worker', direct: true }).ok, true);
+  const bad = callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree });
+  assert.ok(bad.isError, 'malformed hashes fail before a board write');
+  assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
+});
+
+test('MCP submit refuses out-of-scope committed ranges', () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'MCP range scope refusal', files: ['lib/allowed.js'], complexity: 3,
+    complexityWhy: 'confirm MCP submit refuses a committed range outside the declared scope',
+  });
+  const by = 'mcp-range-worker';
+  assert.equal(callTool('claim', { project, ref: ticket.ref, by, direct: true }).ok, true);
+  fs.writeFileSync(path.join(worktree, 'foreign.js'), 'foreign\n');
+  gitAt(worktree, ['add', 'foreign.js']);
+  gitAt(worktree, ['commit', '-m', 'foreign work']);
+  const commit = gitAt(worktree, ['rev-parse', 'HEAD']);
+  gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, commit]);
+  const refused = callTool('submit', { project, ref: ticket.ref, by, commit, worktree });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'outside_scope');
+  assert.ok(store.getTicket(project, ticket.ref).claim, 'scope refusal keeps the claim');
 });
 
 test('sweepClaims releases stale claims through MCP', () => {

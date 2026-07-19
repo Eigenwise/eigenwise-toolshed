@@ -1,6 +1,7 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
+const path = require('path');
 
 function normalizeScope(scope) {
   return String(scope || '')
@@ -74,6 +75,16 @@ function canonicalScope(scope, paths) {
 function canonicalScopedPaths(cwd, files) {
   const paths = trackedPaths(cwd);
   return scopedPaths(files).map((scope) => canonicalScope(scope, paths));
+}
+
+function validateScopeResolution(root, files) {
+  const scopes = scopedPaths(files);
+  if (!scopes.length) return { ok: false, reason: 'missing_scope', outside: [] };
+  const outside = scopes.filter((scope) => {
+    const relative = path.relative(root, path.resolve(root, scope));
+    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  });
+  return { ok: outside.length === 0, reason: outside.length ? 'outside_scope' : null, outside };
 }
 
 function commitPaths(cwd, commit) {
@@ -217,6 +228,8 @@ function commitScoped(cwd, message, files) {
   if (!scopes.length) return { ok: false, reason: 'missing_scope' };
   try {
     const root = repoRoot(cwd);
+    const resolution = validateScopeResolution(root, scopes);
+    if (!resolution.ok) return resolution;
     const canonicalScopes = canonicalScopedPaths(root, scopes);
     git(root, ['commit', '--only', '-m', String(message || ''), '--', ...canonicalScopes]);
     const commit = git(root, ['rev-parse', 'HEAD']).trim();
@@ -236,5 +249,7 @@ module.exports = {
   validateCommitRangeScope,
   submissionRange,
   validateStoredSubmissionRange,
+  validateScopeResolution,
+  repoRoot,
   commitScoped,
 };

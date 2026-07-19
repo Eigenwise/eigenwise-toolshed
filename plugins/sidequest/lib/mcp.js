@@ -27,6 +27,7 @@ const fs = require('fs');
 const store = require('./store');
 const work = require('./work');
 const agentsync = require('./agentsync');
+const commitScope = require('./commit-scope');
 
 const SERVER_NAME = 'sidequest';
 // The latest MCP protocol revision we implement. In `initialize` we echo the
@@ -231,6 +232,41 @@ function mutationAck(project, result, changed) {
     return out;
   }
   return Object.assign(out, changed || {});
+}
+
+function requiredText(args, key, action) {
+  const value = args && args[key] != null ? String(args[key]).trim() : '';
+  if (!value) throw new Error(`${action}: "${key}" is required.`);
+  return value;
+}
+
+function worktreeRoot(worktree, action) {
+  const supplied = requiredText({ worktree }, 'worktree', action);
+  if (!path.isAbsolute(supplied)) throw new Error(`${action}: "worktree" must be an absolute path.`);
+  let stat;
+  try { stat = fs.statSync(supplied); } catch (_) { throw new Error(`${action}: worktree does not exist: ${supplied}`); }
+  if (!stat.isDirectory()) throw new Error(`${action}: worktree must be a directory: ${supplied}`);
+  let root;
+  try { root = commitScope.repoRoot(supplied); } catch (_) { throw new Error(`${action}: worktree is not inside a git work tree: ${supplied}`); }
+  if (path.resolve(supplied) !== path.resolve(root)) throw new Error(`${action}: worktree must name the git worktree root: ${supplied}`);
+  return root;
+}
+
+function verifyEmbedsWorktreeRoot(verify, root) {
+  if (typeof verify !== 'string' || !verify || !root) return false;
+  const normalize = (value) => String(value).replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+  const worktree = normalize(path.resolve(root));
+  const command = normalize(verify);
+  const caseInsensitive = /^[a-z]:\//i.test(worktree);
+  const comparableRoot = caseInsensitive ? worktree.toLowerCase() : worktree;
+  const comparableCommand = caseInsensitive ? command.toLowerCase() : command;
+  let offset = comparableCommand.indexOf(comparableRoot);
+  while (offset !== -1) {
+    const next = comparableCommand.charAt(offset + comparableRoot.length);
+    if (!next || next === '/' || !/[a-z0-9._-]/i.test(next)) return true;
+    offset = comparableCommand.indexOf(comparableRoot, offset + comparableRoot.length);
+  }
+  return false;
 }
 
 function changedTicketFields(ticket, args) {
@@ -588,6 +624,114 @@ const TOOLS = [
       const res = store.releaseTicket(slug, args.ref, by, { status: args.status, source: 'mcp', sessionId: sessionOf(args) });
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);
+    },
+  },
+  {
+    name: 'commit',
+    description: 'Commit only a claimed ticket’s declared paths in an explicit local git worktree. Returns the commit hash; foreign staged paths stay staged.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        by: { type: 'string' },
+        message: { type: 'string' },
+        worktree: { type: 'string', description: 'Absolute path to this executor’s git worktree root.' },
+      },
+      required: ['ref', 'by', 'message', 'worktree'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const by = requireBy(args, 'commit');
+      const message = requiredText(args, 'message', 'commit');
+      const ticket = store.getTicket(slug, args.ref);
+      if (!ticket) throw new Error(`commit: no ticket "${args.ref}" in ${meta.name}.`);
+      if (!ticket.claim || ticket.claim.by !== by) {
+        return mutationAck(slug, { ok: false, ticket, reason: 'not_owner', message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.` });
+      }
+      const root = worktreeRoot(args.worktree, 'commit');
+      const result = commitScope.commitScoped(root, message, ticket.files);
+      if (!result.ok) {
+        const message = result.reason === 'missing_scope'
+          ? `commit: ${ticket.ref} has no declared file scope.`
+          : result.reason === 'outside_scope'
+            ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(', ')}.`
+            : `commit: git failed: ${result.message || result.reason}`;
+        return mutationAck(slug, { ok: false, ticket, reason: result.reason, message });
+      }
+      return mutationAck(slug, { ok: true, ticket }, { commit: result.commit, paths: result.paths });
+    },
+  },
+  {
+    name: 'submit',
+    description: 'Terminal repo-work step: validate a scoped committed range from an explicit worktree, park it for integration, release the claim, and optionally store evidence.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        by: { type: 'string' },
+        commit: { type: 'string' },
+        verify: { type: 'string' },
+        gitRef: { type: 'string' },
+        worktree: { type: 'string', description: 'Absolute path to this executor’s git worktree root. Required for isolated worktrees.' },
+        body: { type: 'string', description: 'Optional durable verification evidence.' },
+        session: { type: 'string' },
+      },
+      required: ['ref', 'by', 'commit'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const by = requireBy(args, 'submit');
+      const commit = requiredText(args, 'commit', 'submit');
+      if (!/^[0-9a-f]{7,64}$/i.test(commit)) {
+        throw new Error(`invalid commit "${commit}" — pass the verified commit's hex hash (7-64 chars)`);
+      }
+      const ticket = store.getTicket(slug, args.ref);
+      if (!ticket) throw new Error(`submit: no ticket "${args.ref}" in ${meta.name}.`);
+      const root = args.worktree == null ? process.cwd() : worktreeRoot(args.worktree, 'submit');
+      if (verifyEmbedsWorktreeRoot(args.verify, root)) {
+        throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
+      }
+      const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
+      const range = commitScope.submissionRange(root, { commit, gitRef, upstream: 'origin/main' });
+      if (!range.ok) {
+        return mutationAck(slug, { ok: false, ticket, reason: range.reason, message: range.message });
+      }
+      const duplicate = store.submissionsPayload(slug).tickets
+        .filter((entry) => entry.ref !== ticket.ref)
+        .find((entry) => {
+          const commits = Array.isArray(entry.submission.commits) && entry.submission.commits.length
+            ? entry.submission.commits : [entry.submission.commit];
+          return commits.some((entryCommit) => range.commits.includes(entryCommit));
+        });
+      if (duplicate) {
+        return mutationAck(slug, { ok: false, ticket, reason: 'duplicate_submission', message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.` });
+      }
+      const scope = commitScope.validateCommitRangeScope(root, range.commits, ticket.files);
+      if (!scope.ok) {
+        const message = scope.reason === 'missing_scope'
+          ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`
+          : scope.reason === 'outside_scope'
+            ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scope.outside.join(', ')}.`
+            : `submit: could not inspect ${commit} from this worktree: ${scope.message || scope.reason}`;
+        return mutationAck(slug, { ok: false, ticket, reason: scope.reason, message });
+      }
+      const res = store.submitTicket(slug, args.ref, by, {
+        commit: range.commit,
+        gitRef,
+        range,
+        verify: args.verify,
+        worktree: args.worktree,
+        source: 'mcp',
+        sessionId: sessionOf(args),
+      });
+      if (res.ok && args.body != null) {
+        const comment = store.addComment(slug, args.ref, { body: String(args.body), by, kind: 'comment', source: 'mcp' });
+        if (!comment.ok) throw new Error(`submit: recorded ${ticket.ref}, but could not add evidence comment: ${comment.reason}`);
+      }
+      if (res.ok) closeDispatchExecutor(ticket);
+      return mutationAck(slug, res, res.ok ? { submission: res.ticket.submission } : null);
     },
   },
   {

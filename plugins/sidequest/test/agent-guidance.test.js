@@ -12,9 +12,9 @@ const publishing = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'refer
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 
 test('comment guidance makes durable handoffs concise and consumable', () => {
-  assert.match(executorTemplate, /cross-actor handoffs, not a work diary/);
-  assert.match(executorTemplate, /Do not post routine progress narration or self-logs/);
-  assert.match(executorTemplate, /Do not dump an entire green test log/);
+  assert.match(executorTemplate, /Comments are handoffs, not a diary/);
+  assert.match(executorTemplate, /Record decisions, constraints,\n\s+risks/);
+  assert.match(executorTemplate, /short\n   relevant excerpt/);
   assert.match(skill, /Before integrating or closing a submitted ticket, read\n`sidequest comments <ref> --json`/);
   assert.match(publishing, /Read each submitted handoff/);
   assert.match(publishing, /Do not cherry-pick until the thread is understood/);
@@ -49,14 +49,15 @@ test('post-wave seam review stays scoped and event-driven', () => {
 });
 
 
-test('shared-tree guidance detects foreign staging and absorbed scope patches', () => {
-  assert.match(executorTemplate, /immediately after claiming and before work, inspect `git diff --cached --name-only`/);
-  assert.match(executorTemplate, /any staged path outside the declared scope is foreign work/);
-  assert.match(executorTemplate, /save the declared-scope staged patch with `git diff --cached --binary -- <declared-scope> > <scratchpad>\/scope\.patch`/);
-  assert.match(executorTemplate, /git log --format="%H\|%an\|%ae\|%s" <pre-sync-head>\.\.HEAD -- <declared-scope>/);
-  assert.match(executorTemplate, /`git apply --check --reverse --cached <saved-patch>` proves it was absorbed/);
-  assert.match(executorTemplate, /must be restored with `git apply --cached <saved-patch>`/);
-  assert.match(executorTemplate, /If it includes any path outside the declared scope, treat it as foreign work: do not commit/);
+test('executor guidance keeps board lifecycle MCP-only and protects shared trees', () => {
+  assert.match(executorTemplate, /mcp__plugin_sidequest_board__claim/);
+  assert.match(executorTemplate, /mcp__plugin_sidequest_board__commit/);
+  assert.match(executorTemplate, /mcp__plugin_sidequest_board__submit/);
+  assert.match(executorTemplate, /Do not look for a command\nline fallback/);
+  assert.match(executorTemplate, /git diff --cached --name-only/);
+  assert.match(executorTemplate, /Foreign staged paths or unexplained in-scope changes mean report and release/);
+  assert.match(executorTemplate, /same absolute `worktree`/);
+  assert.doesNotMatch(executorTemplate, /sidequest submit <ref>/);
 });
 
 test('complete Sidequest doctrine stays shipped and current', () => {

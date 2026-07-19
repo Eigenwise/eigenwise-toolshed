@@ -254,17 +254,18 @@ Because tickets get *executed* by agents (often smaller ones), the skill holds d
 how to verify — never a manager's one-liner. The category route and fallback chain determine which
 executor runs the work, so precision substitutes for model capability.
 
-```bash
-sidequest dispatch SQ-3                              # returns exact executor, briefing, spawn fields, token
-sidequest claim SQ-3 --by <worker> --executor <exact-executor> --effort <stamped-effort> --token <token>
-sidequest commit SQ-3 --by <worker> --message "scoped change"  # only declared ticket paths
-sidequest submit SQ-3 --by <worker> --commit <hash> --verify "<exact command>"
-```
+Routed executors use MCP, not shell commands, for the lifecycle:
+
+- `mcp__plugin_sidequest_board__claim` takes the prepared token, exact executor, and effort.
+- `mcp__plugin_sidequest_board__commit` takes `ref`, `by`, `message`, and the absolute worktree root. It
+  commits only declared paths and leaves foreign staged paths alone.
+- The executor pins the returned hash locally at `refs/sidequest/SQ-n`, then
+  `mcp__plugin_sidequest_board__submit` validates that scoped range from the same worktree and parks it.
 
 - **Routed repo lifecycle:** dispatch → token claim → scoped commit → submit → orchestrator publish. The
   executor uses the exact dispatch executor and unchanged briefing. The token and claim guard prove the
-  resolved route; the executor pins `refs/sidequest/SQ-n`, never pushes or assigns release versions.
-  `submit` parks the verified local commit for the orchestrator's serialized publish transaction.
+  resolved route; the executor never pushes or assigns release versions. `submit` parks the verified local
+  commit for the orchestrator's serialized publish transaction.
 - **Direct claim/done is narrow.** Use `next --direct` or `claim --direct`, followed by `done`, only for
   intentional inline work or non-repository work. Routed repository work ends with `submit`.
 - **Claim before work, always.** The claim is the atomic check that the ticket is still free. If it fails,
@@ -387,9 +388,10 @@ CLI on every action. Same store, same rules — but one tool approval covers the
 prompt per call, the data comes back as structured JSON, and a multi-line ticket description is just a
 string (no shell-quoting). It registers automatically when the plugin loads; you don't configure anything.
 
-The **CLI is still the human interface** and does everything the tools do plus `dashboard`/`serve`. The
-category taxonomy and route shape are the same across CLI, MCP, and dashboard. Routed execution uses
-`dispatch`, then the current conversation's exact Agent spawn. The two board surfaces act on the same boards.
+The **CLI is the human/admin/orchestrator interface** and does everything the tools do plus
+`dashboard`/`serve`. Routed executors use only MCP lifecycle tools, including `commit` and `submit`; the
+explicit worktree argument lets the server operate on their isolated checkout. The category taxonomy and
+route shape are the same across CLI, MCP, and dashboard.
 
 ## CLI
 

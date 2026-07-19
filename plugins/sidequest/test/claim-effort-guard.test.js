@@ -234,7 +234,9 @@ test('instant dispatch (default) returns the stable executor, the briefing, and 
   assert.equal(dispatched.spawn.subagent_type, dispatched.agent);
   assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
   assert.match(dispatched.briefing, new RegExp(`--token ${dispatched.token}`));
-  assert.match(dispatched.briefing, new RegExp(`--executor ${dispatched.agent}`));
+  assert.match(dispatched.briefing, /mcp__plugin_sidequest_board__claim/);
+  assert.match(dispatched.briefing, /exact\n   `executor`/);
+  assert.doesNotMatch(dispatched.briefing, new RegExp(`--executor ${dispatched.agent}`));
   assert.match(dispatched.briefing, /## This ticket/);
   assert.doesNotMatch(dispatched.briefing, /^---$/m);
   assert.equal(ticket(ref).dispatchExecutor, dispatched.agent);

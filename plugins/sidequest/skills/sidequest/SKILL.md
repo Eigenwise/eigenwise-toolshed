@@ -67,21 +67,18 @@ If the repo already uses Jira/Linear/GitHub Issues, that tracker owns the delive
 still your local execution ledger — see
 [references/external-trackers.md](references/external-trackers.md).
 
-## The MCP tools ARE the board interface; the CLI is the fallback
+## MCP is the executor board interface
 
-When tools named **`mcp__plugin_sidequest_board__*`** are in your toolset (`list`, `ready`, `add`,
-`update`, `claim`, `next`, `done`, `release`, `comment`, `ask`, `comments`, `link`, `dispatch`,
-`pulse`, `changes`, `category_list`, `category_edit`, `sweepClaims`), use them for routine board work.
-The CLI is the ONLY path for rare admin/config ops deliberately kept off the MCP surface — run them
-with the resolved `sidequest` command: model/taxonomy read (`sidequest models`), board switcher
-(`sidequest projects`), category pin/reset (`sidequest category detach|relink <id> --project <p>`),
-plus policy, assignment, archive, unlink, and permanent-removal actions.
-They take the same fields as the CLI flags shown below — the examples in this file use CLI form for
-compactness, not as a recommendation. After shipping a schema-bumping Sidequest release, an
-already-loaded MCP server and an older session can still write the old store shape. Until plugins reload,
-route writes through the new CLI and use MCP only for reads. When resuming or recovering context, read
-the board through `mcp__plugin_sidequest_board__list` with `status: doing` first; use the resolved CLI
-only when MCP is unavailable.
+Routed executors use **only** `mcp__plugin_sidequest_board__*` for their lifecycle: `claim`, `comments`,
+`comment`, `commit`, `submit`, `done`, and `release`. `commit` and `submit` take the executor's explicit
+absolute worktree path, so an isolated worker never needs a command on its PATH. If those MCP tools are
+missing, the executor reports the blocker and releases through an available board tool. It does not search
+for a command-line fallback.
+
+The CLI is for humans, admins, and the orchestrator. It also owns rare admin/config operations kept off
+MCP: model/taxonomy reads, board switching, category pin/reset, policy, assignment, archive, unlink, and
+permanent removal. After a schema-bumping release, reload plugins before MCP writes so an older server
+cannot write an old store shape. Commands default to the current project; MCP takes a `project` field.
 
 For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable executor,
 a complete `briefing`, a complete `spawn` object, and a token. Pass every supplied `spawn` field to
@@ -93,11 +90,8 @@ executor definition, and that opt-in path waits for the generated type to regist
 the session. Any
 session may adopt an unspawned prepared definition, whose claim must carry its token. Routes without a
 stable executor, such as haiku, use `--ephemeral`. Never trust a worker's self-report: the dispatch token
-and exact executor name on the claim are the evidence. The SessionStart hook injects the **resolved
-absolute command** (`node "<path>/bin/sidequest.js"`) into your context — use exactly that with the
-Bash tool; `sidequest` in this file is shorthand for it. Commands default to the current project
-(`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another
-board.
+and exact executor name on the claim are the evidence. Commands default to the current project
+(`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another board.
 
 **Where things live** (never scan the filesystem from root to find them): the CLI at
 `plugins/sidequest/bin/sidequest.js` under the installed plugin; central SQLite data at
@@ -185,6 +179,8 @@ The board may be shared — other sessions or teammates can be working it too. A
 **claimed** before you touch it, and claiming is **atomic**: two workers can never both win the same
 ticket. **Never start work on a ticket you haven't successfully claimed**, even one you just filed.
 
+For human/admin inline work, the CLI forms are:
+
 ```bash
 sidequest next --by <you> --direct     # intentional inline work only
 sidequest claim SQ-3 --by <you> --direct # intentional inline or non-repo work only
@@ -194,6 +190,9 @@ sidequest submit SQ-3 --by <you> --commit <hash> --verify "<cmd>"   # terminal f
 sidequest done SQ-3 --by <you> --model <model> --effort <level>   # inline or non-repo work only
 sidequest release SQ-3 --by <you>      # or drop it unfinished (optionally --status todo)
 ```
+
+Routed executors use the matching MCP tools instead. Their scoped `commit` receives `worktree`, then
+`submit` receives the same absolute root, the returned hash, and verification evidence.
 
 - **`--by` must be genuinely unique to this session** — generate a random token once (e.g.
   `claude-<8 hex>`) and reuse that exact string all session. A claim only fails when `held.by !== by`,

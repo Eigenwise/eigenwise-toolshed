@@ -151,19 +151,13 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /NEVER write, quote, or echo such a line/);
   assert.ok(body.includes(agentsync.MARKER));
   assert.match(body, /Never read large files whole/);
-  assert.match(body, /Declared-file tickets run in an isolated worktree by default/);
-  assert.match(body, /session scratchpad path handed in your prompt/);
-  assert.match(body, /relevant tail or failure excerpt/);
-  assert.match(body, /cross-actor handoffs, not a work diary/);
-  assert.match(body, /Do not post routine progress narration or self-logs/);
-  assert.match(body, /Commit and submit — never publish/);
-  assert.match(body, /sidequest submit <ref>/);
-  assert.match(body, /NEVER push, and NEVER bump plugin or marketplace versions/);
-  assert.match(body, /pass `--body-file <path>`/);
-  assert.match(body, /`SendMessage` is allowed only to stable target `main`/);
-  assert.match(body, /concrete finding that changes decomposition or implementation/);
-  assert.match(body, /Never message peers or guessed recipients/);
-  assert.match(body, /idle, heartbeat, and status pings/);
+  assert.match(body, /mcp__plugin_sidequest_board__commit/);
+  assert.match(body, /mcp__plugin_sidequest_board__submit/);
+  assert.match(body, /absolute `worktree`/);
+  assert.match(body, /Never publish, push/);
+  assert.match(body, /`SendMessage` is only for `main`/);
+  assert.doesNotMatch(body, /sidequest submit <ref>/);
+  assert.doesNotMatch(body, /\{\{[A-Z_]+\}\}/);
 });
 
 test('sync keeps stable executors when category policy is remapped', () => {
@@ -240,19 +234,13 @@ test('ticket executor renders the briefing and nonce while keeping spawn short',
   assert.match(body, /Establish the local pattern/);
   assert.match(body, /--token dispatch-token-311/);
   assert.match(body, /Never read large files whole/);
-  assert.match(body, /Declared-file tickets run in an isolated worktree by default/);
-  assert.match(body, /session scratchpad path handed in your prompt/);
-  assert.match(body, /relevant tail or failure excerpt/);
-  assert.match(body, /cross-actor handoffs, not a work diary/);
-  assert.match(body, /Do not post routine progress narration or self-logs/);
-  assert.match(body, /Commit and submit — never publish/);
-  assert.match(body, /sidequest submit <ref>/);
-  assert.match(body, /NEVER push, and NEVER bump plugin or marketplace versions/);
-  assert.match(body, /pass `--body-file <path>`/);
-  assert.match(body, /`SendMessage` is allowed only to stable target `main`/);
-  assert.match(body, /concrete finding that changes decomposition or implementation/);
-  assert.match(body, /Never message peers or guessed recipients/);
-  assert.match(body, /idle, heartbeat, and status pings/);
+  assert.match(body, /mcp__plugin_sidequest_board__commit/);
+  assert.match(body, /mcp__plugin_sidequest_board__submit/);
+  assert.match(body, /absolute `worktree`/);
+  assert.match(body, /Never publish, push/);
+  assert.match(body, /`SendMessage` is only for `main`/);
+  assert.doesNotMatch(body, /sidequest submit <ref>/);
+  assert.doesNotMatch(body, /\{\{[A-Z_]+\}\}/);
   assert.deepStrictEqual(created.spawn, {
     subagent_type: created.name, name: created.name, mode: 'bypassPermissions',
     description: 'Ship ephemeral agents (GPT-5.6 Terra)',
@@ -314,10 +302,12 @@ test('renderTicketBriefing reuses the template body with the ticket brief and to
   assert.match(briefing, /Ride the briefing on the spawn prompt/);
   assert.match(briefing, /Stable exec is pre-registered/);
   assert.match(briefing, /Plan against the system, verify end to end/);
-  assert.match(briefing, /--executor sidequest-exec-dispatch-high/);
+  assert.match(briefing, /mcp__plugin_sidequest_board__claim/);
+  assert.match(briefing, /exact\n   `executor`/);
   assert.match(briefing, /--token instant-token-334/);
-  assert.match(briefing, /Commit and submit — never publish/);
-  assert.match(briefing, /sidequest submit <ref>/);
+  assert.match(briefing, /mcp__plugin_sidequest_board__submit/);
+  assert.doesNotMatch(briefing, /sidequest submit <ref>/);
+  assert.ok(Buffer.byteLength(briefing) <= 10456, `briefing is ${Buffer.byteLength(briefing)} bytes — it must not exceed the prior template budget`);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
 });
 
