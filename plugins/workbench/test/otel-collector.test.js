@@ -72,7 +72,7 @@ test('the redaction processor deletes content-bearing attributes for every signa
   const statements = config.processors['transform/redact'].log_statements[0].statements.join(' ');
   for (const key of ['prompt', 'content', 'tool_response', 'authorization', 'transcript_path']) {
     assert.ok(REDACTED_KEYS.includes(key));
-    assert.ok(statements.includes(`attributes["${key}"]`), `not redacted: ${key}`);
+    assert.ok(statements.includes(`delete_key(attributes, "${key}")`), `not redacted: ${key}`);
   }
   assert.ok(config.processors['transform/redact'].trace_statements);
   assert.ok(config.processors['transform/redact'].metric_statements);

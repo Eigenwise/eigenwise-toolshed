@@ -13,6 +13,7 @@ const {
   applySettings,
   collectorArchiveUrl,
   compareVersions,
+  downloadCollector,
   mergeObservabilitySettings,
   parseChecksum,
   requireClaudeVersion,
@@ -79,6 +80,35 @@ test('uses a pinned platform collector archive and verifies release checksums', 
   const checksum = 'a'.repeat(64);
   assert.equal(parseChecksum(`${checksum}  otelcol-contrib_${COLLECTOR_VERSION}_windows_amd64.tar.gz`, `otelcol-contrib_${COLLECTOR_VERSION}_windows_amd64.tar.gz`), checksum);
   assert.throws(() => parseChecksum('', 'missing.tar.gz'), /No SHA-256/);
+});
+
+test('downloads the pinned archive with the release checksums manifest and Windows-local tar paths', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-collector-download-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const archive = Buffer.from('verified collector archive');
+  const checksum = require('node:crypto').createHash('sha256').update(archive).digest('hex');
+  const urls = [];
+  const calls = [];
+
+  await downloadCollector({
+    dataDir: directory,
+    platform: 'win32',
+    environment: { SystemRoot: path.join(directory, 'missing-windows') },
+    fetch: async (url) => {
+      urls.push(url);
+      return url.endsWith('_checksums.txt')
+        ? { ok: true, text: async () => `${checksum}  otelcol-contrib_${COLLECTOR_VERSION}_windows_amd64.tar.gz` }
+        : { ok: true, arrayBuffer: async () => archive };
+    },
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      return { status: 0 };
+    },
+  });
+
+  assert.match(urls[1], /opentelemetry-collector-releases_otelcol-contrib_checksums\.txt$/);
+  assert.equal(calls[0][0], 'tar');
+  assert.equal(calls[0][1][0], '--force-local');
 });
 
 test('plans current-user application data and only starts LGTM on request', () => {

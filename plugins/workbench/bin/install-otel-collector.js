@@ -24,7 +24,7 @@ function buildCollectorConfig(options = {}) {
   const observerEndpoint = options.observerEndpoint || 'http://127.0.0.1:14319';
   const queueDir = options.queueDirectory || path.join(defaultDataDir(), 'collector-queue');
 
-  const deleteKeys = REDACTED_KEYS.map((key) => `delete(attributes["${key}"]) where attributes["${key}"] != nil`);
+  const deleteKeys = REDACTED_KEYS.map((key) => `delete_key(attributes, "${key}")`);
   const pipeline = (receivers, exporters) => ({
     receivers,
     processors: [...REQUIRED_PROCESSOR_ORDER],
@@ -33,7 +33,7 @@ function buildCollectorConfig(options = {}) {
 
   return {
     extensions: {
-      'file_storage/observer_queue': { directory: queueDir, timeout: '2s' },
+      'file_storage/observer_queue': { directory: queueDir, timeout: '2s', create_directory: true },
     },
     receivers: {
       otlp: { protocols: { http: { endpoint: receiverEndpoint } } },

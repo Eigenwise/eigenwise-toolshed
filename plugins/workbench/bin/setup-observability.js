@@ -124,7 +124,7 @@ async function downloadCollector(options) {
   const dataDir = options.dataDir;
   const archiveUrl = options.archiveUrl || collectorArchiveUrl();
   const archiveName = path.basename(archiveUrl);
-  const checksumsUrl = options.checksumsUrl || `${archiveUrl.slice(0, archiveUrl.lastIndexOf('/'))}/otelcol-contrib_${COLLECTOR_VERSION}_checksums.txt`;
+  const checksumsUrl = options.checksumsUrl || `${archiveUrl.slice(0, archiveUrl.lastIndexOf('/'))}/opentelemetry-collector-releases_otelcol-contrib_checksums.txt`;
   const fetchImpl = options.fetch || global.fetch;
   if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required to install the Collector.');
   const [archiveResponse, checksumsResponse] = await Promise.all([fetchImpl(archiveUrl), fetchImpl(checksumsUrl)]);
@@ -137,7 +137,15 @@ async function downloadCollector(options) {
   const collectorDir = path.join(dataDir, 'collector');
   fs.mkdirSync(collectorDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(archivePath, archive, { mode: 0o600 });
-  const result = (options.spawnSync || spawnSync)('tar', ['-xf', archivePath, '-C', collectorDir], { encoding: 'utf8' });
+  const platform = options.platform || process.platform;
+  const environment = options.environment || process.env;
+  const systemRoot = environment.SystemRoot || environment.WINDIR || 'C:\\Windows';
+  const systemTar = path.join(systemRoot, 'System32', 'tar.exe');
+  const tar = platform === 'win32' && fs.existsSync(systemTar) ? systemTar : 'tar';
+  const tarArgs = platform === 'win32' && tar === 'tar'
+    ? ['--force-local', '-xf', archivePath, '-C', collectorDir]
+    : ['-xf', archivePath, '-C', collectorDir];
+  const result = (options.spawnSync || spawnSync)(tar, tarArgs, { encoding: 'utf8' });
   if (result.error || result.status !== 0) throw new Error('Could not extract the pinned Collector archive.');
   try { fs.unlinkSync(archivePath); } catch { /* The archive is disposable after a verified extraction. */ }
   return resolveCollectorBinary(dataDir, options.environment);
