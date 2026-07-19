@@ -51,7 +51,8 @@ A fresh read returns this ticket projection:
 ```
 
 Spawn the exact `exec.agent` with `model` omitted. A degraded route still uses the same dispatch
-flow because the read's `exec` projection is authoritative.
+flow because the read's `exec` projection is authoritative. Another session adopts work by dispatching
+the ticket again, which returns a fresh token and current briefing for the stable executor.
 
 ## Re-scoring
 

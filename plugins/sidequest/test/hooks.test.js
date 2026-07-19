@@ -588,8 +588,7 @@ test('session-start: reports newly provisioned executors once, then stays quiet'
   });
   const first = JSON.parse(runSessionWithHome(home));
   const firstContext = first.hookSpecificOutput.additionalContext;
-  assert.match(firstContext, /Executor definitions register within minutes/);
-  assert.match(firstContext, /New agent types are now available/);
+  assert.match(firstContext, /Reload plugins before spawning newly created temporary native agents/);
 
   const second = JSON.parse(runSessionWithHome(home));
   const secondContext = second.hookSpecificOutput.additionalContext;
@@ -713,7 +712,7 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(readme, /per-prompt "use sidequest" reminder/);
   assert.doesNotMatch(readme, /marker-triggered capture/);
   assert.doesNotMatch(readme, /native_agent/);
-  assert.match(readme, /Default dispatch is instant/);
+  assert.match(readme, /exact stable executor/);
   assert.match(readme, /\[sidequest-scout\]/);
   for (const file of [
     path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'),

@@ -311,8 +311,7 @@ Routed tickets run through the current Claude Code conversation only. Call `side
 MCP `dispatch`) to return the ticket's exact stable executor, complete briefing, spawn fields, and claim
 token, then invoke that exact spawn spec with Agent. Pass the briefing unchanged, including its one Codex
 route marker when present. The executor must claim with that token, exact executor, and stamped effort.
-Default dispatch is instant: it does not wait for a registration announcement. `sidequest work`/`drain`
-cannot invoke the current conversation's Agent tool.
+`sidequest work`/`drain` cannot invoke the current conversation's Agent tool.
 
 Generic/custom background agents are only for a quick read-only scout whose prompt starts with
 `[sidequest-scout]` and explicitly says quick, read-only, and no edits/writes. The bundled Agent hook denies
@@ -428,7 +427,7 @@ node <plugin>/bin/sidequest.js global-fallback --model sonnet --effort medium
 node <plugin>/bin/sidequest.js models                               # categories, routes, and fallback chain
 node <plugin>/bin/sidequest.js next --category coding.normal --by <you>  # claim work by category route
 node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
-node <plugin>/bin/sidequest.js dispatch SQ-3 [--ephemeral]   # exact routed executor, briefing, spawn, token
+node <plugin>/bin/sidequest.js dispatch SQ-3                 # stable routed executor, briefing, spawn, token
 node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <worker> --direct # intentional inline or non-repo work
 node <plugin>/bin/sidequest.js commit SQ-3 --by <worker> --message "scoped change"

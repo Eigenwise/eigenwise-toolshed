@@ -73,7 +73,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'ephemeral', 'clear', 'steal', 'shared-tree', 'direct']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -1389,10 +1389,9 @@ function cmdDispatch(opts, positional) {
   if (!idOrRef) fail('dispatch: pass a ticket ref, e.g. sidequest dispatch SQ-12.');
   const { slug, meta } = resolveProject(opts);
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
-  const ephemeral = !!opts.ephemeral;
   let prepared;
   try {
-    prepared = store.prepareDispatch(slug, idOrRef, { ephemeral, sessionId });
+    prepared = store.prepareDispatch(slug, idOrRef, { sessionId });
   } catch (err) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
@@ -1405,31 +1404,6 @@ function cmdDispatch(opts, positional) {
   }
   const prompt = agentsync.withProjectIdentity(briefing, meta.path);
   const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
-  if (ephemeral) {
-    let created;
-    try {
-      created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId, isolation, prompt });
-    } catch (err) {
-      fail(`dispatch: ${(err && err.message) || err}`);
-    }
-    process.stdout.write(JSON.stringify({
-      project: slug,
-      projectPath: meta.path,
-      ref: prepared.ticket.ref,
-      effort: prepared.ticket.effort,
-      exec: prepared.ticket.exec,
-      mode: 'ephemeral',
-      agent: created.name,
-      tokenPrefix: prepared.token.slice(0, 12),
-      token: prepared.token,
-      recovery: prepared.recovery || null,
-      spawn: created.spawn,
-      guidance: prepared.recovery
-        ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
-        : `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${created.name} --token ${prepared.token}.`,
-    }, null, 2) + '\n');
-    return;
-  }
   const agent = prepared.ticket.dispatchExecutor;
   const spawn = agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt);
   process.stdout.write(JSON.stringify({
@@ -1447,7 +1421,7 @@ function cmdDispatch(opts, positional) {
     briefing,
     guidance: prepared.recovery
       ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
-      : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}. No registration wait.`,
+      : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}.`,
   }, null, 2) + '\n');
 }
 
@@ -1491,11 +1465,11 @@ function cmdNativeAgent(opts, positional) {
 function cmdModelsSyncAgents(opts) {
   const res = agentsync.syncExecAgents(undefined, opts.dir ? { dir: opts.dir } : undefined);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({}, res, res.written > 0 ? { message: agentsync.RESTART_NOTICE } : {}), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(Object.assign({}, res, res.written > 0 ? { message: agentsync.RELOAD_NOTICE } : {}), null, 2) + '\n');
     return;
   }
   console.log(`✓ exec agents synced: ${res.written} written, ${res.removed} removed, ${res.unchanged} unchanged`);
-  if (res.written > 0) console.log(`  ${agentsync.RESTART_NOTICE}`);
+  if (res.written > 0) console.log(`  ${agentsync.RELOAD_NOTICE}`);
 }
 
 function cmdModels(opts, positional) {
@@ -2023,7 +1997,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--ephemeral] [--shared-tree] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: declared-file tickets run in worktrees by default; --shared-tree is only for uncommitted-state dependencies
+  sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: declared-file tickets run in worktrees by default; --shared-tree is only for uncommitted-state dependencies
   sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]  return an already-registered native Agent spawn spec + bounded prompt
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.

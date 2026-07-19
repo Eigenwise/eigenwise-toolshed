@@ -205,8 +205,8 @@ bypass.
 The normal per-ticket path is instant. Call `dispatch <ref>` (CLI) or the matching MCP tool and use
 its returned stable per-model `agent` and `spawn` object immediately. Pass the returned `briefing`
 unchanged as the Agent prompt. The briefing carries the full ticket contract, category contract,
-anchors, verify command, comments digest, and token-gated claim guard. There is no watcher-registration
-announcement or registration wait in this path. Claude routes pass `model: exec.model`; Codex routes
+anchors, verify command, comments digest, and token-gated claim guard. Stable executors are
+ready from session start. Claude routes pass `model: exec.model`; Codex routes
 omit `model`: the shared `sidequest-exec-dispatch-<effort>` def pins the virtual `claude-codex-auto`,
 and the briefing's closing `[sidequest-route model=... effort=...]` line tells the codex-gateway shim which real
 model and effort to run — pass the briefing verbatim, never write another such line, and never batch tickets
@@ -215,12 +215,8 @@ dispatch are always provisioned. Route edits change only board data; the executo
 is fixed, so nothing is written or registered when a route changes. The executor claims with the
 returned token and exact stable executor name.
 
-Use `dispatch <ref> --ephemeral` (or `{ephemeral:true}` in MCP) only for cross-session adoption. That
-opt-in path creates a self-contained per-ticket executor definition that another session can pick up,
-but it costs the watcher-registration wait. Never end a turn waiting for registration: continue independent work, or use one background timer to wake the session; never use a foreground sleep loop. Any session
-may adopt an unspawned prepared definition. If the tool returns `RESTART_NOTICE`, restart plugin
-loading or use `/reload-plugins` as directed. A route with no stable executor, such as haiku, must use
-`--ephemeral`; instant dispatch will explain that fallback.
+Cross-session adoption is a fresh `dispatch <ref>` in the adopting session. It rotates
+the token and returns the current briefing for the same stable route.
 
 Re-dispatch rotates the token while the stable executor name remains fixed. A stale token is refused,
 and `done` or `release` clears the dispatch guard for either mode. An Agent acknowledgement means only

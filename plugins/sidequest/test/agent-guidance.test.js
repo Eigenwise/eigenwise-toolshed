@@ -26,20 +26,17 @@ test('planning guidance keeps Sidequest stories optional and distinct from Claud
   assert.match(skill, /leave independent or small work as atomic tickets/);
 });
 
-test('ephemeral dispatch guidance prevents registration wait stalls', () => {
-  assert.match(skill, /Never end the turn waiting for registration/);
-  assert.match(skill, /background timer/);
-  assert.match(orchestration, /Never end a turn waiting for registration/);
-  assert.match(orchestration, /Any session\nmay adopt an unspawned prepared definition/);
+test('dispatch guidance uses stable executors and fresh adoption dispatches', () => {
+  assert.match(orchestration, /Stable executors are\nready from session start/);
+  assert.match(orchestration, /Cross-session adoption is a fresh `dispatch <ref>`/);
+  assert.doesNotMatch(orchestration, /ephemeral|registration wait|waiting for registration/);
 });
 
-test('retry guidance diagnoses once, bans blind respawns, and keeps registration waits off the foreground', () => {
+test('retry guidance diagnoses once and bans blind respawns', () => {
   for (const source of [skill, orchestration, executorTemplate]) {
     assert.match(source, /diagnose-first retry/i);
     assert.match(source, /blind\s+respawn/i);
     assert.match(source, /two failures/i);
-    assert.match(source, /background timer/i);
-    assert.match(source, /foreground sleep loop/i);
   }
   assert.match(orchestration, /pulse and read the denial\nverbatim/);
   assert.match(executorTemplate, /`token` refusal means the dispatch token is missing or expired/);

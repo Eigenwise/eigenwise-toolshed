@@ -128,7 +128,7 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   const total = descriptionBytes(tools);
   assert.ok(total <= 6000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
   assert.match(tools.find((tool) => tool.name === 'claim').description, /ok:true/);
-  assert.match(tools.find((tool) => tool.name === 'dispatch').description, /instant/);
+  assert.match(tools.find((tool) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool) => tool.name === 'done').description, /actual model and effort/);
 });
 
@@ -220,10 +220,10 @@ test('CLI-only board archive tools are absent from MCP', () => {
     assert.match(response.content[0].text, /unknown tool/i);
   }
 });
-test('dispatch is instant by default (stable executor + briefing + token); ephemeral writes a per-ticket def', () => {
+test('dispatch returns a stable executor, briefing, and token', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['ephemeral', 'project', 'ref', 'session', 'sharedTree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref', 'session', 'sharedTree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
@@ -250,12 +250,12 @@ test('dispatch is instant by default (stable executor + briefing + token); ephem
   assert.match(instant.guidance, /executor/);
   assert.equal(store.getTicket(slug, addedInstant.ref).dispatchExecutor, instant.agent);
 
-  const addedEphemeral = callTool('add', { title: 'ephemeral dispatch', category: 'dispatch-codex' });
-  const ephemeral = callTool('dispatch', { ref: addedEphemeral.ref, session: 'mcp-dispatch-session', ephemeral: true });
-  assert.equal(ephemeral.mode, 'ephemeral');
-  assert.match(ephemeral.agent, new RegExp(`^sidequest-ticket-${addedEphemeral.ref.toLowerCase()}-gpt-5-6-terra-[a-f0-9]{8}$`));
-  assert.equal(ephemeral.tokenPrefix, ephemeral.token.slice(0, 12));
-  assert.equal(store.getTicket(slug, addedEphemeral.ref).dispatchExecutor, ephemeral.agent);
+  const adopted = callTool('dispatch', { ref: addedInstant.ref, session: 'adopting-session' });
+  assert.equal(adopted.mode, 'instant');
+  assert.equal(adopted.agent, instant.agent);
+  assert.notEqual(adopted.token, instant.token);
+  assert.match(adopted.briefing, new RegExp(`--token ${adopted.token}`));
+  assert.doesNotMatch(JSON.stringify(adopted), /ephemeral/);
 });
 
 test('dispatch returns a complete Claude worktree spawn spec', () => {

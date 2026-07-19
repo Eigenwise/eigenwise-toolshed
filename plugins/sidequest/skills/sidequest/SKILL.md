@@ -84,13 +84,9 @@ For routed work, `dispatch <ref>` is **instant by default**: it returns the tick
 a complete `briefing`, a complete `spawn` object, and a token. Pass every supplied `spawn` field to
 Agent unchanged, including Sidequest's short `description`; do not paraphrase the card label. Claude
 routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the
-backend, while the supplied description includes the resolved route label. Use
-`dispatch <ref> --ephemeral` only for cross-session adoption. It creates a self-contained temporary
-executor definition, and that opt-in path waits for the generated type to register. Never end the turn waiting for registration: continue independent work or use one background timer to wake
-the session, never a foreground sleep loop. Any
-session may adopt an unspawned prepared definition, whose claim must carry its token. Routes without a
-stable executor, such as haiku, use `--ephemeral`. Never trust a worker's self-report: the dispatch token
-and exact executor name on the claim are the evidence. Commands default to the current project
+backend, while the supplied description includes the resolved route label. A session adopting work runs
+`dispatch <ref>` again to receive a fresh token and current briefing. Never trust a worker's self-report:
+the dispatch token and exact executor name on the claim are the evidence. Commands default to the current project
 (`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another board.
 
 **Where things live** (never scan the filesystem from root to find them): the CLI at
@@ -347,11 +343,8 @@ and fallback chain, documented in [references/routing-details.md](references/rou
    matching MCP tool is **instant by default**: it returns the stable per-model `agent`, a complete
    `briefing` to use as the spawn prompt, and the token-gated claim details. A category-routed executor
    claim without that prepared token is refused, even when it supplies the expected executor and effort.
-   Spawn that exact stable
-   `agent` immediately from the returned `spawn` object. There is no registration announcement or
-   watcher-lag wait. Use `dispatch <ref> --ephemeral` (or `{ephemeral:true}` in MCP) only when a
-   cross-session handoff needs a self-contained temporary executor; that path still waits for the
-   generated type to register, and any session may adopt it. Tickets with declared files return
+   Spawn that exact stable `agent` immediately from the returned `spawn` object. Another session adopts
+   the ticket by dispatching it again for a fresh token and current briefing. Tickets with declared files
    `isolation: "worktree"` in `spawn`; pass it unchanged. `--shared-tree` / `{sharedTree:true}` is an
    escape hatch only for a task that depends on uncommitted local state, and its reason belongs in the ticket comment before spawning.
    - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with

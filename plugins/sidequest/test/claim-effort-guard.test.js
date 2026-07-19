@@ -150,7 +150,6 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   const doneRef = seed('guard.codex');
   const preparedDone = store.prepareDispatch(slug, doneRef);
   assert.equal(preparedDone.ok, true);
-  assert.equal(preparedDone.ephemeral, false);
   assert.ok(preparedDone.token);
   // Instant dispatch points the guard at the STABLE per-model executor, not a
   // fresh per-ticket definition, and writes no def file.
@@ -242,19 +241,15 @@ test('instant dispatch (default) returns the stable executor, the briefing, and 
   assert.equal(ticket(ref).dispatchExecutor, dispatched.agent);
 });
 
-test('dispatch --ephemeral writes a per-ticket definition for cross-session adoption', () => {
+test('dispatch always returns the stable executor and does not write a ticket definition', () => {
   const ref = seed('guard.codex');
   const agents = path.join(SIDEQUEST_HOME, 'agents');
-  const dispatched = cliJson(['dispatch', ref, '--ephemeral']);
-  assert.equal(dispatched.ref, ref);
-  assert.equal(dispatched.mode, 'ephemeral');
-  assert.match(dispatched.agent, new RegExp(`^sidequest-ticket-${ref.toLowerCase()}-gpt-test-[a-f0-9]{8}$`));
-  assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
-  assert.match(dispatched.guidance, new RegExp(`--executor ${dispatched.agent}`));
+  const dispatched = cliJson(['dispatch', ref]);
+  assert.equal(dispatched.mode, 'instant');
+  assert.equal(dispatched.agent, 'sidequest-exec-dispatch-high');
   assert.equal(ticket(ref).dispatchExecutor, dispatched.agent);
-  const defFile = path.join(agents, `${dispatched.agent}.md`);
-  assert.ok(fs.existsSync(defFile));
-  assert.match(fs.readFileSync(defFile, 'utf8'), new RegExp(`--token ${dispatched.token}`));
+  assert.ok(!fs.existsSync(path.join(agents, `sidequest-ticket-${ref.toLowerCase()}.md`)));
+  assert.doesNotMatch(JSON.stringify(dispatched), /ephemeral/);
 });
 
 test('instant dispatch sends Haiku through its stable executor with a Haiku spawn model', () => {

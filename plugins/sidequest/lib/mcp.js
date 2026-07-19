@@ -188,7 +188,7 @@ const PROJECT_PROP = { type: 'string', description: 'Board; defaults to the curr
 
 const TOOL_DESCRIPTION_OVERRIDES = {
   claim: 'Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.',
-  dispatch: 'Prepare a ticket executor. Default dispatch is instant; ephemeral writes a legacy per-ticket definition.',
+  dispatch: 'Prepare a ticket executor through its stable route.',
   done: 'Finish a claimed ticket and release its claim. Stamp the actual model and effort.',
   native_agent: 'Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.',
 };
@@ -847,45 +847,24 @@ const TOOLS = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare a token-gated dispatch for a ticket. Default (instant): returns the full rendered briefing text plus the token — spawn the ticket\'s STABLE executor (the returned agent) with that briefing as its prompt; it is registered from session start, so there is no registration wait and no def file. If a known Claude quota failure already prepared the category fallback, this returns that same fallback token and route across sessions. ephemeral:true instead writes a unique per-ticket definition with the token embedded (self-contained so any session may adopt it) and returns its name to spawn once registered. Either way the claim stays gated on the token and executor.',
+    description: 'Prepare a token-gated dispatch for a ticket. It returns the full rendered briefing text plus the token, then spawn the returned stable executor with that briefing as its prompt. Stable executors are ready from session start, so no definition file is involved. A new dispatch in an adopting session rotates the token and returns a current briefing. The claim stays gated on the returned token and executor.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
         session: { type: 'string' },
-        ephemeral: { type: 'boolean', description: 'Write a unique per-ticket executor definition (legacy path) instead of instant dispatch. Use for cross-session adoption; costs the watcher-registration wait.' },
         sharedTree: { type: 'boolean', description: 'Escape hatch for a ticket that depends on uncommitted local state. Declared-file tickets otherwise run in isolated worktrees.' },
       },
       required: ['ref'],
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const ephemeral = !!args.ephemeral;
-      const prepared = store.prepareDispatch(slug, args.ref, { ephemeral, sessionId: sessionOf(args) });
+      const prepared = store.prepareDispatch(slug, args.ref, { sessionId: sessionOf(args) });
       const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
       const briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
       const prompt = agentsync.withProjectIdentity(briefing, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
-      if (ephemeral) {
-        const created = agentsync.createTicketExecutor(prepared.ticket, { nonce: prepared.token, sessionId: sessionOf(args), isolation, prompt });
-        return {
-          project: slug,
-          projectPath: meta.path,
-          ref: prepared.ticket.ref,
-          effort: prepared.ticket.effort,
-          exec: prepared.ticket.exec,
-          mode: 'ephemeral',
-          agent: created.name,
-          tokenPrefix: prepared.token.slice(0, 12),
-          token: prepared.token,
-          recovery: prepared.recovery || null,
-          spawn: created.spawn,
-          guidance: prepared.recovery
-            ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
-            : `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${created.name} and the returned token.`,
-        };
-      }
       const agent = prepared.ticket.dispatchExecutor;
       return {
         project: slug,
@@ -902,7 +881,7 @@ const TOOLS = [
         briefing,
         guidance: prepared.recovery
           ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
-          : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token. No registration wait.`,
+          : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
       };
     },
   },

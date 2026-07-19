@@ -1668,23 +1668,7 @@ function withTicketLock(slug, id, fn) {
   }
 }
 
-function dispatchExecutorName(ticket) {
-  if (!ticket || !ticket.ref || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
-  const resolved = resolveExec(ticket.model, ticket.effort);
-  if (!resolved || !resolved.runsModel) throw new Error(`dispatch executor could not resolve ${ticket.model} at ${ticket.effort}.`);
-  const ref = String(ticket.ref).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'ticket';
-  const runtime = String(resolved.runsModel).toLowerCase().replace(/^codex-/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const base = runtime ? `sidequest-ticket-${ref}-${runtime}` : `sidequest-ticket-${ref}`;
-  let name;
-  do {
-    name = `${base}-${crypto.randomBytes(4).toString('hex')}`;
-  } while (name === ticket.dispatchExecutor);
-  return name;
-}
-
-// The STABLE, session-start-registered executor for a ticket's route. Instant
-// dispatch targets it instead of a fresh per-ticket definition, so the briefing
-// and token ride the spawn prompt with no registration wait.
+// The stable session-start executor receives the briefing and token in its prompt.
 function stableExecutorName(ticket) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
   const resolved = resolveExec(ticket.model, ticket.effort);
@@ -1692,12 +1676,9 @@ function stableExecutorName(ticket) {
   return resolved.agent;
 }
 
-// Prepare a ticket for dispatch: persist a fresh claim nonce and the executor
-// name the claim guard will require. Default (instant) mode points
-// dispatchExecutor at the STABLE per-model executor, so the briefing + token can
-// ride the spawn prompt with no def write and no registration wait. opts.ephemeral
-// keeps the legacy behavior — a unique per-ticket executor name whose self-contained
-// definition any session can later adopt.
+// Prepare a ticket for dispatch: persist a fresh claim nonce and the stable
+// executor name the claim guard requires. The briefing and token ride the spawn
+// prompt, so no executor definition is written.
 function dispatchTokenPrefix(token) {
   return token ? String(token).slice(0, 12) : null;
 }
@@ -1758,18 +1739,16 @@ function prepareDispatch(slug, idOrRef, opts) {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
     const current = dispatchState(t);
-    const requestedEphemeral = !!opts.ephemeral;
     const currentRoute = activeDispatchRoute(t);
     const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
     if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor
-      && currentExec && currentExec.agent === t.dispatchExecutor && !!current.ephemeral === requestedEphemeral) {
+      && currentExec && currentExec.agent === t.dispatchExecutor) {
       if (opts.sessionId) current.sessionId = String(opts.sessionId);
       putTicket(slug, t);
       return {
         ok: true,
         ticket: t,
         token: t.dispatchNonce,
-        ephemeral: requestedEphemeral,
         reused: true,
         recovery: current.recovery,
       };
@@ -1795,13 +1774,12 @@ function prepareDispatch(slug, idOrRef, opts) {
     const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
     const attempts = current && Array.isArray(current.attempts) ? current.attempts.slice() : [];
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
-    t.dispatchExecutor = requestedEphemeral ? dispatchExecutorName(t) : stableExecutorName(t);
+    t.dispatchExecutor = stableExecutorName(t);
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       route: { model: t.model, effort: t.effort },
-      ephemeral: requestedEphemeral,
       preparedAt: now,
       launchedAt: null,
       boundAt: null,
@@ -1813,7 +1791,7 @@ function prepareDispatch(slug, idOrRef, opts) {
     };
     stampDispatchEvent(t, 'dispatch', now);
     putTicket(slug, t);
-    return { ok: true, ticket: t, token: t.dispatchNonce, ephemeral: requestedEphemeral, recovery };
+    return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
   });
 }
 
@@ -1892,7 +1870,6 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       route: { model: fallback.model, effort: fallback.effort },
-      ephemeral: false,
       preparedAt: now,
       launchedAt: null,
       boundAt: null,
@@ -3696,7 +3673,6 @@ module.exports = {
   createTicket,
   updateTicket,
   deleteTicket,
-  dispatchExecutorName,
   stableExecutorName,
   prepareDispatch,
   recordDispatchLaunch,

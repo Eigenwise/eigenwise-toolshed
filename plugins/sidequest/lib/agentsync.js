@@ -52,10 +52,11 @@ const MARKER = '<!-- generated-by: sidequest-agentsync gen2 -->';
 const TEMP_MARKER = '<!-- generated-by: sidequest-native-agent -->';
 const TEMP_PREFIX = 'sidequest-native-';
 const TICKET_PREFIX = 'sidequest-ticket-';
+const RELOAD_NOTICE = 'Reload plugins before spawning newly created temporary native agents.';
+const RESTART_NOTICE = RELOAD_NOTICE;
 
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-const RESTART_NOTICE = 'Executor definitions register within minutes. Wait for `New agent types are now available: <name>` before spawning; premature per-ticket spawns silently run generic agents and their token-gated claim refuses. If registration lags, use the stable pre-provisioned executor. Verify with transcript/meta.json and the token claim, never self-report.';
 
 // Effort-scaled hard caps stamped into every executor definition's `maxTurns`
 // frontmatter — the harness's runaway backstop, not a work budget. Legitimately
@@ -207,18 +208,8 @@ function nativeAgentName(ref, runtime, nonce) {
   return `${base}-${suffix}`;
 }
 
-function ticketExecutorNameForTicket(ticket) {
-  const name = String(ticket && ticket.dispatchExecutor || '');
-  if (!name.startsWith(TICKET_PREFIX)) throw new Error('ticket executor requires a prepared dispatch executor name.');
-  return name;
-}
-
-function ticketExecutorPrefix(ticket) {
-  return `${TICKET_PREFIX}${refToken(ticket.ref)}-`;
-}
-
 function temporaryAgentFile(name, dir) {
-  if (!String(name || '').startsWith(TEMP_PREFIX) && !String(name || '').startsWith(TICKET_PREFIX)) {
+  if (!String(name || '').startsWith(TEMP_PREFIX)) {
     throw new Error('temporary agent name must use a Sidequest temporary prefix.');
   }
   return path.join(dir || defaultAgentsDir(), `${name}.md`);
@@ -315,13 +306,8 @@ function stripExecFrontmatter(source) {
   return body.replace(/^\s*\n/, '');
 }
 
-// Instant-dispatch briefing: the SAME executor body an ephemeral def would carry
-// — the shared template plus this ticket's brief and claim token — minus the
-// def-file frontmatter, returned as text for the orchestrator to paste into the
-// STABLE executor's spawn prompt. One renderer (renderExecAgent + ticketBrief)
-// backs both modes, so the template in scripts/_exec-template.md stays the single
-// source. The stable executor is registered from session start, so instant
-// dispatch writes no def and waits on no watcher.
+// Render the stable executor's template body with the ticket briefing and token.
+// Frontmatter is excluded because the registered executor supplies it.
 function renderTicketBriefing(ticket, nonce) {
   if (typeof nonce !== 'string' || !nonce.trim() || /[\r\n]/.test(nonce)) {
     throw new Error('dispatch briefing nonce is required and must be a non-empty one-line string.');
@@ -370,49 +356,6 @@ function spawnDescription(ticket, resolved) {
 function agentSpawn(name, isolation, model, agentType, prompt, description) {
   return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions' },
     description ? { description } : {}, isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
-}
-
-function createTicketExecutor(ticket, opts) {
-  opts = opts || {};
-  const rawNonce = opts.nonce;
-  if (typeof rawNonce !== 'string' || !rawNonce.trim() || /[\r\n]/.test(rawNonce)) {
-    throw new Error('ticket executor nonce is required and must be a non-empty one-line string.');
-  }
-  const nonce = rawNonce.trim();
-  const name = ticketExecutorNameForTicket(ticket);
-  const resolved = store.resolveExec(ticket.model, ticket.effort);
-  const dir = opts.dir || defaultAgentsDir();
-  const file = temporaryAgentFile(name, dir);
-  const sessionId = String(opts.sessionId || '').replace(/[\r\n]/g, '');
-  const source = renderExecAgent({
-    name,
-    effort: ticket.effort,
-    modelId: resolved.backend === 'codex' ? resolved.spawnId : null,
-    marker: TEMP_MARKER,
-    extraNote: `\n<!-- sidequest-native-session: ${sessionId} -->\n<!-- sidequest-native-runtime: ${resolved.runsModel} -->`,
-    ticketBrief: ticketBrief(ticket, nonce),
-  });
-  fs.mkdirSync(dir, { recursive: true });
-  for (const candidate of fs.readdirSync(dir)) {
-    if (!candidate.startsWith(ticketExecutorPrefix(ticket)) || candidate === `${name}.md` || !candidate.endsWith('.md')) continue;
-    const candidateFile = path.join(dir, candidate);
-    let previous = '';
-    try { previous = fs.readFileSync(candidateFile, 'utf8'); } catch (_) { continue; }
-    if (!previous.includes(TEMP_MARKER)) continue;
-    try { fs.unlinkSync(candidateFile); } catch (_) { /* best effort */ }
-  }
-  if (fs.existsSync(file)) {
-    const previous = fs.readFileSync(file, 'utf8');
-    if (!previous.includes(TEMP_MARKER)) throw new Error(`ticket executor file already exists and is not owned by Sidequest: ${file}`);
-  }
-  fs.writeFileSync(file, source);
-  waitForNativeAgentReload(opts.waitMs);
-  return {
-    name,
-    file,
-    spawn: agentSpawn(name, opts.isolation, resolved.model, undefined, opts.prompt, spawnDescription(ticket, resolved)),
-    cleanup: { name, sessionId: opts.sessionId || null },
-  };
 }
 
 function createNativeAgent(spec, opts) {
@@ -575,8 +518,9 @@ module.exports = {
   TEMP_MARKER,
   TEMP_PREFIX,
   TICKET_PREFIX,
-  NON_MAX_EFFORTS,
+  RELOAD_NOTICE,
   RESTART_NOTICE,
+  NON_MAX_EFFORTS,
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
   execMaxTurns,
@@ -587,8 +531,6 @@ module.exports = {
   renderDispatchAgent,
   renderExecAgent,
   renderTicketBriefing,
-  createTicketExecutor,
-  ticketExecutorNameForTicket,
   createNativeAgent,
   cleanupNativeAgents,
   nativeAgentName,
