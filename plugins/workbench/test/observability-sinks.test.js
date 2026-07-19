@@ -231,7 +231,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
   for (const title of [
-    'Tokens over time, by type', 'Tokens over time, by model', 'Models in use', 'Token volume by provider / backend',
+    'Tokens over time, by type', 'Tokens over time, by model', 'Models in use', 'Token volume by backend',
     'Tool activity by name', 'MCP activity by server / tool', 'MCP definition footprint by server',
     'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
@@ -250,7 +250,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.match(definitionPanel.targets[0].expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   assert.match(JSON.stringify(definitionPanel.transformations), /workbench_measurement_input_mcp_tools_\.\+_tokens_value/);
   assert.ok(definitionPanel.transformations.some(({ id }) => id === 'renameByRegex'));
-  assert.match(byTitle.get('Token volume by provider / backend').targets[0].expr, /provider, backend/);
+  assert.match(byTitle.get('Token volume by backend').targets[0].expr, /workbench_attribute_backend/);
 
   for (const title of ['Tokens over time, by model', 'Models in use']) {
     const panel = byTitle.get(title);

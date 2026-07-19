@@ -500,12 +500,12 @@
     },
     {
       "id": 10,
-      "title": "Token volume by provider / backend",
-      "description": "Exact token telemetry grouped by provider and backend.",
+      "title": "Token volume by backend",
+      "description": "Full input context volume by resolved backend from gateway records: anthropic (Claude subscription) vs codex (ChatGPT subscription). Output tokens excluded.",
       "type": "bargauge",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "gridPos": {
         "h": 7,
@@ -536,13 +536,14 @@
       "targets": [
         {
           "refId": "A",
+          "queryType": "instant",
+          "instant": true,
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "legendFormat": "{{provider}} / {{backend}}",
-          "expr": "sum by (provider, backend) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))",
-          "instant": true
+          "legendFormat": "{{workbench_attribute_backend}}",
+          "expr": "sum by (workbench_attribute_backend) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__range]))"
         }
       ]
     },
