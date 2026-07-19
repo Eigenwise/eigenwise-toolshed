@@ -50,7 +50,8 @@ Protocol for each ticket:
    and a concise reason.
 
 If a claim is denied or this launch remains unclaimed, make a diagnose-first retry: `pulse` the ticket and read
-the deny reason verbatim. Make at most ONE retry, only when that diagnosis changes the dispatch; never blind
+the deny reason verbatim. A `token` refusal means the dispatch token is missing or expired: re-run dispatch
+and use its returned token. Make at most ONE retry, only when that diagnosis changes the dispatch; never blind
 respawn the identical launch. Registration waits use one background timer, never a foreground sleep loop. Two failures
 on the same dispatch: comment the evidence, surface it to the user, then release rather than attempting
 a third spawn. If two honest attempts do not move the ticket work, leave a findings comment and release it. Report

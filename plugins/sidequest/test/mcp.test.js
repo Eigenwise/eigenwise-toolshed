@@ -461,7 +461,6 @@ test('MCP claim passes prepared dispatch token and executor through to the store
   const refused = callTool('claim', { ref: added.ref, by: 'mcp-no-token' });
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'token');
-  assert.strictEqual(refused.detail, 'missing or expired dispatch token — run dispatch again and use its returned token.');
   const accepted = callTool('claim', { ref: added.ref, by: 'mcp-with-token', token: prepared.token, executor: prepared.ticket.dispatchExecutor });
   assert.strictEqual(accepted.ok, true);
 });

@@ -42,6 +42,7 @@ test('retry guidance diagnoses once, bans blind respawns, and keeps registration
     assert.match(source, /foreground sleep loop/i);
   }
   assert.match(orchestration, /pulse and read the denial\nverbatim/);
+  assert.match(executorTemplate, /`token` refusal means the dispatch token is missing or expired/);
   assert.match(skill, /comment the evidence on the ticket and surface the failure to the user/);
 });
 
