@@ -1057,7 +1057,8 @@
           "unit": "short",
           "custom": {
             "drawStyle": "bars",
-            "fillOpacity": 45,
+            "fillOpacity": 55,
+            "lineWidth": 0,
             "stacking": {
               "mode": "normal"
             }
@@ -1087,7 +1088,8 @@
           "expr": "sum by (workbench_attribute_agent_role) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__auto]))",
           "legendFormat": "{{workbench_attribute_agent_role}}"
         }
-      ]
+      ],
+      "maxDataPoints": 60
     },
     {
       "id": 21,
@@ -1108,8 +1110,9 @@
         "defaults": {
           "unit": "short",
           "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 35,
+            "drawStyle": "bars",
+            "fillOpacity": 55,
+            "lineWidth": 0,
             "stacking": {
               "mode": "normal"
             }
@@ -1136,7 +1139,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_native_tools_tokens_value [$__auto])",
+          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_native_tools_tokens_value [$__auto]))",
           "legendFormat": "native tools"
         },
         {
@@ -1145,7 +1148,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_system_tokens_value [$__auto])",
+          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_system_tokens_value [$__auto]))",
           "legendFormat": "system"
         },
         {
@@ -1154,7 +1157,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_first_message_tokens_value [$__auto])",
+          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_first_message_tokens_value [$__auto]))",
           "legendFormat": "first message"
         },
         {
@@ -1163,7 +1166,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_history_tokens_value [$__auto])",
+          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_history_tokens_value [$__auto]))",
           "legendFormat": "history"
         },
         {
@@ -1172,10 +1175,11 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$__auto])",
+          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$__auto]))",
           "legendFormat": "MCP tools"
         }
-      ]
+      ],
+      "maxDataPoints": 60
     },
     {
       "id": 22,
@@ -1197,7 +1201,10 @@
           "unit": "short",
           "custom": {
             "drawStyle": "line",
-            "fillOpacity": 15
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "spanNulls": true,
+            "showPoints": "auto"
           }
         },
         "overrides": []
@@ -1222,10 +1229,11 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "max by (workbench_session_id, workbench_agent_id) (max_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__auto]))",
-          "legendFormat": "{{workbench_session_id}} / {{workbench_agent_id}}"
+          "expr": "max by (workbench_session_id, workbench_agent_id) (max_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | unwrap workbench_measurement_context_tokens_value [$__auto]))",
+          "legendFormat": "{{workbench_attribute_agent_role}} {{workbench_agent_id}}"
         }
-      ]
+      ],
+      "maxDataPoints": 60
     },
     {
       "id": 23,
@@ -1247,7 +1255,8 @@
           "unit": "short",
           "custom": {
             "drawStyle": "bars",
-            "fillOpacity": 40,
+            "fillOpacity": 55,
+            "lineWidth": 0,
             "stacking": {
               "mode": "normal"
             }
@@ -1274,7 +1283,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_read_tokens_value [$__auto])",
+          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_read_tokens_value [$__auto]))",
           "legendFormat": "cache reads"
         },
         {
@@ -1283,7 +1292,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_5m_tokens_value [$__auto])",
+          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_5m_tokens_value [$__auto]))",
           "legendFormat": "5m writes"
         },
         {
@@ -1292,10 +1301,11 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_1h_tokens_value [$__auto])",
+          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_1h_tokens_value [$__auto]))",
           "legendFormat": "1h writes"
         }
-      ]
+      ],
+      "maxDataPoints": 60
     },
     {
       "id": 24,
@@ -1355,7 +1365,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "min_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_rate_limit_input_tokens_remaining_value [$__auto]) or vector(0)",
+          "expr": "sum(min_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_rate_limit_input_tokens_remaining_value [$__auto])) or vector(0)",
           "legendFormat": "Input tokens remaining"
         },
         {
@@ -1364,7 +1374,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "min_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_rate_limit_output_tokens_remaining_value [$__auto]) or vector(0)",
+          "expr": "sum(min_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_rate_limit_output_tokens_remaining_value [$__auto])) or vector(0)",
           "legendFormat": "Output tokens remaining"
         },
         {
@@ -1373,10 +1383,11 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "max_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_codex_throttle_used_percent_value [$__auto]) or vector(0)",
+          "expr": "sum(max_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_codex_throttle_used_percent_value [$__auto])) or vector(0)",
           "legendFormat": "Codex used %"
         }
-      ]
+      ],
+      "maxDataPoints": 60
     },
     {
       "id": 25,
