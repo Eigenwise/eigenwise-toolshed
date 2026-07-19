@@ -27,6 +27,7 @@ const RESOURCE_ID_KEYS = Object.freeze({
 // Only names the schema already allows are honored; anything else becomes a gap.
 const MEASUREMENT_ALIASES = Object.freeze({
   'claude_code.token.usage': 'input_tokens',
+  'claude_code.active_time.total': 'active_time_ms',
   input_tokens: 'input_tokens',
   output_tokens: 'output_tokens',
   cache_read_tokens: 'cache_read_tokens',
@@ -140,9 +141,32 @@ function idColumns(flat, resourceIds) {
   return ids;
 }
 
+const EVENT_ALIASES = Object.freeze({
+  mcp_server_connection: 'claude_code.mcp_server_connection',
+  hook_execution_start: 'claude_code.hook_execution_start',
+  hook_execution_complete: 'claude_code.hook_execution_complete',
+});
+
 function eventNameFrom(candidate, flat) {
   const explicit = candidate || flat['event.name'] || flat.event_name;
-  return typeof explicit === 'string' && ALLOWED_EVENTS.includes(explicit) ? explicit : null;
+  const canonical = EVENT_ALIASES[explicit] || explicit;
+  return typeof canonical === 'string' && ALLOWED_EVENTS.includes(canonical) ? canonical : null;
+}
+
+function canonicalEventAttributes(eventName, flat) {
+  const normalized = { ...flat };
+  if (eventName === 'claude_code.mcp_server_connection') {
+    normalized.mcp_server = normalized.mcp_server || normalized.server_name || normalized.server;
+    normalized.status = normalized.status || normalized.connection_status;
+    delete normalized.server_name;
+    delete normalized.server;
+    delete normalized.connection_status;
+  } else if (eventName.startsWith('claude_code.hook_execution_')) {
+    normalized.hook_name = normalized.hook_name || normalized.hook || normalized.name;
+    delete normalized.hook;
+    delete normalized.name;
+  }
+  return normalized;
 }
 
 function stableSourceId(kind, parts) {
@@ -198,8 +222,9 @@ function convertLogs(root, options, observations, dropped) {
       if (!observedAt) continue;
       const eventName = eventNameFrom(record.eventName, flat);
       if (!eventName) { observations.push(coverageGap('unmapped_log', observedAt, resourceIds)); continue; }
+      const canonicalFlat = canonicalEventAttributes(eventName, flat);
       const localDropped = new Set();
-      const attributes = selectAttributes(eventName, flat, localDropped);
+      const attributes = selectAttributes(eventName, canonicalFlat, localDropped);
       for (const key of localDropped) dropped.add(key);
       const measurements = measurementsFrom(flat, 'request');
       const ids = idColumns(flat, resourceIds);
@@ -271,14 +296,22 @@ function convertMetrics(root, options, observations) {
         const observedAt = nanoToIso(point.timeUnixNano);
         if (!observedAt) continue;
         const flat = flattenAttributes(point.attributes);
-        const named = { ...flat };
+        const activeTime = metric.name === 'claude_code.active_time.total';
+        const metricAttributes = activeTime
+          ? { ...flat, activity_type: flat.activity_type || flat.type || flat.state }
+          : flat;
+        if (activeTime) {
+          delete metricAttributes.type;
+          delete metricAttributes.state;
+        }
+        const named = { ...metricAttributes };
         const raw = point.asInt !== undefined ? Number(point.asInt)
           : typeof point.asDouble === 'number' ? point.asDouble : null;
-        if (raw !== null) named[metric.name] = raw;
+        if (raw !== null) named[metric.name] = activeTime ? raw * 1000 : raw;
         const measurements = measurementsFrom(named, 'aggregate');
         if (measurements.length === 0) { observations.push(coverageGap('unmapped_metric', observedAt, resourceIds)); continue; }
         const localDropped = new Set();
-        const attributes = selectAttributes('otel.metric', flat, localDropped);
+        const attributes = selectAttributes('otel.metric', metricAttributes, localDropped);
         const ids = idColumns(flat, resourceIds);
         observations.push({
           source: 'otel_collector',

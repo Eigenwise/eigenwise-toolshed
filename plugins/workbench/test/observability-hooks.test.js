@@ -7,6 +7,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { normalizeObservation } = require('../lib/observability/ingest.js');
+const { drainHookSpool } = require('../lib/observability/hook-spool.js');
+const { openObservabilityStore } = require('../lib/observability/store.js');
 const { buildObservation, spool, EVENT_MAP } = require('../hooks/observability.js');
 const { buildStatuslineObservations } = require('../bin/workbench-statusline.js');
 
@@ -79,6 +81,33 @@ test('spool appends JSON lines and truncates rather than growing unbounded', (t)
   const filePath = path.join(dir, 'blocker');
   fs.writeFileSync(filePath, 'x');
   assert.equal(spool(path.join(filePath, 'child.jsonl'), observation), false);
+});
+
+test('hook spool drains into the observer store and replays idempotently', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-hook-drain-'));
+  const spoolPath = path.join(dir, 'hook-spool.jsonl');
+  const store = openObservabilityStore(path.join(dir, 'observability.db'), { outboxEnabled: false });
+  t.after(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const observation = buildObservation({
+    hook_event_name: 'PostToolUse', session_id: 'session-1', tool_name: 'mcp__sidequest__list',
+    tool_use_id: 'tool-1', status: 'ok', duration_ms: 42,
+  }, NOW);
+  spool(spoolPath, observation);
+  spool(spoolPath, observation);
+  fs.appendFileSync(spoolPath, '{malformed}\n');
+
+  const projectId = 'a'.repeat(64);
+  const result = drainHookSpool({ spoolPath, store, projectId, batchSize: 1 });
+  assert.deepEqual(result, { drained: 1, duplicates: 1, rejected: 0, malformed: 1, droppedBytes: 0 });
+  assert.equal(fs.existsSync(spoolPath), false);
+  const [tool] = store.queryView('tool_calls');
+  assert.equal(tool.mcp_server, 'sidequest');
+  assert.equal(tool.mcp_tool, 'list');
+  assert.equal(tool.duration_ms, 42);
+  assert.equal(store.database.prepare('SELECT project_id FROM observation').get().project_id, projectId);
 });
 
 test('statusline emits acceptable context + rate-limit snapshots and marks missing usage unavailable', () => {

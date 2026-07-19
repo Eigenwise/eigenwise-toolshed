@@ -13,6 +13,7 @@ const { buildObservation, spool } = require('../hooks/observability.js');
 const { captureCodexRouteLog } = require('../lib/observability/adapters/codex-gateway.js');
 const { ticketObservation } = require('../lib/observability/adapters/sidequest.js');
 const { flushOutbox } = require('../lib/observability/outbox.js');
+const { drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { buildTokenUsageReport, formatTokenUsageReport } = require('../lib/observability/report.js');
 const { createWorkflowRun } = require('../lib/observability/sdk.js');
 const { AgentSdkQueryFailure, observeQuery } = require('../lib/observability/sdk-query.js');
@@ -104,7 +105,7 @@ test('runs the disposable demo through setup, local OTLP, hooks, SDK, tools, rou
     environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
   });
   const observerStore = openObservabilityStore(setup.databaseFile);
-  const observer = createObserver({ store: observerStore, host: '127.0.0.1', port: 0 });
+  const observer = createObserver({ store: observerStore, host: '127.0.0.1', port: 0, hookSpoolFile: path.join(dataDir, 'observer-hook-spool.jsonl') });
   const address = await observer.start();
   const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => {
@@ -280,6 +281,10 @@ test('runs the disposable demo through setup, local OTLP, hooks, SDK, tools, rou
   const spoolPath = path.join(dataDir, 'hook-spool.jsonl');
   assert.equal(spool(spoolPath, hook({ hook_event_name: 'Stop', session_id: 'session-demo', reason: 'manual_compact' }, '2026-07-19T12:00:04.400Z')), true);
   assert.equal(JSON.parse(fs.readFileSync(spoolPath, 'utf8')).source, 'hook');
+  assert.deepEqual(drainHookSpool({ spoolPath, store: observerStore, projectId: PROJECT_ID }), {
+    drained: 1, duplicates: 0, rejected: 0, malformed: 0, droppedBytes: 0,
+  });
+  assert.equal(observerStore.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'hook.stop' AND observed_at = '2026-07-19T12:00:04.400Z'").get().count, 1);
 
   const databaseText = JSON.stringify(observerStore.database.prepare('SELECT * FROM observation').all()) + JSON.stringify(observerStore.database.prepare('SELECT * FROM otlp_outbox').all());
   assert.doesNotMatch(databaseText, /private provider response|private prompt|private result|private command|secret-label|real-user/);

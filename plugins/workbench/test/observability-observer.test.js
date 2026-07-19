@@ -354,7 +354,7 @@ test('exports sanitized OTLP only after acknowledgement and bounds retries witho
 test('observer binds only to loopback and acknowledges HTTP ingestion after commit', async (t) => {
   assert.throws(() => assertLoopbackHost('0.0.0.0'), /loopback/);
   const store = temporaryStore(t);
-  const observer = createObserver({ store, host: '127.0.0.1', port: 0 });
+  const observer = createObserver({ store, host: '127.0.0.1', port: 0, hookSpoolFile: path.join(os.tmpdir(), `workbench-observer-spool-${process.pid}.jsonl`) });
   t.after(() => observer.close());
   const address = await observer.start();
   const base = `http://127.0.0.1:${address.port}`;

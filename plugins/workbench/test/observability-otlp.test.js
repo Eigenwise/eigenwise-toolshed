@@ -80,6 +80,23 @@ test('logs convert to canonical claude_code observations with measurements and d
   assert.equal(serialized.includes('PRIVATE VALUE'), false);
 });
 
+test('MCP connection and hook execution events map their activity facets', () => {
+  const body = {
+    resourceLogs: [{ resource: { attributes: attrs({ 'session.id': 'session-1' }) }, scopeLogs: [{ logRecords: [
+      { timeUnixNano: NANO, eventName: 'mcp_server_connection', attributes: attrs({ server_name: 'sidequest', connection_status: 'error', error_type: 'timeout' }) },
+      { timeUnixNano: NANO, eventName: 'hook_execution_complete', attributes: attrs({ hook_name: 'observability', status: 'ok', duration_ms: 12 }) },
+    ] }] }],
+  };
+  const observations = otlpToObservations('logs', body);
+  accept(observations);
+  const connection = observations.find((o) => o.event_name === 'claude_code.mcp_server_connection');
+  assert.equal(connection.attributes.mcp_server, 'sidequest');
+  assert.equal(connection.attributes.status, 'error');
+  const hook = observations.find((o) => o.event_name === 'claude_code.hook_execution_complete');
+  assert.equal(hook.attributes.hook_name, 'observability');
+  assert.equal(hook.measurements.find((measurement) => measurement.name === 'duration_ms').value, 12);
+});
+
 test('an unmapped log event name becomes an explicit coverage gap, never a guess', () => {
   const body = {
     resourceLogs: [{ resource: { attributes: [] }, scopeLogs: [{ logRecords: [{ timeUnixNano: NANO, eventName: 'vendor.custom.thing', attributes: [] }] }] }],
@@ -118,6 +135,7 @@ test('scalar metrics map to measurements; histograms become coverage gaps', () =
       scopeMetrics: [{
         metrics: [
           { name: 'claude_code.cost.usage', sum: { dataPoints: [{ asDouble: 0.05, timeUnixNano: NANO, attributes: attrs({ model: 'claude-opus-4-8' }) }] } },
+          { name: 'claude_code.active_time.total', sum: { dataPoints: [{ asDouble: 1.5, timeUnixNano: NANO, attributes: attrs({ type: 'active' }) }] } },
           { name: 'claude_code.latency', histogram: { dataPoints: [{ timeUnixNano: NANO }] } },
         ],
       }],
@@ -125,10 +143,13 @@ test('scalar metrics map to measurements; histograms become coverage gaps', () =
   };
   const observations = otlpToObservations('metrics', body);
   accept(observations);
-  const metric = observations.find((o) => o.event_name === 'otel.metric');
+  const metric = observations.find((o) => o.measurements?.some((measurement) => measurement.name === 'cost_usd'));
   assert.equal(metric.measurements[0].name, 'cost_usd');
   assert.equal(metric.measurements[0].scope, 'aggregate');
   assert.equal(metric.measurements[0].quality, 'estimate');
+  const active = observations.find((o) => o.measurements?.some((measurement) => measurement.name === 'active_time_ms'));
+  assert.equal(active.attributes.activity_type, 'active');
+  assert.equal(active.measurements[0].value, 1500);
   assert.equal(observations.some((o) => o.event_name === 'coverage_gap' && o.attributes.status === 'unsupported_metric_shape'), true);
 });
 
@@ -161,7 +182,7 @@ test('observer accepts OTLP JSON on /v1/logs and rejects protobuf with 415', asy
     close() {},
   };
   const port = await freePort();
-  const observer = createObserver({ port, store: fakeStore });
+  const observer = createObserver({ port, store: fakeStore, hookSpoolFile: path.join(os.tmpdir(), `workbench-hook-spool-${port}.jsonl`) });
   await observer.start();
   t.after(() => observer.close());
 
@@ -183,7 +204,7 @@ test('observer accepts OTLP JSON on /v1/logs and rejects protobuf with 415', asy
 test('Collector transport gets an OTLP acknowledgement after the observer commits', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-otlp-ack-'));
   const store = openObservabilityStore(path.join(directory, 'ledger.db'));
-  const observer = createObserver({ port: 0, store, projectId: 'a'.repeat(64) });
+  const observer = createObserver({ port: 0, store, projectId: 'a'.repeat(64), hookSpoolFile: path.join(directory, 'hook-spool.jsonl') });
   t.after(async () => {
     await observer.close();
     store.close();

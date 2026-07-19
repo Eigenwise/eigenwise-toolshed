@@ -5,6 +5,8 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { drainHookSpool } = require('../lib/observability/hook-spool.js');
+const { defaultSpoolPath } = require('../hooks/observability.js');
 const { flushOutbox } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { otlpToObservations } = require('../lib/observability/otlp.js');
@@ -183,6 +185,20 @@ function createObserver(options = {}) {
   });
 
   let started = false;
+  let spoolTimer = null;
+  let drainingSpool = false;
+  const spoolPath = options.hookSpoolFile || process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath();
+  const drainSpool = () => {
+    if (drainingSpool) return null;
+    drainingSpool = true;
+    try {
+      return drainHookSpool({ spoolPath, store, projectId: options.projectId });
+    } catch {
+      return null;
+    } finally {
+      drainingSpool = false;
+    }
+  };
   return {
     host,
     port,
@@ -199,9 +215,17 @@ function createObserver(options = {}) {
         });
       });
       started = true;
+      drainSpool();
+      spoolTimer = setInterval(drainSpool, Math.max(250, Number(options.hookSpoolIntervalMs) || 1000));
+      if (typeof spoolTimer.unref === 'function') spoolTimer.unref();
       return server.address();
     },
     async close() {
+      if (spoolTimer) {
+        clearInterval(spoolTimer);
+        spoolTimer = null;
+      }
+      drainSpool();
       if (started) {
         await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
         started = false;

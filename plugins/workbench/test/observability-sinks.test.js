@@ -124,6 +124,20 @@ test('none keeps ledger observations without creating downstream rows', (t) => {
   assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM otlp_outbox').get().count, 0);
 });
 
+test('Grafana dashboard separates token breakdowns from tool and MCP activity', () => {
+  const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
+  const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
+  for (const title of [
+    'Tokens over time, by type', 'Tokens over time, by model', 'Token volume by provider / backend',
+    'Tool activity by name', 'MCP activity by server / tool', 'Tool activity error rate',
+    'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
+    'Hook execution overhead / failures', 'Subagent lifecycle activity',
+  ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
+  assert.match(byTitle.get('MCP activity by server / tool').description, /frequency only/i);
+  assert.match(byTitle.get('MCP activity by server / tool').description, /token attribution is unavailable/i);
+  assert.match(byTitle.get('Token volume by provider / backend').targets[0].expr, /provider, backend/);
+});
+
 test('generic OTLP forwards private headers only after explicit remote opt-in', async (t) => {
   const directory = temporaryDirectory();
   const store = openObservabilityStore(path.join(directory, 'observability.db'));

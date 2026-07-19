@@ -37,6 +37,11 @@ function effort(value) {
   return typeof value === 'string' && EFFORTS.has(value) ? value : null;
 }
 
+function nonnegativeNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
 function toolFacets(rawName) {
   const name = identifier(rawName);
   if (!name) return {};
@@ -109,6 +114,10 @@ function buildObservation(payload, now) {
   assign(observation, 'parent_agent_id', identifier(payload.parent_agent_id));
   assign(observation, 'tool_use_id', identifier(payload.tool_use_id));
   assign(observation, 'task_id', identifier(payload.task_id));
+  const durationMs = nonnegativeNumber(first(payload.duration_ms, payload.durationMs));
+  if (durationMs !== null && ['hook.post_tool_use', 'hook.subagent_stop'].includes(eventName)) {
+    observation.measurements = [{ name: 'duration_ms', value: durationMs, unit: 'ms', scope: 'attempt', quality: 'exact_client' }];
+  }
   return observation;
 }
 
