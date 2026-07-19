@@ -1,24 +1,40 @@
 {
   "uid": "claude-code-usage",
   "title": "Claude Code Usage",
-  "tags": ["claude-code", "workbench", "tokens"],
+  "tags": [
+    "claude-code",
+    "workbench",
+    "tokens"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "editable": true,
   "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
         "name": "project",
         "label": "Project",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": { "query": "label_values(claude_code_token_usage_tokens_total, project_id)", "refId": "project" },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(claude_code_token_usage_tokens_total, project_id)",
+          "refId": "project"
+        },
         "includeAll": true,
         "multi": true,
         "allValue": ".*",
-        "current": { "text": "All", "value": "$__all" },
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
         "refresh": 2,
         "sort": 1
       }
@@ -29,60 +45,232 @@
       "id": 1,
       "title": "Total tokens",
       "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))" }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))"
+        }
       ]
     },
     {
       "id": 2,
       "title": "Input tokens",
       "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range]))" }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range]))"
+        }
       ]
     },
     {
       "id": 3,
       "title": "Output tokens",
       "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } }, "overrides": [] },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range]))" }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range]))"
+        }
       ]
     },
     {
       "id": 4,
       "title": "Cost (USD)",
       "type": "stat",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "orange" } }, "overrides": [] },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range]))" }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range]))"
+        }
       ]
     },
     {
       "id": 5,
       "title": "Tokens over time, by type",
       "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{type}}", "expr": "sum by (type) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__rate_interval]))" }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "{{type}}",
+          "expr": "sum by (type) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__rate_interval]))"
+        }
       ]
     },
     {
@@ -90,41 +278,175 @@
       "title": "Tokens over time, by model",
       "description": "Full input context volume by resolved gateway model. Adding per-type vectors would drop models missing a type (Codex has no cache measurements), so this tracks context_tokens, present on every record.",
       "type": "timeseries",
-      "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 55,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "loki", "uid": "loki" }, "legendFormat": "{{workbench_attribute_model}}", "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__auto]))" }
-      ]
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "legendFormat": "{{workbench_attribute_model}}",
+          "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__auto]))"
+        }
+      ],
+      "maxDataPoints": 60
     },
     {
       "id": 7,
       "title": "Cost over time",
       "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{project_id}}", "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval]))" }
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "{{project_id}}",
+          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval]))"
+        }
       ]
     },
     {
       "id": 8,
       "title": "Usage by project",
       "type": "table",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-      "options": { "showHeader": true },
-      "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Cost" }, "properties": [ { "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 2 } ] } ] },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
       "targets": [
-        { "refId": "A", "format": "table", "instant": true, "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (project_id) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))" },
-        { "refId": "B", "format": "table", "instant": true, "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range]))" }
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (project_id) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))"
+        },
+        {
+          "refId": "B",
+          "format": "table",
+          "instant": true,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range]))"
+        }
       ],
       "transformations": [
-        { "id": "merge", "options": {} },
-        { "id": "organize", "options": { "renameByName": { "project_id": "Project", "Value #A": "Tokens", "Value #B": "Cost" } } }
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "project_id": "Project",
+              "Value #A": "Tokens",
+              "Value #B": "Cost"
+            }
+          }
+        }
       ]
     },
     {
@@ -132,29 +454,1009 @@
       "title": "Models in use",
       "description": "Full input context volume (fresh input + cache) by resolved gateway model over the selected range. Output tokens excluded.",
       "type": "bargauge",
-      "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
-      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true, "valueMode": "text", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "values": true,
+          "calcs": [],
+          "limit": 25
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "queryType": "instant", "instant": true, "datasource": { "type": "loki", "uid": "loki" }, "legendFormat": "{{workbench_attribute_model}}", "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__range]))" }
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "instant": true,
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "legendFormat": "{{workbench_attribute_model}}",
+          "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__range]))"
+        }
       ]
     },
-    {"id":10,"title":"Token volume by provider / backend","description":"Exact token telemetry grouped by provider and backend.","type":"bargauge","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":7,"w":12,"x":0,"y":26},"options":{"orientation":"horizontal","displayMode":"gradient","showUnfilled":true,"valueMode":"text","reduceOptions":{"calcs":["lastNotNull"]}},"fieldConfig":{"defaults":{"unit":"short","color":{"mode":"continuous-GrYlRd"}},"overrides":[]},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"legendFormat":"{{provider}} / {{backend}}","expr":"sum by (provider, backend) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))"}]},
-    {"id":11,"title":"Tool activity by name","description":"Estimated result tokens by tool. A tool result re-enters the LLM as input on later requests, usually at cache-read rates after its first inclusion, so large results tax every turn until compaction. Call count stays visible for frequency.","type":"table","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":12,"y":26},"options":{"showHeader":true},"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"queryType":"instant","instant":true,"expr":"sum by (workbench_attribute_tool_name) (sum_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | unwrap workbench_measurement_tool_result_tokens_estimate_value [$__range]))","legendFormat":"{{workbench_attribute_tool_name}}"},{"refId":"B","datasource":{"type":"loki","uid":"loki"},"queryType":"instant","instant":true,"expr":"sum by (workbench_attribute_tool_name) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" [$__range]))","legendFormat":"{{workbench_attribute_tool_name}}"}],"transformations":[{"id":"merge","options":{}},{"id":"organize","options":{"excludeByName":{"Time":true},"renameByName":{"workbench_attribute_tool_name":"Tool","Value #A":"Result tokens (estimate)","Value #B":"Calls"}}}]},
-    {"id":12,"title":"MCP activity by server / tool","description":"Estimated result tokens grouped by MCP server. Tool results re-enter the LLM as input on later requests, usually at cache-read rates after first inclusion. Calls stay visible here; exact MCP tool names remain in Tool activity by name.","type":"table","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":0,"y":34},"options":{"showHeader":true},"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"queryType":"instant","instant":true,"expr":"sum by (workbench_attribute_mcp_server) (sum_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_is_mcp = \"true\" | unwrap workbench_measurement_tool_result_tokens_estimate_value [$__range]))","legendFormat":"{{workbench_attribute_mcp_server}}"},{"refId":"B","datasource":{"type":"loki","uid":"loki"},"queryType":"instant","instant":true,"expr":"sum by (workbench_attribute_mcp_server) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_is_mcp = \"true\" [$__range]))","legendFormat":"{{workbench_attribute_mcp_server}}"}],"transformations":[{"id":"merge","options":{}},{"id":"organize","options":{"excludeByName":{"Time":true},"renameByName":{"workbench_attribute_mcp_server":"MCP server","Value #A":"Result tokens (estimate)","Value #B":"Calls"}}}]},
-    {"id":13,"title":"Tool activity error rate","description":"Share of completed tool activity carrying an error status. This is frequency, not token cost.","type":"stat","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":4,"w":6,"x":12,"y":34},"options":{"reduceOptions":{"calcs":["lastNotNull"]},"colorMode":"value","graphMode":"none","textMode":"value"},"fieldConfig":{"defaults":{"unit":"percent","decimals":1,"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":2},{"color":"red","value":10}]}},"overrides":[]},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"queryType":"instant","instant":true,"expr":"(100 * sum(count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_status =~ \"error|failed\" [$__range])) / sum(count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" [$__range]))) or vector(0)"}]},
-    {"id":14,"title":"Tool activity duration p95","description":"Observed hook duration when the hook payload supplies it. Missing durations stay unavailable.","type":"stat","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":4,"w":6,"x":18,"y":34},"options":{"reduceOptions":{"calcs":["lastNotNull"]},"colorMode":"value","graphMode":"area","textMode":"value"},"fieldConfig":{"defaults":{"unit":"ms","decimals":0,"color":{"mode":"fixed","fixedColor":"blue"}},"overrides":[]},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"queryType":"instant","instant":true,"expr":"quantile_over_time(0.95, {service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | unwrap workbench_measurement_duration_ms_value [$__range])"}]},
-    {"id":15,"title":"Active vs idle time","description":"Claude Code active-time telemetry, grouped by the provider activity type.","type":"timeseries","datasource":{"type":"prometheus","uid":"prometheus"},"gridPos":{"h":8,"w":12,"x":12,"y":38},"fieldConfig":{"defaults":{"unit":"s","custom":{"drawStyle":"line","fillOpacity":20,"stacking":{"mode":"normal"}}},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["sum"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"prometheus","uid":"prometheus"},"legendFormat":"{{type}}","expr":"sum by (type) (increase(claude_code_active_time_seconds_total{project_id=~\"$project\"}[$__rate_interval]))"}]},
-    {"id":16,"title":"MCP connection activity","description":"Connection attempts and failures by MCP server. This is reliability activity, not token attribution.","type":"timeseries","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":0,"y":42},"fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"bars","fillOpacity":45,"stacking":{"mode":"normal"}}},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["sum"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"expr":"sum by (workbench_attribute_mcp_server, workbench_attribute_status) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.mcp_server_connection\" [$__auto])) or vector(0)","legendFormat":"{{workbench_attribute_mcp_server}} / {{workbench_attribute_status}}"}]},
-    {"id":17,"title":"Hook execution activity / failures","description":"Own-hook completion frequency by hook name and provider status. Hook duration stays unavailable when Claude Code omits it from this event.","type":"timeseries","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":12,"y":46},"fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"bars","fillOpacity":35}},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["mean","max"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"expr":"sum by (workbench_attribute_hook_name, workbench_attribute_status) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.hook_execution_complete\" [$__auto]))","legendFormat":"{{workbench_attribute_hook_name}} / {{workbench_attribute_status}}"}]},
-    {"id":18,"title":"Subagent lifecycle activity","description":"Starts and stops by agent type. Counts lifecycle activity, not tokens.","type":"timeseries","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":0,"y":50},"fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"bars","fillOpacity":45,"stacking":{"mode":"normal"}}},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["sum"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"expr":"sum by (workbench_attribute_agent_type) (count_over_time({service_name=\"workbench-observer\"} |~ \"hook.subagent_(start|stop)\" [$__auto]))","legendFormat":"{{workbench_attribute_agent_type}}"}]}
-    ,{"id":19,"title":"Gateway usage by session","description":"Exact provider input, cache, and output tokens from proxied /v1/messages responses.","type":"table","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":12,"y":54},"options":{"showHeader":true},"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"queryType":"instant","instant":true,"expr":"sum by (workbench_session_id) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__range]))","legendFormat":"{{workbench_session_id}}"}]},
-    {"id":20,"title":"Orchestrator vs executor usage","description":"Full input context grouped from exact gateway agent headers. A missing agent ID is the orchestrator.","type":"timeseries","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":0,"y":58},"fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"bars","fillOpacity":45,"stacking":{"mode":"normal"}}},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["sum"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"expr":"sum by (workbench_attribute_agent_role) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__auto]))","legendFormat":"{{workbench_attribute_agent_role}}"}]},
-    {"id":21,"title":"Input composition over time","description":"Estimated token split normalized to exact provider input. Tool-result tokens are nested in messages and are not stacked again.","type":"timeseries","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":12,"y":62},"fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"line","fillOpacity":35,"stacking":{"mode":"normal"}}},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["sum"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"expr":"sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_native_tools_tokens_value [$__auto])","legendFormat":"native tools"},{"refId":"B","datasource":{"type":"loki","uid":"loki"},"expr":"sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_system_tokens_value [$__auto])","legendFormat":"system"},{"refId":"C","datasource":{"type":"loki","uid":"loki"},"expr":"sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_first_message_tokens_value [$__auto])","legendFormat":"first message"},{"refId":"D","datasource":{"type":"loki","uid":"loki"},"expr":"sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_history_tokens_value [$__auto])","legendFormat":"history"},{"refId":"E","datasource":{"type":"loki","uid":"loki"},"expr":"sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$__auto])","legendFormat":"MCP tools"}]},
-    {"id":22,"title":"Context-window growth","description":"Exact full input context by session and agent. Drops can indicate compaction. Output has no source attribution.","type":"timeseries","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":0,"y":66},"fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"line","fillOpacity":15}},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull","max"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"expr":"max by (workbench_session_id, workbench_agent_id) (max_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__auto]))","legendFormat":"{{workbench_session_id}} / {{workbench_agent_id}}"}]},
-    {"id":23,"title":"Prompt-cache economics","description":"Exact aggregate cache buckets. Reads cost 0.1x base input, 5-minute writes 1.25x, and 1-hour writes 2x. Per-section cache attribution remains estimated.","type":"timeseries","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":12,"x":12,"y":70},"fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"bars","fillOpacity":40,"stacking":{"mode":"normal"}}},"overrides":[]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["sum"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"expr":"sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_read_tokens_value [$__auto])","legendFormat":"cache reads"},{"refId":"B","datasource":{"type":"loki","uid":"loki"},"expr":"sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_5m_tokens_value [$__auto])","legendFormat":"5m writes"},{"refId":"C","datasource":{"type":"loki","uid":"loki"},"expr":"sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_1h_tokens_value [$__auto])","legendFormat":"1h writes"}]},
-    {"id":24,"title":"Rate-limit and Codex throttle headroom","description":"Exact response-header signals, including failed and throttled requests when the provider returns useful limits.","type":"timeseries","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":24,"x":0,"y":78},"fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"line","fillOpacity":10}},"overrides":[{"matcher":{"id":"byName","options":"Codex used %"},"properties":[{"id":"unit","value":"percent"}]}]},"options":{"legend":{"displayMode":"table","placement":"bottom","calcs":["lastNotNull","min"]},"tooltip":{"mode":"multi"}},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"expr":"min_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_rate_limit_input_tokens_remaining_value [$__auto]) or vector(0)","legendFormat":"Input tokens remaining"},{"refId":"B","datasource":{"type":"loki","uid":"loki"},"expr":"min_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_rate_limit_output_tokens_remaining_value [$__auto]) or vector(0)","legendFormat":"Output tokens remaining"},{"refId":"C","datasource":{"type":"loki","uid":"loki"},"expr":"max_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_codex_throttle_used_percent_value [$__auto]) or vector(0)","legendFormat":"Codex used %"}]},
-    {"id":25,"title":"MCP definition footprint by server","description":"Estimated input tokens spent on each MCP server's tool definitions. These definitions are sent on every request and usually paid at cache-read rates after first inclusion. Empty until the gateway emits per-server measurements.","type":"table","datasource":{"type":"loki","uid":"loki"},"gridPos":{"h":8,"w":24,"x":0,"y":86},"options":{"showHeader":true},"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"targets":[{"refId":"A","datasource":{"type":"loki","uid":"loki"},"queryType":"range","expr":"{service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\""}],"transformations":[{"id":"labelsToFields","options":{"mode":"columns"}},{"id":"filterFieldsByName","options":{"include":{"pattern":"^workbench_measurement_input_mcp_tools_.+_tokens_value$"}}},{"id":"renameByRegex","options":{"regex":"^workbench_measurement_input_mcp_tools_(.+)_tokens_value$","renamePattern":"$1"}},{"id":"reduce","options":{"reducers":["sum"]}},{"id":"transpose","options":{}},{"id":"organize","options":{"renameByName":{"Field":"MCP server","Value":"Definition tokens (estimate)"}}}]}
+    {
+      "id": 10,
+      "title": "Token volume by provider / backend",
+      "description": "Exact token telemetry grouped by provider and backend.",
+      "type": "bargauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "reduceOptions": {
+          "values": true,
+          "calcs": [],
+          "limit": 25
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "continuous-GrYlRd"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "{{provider}} / {{backend}}",
+          "expr": "sum by (provider, backend) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Tool activity by name",
+      "description": "Estimated result tokens by tool. A tool result re-enters the LLM as input on later requests, usually at cache-read rates after its first inclusion, so large results tax every turn until compaction. Call count stays visible for frequency.",
+      "type": "table",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_attribute_tool_name) (sum_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | unwrap workbench_measurement_tool_result_tokens_estimate_value [$__range]))",
+          "legendFormat": "{{workbench_attribute_tool_name}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_attribute_tool_name) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" [$__range]))",
+          "legendFormat": "{{workbench_attribute_tool_name}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "workbench_attribute_tool_name": "Tool",
+              "Value #A": "Result tokens (estimate)",
+              "Value #B": "Calls"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "MCP activity by server / tool",
+      "description": "Estimated result tokens grouped by MCP server. Tool results re-enter the LLM as input on later requests, usually at cache-read rates after first inclusion. Calls stay visible here; exact MCP tool names remain in Tool activity by name.",
+      "type": "table",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_attribute_mcp_server) (sum_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_is_mcp = \"true\" | unwrap workbench_measurement_tool_result_tokens_estimate_value [$__range]))",
+          "legendFormat": "{{workbench_attribute_mcp_server}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_attribute_mcp_server) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_is_mcp = \"true\" [$__range]))",
+          "legendFormat": "{{workbench_attribute_mcp_server}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "workbench_attribute_mcp_server": "MCP server",
+              "Value #A": "Result tokens (estimate)",
+              "Value #B": "Calls"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Tool activity error rate",
+      "description": "Share of completed tool activity carrying an error status. This is frequency, not token cost.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 34
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "(100 * sum(count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_status =~ \"error|failed\" [$__range])) / sum(count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" [$__range]))) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Tool activity duration p95",
+      "description": "Observed hook duration when the hook payload supplies it. Missing durations stay unavailable.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 34
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "quantile_over_time(0.95, {service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | unwrap workbench_measurement_duration_ms_value [$__range])"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Active vs idle time",
+      "description": "Claude Code active-time telemetry, grouped by the provider activity type.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "{{type}}",
+          "expr": "sum by (type) (increase(claude_code_active_time_seconds_total{project_id=~\"$project\"}[$__rate_interval]))"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "MCP connection activity",
+      "description": "Connection attempts and failures by MCP server. This is reliability activity, not token attribution.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 45,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (workbench_attribute_mcp_server, workbench_attribute_status) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.mcp_server_connection\" [$__auto])) or vector(0)",
+          "legendFormat": "{{workbench_attribute_mcp_server}} / {{workbench_attribute_status}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Hook execution activity / failures",
+      "description": "Own-hook completion frequency by hook name and provider status. Hook duration stays unavailable when Claude Code omits it from this event.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 35
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (workbench_attribute_hook_name, workbench_attribute_status) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.hook_execution_complete\" [$__auto]))",
+          "legendFormat": "{{workbench_attribute_hook_name}} / {{workbench_attribute_status}}"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Subagent lifecycle activity",
+      "description": "Starts and stops by agent type. Counts lifecycle activity, not tokens.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 45,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (workbench_attribute_agent_type) (count_over_time({service_name=\"workbench-observer\"} |~ \"hook.subagent_(start|stop)\" [$__auto]))",
+          "legendFormat": "{{workbench_attribute_agent_type}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Gateway usage by session",
+      "description": "Exact provider input, cache, and output tokens from proxied /v1/messages responses.",
+      "type": "table",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 54
+      },
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_session_id) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__range]))",
+          "legendFormat": "{{workbench_session_id}}"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Orchestrator vs executor usage",
+      "description": "Full input context grouped from exact gateway agent headers. A missing agent ID is the orchestrator.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 45,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (workbench_attribute_agent_role) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__auto]))",
+          "legendFormat": "{{workbench_attribute_agent_role}}"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "Input composition over time",
+      "description": "Estimated token split normalized to exact provider input. Tool-result tokens are nested in messages and are not stacked again.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 62
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 35,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_native_tools_tokens_value [$__auto])",
+          "legendFormat": "native tools"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_system_tokens_value [$__auto])",
+          "legendFormat": "system"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_first_message_tokens_value [$__auto])",
+          "legendFormat": "first message"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_history_tokens_value [$__auto])",
+          "legendFormat": "history"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$__auto])",
+          "legendFormat": "MCP tools"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "Context-window growth",
+      "description": "Exact full input context by session and agent. Drops can indicate compaction. Output has no source attribution.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 66
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "max by (workbench_session_id, workbench_agent_id) (max_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__auto]))",
+          "legendFormat": "{{workbench_session_id}} / {{workbench_agent_id}}"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "Prompt-cache economics",
+      "description": "Exact aggregate cache buckets. Reads cost 0.1x base input, 5-minute writes 1.25x, and 1-hour writes 2x. Per-section cache attribution remains estimated.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 70
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 40,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_read_tokens_value [$__auto])",
+          "legendFormat": "cache reads"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_5m_tokens_value [$__auto])",
+          "legendFormat": "5m writes"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_1h_tokens_value [$__auto])",
+          "legendFormat": "1h writes"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "Rate-limit and Codex throttle headroom",
+      "description": "Exact response-header signals, including failed and throttled requests when the provider returns useful limits.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 78
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Codex used %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "min"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "min_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_rate_limit_input_tokens_remaining_value [$__auto]) or vector(0)",
+          "legendFormat": "Input tokens remaining"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "min_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_rate_limit_output_tokens_remaining_value [$__auto]) or vector(0)",
+          "legendFormat": "Output tokens remaining"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "max_over_time({service_name=\"workbench-observer\"} |~ \"gateway[.](token[.]usage|limit[.]signal)\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_codex_throttle_used_percent_value [$__auto]) or vector(0)",
+          "legendFormat": "Codex used %"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "title": "MCP definition footprint by server",
+      "description": "Estimated input tokens spent on each MCP server's tool definitions. These definitions are sent on every request and usually paid at cache-read rates after first inclusion. Empty until the gateway emits per-server measurements.",
+      "type": "table",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 86
+      },
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "expr": "{service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\""
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "pattern": "^workbench_measurement_input_mcp_tools_.+_tokens_value$"
+            }
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^workbench_measurement_input_mcp_tools_(.+)_tokens_value$",
+            "renamePattern": "$1"
+          }
+        },
+        {
+          "id": "reduce",
+          "options": {
+            "reducers": [
+              "sum"
+            ]
+          }
+        },
+        {
+          "id": "transpose",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "Field": "MCP server",
+              "Value": "Definition tokens (estimate)"
+            }
+          }
+        }
+      ]
+    }
   ]
 }
