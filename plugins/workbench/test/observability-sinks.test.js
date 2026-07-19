@@ -231,6 +231,14 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
   for (const title of [
+    'Tokens & models', 'Tool activity', 'MCP', 'Sessions & agents',
+    'Subscription & limits', 'Gateway internals',
+  ]) {
+    const row = byTitle.get(title);
+    assert.equal(row?.type, 'row', `missing dashboard row: ${title}`);
+    assert.equal(row.collapsed, false);
+  }
+  for (const title of [
     'Tokens over time, by type', 'Tokens over time, by model', 'Models in use', 'Token volume by backend',
     'Tool activity by name', 'MCP activity by server / tool', 'MCP definition footprint by server',
     'Tool activity error rate',
@@ -314,15 +322,29 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     assert.doesNotMatch(expression, /\$__rate_interval/);
   }
   assert.match(byTitle.get('Tool activity error rate').targets[0].expr, /or vector\(0\)$/);
-  assert.match(byTitle.get('MCP connection activity').targets[0].expr, /workbench_attribute_mcp_server/);
+  const connectionActivity = byTitle.get('MCP connection activity');
+  assert.match(connectionActivity.targets[0].expr, /workbench_attribute_mcp_server/);
+  assert.doesNotMatch(connectionActivity.targets[0].expr, /or vector\(0\)/);
+  assert.equal(connectionActivity.targets[0].legendFormat, '{{workbench_attribute_mcp_server}} ({{workbench_attribute_status}})');
+  assert.equal(connectionActivity.fieldConfig.defaults.noValue, 'No MCP connections reported');
+  const headroom = byTitle.get('Rate-limit and Codex throttle headroom');
+  for (const target of headroom.targets) assert.doesNotMatch(target.expr, /or vector\(0\)/);
+  assert.equal(headroom.fieldConfig.defaults.unit, 'tokens');
+  assert.equal(headroom.fieldConfig.defaults.noValue, 'No provider limit signal');
+  for (const title of ['Tokens over time, by type', 'Tokens over time, by model', 'Context-window growth']) {
+    assert.deepEqual(byTitle.get(title).options.legend, { displayMode: 'table', placement: 'right', calcs: ['sum'] });
+  }
   const hookActivity = byTitle.get('Hook execution activity / failures');
   assert.match(hookActivity.targets[0].expr, /workbench_attribute_hook_name/);
   assert.equal(hookActivity.targets[0].legendFormat, '{{workbench_attribute_hook_name}}');
+  const lifecycle = byTitle.get('Subagent lifecycle activity');
+  assert.match(lifecycle.targets[0].expr, /workbench_attribute_agent_type != ""/);
+  assert.match(lifecycle.targets[0].expr, /regexReplaceAll/);
   const sessionUsage = byTitle.get('Gateway usage by session');
   assert.match(sessionUsage.targets[0].expr, /workbench_session_id != ""/);
   assert.match(JSON.stringify(sessionUsage.transformations), /Context tokens/);
   assert.match(JSON.stringify(sessionUsage.transformations), /"Time":true/);
-  assert.equal(byTitle.get('Context-window growth').targets[0].legendFormat, '{{workbench_session_id}}');
+  assert.equal(byTitle.get('Context-window growth').targets[0].legendFormat, 'session {{session_label}}');
   for (const title of [
     'Gateway usage by session', 'Orchestrator vs executor usage', 'Input composition over time',
     'Context-window growth', 'Prompt-cache economics', 'Rate-limit and Codex throttle headroom',
