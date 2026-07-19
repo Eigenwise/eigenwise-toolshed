@@ -850,34 +850,61 @@ class DispatchSessionRouteCache {
     this.routes = new Map();
   }
 
-  get(sessionId) {
-    if (!sessionId) return null;
-    const entry = this.routes.get(sessionId);
+  get(requestIdentity) {
+    if (!requestIdentity) return null;
+    const entry = this.routes.get(requestIdentity);
     if (!entry) return null;
     const now = this.now();
     if (now - entry.lastUsedAt >= this.ttlMs) {
-      this.routes.delete(sessionId);
+      this.routes.delete(requestIdentity);
       return null;
     }
     entry.lastUsedAt = now;
-    this.routes.delete(sessionId);
-    this.routes.set(sessionId, entry);
+    this.routes.delete(requestIdentity);
+    this.routes.set(requestIdentity, entry);
     return { model: entry.model, effort: entry.effort };
   }
 
-  set(sessionId, route) {
-    if (!sessionId || !route) return;
+  set(requestIdentity, route) {
+    if (!requestIdentity || !route) return;
     const now = this.now();
     for (const [key, entry] of this.routes) {
       if (now - entry.lastUsedAt < this.ttlMs) break;
       this.routes.delete(key);
     }
-    this.routes.delete(sessionId);
-    this.routes.set(sessionId, { model: route.model, effort: route.effort, lastUsedAt: now });
+    this.routes.delete(requestIdentity);
+    this.routes.set(requestIdentity, { model: route.model, effort: route.effort, lastUsedAt: now });
     while (this.routes.size > this.maxSessions) {
       this.routes.delete(this.routes.keys().next().value);
     }
   }
+}
+
+function sessionIdFromMetadata(metadata) {
+  const userId = metadata && typeof metadata.user_id === 'string' ? metadata.user_id : null;
+  if (!userId) return null;
+  try {
+    const parsed = JSON.parse(userId);
+    return safeMetadataId(parsed && parsed.session_id);
+  } catch {}
+  const marker = '_session_';
+  const markerIndex = userId.lastIndexOf(marker);
+  return markerIndex >= 0 ? safeMetadataId(userId.slice(markerIndex + marker.length)) : null;
+}
+
+function dispatchRequestIdentity(req, payload) {
+  const headerSessionId = safeMetadataId(requestHeader(req, 'x-claude-code-session-id'));
+  const sessionId = headerSessionId || sessionIdFromMetadata(payload && payload.metadata);
+  if (!sessionId) return null;
+  const agentId = safeMetadataId(requestHeader(req, 'x-claude-code-agent-id'));
+  const parentAgentId = safeMetadataId(requestHeader(req, 'x-claude-code-parent-agent-id'));
+  if (!agentId && parentAgentId) return null;
+  return {
+    key: JSON.stringify([sessionId, agentId]),
+    sessionId,
+    agentId,
+    sessionSource: headerSessionId ? 'header' : 'metadata',
+  };
 }
 
 function routeMarkersInText(text, markers = []) {
@@ -1284,12 +1311,12 @@ function runShim() {
 
   // A local audit trail for which model went where. This is intentionally a
   // small, fixed schema, never a dump of the request: prompts, messages, tools,
-  // auth, and arbitrary headers are all excluded. Claude Code currently sends a
-  // session id in x-claude-code-session-id when it has one; keep only that safe
-  // caller correlation value.
-  function requestRouteLog(req, backend, model, pathOnly, via = null, effort = null) {
+  // auth, and arbitrary headers are all excluded. Keep only Claude Code's safe
+  // session/agent correlation values and whether the session came from its
+  // canonical header or metadata fallback.
+  function requestRouteLog(req, backend, model, pathOnly, via = null, effort = null, identity = null) {
     if (!REQUEST_ROUTE_LOG) return;
-    const sessionId = requestSessionId(req);
+    const sessionId = identity?.sessionId || requestSessionId(req);
     const entry = {
       at: new Date().toISOString(),
       backend,
@@ -1298,6 +1325,8 @@ function runShim() {
       ...(via ? { via } : {}),
       ...(effort ? { effort } : {}),
       ...(sessionId ? { sessionId } : {}),
+      ...(identity?.agentId ? { agentId: identity.agentId } : {}),
+      ...(identity?.sessionSource ? { sessionSource: identity.sessionSource } : {}),
     };
     try {
       mkdirs();
@@ -1747,15 +1776,16 @@ function runShim() {
             const requestedBase = parsed.model.slice(PREFIX.length).replace(/\[1m\]$/, '');
             let dispatchRoute = null;
             let dispatchVia = null;
+            let dispatchIdentity = null;
             if (requestedBase === 'auto') {
               const markers = dispatchRouteMarkersFromMessages(parsed.messages);
-              const sessionId = requestSessionId(req);
+              dispatchIdentity = dispatchRequestIdentity(req, parsed);
               if (markers.length === 1) {
                 dispatchRoute = markers[0];
-                dispatchRoutes.set(sessionId, dispatchRoute);
+                dispatchRoutes.set(dispatchIdentity?.key, dispatchRoute);
                 dispatchVia = 'dispatch';
               } else if (markers.length === 0) {
-                dispatchRoute = dispatchRoutes.get(sessionId);
+                dispatchRoute = dispatchRoutes.get(dispatchIdentity?.key);
                 if (dispatchRoute) dispatchVia = 'dispatch-cached';
               }
               if (!dispatchRoute) {
@@ -1775,6 +1805,7 @@ function runShim() {
                   via: 'dispatch',
                 });
                 routeTelemetry.finish(400, 'invalid_route');
+                requestRouteLog(req, 'codex', advertisedModel, pathOnly, 'dispatch-unbound', null, dispatchIdentity);
                 res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
                 return res.end(body);
               }
@@ -1796,7 +1827,7 @@ function runShim() {
             }
             counters.codex++;
             const effectiveEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : requestedEffort;
-            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, effectiveEffort);
+            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, effectiveEffort, dispatchIdentity);
             routeTelemetry.setRoute({
               selectedModel: advertisedModel,
               effectiveModel: parsed.model,
