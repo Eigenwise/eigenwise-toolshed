@@ -14,7 +14,7 @@
         "label": "Project",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": { "query": "label_values(target_info{service_name=\"claude-code\"}, project_id)", "refId": "project" },
+        "query": { "query": "label_values(claude_code_token_usage_tokens_total, project_id)", "refId": "project" },
         "includeAll": true,
         "multi": true,
         "allValue": ".*",
@@ -34,7 +34,7 @@
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))" }
       ]
     },
     {
@@ -46,7 +46,7 @@
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"input\"}[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range]))" }
       ]
     },
     {
@@ -58,7 +58,7 @@
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"output\"}[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range]))" }
       ]
     },
     {
@@ -70,7 +70,7 @@
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area", "textMode": "value" },
       "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "orange" } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_cost_usage_USD_total[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range]))" }
       ]
     },
     {
@@ -82,7 +82,7 @@
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{type}}", "expr": "sum by (type) (increase(claude_code_token_usage_tokens_total[$__rate_interval]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{type}}", "expr": "sum by (type) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__rate_interval]))" }
       ]
     },
     {
@@ -94,7 +94,7 @@
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{model}}", "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total[$__rate_interval]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{model}}", "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__rate_interval]))" }
       ]
     },
     {
@@ -106,7 +106,7 @@
       "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{project_id}}", "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total[$__rate_interval]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{project_id}}", "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval]))" }
       ]
     },
     {
@@ -118,8 +118,8 @@
       "options": { "showHeader": true },
       "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Cost" }, "properties": [ { "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 2 } ] } ] },
       "targets": [
-        { "refId": "A", "format": "table", "instant": true, "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (project_id) (increase(claude_code_token_usage_tokens_total[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" },
-        { "refId": "B", "format": "table", "instant": true, "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total[$__range]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "format": "table", "instant": true, "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (project_id) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))" },
+        { "refId": "B", "format": "table", "instant": true, "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range]))" }
       ],
       "transformations": [
         { "id": "merge", "options": {} },
@@ -135,7 +135,7 @@
       "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true, "valueMode": "text", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{model}}", "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total[5m]) * on(job) group_left(project_id) target_info{project_id=~\"$project\"})" }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "legendFormat": "{{model}}", "expr": "sum by (model) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[5m]))" }
       ]
     }
   ]

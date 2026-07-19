@@ -1,14 +1,37 @@
 'use strict';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const FORBIDDEN_HEADERS = new Set(['content-length', 'content-type', 'host']);
+
+function assertOtlpUrl(value, options = {}) {
+  const url = value instanceof URL ? value : new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error(`OTLP endpoint must use HTTP(S), received ${url.protocol}`);
+  if (url.username || url.password) throw new Error('OTLP endpoint credentials are not allowed.');
+  const local = LOOPBACK_HOSTS.has(url.hostname);
+  if (!local && options.allowRemote !== true) {
+    throw new Error(`OTLP endpoint must use loopback HTTP(S) unless remote egress is explicit, received ${url.origin}.`);
+  }
+  if (!local && url.protocol !== 'https:') throw new Error('A remote OTLP endpoint must use HTTPS.');
+  return url;
+}
 
 function assertLoopbackUrl(value) {
-  const url = value instanceof URL ? value : new URL(value);
-  if (!['http:', 'https:'].includes(url.protocol) || !LOOPBACK_HOSTS.has(url.hostname)) {
-    throw new Error(`OTLP endpoint must use loopback HTTP(S), received ${url.origin}.`);
+  return assertOtlpUrl(value);
+}
+
+function requestHeaders(value) {
+  if (value === undefined) return { 'content-type': 'application/json' };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('OTLP headers must be an object.');
+  const result = {};
+  for (const [name, headerValue] of Object.entries(value)) {
+    const lower = name.toLowerCase();
+    if (!HEADER_NAME.test(name) || FORBIDDEN_HEADERS.has(lower)) throw new Error(`Invalid OTLP header name: ${name}`);
+    if (typeof headerValue !== 'string' || /[\r\n]/.test(headerValue)) throw new Error(`OTLP header ${name} must be a single-line string.`);
+    result[name] = headerValue;
   }
-  if (url.username || url.password) throw new Error('OTLP endpoint credentials are not allowed.');
-  return url;
+  result['content-type'] = 'application/json';
+  return result;
 }
 
 function retryTime(now, attempts, baseDelayMs, maxDelayMs) {
@@ -18,7 +41,12 @@ function retryTime(now, attempts, baseDelayMs, maxDelayMs) {
 
 async function flushOutbox(store, options = {}) {
   if (!store || typeof store.pendingOutbox !== 'function') throw new TypeError('A Workbench observability store is required.');
-  const endpoint = assertLoopbackUrl(options.endpoint || 'http://127.0.0.1:14318/v1/logs');
+  if (options.enabled === false) {
+    return { selected: 0, delivered: 0, failed: 0, exhausted: 0, disabled: true };
+  }
+  const endpoint = assertOtlpUrl(options.endpoint || 'http://127.0.0.1:14318/v1/logs', {
+    allowRemote: options.allowRemote === true,
+  });
   const send = options.fetch || globalThis.fetch;
   if (typeof send !== 'function') throw new TypeError('A fetch implementation is required.');
   const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
@@ -27,13 +55,15 @@ async function flushOutbox(store, options = {}) {
   const maxDelayMs = Math.max(baseDelayMs, Number(options.maxDelayMs) || 60_000);
   const rows = store.pendingOutbox({ limit: options.limit || 100, at: now.toISOString() });
   const result = { selected: rows.length, delivered: 0, failed: 0, exhausted: 0 };
+  const headers = requestHeaders(options.headers);
 
   for (const row of rows) {
     try {
       const response = await send(endpoint, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: row.payload_json,
+        redirect: 'error',
         signal: options.signal,
       });
       if (response.ok) {
@@ -77,6 +107,7 @@ function createOutboxDrainer(store, options = {}) {
 
 module.exports = {
   assertLoopbackUrl,
+  assertOtlpUrl,
   createOutboxDrainer,
   flushOutbox,
 };

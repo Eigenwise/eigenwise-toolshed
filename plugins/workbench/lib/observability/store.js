@@ -163,6 +163,7 @@ function openObservabilityStore(databaseFile, options = {}) {
 
   const now = options.now || (() => new Date());
   const createId = options.randomUUID || randomUUID;
+  const outboxEnabled = options.outboxEnabled !== false;
   const database = new DatabaseSync(databaseFile, { timeout: options.busyTimeoutMs || 5000 });
   database.exec(`PRAGMA busy_timeout=${Number(options.busyTimeoutMs || 5000)}`);
   database.exec('PRAGMA journal_mode=WAL');
@@ -231,9 +232,11 @@ function openObservabilityStore(databaseFile, options = {}) {
       );
     }
     statements.insertDedupe.run(observation.source, observation.source_event_id, observation.event_id, fingerprint);
-    const payloadJson = stableStringify(buildOtlpPayload(observation, measurements, links));
-    const createdAt = isoNow(now);
-    statements.insertOutbox.run(observation.event_id, payloadJson, digest(payloadJson), createdAt, createdAt);
+    if (outboxEnabled) {
+      const payloadJson = stableStringify(buildOtlpPayload(observation, measurements, links));
+      const createdAt = isoNow(now);
+      statements.insertOutbox.run(observation.event_id, payloadJson, digest(payloadJson), createdAt, createdAt);
+    }
     return observation.event_id;
   }
 

@@ -7,14 +7,24 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { writeCollectorConfig } = require('./install-otel-collector.js');
+const grafanaLgtm = require('../observability/sinks/grafana/index.js');
+const {
+  DEFAULT_SINK,
+  SINK_IDS,
+  defaultConfigPath,
+  normalizeObservabilityConfig,
+  readObservabilityConfig,
+  resolveSink,
+  setupSink,
+  writeObservabilityConfig,
+} = require('../observability/sinks/index.js');
 
 const MIN_CLAUDE_VERSION = '2.1.212';
 const COLLECTOR_VERSION = '0.120.0';
-const LGTM_IMAGE = 'grafana/otel-lgtm:0.11.0';
+const LGTM_IMAGE = grafanaLgtm.IMAGE;
 const LOOPBACK = '127.0.0.1';
 const OBSERVER_PORT = 14319;
 const COLLECTOR_PORT = 4318;
-const LGTM_PORT = 14318;
 const STATUSLINE_MARKER = 'workbench-statusline.js';
 const OBSERVABILITY_ENV = Object.freeze({
   CLAUDE_CODE_ENABLE_TELEMETRY: '1',
@@ -151,12 +161,13 @@ async function downloadCollector(options) {
   return resolveCollectorBinary(dataDir, options.environment);
 }
 
-function ensureCollectorConfig(dataDir) {
+function ensureCollectorConfig(dataDir, sink) {
   const configPath = path.join(dataDir, 'otel-collector-config.yaml');
   writeCollectorConfig(configPath, {
     receiverEndpoint: `${LOOPBACK}:${COLLECTOR_PORT}`,
     observerEndpoint: `http://${LOOPBACK}:${OBSERVER_PORT}`,
     queueDirectory: path.join(dataDir, 'collector-queue'),
+    sinkExporter: sink.collectorExporter,
   });
   return configPath;
 }
@@ -168,37 +179,13 @@ function verifyCommand(command, args, spawn = spawnSync) {
 }
 
 function startLgtm(dataDir, options = {}) {
-  const docker = options.docker || 'docker';
-  const spawn = options.spawnSync || spawnSync;
-  const container = 'workbench-otel-lgtm-demo';
-  const grafanaSinkDir = path.resolve(__dirname, '..', 'observability', 'sinks', 'grafana');
-  const grafanaProvisioningDir = path.join(grafanaSinkDir, 'provisioning');
-  const grafanaDashboardsDir = path.join(grafanaSinkDir, 'dashboards');
-  const grafanaProvisioningTarget = '/otel-lgtm/grafana/conf/provisioning/dashboards';
-  const grafanaDashboardsTarget = '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards';
-  const inspected = spawn(docker, ['inspect', '--format', '{{.State.Running}}', container], { encoding: 'utf8' });
-  if (inspected.status === 0 && String(inspected.stdout).trim() === 'true') return { image: LGTM_IMAGE, dataDir, container };
-  if (inspected.status === 0) {
-    const restarted = spawn(docker, ['start', container], { encoding: 'utf8' });
-    if (restarted.error || restarted.status !== 0) throw new Error('Docker could not resume the pinned loopback-only LGTM container.');
-    return { image: LGTM_IMAGE, dataDir, container };
-  }
-  const args = [
-    'run', '--detach', '--name', container, '--restart', 'unless-stopped',
-    '--publish', `${LOOPBACK}:3000:3000`, '--publish', `${LOOPBACK}:${LGTM_PORT}:4318`,
-    '--volume', 'workbench-lgtm-demo-data:/data',
-    '--volume', `${grafanaProvisioningDir}:${grafanaProvisioningTarget}:ro`,
-    '--volume', `${grafanaDashboardsDir}:${grafanaDashboardsTarget}:ro`,
-    LGTM_IMAGE,
-  ];
-  const result = spawn(docker, args, { encoding: 'utf8' });
-  if (result.error || result.status !== 0) throw new Error('Docker could not start the pinned loopback-only LGTM container.');
-  return { image: LGTM_IMAGE, dataDir, container };
+  return grafanaLgtm.setup({}, { ...options, dataDir });
 }
 
 function setupPlan(options = {}) {
   const dataDir = options.dataDir || defaultDataDir(options.environment);
   const projectDir = path.resolve(options.projectDir || process.cwd());
+  const sink = options.sink || (options.lgtm === true ? DEFAULT_SINK : null);
   return {
     dataDir,
     projectDir,
@@ -206,8 +193,38 @@ function setupPlan(options = {}) {
     databaseFile: path.join(dataDir, 'observability.db'),
     collectorConfig: path.join(dataDir, 'otel-collector-config.yaml'),
     collectorBinary: resolveCollectorBinary(dataDir, options.environment),
-    lgtm: options.lgtm === true,
+    observabilityConfig: defaultConfigPath(dataDir),
+    sink,
+    lgtm: sink === DEFAULT_SINK,
   };
+}
+
+function configuredSink(plan, options = {}) {
+  if (options.lgtm && options.sink && options.sink !== DEFAULT_SINK) {
+    throw new Error(`--lgtm cannot be combined with --sink ${options.sink}.`);
+  }
+  const fallback = options.sink || (options.lgtm ? DEFAULT_SINK : 'none');
+  const existing = options.config
+    ? normalizeObservabilityConfig(options.config, { defaultSink: fallback })
+    : readObservabilityConfig(plan.observabilityConfig, { defaultSink: fallback });
+  const sink = options.sink || (options.lgtm ? DEFAULT_SINK : existing.observability.sink);
+  const currentSettings = existing.observability.sinks[sink] || {};
+  const sinkSettings = { ...currentSettings, ...(options.sinkSettings || {}) };
+  if (options.sinkEndpoint !== undefined) {
+    if (sink !== 'otlp') throw new Error('--sink-endpoint is only valid with --sink otlp.');
+    sinkSettings.endpoint = options.sinkEndpoint;
+  }
+  return normalizeObservabilityConfig({
+    ...existing,
+    observability: {
+      ...existing.observability,
+      sink,
+      sinks: {
+        ...existing.observability.sinks,
+        [sink]: sinkSettings,
+      },
+    },
+  });
 }
 
 async function setupObservability(options = {}) {
@@ -216,14 +233,18 @@ async function setupObservability(options = {}) {
   if (options.check) return { ...plan, check: true };
   fs.mkdirSync(plan.dataDir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(plan.dataDir, 0o700); } catch { /* Windows ACLs inherit the current user. */ }
-  const collectorConfig = ensureCollectorConfig(plan.dataDir);
+  const config = configuredSink(plan, options);
+  const sinkRuntime = resolveSink(config);
+  writeObservabilityConfig(plan.observabilityConfig, config);
+  const collectorConfig = ensureCollectorConfig(plan.dataDir, sinkRuntime);
   const collectorBinary = fs.existsSync(plan.collectorBinary)
     ? plan.collectorBinary
     : await downloadCollector({ ...options, dataDir: plan.dataDir });
   verifyCommand(collectorBinary, ['--version'], options.spawnSync);
   const settings = applySettings(plan.projectDir, options);
-  const lgtm = plan.lgtm ? startLgtm(plan.dataDir, options) : null;
-  return { ...plan, collectorConfig, collectorBinary, settings, lgtm };
+  const sink = setupSink(config, { ...options, dataDir: plan.dataDir });
+  const lgtm = sink.id === DEFAULT_SINK ? sink.setup : null;
+  return { ...plan, collectorConfig, collectorBinary, settings, config, sink, lgtm };
 }
 
 function parseArgs(argv) {
@@ -231,9 +252,17 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--project' && argv[index + 1]) { options.projectDir = argv[++index]; continue; }
+    if (argument === '--sink' && argv[index + 1]) { options.sink = argv[++index]; continue; }
+    if (argument === '--sink-endpoint' && argv[index + 1]) { options.sinkEndpoint = argv[++index]; continue; }
     if (argument === '--lgtm') { options.lgtm = true; continue; }
     if (argument === '--check') { options.check = true; continue; }
     throw new Error(`Unknown or incomplete argument: ${argument}`);
+  }
+  if (options.sink && !SINK_IDS.includes(options.sink)) {
+    throw new Error(`Unknown observability sink ${JSON.stringify(options.sink)}; expected one of ${SINK_IDS.join(', ')}.`);
+  }
+  if (options.lgtm && options.sink && options.sink !== DEFAULT_SINK) {
+    throw new Error(`--lgtm cannot be combined with --sink ${options.sink}.`);
   }
   return options;
 }
@@ -250,8 +279,9 @@ async function main() {
     return;
   }
   process.stdout.write(`Observability is prepared in ${result.dataDir}.\n`);
+  process.stdout.write(`Downstream sink: ${result.sink.id}.\n`);
   process.stdout.write(verificationGuidance());
-  if (result.lgtm) process.stdout.write('LGTM is available at http://127.0.0.1:3000.\n');
+  if (result.sink.visualization) process.stdout.write(`Grafana is available at ${result.sink.visualization.url}.\n`);
 }
 
 if (require.main === module) main().catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
@@ -264,6 +294,7 @@ module.exports = {
   applySettings,
   collectorArchiveUrl,
   compareVersions,
+  configuredSink,
   defaultDataDir,
   downloadCollector,
   mergeObservabilitySettings,
