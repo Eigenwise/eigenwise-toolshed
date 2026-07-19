@@ -1,5 +1,5 @@
 {
-  "description": "workbench: report local freshness health and block proven stale prompts",
+  "description": "workbench: report local freshness health, block proven stale prompts, and capture metadata-only lifecycle observations",
   "hooks": {
     "SessionStart": [
       {
@@ -11,6 +11,26 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
+            "timeout": 3
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -20,6 +40,61 @@
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-freshness.js\"",
             "timeout": 2
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
+            "timeout": 3
           }
         ]
       }
