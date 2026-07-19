@@ -11,6 +11,7 @@ const {
   REQUIRED_PROCESSOR_ORDER,
   buildCollectorConfig,
   renderCollectorYaml,
+  toYaml,
   validateCollectorConfig,
   writeCollectorConfig,
 } = require('../bin/install-otel-collector.js');
@@ -20,6 +21,8 @@ test('the default collector config is valid, loopback-only, and commits to the o
   assert.deepEqual(validateCollectorConfig(config), []);
   assert.equal(config.receivers.otlp.protocols.http.endpoint, '127.0.0.1:4318');
   assert.equal(config.exporters['otlphttp/observer'].endpoint, 'http://127.0.0.1:14319');
+  assert.equal(config.exporters['otlphttp/observer'].encoding, 'json');
+  assert.equal(config.exporters['otlphttp/observer'].compression, 'none');
   assert.equal(config.exporters['otlphttp/observer'].sending_queue.storage, 'file_storage/observer_queue');
   for (const signal of ['logs', 'traces', 'metrics']) {
     assert.deepEqual(config.service.pipelines[signal].processors, REQUIRED_PROCESSOR_ORDER);
@@ -31,6 +34,16 @@ test('validation rejects a non-loopback exporter endpoint', () => {
   config.exporters['otlphttp/observer'].endpoint = 'http://10.0.0.5:4318';
   const errors = validateCollectorConfig(config);
   assert.ok(errors.some((e) => e.includes('loopback')));
+});
+
+test('validation requires the observer-compatible OTLP transport', () => {
+  const protobuf = buildCollectorConfig();
+  protobuf.exporters['otlphttp/observer'].encoding = 'proto';
+  assert.ok(validateCollectorConfig(protobuf).some((e) => e.includes('encoding must be json')));
+
+  const compressed = buildCollectorConfig();
+  compressed.exporters['otlphttp/observer'].compression = 'gzip';
+  assert.ok(validateCollectorConfig(compressed).some((e) => e.includes('compression must be none')));
 });
 
 test('validation rejects a reordered pipeline and a debug exporter', () => {
@@ -65,10 +78,22 @@ test('the redaction processor deletes content-bearing attributes for every signa
   assert.ok(config.processors['transform/redact'].metric_statements);
 });
 
+test('toYaml aligns object-array fields as a YAML block sequence', () => {
+  assert.equal(toYaml({
+    statements: [{ context: 'log', statements: ['delete(attributes["body"])'] }],
+  }), [
+    'statements:',
+    '  - context: "log"',
+    '    statements: ["delete(attributes[\\"body\\"])\"]',
+  ].join('\n'));
+});
+
 test('renderCollectorYaml emits parseable-looking YAML with the right markers and no debug exporter', () => {
   const yaml = renderCollectorYaml();
   assert.ok(yaml.includes('endpoint: "127.0.0.1:4318"'));
   assert.ok(yaml.includes('otlphttp/observer:'));
+  assert.ok(yaml.includes('encoding: "json"'));
+  assert.ok(yaml.includes('compression: "none"'));
   assert.ok(yaml.includes('memory_limiter:'));
   assert.ok(yaml.includes('transform/redact:'));
   assert.ok(yaml.includes('file_storage/observer_queue:'));

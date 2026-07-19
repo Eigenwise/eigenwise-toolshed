@@ -1,12 +1,17 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
+const { buildCollectorConfig } = require('../bin/install-otel-collector.js');
 const { normalizeObservation } = require('../lib/observability/ingest.js');
 const { otlpToObservations, nanoToIso } = require('../lib/observability/otlp.js');
+const { openObservabilityStore } = require('../lib/observability/store.js');
 const { createObserver } = require('../bin/workbench-observer.js');
 
 const TRACE = '0123456789abcdef0123456789abcdef';
@@ -149,8 +154,9 @@ function post(port, pathname, body, contentType) {
 
 test('observer accepts OTLP JSON on /v1/logs and rejects protobuf with 415', async (t) => {
   const ingested = [];
+  let committed = true;
   const fakeStore = {
-    ingestBatch(observations) { ingested.push(...observations); return observations.map(() => ({ accepted: true, committed: true })); },
+    ingestBatch(observations) { ingested.push(...observations); return observations.map(() => ({ accepted: true, committed })); },
     queryView() { return [{}]; },
     close() {},
   };
@@ -163,9 +169,60 @@ test('observer accepts OTLP JSON on /v1/logs and rejects protobuf with 415', asy
     scopeLogs: [{ logRecords: [{ timeUnixNano: NANO, eventName: 'claude_code.api_request', attributes: attrs({ model: 'claude-opus-4-8', input_tokens: 10 }) }] }] }] };
   const ok = await post(port, '/v1/logs', logs);
   assert.equal(ok.status, 200);
-  assert.equal(JSON.parse(ok.body).committed, true);
+  assert.deepEqual(JSON.parse(ok.body), {});
   assert.equal(ingested.some((o) => o.event_name === 'claude_code.api_request'), true);
+
+  committed = false;
+  const uncommitted = await post(port, '/v1/logs', logs);
+  assert.equal(uncommitted.status, 503);
 
   const protobuf = await post(port, '/v1/traces', 'binarydata', 'application/x-protobuf');
   assert.equal(protobuf.status, 415);
+});
+
+test('Collector transport gets an OTLP acknowledgement after the observer commits', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-otlp-ack-'));
+  const store = openObservabilityStore(path.join(directory, 'ledger.db'));
+  const observer = createObserver({ port: 0, store, projectId: 'a'.repeat(64) });
+  t.after(async () => {
+    await observer.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const address = await observer.start();
+  const config = buildCollectorConfig({ observerEndpoint: `http://127.0.0.1:${address.port}` });
+  const exporter = config.exporters['otlphttp/observer'];
+
+  assert.equal(exporter.encoding, 'json');
+  assert.equal(exporter.compression, 'none');
+  const response = await fetch(`${exporter.endpoint}/v1/logs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      resourceLogs: [{
+        resource: { attributes: attrs({ 'session.id': 'session-e2e' }) },
+        scopeLogs: [{
+          logRecords: [{
+            timeUnixNano: NANO,
+            body: { stringValue: 'REAL USER CONTENT MUST NOT PERSIST' },
+            attributes: attrs({
+              'event.name': 'claude_code.api_request',
+              model: 'claude-opus-4-8',
+              status: 'ok',
+              input_tokens: 10,
+            }),
+          }],
+        }],
+      }],
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {});
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'claude_code.api_request'").get().count, 1);
+  const persisted = JSON.stringify({
+    observations: store.database.prepare('SELECT * FROM observation').all(),
+    outbox: store.database.prepare('SELECT payload_json FROM otlp_outbox').all(),
+  });
+  assert.equal(persisted.includes('REAL USER CONTENT'), false);
 });
