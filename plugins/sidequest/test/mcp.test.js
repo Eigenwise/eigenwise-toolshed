@@ -147,10 +147,41 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
       total + (key === 'description' && typeof entry === 'string' ? Buffer.byteLength(entry) : descriptionBytes(entry)), 0);
   };
   const total = descriptionBytes(tools);
-  assert.ok(total <= 6000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
+  assert.ok(total <= 5000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
+  const payload = JSON.stringify({ tools });
+  assert.ok(payload.length <= 15500, `tools/list payload is ${payload.length} bytes — trim schemas, don't raise the budget`);
   assert.match(tools.find((tool) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool) => tool.name === 'done').description, /actual model and effort/);
+});
+
+test('write acks and pulse stay lean: no body echoes, no lifecycle noise by default', () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-lean-shapes'), 'SQ lean shapes').slug;
+  const ticket = store.createTicket(project, {
+    title: 'lean wire shapes', complexity: 2, complexityWhy: 'exercise ack and pulse response shapes',
+  });
+
+  const body = 'A long durable handoff body that must never ride back in the ack.\n'.repeat(5);
+  const ack = callTool('comment', { project, ref: ticket.ref, body, by: 'shape-tester' });
+  assert.equal(ack.ok, true);
+  assert.ok(ack.commentId, 'ack carries the comment id');
+  assert.ok(ack.at, 'ack carries the timestamp');
+  assert.equal(ack.comment, undefined, 'ack must not echo the comment object');
+  assert.ok(!JSON.stringify(ack).includes('durable handoff body'), 'ack must not echo the body text');
+
+  const asked = callTool('ask', { project, ref: ticket.ref, body: 'question body, also never echoed', by: 'shape-tester' });
+  assert.equal(asked.ok, true);
+  assert.ok(asked.commentId && asked.comment === undefined, 'ask ack is id-only too');
+
+  store.prepareDispatch(project, ticket.ref, { sessionId: 'shape-session' });
+  const pulse = callTool('pulse', { project, ref: ticket.ref });
+  assert.ok(pulse.dispatch, 'pulse still reports dispatch state');
+  assert.ok(pulse.dispatch.state, 'slim dispatch keeps state');
+  for (const noisy of ['sessionId', 'preparedAt', 'launchedAt', 'boundAt', 'claimedAt', 'terminalAt', 'terminalSource', 'agentId']) {
+    assert.ok(!(noisy in pulse.dispatch), `slim pulse omits ${noisy}`);
+  }
+  const detailed = callTool('pulse', { project, ref: ticket.ref, detail: true });
+  assert.ok('preparedAt' in detailed.dispatch, 'detail:true restores the full dispatch lifecycle');
 });
 
 test('MCP commit and submit finish an isolated worktree without a PATH command', () => {
@@ -316,13 +347,13 @@ test('MCP dispatch records the runtime session and the Agent lifecycle binds it'
     tool_input: friendlyDispatch.spawn,
   });
   const agentName = launched.hookSpecificOutput.updatedInput.name;
-  let pulse = callTool('pulse', { ref: friendly.ref });
+  let pulse = callTool('pulse', { ref: friendly.ref, detail: true });
   assert.equal(pulse.dispatch.state, 'launched');
   assert.equal(pulse.dispatch.sessionId, MCP_SESSION_ID);
   assert.ok(pulse.dispatch.launchedAt);
 
   assert.equal(store.bindDispatchAgent(MCP_SESSION_ID, friendlyDispatch.agent, 'native-mcp-session-agent', agentName).ok, true);
-  pulse = callTool('pulse', { ref: friendly.ref });
+  pulse = callTool('pulse', { ref: friendly.ref, detail: true });
   assert.equal(pulse.dispatch.state, 'bound');
   assert.equal(pulse.dispatch.agentId, 'native-mcp-session-agent');
 });
@@ -584,8 +615,9 @@ test('claim -> comment -> done return compact acknowledgements', () => {
   assert.strictEqual(claim.status, 'doing');
 
   const note = callTool('comment', { ref, body: 'progress note from an MCP tool call' });
-  assert.deepStrictEqual(Object.keys(note).sort(), ['comment', 'ok', 'project', 'ref', 'status']);
-  assert.strictEqual(note.comment.source, 'mcp', 'MCP actions are tagged as background (not dashboard)');
+  assert.deepStrictEqual(Object.keys(note).sort(), ['at', 'commentId', 'ok', 'project', 'ref', 'status']);
+  const stored = store.getTicket(added.project, ref).comments.at(-1);
+  assert.strictEqual(stored.source, 'mcp', 'MCP actions are tagged as background (not dashboard)');
 
   const done = callTool('done', { ref, by: 'mcp-worker-1', model: ticket.model, effort: ticket.effort });
   assert.deepStrictEqual(Object.keys(done).sort(), ['ok', 'project', 'ref', 'status', 'workedBy']);

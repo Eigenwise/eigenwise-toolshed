@@ -195,7 +195,8 @@ function requireKnownModel(action, value) {
  *  content block. A thrown Error becomes an isError tool result the model reads.
  * ------------------------------------------------------------------ */
 
-const PROJECT_PROP = { type: 'string', description: 'Board; defaults to the current project.' };
+const PROJECT_PROP = { type: 'string', description: 'Board (default: current project).' };
+const MODEL_FILTER_PROP = { type: 'string', description: 'Filter by resolved model slug.' };
 
 const TOOL_DESCRIPTION_OVERRIDES = {
   claim: 'Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.',
@@ -333,17 +334,17 @@ function withoutCategories(payload) {
 const TOOLS = [
   {
     name: 'list',
-    description: 'List tickets on a board, PAGED so a large board never overflows the tool-result cap. Default rows are compact (no bodies or threads). Pass detail:true for full tickets. Returns tickets + total + returned + nextCursor. When nextCursor is non-null, call again with cursor set to it; limit:N sets an exact page size; all:true returns the whole column (may overflow on a big board).',
+    description: 'List tickets, paged; compact rows by default. Follow nextCursor until null; detail:true adds bodies + threads.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         status: { type: 'string', enum: ['todo', 'doing', 'done'] },
         archived: { type: 'boolean' },
-        detail: { type: 'boolean', description: 'Return full ticket bodies and comment threads. Omit for the compact default.' },
-        cursor: { type: 'string', description: 'Page cursor from a previous response\'s nextCursor. Omit for the first page.' },
-        limit: { type: 'integer', minimum: 0, description: 'Exact page size (max tickets per page). Omit for the automatic token-safe page.' },
-        all: { type: 'boolean', description: 'Return every matching ticket in one call, bypassing paging. Use only when you truly need the whole column — a big board can overflow the tool-result limit.' },
+        detail: { type: 'boolean', description: 'Full bodies and comment threads.' },
+        cursor: { type: 'string', description: 'nextCursor from the prior page.' },
+        limit: { type: 'integer', minimum: 0, description: 'Exact page size.' },
+        all: { type: 'boolean', description: 'Whole column in one call (can overflow).' },
       },
     },
     handler(args) {
@@ -362,19 +363,20 @@ const TOOLS = [
       });
       const out = Object.assign({ project: slug, projectName: meta.name }, withoutCategories(payload));
       if (payload.nextCursor) {
-        out.hint = `Page shows ${payload.returned} of ${payload.total} tickets. Fetch the next page with cursor:"${payload.nextCursor}"; keep following nextCursor until it is null. Or narrow with status/the ready tool, or pass all:true (may overflow on a big board).`;
+        out.hint = `Page ${payload.returned}/${payload.total}; continue with cursor:"${payload.nextCursor}" until nextCursor is null.`;
       }
       return out;
     },
   },
   {
     name: 'pulse',
-    description: 'One compact liveness read for a ticket: status, claim age, latest comment, dispatch state, and fail-soft scoped git activity.',
+    description: 'Compact liveness read: status, claim, latest comment, dispatch state, git activity.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         ref: { type: 'string', description: 'Ticket ref or id.' },
+        detail: { type: 'boolean', description: 'Include full dispatch lifecycle (timestamps, attempts, session).' },
       },
       required: ['ref'],
     },
@@ -382,7 +384,14 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const pulse = store.pulsePayload(slug, args.ref);
       if (!pulse) throw new Error(`pulse: no ticket "${args.ref}" in ${meta.name}`);
-      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(pulse));
+      const out = Object.assign({ project: slug, projectName: meta.name }, withoutCategories(pulse));
+      if (!args.detail && out.dispatch) {
+        const d = out.dispatch;
+        out.dispatch = { state: d.state, executor: d.executor, agentName: d.agentName, tokenPrefix: d.tokenPrefix, route: d.route, outcome: d.outcome };
+        if (d.recovery) out.dispatch.recovery = d.recovery;
+        if (Array.isArray(d.attempts) && d.attempts.length) out.dispatch.attempts = d.attempts.length;
+      }
+      return out;
     },
   },
   {
@@ -402,14 +411,14 @@ const TOOLS = [
   },
   {
     name: 'ready',
-    description: 'The workable set: unclaimed, unblocked, not-done tickets, partitioned into parallel-safe waves by declared file scope. Filter by resolved model or category ID. brief:true returns compact tickets — default to it for orchestration reads.',
+    description: 'Unclaimed, unblocked, not-done tickets in parallel-safe waves by file scope. Default to brief:true for orchestration reads.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
-        model: { type: 'string', description: 'Filter to a resolved Claude runtime or discovered Codex model slug.' },
+        model: MODEL_FILTER_PROP,
         category: { type: 'string', description: 'Filter to a category ID.' },
-        brief: { type: 'boolean', description: 'Compact tickets: ref/title/status/priority/complexity/categoryId/categoryName/model/effort/files/claim/blockedBy/submission, plus a comments count and awaitingReply. No bodies. Unclassified tickets have null category fields: read category_list, then update before dispatch.' },
+        brief: { type: 'boolean', description: 'Compact rows without bodies; null category fields mean classify before dispatch.' },
       },
     },
     handler(args) {
@@ -431,14 +440,14 @@ const TOOLS = [
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         status: { type: 'string', enum: store.VALID_STATUS },
         labels: { type: 'array', items: { type: 'string' } },
-        files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes) for parallel-wave planning.' },
-        anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Optional pre-scouted executor anchors, carried verbatim into the native task prompt.' },
-        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Optional exact verification command, carried verbatim into the native task prompt.' },
+        files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes).' },
+        anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
+        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Exact verify command, verbatim in the task prompt.' },
         story: { type: 'string', description: 'A story ref (US-n) to file this ticket into.' },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
-        why: { type: 'string', description: 'Motivation for the complexity score, against the actual task (min 20 chars).' },
+        why: { type: 'string', description: 'Motivation for the complexity score (min 20 chars).' },
         category: { type: 'string', description: 'Enabled category id from category_list.' },
-        unclassified: { type: 'boolean', description: 'Explicitly allow no category or legacy complexity. Classify with update before dispatch.' },
+        unclassified: { type: 'boolean', description: 'Allow filing without category or complexity.' },
       },
       required: ['title'],
     },
@@ -490,9 +499,9 @@ const TOOLS = [
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         status: { type: 'string', enum: store.VALID_STATUS },
         labels: { type: 'array', items: { type: 'string' } },
-        files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes) for parallel-wave planning.' },
-        anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Optional pre-scouted executor anchors, carried verbatim into the native task prompt.' },
-        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Optional exact verification command, carried verbatim into the native task prompt.' },
+        files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes).' },
+        anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
+        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Exact verify command, verbatim in the task prompt.' },
         story: { type: 'string' },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string' },
@@ -595,7 +604,7 @@ const TOOLS = [
   },
   {
     name: 'claim',
-    description: 'Atomically claim a ticket before working it (moves it to doing). Fails if gone/done/claimed. Category-routed work requires a prepared dispatch token and its exact executor. direct:true is an auditable inline bypass, only for intentional direct work. by must be a UNIQUE per-worker id. Pass effort (the executor\'s baked level) to be refused if it doesn\'t match the resolved route. Never work a ticket whose claim did not return ok:true.',
+    description: 'Atomically claim a ticket before working it; proceed only on ok:true. Routed work needs the dispatch token + exact executor; direct:true is the auditable inline bypass.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -603,9 +612,9 @@ const TOOLS = [
         project: PROJECT_PROP,
         by: { type: 'string', description: 'Unique per-worker id (e.g. claude-<8 hex>).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
-        executor: { type: 'string', description: 'Exact executor name from the ticket runtime; proves a Codex route uses its backend-specific generated executor.' },
-        token: { type: 'string', description: 'Dispatch nonce required for every category-routed executor claim.' },
-        direct: { type: 'boolean', description: 'Explicitly record a direct inline bypass of the ticket route. Do not use for routed executor work.' },
+        executor: { type: 'string', description: 'Exact executor name from the dispatch.' },
+        token: { type: 'string', description: 'Dispatch token (required for routed claims).' },
+        direct: { type: 'boolean', description: 'Auditable inline bypass of the route.' },
         force: { type: 'boolean', description: 'Steal a live claim only when certain.' },
         session: { type: 'string' },
       },
@@ -622,7 +631,7 @@ const TOOLS = [
   },
   {
     name: 'sweepClaims',
-    description: 'Release every claim older than the configured staleness TTL, add an audit comment, and leave fresh claims untouched.',
+    description: 'Release claims older than the staleness TTL (audited); fresh claims untouched.',
     inputSchema: {
       type: 'object',
       properties: { project: PROJECT_PROP },
@@ -742,7 +751,7 @@ const TOOLS = [
   },
   {
     name: 'submit',
-    description: 'Terminal repo-work step: validate a scoped committed range from an explicit worktree, park it for integration, release the claim, and optionally store evidence.',
+    description: 'Submit a verified scoped commit range for integration and release the claim.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -814,7 +823,7 @@ const TOOLS = [
   },
   {
     name: 'comment',
-    description: 'Add a durable cross-actor handoff: decisions, non-obvious constraints, recurring ruled-out approaches, integration risks, verification evidence, or concise findings. Do not post routine progress narration or self-logs. Does NOT pause — use ask for a question that needs the human.',
+    description: 'Add a durable handoff comment (decisions, constraints, risks, evidence); not progress narration. Use ask for human questions.',
     inputSchema: {
       type: 'object',
       properties: { ref: { type: 'string' }, project: PROJECT_PROP, body: { type: 'string' }, by: { type: 'string' } },
@@ -823,12 +832,12 @@ const TOOLS = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const res = store.addComment(slug, args.ref, { body: args.body, by: args.by || 'agent', kind: 'comment', source: 'mcp' });
-      return mutationAck(slug, res, res.ok ? { comment: res.comment } : null);
+      return mutationAck(slug, res, res.ok ? { commentId: res.comment.id, at: res.comment.at } : null);
     },
   },
   {
     name: 'ask',
-    description: 'Post a QUESTION to the human on a ticket — this means pause and wait for their dashboard reply, do not guess and continue. Poll comments for a source:"dashboard" reply.',
+    description: 'Post a QUESTION to the human, then pause and poll comments for their dashboard reply.',
     inputSchema: {
       type: 'object',
       properties: { ref: { type: 'string' }, project: PROJECT_PROP, body: { type: 'string' }, by: { type: 'string' } },
@@ -837,12 +846,12 @@ const TOOLS = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const res = store.addComment(slug, args.ref, { body: args.body, by: args.by || 'agent', kind: 'question', source: 'mcp' });
-      return mutationAck(slug, res, res.ok ? { comment: res.comment } : null);
+      return mutationAck(slug, res, res.ok ? { commentId: res.comment.id, at: res.comment.at } : null);
     },
   },
   {
     name: 'comments',
-    description: 'Read a ticket\'s full comment thread (read it BEFORE working the ticket — a prior agent may have left the context you need).',
+    description: 'Read a ticket\'s full comment thread BEFORE working it.',
     inputSchema: {
       type: 'object',
       properties: { ref: { type: 'string' }, project: PROJECT_PROP },
@@ -914,7 +923,7 @@ const TOOLS = [
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        sharedTree: { type: 'boolean', description: 'Escape hatch for a ticket that depends on uncommitted local state. Declared-file tickets otherwise run in isolated worktrees.' },
+        sharedTree: { type: 'boolean', description: 'Run in the shared tree instead of an isolated worktree.' },
       },
       required: ['ref'],
     },
@@ -954,7 +963,7 @@ const TOOLS = [
         project: PROJECT_PROP,
         prompt: { type: 'string', description: 'The bounded ticket-execution prompt augmented with stored anchors and verify command.' },
         session: { type: 'string' },
-        sharedTree: { type: 'boolean', description: 'Escape hatch for a ticket that depends on uncommitted local state. Declared-file tickets otherwise run in isolated worktrees.' },
+        sharedTree: { type: 'boolean', description: 'Run in the shared tree instead of an isolated worktree.' },
       },
       required: ['ref', 'prompt'],
     },
@@ -1013,7 +1022,7 @@ const TOOLS = [
   },
   {
     name: 'category_list',
-    description: 'List the categories a project uses to classify tickets, each marked as following the shared default, customized for this board, pinned, added here, or disabled here. Omitted project means the current project; pass global:true for the shared-default policy only.',
+    description: 'List the project\'s ticket categories with their shared/forked/pinned/disabled provenance.',
     inputSchema: { type: 'object', properties: { project: PROJECT_PROP, global: { type: 'boolean', description: 'Show global-only policy instead of the resolved project taxonomy.' } } },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
