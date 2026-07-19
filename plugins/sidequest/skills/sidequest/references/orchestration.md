@@ -50,6 +50,15 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   claim is a user-visible failure: surface it, do not try a third spawn, and do not pull substantial work
   inline by default. `SendMessage` is for new information such as a scope change or unblock, never a
   "wake up" poke.
+- **A 32 MB launch failure is not a retry.** When a dispatched native Agent dies before its first model
+  turn with `Request too large (max 32MB)`, it is a non-retryable 413 from the orchestrator's accumulated
+  images or attachments, not the ticket or briefing. Do not blindly redispatch or resume it: a fresh Agent
+  inherits the oversized parent request and fails the same way, while a resume only grows it. If it claimed
+  the ticket, run `release --status todo` first. It did no file work, so there is no worktree to salvage,
+  though the salvage rule above still governs any partial commit. Recover by running `/compact` in the
+  orchestrator's own session, which drops accumulated attachments, or use Esc twice to remove the turn that
+  added them, then redispatch once. If that fails too, start a new top-level session with only the concise
+  task and filesystem paths. Surface the failure after that one compact-and-redispatch attempt.
 - **Use steerable background execution by default.** Executors are background teammates, so `TaskOutput`
   cannot resolve their names (`No task found`) and polling is banned regardless. After spawning, end the
   turn. Its stop notification is the only wakeup. On the next natural wakeup, whether a stop notification,
