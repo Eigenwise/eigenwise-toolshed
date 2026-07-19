@@ -308,11 +308,22 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', () => 
   assert.equal(instant.spawn.subagent_type, instant.agent);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
   assert.equal(Object.hasOwn(instant, 'briefing'), false);
-  assert.match(instant.spawn.prompt, new RegExp(`--token ${instant.token}`));
+  assert.ok(Buffer.byteLength(instant.spawn.prompt) < 600, `dispatch stub is ${Buffer.byteLength(instant.spawn.prompt)} bytes`);
+  assert.match(instant.spawn.prompt, new RegExp(`briefing ${addedInstant.ref} --token ${instant.token}`));
+  assert.match(instant.spawn.prompt, /FIRST action:/);
   assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
-  assert.match(instant.spawn.prompt, /## This ticket/);
+  assert.doesNotMatch(instant.spawn.prompt, /## This ticket/);
   assert.doesNotMatch(instant.spawn.prompt, /You are a sidequest ticket executor/);
   assert.doesNotMatch(instant.spawn.prompt, /^---$/m);
+  const expectedBriefing = agentsync.withProjectIdentity(agentsync.renderTicketBriefing(
+    store.getTicket(slug, addedInstant.ref), instant.token,
+  ), PROJ);
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const printedBriefing = execFileSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token', instant.token, '--project', PROJ], {
+    encoding: 'utf8', windowsHide: true,
+    env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
+  });
+  assert.strictEqual(printedBriefing, expectedBriefing);
   assert.match(instant.guidance, /executor/);
   assert.equal(store.getTicket(slug, addedInstant.ref).dispatchExecutor, instant.agent);
 
@@ -321,7 +332,13 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', () => 
   assert.equal(adopted.agent, instant.agent);
   assert.notEqual(adopted.token, instant.token);
   assert.equal(Object.hasOwn(adopted, 'briefing'), false);
-  assert.match(adopted.spawn.prompt, new RegExp(`--token ${adopted.token}`));
+  assert.match(adopted.spawn.prompt, new RegExp(`briefing ${addedInstant.ref} --token ${adopted.token}`));
+  const staleBriefing = spawnSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token', instant.token, '--project', PROJ], {
+    encoding: 'utf8', windowsHide: true,
+    env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
+  });
+  assert.equal(staleBriefing.status, 1);
+  assert.match(staleBriefing.stderr, /dispatch token was refused/);
   assert.doesNotMatch(JSON.stringify(adopted), /ephemeral/);
 });
 
@@ -391,8 +408,9 @@ test('dispatch returns a complete Claude worktree spawn spec', () => {
     isolation: 'worktree',
     model: 'fable',
   });
-  assert.match(prompt, /## This ticket/);
+  assert.match(prompt, /briefing SQ-/);
   assert.match(prompt, /Dispatch board identity: --project/);
+  assert.doesNotMatch(prompt, /## This ticket/);
   assert.doesNotMatch(prompt, /You are a sidequest ticket executor/);
   assert.equal(dispatched.effort, 'xhigh');
   assert.equal(dispatched.projectPath, PROJ);

@@ -931,8 +931,7 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const prepared = store.prepareDispatch(slug, args.ref, { sessionId: requireDispatchSession() });
       const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
-      const ticketPrompt = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
-      const prompt = agentsync.withProjectIdentity(ticketPrompt, meta.path);
+      const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
       const agent = prepared.ticket.dispatchExecutor;
       return {

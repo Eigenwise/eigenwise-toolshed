@@ -82,11 +82,12 @@ current project; MCP takes a `project` field. After a schema-bumping release, re
 writes so an older server cannot write an old store shape.
 
 For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable executor,
-a complete `spawn` object, and a token. Pass every supplied `spawn` field to
-Agent unchanged, including Sidequest's short `description`; do not paraphrase the card label. Claude
-routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the
-backend, while the supplied description includes the resolved route label. A session adopting work runs
-`dispatch <ref>` again to receive a fresh token and current spawn. Never trust a worker's self-report:
+a short `spawn` fetch stub, and a token. Pass every supplied `spawn` field to Agent unchanged, including
+Sidequest's short `description`; do not paraphrase the card label. The stub keeps the route marker inline and
+has the executor fetch its token-gated full briefing as its first action, so ticket context stays out of the
+orchestrator transcript. Claude routes pass the resolved `model`; Codex routes omit it so the generated executor's
+frontmatter pins the backend, while the supplied description includes the resolved route label. A session adopting
+work runs `dispatch <ref>` again to receive a fresh token and current spawn. Never trust a worker's self-report:
 the dispatch token and exact executor name on the claim are the evidence. Commands default to the current project
 (`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another board.
 
@@ -344,8 +345,9 @@ and fallback chain, documented in [references/routing-details.md](references/rou
    Model · effort`. Claude Code's native suffix is external metadata; the Sidequest route line and
    executor name are authoritative. **All routed work dispatches through the native Agent tool**
    (`exec.dispatch` is `native-agent` on every route). For a ticket, `dispatch <ref>` (CLI) or the
-   matching MCP tool is **instant by default**: it returns the stable per-model `agent`, a complete
-   `spawn` object with the ticket prompt, and the token-gated claim details. A category-routed executor
+   matching MCP tool is **instant by default**: it returns the stable per-model `agent`, a short
+   `spawn` fetch stub, and the token-gated claim details. The executor runs the stub's `briefing` command as
+   its first action; the command prints the full contract with fresh comments. A category-routed executor
    claim without that prepared token is refused, even when it supplies the expected executor and effort.
    Spawn that exact stable `agent` immediately from the returned `spawn` object. Another session adopts
    the ticket by dispatching it again for a fresh token and current spawn. Tickets with declared files

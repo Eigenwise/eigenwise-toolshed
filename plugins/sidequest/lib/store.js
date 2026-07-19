@@ -1827,6 +1827,16 @@ function prepareDispatch(slug, idOrRef, opts) {
   });
 }
 
+function readDispatchBriefing(slug, idOrRef, token) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket) return { ok: false, reason: 'not_found' };
+  const state = dispatchState(ticket);
+  if (!state || state.terminalAt || !ticket.dispatchNonce || token !== ticket.dispatchNonce) {
+    return { ok: false, reason: 'token' };
+  }
+  return { ok: true, ticket };
+}
+
 function recordDispatchLaunch(slug, idOrRef, opts) {
   opts = opts || {};
   const found = getTicket(slug, idOrRef);
@@ -3754,6 +3764,7 @@ module.exports = {
   deleteTicket,
   stableExecutorName,
   prepareDispatch,
+  readDispatchBriefing,
   isSupersededDispatchToken,
   recordDispatchLaunch,
   recoverDispatchQuotaFailure,

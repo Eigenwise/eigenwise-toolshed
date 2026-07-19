@@ -1407,13 +1407,7 @@ function cmdDispatch(opts, positional) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
   const isolation = agentsync.ticketIsolation(prepared.ticket, !!opts['shared-tree']);
-  let ticketPrompt;
-  try {
-    ticketPrompt = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
-  } catch (err) {
-    fail(`dispatch: ${(err && err.message) || err}`);
-  }
-  const prompt = agentsync.withProjectIdentity(ticketPrompt, meta.path);
+  const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
   const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
   const agent = prepared.ticket.dispatchExecutor;
   const spawn = agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt);
@@ -1433,6 +1427,16 @@ function cmdDispatch(opts, positional) {
       ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
       : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}.`,
   }, null, 2) + '\n');
+}
+
+function cmdBriefing(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('briefing: pass a ticket ref, e.g. sidequest briefing SQ-12 --token <token>.');
+  if (!opts.token) fail('briefing: pass the current dispatch token with --token.');
+  const { slug, meta } = resolveProject(opts);
+  const result = store.readDispatchBriefing(slug, idOrRef, opts.token);
+  if (!result.ok) fail(`briefing: ${result.reason === 'not_found' ? `no ticket "${idOrRef}".` : 'dispatch token was refused; re-run dispatch for a current spawn.'}`);
+  process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token), meta.path));
 }
 
 function cmdNativeAgent(opts, positional) {
@@ -2008,6 +2012,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
 
 Native Agent dispatch (routed work stays in this conversation):
   sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: declared-file tickets run in worktrees by default; --shared-tree is only for uncommitted-state dependencies
+  sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]  print the current token-gated executor briefing
   sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]  return an already-registered native Agent spawn spec + bounded prompt
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
@@ -2205,6 +2210,9 @@ async function main() {
       break;
     case 'dispatch':
       cmdDispatch(opts, positional);
+      break;
+    case 'briefing':
+      cmdBriefing(opts, positional);
       break;
     case 'native-agent':
     case 'native_agent':

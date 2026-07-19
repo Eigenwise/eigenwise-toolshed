@@ -319,6 +319,35 @@ function withProjectIdentity(prompt, projectPath) {
   return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
 }
 
+function quotedShellArgument(value) {
+  return `"${String(value || '').replace(/"/g, '\\"')}"`;
+}
+
+function renderDispatchStub(ticket, nonce, projectPath) {
+  const briefing = renderTicketBriefing(ticket, nonce);
+  const project = String(projectPath || '').trim();
+  if (!project) throw new Error('Dispatch board project path is required.');
+  const marker = briefing.match(/^\[sidequest-route [^\n]+\]$/m)?.[0];
+  const command = [
+    'node',
+    quotedShellArgument(path.join(__dirname, '..', 'bin', 'sidequest.js')),
+    'briefing',
+    String(ticket.ref),
+    '--token',
+    String(nonce).trim(),
+    '--project',
+    quotedShellArgument(project),
+  ].join(' ');
+  return [
+    ...(marker ? [marker, ''] : []),
+    `Prepared Sidequest executor: ${ticket.dispatchExecutor}.`,
+    `Ticket: ${ticket.ref}.`,
+    `Dispatch board identity: --project ${quotedShellArgument(project)}.`,
+    '',
+    `FIRST action: run \`${command}\` and execute exactly what it prints.`,
+  ].join('\n');
+}
+
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
 
 function spawnDescription(ticket, resolved) {
@@ -514,6 +543,7 @@ module.exports = {
   nativeAgentName,
   nativeAgentSource,
   withProjectIdentity,
+  renderDispatchStub,
   agentSpawn,
   spawnDescription,
   ticketIsolation,

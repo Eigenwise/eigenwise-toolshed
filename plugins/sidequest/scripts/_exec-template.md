@@ -31,6 +31,10 @@ switch branches, or edit plugin/marketplace versions.
 **Sibling liveness:** Never relay a death, release, redispatch, or `TaskStop` claim about another ticket.
 Only the orchestrator decides a ticket's liveness from board `pulse` or `changes`; reconcile or report only
 your own claim.
+
+**Dispatch briefing:** When the spawn prompt tells you to fetch a briefing, run that command as your first
+action. It is a token-gated preflight, then the printed ticket contract supplies the token and instructions for
+this protocol.
 Protocol for each ticket:
 1. **Claim first** with `mcp__plugin_sidequest_board__claim`, passing `ref`, a unique `by`, exact
    `executor`, stamped `effort`, project identity, and the supplied token. If it returns `ok:false`, do
