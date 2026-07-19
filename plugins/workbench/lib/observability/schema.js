@@ -326,6 +326,9 @@ const EVENT_ATTRIBUTES = Object.freeze({
   'gateway.tool_result.usage': [
     'model', 'requested_model', 'backend', 'effort', 'via', 'agent_role', 'tool_name',
   ],
+  'gateway.mcp.footprint': [
+    'mcp_server', 'model', 'requested_model', 'backend', 'effort', 'via', 'agent_role',
+  ],
   'gateway.limit.signal': [
     'model', 'requested_model', 'backend', 'effort', 'via', 'status', 'status_code',
     'agent_role', 'request_id_source', 'response_mode',

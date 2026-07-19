@@ -285,3 +285,65 @@ test('gateway tool-result usage records land with their declared quality and no 
   }
   assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
 });
+
+test('gateway mcp-footprint records keep their server label and drop nothing', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-footprint-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'));
+  const receiver = await startFakeOtlpReceiver();
+  const observer = createObserver({
+    port: 0,
+    store,
+    projectId: PROJECT_ID,
+    hookSpoolFile: path.join(directory, 'hook-spool.jsonl'),
+    sink: testSink(receiver.endpoint),
+  });
+  const address = await observer.start();
+  t.after(async () => {
+    await observer.close();
+    await receiver.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const footprintRecord = (server, tokens) => ({
+    eventName: 'gateway.mcp.footprint',
+    observedAt: new Date('2026-07-19T20:00:03.000Z'),
+    attributes: {
+      source: 'codex_gateway',
+      source_event_id: `gateway-mcp-footprint-${server}`,
+      source_schema: 'gateway-usage-v1',
+      'event.name': 'gateway.mcp.footprint',
+      event_name: 'gateway.mcp.footprint',
+      request_id: 'request-gateway',
+      session_id: 'session-gateway',
+      agent_id: 'agent-gateway',
+      agent_role: 'orchestrator',
+      model: 'claude-opus-4-8',
+      requested_model: 'claude-codex-auto',
+      backend: 'anthropic',
+      effort: 'max',
+      via: 'dispatch',
+      mcp_server: server,
+      input_mcp_tools_tokens: tokens,
+    },
+  });
+
+  for (const [server, tokens] of [['plugin_sidequest_board', 1800], ['plugin_playwright_playwright', 1650]]) {
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(buildOtlpLogPayload(footprintRecord(server, tokens))),
+    });
+    assert.equal(response.status, 200);
+  }
+
+  const rows = store.database.prepare(
+    "SELECT attributes_json, m.value FROM observation o JOIN measurement m ON m.event_id = o.event_id WHERE o.event_name = 'gateway.mcp.footprint' AND m.name = 'input_mcp_tools_tokens'",
+  ).all();
+  assert.equal(rows.length, 2);
+  const byServer = {};
+  for (const row of rows) byServer[JSON.parse(row.attributes_json).mcp_server] = row.value;
+  assert.equal(byServer.plugin_sidequest_board, 1800);
+  assert.equal(byServer.plugin_playwright_playwright, 1650);
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
+});
