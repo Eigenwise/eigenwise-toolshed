@@ -67,6 +67,21 @@ function extractDispatchToken(prompt) {
   return match ? match[1] : null;
 }
 
+function dispatchLaunches(prompt) {
+  if (typeof prompt !== 'string' || !prompt) return [];
+  const headings = [...prompt.matchAll(/^Ref:\s*(SQ-\d+)\s*$/gim)];
+  const launches = headings.map((match, index) => {
+    const section = prompt.slice(match.index, headings[index + 1] ? headings[index + 1].index : prompt.length);
+    return { ref: match[1].toUpperCase(), token: extractDispatchToken(section) };
+  }).filter((launch) => launch.token);
+  if (launches.length) return launches;
+
+  const refs = extractRefs(prompt);
+  const tokens = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)].map((match) => match[1]);
+  if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] }));
+  return refs.length === 1 && tokens.length === 1 ? [{ ref: refs[0], token: tokens[0] }] : [];
+}
+
 function dispatchAgentName(input) {
   const toolInput = input && input.tool_input;
   const refs = extractRefs(toolInput && toolInput.prompt);
@@ -78,21 +93,22 @@ function dispatchAgentName(input) {
 function recordAuthoritativeLaunch(input, type, agentName) {
   const toolInput = input && input.tool_input;
   const prompt = toolInput && toolInput.prompt;
-  const refs = extractRefs(prompt);
-  const token = extractDispatchToken(prompt);
+  const launches = dispatchLaunches(prompt);
   const projectArg = extractProjectArg(prompt) || input.cwd || process.env.CLAUDE_PROJECT_DIR;
   const sessionId = input.session_id || input.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID;
-  if (refs.length !== 1 || !token || !projectArg || !sessionId) return;
+  if (!launches.length || !projectArg || !sessionId) return;
   try {
     const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
     const found = store.findProject(projectArg);
     if (!found.ok) return;
-    store.recordDispatchLaunch(found.slug, refs[0], {
-      token,
-      executor: type,
-      sessionId,
-      agentName: agentName || toolInput.name,
-    });
+    for (const launch of launches) {
+      store.recordDispatchLaunch(found.slug, launch.ref, {
+        token: launch.token,
+        executor: type,
+        sessionId,
+        agentName: agentName || toolInput.name,
+      });
+    }
   } catch (_) {
     // A launch ledger must never block the Agent call.
   }

@@ -1667,6 +1667,21 @@ function dispatchState(ticket) {
   return ticket && ticket.dispatch && typeof ticket.dispatch === 'object' ? ticket.dispatch : null;
 }
 
+function stampDispatchEvent(ticket, source, now) {
+  ticket.lastEventType = 'dispatch';
+  ticket.lastEventSource = source || 'store';
+  ticket.updatedAt = now || new Date().toISOString();
+}
+
+function pulseDispatchState(state) {
+  if (!state) return null;
+  if (state.terminalAt) return state.outcome || 'terminal';
+  if (state.claimedAt) return 'claimed';
+  if (state.boundAt) return 'bound';
+  if (state.launchedAt) return 'launched';
+  return state.outcome || 'prepared';
+}
+
 function terminalDispatchTarget(agentName) {
   const target = String(agentName || '').trim();
   if (!target) return null;
@@ -1711,11 +1726,12 @@ function prepareDispatch(slug, idOrRef, opts) {
       executor: t.dispatchExecutor,
       preparedAt: now,
       launchedAt: null,
+      boundAt: null,
       claimedAt: null,
       terminalAt: null,
       outcome: 'prepared',
     };
-    t.updatedAt = now;
+    stampDispatchEvent(t, 'dispatch', now);
     putTicket(slug, t);
     return { ok: true, ticket: t, token: t.dispatchNonce, ephemeral: !!opts.ephemeral };
   });
@@ -1737,7 +1753,7 @@ function recordDispatchLaunch(slug, idOrRef, opts) {
     state.agentName = opts.agentName ? String(opts.agentName) : state.agentName || null;
     state.launchedAt = state.launchedAt || now;
     state.outcome = 'launched';
-    t.updatedAt = now;
+    stampDispatchEvent(t, opts.source || 'dispatch', now);
     putTicket(slug, t);
     return { ok: true, ticket: t };
   });
@@ -1755,19 +1771,29 @@ function bindDispatchAgent(sessionId, executor, agentId, agentName) {
       matches.push({ slug: project.slug, id: ticket.id });
     }
   }
-  if (matches.length !== 1) return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
-  return withTicketLock(matches[0].slug, matches[0].id, () => {
-    const t = getTicket(matches[0].slug, matches[0].id);
-    const state = dispatchState(t);
-    if (!state || state.outcome !== 'launched' || state.sessionId !== String(sessionId) || state.executor !== String(executor)) {
-      return { ok: false, reason: 'not_found' };
-    }
-    state.agentId = String(agentId);
-    state.agentName = agentName ? String(agentName) : state.agentName || null;
-    t.updatedAt = new Date().toISOString();
-    putTicket(matches[0].slug, t);
-    return { ok: true, ticket: t };
-  });
+  if (!matches.length || (matches.length > 1 && !agentName)) {
+    return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
+  }
+  const tickets = [];
+  for (const match of matches) {
+    const result = withTicketLock(match.slug, match.id, () => {
+      const t = getTicket(match.slug, match.id);
+      const state = dispatchState(t);
+      if (!state || state.outcome !== 'launched' || state.sessionId !== String(sessionId) || state.executor !== String(executor)) {
+        return { ok: false };
+      }
+      const now = new Date().toISOString();
+      state.agentId = String(agentId);
+      state.agentName = agentName ? String(agentName) : state.agentName || null;
+      state.boundAt = state.boundAt || now;
+      stampDispatchEvent(t, 'subagent-start', now);
+      putTicket(match.slug, t);
+      return { ok: true, ticket: t };
+    });
+    if (!result || !result.ok) return { ok: false, reason: 'not_found' };
+    tickets.push(result.ticket);
+  }
+  return { ok: true, ticket: tickets[0], tickets };
 }
 
 function markDispatchStopped(sessionId, executor, agentId, agentName) {
@@ -1784,24 +1810,33 @@ function markDispatchStopped(sessionId, executor, agentId, agentName) {
       }
     }
   }
-  if (matches.length !== 1) return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
-  return withTicketLock(matches[0].slug, matches[0].id, () => {
-    const t = getTicket(matches[0].slug, matches[0].id);
-    const state = dispatchState(t);
-    if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor)) {
-      return { ok: false, reason: 'not_found' };
-    }
-    if (agentId) state.agentId = String(agentId);
-    if (agentName) state.agentName = String(agentName);
-    setDispatchTerminal(t, t.claim && t.claim.by ? 'stopped_claimed' : 'failed', 'subagent-stop');
-    if (!t.claim || !t.claim.by) {
-      t.dispatchNonce = null;
-      t.dispatchExecutor = null;
-    }
-    t.updatedAt = new Date().toISOString();
-    putTicket(matches[0].slug, t);
-    return { ok: true, ticket: t };
-  });
+  if (!matches.length || (matches.length > 1 && !agentName)) {
+    return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
+  }
+  const tickets = [];
+  for (const match of matches) {
+    const result = withTicketLock(match.slug, match.id, () => {
+      const t = getTicket(match.slug, match.id);
+      const state = dispatchState(t);
+      if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor)) {
+        return { ok: false, reason: 'not_found' };
+      }
+      const now = new Date().toISOString();
+      if (agentId) state.agentId = String(agentId);
+      if (agentName) state.agentName = String(agentName);
+      setDispatchTerminal(t, t.claim && t.claim.by ? 'stopped_claimed' : 'failed', 'subagent-stop');
+      if (!t.claim || !t.claim.by) {
+        t.dispatchNonce = null;
+        t.dispatchExecutor = null;
+      }
+      stampDispatchEvent(t, 'subagent-stop', now);
+      putTicket(match.slug, t);
+      return { ok: true, ticket: t };
+    });
+    if (!result || !result.ok) return { ok: false, reason: 'not_found' };
+    tickets.push(result.ticket);
+  }
+  return { ok: true, ticket: tickets[0], tickets };
 }
 
 function reconcileLaunchedDispatches(sessionId, opts) {
@@ -1821,7 +1856,7 @@ function reconcileLaunchedDispatches(sessionId, opts) {
         setDispatchTerminal(t, 'failed', source);
         t.dispatchNonce = null;
         t.dispatchExecutor = null;
-        t.updatedAt = new Date().toISOString();
+        stampDispatchEvent(t, source);
         putTicket(project.slug, t);
         return { ok: true, ticket: t };
       });
@@ -1880,9 +1915,12 @@ function claimTicket(slug, idOrRef, by, opts) {
       state.outcome = 'claimed';
     }
     if (opts.status !== false) t.status = coerceStatus(opts.status || 'doing', t.status);
-    t.lastEventType = 'status';
-    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
-    t.updatedAt = new Date().toISOString();
+    if (state) stampDispatchEvent(t, opts.source || 'cli', now);
+    else {
+      t.lastEventType = 'status';
+      t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+      t.updatedAt = now;
+    }
     putTicket(slug, t);
     // Tie this claim to the worker's session so a SessionEnd/SubagentStop hook can
     // release it immediately instead of waiting out the TTL. No-op without a session id.
@@ -1934,6 +1972,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     }
     const now = new Date().toISOString();
     let comment = null;
+    const dispatch = dispatchState(t);
     t.claim = null;
     setDispatchTerminal(t, opts.status === 'done' ? 'done' : 'released', opts.source || 'cli');
     t.dispatchNonce = null;
@@ -1962,9 +2001,12 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (t.status === 'done' && pendingSubmission(t)) {
       t.submission = Object.assign({}, t.submission, { integratedAt: new Date().toISOString() });
     }
-    t.lastEventType = 'status';
-    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
-    t.updatedAt = now;
+    if (dispatch) stampDispatchEvent(t, opts.source || 'cli', now);
+    else {
+      t.lastEventType = 'status';
+      t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+      t.updatedAt = now;
+    }
     putTicket(slug, t);
     // Drop this claim from the session registry — it's no longer outstanding, so a
     // later reconcile of the same session won't try to touch it (keyed on the
@@ -2107,14 +2149,18 @@ function submitTicket(slug, idOrRef, by, opts) {
       worktree,
       integratedAt: null,
     }, range || {});
+    const dispatch = dispatchState(t);
     t.claim = null;
     setDispatchTerminal(t, 'submitted', opts.source || 'cli');
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     t.status = 'doing'; // ready-for-integration parks in doing, never done
-    t.lastEventType = 'status';
-    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
-    t.updatedAt = new Date().toISOString();
+    if (dispatch) stampDispatchEvent(t, opts.source || 'cli');
+    else {
+      t.lastEventType = 'status';
+      t.lastEventSource = opts.source ? String(opts.source) : 'cli';
+      t.updatedAt = new Date().toISOString();
+    }
     putTicket(slug, t);
     if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
@@ -2763,35 +2809,55 @@ function gitPulse(projectPath, files) {
   }
 }
 
+function claimActivityPulse(ticket, git) {
+  const claim = ticket && ticket.claim;
+  if (!claim || !claim.by) return { working: false, lastActivityAt: null };
+  const activity = [claim.at];
+  for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
+    if (comment && comment.by === claim.by) activity.push(comment.at);
+  }
+  if (git && git.commit && git.commit.at) activity.push(git.commit.at);
+  const timestamps = activity
+    .filter((at) => Number.isFinite(Date.parse(at)))
+    .sort((a, b) => Date.parse(b) - Date.parse(a));
+  return { working: true, lastActivityAt: timestamps[0] || null };
+}
+
 function pulsePayload(slug, idOrRef) {
   const ticket = getTicket(slug, idOrRef);
   if (!ticket) return null;
   const meta = readMeta(slug);
+  const git = gitPulse(meta && meta.path, ticket.files);
+  const activity = claimActivityPulse(ticket, git);
+  const dispatch = dispatchState(ticket);
   return {
     ref: ticket.ref,
     title: ticket.title,
     status: ticket.status,
     direct: ticket.directClaim || null,
     claim: claimPulse(ticket.claim, Date.now()),
+    working: activity.working,
+    lastActivityAt: activity.lastActivityAt,
     comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
     lastComment: lastCommentPulse(ticket),
     dispatchExecutor: ticket.dispatchExecutor || null,
-    dispatchNonce: ticket.dispatchNonce || null,
-    dispatch: dispatchState(ticket) ? {
-      sessionId: dispatchState(ticket).sessionId || null,
-      tokenPrefix: dispatchState(ticket).tokenPrefix || null,
-      executor: dispatchState(ticket).executor || null,
-      agentId: dispatchState(ticket).agentId || null,
-      agentName: dispatchState(ticket).agentName || null,
-      preparedAt: dispatchState(ticket).preparedAt || null,
-      launchedAt: dispatchState(ticket).launchedAt || null,
-      claimedAt: dispatchState(ticket).claimedAt || null,
-      terminalAt: dispatchState(ticket).terminalAt || null,
-      terminalSource: dispatchState(ticket).terminalSource || null,
-      outcome: dispatchState(ticket).outcome || null,
+    dispatch: dispatch ? {
+      state: pulseDispatchState(dispatch),
+      sessionId: dispatch.sessionId || null,
+      tokenPrefix: dispatch.tokenPrefix || null,
+      executor: dispatch.executor || null,
+      agentId: dispatch.agentId || null,
+      agentName: dispatch.agentName || null,
+      preparedAt: dispatch.preparedAt || null,
+      launchedAt: dispatch.launchedAt || null,
+      boundAt: dispatch.boundAt || null,
+      claimedAt: dispatch.claimedAt || null,
+      terminalAt: dispatch.terminalAt || null,
+      terminalSource: dispatch.terminalSource || null,
+      outcome: dispatch.outcome || null,
     } : null,
     submission: ticket.submission || null,
-    git: gitPulse(meta && meta.path, ticket.files),
+    git,
   };
 }
 
