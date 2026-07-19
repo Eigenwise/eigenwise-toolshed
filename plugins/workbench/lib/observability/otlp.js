@@ -3,8 +3,8 @@
 const { createHash } = require('node:crypto');
 const {
   ALLOWED_EVENTS,
-  ALLOWED_MEASUREMENTS,
   ALLOWED_SOURCES,
+  isAllowedMeasurementName,
   ATTRIBUTE_SPECS,
   EVENT_ATTRIBUTES,
 } = require('./schema.js');
@@ -96,7 +96,7 @@ function validAttribute(spec, value) {
 function measurementName(rawKey) {
   const normalized = normalizeKey(rawKey);
   return MEASUREMENT_ALIASES[rawKey] || MEASUREMENT_ALIASES[normalized]
-    || (ALLOWED_MEASUREMENTS.includes(normalized) ? normalized : null);
+    || (isAllowedMeasurementName(normalized) ? normalized : null);
 }
 
 function measurementUnit(name) {
@@ -152,7 +152,7 @@ function measurementsFrom(flat, scope, eventName = null) {
   const seen = new Set();
   for (const [rawKey, value] of Object.entries(flat)) {
     const name = measurementName(rawKey);
-    if (!name || !ALLOWED_MEASUREMENTS.includes(name)) continue;
+    if (!name || !isAllowedMeasurementName(name)) continue;
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue;
     if (seen.has(name)) continue;
     seen.add(name);

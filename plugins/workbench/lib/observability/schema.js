@@ -174,6 +174,14 @@ const ALLOWED_MEASUREMENTS = Object.freeze([
   'queue_capacity',
 ]);
 
+// The gateway emits one measurement per MCP server with a sanitized, bounded
+// name; a static list can't enumerate user-installed servers.
+const DYNAMIC_MEASUREMENT_NAME = /^input_mcp_tools_[a-z0-9_]{1,64}_tokens$/;
+
+function isAllowedMeasurementName(name) {
+  return ALLOWED_MEASUREMENTS.includes(name) || DYNAMIC_MEASUREMENT_NAME.test(String(name || ''));
+}
+
 const ALLOWED_UNITS = Object.freeze([
   'tokens',
   'ms',
@@ -447,6 +455,7 @@ module.exports = {
   LINK_QUALITIES,
   LINK_RELATIONS,
   LINK_TARGET_KINDS,
+  isAllowedMeasurementName,
   MEASUREMENT_QUALITIES,
   MEASUREMENT_SCOPES,
   RESOLVED_VIEWS,

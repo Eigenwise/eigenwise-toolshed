@@ -3,11 +3,11 @@
 const { randomUUID } = require('node:crypto');
 const {
   ALLOWED_EVENTS,
-  ALLOWED_MEASUREMENTS,
   ALLOWED_SOURCES,
   ALLOWED_UNITS,
   ATTRIBUTE_SPECS,
   EVENT_ATTRIBUTES,
+  isAllowedMeasurementName,
   LINK_METHODS,
   LINK_QUALITIES,
   LINK_RELATIONS,
@@ -150,7 +150,7 @@ function normalizeMeasurements(input, droppedFields, rejectedFields) {
     for (const field of ['name', 'unit', 'scope', 'quality']) {
       if (typeof measurement[field] !== 'string') addField(rejectedFields, `${prefix}.${field}`);
     }
-    if (!ALLOWED_MEASUREMENTS.includes(measurement.name)) addField(rejectedFields, `${prefix}.name`);
+    if (!isAllowedMeasurementName(measurement.name)) addField(rejectedFields, `${prefix}.name`);
     if (!ALLOWED_UNITS.includes(measurement.unit)) addField(rejectedFields, `${prefix}.unit`);
     if (!MEASUREMENT_SCOPES.includes(measurement.scope)) addField(rejectedFields, `${prefix}.scope`);
     if (!MEASUREMENT_QUALITIES.includes(measurement.quality)) addField(rejectedFields, `${prefix}.quality`);
