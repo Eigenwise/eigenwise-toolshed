@@ -41,7 +41,8 @@ splits at a reload boundary:
 6. **Wrap up** — commit reminder and what they got (Phase 5).
 
 Read `references/stack-plugins.md` and `references/rule-templates.md` before Phase 1; read
-`references/self-improvement.md` and `references/structure-notes.md` when you reach those steps.
+`references/self-improvement.md` and `references/structure-notes.md` when you reach those steps. Read
+`references/observability.md` when the user chooses local telemetry.
 
 ## Phase 0 — Assess
 
@@ -83,6 +84,8 @@ essays. Ask what you genuinely can't infer. A good compact set (adapt, don't rec
    default is project scope, local is only for an explicitly personal-per-repo choice, and user is
    only for an explicitly cross-project choice.
 6. **CLAUDE.md?** Do they want one seeded (you'll delegate to `/init`), or skip it?
+7. **Local telemetry?** Offer SQLite only, SQLite + optional loopback LGTM Docker viewer, or skip. Read
+   `references/observability.md` after they choose; do not ask for telemetry content settings, endpoints, or secrets.
 
 Use the `AskUserQuestion` tool for the choices with clear options (plugins, codebase-or-not,
 `CLAUDE.md` yes/no); ask the open ones (what is this, conventions) in plain text. If the user said
@@ -135,7 +138,13 @@ a reload, or claim the workspace setup completed after a partial install. After 
 merge the plan's non-plugin settings without replacing existing values, then continue with the other
 pre-reload artifacts.
 
-### 2b. Atomic live rules
+### 2b. Optional local telemetry
+
+If the user chose telemetry, follow `references/observability.md` now. Run its setup helper after the plugin
+installer succeeds and before any reload request. On a partial telemetry failure, stop and give the exact
+rerun command. Do not request reload or claim the workspace setup completed.
+
+### 2c. Atomic live rules
 
 After a successful install, write every starter rule as its own `.claude/live-rules/rules/<stable-name>.md`
 file, then atomically write `.claude/live-rules/manifest.json`. Each entry has the relative rule path,
@@ -159,7 +168,7 @@ rule files plus the manifest through temporary siblings and rename them into pla
 project already has `.claude/live-rules.md`, migrate its rules into atomic files without deleting the
 original until the manifest and matcher behavior have been checked.
 
-### 2c. Structure notes
+### 2d. Structure notes
 
 Write a short `.claude/.codebase-info/structure.md` (or, for a not-a-codebase project, a top-level
 note) capturing **how the project is meant to be laid out** — the organizing principle, where things
@@ -167,7 +176,7 @@ go, what belongs where. See `references/structure-notes.md`. This matters most f
 it's where intent gets written down before there's code for `map-codebase` to read. For an existing
 codebase this is light (the map will cover structure); for greenfield it's a real deliverable.
 
-### 2d. `CLAUDE.md` (optional)
+### 2e. `CLAUDE.md` (optional)
 
 If the user wanted one, **delegate to the built-in `/init`** rather than hand-rolling it. Note the
 deliberate exception: every other toolshed plugin says never touch `CLAUDE.md`, because their hooks
