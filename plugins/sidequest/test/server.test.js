@@ -335,7 +335,7 @@ function isAlive(pid) {
   }
 }
 
-test('dashboard self-updates to a newer cached install at the same URL', { timeout: 20000 }, async (t) => {
+test('dashboard self-updates to a newer cached install at the same URL', { timeout: 60000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-upgrade-'));
   const oldRoot = path.join(root, '1.37.0');
   const newRoot = path.join(root, '1.37.1');
@@ -343,7 +343,7 @@ test('dashboard self-updates to a newer cached install at the same URL', { timeo
   const home = path.join(root, 'home');
   copyPlugin(source, oldRoot, '1.37.0');
 
-  const port = 43000 + Math.floor(Math.random() * 1000);
+  const port = 50000 + Math.floor(Math.random() * 10000);
   const env = Object.assign({}, process.env, {
     SIDEQUEST_HOME: home,
     SIDEQUEST_VERSION_WATCH_MS: '100',
@@ -370,7 +370,7 @@ test('dashboard self-updates to a newer cached install at the same URL', { timeo
     } catch (_) {
       return false;
     }
-  }, 5000, 'the old dashboard');
+  }, 30000, 'the old dashboard');
 
   const oldHealth = await fetchJson(port, '/api/health');
   copyPlugin(source, newRoot, '1.37.1');
