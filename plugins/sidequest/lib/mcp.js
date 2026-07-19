@@ -75,6 +75,20 @@ function sessionOf(args) {
   return String(v).trim() || null;
 }
 
+function workflowRecipe(slug, categoryId) {
+  const requested = String(categoryId || '').trim();
+  if (!requested) throw new Error('route_recipe: "category" is required.');
+  const category = store.getCategory(requested, { project: slug });
+  if (!category || !category.enabled) {
+    const disabled = store.getCategory(requested, { project: slug, includeDisabled: true })
+      || store.getProjectCategories(slug).rows.some((row) => row.kind === 'DISABLE' && row.id === requested.toLowerCase());
+    throw new Error(`route_recipe: category "${requested}" is ${disabled ? 'disabled for this project' : 'unknown'}.`);
+  }
+  const resolved = store.resolveCategoryRoute(category);
+  if (!resolved || !resolved.exec) throw new Error(`route_recipe: category "${category.id}" has no available route.`);
+  return agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
+}
+
 // A worker identity is required for claim/next/done/release — a generic shared
 // value silently defeats the atomic-claim guarantee (two sessions both "claude"
 // each think they own the ticket), so we don't invent a default here.
@@ -938,6 +952,19 @@ const TOOLS = [
     handler(args) {
       if (!args.name && !sessionOf(args)) throw new Error('native_agent_cleanup: pass name or session.');
       return agentsync.cleanupNativeAgents({ name: args.name, sessionId: sessionOf(args) });
+    },
+  },
+  {
+    name: 'route_recipe',
+    description: 'Resolve a category into a live Workflow agent recipe. Fetch it when starting work so route edits and warnings stay current.',
+    inputSchema: {
+      type: 'object',
+      properties: { category: { type: 'string' }, project: PROJECT_PROP },
+      required: ['category'],
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      return workflowRecipe(slug, args.category);
     },
   },
   {

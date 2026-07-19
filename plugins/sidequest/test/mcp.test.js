@@ -105,7 +105,7 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'claim', 'sweepClaims', 'next', 'done', 'release', 'commit', 'submit', 'comment', 'ask', 'link', 'dispatch', 'category_edit', 'category_list']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'claim', 'sweepClaims', 'next', 'done', 'release', 'commit', 'submit', 'comment', 'ask', 'link', 'dispatch', 'category_edit', 'category_list', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['archive_board', 'unarchive_board', 'category_add', 'category_rm', 'global_fallback', 'unlink', 'assign', 'remove',
@@ -566,6 +566,42 @@ test('models reports concrete routes and no grade output', () => {
     assert.ok(out.models.includes('codex-terra'));
     assert.ok(out.categories.some((category) => category.id === 'model-codex' && category.resolved.model === 'codex-terra'));
     assert.ok(!JSON.stringify(out).includes('grade-'));
+  } finally {
+    clearCatalog();
+  }
+});
+
+test('route_recipe resolves a live route and makes category errors explicit', () => {
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra' }]);
+  try {
+    store.setCategory({ id: 'recipe-codex', name: 'Recipe Codex', route: { model: 'codex-terra', effort: 'high' } });
+    const recipe = callTool('route_recipe', { category: 'recipe-codex' });
+    assert.deepEqual(recipe.route, { model: 'codex-terra', effort: 'high' });
+    assert.deepEqual(recipe.agent, {
+      model: agentsync.DISPATCH_MODEL_ID,
+      promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=high]\n\n',
+    });
+    assert.equal(recipe.effortCarrier, 'marker');
+    assert.deepEqual(recipe.warnings, []);
+
+    store.setCategory({ id: 'recipe-disabled', name: 'Recipe Disabled', route: { model: 'sonnet', effort: 'high' }, enabled: false });
+    const disabled = callToolRaw('route_recipe', { category: 'recipe-disabled' });
+    assert.ok(disabled.isError);
+    assert.match(disabled.content[0].text, /disabled for this project/i);
+
+    const unknown = callToolRaw('route_recipe', { category: 'missing-recipe' });
+    assert.ok(unknown.isError);
+    assert.match(unknown.content[0].text, /unknown/i);
+
+    const resolveCategoryRoute = store.resolveCategoryRoute;
+    store.resolveCategoryRoute = () => ({ exec: null });
+    try {
+      const unroutable = callToolRaw('route_recipe', { category: 'recipe-codex' });
+      assert.ok(unroutable.isError);
+      assert.match(unroutable.content[0].text, /no available route/i);
+    } finally {
+      store.resolveCategoryRoute = resolveCategoryRoute;
+    }
   } finally {
     clearCatalog();
   }

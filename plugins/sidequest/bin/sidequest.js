@@ -1514,6 +1514,23 @@ function cmdModels(opts, positional) {
   }
 }
 
+function cmdRoute(opts, positional) {
+  if (!opts.json) fail('route: pass --json.');
+  const categoryId = positional[0];
+  if (!categoryId) fail('route: pass a category id.');
+  const { slug } = resolveProject(opts);
+  const category = store.getCategory(categoryId, { project: slug });
+  if (!category || !category.enabled) {
+    const disabled = store.getCategory(categoryId, { project: slug, includeDisabled: true })
+      || store.getProjectCategories(slug).rows.some((row) => row.kind === 'DISABLE' && row.id === String(categoryId).trim().toLowerCase());
+    fail(`route: category "${categoryId}" is ${disabled ? 'disabled for this project' : 'unknown'}.`);
+  }
+  const resolved = store.resolveCategoryRoute(category);
+  if (!resolved || !resolved.exec) fail(`route: category "${category.id}" has no available route.`);
+  const recipe = agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
+  process.stdout.write(JSON.stringify(recipe, null, 2) + '\n');
+}
+
 function cmdProjects(opts) {
   const projects = store.listProjects({ archived: !!opts.archived });
   if (opts.json) {
@@ -1994,6 +2011,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   sidequest update <id|SQ-n> --category <id|none>
   sidequest ready --model <model> --category <id>  ·  sidequest next --model <model> --category <id>
   sidequest models [--project <path-or-slug>] [--json]  available models and the selected project's effective category routes
+  sidequest route <category> [--project <path-or-slug>] --json  live workflow agent recipe for a category
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   Legacy --complexity + --why remains supported for existing intake and maps to a category at read time.
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
@@ -2204,6 +2222,9 @@ async function main() {
       break;
     case 'models':
       cmdModels(opts, positional);
+      break;
+    case 'route':
+      cmdRoute(opts, positional);
       break;
     case 'projects':
     case 'boards':
