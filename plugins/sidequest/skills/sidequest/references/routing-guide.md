@@ -47,6 +47,32 @@ routes expose a backend-specific `exec.agent` with `exec.model` null, so spawn t
 `model` parameter omitted. Inject the category contract verbatim alongside the ticket contract. Never
 hand-pick a model or effort after reading the route.
 
+## One-step workflow routing
+
+The `route_recipe` MCP tool and `sidequest route <category> --json` CLI command return the same one-step workflow recipe. Fetch it when the workflow starts, then wire only the `agent` fields into the caller. Never persist a recipe across route edits.
+
+```js
+const recipe = await route_recipe({ category });
+const result = await Agent({
+  model: recipe.agent.model,
+  prompt: recipe.agent.promptPrefix + prompt,
+});
+```
+
+For a Claude route, the recipe keeps the runtime model and an empty prefix:
+
+```json
+{"route":{"model":"opus","effort":"high"},"agent":{"model":"opus","promptPrefix":""}}
+```
+
+Claude workflow effort follows the session. For a Codex route, the recipe puts the virtual dispatch model in `agent.model` and the one gateway marker in `agent.promptPrefix`:
+
+```json
+{"route":{"model":"codex-gpt-5-6-terra","effort":"medium"},"agent":{"model":"claude-codex-auto","promptPrefix":"[sidequest-route model=gpt-5.6-terra effort=medium]\\n\\n"}}
+```
+
+`route` is display and provenance data. `agent` is the caller wiring surface. Use exactly one gateway marker, unchanged. Never quote it in the prompt or append another marker. Codex effort rides only in that marker; Claude effort follows the session. A Codex gateway authentication failure remains a spawn-time error, so report the failed spawn instead of translating the recipe by hand.
+
 ## Sources
 
 - Choosing the right model — platform.claude.com/docs/en/about-claude/models/choosing-a-model

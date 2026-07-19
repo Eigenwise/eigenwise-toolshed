@@ -89,6 +89,8 @@ backend, while the supplied description includes the resolved route label. A ses
 the dispatch token and exact executor name on the claim are the evidence. Commands default to the current project
 (`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another board.
 
+**Workflow callers:** at workflow start, call `route_recipe` or `sidequest route <category> --json`, then wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` into the Agent call. Do not manually translate route, gateway, virtual-model, marker, or effort fields; see [references/routing-guide.md](references/routing-guide.md).
+
 **Where things live** (never scan the filesystem from root to find them): the CLI at
 `plugins/sidequest/bin/sidequest.js` under the installed plugin; central SQLite data at
 `~/.claude/sidequest/sidequest.db` (override: `SIDEQUEST_HOME`); attachment images under
