@@ -37,6 +37,7 @@ const https = require('node:https');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const { createGatewayUsageEmitter } = require('../lib/usage-observability.js');
 
 const WIN = process.platform === 'win32';
@@ -1629,6 +1630,37 @@ function runShim() {
     };
   }
 
+  function observeSse(upRes, observer, contentEncoding, onChunk, onDecodeFailure, onEnd = () => {}) {
+    const decompressor = {
+      br: zlib.createBrotliDecompress,
+      deflate: zlib.createInflate,
+      gzip: zlib.createGunzip,
+    }[String(contentEncoding || '').toLowerCase().trim()];
+    if (!decompressor) {
+      upRes.on('data', (chunk) => {
+        onChunk(chunk);
+        observer.write(chunk);
+      });
+      upRes.on('end', () => {
+        observer.end();
+        onEnd();
+      });
+      return;
+    }
+    const decoded = decompressor();
+    upRes.on('data', onChunk);
+    decoded.on('data', (chunk) => observer.write(chunk));
+    decoded.on('end', () => {
+      observer.end();
+      onEnd();
+    });
+    decoded.on('error', () => {
+      onDecodeFailure();
+      onEnd();
+    });
+    upRes.pipe(decoded);
+  }
+
   function keepSseAlive(upRes, clientRes) {
     if (!SSE_HEARTBEAT_MS) return;
     let timer = null;
@@ -1657,7 +1689,8 @@ function runShim() {
 
   function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null, usageCapture = null) {
     const url = new URL(clientReq.url, target);
-    if (usageCapture) clientRes.once('finish', () => usageCapture.finish());
+    let finishUsage = () => usageCapture?.finish();
+    if (usageCapture) clientRes.once('finish', () => finishUsage());
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
     for (const h of ['host', 'connection', 'content-length', 'keep-alive', ...TRACE_HEADERS, ...extraHeaderDrop]) delete headers[h];
@@ -1825,11 +1858,24 @@ function runShim() {
             usageEmitter.maxResponseBytes,
             () => usageCapture?.markOverflow(),
           );
-          upRes.on('data', (chunk) => {
-            usageCapture?.noteResponseBytes(chunk.length);
-            observer.write(chunk);
-          });
-          upRes.on('end', () => observer.end());
+          let clientFinished = false;
+          let observationFinished = false;
+          const completeUsage = () => {
+            observationFinished = true;
+            if (clientFinished) usageCapture?.finish();
+          };
+          finishUsage = () => {
+            clientFinished = true;
+            if (observationFinished) usageCapture?.finish();
+          };
+          observeSse(
+            upRes,
+            observer,
+            upRes.headers['content-encoding'],
+            (chunk) => usageCapture?.noteResponseBytes(chunk.length),
+            () => usageCapture?.markOverflow(),
+            completeUsage,
+          );
         }
       } else if (successful && usageCapture) {
         upRes.on('data', (chunk) => usageCapture.observeChunk(chunk));

@@ -8,6 +8,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const zlib = require('node:zlib');
 
 const { inputComposition } = require('../lib/usage-observability.js');
 
@@ -94,7 +95,7 @@ async function collector(t, delayMs = 0) {
   return { received, endpoint: `http://127.0.0.1:${port}/v1/logs` };
 }
 
-async function spawnShim(t, proxyPort, usageEndpoint) {
+async function spawnShim(t, proxyPort, usageEndpoint, anthropicUpstream = undefined) {
   const shimPort = await unusedPort();
   const compatPort = await unusedPort();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-usage-integration-'));
@@ -113,6 +114,7 @@ async function spawnShim(t, proxyPort, usageEndpoint) {
       CODEX_GATEWAY_REQUEST_LOG: '0',
       CODEX_GATEWAY_TELEMETRY_ENDPOINT: '0',
       CODEX_GATEWAY_USAGE_ENDPOINT: usageEndpoint,
+      ...(anthropicUpstream ? { CODEX_GATEWAY_ANTHROPIC_UPSTREAM: anthropicUpstream } : {}),
       CODEX_GATEWAY_SSE_HEARTBEAT_MS: '0',
     },
     stdio: 'ignore',
@@ -318,4 +320,57 @@ test('isolated throttled proxy emits header-only limit evidence', async (t) => {
   assert.equal(values.codex_throttle_used_percent, 100);
   assert.equal(values.input_tokens, undefined);
   assert.equal(received.body.includes('private throttle error'), false);
+});
+
+test('isolated Anthropic SSE emits usage for the requested model', async (t) => {
+  const upstream = http.createServer((req, res) => {
+    assert.equal(req.url, '/v1/messages');
+    const events = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg-anthropic-sse',
+          model: 'claude-fable-5',
+          usage: { input_tokens: 9, output_tokens: 0 },
+        },
+      },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn' },
+        usage: { output_tokens: 6 },
+      },
+    ];
+    const stream = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'content-encoding': 'gzip',
+      'request-id': 'anthropic-sse-request',
+    });
+    res.end(zlib.gzipSync(stream));
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => upstream.close());
+  const usageCollector = await collector(t);
+  const proxyPort = await unusedPort();
+  const shimPort = await spawnShim(t, proxyPort, usageCollector.endpoint, `http://127.0.0.1:${upstreamPort}`);
+
+  const response = await request(shimPort, JSON.stringify({
+    model: 'claude-fable-5',
+    stream: true,
+    messages: [{ role: 'user', content: 'private direct Anthropic prompt' }],
+  }), {
+    'x-claude-code-session-id': 'session-anthropic-sse',
+    'x-claude-code-agent-id': 'agent-anthropic-sse',
+  });
+  assert.equal(response.status, 200);
+  const received = await waitFor(() => usageCollector.received[0], 'Anthropic SSE usage log was not received');
+  const { eventName, values } = attributesFrom(received);
+  assert.equal(eventName, 'gateway.token.usage');
+  assert.equal(values.model, 'claude-fable-5');
+  assert.equal(values.requested_model, 'claude-fable-5');
+  assert.equal(values.backend, 'anthropic');
+  assert.equal(values.agent_role, 'executor');
+  assert.equal(values.input_tokens, 9);
+  assert.equal(values.output_tokens, 6);
+  assert.equal(received.body.includes('private direct Anthropic prompt'), false);
 });
