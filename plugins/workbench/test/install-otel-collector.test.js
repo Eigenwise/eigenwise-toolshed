@@ -7,7 +7,11 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
-const { buildCollectorConfig, writeCollectorConfig } = require('../bin/install-otel-collector.js');
+const {
+  PROJECT_LABEL_PROMOTION,
+  buildCollectorConfig,
+  writeCollectorConfig,
+} = require('../bin/install-otel-collector.js');
 const { downloadCollector } = require('../bin/setup-observability.js');
 
 const configuredBinary = process.env.WORKBENCH_OTELCOL_CONTRIB;
@@ -16,10 +20,13 @@ const runRealCollectorTest = Boolean(configuredBinary || process.env.CI);
 test('the Collector config uses supported redaction and creates its queue directory', () => {
   const config = buildCollectorConfig();
   const redact = config.processors['transform/redact'];
-  for (const group of ['log_statements', 'trace_statements', 'metric_statements']) {
+  for (const group of ['log_statements', 'trace_statements']) {
     assert.equal(redact[group][0].statements.length, 22);
     assert.ok(redact[group][0].statements.every((statement) => statement.startsWith('delete_key(attributes, ')));
   }
+  assert.equal(redact.metric_statements[0].statements.length, 23);
+  assert.equal(redact.metric_statements[0].statements[0], PROJECT_LABEL_PROMOTION);
+  assert.ok(redact.metric_statements[0].statements.slice(1).every((statement) => statement.startsWith('delete_key(attributes, ')));
   assert.equal(config.extensions['file_storage/observer_queue'].create_directory, true);
 });
 

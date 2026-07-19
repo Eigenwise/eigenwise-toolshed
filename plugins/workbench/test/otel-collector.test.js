@@ -7,8 +7,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  PROJECT_LABEL_PROMOTION,
   REDACTED_KEYS,
   REQUIRED_PROCESSOR_ORDER,
+  SINK_EXPORTER,
   buildCollectorConfig,
   renderCollectorYaml,
   toYaml,
@@ -27,6 +29,35 @@ test('the default collector config is valid, loopback-only, and commits to the o
   for (const signal of ['logs', 'traces', 'metrics']) {
     assert.deepEqual(config.service.pipelines[signal].processors, REQUIRED_PROCESSOR_ORDER);
   }
+});
+
+test('fans every redacted signal out to an explicitly declared sink', () => {
+  const sinkExporter = {
+    endpoint: 'https://otlp.example.test',
+    headers: { Authorization: 'Bearer private' },
+    allowRemote: true,
+  };
+  const config = buildCollectorConfig({ sinkExporter });
+  assert.deepEqual(validateCollectorConfig(config, { sinkExporter }), []);
+  assert.equal(config.exporters[SINK_EXPORTER].endpoint, 'https://otlp.example.test/');
+  assert.equal(config.exporters[SINK_EXPORTER].headers.Authorization, 'Bearer private');
+  for (const signal of ['logs', 'traces', 'metrics']) {
+    assert.deepEqual(config.service.pipelines[signal].exporters, ['otlphttp/observer', SINK_EXPORTER]);
+    assert.deepEqual(config.service.pipelines[signal].processors, REQUIRED_PROCESSOR_ORDER);
+  }
+
+  assert.ok(validateCollectorConfig(config).some((error) => error.includes('unexpected exporter')));
+  config.exporters[SINK_EXPORTER].endpoint = 'https://other.example.test/';
+  assert.ok(validateCollectorConfig(config, { sinkExporter }).some((error) => error.includes('declared sink endpoint')));
+});
+
+test('promotes the project resource attribute to a metric datapoint label', () => {
+  const config = buildCollectorConfig();
+  const statements = config.processors['transform/redact'].metric_statements[0].statements;
+  assert.equal(statements[0], PROJECT_LABEL_PROMOTION);
+
+  statements.shift();
+  assert.ok(validateCollectorConfig(config).some((error) => error.includes('promote resource project.id')));
 });
 
 test('validation rejects a non-loopback exporter endpoint', () => {
@@ -62,6 +93,10 @@ test('validation requires the content-stripping processor and the persistent que
   delete noRedact.processors['transform/redact'];
   assert.ok(validateCollectorConfig(noRedact).some((e) => e.includes('transform/redact')));
 
+  const incompleteRedaction = buildCollectorConfig();
+  incompleteRedaction.processors['transform/redact'].log_statements[0].statements.pop();
+  assert.ok(validateCollectorConfig(incompleteRedaction).some((e) => e.includes('content stripping')));
+
   const noQueue = buildCollectorConfig();
   delete noQueue.extensions['file_storage/observer_queue'];
   assert.ok(validateCollectorConfig(noQueue).some((e) => e.includes('file_storage')));
@@ -96,6 +131,7 @@ test('renderCollectorYaml emits parseable-looking YAML with the right markers an
   assert.ok(yaml.includes('compression: "none"'));
   assert.ok(yaml.includes('memory_limiter:'));
   assert.ok(yaml.includes('transform/redact:'));
+  assert.ok(yaml.includes('set(attributes[\\"project.id\\"], resource.attributes[\\"project.id\\"])'));
   assert.ok(yaml.includes('file_storage/observer_queue:'));
   assert.equal(/\n\s+debug:/.test(yaml), false);
   // processors list renders inline in order.

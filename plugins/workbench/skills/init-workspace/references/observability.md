@@ -18,11 +18,13 @@ When the user chooses either telemetry option:
 2. Run the resumable setup helper from the installed Workbench root:
 
    ```sh
-   node "${CLAUDE_PLUGIN_ROOT}/bin/setup-observability.js" --project "<absolute-project-dir>"
+   node "${CLAUDE_PLUGIN_ROOT}/bin/setup-observability.js" --project "<absolute-project-dir>" --sink none
    ```
 
-   Add `--lgtm` only for the SQLite + LGTM choice. The helper downloads and checksum-verifies the pinned Collector Contrib release, writes its loopback-only config, preserves `.claude/settings.json`, and wraps an existing status-line renderer rather than replacing it. Workbench's plugin hooks already contribute the metadata-only lifecycle hooks, so do not hand-write or duplicate hook entries.
+   Use `--sink grafana-lgtm` for the SQLite + LGTM choice. `--lgtm` remains an alias. The helper downloads and checksum-verifies the pinned Collector Contrib release, writes its loopback-only config, stores the sink choice in the private Workbench `observability.json`, preserves `.claude/settings.json`, and wraps an existing status-line renderer rather than replacing it. Workbench's plugin hooks already contribute the metadata-only lifecycle hooks, so do not hand-write or duplicate hook entries.
 3. If any setup step fails, stop before writing dependent workspace artifacts or requesting reload. Keep the same command as the recovery path. It is safe to rerun.
+
+The private config also supports `otlp` and reserves `posthog`. Do not offer remote setup during the normal init interview. A user who explicitly asks for generic OTLP must set the HTTPS base endpoint and any headers under `observability.sinks.otlp`; secrets do not belong in project settings or command arguments.
 
 The helper enables only local OTLP/HTTP at `127.0.0.1:4318`, all three signal exporters, beta traces, and the pseudonymous telemetry path. Leave these content settings unset: `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`, and `OTEL_LOG_RAW_API_BODIES`.
 

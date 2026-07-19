@@ -41,7 +41,9 @@ After updates, reload every session that had an affected plugin loaded.
 
 ## Local observability
 
-During `/init-workspace`, choose **SQLite only** or **SQLite + LGTM** to add metadata-only telemetry. It requires Claude Code v2.1.212+ and leaves Workbench as the only manually installed prerequisite. The setup downloads a checksummed pinned Collector into current-user application data, keeps the observer, Collector, and optional LGTM receivers on loopback, preserves existing project settings and statusline rendering, and asks for the normal single reload only after setup succeeds.
+During `/init-workspace`, choose **SQLite only** or **SQLite + LGTM** to add metadata-only telemetry. It requires Claude Code v2.1.212+ and leaves Workbench as the only manually installed prerequisite. The setup downloads a checksummed pinned Collector into current-user application data, keeps local receivers on loopback, preserves existing project settings and statusline rendering, and asks for the normal single reload only after setup succeeds.
+
+The downstream sink is selected in the current-user-only `observability.json`: `grafana-lgtm`, `otlp`, `posthog`, or `none`. For Grafana and generic OTLP, the collector fans the same redacted signals out to the canonical observer and the selected backend. `none` keeps only SQLite plus local reports. The PostHog provider is reserved but remains disabled until its event mapping is defined. Remote OTLP requires HTTPS and keeps credentials in config headers instead of project settings.
 
 SQLite is the source of truth and works without Docker. The optional `grafana/otel-lgtm:0.11.0` viewer uses a persistent `/data` volume, binds only `127.0.0.1`, and retains demo data for seven days. Safe detailed facts are retained for 30 days, rollups for 365 days, and acknowledged spool rows for under 24 hours. Project, session, and time-range deletion are supported by the observer. No prompt, response, tool-content, raw-body, credential, or environment-value capture is enabled.
 

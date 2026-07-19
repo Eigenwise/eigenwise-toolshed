@@ -8,6 +8,12 @@ const { openObservabilityStore } = require('../lib/observability/store.js');
 const { flushOutbox } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { otlpToObservations } = require('../lib/observability/otlp.js');
+const {
+  DEFAULT_SINK,
+  defaultConfigPath,
+  readObservabilityConfig,
+  resolveSink,
+} = require('../observability/sinks/index.js');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const OTLP_SIGNALS = Object.freeze({ '/v1/logs': 'logs', '/v1/traces': 'traces', '/v1/metrics': 'metrics' });
@@ -71,21 +77,47 @@ function readJson(request, maxBodyBytes) {
   });
 }
 
+function defaultSink() {
+  return {
+    id: DEFAULT_SINK,
+    egress: 'loopback',
+    outbox: {
+      enabled: true,
+      endpoint: 'http://127.0.0.1:14318/v1/logs',
+      headers: {},
+      allowRemote: false,
+    },
+  };
+}
+
 function createObserver(options = {}) {
   const host = assertLoopbackHost(options.host || '127.0.0.1');
   const port = Number(options.port === undefined ? 14319 : options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid observer port: ${options.port}`);
   const maxBodyBytes = Math.max(1024, Number(options.maxBodyBytes) || 1024 * 1024);
+  const overriddenOutbox = options.outboxEndpoint
+    ? { enabled: true, endpoint: options.outboxEndpoint, headers: options.outboxHeaders || {}, allowRemote: false }
+    : null;
+  const sink = options.sink || (overriddenOutbox
+    ? { id: 'otlp', egress: 'loopback', outbox: overriddenOutbox }
+    : defaultSink());
+  const outbox = overriddenOutbox || sink.outbox;
+  if (!outbox || typeof outbox.enabled !== 'boolean') throw new Error('The observer requires a valid sink outbox contract.');
   const ownsStore = !options.store;
-  const store = options.store || openObservabilityStore(options.databaseFile || defaultDatabaseFile());
-  const outboxEndpoint = options.outboxEndpoint || 'http://127.0.0.1:14318/v1/logs';
+  const store = options.store || openObservabilityStore(options.databaseFile || defaultDatabaseFile(), {
+    outboxEnabled: outbox.enabled,
+  });
 
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${host}:${port || 80}`);
       if (request.method === 'GET' && url.pathname === '/health') {
-        const [outbox] = store.queryView('outbox_health', { limit: 1 });
-        jsonResponse(response, 200, { ok: true, outbox });
+        const [outboxHealth] = store.queryView('outbox_health', { limit: 1 });
+        jsonResponse(response, 200, {
+          ok: true,
+          sink: { id: sink.id, egress: sink.egress, enabled: outbox.enabled },
+          outbox: outboxHealth,
+        });
         return;
       }
 
@@ -131,7 +163,10 @@ function createObserver(options = {}) {
 
       if (request.method === 'POST' && url.pathname === '/v1/outbox/flush') {
         const result = await flushOutbox(store, {
-          endpoint: outboxEndpoint,
+          enabled: outbox.enabled,
+          endpoint: outbox.endpoint,
+          headers: outbox.headers,
+          allowRemote: outbox.allowRemote,
           fetch: options.fetch,
           maxAttempts: options.maxOutboxAttempts,
         });
@@ -152,6 +187,7 @@ function createObserver(options = {}) {
     host,
     port,
     server,
+    sink,
     store,
     async start() {
       if (started) return server.address();
@@ -183,6 +219,7 @@ function parseArgs(argv) {
     if (argument === '--db' && next) { options.databaseFile = next; index += 1; continue; }
     if (argument === '--host' && next) { options.host = next; index += 1; continue; }
     if (argument === '--port' && next) { options.port = Number(next); index += 1; continue; }
+    if (argument === '--config' && next) { options.configFile = next; index += 1; continue; }
     if (argument === '--outbox-endpoint' && next) { options.outboxEndpoint = next; index += 1; continue; }
     throw new Error(`Unknown or incomplete argument: ${argument}`);
   }
@@ -193,9 +230,15 @@ function defaultDatabaseFile() {
   return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share'), 'Eigenwise', 'Workbench', 'observability.db');
 }
 
+function loadConfiguredSink(databaseFile, configFile) {
+  const filePath = configFile || defaultConfigPath(path.dirname(databaseFile));
+  return resolveSink(readObservabilityConfig(filePath, { defaultSink: DEFAULT_SINK }));
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (!options.databaseFile) options.databaseFile = defaultDatabaseFile();
+  if (!options.outboxEndpoint) options.sink = loadConfiguredSink(options.databaseFile, options.configFile);
   const observer = createObserver(options);
   const address = await observer.start();
   process.stdout.write(`Workbench observer listening on ${address.address}:${address.port}\n`);
@@ -218,5 +261,6 @@ module.exports = {
   assertLoopbackHost,
   createObserver,
   defaultDatabaseFile,
+  loadConfiguredSink,
   parseArgs,
 };

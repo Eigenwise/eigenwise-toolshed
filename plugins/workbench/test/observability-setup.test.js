@@ -13,10 +13,13 @@ const {
   applySettings,
   collectorArchiveUrl,
   compareVersions,
+  configuredSink,
   downloadCollector,
   mergeObservabilitySettings,
+  parseArgs,
   parseChecksum,
   requireClaudeVersion,
+  setupObservability,
   setupPlan,
   startLgtm,
   verificationGuidance,
@@ -34,6 +37,8 @@ test('bundles a valid Grafana provider for the Claude Code Usage dashboard', () 
   assert.match(provisioning, /^      path: \/otel-lgtm\/grafana\/conf\/provisioning\/workbench-dashboards$/m);
   assert.equal(dashboard.uid, 'claude-code-usage');
   assert.equal(dashboard.title, 'Claude Code Usage');
+  assert.match(JSON.stringify(dashboard), /project_id/);
+  assert.doesNotMatch(JSON.stringify(dashboard), /target_info|group_left/);
 });
 
 test('requires Claude Code v2.1.212 or newer', () => {
@@ -143,4 +148,50 @@ test('plans current-user application data and only starts LGTM on request', () =
   const resumed = [];
   startLgtm(plan.dataDir, { spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: 'true' }; } });
   assert.equal(resumed.length, 1);
+});
+
+test('stores sink selection separately from project settings', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-sink-config-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const projectDir = path.join(directory, 'project');
+  const dataDir = path.join(directory, 'application-data');
+  fs.mkdirSync(projectDir, { recursive: true });
+
+  const result = await setupObservability({
+    projectDir,
+    dataDir,
+    sink: 'none',
+    claudeVersion: MIN_CLAUDE_VERSION,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
+    spawnSync: () => ({ status: 0, stdout: process.version }),
+  });
+
+  const config = JSON.parse(fs.readFileSync(result.observabilityConfig, 'utf8'));
+  assert.equal(config.observability.sink, 'none');
+  assert.equal(result.sink.id, 'none');
+  assert.equal(result.sink.outbox.enabled, false);
+  assert.doesNotMatch(fs.readFileSync(result.collectorConfig, 'utf8'), /otlphttp\/sink/);
+  assert.equal(Object.hasOwn(result.settings.settings.env, 'WORKBENCH_OBSERVABILITY_SINK'), false);
+});
+
+test('configures generic OTLP from the private sink config and parses explicit CLI selection', () => {
+  const plan = setupPlan({ dataDir: 'C:/Workbench', projectDir: '.' });
+  const config = configuredSink(plan, {
+    sink: 'otlp',
+    sinkEndpoint: 'https://otlp.example.test',
+    config: {
+      observability: {
+        sinks: { otlp: { headers: { Authorization: 'Bearer private' } } },
+      },
+    },
+  });
+
+  assert.equal(config.observability.sink, 'otlp');
+  assert.equal(config.observability.sinks.otlp.endpoint, 'https://otlp.example.test');
+  assert.equal(config.observability.sinks.otlp.headers.Authorization, 'Bearer private');
+  assert.deepEqual(parseArgs(['--sink', 'otlp', '--sink-endpoint', 'https://otlp.example.test']), {
+    sink: 'otlp',
+    sinkEndpoint: 'https://otlp.example.test',
+  });
+  assert.throws(() => parseArgs(['--sink', 'unknown']), /Unknown observability sink/);
 });
