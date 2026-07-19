@@ -203,20 +203,20 @@ bypass.
 ## Instant ticket executor dispatch
 
 The normal per-ticket path is instant. Call `dispatch <ref>` (CLI) or the matching MCP tool and use
-its returned stable per-model `agent` and `spawn` object immediately. Pass the returned `briefing`
-unchanged as the Agent prompt. The briefing carries the full ticket contract, category contract,
+its returned stable per-model `agent` and `spawn` object immediately. Pass `spawn.prompt`
+unchanged as the Agent prompt. It carries the full ticket contract, category contract,
 anchors, verify command, comments digest, and token-gated claim guard. Stable executors are
 ready from session start. Claude routes pass `model: exec.model`; Codex routes
 omit `model`: the shared `sidequest-exec-dispatch-<effort>` def pins the virtual `claude-codex-auto`,
-and the briefing's closing `[sidequest-route model=... effort=...]` line tells the codex-gateway shim which real
-model and effort to run — pass the briefing verbatim, never write another such line, and never batch tickets
+and `spawn.prompt` ends with `[sidequest-route model=... effort=...]`, which tells the codex-gateway shim which real
+model and effort to run, so pass the prompt verbatim, never write another such line, and never batch tickets
 stamped with different models into one spawn. The gateway route log records both values per dispatch; a marker effort that differs from the board stamp in an audit means the prompt was hand-edited. All five effort levels for both Claude builtins and Codex
 dispatch are always provisioned. Route edits change only board data; the executor def set
 is fixed, so nothing is written or registered when a route changes. The executor claims with the
 returned token and exact stable executor name.
 
 Cross-session adoption is a fresh `dispatch <ref>` in the adopting session. It rotates
-the token and returns the current briefing for the same stable route.
+the token and returns the current spawn for the same stable route.
 
 Re-dispatch rotates the token while the stable executor name remains fixed. A stale token is refused,
 and `done` or `release` clears the dispatch guard for either mode. An Agent acknowledgement means only
@@ -228,8 +228,8 @@ two failures require ticket evidence and a user-visible stop. Never trust a work
 ## Routed Agent dispatch
 
 All routed execution stays in the current conversation. Call `dispatch <ref>` through the CLI or MCP,
-then pass its exact stable executor, `spawn` object, and complete `briefing` unchanged to Agent. The
+then pass its exact stable executor and complete `spawn` object unchanged to Agent. The
 executor claims using the returned token, its exact executor name, and the stamped effort. The claim guard
-is the proof that the right route ran. For Codex, preserve the briefing's one route marker unchanged so the
+is the proof that the right route ran. For Codex, preserve `spawn.prompt`'s route marker unchanged so the
 gateway receives the resolved model and effort; never add, rewrite, or combine markers. Dispatch is the
 current board interface for routed work.

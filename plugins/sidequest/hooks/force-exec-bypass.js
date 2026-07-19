@@ -239,7 +239,7 @@ function main() {
             hookEventName: 'PreToolUse',
             permissionDecision: 'deny',
             permissionDecisionReason:
-              'sidequest: dispatch executor is missing the route marker from its briefing — re-run dispatch and spawn the returned briefing verbatim.',
+              'sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged.',
           },
         }));
         return;
@@ -253,7 +253,7 @@ function main() {
             permissionDecisionReason:
               `sidequest: this batch mixes tickets stamped with different models (${conflict.join(', ')}) under one ` +
               `dispatch executor — every ticket would silently run on the last route marker's model. Split the batch ` +
-              `per model and re-spawn each with its own dispatch briefing.`,
+              `per model and re-spawn each with its own dispatch prompt.`,
           },
         }));
         return;

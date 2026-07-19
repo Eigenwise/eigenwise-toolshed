@@ -269,7 +269,7 @@ Routed executors use MCP, not shell commands, for the lifecycle:
   `mcp__plugin_sidequest_board__submit` validates that scoped range from the same worktree and parks it.
 
 - **Routed repo lifecycle:** dispatch → token claim → scoped commit → submit → orchestrator publish. The
-  executor uses the exact dispatch executor and unchanged briefing. The token and claim guard prove the
+  executor uses the exact dispatch executor and unchanged `spawn.prompt`. The token and claim guard prove the
   resolved route; the executor never pushes or assigns release versions. `submit` parks the verified local
   commit for the orchestrator's serialized publish transaction.
 - **Direct claim/done is narrow.** Use `next --direct` or `claim --direct`, followed by `done`, only for
@@ -308,8 +308,8 @@ anything that shares files or has a `depends-on` link stays sequential (blocked 
 ## Native routed execution
 
 Routed tickets run through the current Claude Code conversation only. Call `sidequest dispatch SQ-n` (or
-MCP `dispatch`) to return the ticket's exact stable executor, complete briefing, spawn fields, and claim
-token, then invoke that exact spawn spec with Agent. Pass the briefing unchanged, including its one Codex
+MCP `dispatch`) to return the ticket's exact stable executor, complete `spawn` object, and claim token,
+then invoke that exact spawn spec with Agent. Pass `spawn.prompt` unchanged, including its one Codex
 route marker when present. The executor must claim with that token, exact executor, and stamped effort.
 `sidequest work`/`drain` cannot invoke the current conversation's Agent tool.
 
@@ -427,7 +427,7 @@ node <plugin>/bin/sidequest.js global-fallback --model sonnet --effort medium
 node <plugin>/bin/sidequest.js models                               # categories, routes, and fallback chain
 node <plugin>/bin/sidequest.js next --category coding.normal --by <you>  # claim work by category route
 node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
-node <plugin>/bin/sidequest.js dispatch SQ-3                 # stable routed executor, briefing, spawn, token
+node <plugin>/bin/sidequest.js dispatch SQ-3                 # stable routed executor, spawn, token
 node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
 node <plugin>/bin/sidequest.js claim SQ-3 --by <worker> --direct # intentional inline or non-repo work
 node <plugin>/bin/sidequest.js commit SQ-3 --by <worker> --message "scoped change"

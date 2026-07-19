@@ -81,11 +81,11 @@ permanent removal. After a schema-bumping release, reload plugins before MCP wri
 cannot write an old store shape. Commands default to the current project; MCP takes a `project` field.
 
 For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable executor,
-a complete `briefing`, a complete `spawn` object, and a token. Pass every supplied `spawn` field to
+a complete `spawn` object, and a token. Pass every supplied `spawn` field to
 Agent unchanged, including Sidequest's short `description`; do not paraphrase the card label. Claude
 routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the
 backend, while the supplied description includes the resolved route label. A session adopting work runs
-`dispatch <ref>` again to receive a fresh token and current briefing. Never trust a worker's self-report:
+`dispatch <ref>` again to receive a fresh token and current spawn. Never trust a worker's self-report:
 the dispatch token and exact executor name on the claim are the evidence. Commands default to the current project
 (`$CLAUDE_PROJECT_DIR`); add `--project "<path-or-slug>"` (MCP: the `project` field) for another board.
 
@@ -341,10 +341,10 @@ and fallback chain, documented in [references/routing-details.md](references/rou
    executor name are authoritative. **All routed work dispatches through the native Agent tool**
    (`exec.dispatch` is `native-agent` on every route). For a ticket, `dispatch <ref>` (CLI) or the
    matching MCP tool is **instant by default**: it returns the stable per-model `agent`, a complete
-   `briefing` to use as the spawn prompt, and the token-gated claim details. A category-routed executor
+   `spawn` object with the ticket prompt, and the token-gated claim details. A category-routed executor
    claim without that prepared token is refused, even when it supplies the expected executor and effort.
    Spawn that exact stable `agent` immediately from the returned `spawn` object. Another session adopts
-   the ticket by dispatching it again for a fresh token and current briefing. Tickets with declared files
+   the ticket by dispatching it again for a fresh token and current spawn. Tickets with declared files
    `isolation: "worktree"` in `spawn`; pass it unchanged. `--shared-tree` / `{sharedTree:true}` is an
    escape hatch only for a task that depends on uncommitted local state, and its reason belongs in the ticket comment before spawning.
    - **Claude (`exec.model` non-null):** spawn `exec.agent` through the Agent tool with
@@ -357,8 +357,8 @@ and fallback chain, documented in [references/routing-details.md](references/rou
      `exec.agent` (`sidequest-exec-dispatch-<effort>`) through the Agent tool with
      `mode: "bypassPermissions"`, a unique `name`, and **the `model` parameter OMITTED entirely** —
      `exec.model` is null precisely so you leave it out. The def pins the virtual `claude-codex-auto`;
-     the REAL model rides the dispatch briefing as its `[sidequest-route model=...]` line, which the
-     codex-gateway shim resolves per request — so the briefing from `dispatch` must reach the spawn
+     the REAL model rides `spawn.prompt` as its `[sidequest-route model=...]` line, which the
+     codex-gateway shim resolves per request — so that prompt must reach the spawn
      prompt intact, and one spawn carries exactly one marker (never batch tickets stamped with
      different models). Passing ANY `model` value (`fable|opus|sonnet|haiku`) overrides the pin and
      silently runs Anthropic instead. Never substitute a generic `sidequest-exec-<effort>` agent for

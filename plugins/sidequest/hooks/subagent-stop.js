@@ -121,7 +121,7 @@ function stopVerdict(store, claims, agentType) {
     return `exec stopped HOLDING ${label} claim (age ${mins}m), likely dead: release + respawn, then TaskStop it`;
   }
 
-  if (agentType.startsWith('sidequest-')) return 'exec stopped without ever claiming, TaskStop it first, then respawn with the same briefing';
+  if (agentType.startsWith('sidequest-')) return 'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec';
   return null;
 }
 

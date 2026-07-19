@@ -1396,13 +1396,13 @@ function cmdDispatch(opts, positional) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
   const isolation = agentsync.ticketIsolation(prepared.ticket, !!opts['shared-tree']);
-  let briefing;
+  let ticketPrompt;
   try {
-    briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
+    ticketPrompt = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
   } catch (err) {
     fail(`dispatch: ${(err && err.message) || err}`);
   }
-  const prompt = agentsync.withProjectIdentity(briefing, meta.path);
+  const prompt = agentsync.withProjectIdentity(ticketPrompt, meta.path);
   const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
   const agent = prepared.ticket.dispatchExecutor;
   const spawn = agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt);
@@ -1418,7 +1418,6 @@ function cmdDispatch(opts, positional) {
     token: prepared.token,
     recovery: prepared.recovery || null,
     spawn,
-    briefing,
     guidance: prepared.recovery
       ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
       : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}.`,
