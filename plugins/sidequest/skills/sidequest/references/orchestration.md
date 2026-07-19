@@ -5,6 +5,44 @@ delegation rule (route execution down to each ticket's stamped cheap model as sh
 batch small same-model tickets, fan out over independent waves, inline only trivial one-steps) lives
 in the main skill — this file is the detail on the bigger shapes.
 
+## Decomposition in depth
+
+The main skill's planning rules, expanded. One ticket = one piece a single agent can finish in a
+short bounded run and check on its own. That's often a code change with a verify command, but just
+as often an investigation, spike, or review whose "done" is a concrete answer or artifact, not a
+diff — don't force every ticket into an implementation shape. The reason to split is parallelism as
+much as cost: independent tickets fan out to sub-agents that run at the same time, so cut where the
+pieces are genuinely independent (several files to probe, several questions to answer, several
+changes that don't touch each other). Split work with multiple independently checkable outcomes or
+that would make an agent broadly rediscover the codebase; keep tightly coupled work that must land
+and resolve together in one ticket.
+
+**Enumerated deliverables are a decomposition smell.** When one ticket would "own" several named
+pieces (e.g. CLI + wiring + script + state metadata + tests), that enumeration is the tell that
+it's a feature pivoting on one shared contract, not a single atomic change — prefer the story
+shape: file a cheap ticketed planning investigation that pins the shared contract and anchors, then
+an independent wave that fans the deliverables out to parallel sub-agents, each reading that
+investigation's result. Keep them bundled in one ticket only when the pieces genuinely cannot
+verify independently. This is also how context-completeness stays cheap: don't pay for it with
+orchestrator tokens by investigating inline on the pricey thread — pay for it with the planning
+investigation whose output the wave consumes, instead of the orchestrator re-deriving it.
+
+**The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket:
+direct `Read`/`Glob`/`Grep` when the affected surfaces are obvious; when they are unfamiliar, a
+proportional investigation ticket whose result pins the scope, executor anchors, and exact verify
+command before implementation tickets are filed. For a wave ticket, make that verify command a
+scoped test or reproduction for its declared files; reserve full-suite green for the integration or
+ship ticket. Shrink until the complexity drops — a piece still scoring 7+ is usually a small design
+ticket plus a mechanical application ticket.
+
+**Spec completeness scales inversely with the executor's model.** Work routed to a cheap model
+needs a near-patch-level spec — exact anchors, expected strings, precise verification commands —
+because the spec substitutes for judgment. Everything you already know goes in the description: a
+weaker executor fails on missing context, not on the work itself, so front-load what your
+investigation found (paths, the surrounding contract, the gotcha you spotted). If finishing the
+ticket would need context its description does not carry, gather it first and put what you learned
+in the spec, or split it further.
+
 ## Fan-out mechanics
 
 When several tickets are **ready and independent**, work them in parallel — one executor per ticket,

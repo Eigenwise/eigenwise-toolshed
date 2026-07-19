@@ -8,6 +8,14 @@ const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 
 const routingGuide = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'routing-guide.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
 
+// SKILL.md loads into the orchestrator (the priciest model) every session, so
+// its size is a budget like the hook byte budgets: detail belongs in
+// references/ that load on demand. Raise this only with a deliberate decision.
+test('SKILL.md stays inside its session-load byte budget', () => {
+  assert.ok(Buffer.byteLength(skill, 'utf8') <= 16000,
+    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 16000 — move detail into references/`);
+});
+
 test('workflow routing guidance uses the live recipe wiring surface', () => {
   assert.match(skill, /call `route_recipe` or `sidequest route <category> --json`/);
   assert.match(skill, /wire only `recipe\.agent\.model` and `recipe\.agent\.promptPrefix \+ prompt`/);

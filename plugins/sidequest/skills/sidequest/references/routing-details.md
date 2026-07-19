@@ -54,6 +54,37 @@ Spawn the exact `exec.agent` with `model` omitted. A degraded route still uses t
 flow because the read's `exec` projection is authoritative. Another session adopts work by dispatching
 the ticket again, which returns a fresh token and current spawn for the stable executor.
 
+## Spawn parameters by route
+
+The main skill's spawn rules, expanded. Every routed spawn goes through the native Agent tool with
+the exact executor and spawn object a fresh `dispatch <ref>` returned.
+
+- **Claude routes (`exec.model` non-null):** spawn `exec.agent` with `model: exec.model`,
+  `mode: "bypassPermissions"`, and a unique `name`. Sidequest executors are unattended workers;
+  omitting bypass sends their ordinary Bash approvals into the lead session. Never spawn a
+  Claude-route executor without `model:` — an omitted model inherits the session model (usually the
+  priciest route), silently defeating routing. The bundled PreToolUse hook injects or blocks as a
+  backstop, but the spawn call must carry it.
+- **Codex routes (`exec.model` null):** spawn the EXACT shared dispatch executor named by
+  `exec.agent` (`sidequest-exec-dispatch-<effort>`) with `mode: "bypassPermissions"`, a unique
+  `name`, and the `model` parameter OMITTED entirely — `exec.model` is null precisely so you leave
+  it out. The def pins the virtual `claude-codex-auto`; the REAL model rides the spawn prompt's
+  `[sidequest-route model=... effort=...]` marker, which the codex-gateway shim resolves per
+  request — so the marker must reach the spawn prompt intact, and one spawn carries exactly one
+  marker (never batch tickets stamped with different models). Passing ANY `model` value
+  (`fable|opus|sonnet|haiku`) overrides the pin and silently runs Anthropic instead. Never
+  substitute a generic `sidequest-exec-<effort>` agent for a Codex route — the board refuses its
+  claim. Model provenance lives in the gateway route log, the subagent transcript, and
+  `done --model`, never in the executor name.
+- `<effort>` is the ticket's `effort` verbatim from the fresh read, never a level you judge fits
+  better: the executor claims with `--effort <baked level>` and the board refuses the claim on a
+  mismatch, bouncing the ticket back.
+- A haiku ticket has no effort: `exec.agent` is null; spawn a plain Agent with `model: haiku`,
+  still uniquely named.
+- Worktree isolation: tickets with declared files carry `isolation: "worktree"` in `spawn`; pass it
+  unchanged. `--shared-tree` / `{sharedTree:true}` is an escape hatch only for a task that depends
+  on uncommitted local state, and its reason belongs in a ticket comment before spawning.
+
 ## Re-scoring
 
 ```bash
