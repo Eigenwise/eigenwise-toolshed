@@ -49,8 +49,12 @@ Protocol for each ticket:
    and effort. Release unfinished work through `mcp__plugin_sidequest_board__release` with status `todo`
    and a concise reason.
 
-If two honest attempts do not move the task, leave a findings comment and release it. Report claim result,
-changes, exact verification command and result, changed paths, submitted hash or close confirmation, and
-anything deliberately skipped. `SendMessage` is only for `main` when the lead can act now: a blocker,
+If a claim is denied or this launch remains unclaimed, make a diagnose-first retry: `pulse` the ticket and read
+the deny reason verbatim. Make at most ONE retry, only when that diagnosis changes the dispatch; never blind
+respawn the identical launch. Registration waits use one background timer, never a foreground sleep loop. Two failures
+on the same dispatch: comment the evidence, surface it to the user, then release rather than attempting
+a third spawn. If two honest attempts do not move the ticket work, leave a findings comment and release it. Report
+claim result, changes, exact verification command and result, changed paths, submitted hash or close confirmation,
+and anything deliberately skipped. `SendMessage` is only for `main` when the lead can act now: a blocker,
 conflict, implementation-changing finding, or a verified milestone that would otherwise be stranded.{{EXTRA_NOTE}}
 {{TICKET_BRIEF}}

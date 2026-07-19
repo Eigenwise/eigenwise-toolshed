@@ -93,7 +93,7 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
 });
 
-test('pre-tool hook: denies non-executor Agent launches and gives the direct-tool and ticket flow', () => {
+test('pre-tool hook: generic agents get direct-tool guidance and Sidequest-shaped types get a version diagnosis', () => {
   for (const [subagent_type, prompt] of [
     ['Explore', 'Locate the current hook contract.'],
     ['claude-code-guide', 'Check the current Agent-tool documentation.'],
@@ -104,11 +104,25 @@ test('pre-tool hook: denies non-executor Agent launches and gives the direct-too
       tool_name: 'Agent',
       tool_input: { subagent_type, isolation: 'worktree', prompt },
     });
+    const reason = out.hookSpecificOutput.permissionDecisionReason;
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', subagent_type);
-    assert.match(out.hookSpecificOutput.permissionDecisionReason, /ticket and fresh dispatch briefing/);
-    assert.match(out.hookSpecificOutput.permissionDecisionReason, /Read, Glob, Grep, or WebFetch inline/);
-    assert.match(out.hookSpecificOutput.permissionDecisionReason, /file a ticket, route it, dispatch it/);
+    assert.match(reason, /generic Agent, not a Sidequest ticket executor/);
+    assert.match(reason, /Read, Glob, Grep, or WebFetch inline/);
+    assert.match(reason, /file a ticket, route it, dispatch it/);
+    assert.match(reason, /\[sidequest-scout\]/);
+    assert.match(reason, /never use this for ticket work/);
+    assert.doesNotMatch(reason, /fresh dispatch briefing/);
   }
+  const mismatch = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-scout', isolation: 'worktree', prompt: 'Quick read-only scout.' },
+  });
+  assert.equal(mismatch.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(
+    mismatch.hookSpecificOutput.permissionDecisionReason,
+    'sidequest: sidequest-scout is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.'
+  );
+  assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, /\[sidequest-scout\]/);
 });
 
 test('pre-tool hook keeps built-in executor model but removes overrides for pinned Codex, native, and ticket executors', () => {
@@ -516,9 +530,13 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.match(ctx, /Dispatch is instant: no registration\/watcher wait/, 'must replace the registration wait flow');
   assert.ok(ctx.includes('do not use `native_agent`'), 'must reject temporary native dispatch for normal execution');
   assert.ok(ctx.includes('bypassPermissions'), 'must require unattended executors to launch in bypass');
-  assert.ok(ctx.includes('Native Agent results arrive automatically: never TaskOutput them.'), 'must ban invalid native Agent TaskOutput polling');
+  assert.ok(ctx.includes('Native results: never TaskOutput.'), 'must ban invalid native Agent TaskOutput polling');
   assert.ok(ctx.includes('pulse ref / changes --since; TaskStop only after terminal board evidence'), 'must give the board-based liveness and stop rule');
   assert.ok(ctx.includes('Never proxy-wait'), 'must ban proxy waiters (side-channel Bash/Monitor/cron waits + blocking TaskOutput on a proxy)');
+  assert.match(ctx, /ONE diagnose-first retry/);
+  assert.match(ctx, /never blind respawn/);
+  assert.match(ctx, /Two failures: comment evidence \+ surface user/);
+  assert.match(ctx, /one background timer, never foreground sleep loop/);
   assert.ok(ctx.includes('SHORT'), 'must demand short, bounded executor runs');
   assert.ok(ctx.includes('bounce back'), 'must tell executors to bounce back, not wander');
   assert.ok(ctx.includes('ONE executor'), 'must carry the batch-small-tickets rule');
@@ -621,15 +639,20 @@ test('session-start: compact and resume preserve the minimum ticket and executor
   for (const source of ['compact', 'resume']) {
     const ctx = runHook(SESSION, { session_id: 't', source });
     assert.match(ctx, /sidequest \(active — context restored\)/);
-    assert.ok(ctx.includes('Reload the Sidequest skill'), `${source} must reload the skill`);
+    assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
     assert.match(ctx, /Substantive work needs a board ticket/, `${source} must preserve ticket-first work`);
     assert.match(ctx, /fresh dispatch's exact token-gated executor and briefing/, `${source} must preserve exact dispatch execution`);
     assert.match(ctx, /Every Agent launch must use that executor/, `${source} must require dispatch for every Agent launch`);
     assert.match(ctx, /Read, Glob, Grep, or WebFetch inline/, `${source} must name direct lookup tools`);
+    assert.ok(ctx.includes('delegated exploration/research/review/analysis gets a ticket first'), `${source} must route delegated work through the board`);
     assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), `${source} must prefer the MCP doing-list read`);
     assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
-    assert.ok(ctx.includes('never TaskOutput them'), `${source} must ban native Agent TaskOutput polling`);
+    assert.ok(ctx.includes('never TaskOutput'), `${source} must ban native Agent TaskOutput polling`);
     assert.ok(ctx.includes('changes --since; TaskStop only after terminal board evidence'), `${source} must retain the board-based liveness and stop rule`);
+    assert.match(ctx, /ONE diagnose-first retry/);
+    assert.match(ctx, /never blind respawn/);
+    assert.match(ctx, /Two failures: comment evidence \+ surface user/);
+    assert.match(ctx, /one background timer, never foreground sleep loop/);
     assert.ok(ctx.includes('list --status doing'), `${source} must retain the CLI fallback`);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
     assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `${source} block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
@@ -926,7 +949,9 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   );
   assert.equal(mixed.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /route marker/);
+  assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /mixes tickets stamped with different models/);
   assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /Split the batch/);
+  assert.doesNotMatch(mixed.hookSpecificOutput.permissionDecisionReason, /fresh dispatch briefing/);
   const same = runForceBypassWithEnv(
     { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-same', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: SQ-999\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
@@ -1071,7 +1096,7 @@ test('pre-tool hook: dispatch executor requires a canonical route marker without
   assert.equal(missingMarker.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(
     missingMarker.hookSpecificOutput.permissionDecisionReason,
-    "sidequest: a dispatch executor's spawn prompt must contain its briefing's route marker — spawn with the dispatch briefing verbatim and append addenda; re-run dispatch if the briefing was lost."
+    "sidequest: dispatch executor is missing the route marker from its briefing — re-run dispatch and spawn the returned briefing verbatim."
   );
 
   const builtIn = runHookOutput(FORCE_BYPASS, {

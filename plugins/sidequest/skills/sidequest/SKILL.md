@@ -86,8 +86,8 @@ Agent unchanged, including Sidequest's short `description`; do not paraphrase th
 routes pass the resolved `model`; Codex routes omit it so the generated executor's frontmatter pins the
 backend, while the supplied description includes the resolved route label. Use
 `dispatch <ref> --ephemeral` only for cross-session adoption. It creates a self-contained temporary
-executor definition, and that opt-in path waits for the generated type to register. Never end the turn waiting for registration: continue independent work or use a background timer to wake
-the session. Any
+executor definition, and that opt-in path waits for the generated type to register. Never end the turn waiting for registration: continue independent work or use one background timer to wake
+the session, never a foreground sleep loop. Any
 session may adopt an unspawned prepared definition, whose claim must carry its token. Routes without a
 stable executor, such as haiku, use `--ephemeral`. Never trust a worker's self-report: the dispatch token
 and exact executor name on the claim are the evidence. Commands default to the current project
@@ -199,8 +199,11 @@ Routed executors use the matching MCP tools instead. Their scoped `commit` recei
   so two sessions both using a generic label like `"claude"` silently coexist as the same worker and
   the atomicity guarantee never trips.
 - **If a claim fails** (already claimed / done / gone), **do not work that ticket** — pick another or
-  stop. Re-read its claim state immediately before spawning any replacement. Never both resume a prior
-  executor with `SendMessage` and spawn a fresh executor for the same ticket.
+  stop. Re-read its claim state immediately before spawning any replacement. A denied or unclaimed spawn gets
+  **one diagnose-first retry only**: `pulse <ref>` and read the deny reason verbatim, then retry only when
+  that diagnosis changes the spawn. Never issue an identical blind respawn. Two failures on one dispatch:
+  comment the evidence on the ticket and surface the failure to the user. Never both resume a prior executor
+  with `SendMessage` and spawn a fresh executor for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`) — a prior agent may have
   left exactly the context you need.
 - **Stale claims** are reclaimable after a TTL (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 min). Claims

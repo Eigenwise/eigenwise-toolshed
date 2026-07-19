@@ -33,10 +33,22 @@ test('ephemeral dispatch guidance prevents registration wait stalls', () => {
   assert.match(orchestration, /Any session\nmay adopt an unspawned prepared definition/);
 });
 
+test('retry guidance diagnoses once, bans blind respawns, and keeps registration waits off the foreground', () => {
+  for (const source of [skill, orchestration, executorTemplate]) {
+    assert.match(source, /diagnose-first retry/i);
+    assert.match(source, /blind\s+respawn/i);
+    assert.match(source, /two failures/i);
+    assert.match(source, /background timer/i);
+    assert.match(source, /foreground sleep loop/i);
+  }
+  assert.match(orchestration, /pulse and read the denial\nverbatim/);
+  assert.match(skill, /comment the evidence on the ticket and surface the failure to the user/);
+});
+
 test('dispatch guidance requires board confirmation after an Agent launch', () => {
   assert.match(orchestration, /Agent acknowledgement means only\n`launched`/);
   assert.match(orchestration, /Pulse the ticket immediately/);
-  assert.match(orchestration, /missing claim means diagnose or respawn/);
+  assert.match(orchestration, /denied or missing claim gets one diagnose-first retry/);
 });
 
 test('post-wave seam review stays scoped and event-driven', () => {

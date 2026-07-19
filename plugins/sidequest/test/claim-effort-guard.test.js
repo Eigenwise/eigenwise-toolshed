@@ -124,6 +124,7 @@ test('the store requires a dispatch nonce, rejects a wrong one, and accepts its 
   const wrong = store.claimTicket(slug, ref, 'store-wrong-token', { token: 'wrong-token', executor: prepared.ticket.dispatchExecutor });
   assert.equal(wrong.ok, false);
   assert.equal(wrong.reason, 'token');
+  assert.equal(wrong.detail, 'missing or expired dispatch token — run dispatch again and use its returned token.');
   const accepted = store.claimTicket(slug, ref, 'store-prepared', { token: prepared.token, executor: prepared.ticket.dispatchExecutor });
   assert.equal(accepted.ok, true);
 });

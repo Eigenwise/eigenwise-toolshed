@@ -31,8 +31,12 @@ function isPinnedSidequestExecutor(type) {
 }
 
 function agentDenyReason(type) {
-  return `sidequest: ${type || 'custom'} Agent launches need a ticket and fresh dispatch briefing. ` +
-    'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. For delegated exploration, research, review, or analysis, file a ticket, route it, dispatch it, and spawn the returned executor.';
+  if (type.startsWith('sidequest-')) {
+    return `sidequest: ${type} is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.`;
+  }
+  return `sidequest: ${type || 'custom'} is a generic Agent, not a Sidequest ticket executor. ` +
+    'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. For delegated exploration, research, review, or analysis, file a ticket, route it, dispatch it, and spawn the returned executor. ' +
+    'For a genuinely generic read-only scout, start the prompt with [sidequest-scout] and state that it is quick with no edits or writes; never use this for ticket work.';
 }
 
 const REF_RE = /\bSQ-\d+\b/gi;
@@ -235,7 +239,7 @@ function main() {
             hookEventName: 'PreToolUse',
             permissionDecision: 'deny',
             permissionDecisionReason:
-              `sidequest: a dispatch executor's spawn prompt must contain its briefing's route marker — spawn with the dispatch briefing verbatim and append addenda; re-run dispatch if the briefing was lost.`,
+              'sidequest: dispatch executor is missing the route marker from its briefing — re-run dispatch and spawn the returned briefing verbatim.',
           },
         }));
         return;

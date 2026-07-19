@@ -43,16 +43,17 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   replacing it. Preserve a verified commit, or recover the declared-scope diff, then read the ticket and
   its thread again before deciding whether a replacement is needed. Never overwrite stranded work by
   blindly redispatching. When a natural wakeup shows that an executor has no claim and no commit past the
-  2–3 minute grace period, stop it and respawn it once with the same briefing. When native Agent reports the
-  exact supported Claude quota-limit signature before claim, the failure hook records that primary attempt
+  2–3 minute grace period, stop it, then diagnose before retrying: `pulse <ref>` and read the denial or
+  terminal reason verbatim. Make ONE retry only when that diagnosis changes the dispatch; never blindly
+  respawn the identical spec. When native Agent reports the exact supported Claude quota-limit signature before claim, the failure hook records that primary attempt
   and prepares the ticket's configured fallback with a fresh token. Run `dispatch` for the ref again, then
   spawn the returned fallback spec unchanged. Do not edit or detach the category: the recovered route is
   ticket-local, survives a session restart, and normal category policy resumes when that dispatch ends.
   Treat any other model-access or API error as generic. Surface it without guessing a fallback or retrying
-  the route. Never both message the old executor and spawn a replacement for one ticket. A respawn that still
-  produces no claim is a user-visible failure: surface it, do not try a third spawn, and do not pull
-  substantial work inline by default. `SendMessage` is for new information such as a scope change or unblock,
-  never a "wake up" poke.
+  the route. Never both message the old executor and spawn a replacement for one ticket. Two failures on one
+  dispatch are a user-visible failure: comment the ticket with the verbatim denial/terminal evidence, surface
+  it, do not try a third spawn, and do not pull substantial work inline by default. `SendMessage` is for new
+  information such as a scope change or unblock, never a "wake up" poke.
 - **A 32 MB launch failure is not a retry.** When a dispatched native Agent dies before its first model
   turn with `Request too large (max 32MB)`, it is a non-retryable 413 from the orchestrator's accumulated
   images or attachments, not the ticket or briefing. Do not blindly redispatch or resume it: a fresh Agent
@@ -216,7 +217,7 @@ returned token and exact stable executor name.
 
 Use `dispatch <ref> --ephemeral` (or `{ephemeral:true}` in MCP) only for cross-session adoption. That
 opt-in path creates a self-contained per-ticket executor definition that another session can pick up,
-but it costs the watcher-registration wait. Never end a turn waiting for registration: continue independent work, or end the turn and resume at the next natural wakeup. Any session
+but it costs the watcher-registration wait. Never end a turn waiting for registration: continue independent work, or use one background timer to wake the session; never use a foreground sleep loop. Any session
 may adopt an unspawned prepared definition. If the tool returns `RESTART_NOTICE`, restart plugin
 loading or use `/reload-plugins` as directed. A route with no stable executor, such as haiku, must use
 `--ephemeral`; instant dispatch will explain that fallback.
@@ -224,8 +225,9 @@ loading or use `/reload-plugins` as directed. A route with no stable executor, s
 Re-dispatch rotates the token while the stable executor name remains fixed. A stale token is refused,
 and `done` or `release` clears the dispatch guard for either mode. An Agent acknowledgement means only
 `launched`. Pulse the ticket immediately and report it as running only after the holder and dispatch
-token are visible. A missing claim means diagnose or respawn, never wait for a completion notification.
-Never trust a worker's self-reported identity. The token-gated claim and the dispatch response are the evidence.
+token are visible. A denied or missing claim gets one diagnose-first retry: pulse and read the denial
+verbatim, then retry only when that diagnosis changes the dispatch. Never issue an identical blind respawn;
+two failures require ticket evidence and a user-visible stop. Never trust a worker's self-reported identity. The token-gated claim and the dispatch response are the evidence.
 
 ## Routed Agent dispatch
 
