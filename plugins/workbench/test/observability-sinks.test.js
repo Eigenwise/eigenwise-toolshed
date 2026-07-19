@@ -245,15 +245,19 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     assert.equal(panel.datasource.type, 'loki');
     assert.match(panel.description, /resolved gateway model/i);
     assert.match(panel.targets[0].legendFormat, /workbench_attribute_model/);
-    for (const measurement of ['input', 'output', 'cache_read', 'cache_creation']) {
-      assert.match(panel.targets[0].expr, new RegExp(`workbench_measurement_${measurement}_tokens_value`));
-    }
     assert.match(panel.targets[0].expr, /gateway\.token\.usage/);
     assert.match(panel.targets[0].expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   }
-  assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /\[\$__rate_interval\]/);
+  assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /\[\$__auto\]/);
   assert.match(byTitle.get('Models in use').targets[0].expr, /\[\$__range\]/);
   assert.equal(byTitle.get('Models in use').targets[0].instant, true);
+  // Binary + between per-type vectors drops any model missing a type (Codex
+  // records carry no cache measurements), so the model panels must unwrap a
+  // measurement present on every record.
+  for (const title of ['Tokens over time, by model', 'Models in use']) {
+    assert.match(byTitle.get(title).targets[0].expr, /context_tokens_value/);
+    assert.doesNotMatch(byTitle.get(title).targets[0].expr, /\) \+ sum/);
+  }
 
   const lokiExpressions = dashboard.panels
     .flatMap((panel) => panel.targets || [])
@@ -262,6 +266,9 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   for (const expression of lokiExpressions) {
     assert.doesNotMatch(expression, /\| json/);
     assert.doesNotMatch(expression, /workbench_[a-z_]+(?:=|=~|!~)/);
+    // Grafana only interpolates $__rate_interval for Prometheus; on Loki it
+    // reaches the server verbatim and every panel parse-errors.
+    assert.doesNotMatch(expression, /\$__rate_interval/);
   }
   assert.match(byTitle.get('Tool activity error rate').targets[0].expr, /or vector\(0\)$/);
   assert.match(byTitle.get('MCP connection activity').targets[0].expr, /workbench_attribute_mcp_server/);
