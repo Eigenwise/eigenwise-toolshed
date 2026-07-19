@@ -64,8 +64,8 @@ function callToolRaw(name, args) {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
   return resp.result;
 }
-// CLI-only tools are excluded from the MCP callable map on purpose, so exercise
-// their handler logic directly (the CLI path is what ships them to callers).
+// Legacy native-agent helpers remain CLI-only, but their handlers still have
+// direct coverage for the backward-compatible fallback path.
 function callHandler(name, args) {
   const tool = mcp.TOOLS.find((t) => t.name === name);
   assert.ok(tool, `tool ${name} exists in the registry`);
@@ -74,6 +74,16 @@ function callHandler(name, args) {
 
 function gitAt(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function runCli(args) {
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const output = execFileSync(process.execPath, [cli, ...args], {
+    encoding: 'utf8', windowsHide: true,
+    env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
+  });
+  const trimmed = output.trim();
+  return trimmed && trimmed.startsWith('{') ? JSON.parse(trimmed) : trimmed;
 }
 
 function runForceBypass(payload) {
@@ -117,11 +127,10 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'claim', 'sweepClaims', 'next', 'done', 'release', 'commit', 'submit', 'comment', 'ask', 'link', 'dispatch', 'category_edit', 'category_list', 'route_recipe']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'release', 'commit', 'submit', 'comment', 'ask', 'link', 'unlink', 'assign', 'dispatch', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
-  for (const cliOnly of ['archive_board', 'unarchive_board', 'category_add', 'category_rm', 'global_fallback', 'unlink', 'assign', 'remove',
-    'native_agent', 'native_agent_cleanup', 'category_detach', 'category_relink', 'models', 'projects']) {
+  for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
     assert.ok(!names.includes(cliOnly), `${cliOnly} stays CLI-only`);
   }
   for (const t of resp.result.tools) {
@@ -225,12 +234,24 @@ test('sweepClaims releases stale claims through MCP', () => {
 });
 
 
-test('CLI-only board archive tools are absent from MCP', () => {
-  for (const name of ['archive_board', 'unarchive_board']) {
-    const response = callToolRaw(name, {});
-    assert.ok(response.isError);
-    assert.match(response.content[0].text, /unknown tool/i);
-  }
+test('MCP board archive tools match the CLI archive-board lifecycle', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-board-archive-'));
+  const project = store.ensureProject(projectPath).slug;
+  const cliArchived = runCli(['archive-board', project, '--json']);
+  assert.equal(cliArchived.ok, true);
+  assert.ok(store.findProject(project).meta.archivedAt);
+
+  const restored = callTool('unarchive_board', { project });
+  assert.equal(restored.ok, true);
+  assert.equal(store.findProject(project).meta.archivedAt, undefined);
+
+  const archived = callTool('archive_board', { project });
+  assert.equal(archived.ok, true);
+  assert.ok(store.findProject(project).meta.archivedAt);
+
+  const cliRestored = runCli(['unarchive-board', project, '--json']);
+  assert.equal(cliRestored.ok, true);
+  assert.equal(store.findProject(project).meta.archivedAt, undefined);
 });
 test('dispatch returns a stable executor, one spawn prompt, and a token', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
@@ -447,11 +468,77 @@ test('status validation fails loudly and directs deletion to remove', () => {
   assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
 });
 
-test('CLI-only ticket removal is absent from MCP', () => {
-  const response = callToolRaw('remove', {});
-  assert.ok(response.isError);
-  assert.match(response.content[0].text, /unknown tool/i);
+test('MCP remove matches the CLI rm permanent-delete semantics', () => {
+  const cliTicket = callTool('add', { title: 'CLI permanent removal', unclassified: true });
+  runCli(['rm', cliTicket.ref, '--project', cliTicket.project]);
+  assert.equal(store.getTicket(cliTicket.project, cliTicket.ref), null);
+
+  const mcpTicket = callTool('add', { title: 'MCP permanent removal', unclassified: true });
+  const removed = callTool('remove', { project: mcpTicket.project, ref: mcpTicket.ref });
+  assert.equal(removed.ok, true);
+  assert.equal(store.getTicket(mcpTicket.project, mcpTicket.ref), null);
 });
+
+test('MCP archive and unarchive match the CLI ticket archive lifecycle', () => {
+  const cliTicket = callTool('add', { title: 'CLI ticket archive', unclassified: true });
+  const cliArchived = runCli(['archive', cliTicket.ref, '--project', cliTicket.project, '--json']);
+  assert.equal(cliArchived.ok, true);
+  assert.equal(store.getTicket(cliTicket.project, cliTicket.ref).archived, true);
+
+  const restored = callTool('unarchive', { project: cliTicket.project, ref: cliTicket.ref });
+  assert.equal(restored.ok, true);
+  assert.equal(store.getTicket(cliTicket.project, cliTicket.ref).archived, false);
+
+  const mcpTicket = callTool('add', { title: 'MCP ticket archive', unclassified: true });
+  const archived = callTool('archive', { project: mcpTicket.project, ref: mcpTicket.ref });
+  assert.equal(archived.ok, true);
+  assert.equal(store.getTicket(mcpTicket.project, mcpTicket.ref).archived, true);
+
+  const cliRestored = runCli(['unarchive', mcpTicket.ref, '--project', mcpTicket.project, '--json']);
+  assert.equal(cliRestored.ok, true);
+  assert.equal(store.getTicket(mcpTicket.project, mcpTicket.ref).archived, false);
+});
+
+test('MCP admin/config tools share CLI state transitions', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-admin-'));
+  const project = store.ensureProject(projectPath).slug;
+  const categoryId = `mcp-admin-${process.pid}`;
+  const fallback = store.getRoutingFallback();
+  try {
+    const cliCategory = runCli(['category', 'add', categoryId, '--name', 'MCP admin category', '--route-model', 'sonnet', '--route-effort', 'low', '--json']);
+    assert.equal(cliCategory.ok, true);
+    assert.equal(callTool('category_detach', { project, id: categoryId }).localRow.kind, 'DETACH');
+    const relinked = runCli(['category', 'relink', categoryId, '--project', project, '--json']);
+    assert.equal(relinked.localRow, null);
+
+    const mcpFallback = callTool('global_fallback', { project, model: 'sonnet', effort: 'low' });
+    assert.deepEqual(runCli(['global-fallback', '--project', project, '--json']).fallback, mcpFallback.fallback);
+    const cliFallback = runCli(['global-fallback', '--project', project, '--model', 'opus', '--effort', 'high', '--json']);
+    assert.deepEqual(callTool('global_fallback', { project }).fallback, cliFallback.fallback);
+
+    const a = callTool('add', { project, title: 'CLI assignment and link', unclassified: true });
+    const b = callTool('add', { project, title: 'MCP assignment and unlink', unclassified: true });
+    assert.equal(runCli(['assign', a.ref, '--project', project, '--to', 'cli-owner', '--json']).ticket.assignee, 'cli-owner');
+    assert.equal(callTool('assign', { project, ref: a.ref, to: 'mcp-owner' }).assignee, 'mcp-owner');
+    assert.equal(runCli(['link', a.ref, 'related', b.ref, '--project', project, '--json']).ok, true);
+    assert.equal(callTool('unlink', { project, a: a.ref, b: b.ref }).ok, true);
+    assert.equal(store.getTicket(project, a.ref).links.length, 0);
+
+    assert.deepEqual(callTool('models', { project }), runCli(['models', '--project', project, '--json']));
+    assert.deepEqual(callTool('projects', {}), runCli(['projects', '--json']));
+    assert.equal(callTool('category_rm', { id: categoryId }).ok, true);
+
+    const mcpCategoryId = `${categoryId}-mcp`;
+    assert.equal(callTool('category_add', {
+      id: mcpCategoryId, name: 'MCP-created admin category', routeModel: 'sonnet', routeEffort: 'low',
+    }).ok, true);
+    assert.ok(runCli(['category', 'list', '--json']).categories.some((category) => category.id === mcpCategoryId));
+    assert.equal(runCli(['category', 'rm', mcpCategoryId, '--json']).ok, true);
+  } finally {
+    if (fallback) store.setRoutingFallback(fallback);
+  }
+});
+
 
 test('claim -> comment -> done return compact acknowledgements', () => {
   const added = callTool('add', { title: 'work me', complexity: 2, why: 'a mechanical change to exercise the claim/done path over MCP' });

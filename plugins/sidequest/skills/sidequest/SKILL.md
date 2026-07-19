@@ -75,10 +75,11 @@ absolute worktree path, so an isolated worker never needs a command on its PATH.
 missing, the executor reports the blocker and releases through an available board tool. It does not search
 for a command-line fallback.
 
-The CLI is for humans, admins, and the orchestrator. It also owns rare admin/config operations kept off
-MCP: model/taxonomy reads, board switching, category pin/reset, policy, assignment, archive, unlink, and
-permanent removal. After a schema-bumping release, reload plugins before MCP writes so an older server
-cannot write an old store shape. Commands default to the current project; MCP takes a `project` field.
+MCP is the normal interface for everyday board work and admin/config operations: model and project reads,
+category policy and pin/reset, assignment, archive, unlink, and permanent removal. The CLI is the resilience
+fallback when MCP is unavailable, and the path for git-context-bound operations. Commands default to the
+current project; MCP takes a `project` field. After a schema-bumping release, reload plugins before MCP
+writes so an older server cannot write an old store shape.
 
 For routed work, `dispatch <ref>` is **instant by default**: it returns the ticket's stable executor,
 a complete `spawn` object, and a token. Pass every supplied `spawn` field to

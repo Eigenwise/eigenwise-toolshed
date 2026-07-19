@@ -202,6 +202,21 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   dispatch: 'Prepare a ticket executor through its stable route.',
   done: 'Finish a claimed ticket and release its claim. Stamp the actual model and effort.',
   native_agent: 'Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.',
+  archive: 'Archive one ticket, or every done ticket.',
+  archive_board: 'Archive an explicitly named board.',
+  assign: 'Set a ticket assignee.',
+  category_add: 'Add a global or project category.',
+  category_detach: 'Pin a board category to its current policy.',
+  category_edit: 'Edit a global category or project policy.',
+  category_relink: 'Reset a board category to the shared policy.',
+  category_rm: 'Remove a global or project category policy.',
+  global_fallback: 'Read or set the global routing fallback.',
+  models: 'Read models and category routes.',
+  projects: 'List registered boards.',
+  remove: 'Permanently delete a ticket.',
+  unarchive: 'Restore an archived ticket.',
+  unarchive_board: 'Restore an explicitly named board.',
+  unlink: 'Remove links between two tickets.',
 };
 
 function conciseDescription(description) {
@@ -519,28 +534,56 @@ const TOOLS = [
   },
   {
     name: 'remove',
-    description: 'Permanently and irreversibly delete a ticket by ref. Refuses a live claim unless force:true is passed.',
+    description: 'Permanently and irreversibly delete a ticket by ref, matching sidequest rm.',
     inputSchema: {
       type: 'object',
-      properties: {
-        ref: { type: 'string' },
-        project: PROJECT_PROP,
-        force: { type: 'boolean', description: 'Permanently remove a ticket with a live claim. Use only when certain.' },
-      },
+      properties: { ref: { type: 'string' }, project: PROJECT_PROP },
       required: ['ref'],
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
-      if (ticket.claim && ticket.claim.by && !store.isClaimStale(ticket.claim) && !args.force) {
-        return { ok: false, project: slug, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
-      }
       const removed = { ref: ticket.ref, title: ticket.title };
       if (!store.deleteTicket(slug, ticket.id)) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
       }
       return { ok: true, project: slug, removed, ref: removed.ref, title: removed.title };
+    },
+  },
+  {
+    name: 'archive',
+    description: 'Archive one ticket by ref, or every done ticket with done:true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        done: { type: 'boolean', description: 'Archive every done ticket on the board.' },
+      },
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      if (args.done) return Object.assign({ project: slug }, store.archiveAllDone(slug, { source: 'mcp' }));
+      const ref = requiredText(args, 'ref', 'archive');
+      const result = store.archiveTicket(slug, ref, { source: 'mcp' });
+      if (!result.ok) throw new Error(`archive: no ticket "${ref}" on ${meta.name}.`);
+      return mutationAck(slug, result);
+    },
+  },
+  {
+    name: 'unarchive',
+    description: 'Restore an archived ticket by ref.',
+    inputSchema: {
+      type: 'object',
+      properties: { ref: { type: 'string' }, project: PROJECT_PROP },
+      required: ['ref'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const result = store.unarchiveTicket(slug, args.ref, { source: 'mcp' });
+      if (!result.ok) throw new Error(`unarchive: no ticket "${args.ref}" on ${meta.name}.`);
+      return mutationAck(slug, result);
     },
   },
   {
@@ -1173,14 +1216,7 @@ const TOOLS = [
 ];
 
 const MCP_CLI_ONLY_TOOLS = new Set([
-  'archive_board', 'unarchive_board', 'category_add', 'category_rm',
-  'global_fallback', 'unlink', 'assign', 'remove',
-  // Rare admin/config/switcher reads and the deprecated native_agent path. Kept
-  // off the always-on MCP descriptor list (they cost ~530 tokens of schema every
-  // request for ops fired ~never); still reachable via the CLI, documented in the
-  // skill's "CLI is the fallback" section.
-  'native_agent', 'native_agent_cleanup', 'category_detach', 'category_relink',
-  'models', 'projects',
+  'native_agent', 'native_agent_cleanup',
 ]);
 
 const TOOL_BY_NAME = new Map(TOOLS
