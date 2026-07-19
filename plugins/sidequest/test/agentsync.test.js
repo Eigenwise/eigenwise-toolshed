@@ -320,6 +320,68 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
   assert.doesNotMatch(briefing, /\[sidequest-route model=/);
 });
 
+test('workflow recipes use the dispatch pin and normalized catalog marker for Codex routes', () => {
+  seedCatalog([TERRA]);
+  const store = require('../lib/store.js');
+  configure(store, 'workflow-codex', { model: TERRA.slug, effort: 'medium' });
+  const category = Object.assign(store.getCategory('workflow-codex'), { project: 'recipe-project' });
+
+  assert.deepStrictEqual(agentsync.workflowRecipe(category, store.resolveCategoryRoute(category)), {
+    project: 'recipe-project',
+    category: 'workflow-codex',
+    categoryName: 'workflow-codex',
+    backend: 'codex',
+    route: { model: TERRA.slug, effort: 'medium' },
+    runsLabel: TERRA.label,
+    agent: {
+      model: agentsync.DISPATCH_MODEL_ID,
+      promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n',
+    },
+    effortCarrier: 'marker',
+    warnings: [],
+  });
+});
+
+test('workflow recipes use the Claude runtime alias without a prompt prefix', () => {
+  clearCatalog();
+  const store = require('../lib/store.js');
+  configure(store, 'workflow-claude', { model: 'opus', effort: 'high' });
+  const category = Object.assign(store.getCategory('workflow-claude'), { project: 'recipe-project' });
+
+  assert.deepStrictEqual(agentsync.workflowRecipe(category, store.resolveCategoryRoute(category)), {
+    project: 'recipe-project',
+    category: 'workflow-claude',
+    categoryName: 'workflow-claude',
+    backend: 'claude',
+    route: { model: 'opus', effort: 'high' },
+    runsLabel: 'Claude Opus',
+    agent: { model: 'opus', promptPrefix: '' },
+    effortCarrier: 'none',
+    warnings: [],
+  });
+});
+
+test('workflow recipes preserve live fallback warnings', () => {
+  clearCatalog();
+  const store = require('../lib/store.js');
+  configure(store, 'workflow-fallback', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'medium' });
+  const category = Object.assign(store.getCategory('workflow-fallback'), { project: 'recipe-project' });
+  const recipe = agentsync.workflowRecipe(category, store.resolveCategoryRoute(category));
+
+  assert.deepStrictEqual(recipe.route, { model: 'opus', effort: 'medium' });
+  assert.equal(recipe.effortCarrier, 'none');
+  assert.deepStrictEqual(recipe.warnings, ['Category "workflow-fallback" route model "codex-gpt-5-6-terra" isn\'t currently available.']);
+});
+
+test('workflow recipes reject an invalid Codex marker before spawning', () => {
+  assert.throws(() => agentsync.workflowRecipe({ id: 'invalid-route', name: 'Invalid route', project: 'recipe-project' }, {
+    model: 'codex-invalid',
+    effort: 'high',
+    exec: { backend: 'codex', dispatchModel: 'not marker-safe', runsLabel: 'Invalid' },
+    warnings: [],
+  }), /model id is not marker-safe/);
+});
+
 test('routeMarker rejects ids and efforts outside the gateway grammar', () => {
   for (const effort of EFFORTS) {
     assert.equal(agentsync.routeMarker('gpt-5.6-sol', effort), `[sidequest-route model=gpt-5.6-sol effort=${effort}]`);

@@ -108,6 +108,36 @@ function routeMarker(dispatchModel, effort) {
   return marker;
 }
 
+function workflowRecipe(category, resolved) {
+  const exec = resolved && resolved.exec;
+  if (!category || !exec) throw new Error('A resolved category route is required.');
+
+  const recipe = {
+    project: category.project,
+    category: category.id,
+    categoryName: category.name,
+    backend: exec.backend,
+    route: { model: resolved.model, effort: resolved.effort },
+    runsLabel: exec.runsLabel,
+    agent: null,
+    effortCarrier: null,
+    warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : [],
+  };
+
+  if (exec.backend === 'codex') {
+    recipe.agent = {
+      model: DISPATCH_MODEL_ID,
+      promptPrefix: `${routeMarker(exec.dispatchModel, resolved.effort)}\n\n`,
+    };
+    recipe.effortCarrier = 'marker';
+  } else {
+    recipe.agent = { model: exec.model, promptPrefix: '' };
+    recipe.effortCarrier = 'none';
+  }
+
+  return recipe;
+}
+
 // Render one agent file's full source from the shared template. Every runtime
 // file is user-scoped rather than plugin-scoped so Claude Code honors its
 // permissionMode: bypassPermissions frontmatter. `name` and `effort` are
@@ -553,6 +583,7 @@ module.exports = {
   ticketCommentsDigest,
   COMMENT_DIGEST_MAX_CHARS,
   routeMarker,
+  workflowRecipe,
   renderDispatchAgent,
   renderExecAgent,
   renderTicketBriefing,
