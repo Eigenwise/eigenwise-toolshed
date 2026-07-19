@@ -348,6 +348,30 @@ test('JSON capture emits exact identities, resolved route, measurements, and no 
   }
 });
 
+test('emits normalized MCP footprint records per server', () => {
+  const emitted = [];
+  const emitter = createGatewayUsageEmitter({
+    endpoint: 'http://127.0.0.1:4318/v1/logs',
+    emit(record) { emitted.push(record); },
+  });
+  finishEmitterRequest(emitter, {
+    tools: [
+      { name: 'mcp__alpha__one', description: 'alpha schema' },
+      { name: 'mcp__beta__two', description: 'beta schema' },
+    ],
+  }, 1000, 'session-footprint', 'agent-footprint');
+
+  const request = emitted.find((record) => record.eventName === 'gateway.token.usage');
+  const footprints = emitted.filter((record) => record.eventName === 'gateway.mcp.footprint');
+  assert.equal(footprints.length, 2);
+  assert.deepEqual(new Set(footprints.map((record) => record.attributes.mcp_server)), new Set(['alpha', 'beta']));
+  assert.equal(
+    footprints.reduce((total, record) => total + record.attributes.input_mcp_tools_tokens, 0),
+    request.attributes.input_mcp_tools_tokens,
+  );
+  assert.ok(footprints.every((record) => record.attributes.session_id === 'session-footprint'));
+});
+
 test('emits bounded per-server MCP tool token measurements', () => {
   const requestPayload = {
     system: 'system',

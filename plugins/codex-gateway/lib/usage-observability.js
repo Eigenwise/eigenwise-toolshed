@@ -14,6 +14,7 @@ const MAX_MCP_SERVER_MEASUREMENTS = 20;
 const DEFAULT_CONTEXT_SNAPSHOT_TTL_MS = 4 * 60 * 60 * 1000;
 const DEFAULT_CONTEXT_SNAPSHOT_MAX_IDENTITIES = 500;
 const TOOL_RESULT_EVENT = 'gateway.tool_result.usage';
+const MCP_FOOTPRINT_EVENT = 'gateway.mcp.footprint';
 
 const RATE_LIMIT_HEADERS = Object.freeze({
   'anthropic-ratelimit-requests-limit': ['rate_limit_requests_limit', 'count'],
@@ -754,6 +755,43 @@ function toolResultUsageRecord(requestRecord, attribution) {
   };
 }
 
+function mcpFootprintRecords(requestRecord) {
+  const request = requestRecord.attributes;
+  return Object.entries(request)
+    .filter(([name, value]) => /^input_mcp_tools_[a-z0-9_]{1,64}_tokens$/.test(name) && numeric(value) !== null)
+    .map(([name, value]) => {
+      const server = name.slice('input_mcp_tools_'.length, -'_tokens'.length);
+      const attributes = {
+        source: 'codex_gateway',
+        source_event_id: `gateway-mcp-footprint-${crypto.randomUUID()}`,
+        source_schema: 'gateway-usage-v1',
+        'event.name': MCP_FOOTPRINT_EVENT,
+        event_name: MCP_FOOTPRINT_EVENT,
+        request_id: request.request_id,
+        client_request_id: request.client_request_id,
+        session_id: request.session_id,
+        agent_id: request.agent_id,
+        parent_agent_id: request.parent_agent_id,
+        agent_role: request.agent_role,
+        model: request.model,
+        requested_model: request.requested_model,
+        backend: request.backend,
+        effort: request.effort,
+        via: request.via,
+        request_sequence: request.request_sequence,
+        mcp_server: server,
+        input_mcp_tools_tokens: value,
+      };
+      return {
+        eventName: MCP_FOOTPRINT_EVENT,
+        observedAt: requestRecord.observedAt,
+        attributes,
+        traceId: requestRecord.traceId,
+        spanId: requestRecord.spanId,
+      };
+    });
+}
+
 function createGatewayUsageEmitter(options = {}) {
   const environment = options.environment || process.env;
   const endpoint = options.endpoint === null
@@ -808,6 +846,9 @@ function createGatewayUsageEmitter(options = {}) {
         emit(record) {
           try { emitRecord(record); } catch {}
           if (record.eventName !== 'gateway.token.usage') return;
+          for (const footprint of mcpFootprintRecords(record)) {
+            try { emitRecord(footprint); } catch {}
+          }
           const attributions = toolResultTracker.finish(contextCapture, record.attributes.context_tokens);
           for (const attribution of attributions) {
             try { emitRecord(toolResultUsageRecord(record, attribution)); } catch {}

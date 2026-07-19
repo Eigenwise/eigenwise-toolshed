@@ -906,7 +906,7 @@
     {
       "id": 25,
       "title": "MCP definition footprint by server",
-      "description": "Estimated input tokens spent per request on each MCP server’s tool definitions. Servers are enumerated in the query; newly connected MCP servers appear after a dashboard update (normalized emission tracked on the board).",
+      "description": "Estimated input tokens spent per request on each MCP server’s tool definitions. Server names come from normalized gateway.mcp.footprint records, so new servers appear automatically.",
       "type": "table",
       "datasource": {
         "type": "loki",
@@ -936,8 +936,8 @@
           },
           "queryType": "instant",
           "instant": true,
-          "expr": "sum by (mcp_server) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | label_format mcp_server=\"plugin_sidequest_board\" | unwrap workbench_measurement_input_mcp_tools_plugin_sidequest_board_tokens_value [$__range])) or sum by (mcp_server) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | label_format mcp_server=\"plugin_playwright_playwright\" | unwrap workbench_measurement_input_mcp_tools_plugin_playwright_playwright_tokens_value [$__range]))",
-          "legendFormat": "{{mcp_server}}"
+          "expr": "sum by (workbench_attribute_mcp_server) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.mcp.footprint\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$__range]))",
+          "legendFormat": "{{workbench_attribute_mcp_server}}"
         }
       ],
       "transformations": [
@@ -948,6 +948,7 @@
               "Time": true
             },
             "renameByName": {
+              "workbench_attribute_mcp_server": "MCP server",
               "Value #A": "Definition tokens per request"
             }
           }

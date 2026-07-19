@@ -258,11 +258,11 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.match(byTitle.get('MCP activity by server / tool').targets[0].expr, /sum by \(workbench_attribute_mcp_server\)/);
   const definitionPanel = byTitle.get('MCP definition footprint by server');
   assert.equal(definitionPanel.targets[0].instant, true);
-  assert.match(definitionPanel.targets[0].expr, /gateway\.token\.usage/);
-  assert.match(definitionPanel.targets[0].expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
-  assert.match(definitionPanel.targets[0].expr, /input_mcp_tools_plugin_sidequest_board_tokens_value/);
-  assert.match(definitionPanel.targets[0].expr, /input_mcp_tools_plugin_playwright_playwright_tokens_value/);
-  assert.match(definitionPanel.description, /servers are enumerated in the query/i);
+  assert.match(definitionPanel.targets[0].expr, /gateway\.mcp\.footprint/);
+  assert.match(definitionPanel.targets[0].expr, /workbench_attribute_mcp_server/);
+  assert.match(definitionPanel.targets[0].expr, /workbench_measurement_input_mcp_tools_tokens_value/);
+  assert.doesNotMatch(definitionPanel.targets[0].expr, /plugin_sidequest_board|plugin_playwright_playwright/);
+  assert.match(definitionPanel.description, /new servers appear automatically/i);
   assert.ok(definitionPanel.transformations.some(({ id }) => id === 'organize'));
   assert.match(JSON.stringify(definitionPanel.transformations), /Definition tokens per request/);
   assert.match(byTitle.get('Token volume by backend').targets[0].expr, /workbench_attribute_backend/);

@@ -94,6 +94,7 @@ const ALLOWED_EVENTS = Object.freeze([
   'sidequest.ticket',
   'codex_gateway.route',
   'gateway.token.usage',
+  'gateway.mcp.footprint',
   'gateway.tool_result.usage',
   'gateway.limit.signal',
   'coverage_gap',
