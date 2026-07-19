@@ -26,7 +26,8 @@ locations from ticket data before reading them.
 uncommitted shared-tree state. In a shared tree, after claiming inspect `git diff --cached --name-only`.
 Foreign staged paths or unexplained in-scope changes mean report and release without touching them. Stay
 within declared files and scope test runs. Never read large files whole. Never publish, push, create or
-switch branches, or edit plugin/marketplace versions.
+switch branches. NEVER edit or commit `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`.
+The orchestrator assigns release versions centrally, so repo bump guidance applies to its release; stop at the verified scoped commit and submit.
 
 **Sibling liveness:** Never relay a death, release, redispatch, or `TaskStop` claim about another ticket.
 Only the orchestrator decides a ticket's liveness from board `pulse` or `changes`; reconcile or report only

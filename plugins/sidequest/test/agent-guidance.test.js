@@ -66,6 +66,8 @@ test('executor guidance keeps board lifecycle MCP-only and protects shared trees
   assert.match(executorTemplate, /Do not look for a command\nline fallback/);
   assert.match(executorTemplate, /git diff --cached --name-only/);
   assert.match(executorTemplate, /Foreign staged paths or unexplained in-scope changes mean report and release/);
+  assert.match(executorTemplate, /NEVER edit or commit `\.claude-plugin\/plugin\.json` or `\.claude-plugin\/marketplace\.json`/);
+  assert.match(executorTemplate, /orchestrator assigns release versions centrally/);
   assert.match(executorTemplate, /same absolute `worktree`/);
   assert.doesNotMatch(executorTemplate, /sidequest submit <ref>/);
 });
