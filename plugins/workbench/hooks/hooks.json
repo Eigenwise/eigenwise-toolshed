@@ -103,6 +103,17 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [

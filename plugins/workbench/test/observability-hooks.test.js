@@ -140,7 +140,7 @@ test('hooks.json keeps the freshness hooks and registers observability across li
   assert.ok(commandsFor('SessionStart').includes('lib/observability/ensure.js'));
   assert.ok(commandsFor('SessionStart').includes('--launch'));
   assert.ok(commandsFor('UserPromptSubmit').includes('user-prompt-freshness.js'));
-  for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop']) {
+  for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStart', 'SubagentStop']) {
     assert.ok(commandsFor(event).includes('observability.js'), `observability missing on ${event}`);
   }
 });

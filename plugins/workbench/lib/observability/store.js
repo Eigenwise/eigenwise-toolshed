@@ -77,12 +77,16 @@ function buildOtlpPayload(observation, measurements = [], links = []) {
   for (const [field, value] of Object.entries(observation.attributes || {})) {
     add(`workbench.attribute.${field}`, Array.isArray(value) ? JSON.stringify(value) : value);
   }
+  if (measurements.length > 0) {
+    add('workbench.measurements', stableStringify(measurements.map(({ name, unit, scope, quality }) => ({
+      name,
+      unit,
+      scope,
+      quality,
+    }))));
+  }
   for (const measurement of measurements) {
-    const prefix = `workbench.measurement.${measurement.name}`;
-    add(`${prefix}.quality`, measurement.quality);
-    add(`${prefix}.scope`, measurement.scope);
-    add(`${prefix}.unit`, measurement.unit);
-    if (measurement.value !== null) add(`${prefix}.value`, measurement.value);
+    if (measurement.value !== null) add(`workbench.measurement.${measurement.name}.value`, measurement.value);
   }
   if (links.length > 0) add('workbench.links', JSON.stringify(links));
 

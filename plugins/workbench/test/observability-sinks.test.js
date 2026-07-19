@@ -7,7 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { DEFAULT_PORTS, normalizeManagedConfig } = require('../bin/setup-observability.js');
 const { flushOutbox } = require('../lib/observability/outbox.js');
-const { openObservabilityStore } = require('../lib/observability/store.js');
+const { buildOtlpPayload, openObservabilityStore } = require('../lib/observability/store.js');
 const grafana = require('../observability/sinks/grafana/index.js');
 const {
   DEFAULT_SINK,
@@ -203,6 +203,30 @@ test('none keeps ledger observations without creating downstream rows', (t) => {
   assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM otlp_outbox').get().count, 0);
 });
 
+test('OTLP outbox keeps measurement metadata without exceeding collector attribute limits', () => {
+  const measurements = Array.from({ length: 60 }, (_, index) => ({
+    name: `measurement_${index}`,
+    value: index,
+    unit: 'tokens',
+    scope: 'request',
+    quality: 'exact_provider',
+  }));
+  const payload = buildOtlpPayload({
+    event_id: 'event-many-measurements',
+    source: 'codex_gateway',
+    source_event_id: 'gateway-many-measurements',
+    source_schema: 'gateway-v1',
+    observed_at: '2026-07-19T12:00:00.000Z',
+    event_name: 'gateway.token.usage',
+    attributes: { model: 'gpt-5.6-sol', agent_role: 'executor' },
+  }, measurements);
+  const attributes = payload.resourceLogs[0].scopeLogs[0].logRecords[0].attributes;
+
+  assert.ok(attributes.length < 128);
+  assert.equal(attributes.filter(({ key }) => key === 'workbench.measurements').length, 1);
+  assert.equal(attributes.filter(({ key }) => key.endsWith('.value')).length, 60);
+});
+
 test('Grafana dashboard separates token breakdowns from tool and MCP activity', () => {
   const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
@@ -210,11 +234,29 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     'Tokens over time, by type', 'Tokens over time, by model', 'Token volume by provider / backend',
     'Tool activity by name', 'MCP activity by server / tool', 'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
-    'Hook execution overhead / failures', 'Subagent lifecycle activity',
+    'Hook execution activity / failures', 'Subagent lifecycle activity',
   ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
   assert.match(byTitle.get('MCP activity by server / tool').description, /frequency only/i);
   assert.match(byTitle.get('MCP activity by server / tool').description, /token attribution is unavailable/i);
   assert.match(byTitle.get('Token volume by provider / backend').targets[0].expr, /provider, backend/);
+
+  const lokiExpressions = dashboard.panels
+    .flatMap((panel) => panel.targets || [])
+    .filter((target) => target.datasource && target.datasource.type === 'loki')
+    .map((target) => target.expr);
+  for (const expression of lokiExpressions) {
+    assert.doesNotMatch(expression, /\| json/);
+    assert.doesNotMatch(expression, /workbench_[a-z_]+(?:=|=~|!~)/);
+  }
+  assert.match(byTitle.get('Tool activity error rate').targets[0].expr, /or vector\(0\)$/);
+  assert.match(byTitle.get('MCP connection activity').targets[0].expr, /workbench_attribute_mcp_server/);
+  assert.match(byTitle.get('Hook execution activity / failures').targets[0].expr, /workbench_attribute_hook_name/);
+  for (const title of [
+    'Gateway usage by session', 'Orchestrator vs executor usage', 'Input composition over time',
+    'Context-window growth', 'Prompt-cache economics', 'Rate-limit and Codex throttle headroom',
+  ]) {
+    for (const target of byTitle.get(title).targets) assert.match(target.expr, /workbench_session_id !~ "probe\.\*"/);
+  }
 });
 
 test('generic OTLP forwards private headers only after explicit remote opt-in', async (t) => {
