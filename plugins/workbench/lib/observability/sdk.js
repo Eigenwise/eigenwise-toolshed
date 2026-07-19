@@ -50,8 +50,10 @@ function formatTraceparent(traceId, spanId, sampled = true) {
   return `00-${traceId}-${spanId}-${sampled ? '01' : '00'}`;
 }
 
-// Application-supplied workflow root: create a root span and a W3C traceparent to
-// inject into the SDK `query()` call so native children join by trace parentage.
+// Application-owned correlation context: mint a W3C trace context to inject into the SDK
+// `query()` call so native children join by trace parentage. This emits NO observation —
+// the single terminal observation is produced only from a real SDKResultMessage by
+// normalizeTerminalResult(). `workflow_run_id` is application metadata, not an SDK field.
 function createWorkflowRun(options = {}) {
   const workflowRunId = identifier(first(options.workflowRunId, options.workflow_run_id));
   const parent = parseTraceparent(first(options.traceparent, options.parentTraceparent));
@@ -59,28 +61,14 @@ function createWorkflowRun(options = {}) {
   const spanId = randomBytes(8).toString('hex');
   const sampled = parent ? parent.sampled : true;
 
-  const attributes = {};
-  const rootObservation = {
-    source: 'agent_sdk',
-    source_event_id: `agent_sdk_workflow_${traceId}_${spanId}`,
-    source_schema: 'agent-sdk-v1',
-    observed_at: isoTime(options.observedAt, new Date().toISOString()),
-    event_name: 'agent_sdk.terminal_result',
-    trace_id: traceId,
-    span_id: spanId,
-    attributes,
-  };
-  if (parent) rootObservation.parent_span_id = parent.spanId;
-  assign(rootObservation, 'workflow_run_id', workflowRunId);
-  assign(rootObservation, 'project_id', identifier(options.projectId));
-
   return {
     workflowRunId,
     traceId,
     spanId,
     sampled,
+    parentSpanId: parent ? parent.spanId : null,
     traceparent: formatTraceparent(traceId, spanId, sampled),
-    rootObservation,
+    projectId: identifier(options.projectId),
   };
 }
 
@@ -107,17 +95,18 @@ function costMeasurement(raw, scope) {
   return { name: 'cost_usd', value, unit: 'usd', scope, quality: 'estimate' };
 }
 
-// Per-model breakdown from the terminal result: one assistant_usage observation per
-// model, at run scope so it never duplicates per-request usage from api_request events.
+// Whole-tree per-model breakdown (includes subagents) from the terminal `modelUsage`
+// field: one assistant_usage observation per model at run scope. Kept separate from the
+// top-level query-scope `usage` on the terminal observation; the two are never summed.
 function modelUsageObservations(result, base) {
-  const breakdown = first(result.modelUsage, result.model_usage);
+  const breakdown = result.modelUsage;
   if (!isPlainObject(breakdown)) return [];
   const observations = [];
   for (const [rawModel, usage] of Object.entries(breakdown)) {
     const model = identifier(rawModel);
     if (!model || !isPlainObject(usage)) continue;
     const measurements = usageMeasurements(usage, 'run');
-    const cost = costMeasurement(first(usage.costUSD, usage.cost_usd), 'run');
+    const cost = costMeasurement(usage.costUSD, 'run');
     if (cost) measurements.push(cost);
     if (measurements.length === 0) continue;
     observations.push({
@@ -142,30 +131,33 @@ function runLink(relation, kind, id, method, quality) {
 function normalizeTerminalResult(result, context = {}) {
   if (!isPlainObject(result)) throw new TypeError('An SDK terminal result object is required.');
 
-  const sessionId = identifier(first(result.session_id, result.sessionId, context.sessionId));
-  const messageUuid = identifier(first(result.uuid, result.messageUuid, result.message_uuid));
-  const workflowRunId = identifier(first(context.workflowRunId, context.workflow_run_id, result.workflow_run_id));
+  const sessionId = identifier(first(result.session_id, context.sessionId));
+  const messageUuid = identifier(result.uuid);
+  const workflowRunId = identifier(first(context.workflowRunId, context.workflow_run_id));
   const trace = parseTraceparent(context.traceparent) || {
     traceId: identifier(context.traceId),
     spanId: identifier(context.spanId),
   };
 
   const attributes = {};
-  assign(attributes, 'status', identifier(first(result.subtype, result.status)));
-  assign(attributes, 'stop_reason', identifier(first(result.stop_reason, result.stopReason)));
-  const turns = nonNegative(first(result.num_turns, result.numTurns));
+  assign(attributes, 'status', identifier(result.subtype));
+  assign(attributes, 'stop_reason', identifier(result.stop_reason));
+  const turns = nonNegative(result.num_turns);
   if (turns !== null) attributes.turns = turns;
 
   const measurements = [];
-  const duration = nonNegative(first(result.duration_ms, result.durationMs));
+  const duration = nonNegative(result.duration_ms);
   if (duration !== null) measurements.push({ name: 'duration_ms', value: duration, unit: 'ms', scope: 'run', quality: 'exact_client' });
-  // API duration is time the run spent blocked on the provider; distinct measurement name.
-  const apiDuration = nonNegative(first(result.duration_api_ms, result.durationApiMs));
-  if (apiDuration !== null) measurements.push({ name: 'blocked_ms', value: apiDuration, unit: 'ms', scope: 'run', quality: 'exact_client' });
-  // Aggregate usage at run scope is a completeness check; request-scope usage lives on
-  // api_request events, so run scope here never double-counts them.
-  for (const measurement of usageMeasurements(first(result.usage, result.totalUsage), 'run')) measurements.push(measurement);
-  const cost = costMeasurement(first(result.total_cost_usd, result.totalCostUsd), 'run');
+  // duration_api_ms is the SDK's own API-time figure; it carries no provider-blocked-time
+  // contract, so it is recorded under an SDK-native name (never blocked_ms, which is a
+  // tool-scoped measurement with a different meaning).
+  const apiDuration = nonNegative(result.duration_api_ms);
+  if (apiDuration !== null) measurements.push({ name: 'api_duration_ms', value: apiDuration, unit: 'ms', scope: 'run', quality: 'exact_client' });
+  // Top-level `usage` is the query() call total and EXCLUDES subagents. It stays at run
+  // scope, kept distinct from the whole-tree per-model `modelUsage` breakdown below; the
+  // two are never summed.
+  for (const measurement of usageMeasurements(result.usage, 'run')) measurements.push(measurement);
+  const cost = costMeasurement(result.total_cost_usd, 'run');
   if (cost) measurements.push(cost);
 
   const observedAt = isoTime(context.observedAt, new Date().toISOString());

@@ -50,6 +50,32 @@ function terminalResult(overrides = {}) {
   };
 }
 
+// A faithful SDKResultError shape (subtype error_*, is_error, errors[], permission_denials[]).
+function errorResult(overrides = {}) {
+  return {
+    subtype: 'error_max_turns',
+    is_error: true,
+    uuid: 'msg-uuid-err',
+    session_id: 'session-err',
+    num_turns: 12,
+    duration_ms: 9100,
+    duration_api_ms: 6400,
+    total_cost_usd: 0.1337,
+    stop_reason: null,
+    usage: {
+      input_tokens: 4000,
+      output_tokens: 900,
+    },
+    modelUsage: {
+      'claude-codex-gpt-5.6-sol': { inputTokens: 4000, outputTokens: 900, costUSD: 0.1337 },
+    },
+    // Content that must never be captured:
+    errors: [{ message: 'private error detail that must not leak' }],
+    permission_denials: [{ tool_name: 'Bash', tool_input: { command: 'rm secret' } }],
+    ...overrides,
+  };
+}
+
 function assertAccepted(observation) {
   const result = normalizeObservation(observation);
   assert.equal(result.accepted, true, `rejected: ${JSON.stringify(result.rejectedFields)}`);
@@ -74,28 +100,28 @@ test('parseTraceparent validates and rejects malformed / all-zero context', () =
   assert.equal(parseTraceparent(unsampled).sampled, false);
 });
 
-test('createWorkflowRun inherits a parent trace and emits an acceptable root observation', () => {
+test('createWorkflowRun inherits a parent trace as correlation context and emits no observation', () => {
   const run = createWorkflowRun({
     workflowRunId: 'wf-run-7',
     traceparent: PARENT_TRACE,
     projectId: PROJECT_ID,
-    observedAt: '2026-07-19T10:00:00.000Z',
   });
   assert.equal(run.workflowRunId, 'wf-run-7');
   assert.equal(run.traceId, '0123456789abcdef0123456789abcdef');
+  assert.equal(run.parentSpanId, '1122334455667788');
+  assert.equal(run.projectId, PROJECT_ID);
   assert.match(run.traceparent, /^00-0123456789abcdef0123456789abcdef-[0-9a-f]{16}-01$/);
-  assert.equal(run.rootObservation.parent_span_id, '1122334455667788');
-  assert.equal(run.rootObservation.workflow_run_id, 'wf-run-7');
-  assertAccepted(run.rootObservation);
+  // Correlation context only: no terminal observation is fabricated before a real result.
+  assert.equal('rootObservation' in run, false);
 });
 
 test('createWorkflowRun mints a fresh trace when no parent is supplied', () => {
-  const run = createWorkflowRun({ observedAt: '2026-07-19T10:00:00.000Z' });
+  const run = createWorkflowRun({});
   assert.match(run.traceId, /^[0-9a-f]{32}$/);
   assert.match(run.spanId, /^[0-9a-f]{16}$/);
   assert.equal(run.workflowRunId, null);
-  assert.equal(run.rootObservation.parent_span_id, undefined);
-  assertAccepted(run.rootObservation);
+  assert.equal(run.parentSpanId, null);
+  assert.equal('rootObservation' in run, false);
 });
 
 test('normalizeTerminalResult emits acceptable terminal + per-model observations at run scope', () => {
@@ -117,7 +143,7 @@ test('normalizeTerminalResult emits acceptable terminal + per-model observations
   // run scope, never request scope (that would double-count api_request usage).
   for (const measurement of terminal.measurements) assert.equal(measurement.scope, 'run');
   const durations = terminal.measurements.filter((m) => m.unit === 'ms').map((m) => m.name).sort();
-  assert.deepEqual(durations, ['blocked_ms', 'duration_ms']);
+  assert.deepEqual(durations, ['api_duration_ms', 'duration_ms']);
   const costs = terminal.measurements.filter((m) => m.name === 'cost_usd');
   assert.equal(costs[0].quality, 'estimate');
 
@@ -155,6 +181,36 @@ test('normalizeTerminalResult never captures prompt, response, cwd, or env conte
   assert.equal(serialized.includes('secret-project'), false);
   assert.equal(serialized.includes('something private'), false);
   assert.equal(serialized.includes('/home/kenny'), false);
+});
+
+test('normalizeTerminalResult accepts an SDKResultError shape and stays metadata-only', () => {
+  const observations = normalizeTerminalResult(errorResult(), {
+    workflowRunId: 'wf-run-9',
+    projectId: PROJECT_ID,
+    observedAt: '2026-07-19T10:06:00.000Z',
+  });
+  const [terminal, ...models] = observations;
+  assert.equal(terminal.event_name, 'agent_sdk.terminal_result');
+  assert.equal(terminal.attributes.status, 'error_max_turns');
+  assert.equal(terminal.attributes.turns, 12);
+  const durations = terminal.measurements.filter((m) => m.unit === 'ms').map((m) => m.name).sort();
+  assert.deepEqual(durations, ['api_duration_ms', 'duration_ms']);
+  assert.equal(models.length, 1);
+  // errors[] and permission_denials[] carry private content that must never be captured.
+  const serialized = JSON.stringify(observations);
+  assert.equal(serialized.includes('private error detail'), false);
+  assert.equal(serialized.includes('rm secret'), false);
+  assert.equal(serialized.includes('Bash'), false);
+  for (const observation of observations) assertAccepted(observation);
+});
+
+test('normalizeTerminalResult never reads workflow_run_id from the SDK result', () => {
+  const observations = normalizeTerminalResult(terminalResult({ workflow_run_id: 'sdk-should-be-ignored' }), {
+    projectId: PROJECT_ID,
+    observedAt: '2026-07-19T10:05:00.000Z',
+  });
+  const [terminal] = observations;
+  assert.equal(terminal.workflow_run_id, undefined);
 });
 
 test('flushObservations is bounded and fail-open', async () => {

@@ -104,6 +104,7 @@ const ALLOWED_MEASUREMENTS = Object.freeze([
   'result_tokens',
   'duration_ms',
   'blocked_ms',
+  'api_duration_ms',
   'cost_usd',
   'bytes_in',
   'bytes_out',
