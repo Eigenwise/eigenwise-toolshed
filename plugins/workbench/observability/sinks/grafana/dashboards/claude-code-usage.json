@@ -760,7 +760,7 @@
           },
           "queryType": "instant",
           "instant": true,
-          "expr": "quantile_over_time(0.95, {service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | unwrap workbench_measurement_duration_ms_value [$__range])"
+          "expr": "quantile_over_time(0.95, {service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | unwrap workbench_measurement_duration_ms_value [$__range]) by ()"
         }
       ]
     },

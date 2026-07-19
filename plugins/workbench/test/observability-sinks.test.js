@@ -246,6 +246,8 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     'Hook execution activity / failures', 'Subagent lifecycle activity',
     'Subscription rate-limit burn', 'Subscription window resets',
   ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
+  const toolDurationP95 = byTitle.get('Tool activity duration p95');
+  assert.equal(toolDurationP95.targets[0].expr, 'quantile_over_time(0.95, {service_name="workbench-observer"} |= "hook.post_tool_use" | unwrap workbench_measurement_duration_ms_value [$__range]) by ()');
   for (const title of ['Tool activity by name', 'MCP activity by server / tool']) {
     const panel = byTitle.get(title);
     assert.equal(panel.type, 'table');
