@@ -1,6 +1,6 @@
 {
   "name": "workbench",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Set up and maintain a Claude Code workspace: initialize project-side configuration, check and update Toolshed plugins, diagnose local health, and run retrospectives.",
   "author": {
     "name": "Eigenwise",
