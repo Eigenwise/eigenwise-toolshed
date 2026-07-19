@@ -269,3 +269,28 @@ test('bounded JSON side buffers drop overflowed usage and failed responses emit 
   assert.equal(record.attributes.input_tokens, undefined);
   assert.equal(emitted.length, 1);
 });
+
+test('OTLP payload carries the event.name attribute the collector filter matches on', () => {
+  let emitted;
+  const capture = createUsageCapture({
+    payload,
+    requestBodyBytes: Buffer.byteLength(JSON.stringify(payload)),
+    requestHeaders: { 'x-claude-code-session-id': 'session-filter-seam' },
+    route: { backend: 'codex', effectiveModel: 'gpt-5.6-terra', requestedModel: 'claude-codex-auto' },
+    emit(record) { emitted = record; },
+  });
+  capture.setResponse(200, {});
+  capture.observeJson(JSON.stringify({ usage: { input_tokens: 10, output_tokens: 2 } }));
+  capture.finish();
+
+  const otlp = buildOtlpLogPayload(emitted);
+  const attributes = attributeMap(otlp);
+  assert.equal(attributes['event.name'], 'gateway.token.usage');
+  assert.equal(attributes.event_name, 'gateway.token.usage');
+
+  // Seam guard: this is the workbench collector's filter/signals allowlist
+  // (REQUIRED_LOG_FILTER in plugins/workbench/bin/install-otel-collector.js).
+  // If either side changes its key or pattern, this must fail.
+  const filterRegex = /^(claude_code|agent_sdk|gateway)\.|^(mcp_server_connection|hook_execution_(start|complete))$/;
+  assert.match(attributes['event.name'], filterRegex);
+});

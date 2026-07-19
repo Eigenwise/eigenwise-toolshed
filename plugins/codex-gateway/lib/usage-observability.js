@@ -505,6 +505,10 @@ function createUsageCapture(options) {
       source: 'codex_gateway',
       source_event_id: sourceEventId,
       source_schema: 'gateway-usage-v1',
+      // Both spellings: the collector's filter/signals matches the OTel
+      // convention attributes["event.name"]; event_name stays for the
+      // observer's existing column mapping.
+      'event.name': eventName,
       event_name: eventName,
       request_id: requestIdEvidence.value,
       request_id_source: requestIdEvidence.source,
