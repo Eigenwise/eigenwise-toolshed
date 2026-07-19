@@ -126,6 +126,45 @@ function runLink(relation, kind, id, method, quality) {
   return { relation, to_kind: kind, to_id: safeId, method, quality };
 }
 
+function normalizeAssistantUsage(message, context = {}) {
+  if (!isPlainObject(message) || message.type !== 'assistant' || !isPlainObject(message.message)) return null;
+
+  const providerMessageId = identifier(message.message.id);
+  if (!providerMessageId) return null;
+  const measurements = usageMeasurements(message.message.usage, 'request');
+  if (measurements.length === 0) return null;
+
+  const sessionId = identifier(first(message.session_id, context.sessionId));
+  const messageUuid = identifier(message.uuid);
+  const trace = parseTraceparent(context.traceparent) || {
+    traceId: identifier(context.traceId),
+    spanId: identifier(context.spanId),
+  };
+  const attributes = {};
+  assign(attributes, 'model', identifier(message.message.model));
+  assign(attributes, 'message_uuid', messageUuid);
+
+  const observation = {
+    source: 'agent_sdk',
+    source_event_id: `agent_sdk_assistant_${createHash('sha256').update(providerMessageId).digest('hex').slice(0, 32)}`,
+    source_schema: 'agent-sdk-v1',
+    observed_at: isoTime(context.observedAt, new Date().toISOString()),
+    event_name: 'agent_sdk.assistant_usage',
+    attributes,
+    measurements,
+  };
+  assign(observation, 'project_id', identifier(context.projectId));
+  assign(observation, 'session_id', sessionId);
+  assign(observation, 'workflow_run_id', identifier(first(context.workflowRunId, context.workflow_run_id)));
+  assign(observation, 'request_id', identifier(message.request_id));
+  assign(observation, 'trace_id', identifier(trace.traceId));
+  assign(observation, 'span_id', identifier(trace.spanId));
+
+  const parentToolUse = runLink('child_of', 'tool', first(message.parent_tool_use_id, context.parentToolUseId), 'direct_id', 'exact_client');
+  if (parentToolUse) observation.links = [parentToolUse];
+  return observation;
+}
+
 // Normalize the SDK/Workflow terminal `result` message into canonical observations.
 // Metadata only: never reads prompt, response, tool content, cwd, transcript, or env.
 function normalizeTerminalResult(result, context = {}) {
@@ -142,6 +181,7 @@ function normalizeTerminalResult(result, context = {}) {
   const attributes = {};
   assign(attributes, 'status', identifier(result.subtype));
   assign(attributes, 'stop_reason', identifier(result.stop_reason));
+  assign(attributes, 'message_uuid', messageUuid);
   const turns = nonNegative(result.num_turns);
   if (turns !== null) attributes.turns = turns;
 
@@ -232,6 +272,7 @@ module.exports = {
   createWorkflowRun,
   flushObservations,
   formatTraceparent,
+  normalizeAssistantUsage,
   normalizeTerminalResult,
   parseTraceparent,
 };

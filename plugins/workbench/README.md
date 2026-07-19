@@ -39,6 +39,29 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js"
 
 After updates, reload every session that had an affected plugin loaded.
 
+## Agent SDK observability
+
+`lib/observability/sdk-query.js` wraps the real async iterator from `@anthropic-ai/claude-agent-sdk` without making Workbench install or own that dependency. This integration was verified against `@anthropic-ai/claude-agent-sdk` `0.3.215`.
+
+```js
+const { query } = require('@anthropic-ai/claude-agent-sdk');
+const { observeQuery } = require('./lib/observability/sdk-query.js');
+
+for await (const message of observeQuery({
+  query,
+  prompt: 'Inspect this repository.',
+  options: { cwd: process.cwd() },
+  traceparent: activeSpanTraceparent,
+  tracestate: activeSpanTracestate,
+})) {
+  if (message.type === 'result') {
+    console.log(message.subtype);
+  }
+}
+```
+
+Omit `traceparent` and `tracestate` to leave the SDK's automatic OpenTelemetry propagation alone. The SDK treats `options.env` as a replacement subprocess environment, not a merge. When supplying trace context, the adapter merges `process.env`, the caller's `options.env`, and the W3C variables. If you set `options.env` without trace context, include the environment variables the SDK process needs yourself.
+
 ## License
 
 [MIT](../../LICENSE) © Kenny Vaneetvelde
