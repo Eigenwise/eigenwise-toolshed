@@ -9,6 +9,7 @@ const {
   activeInstances,
   compareSemver,
   decide,
+  isAgentGeneratedPrompt,
   isMaintenancePrompt,
   isTaskNotificationPrompt,
 } = require('../hooks/user-prompt-freshness.js');
@@ -123,14 +124,18 @@ const reorderedTaskNotification = `<task-notification>
 <tool-use-id>toolu_01D2s5bnLL6LWzYm1Qf7PsK7</tool-use-id>
 </task-notification>`;
 
-test('complete native Agent task notifications bypass without registry work', () => {
-  let reads = 0;
-  const result = decide({ prompt: completeTaskNotification, cwd: 'C:\\dev\\project' }, {
-    fileSystem: { readFileSync: () => { reads += 1; throw new Error('must not read'); } },
-    registryFile: 'unreadable-registry',
-  });
-  assert.equal(result, '');
-  assert.equal(reads, 0);
+test('agent-generated continuations pass with one reload warning', () => {
+  const directory = tempDirectory();
+  const { registryFile, pluginRoot } = reloadPending(directory);
+  const warningStateDirectory = path.join(directory, 'warnings');
+  const options = { registryFile, pluginRoot, platform: 'win32', warningStateDirectory };
+  const prompt = '<agent-message>Executor completed.</agent-message>';
+  const first = JSON.parse(decide({ prompt, cwd: 'C:\\dev\\project', session_id: 'session-agent' }, options));
+  assert.equal(first.hookSpecificOutput.additionalContext, 'Workbench 2.0.0 installed, session loaded 1.0.0. Reload when convenient.');
+  assert.equal(decide({ prompt, cwd: 'C:\\dev\\project', session_id: 'session-agent' }, options), '');
+  assert.equal(isAgentGeneratedPrompt(prompt), true);
+  assert.equal(isAgentGeneratedPrompt('<local-command-caveat>Use the CLI result.</local-command-caveat>'), true);
+  assert.equal(isAgentGeneratedPrompt(completeTaskNotification), true);
   assert.equal(isTaskNotificationPrompt(completeTaskNotification), true);
   assert.equal(isTaskNotificationPrompt(reorderedTaskNotification), true);
 });
@@ -139,8 +144,8 @@ test('malformed task-notification envelopes do not bypass the reload guard', () 
   const directory = tempDirectory();
   const { registryFile, pluginRoot } = reloadPending(directory);
   const options = { registryFile, pluginRoot, platform: 'win32' };
-  // A genuine complete envelope still bypasses even with a reload pending.
-  assert.equal(decide({ prompt: completeTaskNotification, cwd: 'C:\\dev\\project' }, options), '');
+  // A genuine complete envelope receives a warning but continues through a reload window.
+  assert.match(decide({ prompt: completeTaskNotification, cwd: 'C:\\dev\\project' }, options), /"additionalContext"/);
   const invalid = [
     `Please handle this.\n${completeTaskNotification}`,
     `${completeTaskNotification}\nPlease handle this.`,
@@ -158,6 +163,31 @@ test('malformed task-notification envelopes do not bypass the reload guard', () 
     assert.equal(isTaskNotificationPrompt(prompt), false, prompt);
     assert.match(decide({ prompt, cwd: 'C:\\dev\\project' }, options), /"decision":"block"/);
   }
+});
+
+test('toolshed source checkout warns instead of blocking a human prompt', () => {
+  const directory = tempDirectory();
+  const { registryFile, pluginRoot } = reloadPending(directory);
+  const project = path.join(directory, 'toolshed', 'plugins', 'workbench');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(path.join(directory, 'toolshed', '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(directory, 'toolshed', '.claude-plugin', 'marketplace.json'), JSON.stringify({
+    name: 'eigenwise-toolshed',
+    plugins: [{ name: 'workbench', source: './plugins/workbench' }],
+  }));
+  const result = JSON.parse(decide({ prompt: 'keep working', cwd: project, session_id: 'session-dev' }, {
+    registryFile,
+    pluginRoot,
+    platform: 'win32',
+    warningStateDirectory: path.join(directory, 'warnings'),
+  }));
+  assert.equal(result.hookSpecificOutput.additionalContext, 'Workbench 2.0.0 installed, session loaded 1.0.0. Reload when convenient.');
+});
+
+test('ordinary human prompts still hard-block during a reload window', () => {
+  const directory = tempDirectory();
+  const { registryFile, pluginRoot } = reloadPending(directory);
+  assert.match(decide({ prompt: 'keep working', cwd: 'C:\\dev\\consumer' }, { registryFile, pluginRoot, platform: 'win32' }), /"decision":"block"/);
 });
 
 test('selects user and overlapping project installs, excluding unrelated marketplaces', () => {
