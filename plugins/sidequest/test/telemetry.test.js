@@ -64,3 +64,67 @@ test('pulse git probe reports scoped working tree changes', () => {
   const pulse = cliJson(['pulse', ref]);
   assert.strictEqual(pulse.git.dirty, true);
 });
+
+test('native lifecycle observations include only allowlisted metadata', () => {
+  const telemetry = require('../lib/telemetry.js');
+  const ticket = {
+    ref: 'SQ-42',
+    title: 'do not emit this title',
+    description: 'or this description',
+    status: 'doing',
+    categoryId: 'coding.normal',
+    category: { route: { model: 'terra', effort: 'high' } },
+    model: 'gpt-5.6-terra',
+    effort: 'high',
+    exec: { agent: 'sidequest-exec-dispatch-high', backend: 'codex' },
+    claim: { by: 'worker-1' },
+    dispatch: {
+      id: 'dispatch-42',
+      sessionId: 'session-42',
+      taskId: 'task-42',
+      agentId: 'agent-42',
+      executor: 'sidequest-exec-dispatch-high',
+      tokenPrefix: 'must-not-leak',
+    },
+    updatedAt: '2026-07-19T10:00:00.000Z',
+  };
+  const observation = telemetry.ticketObservation('project-42', ticket);
+  assert.deepStrictEqual(observation.attributes, {
+    category: 'coding.normal',
+    configured_model: 'terra',
+    configured_effort: 'high',
+    configured_backend: 'codex',
+    resolved_model: 'gpt-5.6-terra',
+    resolved_effort: 'high',
+    resolved_backend: 'codex',
+    executor: 'sidequest-exec-dispatch-high',
+    dispatch_id: 'dispatch-42',
+    claim_worker_id: 'worker-1',
+    claim_session_id: 'session-42',
+    task_status: 'doing',
+  });
+  assert.strictEqual(observation.task_id, 'task-42');
+  assert.strictEqual(observation.route_id, 'dispatch-42');
+  assert.strictEqual(observation.session_id, 'session-42');
+  assert.strictEqual(observation.agent_id, 'agent-42');
+  assert.match(observation.source_event_id, /^sidequest_[a-f0-9]{64}$/);
+  assert.strictEqual(telemetry.ticketObservation('project-42', ticket).source_event_id, observation.source_event_id);
+  assert.strictEqual(telemetry.ticketObservation('project-42', Object.assign({}, ticket, { submission: { commit: 'abc1234' } })).attributes.task_status, 'submitted');
+  const serialized = JSON.stringify(observation);
+  for (const secret of ['do not emit this title', 'or this description', 'must-not-leak']) assert.ok(!serialized.includes(secret));
+});
+
+test('shared store boundary emits once for MCP mutations', () => {
+  const telemetry = require('../lib/telemetry.js');
+  const observed = [];
+  telemetry.setTestSink((observation) => observed.push(observation));
+  try {
+    const result = callTool('update', { ref, status: 'todo' });
+    assert.strictEqual(result.ok, true);
+  } finally {
+    telemetry.setTestSink(null);
+  }
+  assert.strictEqual(observed.length, 1);
+  assert.strictEqual(observed[0].ticket_ref, ref);
+  assert.strictEqual(observed[0].attributes.task_status, 'todo');
+});

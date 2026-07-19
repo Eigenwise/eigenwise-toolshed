@@ -35,6 +35,7 @@ const { execFileSync } = require('child_process');
 const db = require('./db.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels } = require('./discovery.js');
+const telemetry = require('./telemetry.js');
 
 /* ------------------------------------------------------------------ *
  *  Roots and path helpers
@@ -231,6 +232,7 @@ function putTicket(slug, ticket) {
     claim_by: stored.claim && stored.claim.by ? stored.claim.by : null,
     data: stored,
   });
+  telemetry.emitTicket(slug, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
 }
 
 function putStory(slug, story) {

@@ -399,6 +399,18 @@ The **CLI is the human/admin/orchestrator interface** and does everything the to
 explicit worktree argument lets the server operate on their isolated checkout. The category taxonomy and
 route shape are the same across CLI, MCP, and dashboard.
 
+### Local Workbench telemetry
+
+When the Workbench observer is running on `127.0.0.1:14319`, Sidequest sends a small lifecycle snapshot
+for each ticket write. It includes only routing and lifecycle metadata: category, configured and resolved
+route, executor, dispatch/task/session/agent IDs, claim worker, submission state, and status. The endpoint
+is loopback-only, requests time out after 250 ms, and observer failures never affect a board mutation.
+
+Ticket titles, descriptions, comments, prompts, attachment paths and contents, dispatch tokens, tool
+payloads, errors, and credentials stay out of telemetry. Each snapshot has a stable source event ID, so
+observer deduplication covers writes reached through either MCP or the CLI. Use `sidequest changes --since
+<serverTime>` to backfill a missed interval.
+
 ## CLI
 
 Every action is a thin wrapper over one script, usable directly too:
