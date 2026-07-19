@@ -224,7 +224,7 @@ test('a re-dispatch rotates the token against a constant stable executor and rej
   assert.equal(cliJson(['claim', ref, '--by', 'latest', '--token', second.token, '--executor', second.ticket.dispatchExecutor]).ok, true);
 });
 
-test('instant dispatch (default) returns the stable executor, the briefing, and the token', () => {
+test('instant dispatch (default) returns a stable executor, ticket-only spawn prompt, and token', () => {
   const ref = seed('guard.codex');
   const dispatched = cliJson(['dispatch', ref]);
   assert.equal(dispatched.ref, ref);
@@ -232,12 +232,13 @@ test('instant dispatch (default) returns the stable executor, the briefing, and 
   assert.equal(dispatched.agent, 'sidequest-exec-dispatch-high');
   assert.equal(dispatched.spawn.subagent_type, dispatched.agent);
   assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
-  assert.match(dispatched.briefing, new RegExp(`--token ${dispatched.token}`));
-  assert.match(dispatched.briefing, /mcp__plugin_sidequest_board__claim/);
-  assert.match(dispatched.briefing, /exact\n   `executor`/);
-  assert.doesNotMatch(dispatched.briefing, new RegExp(`--executor ${dispatched.agent}`));
-  assert.match(dispatched.briefing, /## This ticket/);
-  assert.doesNotMatch(dispatched.briefing, /^---$/m);
+  assert.equal(Object.hasOwn(dispatched, 'briefing'), false);
+  assert.match(dispatched.spawn.prompt, new RegExp(`--token ${dispatched.token}`));
+  assert.doesNotMatch(dispatched.spawn.prompt, /mcp__plugin_sidequest_board__claim/);
+  assert.doesNotMatch(dispatched.spawn.prompt, /exact\n   `executor`/);
+  assert.match(dispatched.spawn.prompt, /## This ticket/);
+  assert.doesNotMatch(dispatched.spawn.prompt, /You are a sidequest ticket executor/);
+  assert.doesNotMatch(dispatched.spawn.prompt, /^---$/m);
   assert.equal(ticket(ref).dispatchExecutor, dispatched.agent);
 });
 

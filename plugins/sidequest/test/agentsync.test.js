@@ -212,7 +212,7 @@ test('declared-file tickets receive a worktree spawn unless shared-tree is expli
   assert.equal(created.spawn.isolation, 'worktree');
 });
 
-test('renderTicketBriefing reuses the template body with the ticket brief and token, minus frontmatter', () => {
+test('renderTicketBriefing contains only ticket-specific dispatch context', () => {
   seedCatalog([TERRA]);
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-334', title: 'Instant dispatch', description: 'Ride the briefing on the spawn prompt.',
@@ -223,17 +223,16 @@ test('renderTicketBriefing reuses the template body with the ticket brief and to
   }, 'instant-token-334');
   assert.doesNotMatch(briefing, /^---$/m);
   assert.doesNotMatch(briefing, /^name:/m);
-  assert.match(briefing, /You are a sidequest ticket executor/);
+  assert.doesNotMatch(briefing, /You are a sidequest ticket executor/);
+  assert.match(briefing, /## This ticket/);
   assert.match(briefing, /Instant dispatch/);
   assert.match(briefing, /Ride the briefing on the spawn prompt/);
   assert.match(briefing, /Stable exec is pre-registered/);
   assert.match(briefing, /Plan against the system, verify end to end/);
-  assert.match(briefing, /mcp__plugin_sidequest_board__claim/);
-  assert.match(briefing, /exact\n   `executor`/);
+  assert.doesNotMatch(briefing, /mcp__plugin_sidequest_board__claim/);
   assert.match(briefing, /--token instant-token-334/);
-  assert.match(briefing, /mcp__plugin_sidequest_board__submit/);
-  assert.doesNotMatch(briefing, /sidequest submit <ref>/);
-  assert.ok(Buffer.byteLength(briefing) <= 10456, `briefing is ${Buffer.byteLength(briefing)} bytes — it must not exceed the prior template budget`);
+  assert.doesNotMatch(briefing, /mcp__plugin_sidequest_board__submit/);
+  assert.ok(Buffer.byteLength(briefing) < 4000, `ticket briefing is ${Buffer.byteLength(briefing)} bytes`);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
 });
 

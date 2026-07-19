@@ -295,38 +295,18 @@ function ticketBrief(ticket, nonce, marker) {
   return parts.join('\n\n');
 }
 
-// Drop the YAML frontmatter block a rendered executor file opens with, leaving
-// the prompt body. Instant dispatch pastes the body into a spawn prompt, where
-// def-file frontmatter (name/model/maxTurns/permissionMode) is meaningless — the
-// stable executor supplies its own.
-function stripExecFrontmatter(source) {
-  const text = String(source);
-  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(text);
-  const body = match ? text.slice(match[0].length) : text;
-  return body.replace(/^\s*\n/, '');
-}
-
-// Render the stable executor's template body with the ticket briefing and token.
-// Frontmatter is excluded because the registered executor supplies it.
+// Stable executor definitions carry the invariant protocol as their system
+// prompt. The spawn prompt only carries the ticket-specific details and route
+// marker, so instant dispatch does not duplicate that protocol per ticket.
 function renderTicketBriefing(ticket, nonce) {
   if (typeof nonce !== 'string' || !nonce.trim() || /[\r\n]/.test(nonce)) {
     throw new Error('dispatch briefing nonce is required and must be a non-empty one-line string.');
   }
-  const name = ticket && ticket.dispatchExecutor
-    ? String(ticket.dispatchExecutor)
-    : ((ticket && ticket.exec && ticket.exec.agent) || stableClaudeName((ticket && ticket.effort) || 'low'));
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const marker = resolved && resolved.backend === 'codex' && resolved.dispatchModel
     ? routeMarker(resolved.dispatchModel, ticket.effort)
     : null;
-  const source = renderExecAgent({
-    name,
-    effort: ticket.effort,
-    marker: '',
-    extraNote: '',
-    ticketBrief: ticketBrief(ticket, nonce.trim(), marker),
-  });
-  return stripExecFrontmatter(source);
+  return ticketBrief(ticket, nonce.trim(), marker);
 }
 
 function ticketIsolation(ticket, sharedTree) {

@@ -847,7 +847,7 @@ const TOOLS = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare a token-gated dispatch for a ticket. It returns the full rendered briefing text plus the token, then spawn the returned stable executor with that briefing as its prompt. Stable executors are ready from session start, so no definition file is involved. A new dispatch in an adopting session rotates the token and returns a current briefing. The claim stays gated on the returned token and executor.',
+    description: 'Prepare a token-gated dispatch for a ticket. It returns a stable executor spawn spec and token. Pass spawn unchanged to Agent. Stable executors are ready from session start, so no definition file is involved. A new dispatch in an adopting session rotates the token and returns a current spawn. The claim stays gated on the returned token and executor.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -862,8 +862,8 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const prepared = store.prepareDispatch(slug, args.ref, { sessionId: sessionOf(args) });
       const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
-      const briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
-      const prompt = agentsync.withProjectIdentity(briefing, meta.path);
+      const ticketPrompt = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
+      const prompt = agentsync.withProjectIdentity(ticketPrompt, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
       const agent = prepared.ticket.dispatchExecutor;
       return {
@@ -878,7 +878,6 @@ const TOOLS = [
         token: prepared.token,
         recovery: prepared.recovery || null,
         spawn: agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt, agentsync.spawnDescription(prepared.ticket, resolved)),
-        briefing,
         guidance: prepared.recovery
           ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
           : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,

@@ -526,7 +526,7 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.match(ctx, /Read, Glob, Grep, or WebFetch inline/, 'must give tiny lookups direct tools');
   assert.match(ctx, /delegated exploration, research, review, or analysis gets a ticket first/, 'must route delegated work through the board');
   assert.ok(ctx.includes('fresh `dispatch`'), 'must require a fresh dispatch result');
-  assert.ok(ctx.includes('exact stable executor, briefing, and token'), 'must use the exact instant dispatch result');
+  assert.ok(ctx.includes('exact stable executor, spawn, and token'), 'must use the exact instant dispatch result');
   assert.match(ctx, /Dispatch is instant: no registration\/watcher wait/, 'must replace the registration wait flow');
   assert.ok(ctx.includes('do not use `native_agent`'), 'must reject temporary native dispatch for normal execution');
   assert.ok(ctx.includes('bypassPermissions'), 'must require unattended executors to launch in bypass');
@@ -640,7 +640,7 @@ test('session-start: compact and resume preserve the minimum ticket and executor
     assert.match(ctx, /sidequest \(active — context restored\)/);
     assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
     assert.match(ctx, /Substantive work needs a board ticket/, `${source} must preserve ticket-first work`);
-    assert.match(ctx, /fresh dispatch's exact token-gated executor and briefing/, `${source} must preserve exact dispatch execution`);
+    assert.match(ctx, /fresh dispatch's exact token-gated executor and spawn/, `${source} must preserve exact dispatch execution`);
     assert.match(ctx, /Every Agent launch must use that executor/, `${source} must require dispatch for every Agent launch`);
     assert.match(ctx, /Read, Glob, Grep, or WebFetch inline/, `${source} must name direct lookup tools`);
     assert.ok(ctx.includes('delegated exploration/research/review/analysis gets a ticket first'), `${source} must route delegated work through the board`);
@@ -900,7 +900,7 @@ test('subagent-stop: a prior owner is silent after another worker reclaims the t
 test('subagent-stop: a stopped executor without a claim gets a respawn verdict', () => {
   assert.strictEqual(
     runHook(SUBAGENT_STOP, { session_id: 'sess-nobody-here', agent_type: 'sidequest-exec-high' }),
-    'exec stopped without ever claiming, TaskStop it first, then respawn with the same briefing'
+    'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec'
   );
   assert.strictEqual(runHook(SUBAGENT_STOP, {}), '', 'a bare payload with no session id stays silent');
 });
@@ -1095,7 +1095,7 @@ test('pre-tool hook: dispatch executor requires a canonical route marker without
   assert.equal(missingMarker.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(
     missingMarker.hookSpecificOutput.permissionDecisionReason,
-    "sidequest: dispatch executor is missing the route marker from its briefing — re-run dispatch and spawn the returned briefing verbatim."
+    "sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged."
   );
 
   const builtIn = runHookOutput(FORCE_BYPASS, {

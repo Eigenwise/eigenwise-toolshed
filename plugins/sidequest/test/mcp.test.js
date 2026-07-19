@@ -220,7 +220,7 @@ test('CLI-only board archive tools are absent from MCP', () => {
     assert.match(response.content[0].text, /unknown tool/i);
   }
 });
-test('dispatch returns a stable executor, briefing, and token', () => {
+test('dispatch returns a stable executor, one spawn prompt, and a token', () => {
   const d = mcp.toolDescriptors().find((t) => t.name === 'dispatch');
   assert.ok(d);
   assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref', 'session', 'sharedTree']);
@@ -243,10 +243,12 @@ test('dispatch returns a stable executor, briefing, and token', () => {
   assert.equal(instant.spawn.model, undefined);
   assert.equal(instant.spawn.subagent_type, instant.agent);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
-  assert.match(instant.briefing, new RegExp(`--token ${instant.token}`));
-  assert.match(instant.briefing, /\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
-  assert.match(instant.briefing, /## This ticket/);
-  assert.doesNotMatch(instant.briefing, /^---$/m);
+  assert.equal(Object.hasOwn(instant, 'briefing'), false);
+  assert.match(instant.spawn.prompt, new RegExp(`--token ${instant.token}`));
+  assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
+  assert.match(instant.spawn.prompt, /## This ticket/);
+  assert.doesNotMatch(instant.spawn.prompt, /You are a sidequest ticket executor/);
+  assert.doesNotMatch(instant.spawn.prompt, /^---$/m);
   assert.match(instant.guidance, /executor/);
   assert.equal(store.getTicket(slug, addedInstant.ref).dispatchExecutor, instant.agent);
 
@@ -254,7 +256,8 @@ test('dispatch returns a stable executor, briefing, and token', () => {
   assert.equal(adopted.mode, 'instant');
   assert.equal(adopted.agent, instant.agent);
   assert.notEqual(adopted.token, instant.token);
-  assert.match(adopted.briefing, new RegExp(`--token ${adopted.token}`));
+  assert.equal(Object.hasOwn(adopted, 'briefing'), false);
+  assert.match(adopted.spawn.prompt, new RegExp(`--token ${adopted.token}`));
   assert.doesNotMatch(JSON.stringify(adopted), /ephemeral/);
 });
 
@@ -263,15 +266,18 @@ test('dispatch returns a complete Claude worktree spawn spec', () => {
   const added = callTool('add', { title: 'complete instant spawn', category: 'dispatch-fable', files: ['plugins/sidequest'] });
   const dispatched = callTool('dispatch', { ref: added.ref });
 
-  assert.deepStrictEqual(dispatched.spawn, {
+  const { prompt, ...spawn } = dispatched.spawn;
+  assert.deepStrictEqual(spawn, {
     subagent_type: 'sidequest-exec-xhigh',
     name: 'sidequest-exec-xhigh',
     mode: 'bypassPermissions',
     description: 'complete instant spawn',
     isolation: 'worktree',
     model: 'fable',
-    prompt: agentsync.withProjectIdentity(dispatched.briefing, PROJ),
   });
+  assert.match(prompt, /## This ticket/);
+  assert.match(prompt, /Dispatch board identity: --project/);
+  assert.doesNotMatch(prompt, /You are a sidequest ticket executor/);
   assert.equal(dispatched.effort, 'xhigh');
   assert.equal(dispatched.projectPath, PROJ);
 });
