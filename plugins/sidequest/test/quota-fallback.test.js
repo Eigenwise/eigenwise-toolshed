@@ -160,7 +160,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.deepEqual(store.getCategory('quota.fixture').route, { model: 'fable', effort: 'xhigh' });
 });
 
-test('PostToolUseFailure ignores generic errors and prepares quota fallback for CLI and MCP adoption', () => {
+test('PostToolUseFailure ignores generic errors and prepares quota fallback for CLI --session and MCP runtime-session adoption', () => {
   const ticket = createFixture('hook quota recovery');
   const launched = launch(ticket, 'quota-hook-primary');
   const payload = {
@@ -191,16 +191,24 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
   assert.equal(cliDispatch.effort, 'max');
   assert.equal(cliDispatch.exec.backend, 'codex');
   assert.match(cliDispatch.spawn.prompt, /\[sidequest-route model=gpt-5\.6-sol effort=max\]/);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, 'quota-cli-adopted');
 
-  const mcpDispatch = callTool('dispatch', {
-    project: PROJECT,
-    ref: ticket.ref,
-    session: 'quota-mcp-adopted',
-  });
-  assert.equal(mcpDispatch.token, cliDispatch.token);
-  assert.equal(mcpDispatch.recovery.model, 'codex-gpt-5-6-sol');
-  assert.equal(mcpDispatch.spawn.subagent_type, 'sidequest-exec-dispatch-max');
-  assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, 'quota-mcp-adopted');
+  const mcpRuntimeSessionId = 'quota-mcp-runtime-session';
+  const previousMcpRuntimeSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = mcpRuntimeSessionId;
+  try {
+    const mcpDispatch = callTool('dispatch', {
+      project: PROJECT,
+      ref: ticket.ref,
+    });
+    assert.equal(mcpDispatch.token, cliDispatch.token);
+    assert.equal(mcpDispatch.recovery.model, 'codex-gpt-5-6-sol');
+    assert.equal(mcpDispatch.spawn.subagent_type, 'sidequest-exec-dispatch-max');
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, mcpRuntimeSessionId);
+  } finally {
+    if (previousMcpRuntimeSessionId == null) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previousMcpRuntimeSessionId;
+  }
 
   const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8'));
   assert.equal(hooks.hooks.PostToolUseFailure[0].matcher, 'Agent');
