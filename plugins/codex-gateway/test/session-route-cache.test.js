@@ -323,3 +323,71 @@ test('native Agent route survives repeated tools and the compaction identity tra
     },
   ]);
 });
+
+test('route log identifies parent-only Agent dispatch cache misses', async (t) => {
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-parent-agent-'));
+  const routeLog = path.join(logDir, 'routes.jsonl');
+  const forwarded = [];
+  const proxy = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (req.url === '/v1/models') {
+        res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+        return;
+      }
+      const payload = JSON.parse(Buffer.concat(chunks).toString());
+      forwarded.push(payload);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ type: 'message', model: payload.model, content: [] }));
+    });
+  });
+  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  t.after(() => proxy.close());
+
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG_PATH: routeLog,
+      CODEX_GATEWAY_SENTRY: '0',
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForHealthz(shimPort);
+
+  const parentOnlyHeaders = { 'x-claude-code-parent-agent-id': 'parent-agent' };
+  const initial = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('[sidequest-route model=gpt-5.6-sol effort=xhigh] initial-parent-turn'),
+    'root-session',
+    parentOnlyHeaders,
+  );
+  const compacted = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('compacted-parent-turn'),
+    'root-session',
+    parentOnlyHeaders,
+  );
+
+  assert.equal(initial.status, 200);
+  assert.equal(compacted.status, 400);
+  assert.deepEqual(forwarded.map(({ model }) => model), ['gpt-5.6-sol']);
+  const routes = fs.readFileSync(routeLog, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(routes.map(({ via, sessionId, parentAgentId, markersLength }) => ({
+    via, sessionId, parentAgentId, markersLength,
+  })), [
+    {
+      via: 'dispatch', sessionId: 'root-session', parentAgentId: 'parent-agent', markersLength: 1,
+    },
+    {
+      via: 'dispatch-unbound', sessionId: 'root-session', parentAgentId: 'parent-agent', markersLength: 0,
+    },
+  ]);
+});

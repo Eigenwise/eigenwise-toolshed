@@ -929,11 +929,11 @@ function dispatchRequestIdentity(req, payload) {
   if (!sessionId) return null;
   const agentId = safeMetadataId(requestHeader(req, 'x-claude-code-agent-id'));
   const parentAgentId = safeMetadataId(requestHeader(req, 'x-claude-code-parent-agent-id'));
-  if (!agentId && parentAgentId) return null;
   return {
-    key: JSON.stringify([sessionId, agentId]),
+    key: !agentId && parentAgentId ? null : JSON.stringify([sessionId, agentId]),
     sessionId,
     agentId,
+    parentAgentId,
     sessionSource: headerSessionId ? 'header' : 'metadata',
   };
 }
@@ -1350,7 +1350,7 @@ function runShim() {
   // auth, and arbitrary headers are all excluded. Keep only Claude Code's safe
   // session/agent correlation values and whether the session came from its
   // canonical header or metadata fallback.
-  function requestRouteLog(req, backend, model, pathOnly, via = null, effort = null, identity = null) {
+  function requestRouteLog(req, backend, model, pathOnly, via = null, effort = null, identity = null, markersLength = null) {
     if (!REQUEST_ROUTE_LOG) return;
     const sessionId = identity?.sessionId || requestSessionId(req);
     const entry = {
@@ -1362,7 +1362,9 @@ function runShim() {
       ...(effort ? { effort } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(identity?.agentId ? { agentId: identity.agentId } : {}),
+      ...(identity?.parentAgentId ? { parentAgentId: identity.parentAgentId } : {}),
       ...(identity?.sessionSource ? { sessionSource: identity.sessionSource } : {}),
+      ...(Number.isInteger(markersLength) ? { markersLength } : {}),
     };
     try {
       mkdirs();
@@ -1949,8 +1951,10 @@ function runShim() {
             let dispatchRoute = null;
             let dispatchVia = null;
             let dispatchIdentity = null;
+            let dispatchMarkersLength = null;
             if (requestedBase === 'auto') {
               const markers = dispatchRouteMarkersFromMessages(parsed.messages);
+              dispatchMarkersLength = markers.length;
               dispatchIdentity = dispatchRequestIdentity(req, parsed);
               if (markers.length === 1) {
                 dispatchRoute = markers[0];
@@ -1977,7 +1981,7 @@ function runShim() {
                   via: 'dispatch',
                 });
                 routeTelemetry.finish(400, 'invalid_route');
-                requestRouteLog(req, 'codex', advertisedModel, pathOnly, 'dispatch-unbound', null, dispatchIdentity);
+                requestRouteLog(req, 'codex', advertisedModel, pathOnly, 'dispatch-unbound', null, dispatchIdentity, dispatchMarkersLength);
                 res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
                 return res.end(body);
               }
@@ -2000,7 +2004,7 @@ function runShim() {
             }
             counters.codex++;
             const effectiveEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : requestedEffort;
-            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, effectiveEffort, dispatchIdentity);
+            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, effectiveEffort, dispatchIdentity, dispatchMarkersLength);
             routeTelemetry.setRoute({
               selectedModel: advertisedModel,
               effectiveModel: parsed.model,
