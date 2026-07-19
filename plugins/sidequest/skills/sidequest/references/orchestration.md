@@ -43,13 +43,16 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   replacing it. Preserve a verified commit, or recover the declared-scope diff, then read the ticket and
   its thread again before deciding whether a replacement is needed. Never overwrite stranded work by
   blindly redispatching. When a natural wakeup shows that an executor has no claim and no commit past the
-  2–3 minute grace period, stop it and respawn it once with the same briefing. If a Claude-routed executor
-  dies immediately with a model-access or API error, do not respawn that route: its model likely left the
-  plan. Flip the category route to its recorded fallback with one category edit, then redispatch. Never
-  both message the old executor and spawn a replacement for one ticket. A respawn that still produces no
-  claim is a user-visible failure: surface it, do not try a third spawn, and do not pull substantial work
-  inline by default. `SendMessage` is for new information such as a scope change or unblock, never a
-  "wake up" poke.
+  2–3 minute grace period, stop it and respawn it once with the same briefing. When native Agent reports the
+  exact supported Claude quota-limit signature before claim, the failure hook records that primary attempt
+  and prepares the ticket's configured fallback with a fresh token. Run `dispatch` for the ref again, then
+  spawn the returned fallback spec unchanged. Do not edit or detach the category: the recovered route is
+  ticket-local, survives a session restart, and normal category policy resumes when that dispatch ends.
+  Treat any other model-access or API error as generic. Surface it without guessing a fallback or retrying
+  the route. Never both message the old executor and spawn a replacement for one ticket. A respawn that still
+  produces no claim is a user-visible failure: surface it, do not try a third spawn, and do not pull
+  substantial work inline by default. `SendMessage` is for new information such as a scope change or unblock,
+  never a "wake up" poke.
 - **A 32 MB launch failure is not a retry.** When a dispatched native Agent dies before its first model
   turn with `Request too large (max 32MB)`, it is a non-retryable 413 from the orchestrator's accumulated
   images or attachments, not the ticket or briefing. Do not blindly redispatch or resume it: a fresh Agent

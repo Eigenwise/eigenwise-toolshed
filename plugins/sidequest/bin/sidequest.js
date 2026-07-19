@@ -1422,8 +1422,11 @@ function cmdDispatch(opts, positional) {
       agent: created.name,
       tokenPrefix: prepared.token.slice(0, 12),
       token: prepared.token,
+      recovery: prepared.recovery || null,
       spawn: created.spawn,
-      guidance: `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${created.name} --token ${prepared.token}.`,
+      guidance: prepared.recovery
+        ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
+        : `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${created.name} --token ${prepared.token}.`,
     }, null, 2) + '\n');
     return;
   }
@@ -1439,9 +1442,12 @@ function cmdDispatch(opts, positional) {
     agent,
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
+    recovery: prepared.recovery || null,
     spawn,
     briefing,
-    guidance: `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}. No registration wait.`,
+    guidance: prepared.recovery
+      ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
+      : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}. No registration wait.`,
   }, null, 2) + '\n');
 }
 

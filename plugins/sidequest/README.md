@@ -154,7 +154,13 @@ sidequest global-fallback --model sonnet --effort medium
 
 Each category has a primary route and may define its own fallback. If that model is unavailable, sidequest
 tries the category fallback, then the required global fallback, and reports a warning for the route that
-was skipped. The CLI, MCP surfaces, and dashboard expose the same category CRUD operations and usage counts.
+was skipped. A native Agent launch can reveal a Claude quota limit that catalog availability cannot see.
+For the exact supported quota signature, the failure hook records the primary attempt and prepares this
+ticket's configured fallback with a fresh claim token. Run `dispatch` again to get that prepared fallback.
+The recovery survives a session restart, applies only to that ticket's active dispatch, and ends when the
+dispatch finishes or is released, so future tickets and later dispatches use category policy again. Generic
+Agent failures never change the route. The CLI, MCP surfaces, and dashboard expose the same category CRUD
+operations and usage counts.
 
 Categories live in a shared default policy. Pick a board to customize a category just for it: editing a
 category on a board forks it into that board's own copy. The fork stops following the shared default

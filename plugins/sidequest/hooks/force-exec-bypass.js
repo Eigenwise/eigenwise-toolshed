@@ -53,8 +53,9 @@ function extractRefs(prompt) {
 
 function extractProjectArg(prompt) {
   if (typeof prompt !== 'string' || !prompt) return null;
-  const m = prompt.match(/--project\s+"([^"]+)"|--project[=\s]+(\S+)/);
-  return m ? (m[1] || m[2] || null) : null;
+  const matches = [...prompt.matchAll(/--project\s+"([^"]+)"|--project[=\s]+(\S+)/g)];
+  const match = matches.at(-1);
+  return match ? (match[1] || match[2] || null) : null;
 }
 
 function pluginRoot() {
@@ -63,7 +64,8 @@ function pluginRoot() {
 
 function extractDispatchToken(prompt) {
   if (typeof prompt !== 'string' || !prompt) return null;
-  const match = prompt.match(/--token\s+([^\s`"']+)/);
+  const matches = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)];
+  const match = matches.at(-1);
   return match ? match[1] : null;
 }
 

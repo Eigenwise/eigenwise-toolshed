@@ -273,6 +273,9 @@ const BACKEND_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 const BACKEND_KEY_RE = /^([a-z0-9][a-z0-9-]{0,31}):([a-z0-9][a-z0-9-]{1,31})$/;
 const HAIKU_BACKEND_EFFORT = 'medium';
 const ROUTING_FALLBACK_DEFAULT = Object.freeze({ model: 'sonnet', effort: 'high' });
+const CLAUDE_QUOTA_FAILURES = Object.freeze([
+  Object.freeze({ model: 'fable', signature: "You've reached your Fable 5 limit" }),
+]);
 
 function coerceEffort(v) {
   if (v == null) return null;
@@ -412,6 +415,11 @@ function normalizeRoute(raw) {
   const model = normalizeRouteModel(raw.model);
   const effort = coerceEffort(raw.effort);
   return model && effort ? { model, effort } : null;
+}
+
+function claudeQuotaFailure(error) {
+  const text = String(error || '');
+  return CLAUDE_QUOTA_FAILURES.find((failure) => text.includes(failure.signature)) || null;
 }
 
 function getRoutingFallback() {
@@ -676,6 +684,22 @@ function resolveCategoryRoute(category) {
   return { model: route.model, effort: route.effort, exec: resolveExec(route.model, route.effort), warnings };
 }
 
+function resolveCategoryFallback(category, failedModel) {
+  const candidates = [
+    { source: 'category fallback', route: category && category.fallback },
+    { source: 'global fallback', route: getRoutingFallback() },
+    { source: 'hardwired fallback', route: ROUTING_FALLBACK_DEFAULT },
+  ];
+  for (const candidate of candidates) {
+    const route = normalizeRoute(candidate.route);
+    if (!route) continue;
+    const exec = resolveExec(route.model, route.effort);
+    if (!exec || exec.runsModel === failedModel) continue;
+    return { model: exec.runsModel, effort: route.effort, exec, source: candidate.source };
+  }
+  return null;
+}
+
 function ticketCategory(ticket) {
   if (!ticket || ticket.category == null) return null;
   return typeof ticket.category === 'object' ? ticket.categoryId || ticket.category.id : String(ticket.category);
@@ -720,6 +744,19 @@ function applyDerivedRouting(t, opts) {
     delete t.model;
     delete t.effort;
     delete t.exec;
+  }
+  const dispatchRoute = activeDispatchRoute(t);
+  if (dispatchRoute) {
+    const dispatchExec = resolveExec(dispatchRoute.model, dispatchRoute.effort);
+    if (dispatchExec) {
+      t.model = dispatchExec.runsModel;
+      t.effort = dispatchRoute.effort;
+      t.exec = execProjection(dispatchExec);
+      const state = dispatchState(t);
+      if (state && state.recovery) {
+        warnings.push(`This dispatch is temporarily using ${t.model} at ${t.effort} after ${state.recovery.failedModel} quota exhaustion; category policy is unchanged.`);
+      }
+    }
   }
   delete t.profile;
   if (warnings.length) t.warnings = warnings;
@@ -1667,6 +1704,12 @@ function dispatchState(ticket) {
   return ticket && ticket.dispatch && typeof ticket.dispatch === 'object' ? ticket.dispatch : null;
 }
 
+function activeDispatchRoute(ticket) {
+  const state = dispatchState(ticket);
+  if (!state || state.terminalAt || !ticket.dispatchNonce) return null;
+  return normalizeRoute(state.route);
+}
+
 function stampDispatchEvent(ticket, source, now) {
   ticket.lastEventType = 'dispatch';
   ticket.lastEventSource = source || 'store';
@@ -1712,28 +1755,63 @@ function prepareDispatch(slug, idOrRef, opts) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+    const current = dispatchState(t);
+    const requestedEphemeral = !!opts.ephemeral;
+    const currentRoute = activeDispatchRoute(t);
+    const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
+    if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor
+      && currentExec && currentExec.agent === t.dispatchExecutor && !!current.ephemeral === requestedEphemeral) {
+      if (opts.sessionId) current.sessionId = String(opts.sessionId);
+      putTicket(slug, t);
+      return {
+        ok: true,
+        ticket: t,
+        token: t.dispatchNonce,
+        ephemeral: requestedEphemeral,
+        reused: true,
+        recovery: current.recovery,
+      };
+    }
+    if (current && current.recovery && !current.terminalAt && !currentExec) {
+      const replacement = resolveCategoryFallback(t.category, current.recovery.failedModel);
+      if (!replacement) throw new Error(`prepare dispatch: no fallback remains available for ${current.recovery.failedModel}.`);
+      t.model = replacement.model;
+      t.effort = replacement.effort;
+      t.exec = execProjection(replacement.exec);
+      current.recovery = Object.assign({}, current.recovery, {
+        fallbackSource: replacement.source,
+        model: replacement.model,
+        effort: replacement.effort,
+      });
+    }
     const now = new Date().toISOString();
     const backend = availableRoute(t.model);
     if (backend && backend.backend === 'claude' && (t.effort == null || String(t.effort).trim() === '')) {
       t.effort = 'low';
       t.exec = execProjection(resolveExec(t.model, t.effort));
     }
+    const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
+    const attempts = current && Array.isArray(current.attempts) ? current.attempts.slice() : [];
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
-    t.dispatchExecutor = opts.ephemeral ? dispatchExecutorName(t) : stableExecutorName(t);
+    t.dispatchExecutor = requestedEphemeral ? dispatchExecutorName(t) : stableExecutorName(t);
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
+      route: { model: t.model, effort: t.effort },
+      ephemeral: requestedEphemeral,
       preparedAt: now,
       launchedAt: null,
       boundAt: null,
       claimedAt: null,
       terminalAt: null,
       outcome: 'prepared',
+      ...(attempts.length ? { attempts } : {}),
+      ...(recovery ? { recovery } : {}),
     };
     stampDispatchEvent(t, 'dispatch', now);
     putTicket(slug, t);
-    return { ok: true, ticket: t, token: t.dispatchNonce, ephemeral: !!opts.ephemeral };
+    return { ok: true, ticket: t, token: t.dispatchNonce, ephemeral: requestedEphemeral, recovery };
   });
 }
 
@@ -1756,6 +1834,78 @@ function recordDispatchLaunch(slug, idOrRef, opts) {
     stampDispatchEvent(t, opts.source || 'dispatch', now);
     putTicket(slug, t);
     return { ok: true, ticket: t };
+  });
+}
+
+function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
+  opts = opts || {};
+  const failure = claudeQuotaFailure(opts.error);
+  if (!failure) return { ok: false, reason: 'unrecognized_failure' };
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+      return { ok: false, reason: 'not_prepared' };
+    }
+    if (t.claim && t.claim.by) return { ok: false, reason: 'claimed' };
+    const state = dispatchState(t);
+    if (!state || state.outcome !== 'launched' || state.terminalAt) return { ok: false, reason: 'not_launched' };
+    const failedRoute = normalizeRoute(state.route) || normalizeRoute({ model: t.model, effort: t.effort });
+    const failedExec = failedRoute && resolveExec(failedRoute.model, failedRoute.effort);
+    if (!failedExec || failedExec.backend !== 'claude' || failedExec.runsModel !== failure.model) {
+      return { ok: false, reason: 'signature_route_mismatch' };
+    }
+    const fallback = resolveCategoryFallback(t.category, failedExec.runsModel);
+    if (!fallback) return { ok: false, reason: 'no_fallback' };
+
+    const now = new Date().toISOString();
+    const failedAttempt = {
+      route: { model: failedExec.runsModel, effort: failedRoute.effort },
+      executor: state.executor || t.dispatchExecutor,
+      tokenPrefix: state.tokenPrefix || dispatchTokenPrefix(t.dispatchNonce),
+      preparedAt: state.preparedAt || null,
+      launchedAt: state.launchedAt || null,
+      outcome: 'quota_exhausted',
+      terminalAt: now,
+      terminalSource: opts.source || 'agent-launch-failure',
+      failure: { kind: 'claude_quota_exhausted', signature: failure.signature },
+    };
+    const attempts = (Array.isArray(state.attempts) ? state.attempts : []).concat(failedAttempt).slice(-8);
+    const recovery = {
+      kind: 'claude_quota_exhausted',
+      failedModel: failedExec.runsModel,
+      failedEffort: failedRoute.effort,
+      fallbackSource: fallback.source,
+      model: fallback.model,
+      effort: fallback.effort,
+      signature: failure.signature,
+      at: now,
+    };
+
+    t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
+    t.dispatchExecutor = fallback.exec.agent;
+    t.dispatch = {
+      sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
+      tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+      executor: t.dispatchExecutor,
+      route: { model: fallback.model, effort: fallback.effort },
+      ephemeral: false,
+      preparedAt: now,
+      launchedAt: null,
+      boundAt: null,
+      claimedAt: null,
+      terminalAt: null,
+      outcome: 'prepared',
+      attempts,
+      recovery,
+    };
+    t.model = fallback.model;
+    t.effort = fallback.effort;
+    t.exec = execProjection(fallback.exec);
+    stampDispatchEvent(t, opts.source || 'agent-launch-failure', now);
+    putTicket(slug, t);
+    return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
   });
 }
 
@@ -2846,6 +2996,9 @@ function pulsePayload(slug, idOrRef) {
       sessionId: dispatch.sessionId || null,
       tokenPrefix: dispatch.tokenPrefix || null,
       executor: dispatch.executor || null,
+      route: normalizeRoute(dispatch.route),
+      recovery: dispatch.recovery || null,
+      attempts: Array.isArray(dispatch.attempts) ? dispatch.attempts : [],
       agentId: dispatch.agentId || null,
       agentName: dispatch.agentName || null,
       preparedAt: dispatch.preparedAt || null,
@@ -3504,6 +3657,7 @@ module.exports = {
   resolveModelId,
   resolveExec,
   resolveCategoryRoute,
+  claudeQuotaFailure,
   classifyModelFilter,
   getRoutingFallback,
   setRoutingFallback,
@@ -3544,6 +3698,7 @@ module.exports = {
   stableExecutorName,
   prepareDispatch,
   recordDispatchLaunch,
+  recoverDispatchQuotaFailure,
   bindDispatchAgent,
   terminalDispatchTarget,
   markDispatchStopped,

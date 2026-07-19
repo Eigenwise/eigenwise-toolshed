@@ -847,7 +847,7 @@ const TOOLS = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare a token-gated dispatch for a ticket. Default (instant): returns the full rendered briefing text plus the token — spawn the ticket\'s STABLE executor (the returned agent) with that briefing as its prompt; it is registered from session start, so there is no registration wait and no def file. ephemeral:true instead writes a unique per-ticket definition with the token embedded (self-contained so any session may adopt it) and returns its name to spawn once registered. Either way the claim stays gated on the token and executor.',
+    description: 'Prepare a token-gated dispatch for a ticket. Default (instant): returns the full rendered briefing text plus the token — spawn the ticket\'s STABLE executor (the returned agent) with that briefing as its prompt; it is registered from session start, so there is no registration wait and no def file. If a known Claude quota failure already prepared the category fallback, this returns that same fallback token and route across sessions. ephemeral:true instead writes a unique per-ticket definition with the token embedded (self-contained so any session may adopt it) and returns its name to spawn once registered. Either way the claim stays gated on the token and executor.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -862,7 +862,7 @@ const TOOLS = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const ephemeral = !!args.ephemeral;
-      const prepared = store.prepareDispatch(slug, args.ref, { ephemeral });
+      const prepared = store.prepareDispatch(slug, args.ref, { ephemeral, sessionId: sessionOf(args) });
       const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
       const briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token);
       const prompt = agentsync.withProjectIdentity(briefing, meta.path);
@@ -879,8 +879,11 @@ const TOOLS = [
           agent: created.name,
           tokenPrefix: prepared.token.slice(0, 12),
           token: prepared.token,
+          recovery: prepared.recovery || null,
           spawn: created.spawn,
-          guidance: `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${created.name} and the returned token.`,
+          guidance: prepared.recovery
+            ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
+            : `Ephemeral def written. ${agentsync.RESTART_NOTICE} Then pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${created.name} and the returned token.`,
         };
       }
       const agent = prepared.ticket.dispatchExecutor;
@@ -894,9 +897,12 @@ const TOOLS = [
         agent,
         tokenPrefix: prepared.token.slice(0, 12),
         token: prepared.token,
+        recovery: prepared.recovery || null,
         spawn: agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt, agentsync.spawnDescription(prepared.ticket, resolved)),
         briefing,
-        guidance: `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token. No registration wait.`,
+        guidance: prepared.recovery
+          ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
+          : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token. No registration wait.`,
       };
     },
   },

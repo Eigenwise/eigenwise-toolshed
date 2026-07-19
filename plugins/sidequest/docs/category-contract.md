@@ -35,6 +35,19 @@ Resolution is deterministic:
 3. Otherwise resolve global `routing-fallback`, if valid.
 4. Otherwise launch hardwired `sonnet` at `high` and append a warning.
 
+Catalog resolution only proves that a route can be launched in principle. Claude quota exhaustion is known
+only when the native Agent tool fails. `PostToolUseFailure` handles the exact supported Fable quota signature
+and requires the still-current dispatch token, executor, launch state, and matching Claude runtime before it
+writes anything. It records the failed primary attempt in the dispatch ledger, selects the first available
+route after the primary (category fallback, global fallback, then hardwired fallback), and prepares that route
+with a fresh token. Generic errors and signature/route mismatches leave state untouched.
+
+The recovered route is an active-dispatch projection, not a category edit or global availability flag. It
+survives session changes because the ticket stores it, and repeated CLI or MCP `dispatch` calls return the
+same prepared fallback token. The projection ends at the dispatch's terminal transition, which immediately
+re-enables normal category resolution for later work. This gives reset credits a clean path without a timer
+or a permanent policy reversal. The failed attempt remains available through `pulse.dispatch.attempts`.
+
 The resolved concrete model plus effort produces the existing native-agent shape. Preserve the agent-name construction in [`resolveExec()` at `lib/store.js:451-477`](../lib/store.js#L451-L477), but change its input contract from a capability alias to `{ model, effort }`. Tickets expose `exec` only as a read projection, as `putTicket()` already strips it before persistence ([`lib/store.js:215-230`](../lib/store.js#L215-L230)).
 
 **Current-code conflict.** `normalizeCategory()` currently accepts a category route without a fallback and defaults it to a capability alias ([`lib/store.js:770-793`](../lib/store.js#L770-L793)). `resolveCategoryRoute()` then invents an alias for a direct Codex route, including one from `suggestedTier` ([`lib/store.js:818-843`](../lib/store.js#L818-L843)). Replace both with concrete route validation and the ordered fallback chain above. A direct Codex route must not infer an unrelated capability identity.
