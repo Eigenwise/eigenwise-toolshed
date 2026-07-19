@@ -42,6 +42,16 @@ function nonnegativeNumber(value) {
   return Number.isFinite(number) && number >= 0 ? number : null;
 }
 
+function serializedSizeMeasurements(name, value) {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) return [];
+  const bytes = Buffer.byteLength(serialized, 'utf8');
+  return [
+    { name: `${name}_bytes`, value: bytes, unit: 'bytes', scope: 'attempt', quality: 'exact_client' },
+    { name: `${name}_tokens_estimate`, value: bytes / 4, unit: 'tokens', scope: 'attempt', quality: 'estimate' },
+  ];
+}
+
 function toolFacets(rawName) {
   const name = identifier(rawName);
   if (!name) return {};
@@ -56,7 +66,7 @@ function toolFacets(rawName) {
 }
 
 // Build a canonical, metadata-only observation from a hook payload. Prompt text,
-// tool inputs/results, cwd, transcript paths, and session titles are never read.
+// tool inputs/results, cwd, transcript paths, and session titles are never retained.
 function buildObservation(payload, now) {
   if (!payload || typeof payload !== 'object') return null;
   const eventName = EVENT_MAP[payload.hook_event_name];
@@ -114,10 +124,22 @@ function buildObservation(payload, now) {
   assign(observation, 'parent_agent_id', identifier(payload.parent_agent_id));
   assign(observation, 'tool_use_id', identifier(payload.tool_use_id));
   assign(observation, 'task_id', identifier(payload.task_id));
+  const measurements = [];
+  if (eventName === 'hook.post_tool_use') {
+    if (Object.hasOwn(payload, 'tool_input')) {
+      measurements.push(...serializedSizeMeasurements('tool_input', payload.tool_input));
+    }
+    if (Object.hasOwn(payload, 'tool_response')) {
+      measurements.push(...serializedSizeMeasurements('tool_result', payload.tool_response));
+    } else if (Object.hasOwn(payload, 'tool_result')) {
+      measurements.push(...serializedSizeMeasurements('tool_result', payload.tool_result));
+    }
+  }
   const durationMs = nonnegativeNumber(first(payload.duration_ms, payload.durationMs));
   if (durationMs !== null && ['hook.post_tool_use', 'hook.subagent_stop'].includes(eventName)) {
-    observation.measurements = [{ name: 'duration_ms', value: durationMs, unit: 'ms', scope: 'attempt', quality: 'exact_client' }];
+    measurements.push({ name: 'duration_ms', value: durationMs, unit: 'ms', scope: 'attempt', quality: 'exact_client' });
   }
+  if (measurements.length > 0) observation.measurements = measurements;
   return observation;
 }
 

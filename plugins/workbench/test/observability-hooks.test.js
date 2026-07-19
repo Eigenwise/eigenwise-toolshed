@@ -46,6 +46,33 @@ test('tool facets classify native vs MCP tools without capturing arguments', () 
   assert.equal(native.attributes.tool_kind, 'native');
 });
 
+test('PostToolUse measures serialized input and result sizes without retaining content', () => {
+  const toolInput = { command: 'printf héllo' };
+  const toolResponse = { stdout: 'private result', exitCode: 0 };
+  const observation = buildObservation({
+    hook_event_name: 'PostToolUse',
+    session_id: 'session-1',
+    tool_name: 'mcp__plugin_sidequest_board__list',
+    tool_input: toolInput,
+    tool_response: toolResponse,
+    duration_ms: 12,
+  }, NOW);
+  const measurements = Object.fromEntries(observation.measurements.map((measurement) => [measurement.name, measurement]));
+  const inputBytes = Buffer.byteLength(JSON.stringify(toolInput), 'utf8');
+  const resultBytes = Buffer.byteLength(JSON.stringify(toolResponse), 'utf8');
+
+  assert.equal(measurements.tool_input_bytes.value, inputBytes);
+  assert.equal(measurements.tool_input_bytes.quality, 'exact_client');
+  assert.equal(measurements.tool_input_tokens_estimate.value, inputBytes / 4);
+  assert.equal(measurements.tool_input_tokens_estimate.quality, 'estimate');
+  assert.equal(measurements.tool_result_bytes.value, resultBytes);
+  assert.equal(measurements.tool_result_tokens_estimate.value, resultBytes / 4);
+  assert.equal(measurements.tool_result_tokens_estimate.quality, 'estimate');
+  assert.equal(measurements.duration_ms.value, 12);
+  assert.equal(JSON.stringify(observation).includes('private result'), false);
+  accept(observation);
+});
+
 test('hook observations never carry prompt, tool payloads, cwd, or transcript paths', () => {
   const observation = buildObservation({
     hook_event_name: 'PostToolUse',

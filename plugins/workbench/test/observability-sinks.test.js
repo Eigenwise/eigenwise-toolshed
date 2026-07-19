@@ -232,12 +232,24 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
   for (const title of [
     'Tokens over time, by type', 'Tokens over time, by model', 'Models in use', 'Token volume by provider / backend',
-    'Tool activity by name', 'MCP activity by server / tool', 'Tool activity error rate',
+    'Tool activity by name', 'MCP activity by server / tool', 'MCP definition footprint by server',
+    'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
     'Hook execution activity / failures', 'Subagent lifecycle activity',
   ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
-  assert.match(byTitle.get('MCP activity by server / tool').description, /frequency only/i);
-  assert.match(byTitle.get('MCP activity by server / tool').description, /token attribution is unavailable/i);
+  for (const title of ['Tool activity by name', 'MCP activity by server / tool']) {
+    const panel = byTitle.get(title);
+    assert.equal(panel.type, 'table');
+    assert.match(panel.description, /re-enter/i);
+    assert.match(panel.targets[0].expr, /workbench_measurement_tool_result_tokens_estimate_value/);
+    assert.match(panel.targets[1].expr, /count_over_time/);
+  }
+  assert.match(byTitle.get('MCP activity by server / tool').targets[0].expr, /sum by \(workbench_attribute_mcp_server\)/);
+  const definitionPanel = byTitle.get('MCP definition footprint by server');
+  assert.match(definitionPanel.targets[0].expr, /gateway\.token\.usage/);
+  assert.match(definitionPanel.targets[0].expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
+  assert.match(JSON.stringify(definitionPanel.transformations), /workbench_measurement_input_mcp_tools_\.\+_tokens_value/);
+  assert.ok(definitionPanel.transformations.some(({ id }) => id === 'renameByRegex'));
   assert.match(byTitle.get('Token volume by provider / backend').targets[0].expr, /provider, backend/);
 
   for (const title of ['Tokens over time, by model', 'Models in use']) {
@@ -276,6 +288,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   for (const title of [
     'Gateway usage by session', 'Orchestrator vs executor usage', 'Input composition over time',
     'Context-window growth', 'Prompt-cache economics', 'Rate-limit and Codex throttle headroom',
+    'MCP definition footprint by server',
   ]) {
     for (const target of byTitle.get(title).targets) assert.match(target.expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   }
