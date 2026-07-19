@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomBytes, createHash } = require('node:crypto');
+const { assertNoTestDefaultPort } = require('./outbox.js');
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const TRACEPARENT = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/;
@@ -243,6 +244,7 @@ async function flushObservations(observations, options = {}) {
   const list = Array.isArray(observations) ? observations.filter(isPlainObject) : [];
   if (list.length === 0) return { sent: 0, ok: true };
   const url = typeof options.url === 'string' ? options.url : 'http://127.0.0.1:14319/v1/observations';
+  assertNoTestDefaultPort(url);
   const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 1500;
   const fetchImpl = options.fetch || globalThis.fetch;
   if (typeof fetchImpl !== 'function') return { sent: 0, ok: false, error: 'no_fetch' };

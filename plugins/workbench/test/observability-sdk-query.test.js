@@ -52,6 +52,7 @@ function loopbackRecorder() {
   return {
     calls,
     flushOptions: {
+      url: 'http://127.0.0.1:45681/v1/observations',
       fetch: async (url, init) => {
         calls.push({ url, observations: JSON.parse(init.body) });
         return { ok: true, status: 200 };

@@ -216,14 +216,18 @@ test('normalizeTerminalResult never reads workflow_run_id from the SDK result', 
 test('flushObservations is bounded and fail-open', async () => {
   const calls = [];
   const okFetch = async (url, init) => { calls.push({ url, body: init.body }); return { ok: true, status: 200 }; };
-  const sent = await flushObservations([{ a: 1 }], { fetch: okFetch, url: 'http://127.0.0.1:14319/v1/observations' });
+  const sent = await flushObservations([{ a: 1 }], { fetch: okFetch, url: 'http://127.0.0.1:45680/v1/observations' });
   assert.deepEqual(sent, { sent: 1, ok: true, status: 200 });
   assert.equal(calls.length, 1);
 
   assert.deepEqual(await flushObservations([], { fetch: okFetch }), { sent: 0, ok: true });
 
   const throwingFetch = async () => { throw new Error('ECONNREFUSED'); };
-  const failed = await flushObservations([{ a: 1 }], { fetch: throwingFetch });
+  const failed = await flushObservations([{ a: 1 }], { fetch: throwingFetch, url: 'http://127.0.0.1:45680/v1/observations' });
   assert.equal(failed.ok, false);
   assert.equal(failed.error, 'unreachable');
+  await assert.rejects(
+    () => flushObservations([{ a: 1 }], { fetch: okFetch }),
+    /Tests must use an explicit ephemeral receiver/,
+  );
 });

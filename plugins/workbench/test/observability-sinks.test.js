@@ -255,7 +255,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     'Gateway usage by session', 'Orchestrator vs executor usage', 'Input composition over time',
     'Context-window growth', 'Prompt-cache economics', 'Rate-limit and Codex throttle headroom',
   ]) {
-    for (const target of byTitle.get(title).targets) assert.match(target.expr, /workbench_session_id !~ "probe\.\*"/);
+    for (const target of byTitle.get(title).targets) assert.match(target.expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   }
 });
 

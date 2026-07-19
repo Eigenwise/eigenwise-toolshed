@@ -13,6 +13,7 @@ const { normalizeObservation } = require('../lib/observability/ingest.js');
 const { otlpToObservations, nanoToIso } = require('../lib/observability/otlp.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const { createObserver } = require('../bin/workbench-observer.js');
+const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
 
 const TRACE = '0123456789abcdef0123456789abcdef';
 const SPAN = '1122334455667788';
@@ -181,10 +182,14 @@ test('observer accepts OTLP JSON on /v1/logs and rejects protobuf with 415', asy
     queryView() { return [{}]; },
     close() {},
   };
+  const receiver = await startFakeOtlpReceiver();
   const port = await freePort();
-  const observer = createObserver({ port, store: fakeStore, hookSpoolFile: path.join(os.tmpdir(), `workbench-hook-spool-${port}.jsonl`) });
+  const observer = createObserver({ port, store: fakeStore, sink: testSink(receiver.endpoint), hookSpoolFile: path.join(os.tmpdir(), `workbench-hook-spool-${port}.jsonl`) });
   await observer.start();
-  t.after(() => observer.close());
+  t.after(async () => {
+    await observer.close();
+    await receiver.close();
+  });
 
   const logs = { resourceLogs: [{ resource: { attributes: attrs({ 'session.id': 'session-1' }) },
     scopeLogs: [{ logRecords: [{ timeUnixNano: NANO, eventName: 'claude_code.api_request', attributes: attrs({ model: 'claude-opus-4-8', input_tokens: 10 }) }] }] }] };
@@ -204,9 +209,11 @@ test('observer accepts OTLP JSON on /v1/logs and rejects protobuf with 415', asy
 test('Collector transport gets an OTLP acknowledgement after the observer commits', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-otlp-ack-'));
   const store = openObservabilityStore(path.join(directory, 'ledger.db'));
-  const observer = createObserver({ port: 0, store, projectId: 'a'.repeat(64), hookSpoolFile: path.join(directory, 'hook-spool.jsonl') });
+  const receiver = await startFakeOtlpReceiver();
+  const observer = createObserver({ port: 0, store, projectId: 'a'.repeat(64), sink: testSink(receiver.endpoint), hookSpoolFile: path.join(directory, 'hook-spool.jsonl') });
   t.after(async () => {
     await observer.close();
+    await receiver.close();
     store.close();
     fs.rmSync(directory, { recursive: true, force: true });
   });

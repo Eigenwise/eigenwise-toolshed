@@ -9,6 +9,7 @@ const test = require('node:test');
 const { createObserver } = require('../bin/workbench-observer.js');
 const { buildTokenUsageReport } = require('../lib/observability/report.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
 const {
   buildOtlpLogPayload,
   createUsageCapture,
@@ -77,15 +78,18 @@ function gatewayPayload() {
 test('gateway OTLP becomes authoritative first-class usage across observer views and reports', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-observer-'));
   const store = openObservabilityStore(path.join(directory, 'observability.db'));
+  const receiver = await startFakeOtlpReceiver();
   const observer = createObserver({
     port: 0,
     store,
     projectId: PROJECT_ID,
     hookSpoolFile: path.join(directory, 'hook-spool.jsonl'),
+    sink: testSink(receiver.endpoint),
   });
   const address = await observer.start();
   t.after(async () => {
     await observer.close();
+    await receiver.close();
     store.close();
     fs.rmSync(directory, { recursive: true, force: true });
   });

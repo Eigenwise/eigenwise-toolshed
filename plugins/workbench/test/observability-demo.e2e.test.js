@@ -18,6 +18,7 @@ const { buildTokenUsageReport, formatTokenUsageReport } = require('../lib/observ
 const { createWorkflowRun } = require('../lib/observability/sdk.js');
 const { AgentSdkQueryFailure, observeQuery } = require('../lib/observability/sdk-query.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
 
 const DEMO_ROOT = path.resolve(__dirname, '../../../examples/token-observability-demo');
 const PROJECT_ID = 'b'.repeat(64);
@@ -108,11 +109,13 @@ test('runs the disposable demo through setup, local OTLP, hooks, SDK, tools, rou
     ensure: async () => ({ enabled: true, started: [] }),
   });
   const observerStore = openObservabilityStore(setup.databaseFile);
-  const observer = createObserver({ store: observerStore, host: '127.0.0.1', port: 0, hookSpoolFile: path.join(dataDir, 'observer-hook-spool.jsonl') });
+  const receiver = await startFakeOtlpReceiver();
+  const observer = createObserver({ store: observerStore, host: '127.0.0.1', port: 0, sink: testSink(receiver.endpoint), hookSpoolFile: path.join(dataDir, 'observer-hook-spool.jsonl') });
   const address = await observer.start();
   const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => {
     await observer.close();
+    await receiver.close();
     observerStore.close();
     fs.rmSync(directory, { recursive: true, force: true });
   });
@@ -330,8 +333,7 @@ test('runs the disposable demo through setup, local OTLP, hooks, SDK, tools, rou
   });
   assert.ok(outage.failed > 0);
   const replay = await flushOutbox(observerStore, {
-    endpoint: 'http://127.0.0.1:14318/v1/logs', maxAttempts: 2, now: new Date('2099-01-02T00:00:00.000Z'),
-    fetch: async () => ({ ok: true, status: 200 }),
+    endpoint: receiver.endpoint, maxAttempts: 2, now: new Date('2099-01-02T00:00:00.000Z'),
   });
   assert.equal(replay.delivered, outage.failed);
   assert.equal(observerStore.queryView('outbox_health')[0].pending_count, 0);

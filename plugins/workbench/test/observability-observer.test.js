@@ -10,6 +10,7 @@ const { createObserver, assertLoopbackHost } = require('../bin/workbench-observe
 const { flushOutbox } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
 
 const PROJECT_ID = 'a'.repeat(64);
 
@@ -315,7 +316,7 @@ test('exports sanitized OTLP only after acknowledgement and bounds retries witho
   store.ingest(requestObservation());
   const sent = [];
   const delivered = await flushOutbox(store, {
-    endpoint: 'http://127.0.0.1:14318/v1/logs',
+    endpoint: 'http://127.0.0.1:45678/v1/logs',
     fetch: async (url, request) => {
       sent.push({ url: String(url), payload: JSON.parse(request.body) });
       return { ok: true, status: 200 };
@@ -335,7 +336,7 @@ test('exports sanitized OTLP only after acknowledgement and bounds retries witho
 
   store.ingest(requestObservation({ source_event_id: 'api-event-2', request_id: 'request-2' }));
   const failed = await flushOutbox(store, {
-    endpoint: 'http://127.0.0.1:14318/v1/logs',
+    endpoint: 'http://127.0.0.1:45678/v1/logs',
     maxAttempts: 1,
     fetch: async () => { throw new Error('raw upstream credential-value'); },
   });
@@ -349,12 +350,18 @@ test('exports sanitized OTLP only after acknowledgement and bounds retries witho
     () => flushOutbox(store, { endpoint: 'http://0.0.0.0:4318/v1/logs', fetch: async () => ({ ok: true }) }),
     /loopback/,
   );
+  await assert.rejects(
+    () => flushOutbox(store, { endpoint: 'http://127.0.0.1:14318/v1/logs', fetch: async () => ({ ok: true }) }),
+    /Tests must use an explicit ephemeral receiver/,
+  );
 });
 
 test('observer binds only to loopback and acknowledges HTTP ingestion after commit', async (t) => {
   assert.throws(() => assertLoopbackHost('0.0.0.0'), /loopback/);
   const store = temporaryStore(t);
-  const observer = createObserver({ store, host: '127.0.0.1', port: 0, hookSpoolFile: path.join(os.tmpdir(), `workbench-observer-spool-${process.pid}.jsonl`) });
+  const receiver = await startFakeOtlpReceiver();
+  const observer = createObserver({ store, host: '127.0.0.1', port: 0, sink: testSink(receiver.endpoint), hookSpoolFile: path.join(os.tmpdir(), `workbench-observer-spool-${process.pid}.jsonl`) });
+  t.after(() => receiver.close());
   t.after(() => observer.close());
   const address = await observer.start();
   const base = `http://127.0.0.1:${address.port}`;
@@ -391,7 +398,7 @@ test('continuous outbox drain is fail-open and shares one in-flight flush', asyn
     sink: {
       id: 'test',
       egress: 'loopback',
-      outbox: { enabled: true, endpoint: 'http://127.0.0.1:14318/v1/logs', headers: {}, allowRemote: false },
+      outbox: { enabled: true, endpoint: 'http://127.0.0.1:45679/v1/logs', headers: {}, allowRemote: false },
     },
     fetch: async () => {
       fetchCalls += 1;

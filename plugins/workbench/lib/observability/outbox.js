@@ -1,6 +1,7 @@
 'use strict';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+const TEST_DEFAULT_PORTS = new Set([4318, 14318, 14319]);
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const FORBIDDEN_HEADERS = new Set(['content-length', 'content-type', 'host']);
 
@@ -18,6 +19,14 @@ function assertOtlpUrl(value, options = {}) {
 
 function assertLoopbackUrl(value) {
   return assertOtlpUrl(value);
+}
+
+function assertNoTestDefaultPort(value) {
+  if (!process.env.NODE_TEST_CONTEXT) return;
+  const url = value instanceof URL ? value : new URL(value);
+  if (LOOPBACK_HOSTS.has(url.hostname) && TEST_DEFAULT_PORTS.has(Number(url.port))) {
+    throw new Error(`Tests must use an explicit ephemeral receiver, received ${url.origin}.`);
+  }
 }
 
 function requestHeaders(value) {
@@ -47,6 +56,7 @@ async function flushOutbox(store, options = {}) {
   const endpoint = assertOtlpUrl(options.endpoint || 'http://127.0.0.1:14318/v1/logs', {
     allowRemote: options.allowRemote === true,
   });
+  assertNoTestDefaultPort(endpoint);
   const send = options.fetch || globalThis.fetch;
   if (typeof send !== 'function') throw new TypeError('A fetch implementation is required.');
   const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
@@ -107,6 +117,7 @@ function createOutboxDrainer(store, options = {}) {
 
 module.exports = {
   assertLoopbackUrl,
+  assertNoTestDefaultPort,
   assertOtlpUrl,
   createOutboxDrainer,
   flushOutbox,
