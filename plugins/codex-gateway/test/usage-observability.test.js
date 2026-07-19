@@ -41,6 +41,20 @@ const payload = {
   ],
 };
 
+function finishEmitterRequest(emitter, requestPayload, contextTokens, sessionId, agentId) {
+  const capture = emitter.start({
+    payload: requestPayload,
+    requestHeaders: {
+      'x-claude-code-session-id': sessionId,
+      'x-claude-code-agent-id': agentId,
+    },
+    route: { backend: 'codex', effectiveModel: 'gpt-5.6-sol', requestedModel: 'claude-codex-auto' },
+  });
+  capture.setResponse(200, {});
+  capture.observeJson(JSON.stringify({ usage: { input_tokens: contextTokens, output_tokens: 1 } }));
+  return capture.finish();
+}
+
 test('counts request composition without retaining content', () => {
   const composition = inputComposition(payload, 9876);
   assert.equal(composition.request_body_bytes, 9876);
@@ -84,6 +98,125 @@ test('largest-remainder and source attribution preserve exact totals', () => {
   const outputOnly = inputAttribution(composition, { output_tokens: 5 });
   assert.equal(outputOnly.context_tokens, null);
   assert.ok(outputOnly.input_history_tokens > 0);
+});
+
+test('derives one tool result exactly from consecutive request context totals', () => {
+  const emitted = [];
+  const emitter = createGatewayUsageEmitter({
+    endpoint: 'http://127.0.0.1:4318/v1/logs',
+    emit(record) { emitted.push(record); },
+  });
+  const baseline = {
+    messages: [
+      { role: 'user', content: 'run the tool' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-exact', name: 'mcp__sidequest__claim', input: {} }] },
+    ],
+  };
+  const next = {
+    messages: [...baseline.messages, {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'tool-exact', content: 'private exact result' }],
+    }],
+  };
+
+  finishEmitterRequest(emitter, baseline, 100, 'session-exact', 'agent-exact');
+  finishEmitterRequest(emitter, next, 137, 'session-exact', 'agent-exact');
+
+  const toolRecords = emitted.filter((record) => record.eventName === 'gateway.tool_result.usage');
+  assert.equal(toolRecords.length, 1);
+  assert.equal(toolRecords[0].attributes.tool_result_tokens, 37);
+  assert.equal(toolRecords[0].attributes.tool_result_tokens_unit, 'tokens');
+  assert.equal(toolRecords[0].attributes.tool_result_tokens_quality, 'derived_exact');
+  assert.equal(toolRecords[0].attributes.tool_use_id, 'tool-exact');
+  assert.equal(toolRecords[0].attributes.tool_name, 'mcp__sidequest__claim');
+  assert.equal(JSON.stringify(toolRecords[0]).includes('private exact result'), false);
+});
+
+test('allocates an exact context delta across multiple new tool results', () => {
+  const emitted = [];
+  const emitter = createGatewayUsageEmitter({
+    endpoint: 'http://127.0.0.1:4318/v1/logs',
+    emit(record) { emitted.push(record); },
+  });
+  const baseline = {
+    messages: [{
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 'tool-short', name: 'Read', input: {} },
+        { type: 'tool_use', id: 'tool-long', name: 'mcp__sidequest__comments', input: {} },
+      ],
+    }],
+  };
+  const next = {
+    messages: [...baseline.messages, {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'tool-short', content: 'x' },
+        { type: 'tool_result', tool_use_id: 'tool-long', content: 'long private result'.repeat(8) },
+      ],
+    }],
+  };
+
+  finishEmitterRequest(emitter, baseline, 200, 'session-multi', 'agent-multi');
+  finishEmitterRequest(emitter, next, 219, 'session-multi', 'agent-multi');
+
+  const toolRecords = emitted.filter((record) => record.eventName === 'gateway.tool_result.usage');
+  assert.equal(toolRecords.length, 2);
+  assert.equal(toolRecords.reduce((total, record) => total + record.attributes.tool_result_tokens, 0), 19);
+  assert.ok(toolRecords.find((record) => record.attributes.tool_use_id === 'tool-long').attributes.tool_result_tokens
+    > toolRecords.find((record) => record.attributes.tool_use_id === 'tool-short').attributes.tool_result_tokens);
+  assert.deepEqual(new Set(toolRecords.map((record) => record.attributes.tool_name)), new Set(['Read', 'mcp__sidequest__comments']));
+  assert.ok(toolRecords.every((record) => record.attributes.tool_result_tokens_quality === 'estimate'));
+  assert.equal(JSON.stringify(toolRecords).includes('long private result'), false);
+});
+
+test('resets context attribution after compaction shrinks the exact total', () => {
+  const emitted = [];
+  const emitter = createGatewayUsageEmitter({
+    endpoint: 'http://127.0.0.1:4318/v1/logs',
+    emit(record) { emitted.push(record); },
+  });
+  const baseline = {
+    messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'tool-compact', name: 'Read', input: {} }] }],
+  };
+  const compacted = {
+    messages: [...baseline.messages, {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'tool-compact', content: 'result after compact' }],
+    }],
+  };
+
+  finishEmitterRequest(emitter, baseline, 300, 'session-compact', 'agent-compact');
+  finishEmitterRequest(emitter, compacted, 90, 'session-compact', 'agent-compact');
+
+  assert.equal(emitted.filter((record) => record.eventName === 'gateway.tool_result.usage').length, 0);
+});
+
+test('isolates consecutive context snapshots by agent identity', () => {
+  const emitted = [];
+  const emitter = createGatewayUsageEmitter({
+    endpoint: 'http://127.0.0.1:4318/v1/logs',
+    emit(record) { emitted.push(record); },
+  });
+  const baseline = {
+    messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'tool-shared', name: 'Read', input: {} }] }],
+  };
+  const next = {
+    messages: [...baseline.messages, {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'tool-shared', content: 'isolated result' }],
+    }],
+  };
+
+  finishEmitterRequest(emitter, baseline, 100, 'session-isolated', 'agent-a');
+  finishEmitterRequest(emitter, baseline, 400, 'session-isolated', 'agent-b');
+  finishEmitterRequest(emitter, next, 111, 'session-isolated', 'agent-a');
+  finishEmitterRequest(emitter, next, 407, 'session-isolated', 'agent-b');
+
+  const toolRecords = emitted.filter((record) => record.eventName === 'gateway.tool_result.usage');
+  assert.equal(toolRecords.length, 2);
+  assert.equal(toolRecords.find((record) => record.attributes.agent_id === 'agent-a').attributes.tool_result_tokens, 11);
+  assert.equal(toolRecords.find((record) => record.attributes.agent_id === 'agent-b').attributes.tool_result_tokens, 7);
 });
 
 test('extracts cache TTL, thinking, and server-tool details', () => {

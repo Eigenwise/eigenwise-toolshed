@@ -11,6 +11,9 @@ const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@\[\]-]{0,254}$/;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const MCP_SERVER_BYTES = Symbol('mcpServerBytes');
 const MAX_MCP_SERVER_MEASUREMENTS = 20;
+const DEFAULT_CONTEXT_SNAPSHOT_TTL_MS = 4 * 60 * 60 * 1000;
+const DEFAULT_CONTEXT_SNAPSHOT_MAX_IDENTITIES = 500;
+const TOOL_RESULT_EVENT = 'gateway.tool_result.usage';
 
 const RATE_LIMIT_HEADERS = Object.freeze({
   'anthropic-ratelimit-requests-limit': ['rate_limit_requests_limit', 'count'],
@@ -121,6 +124,145 @@ function allocateLargestRemainder(total, weights) {
     allocated[fractions[index % fractions.length].name] += 1;
   }
   return allocated;
+}
+
+function messageBlockSnapshot(payload) {
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const toolNames = new Map();
+  for (const message of messages) {
+    if (!Array.isArray(message?.content)) continue;
+    for (const block of message.content) {
+      if (block?.type !== 'tool_use') continue;
+      const id = safeIdentifier(block.id);
+      const name = safeIdentifier(block.name);
+      if (id && name) toolNames.set(id, name);
+    }
+  }
+
+  const blocks = [];
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+    const content = messages[messageIndex]?.content;
+    const entries = Array.isArray(content) ? content : content === undefined ? [] : [content];
+    for (let blockIndex = 0; blockIndex < entries.length; blockIndex += 1) {
+      const block = entries[blockIndex];
+      const kind = safeIdentifier(block?.type) || (typeof block === 'string' ? 'text' : 'content');
+      const resultId = kind === 'tool_result' || kind.endsWith('_tool_result')
+        ? safeIdentifier(block?.tool_use_id)
+        : null;
+      const blockId = safeIdentifier(block?.id) || resultId;
+      blocks.push(Object.freeze({
+        bytes: serializedBytes(block),
+        id: blockId ? `${kind}:${blockId}` : `${messageIndex}:${blockIndex}:${kind}`,
+        kind,
+        toolUseId: resultId,
+        toolName: resultId ? toolNames.get(resultId) || null : null,
+      }));
+    }
+  }
+  return Object.freeze(blocks);
+}
+
+function addedMessageBlocks(previous, current) {
+  const remaining = new Map();
+  for (const block of previous) {
+    const key = `${block.id}:${block.bytes}`;
+    remaining.set(key, (remaining.get(key) || 0) + 1);
+  }
+  const added = [];
+  for (const block of current) {
+    const key = `${block.id}:${block.bytes}`;
+    const count = remaining.get(key) || 0;
+    if (count > 0) {
+      if (count === 1) remaining.delete(key);
+      else remaining.set(key, count - 1);
+    } else {
+      added.push(block);
+    }
+  }
+  return added;
+}
+
+function contextSnapshotIdentity(headers) {
+  const sessionId = safeIdentifier(headerValue(headers, 'x-claude-code-session-id'));
+  if (!sessionId) return null;
+  const agentId = safeIdentifier(headerValue(headers, 'x-claude-code-agent-id'));
+  const parentAgentId = safeIdentifier(headerValue(headers, 'x-claude-code-parent-agent-id'));
+  return JSON.stringify([sessionId, agentId, agentId ? null : parentAgentId]);
+}
+
+class ContextSnapshotCache {
+  constructor({ ttlMs = DEFAULT_CONTEXT_SNAPSHOT_TTL_MS, maxIdentities = DEFAULT_CONTEXT_SNAPSHOT_MAX_IDENTITIES, now = Date.now } = {}) {
+    this.ttlMs = ttlMs;
+    this.maxIdentities = maxIdentities;
+    this.now = now;
+    this.snapshots = new Map();
+  }
+
+  get(identity) {
+    if (!identity) return null;
+    const snapshot = this.snapshots.get(identity);
+    if (!snapshot) return null;
+    const now = this.now();
+    if (now - snapshot.lastUsedAt >= this.ttlMs) {
+      this.snapshots.delete(identity);
+      return null;
+    }
+    snapshot.lastUsedAt = now;
+    this.snapshots.delete(identity);
+    this.snapshots.set(identity, snapshot);
+    return snapshot;
+  }
+
+  set(identity, snapshot) {
+    if (!identity) return;
+    const now = this.now();
+    for (const [key, entry] of this.snapshots) {
+      if (now - entry.lastUsedAt < this.ttlMs) break;
+      this.snapshots.delete(key);
+    }
+    this.snapshots.delete(identity);
+    this.snapshots.set(identity, { ...snapshot, lastUsedAt: now });
+    while (this.snapshots.size > this.maxIdentities) {
+      this.snapshots.delete(this.snapshots.keys().next().value);
+    }
+  }
+}
+
+class ToolResultContextTracker {
+  constructor(options = {}) {
+    this.cache = new ContextSnapshotCache(options);
+  }
+
+  capture(payload, headers) {
+    return {
+      blocks: messageBlockSnapshot(payload),
+      identity: contextSnapshotIdentity(headers),
+    };
+  }
+
+  finish(capture, contextTokens) {
+    const total = numeric(contextTokens);
+    if (!capture.identity || total === null) return [];
+    const current = { blocks: capture.blocks, contextTokens: Math.floor(total) };
+    const previous = this.cache.get(capture.identity);
+    this.cache.set(capture.identity, current);
+    if (!previous) return [];
+
+    const delta = current.contextTokens - previous.contextTokens;
+    if (delta < 0) return [];
+    const added = addedMessageBlocks(previous.blocks, current.blocks);
+    if (added.length === 0) return [];
+    const allocations = added.length === 1
+      ? { 0: delta }
+      : allocateLargestRemainder(delta, Object.fromEntries(added.map((block, index) => [index, block.bytes])));
+    const quality = added.length === 1 ? 'derived_exact' : 'estimate';
+    return added.flatMap((block, index) => block.toolUseId ? [{
+      quality,
+      tokens: allocations[index],
+      toolName: block.toolName,
+      toolUseId: block.toolUseId,
+    }] : []);
+  }
 }
 
 function exactUsage(usage) {
@@ -577,18 +719,67 @@ function createUsageCapture(options) {
   };
 }
 
+function toolResultUsageRecord(requestRecord, attribution) {
+  const request = requestRecord.attributes;
+  const attributes = {
+    source: 'codex_gateway',
+    source_event_id: `gateway-tool-result-${crypto.randomUUID()}`,
+    source_schema: 'gateway-usage-v1',
+    'event.name': TOOL_RESULT_EVENT,
+    event_name: TOOL_RESULT_EVENT,
+    request_id: request.request_id,
+    client_request_id: request.client_request_id,
+    session_id: request.session_id,
+    agent_id: request.agent_id,
+    parent_agent_id: request.parent_agent_id,
+    agent_role: request.agent_role,
+    model: request.model,
+    requested_model: request.requested_model,
+    backend: request.backend,
+    effort: request.effort,
+    via: request.via,
+    request_sequence: request.request_sequence,
+    tool_use_id: attribution.toolUseId,
+    tool_name: attribution.toolName,
+    tool_result_tokens: attribution.tokens,
+    tool_result_tokens_unit: 'tokens',
+    tool_result_tokens_quality: attribution.quality,
+  };
+  return {
+    eventName: TOOL_RESULT_EVENT,
+    observedAt: requestRecord.observedAt,
+    attributes,
+    traceId: requestRecord.traceId,
+    spanId: requestRecord.spanId,
+  };
+}
+
 function createGatewayUsageEmitter(options = {}) {
+  const environment = options.environment || process.env;
   const endpoint = options.endpoint === null
     ? null
     : options.endpoint instanceof URL
       ? options.endpoint
       : options.endpoint
         ? normalizeLoopbackEndpoint(options.endpoint)
-        : resolveUsageEndpoint(options.environment || process.env);
+        : resolveUsageEndpoint(environment);
   const timeoutMs = Math.max(10, Number(options.timeoutMs) || DEFAULT_TIMEOUT_MS);
   const maxResponseBytes = Math.max(1024, Number(options.maxResponseBytes)
-    || Number((options.environment || process.env).CODEX_GATEWAY_USAGE_MAX_RESPONSE_BYTES)
+    || Number(environment.CODEX_GATEWAY_USAGE_MAX_RESPONSE_BYTES)
     || DEFAULT_MAX_RESPONSE_BYTES);
+  const configuredSnapshotTtlMs = Number(environment.CODEX_GATEWAY_DISPATCH_CACHE_TTL_MS);
+  const snapshotTtlMs = Number.isFinite(configuredSnapshotTtlMs) && configuredSnapshotTtlMs > 0
+    ? configuredSnapshotTtlMs
+    : DEFAULT_CONTEXT_SNAPSHOT_TTL_MS;
+  const configuredSnapshotMaxIdentities = Number(environment.CODEX_GATEWAY_DISPATCH_CACHE_MAX_SESSIONS);
+  const snapshotMaxIdentities = Number.isInteger(configuredSnapshotMaxIdentities) && configuredSnapshotMaxIdentities > 0
+    ? configuredSnapshotMaxIdentities
+    : DEFAULT_CONTEXT_SNAPSHOT_MAX_IDENTITIES;
+  const toolResultTracker = options.toolResultTracker || new ToolResultContextTracker({
+    maxIdentities: snapshotMaxIdentities,
+    now: options.contextNow || Date.now,
+    ttlMs: snapshotTtlMs,
+  });
   const schedule = options.schedule || ((work) => {
     const immediate = setImmediate(work);
     immediate.unref?.();
@@ -601,6 +792,7 @@ function createGatewayUsageEmitter(options = {}) {
     const payload = buildOtlpLogPayload(record);
     schedule(() => postOtlpLog(endpoint, payload, timeoutMs));
   }
+  const emitRecord = options.emit || emit;
 
   return {
     enabled: !!endpoint,
@@ -608,7 +800,20 @@ function createGatewayUsageEmitter(options = {}) {
     maxResponseBytes,
     start(input) {
       sequence += 1;
-      return createUsageCapture({ ...input, sequence, maxResponseBytes, emit: options.emit || emit });
+      const contextCapture = toolResultTracker.capture(input.payload, input.requestHeaders);
+      return createUsageCapture({
+        ...input,
+        sequence,
+        maxResponseBytes,
+        emit(record) {
+          try { emitRecord(record); } catch {}
+          if (record.eventName !== 'gateway.token.usage') return;
+          const attributions = toolResultTracker.finish(contextCapture, record.attributes.context_tokens);
+          for (const attribution of attributions) {
+            try { emitRecord(toolResultUsageRecord(record, attribution)); } catch {}
+          }
+        },
+      });
     },
   };
 }
