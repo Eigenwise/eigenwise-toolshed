@@ -1469,6 +1469,128 @@
           }
         }
       ]
+    },
+    {
+      "id": 26,
+      "title": "Subscription rate-limit burn",
+      "description": "Claude.ai subscription allowance consumed in the rolling 5-hour and 7-day windows. Statusline data appears after the first API response and is absent on API-key billing paths.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 94
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "max_over_time({service_name=\"workbench-observer\"} |= \"statusline.rate_limit\" | unwrap workbench_measurement_rate_limit_five_hour_used_percent_value [$__auto])",
+          "legendFormat": "5-hour used"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "max_over_time({service_name=\"workbench-observer\"} |= \"statusline.rate_limit\" | unwrap workbench_measurement_rate_limit_seven_day_used_percent_value [$__auto])",
+          "legendFormat": "7-day used"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "title": "Subscription window resets",
+      "description": "Next reset time reported by Claude Code for each subscription allowance window. Values follow the dashboard time-range picker and remain unavailable when the statusline has not reported subscription limits.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 94
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "wideLayout": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "instant": true,
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "last_over_time({service_name=\"workbench-observer\"} |= \"statusline.rate_limit\" | unwrap workbench_measurement_rate_limit_five_hour_reset_at_ms_value [$__range])",
+          "legendFormat": "5-hour reset"
+        },
+        {
+          "refId": "B",
+          "queryType": "instant",
+          "instant": true,
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "last_over_time({service_name=\"workbench-observer\"} |= \"statusline.rate_limit\" | unwrap workbench_measurement_rate_limit_seven_day_reset_at_ms_value [$__range])",
+          "legendFormat": "7-day reset"
+        }
+      ]
     }
   ]
 }

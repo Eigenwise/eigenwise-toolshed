@@ -144,12 +144,20 @@ test('statusline emits acceptable context + rate-limit snapshots and marks missi
     context: { used_tokens: 42000, window_tokens: 1000000 },
     cost: { total_cost_usd: 0.5, total_duration_ms: 120000 },
     rate_limit: { percent: 12, reset_ms: 3600000 },
+    rate_limits: {
+      five_hour: { used_percentage: 23.5, resets_at: 1738425600 },
+      seven_day: { used_percentage: 41.2, resets_at: 1738857600 },
+    },
   }, NOW);
   for (const observation of full) accept(observation);
   const snapshot = full.find((o) => o.event_name === 'statusline.context_snapshot');
   assert.equal(snapshot.measurements.find((m) => m.name === 'context_tokens').value, 42000);
   const rate = full.find((o) => o.event_name === 'statusline.rate_limit');
   assert.equal(rate.measurements.find((m) => m.name === 'rate_limit_reset_ms').value, 3600000);
+  assert.equal(rate.measurements.find((m) => m.name === 'rate_limit_five_hour_used_percent').value, 23.5);
+  assert.equal(rate.measurements.find((m) => m.name === 'rate_limit_five_hour_reset_at_ms').value, 1738425600000);
+  assert.equal(rate.measurements.find((m) => m.name === 'rate_limit_seven_day_used_percent').value, 41.2);
+  assert.equal(rate.measurements.find((m) => m.name === 'rate_limit_seven_day_reset_at_ms').value, 1738857600000);
 
   // Before the first response / after a compact: usage is unavailable (null), never zero.
   const empty = buildStatuslineObservations({ session_id: 'session-1', model: { id: 'claude-opus-4-8' }, context: {} }, NOW);
@@ -164,6 +172,7 @@ test('hooks.json keeps the freshness hooks and registers observability across li
   const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8')).hooks;
   const commandsFor = (event) => (hooks[event] || []).flatMap((group) => group.hooks.map((h) => h.command)).join(' ');
   assert.ok(commandsFor('SessionStart').includes('session-start-freshness.js'));
+  assert.ok(commandsFor('SessionStart').includes('billing-path-check.js'));
   assert.ok(commandsFor('SessionStart').includes('lib/observability/ensure.js'));
   assert.ok(commandsFor('SessionStart').includes('--launch'));
   assert.ok(commandsFor('UserPromptSubmit').includes('user-prompt-freshness.js'));

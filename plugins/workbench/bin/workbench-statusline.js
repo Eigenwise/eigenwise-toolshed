@@ -19,6 +19,17 @@ function nonNegative(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+function rateLimitWindow(rateLimits, name) {
+  const window = rateLimits && typeof rateLimits[name] === 'object' ? rateLimits[name] : {};
+  const usedPercentage = nonNegative(window.used_percentage);
+  const resetsAtSeconds = nonNegative(window.resets_at);
+  return {
+    usedPercentage,
+    resetsAtMs: resetsAtSeconds === null ? null : resetsAtSeconds * 1000,
+    available: usedPercentage !== null || resetsAtSeconds !== null,
+  };
+}
+
 // A measurement that is genuinely unavailable (e.g. before the first response or
 // right after a compact) is null with quality 'unavailable', never a fabricated zero.
 function measure(name, value, unit, scope, quality) {
@@ -40,6 +51,9 @@ function buildStatuslineObservations(payload, now, suppliedRequestBodyEstimate) 
     : (payload.context && typeof payload.context === 'object' ? payload.context : {});
   const cost = payload.cost && typeof payload.cost === 'object' ? payload.cost : {};
   const rate = payload.rate_limit && typeof payload.rate_limit === 'object' ? payload.rate_limit : {};
+  const rateLimits = payload.rate_limits && typeof payload.rate_limits === 'object' ? payload.rate_limits : {};
+  const fiveHour = rateLimitWindow(rateLimits, 'five_hour');
+  const sevenDay = rateLimitWindow(rateLimits, 'seven_day');
 
   const contextTokens = nonNegative(first(
     context.used_tokens,
@@ -80,7 +94,7 @@ function buildStatuslineObservations(payload, now, suppliedRequestBodyEstimate) 
 
   const percent = nonNegative(first(rate.percent, rate.used_percent, rate.usedPercent));
   const resetMs = nonNegative(first(rate.reset_ms, rate.resetMs, rate.reset_in_ms));
-  if (percent !== null || resetMs !== null || Object.keys(rate).length > 0) {
+  if (percent !== null || resetMs !== null || Object.keys(rate).length > 0 || fiveHour.available || sevenDay.available) {
     const rateAttributes = {};
     if (model) rateAttributes.model = model;
     const rateLimit = {
@@ -93,6 +107,10 @@ function buildStatuslineObservations(payload, now, suppliedRequestBodyEstimate) 
       measurements: [
         measure('rate_limit_percent', percent, 'percent', 'context_snapshot', 'exact_client'),
         measure('rate_limit_reset_ms', resetMs, 'ms', 'context_snapshot', 'exact_client'),
+        measure('rate_limit_five_hour_used_percent', fiveHour.usedPercentage, 'percent', 'context_snapshot', 'exact_client'),
+        measure('rate_limit_five_hour_reset_at_ms', fiveHour.resetsAtMs, 'ms', 'context_snapshot', 'exact_client'),
+        measure('rate_limit_seven_day_used_percent', sevenDay.usedPercentage, 'percent', 'context_snapshot', 'exact_client'),
+        measure('rate_limit_seven_day_reset_at_ms', sevenDay.resetsAtMs, 'ms', 'context_snapshot', 'exact_client'),
       ],
     };
     if (sessionId) rateLimit.session_id = sessionId;
@@ -114,11 +132,30 @@ function renderPassthrough(raw) {
   }
 }
 
-function renderStatusline(raw, requestBodyEstimate) {
+function formatRateLimitStatus(payload) {
+  const rateLimits = payload && typeof payload.rate_limits === 'object' ? payload.rate_limits : {};
+  const windows = [
+    ['5h', rateLimitWindow(rateLimits, 'five_hour')],
+    ['7d', rateLimitWindow(rateLimits, 'seven_day')],
+  ];
+  return windows
+    .filter(([, window]) => window.usedPercentage !== null)
+    .map(([label, window]) => `${label}: ${Math.round(window.usedPercentage)}%`)
+    .join(' ');
+}
+
+function statuslinePayload(raw, suppliedPayload) {
+  if (suppliedPayload && typeof suppliedPayload === 'object') return suppliedPayload;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function renderStatusline(raw, requestBodyEstimate, suppliedPayload) {
   const rendered = renderPassthrough(raw).trimEnd();
-  const requestBody = formatRequestBodyStatus(requestBodyEstimate);
-  if (!requestBody) return rendered;
-  return rendered ? `${rendered} | ${requestBody}` : requestBody;
+  const additions = [
+    formatRequestBodyStatus(requestBodyEstimate),
+    formatRateLimitStatus(statuslinePayload(raw, suppliedPayload)),
+  ].filter(Boolean);
+  return [rendered, ...additions].filter(Boolean).join(' | ');
 }
 
 async function main() {
@@ -128,7 +165,7 @@ async function main() {
   try {
     const payload = JSON.parse(raw);
     const requestBodyEstimate = estimateRequestBodyBytes(payload.transcript_path);
-    process.stdout.write(renderStatusline(raw, requestBodyEstimate));
+    process.stdout.write(renderStatusline(raw, requestBodyEstimate, payload));
     for (const observation of buildStatuslineObservations(payload, new Date(), requestBodyEstimate)) {
       spool(process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath(), observation);
     }
@@ -139,4 +176,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { buildStatuslineObservations, renderPassthrough, renderStatusline };
+module.exports = { buildStatuslineObservations, formatRateLimitStatus, renderPassthrough, renderStatusline };
