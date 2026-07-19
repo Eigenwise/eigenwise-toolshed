@@ -108,6 +108,7 @@ const ALLOWED_MEASUREMENTS = Object.freeze([
   'cost_usd',
   'bytes_in',
   'bytes_out',
+  'request_body_bytes',
   'request_count',
   'tool_count',
   'rate_limit_percent',

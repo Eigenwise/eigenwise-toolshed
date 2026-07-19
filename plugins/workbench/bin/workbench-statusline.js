@@ -3,6 +3,7 @@
 
 const { spawnSync } = require('node:child_process');
 const { spool, defaultSpoolPath } = require('../hooks/observability.js');
+const { estimateRequestBodyBytes, formatRequestBodyStatus } = require('../lib/observability/request-body.js');
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 
@@ -25,18 +26,36 @@ function measure(name, value, unit, scope, quality) {
   return { name, value, unit, scope, quality };
 }
 
-function buildStatuslineObservations(payload, now) {
+function buildStatuslineObservations(payload, now, suppliedRequestBodyEstimate) {
   if (!payload || typeof payload !== 'object') return [];
   const observedAt = (now instanceof Date ? now : new Date()).toISOString();
   const sessionId = identifier(first(payload.session_id, payload.sessionId));
   const model = identifier(first(payload.model && payload.model.id, payload.model && payload.model.display_name, payload.model));
+  const requestBodyEstimate = suppliedRequestBodyEstimate === undefined
+    ? estimateRequestBodyBytes(payload.transcript_path)
+    : suppliedRequestBodyEstimate;
 
-  const context = payload.context && typeof payload.context === 'object' ? payload.context : {};
+  const context = payload.context_window && typeof payload.context_window === 'object'
+    ? payload.context_window
+    : (payload.context && typeof payload.context === 'object' ? payload.context : {});
   const cost = payload.cost && typeof payload.cost === 'object' ? payload.cost : {};
   const rate = payload.rate_limit && typeof payload.rate_limit === 'object' ? payload.rate_limit : {};
 
-  const contextTokens = nonNegative(first(context.used_tokens, context.usedTokens, context.current_usage, context.tokens));
-  const windowTokens = nonNegative(first(context.window_tokens, context.windowTokens, context.context_window, context.window));
+  const contextTokens = nonNegative(first(
+    context.used_tokens,
+    context.usedTokens,
+    context.total_input_tokens,
+    context.current_usage && context.current_usage.input_tokens,
+    context.current_usage,
+    context.tokens,
+  ));
+  const windowTokens = nonNegative(first(
+    context.window_tokens,
+    context.windowTokens,
+    context.context_window_size,
+    context.context_window,
+    context.window,
+  ));
 
   const snapshotAttributes = {};
   if (model) snapshotAttributes.model = model;
@@ -50,6 +69,7 @@ function buildStatuslineObservations(payload, now) {
     measurements: [
       measure('context_tokens', contextTokens, 'tokens', 'context_snapshot', 'exact_client'),
       measure('context_window_tokens', windowTokens, 'tokens', 'context_snapshot', 'exact_client'),
+      measure('request_body_bytes', requestBodyEstimate ? requestBodyEstimate.value : null, 'bytes', 'context_snapshot', 'estimate'),
       measure('cost_usd', nonNegative(first(cost.total_cost_usd, cost.totalCostUsd)), 'usd', 'session', 'estimate'),
       measure('duration_ms', nonNegative(first(cost.total_duration_ms, cost.totalDurationMs)), 'ms', 'session', 'exact_client'),
     ],
@@ -94,23 +114,29 @@ function renderPassthrough(raw) {
   }
 }
 
+function renderStatusline(raw, requestBodyEstimate) {
+  const rendered = renderPassthrough(raw).trimEnd();
+  const requestBody = formatRequestBodyStatus(requestBodyEstimate);
+  if (!requestBody) return rendered;
+  return rendered ? `${rendered} | ${requestBody}` : requestBody;
+}
+
 async function main() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString('utf8');
-  let rendered = '';
-  try { rendered = renderPassthrough(raw); } catch { rendered = ''; }
-  process.stdout.write(rendered);
   try {
     const payload = JSON.parse(raw);
-    for (const observation of buildStatuslineObservations(payload, new Date())) {
+    const requestBodyEstimate = estimateRequestBodyBytes(payload.transcript_path);
+    process.stdout.write(renderStatusline(raw, requestBodyEstimate));
+    for (const observation of buildStatuslineObservations(payload, new Date(), requestBodyEstimate)) {
       spool(process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath(), observation);
     }
   } catch {
-    // Fail open: the statusline must render regardless of observability.
+    process.stdout.write(renderPassthrough(raw));
   }
 }
 
 if (require.main === module) main();
 
-module.exports = { buildStatuslineObservations, renderPassthrough };
+module.exports = { buildStatuslineObservations, renderPassthrough, renderStatusline };
