@@ -1,6 +1,6 @@
 {
   "name": "codex-gateway",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "description": "Your ChatGPT/Codex subscription models in Claude Code's /model picker. A local gateway routes claude-codex-* models to OpenAI's Codex backend (via claude-code-proxy) and everything else to api.anthropic.com, so you switch between Claude and GPT-5.x mid-session like any other model. No OpenAI API key.",
   "author": {
     "name": "Eigenwise",
