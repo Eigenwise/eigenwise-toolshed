@@ -42,6 +42,7 @@ const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'codex-gateway');
 const LOGS = path.join(STATE, 'logs');
 const BIN_DIR = path.join(STATE, 'bin');
+const PLUGIN_VERSION = readPluginVersion();
 const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-code-proxy');
 const SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
 const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
@@ -145,6 +146,12 @@ const flag = (f) => args.includes(f);
 
 function log(m) { console.log(m); }
 function die(m, code) { console.error('codex-gateway: ' + m); process.exit(code == null ? 1 : code); }
+function readPluginVersion() {
+  try {
+    const { version } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8'));
+    return typeof version === 'string' ? version : null;
+  } catch { return null; }
+}
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 // ------------------------------------------------------------ small helpers
@@ -625,6 +632,25 @@ async function fetchShimHealth() {
     const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout: 2000 });
     return JSON.parse(r.body.toString());
   } catch { return null; }
+}
+
+function shimNeedsRestart(installedVersion, health) {
+  const installed = parseSemver(installedVersion);
+  const running = parseSemver(health && health.version);
+  return Boolean(installed && running && semverLt(running, installed));
+}
+
+async function restartShimIfOutdated({
+  quiet = false,
+  fetchHealth = fetchShimHealth,
+  stop = stopAll,
+  start = startAll,
+} = {}) {
+  let health;
+  try { health = await fetchHealth(); } catch { return null; }
+  if (!shimNeedsRestart(PLUGIN_VERSION, health)) return null;
+  stop();
+  return start({ quiet });
 }
 
 // What mode the running shim actually achieved this session: compat only if
@@ -1777,6 +1803,7 @@ function runShim() {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({
         ok: true,
+        version: PLUGIN_VERSION,
         models: modelCache.data.length,
         served: counters,
         compat: { ...compatState },
@@ -1974,7 +2001,7 @@ if (require.main === module) {
         log('codex-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the codex-gateway skill.');
         process.exit(0);
       }
-      const r = await startAll({ quiet });
+      const r = await restartShimIfOutdated({ quiet }) || await startAll({ quiet });
       if (!r.ok) { console.error('codex-gateway: ' + r.reason); process.exit(1); }
       // Proxy is confirmed running; one fail-soft nudge if it predates the 413
       // overflow fix. No auto-download inside the keepalive hook.
@@ -2040,6 +2067,9 @@ module.exports = {
   COMPAT_BASE_URL,
   parseSemver,
   semverLt,
+  shimNeedsRestart,
+  restartShimIfOutdated,
+  PLUGIN_VERSION,
   MIN_PROXY_VERSION,
   CATALOG_SCHEMA_VERSION,
   buildCatalog,
