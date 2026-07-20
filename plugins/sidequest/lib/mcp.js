@@ -35,6 +35,8 @@ const SERVER_NAME = 'sidequest';
 // client's requested version when it sends one (maximizes compatibility) and
 // fall back to this otherwise.
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
+const CATEGORY_TAXONOMY_WARNING = 'Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.';
+let categoryListServed = false;
 
 function serverVersion() {
   try {
@@ -493,6 +495,7 @@ const TOOLS = [
       const ticket = store.getTicket(slug, created.ref) || created;
       const changed = { title: ticket.title, category: categoryEcho(ticket) };
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
+      if (category && !categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
       if (warnings.length) changed.warnings = warnings;
       return mutationAck(slug, { ok: true, ticket }, changed);
     },
@@ -549,6 +552,7 @@ const TOOLS = [
       const changed = changedTicketFields(t, args);
       if (args.category !== undefined) changed.category = categoryEcho(t);
       const warnings = store.ticketReferenceWarnings(slug, t.title, t.description);
+      if (patch.category && !categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
       if (warnings.length) changed.warnings = warnings;
       return mutationAck(slug, { ok: true, ticket: t }, changed);
     },
@@ -1065,6 +1069,7 @@ const TOOLS = [
         return Object.assign({}, category, { origin: localRow ? (localRow.kind === 'ADD' ? 'project' : category.linkState) : 'global', localRow, ticketCount: usage(category.id) });
       });
       for (const localRow of layer.rows.filter((row) => row.kind === 'DISABLE')) categories.push({ id: localRow.id, origin: 'disabled', localRow, effective: null, ticketCount: usage(localRow.id) });
+      categoryListServed = true;
       return { project: slug, projectName: meta.name, categories, warnings: layer.warnings };
     },
   },

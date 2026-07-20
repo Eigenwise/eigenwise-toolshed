@@ -65,6 +65,17 @@ function callToolRaw(name, args) {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
   return resp.result;
 }
+function callToolOn(server, name, args) {
+  const resp = server.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
+  assert.ok(resp && resp.result, `tool ${name} returned a result`);
+  assert.ok(!resp.result.isError, `tool ${name} errored: ${resp.result.content && resp.result.content[0] && resp.result.content[0].text}`);
+  return JSON.parse(resp.result.content[0].text);
+}
+function freshMcpServer() {
+  const modulePath = require.resolve('../lib/mcp.js');
+  delete require.cache[modulePath];
+  return require(modulePath);
+}
 // Legacy native-agent helpers remain CLI-only, but their handlers still have
 // direct coverage for the backward-compatible fallback path.
 function callHandler(name, args) {
@@ -508,6 +519,23 @@ test('add returns a compact category acknowledgement', () => {
   assert.equal(typeof out.category.name, 'string');
   assert.equal(typeof out.category.description, 'string');
   assert.equal(typeof out.category.route.model, 'string');
+});
+
+test('category stamps warn until category_list is served by the MCP session', () => {
+  const session = freshMcpServer();
+  const slug = store.ensureProject(PROJ).slug;
+  const existing = store.createTicket(slug, { title: 'update without category', category: 'mechanical' });
+  const unchangedCategory = callToolOn(session, 'update', { ref: existing.ref, title: 'update without a category stamp' });
+  assert.equal(unchangedCategory.warnings, undefined);
+
+  const warned = callToolOn(session, 'add', { title: 'category stamped before read', category: 'mechanical' });
+  assert.deepEqual(warned.warnings, ['Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.']);
+
+  callToolOn(session, 'category_list', {});
+  const acknowledged = callToolOn(session, 'add', { title: 'category stamped after read', category: 'mechanical' });
+  assert.equal(acknowledged.warnings, undefined);
+
+  callTool('category_list', {});
 });
 
 test('dispatch rejects a thin routed brief but only warns about a missing coding verify command', () => {
