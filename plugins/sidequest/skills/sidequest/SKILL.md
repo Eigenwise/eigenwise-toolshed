@@ -163,14 +163,15 @@ through the publish transaction first.
 
 ## Route execution down; keep the loop tight
 
-**The orchestrator (this thread) is usually the most expensive model in the session; the stamped
-models are cheaper.** Route essentially all real execution to each ticket's stamped model; inline
-only a trivial one-step where the spawn round-trip costs more than the work — pulling it inline moves execution onto this expensive thread at full context. **File and dispatch substantial
-work before starting it**; a routed claim without the prepared token is refused, and `--direct`
-is the narrow, auditable inline escape hatch. **The orchestrator keeps the thinking; each
-executor owns its ticket**: delegated investigation returns **compressed findings** (~1–2k
-tokens) written back as a comment, never transcripts. **Every Agent-tool launch must be a freshly
-dispatched Sidequest executor**; tiny lookups use `Read`/`Glob`/`Grep`/`WebFetch` inline.
+**The orchestrator is usually the most expensive model; stamped executors are cheaper.** Route real
+execution to each ticket's stamped model; inline only trivial one-step work. **File and dispatch
+substantial work before starting it**; a claim without its prepared token is refused, and `--direct`
+is the auditable inline escape hatch. Executors own their tickets; investigations return **compressed
+findings** (~1–2k tokens) as comments, not transcripts. Every Agent launch uses a freshly dispatched
+Sidequest executor; tiny lookups use `Read`/`Glob`/`Grep`/`WebFetch` inline.
+
+Quick read-only scout: generic Agent prompt starts `[sidequest-scout]`; no ticket, edits, or writes.
+Substantial exploration or research goes through the taxonomy: file a ticket, then route and dispatch it.
 
 **The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
 submit verified commits → read each thread, re-run the verify, publish the wave in one

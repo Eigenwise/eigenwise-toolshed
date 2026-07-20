@@ -45,7 +45,7 @@ function agentDenyReason(type) {
   }
   return `sidequest: ${type || 'custom'} is a generic Agent, not a Sidequest ticket executor. ` +
     'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. For delegated exploration, research, review, or analysis, file a ticket, route it, dispatch it, and spawn the returned executor. ' +
-    'For a genuinely generic read-only scout, start the prompt with [sidequest-scout] and state that it is quick with no edits or writes; never use this for ticket work.';
+    'Quick read-only scout: generic Agent prompt starts [sidequest-scout]; no ticket, edits, or writes. Never use this for ticket work.';
 }
 
 const REF_RE = /\bSQ-\d+\b/gi;

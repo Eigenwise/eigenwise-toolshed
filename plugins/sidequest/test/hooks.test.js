@@ -109,7 +109,7 @@ test('pre-tool hook: generic agents get direct-tool guidance and Sidequest-shape
     assert.match(reason, /Read, Glob, Grep, or WebFetch inline/);
     assert.match(reason, /file a ticket, route it, dispatch it/);
     assert.match(reason, /\[sidequest-scout\]/);
-    assert.match(reason, /never use this for ticket work/);
+    assert.match(reason, /Never use this for ticket work/);
     assert.doesNotMatch(reason, /fresh dispatch briefing/);
   }
   const mismatch = runHookOutput(FORCE_BYPASS, {
@@ -562,8 +562,8 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the routed model');
   assert.match(ctx, /substantive investigations and changes are board tickets/, 'must preserve ticket-first substantive work');
   assert.match(ctx, /Every Agent launch uses that executor/, 'must require every Agent launch to use a dispatched executor');
-  assert.match(ctx, /Read, Glob, Grep, or WebFetch inline/, 'must give tiny lookups direct tools');
-  assert.match(ctx, /delegated exploration, research, review, or analysis gets a ticket first/, 'must route delegated work through the board');
+  assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/, 'must give tiny lookups direct tools');
+  assert.match(ctx, /substantial exploration\/research\/review\/analysis: file a taxonomy ticket, then dispatch/, 'must route delegated work through the board');
   assert.ok(ctx.includes('fresh `dispatch`'), 'must require a fresh dispatch result');
   assert.ok(ctx.includes('exact stable executor, spawn, and token'), 'must use the exact instant dispatch result');
   assert.match(ctx, /Dispatch is instant: no registration\/watcher wait/, 'must replace the registration wait flow');
@@ -584,6 +584,18 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
     ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'),
     'must push the MCP tools as the first-choice board interface (models default to the CLI out of habit)'
   );
+});
+
+test('session-start: teaches the scout marker and taxonomy route from turn zero', () => {
+  const ctx = runHook(SESSION, { session_id: 'test' });
+  assert.match(ctx, /Quick read-only scout: generic Agent prompt starts \[sidequest-scout\]; no ticket, edits, or writes\./);
+  assert.match(ctx, /substantial exploration\/research\/review\/analysis: file a taxonomy ticket, then dispatch\./);
+  const pluginRoot = path.join(__dirname, '..');
+  const deny = fs.readFileSync(path.join(HOOKS, 'force-exec-bypass.js'), 'utf8');
+  const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
+  for (const surface of [deny, skill.replaceAll('`', '')]) {
+    assert.match(surface, /Quick read-only scout: generic Agent prompt starts \[sidequest-scout\]; no ticket, edits, or writes\./);
+  }
 });
 
 test('session-start: carries runtime resource and worker reporting coordination', () => {
@@ -753,8 +765,9 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(readme, /native_agent/);
   assert.match(readme, /exact stable executor/);
   assert.match(readme, /\[sidequest-scout\]/);
+  const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
+  assert.match(skill, /\[sidequest-scout\]/);
   for (const file of [
-    path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'),
     path.join(pluginRoot, 'skills', 'sidequest', 'references', 'orchestration.md'),
   ]) {
     assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /\[sidequest-scout\]|\bscouts?\b/i, `${file} must not teach scout bypasses`);
