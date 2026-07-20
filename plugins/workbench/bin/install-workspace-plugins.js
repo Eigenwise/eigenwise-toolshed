@@ -151,7 +151,13 @@ function computeDelta(plan, marketplaces, plugins) {
     const correct = matching.find((plugin) => plugin.scope === planned.scope && projectMatches(plugin, plan.projectDir));
     if (correct && correct.enabled !== false) return { ...planned, status: 'skipped' };
     if (correct) return { ...planned, status: 'disabled' };
-    if (matching.length > 0) return { ...planned, status: 'scope-mismatch' };
+    if (planned.scope !== 'user' && matching.some((plugin) => plugin.scope === 'user')) {
+      return { ...planned, status: 'already-covered' };
+    }
+    if (matching.some((plugin) => projectMatches(plugin, plan.projectDir))) {
+      return { ...planned, status: 'scope-mismatch' };
+    }
+    if (matching.length > 0) return { ...planned, status: 'install-elsewhere' };
     return { ...planned, status: 'missing' };
   });
 
@@ -269,7 +275,7 @@ function runInstall({ plan, options = {}, run = defaultRun, report = () => {} })
 
   const mutations = [
     ...delta.marketplaces.filter((item) => item.status === 'missing').map((item) => marketplaceAddCommand(item, settings.claude, plan.projectDir)),
-    ...orderedPlugins(delta.plugins).filter((item) => item.status === 'missing' || item.status === 'disabled').map((item) => pluginInstallCommand(item, settings.claude, plan.projectDir)),
+    ...orderedPlugins(delta.plugins).filter((item) => item.status === 'missing' || item.status === 'disabled' || item.status === 'install-elsewhere').map((item) => pluginInstallCommand(item, settings.claude, plan.projectDir)),
   ];
 
   if (settings.check || settings.dryRun) {
@@ -292,12 +298,12 @@ function runInstall({ plan, options = {}, run = defaultRun, report = () => {} })
     if (missing.length > 0) return failedSummary(base, verifiedMarketplaces.step, `Marketplace verification failed: ${missing.map((item) => item.name).join(', ')}`);
   }
 
-  for (const plugin of orderedPlugins(delta.plugins).filter((item) => item.status === 'missing' || item.status === 'disabled')) {
+  for (const plugin of orderedPlugins(delta.plugins).filter((item) => item.status === 'missing' || item.status === 'disabled' || item.status === 'install-elsewhere')) {
     const { result, step } = runCommand(pluginInstallCommand(plugin, settings.claude, plan.projectDir), run, steps);
     if (!result.ok) return failedSummary(base, step, `Failed to install plugin: ${plugin.id}`);
   }
 
-  if (delta.plugins.some((item) => item.status === 'missing' || item.status === 'disabled')) {
+  if (delta.plugins.some((item) => item.status === 'missing' || item.status === 'disabled' || item.status === 'install-elsewhere')) {
     const verifiedPlugins = inventory(pluginListCommand(settings.claude, plan.projectDir), run, steps, 'Could not verify plugin inventory');
     if (verifiedPlugins.error) return failedSummary(base, verifiedPlugins.step, verifiedPlugins.error);
     const verifiedDelta = computeDelta(plan, initialMarketplaces.value, verifiedPlugins.value);
@@ -306,7 +312,7 @@ function runInstall({ plan, options = {}, run = defaultRun, report = () => {} })
   }
 
   base.reloadRequired = mutations.length > 0;
-  base.installed = delta.plugins.filter((item) => item.status === 'missing' || item.status === 'disabled').map((item) => item.id);
+  base.installed = delta.plugins.filter((item) => item.status === 'missing' || item.status === 'disabled' || item.status === 'install-elsewhere').map((item) => item.id);
   report(JSON.stringify(base));
   return base;
 }
