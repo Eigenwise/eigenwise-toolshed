@@ -192,7 +192,7 @@ export class BoardState {
     if (this.assignee === 'you' && !this.isAssignedToYou(ticket)) return false;
     if (this.assignee === 'agent' && !this.isAgentHeld(ticket)) return false;
     if (this.assignee === 'unassigned' && (this.isAssignedToYou(ticket) || this.isAgentHeld(ticket))) return false;
-    if (this.story !== 'all' && ticket.storyId !== this.story) return false;
+    if (this.story === 'none' ? Boolean(ticket.storyId) : this.story !== 'all' && ticket.storyId !== this.story) return false;
     return true;
   }
   private isAssignedToYou(ticket: Ticket) { return String(ticket.assignee ?? '').toLowerCase() === 'you'; }
