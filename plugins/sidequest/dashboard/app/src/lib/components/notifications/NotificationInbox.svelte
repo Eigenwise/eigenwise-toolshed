@@ -113,6 +113,8 @@
   });
 </script>
 
+<svelte:window onkeydown={(event) => { if (event.key === 'Escape' && state.popover === 'inbox') state.popover = null; }} />
+
 <button
   class="bell"
   aria-label="Notifications"

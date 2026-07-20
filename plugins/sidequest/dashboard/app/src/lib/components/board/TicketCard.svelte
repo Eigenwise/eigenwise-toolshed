@@ -20,7 +20,7 @@
 <article class:has-story={Boolean(story)} class="card" draggable="true" ondragstart={() => { ondragging(true); state.setDragging(true); }} ondragend={() => { ondragging(false); state.setDragging(false); }}>
   <button class="card-main" onclick={() => state.openDialog = ticket.id}>
     {#if story}<span class="story-rail" style:background={story.color}></span>{/if}
-    <span class="topline"><code>{ticket.ref}</code>{#if state.selectedProject === 'all'}<span class="project">{project?.name ?? projectFor(ticket)}</span>{/if}{#if story}<span class="story" style:--story={story.color}>{story.title}</span>{/if}{#if category?.name}<span class="category" title={category.description}>{category.name}</span>{/if}<span class={`priority ${ticket.priority ?? 'normal'}`}>{ticket.priority ?? 'normal'}</span></span>
+    <span class="topline"><code>{ticket.ref}</code>{#if state.selectedProject === 'all'}<span class="project">{project?.name ?? projectFor(ticket)}</span>{/if}{#if story}<span class="story" style:--story={story.color}>{story.title}</span>{/if}{#if category?.name}<span class="category">{category.name}</span>{/if}<span class={`priority ${ticket.priority ?? 'normal'}`}>{ticket.priority ?? 'normal'}</span></span>
     <strong>{ticket.title}</strong>
     {#if ticket.description}<span class="description">{plainText(ticket.description)}</span>{/if}
     <span class="footer">

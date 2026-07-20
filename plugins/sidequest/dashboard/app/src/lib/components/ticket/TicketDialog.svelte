@@ -8,6 +8,7 @@
 	import LinkEditor from './LinkEditor.svelte';
 	import ReminderEditor from './ReminderEditor.svelte';
 	import { renderMarkdown } from './markdown';
+	import Button from '../ui/Button.svelte';
 
 	let { state: board }: { state: BoardState } = $props();
 	let title = $state('');
@@ -99,7 +100,7 @@
 {#if board.openDialog === 'create' || editingTicket}
 	<div class="overlay" role="presentation" onclick={close}>
 		<dialog class="dialog panel" open aria-modal="true" aria-label={editingTicket ? `Edit ${editingTicket.ref}` : 'New ticket'} onclick={(event) => event.stopPropagation()}>
-			<header><div><h2>{editingTicket ? editingTicket.ref : 'New ticket'}</h2><small>{saving ? 'Saving…' : editingTicket?.updatedAt ? `Updated ${new Date(editingTicket.updatedAt).toLocaleString()}` : 'Fill in the ticket details.'}</small></div><button type="button" onclick={close}>Close</button></header>
+			<header><div><h2>{editingTicket ? editingTicket.ref : 'New ticket'}</h2><small>{saving ? 'Saving…' : editingTicket?.updatedAt ? `Updated ${new Date(editingTicket.updatedAt).toLocaleString()}` : 'Fill in the ticket details.'}</small></div><Button variant="quiet" onclick={close}>Close</Button></header>
 			<div class="main-grid">
 				<div class="fields">
 					<label><span>Title</span><input aria-label="Title" value={editingTicket?.title ?? title} onblur={(event) => autosave('title', event.currentTarget.value)} oninput={(event) => { if (!editingTicket) title = event.currentTarget.value; }} /></label>
@@ -115,11 +116,11 @@
 				</div>
 				{#if editingTicket}<aside><ReminderEditor board={board} ticket={editingTicket} /><LinkEditor board={board} ticket={editingTicket} /><CommentThread board={board} ticket={editingTicket} /></aside>{/if}
 			</div>
-			{#if !editingTicket}<footer><button type="button" onclick={close}>Cancel</button><button type="button" disabled={saving} onclick={create}>Create</button></footer>{/if}
+			{#if editingTicket}<footer class="editor-actions"><Button variant="danger" onclick={() => { board.deleteTicket(editingTicket); close(); }}>Delete ticket</Button><Button onclick={() => { board.archiveTicket(editingTicket); close(); }}>Archive ticket</Button></footer>{:else}<footer><Button onclick={close}>Cancel</Button><Button variant="primary" disabled={saving} onclick={create}>Create ticket</Button></footer>{/if}
 		</dialog>
 	</div>
 {/if}
 
 <style>
-	.overlay { position:fixed; inset:0; z-index:30; display:grid; place-items:center; padding:1rem; background:color-mix(in srgb, var(--text) 24%, transparent); } .dialog { width:min(70rem, 100%); max-height:calc(100vh - 2rem); overflow:auto; padding:1rem; border:0; border-radius:calc(var(--radius) * 1.5); color:var(--text); background:var(--surface); } header { display:flex; justify-content:space-between; gap:1rem; align-items:start; } h2 { margin:0; } small { color:var(--text-muted); } .main-grid { display:grid; grid-template-columns:minmax(0, 1fr) minmax(18rem, .7fr); gap:1.25rem; margin-top:1rem; } .fields { display:grid; gap:.75rem; } label { display:grid; gap:.3rem; } input, textarea, select { box-sizing:border-box; width:100%; padding:.55rem; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); color:var(--text); } textarea { min-height:10rem; resize:vertical; } .description { min-height:6rem; padding:.6rem; border:1px solid var(--border); border-radius:var(--radius); text-align:left; color:var(--text); background:var(--surface); } .description span { color:var(--text-muted); } .three { display:grid; grid-template-columns:repeat(3, 1fr); gap:.5rem; } .check { display:flex; align-items:center; gap:.5rem; } .check input { width:auto; } aside { min-width:0; } footer { display:flex; justify-content:end; gap:.5rem; margin-top:1rem; } .markdown :global(p) { margin:.3rem 0; } @media (max-width:720px) { .main-grid { grid-template-columns:1fr; } }
+	.overlay { position:fixed; inset:0; z-index:30; display:grid; place-items:center; padding:1rem; background:color-mix(in srgb, var(--text) 24%, transparent); } .dialog { width:min(70rem, 100%); max-height:calc(100vh - 2rem); overflow:auto; padding:1rem; border:0; border-radius:calc(var(--radius) * 1.5); color:var(--text); background:var(--surface); } header { display:flex; justify-content:space-between; gap:1rem; align-items:start; } h2 { margin:0; } small { color:var(--text-muted); } .main-grid { display:grid; grid-template-columns:minmax(0, 1fr) minmax(18rem, .7fr); gap:1.25rem; margin-top:1rem; } .fields { display:grid; gap:.75rem; } label { display:grid; gap:.3rem; } input, textarea, select { box-sizing:border-box; width:100%; padding:.55rem; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); color:var(--text); } textarea { min-height:10rem; resize:vertical; } .description { min-height:6rem; padding:.6rem; border:1px solid var(--border); border-radius:var(--radius); text-align:left; color:var(--text); background:var(--surface); } .description span { color:var(--text-muted); } .three { display:grid; grid-template-columns:repeat(3, 1fr); gap:.5rem; } .check { display:flex; align-items:center; gap:.5rem; } .check input { width:auto; } aside { min-width:0; } footer { display:flex; justify-content:end; gap:.5rem; margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border); } footer.editor-actions { justify-content:space-between; } .markdown :global(p) { margin:.3rem 0; } @media (max-width:720px) { .main-grid { grid-template-columns:1fr; } }
 </style>

@@ -13,11 +13,18 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@sveltejs/vite-plugin-svelte": "^6.1.0",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.15.0",
     "svelte": "^5.38.0",
     "svelte-check": "^4.2.2",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.8.3",
     "vite": "^7.0.6",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "bits-ui": "^2.18.1",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.6.0"
   }
 }
