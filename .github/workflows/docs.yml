@@ -7,6 +7,12 @@ on:
     paths:
       - docs/**
       - .github/workflows/docs.yml
+      # The reference section is generated from these at build time — a plugin
+      # release must redeploy the docs or the reference goes stale.
+      - plugins/**/.claude-plugin/plugin.json
+      - plugins/**/skills/**
+      - plugins/**/hooks/hooks.json
+      - .claude-plugin/marketplace.json
   workflow_dispatch:
 
 permissions:
