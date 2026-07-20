@@ -1192,8 +1192,8 @@
     },
     {
       "id": 19,
-      "title": "Gateway usage by session",
-      "description": "Exact provider input context by session. Session IDs are shortened to eight characters for readable comparison.",
+      "title": "Gateway usage by session and role",
+      "description": "Exact provider input context and request count by session, agent role, and resolved model. Project names come from session-start events; Session is the short UUID fallback when a session has no labeled start event in the selected range.",
       "type": "table",
       "datasource": {
         "type": "loki",
@@ -1206,7 +1206,13 @@
         "h": 8
       },
       "options": {
-        "showHeader": true
+        "showHeader": true,
+        "footer": {
+          "show": true,
+          "reducer": [
+            "sum"
+          ]
+        }
       },
       "fieldConfig": {
         "defaults": {
@@ -1223,21 +1229,80 @@
           },
           "queryType": "instant",
           "instant": true,
-          "expr": "sum by (session_label) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | label_format session_label=\"{{ .workbench_session_id | trunc 8 }}\" | unwrap workbench_measurement_context_tokens_value [$__range]))",
-          "legendFormat": "session {{session_label}}"
+          "expr": "sum by (workbench_session_id, session_label, workbench_attribute_agent_role, workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | label_format session_label=\"{{ .workbench_session_id | trunc 8 }}\" | unwrap workbench_measurement_context_tokens_value [$__range]))",
+          "legendFormat": "{{session_label}} {{workbench_attribute_agent_role}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_session_id, session_label, workbench_attribute_agent_role, workbench_attribute_model) (count_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | label_format session_label=\"{{ .workbench_session_id | trunc 8 }}\" [$__range]))",
+          "legendFormat": "{{session_label}} {{workbench_attribute_agent_role}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "max by (workbench_session_id, workbench_attribute_project_name) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.session_start\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | workbench_attribute_project_name != \"\" [$__range]))",
+          "legendFormat": "{{workbench_session_id}}"
         }
       ],
       "transformations": [
         {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "workbench_session_id",
+            "mode": "outer"
+          }
+        },
+        {
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time": true
+              "Time": true,
+              "Value #C": true,
+              "workbench_session_id": true
+            },
+            "indexByName": {
+              "workbench_attribute_project_name": 0,
+              "session_label": 1,
+              "workbench_attribute_agent_role": 2,
+              "workbench_attribute_model": 3,
+              "Value #A": 4,
+              "Value #B": 5
             },
             "renameByName": {
+              "workbench_attribute_project_name": "Project",
               "session_label": "Session",
-              "Value #A": "Context tokens"
+              "workbench_attribute_agent_role": "Role",
+              "workbench_attribute_model": "Model",
+              "Value #A": "Context tokens",
+              "Value #B": "Requests"
             }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Context tokens",
+                "desc": true
+              }
+            ]
           }
         }
       ]

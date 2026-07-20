@@ -252,6 +252,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
     'Hook execution activity / failures', 'Subagent lifecycle activity',
+    'Gateway usage by session and role',
     'Ticket dispatch usage and route drift',
   ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
 
@@ -353,10 +354,25 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const lifecycle = byTitle.get('Subagent lifecycle activity');
   assert.match(lifecycle.targets[0].expr, /workbench_attribute_agent_type != ""/);
   assert.match(lifecycle.targets[0].expr, /regexReplaceAll/);
-  const sessionUsage = byTitle.get('Gateway usage by session');
-  assert.match(sessionUsage.targets[0].expr, /workbench_session_id != ""/);
+  const sessionUsage = byTitle.get('Gateway usage by session and role');
+  assert.equal(sessionUsage.type, 'table');
+  assert.deepEqual(sessionUsage.options.footer.reducer, ['sum']);
+  assert.equal(sessionUsage.targets.length, 3);
+  assert.ok(sessionUsage.targets.every((target) => target.instant === true));
+  assert.match(sessionUsage.targets[0].expr, /sum by \(workbench_session_id, session_label, workbench_attribute_agent_role, workbench_attribute_model\)/);
+  assert.match(sessionUsage.targets[0].expr, /workbench_measurement_context_tokens_value/);
+  assert.match(sessionUsage.targets[1].expr, /count_over_time/);
+  assert.match(sessionUsage.targets[2].expr, /hook\.session_start/);
+  assert.match(sessionUsage.targets[2].expr, /workbench_attribute_project_name/);
+  assert.ok(sessionUsage.transformations.some(({ id }) => id === 'joinByField'));
+  assert.match(JSON.stringify(sessionUsage.transformations), /"byField":"workbench_session_id"/);
+  assert.match(JSON.stringify(sessionUsage.transformations), /Project/);
+  assert.match(JSON.stringify(sessionUsage.transformations), /Session/);
+  assert.match(JSON.stringify(sessionUsage.transformations), /Role/);
+  assert.match(JSON.stringify(sessionUsage.transformations), /Model/);
   assert.match(JSON.stringify(sessionUsage.transformations), /Context tokens/);
-  assert.match(JSON.stringify(sessionUsage.transformations), /"Time":true/);
+  assert.match(JSON.stringify(sessionUsage.transformations), /Requests/);
+  assert.match(JSON.stringify(sessionUsage.transformations), /"desc":true/);
   const boardCost = byTitle.get('Ticket dispatch usage and route drift');
   assert.equal(boardCost.type, 'table');
   assert.match(boardCost.description, /Batched agents mapped to multiple tickets are excluded/i);
@@ -374,7 +390,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.match(JSON.stringify(boardCost.transformations), /Resolved model/);
   assert.equal(byTitle.get('Context-window growth').targets[0].legendFormat, 'session {{session_label}}');
   for (const title of [
-    'Gateway usage by session', 'Orchestrator vs executor usage', 'Input composition over time',
+    'Gateway usage by session and role', 'Orchestrator vs executor usage', 'Input composition over time',
     'Context-window growth', 'Prompt-cache economics',
     'MCP definition footprint by server',
   ]) {
