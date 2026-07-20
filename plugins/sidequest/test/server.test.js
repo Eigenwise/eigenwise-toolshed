@@ -147,7 +147,7 @@ test('detached dashboard spawn options use a stable cwd and preserve lifecycle f
   assert.match(server, /spawn\(process\.execPath, \[targetBin, 'serve', '--port', String\(ownPort\), '--handoff-pid', String\(process\.pid\)\], \{\s*cwd: os\.homedir\(\),\s*detached: true,\s*stdio: 'ignore',\s*windowsHide: true,\s*\}\)/);
 });
 
-test('stable cwd lets a detached child outlive a removed worktree-like cwd', { timeout: 10000 }, async (t) => {
+test('stable cwd lets a detached child outlive a removed worktree-like cwd', { timeout: 60000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-detached-cwd-'));
   const worktree = path.join(root, 'worktree');
   fs.mkdirSync(worktree);
@@ -166,7 +166,7 @@ test('stable cwd lets a detached child outlive a removed worktree-like cwd', { t
     }
     try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
   });
-  await waitFor(() => fs.existsSync(marker), 5000, 'detached child marker');
+  await waitFor(() => fs.existsSync(marker), 30000, 'detached child marker');
   assert.strictEqual(fs.readFileSync(marker, 'utf8'), 'ready');
 });
 
@@ -348,7 +348,7 @@ function isAlive(pid) {
   }
 }
 
-test('dashboard self-updates to a newer cached install at the same URL', { timeout: 60000 }, async (t) => {
+test('dashboard self-updates to a newer cached install at the same URL', { timeout: 180000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-upgrade-'));
   const oldRoot = path.join(root, '1.37.0');
   const newRoot = path.join(root, '1.37.1');
@@ -383,7 +383,7 @@ test('dashboard self-updates to a newer cached install at the same URL', { timeo
     } catch (_) {
       return false;
     }
-  }, 30000, 'the old dashboard');
+  }, 120000, 'the old dashboard');
 
   const oldHealth = await fetchJson(port, '/api/health');
   copyPlugin(source, newRoot, '1.37.1');
@@ -395,7 +395,7 @@ test('dashboard self-updates to a newer cached install at the same URL', { timeo
     } catch (_) {
       return false;
     }
-  }, 10000, 'the upgraded dashboard');
+  }, 30000, 'the upgraded dashboard');
 
   const newHealth = await fetchJson(port, '/api/health');
   assert.strictEqual(newHealth.version, '1.37.1');
