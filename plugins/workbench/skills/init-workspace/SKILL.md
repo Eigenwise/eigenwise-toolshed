@@ -56,8 +56,10 @@ that from the project-local telemetry settings and the result of the telemetry s
 When it is already enabled, say so briefly and skip this question on re-entry.
 
 When telemetry is not enabled, use one `AskUserQuestion` with this plain explanation: **"Enable local
-project telemetry? It records usage metrics locally through the Collector so they can appear in Grafana
-dashboards. It is per-project only and writes `.claude/settings.local.json`, not shared or user settings."**
+project telemetry? Each project must opt in: this writes only its `.claude/settings.local.json` and sends usage
+metadata through the local Collector to local Grafana. You can see API-equivalent cost; input, output, and cache
+token totals; tool-call names and counts; plus model, session, agent, and activity information. It never records
+prompt or response text, code or file contents, tool inputs or results, credentials, or environment values."**
 
 - **Yes:** hand off to `/workbench:enable-project-telemetry`; it owns consent confirmation, setup, and
   verification. After it finishes, stop. Tell the user to restart Claude Code because its OTEL settings only

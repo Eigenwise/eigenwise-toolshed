@@ -46,7 +46,10 @@ test('init-workspace starts with telemetry consent and then the live plugin pick
 
   assert.ok(telemetry >= 0 && telemetry < picker && picker < assessment);
   assert.match(skill, /This is the first question in the whole flow/);
-  assert.match(skill, /`\.claude\/settings\.local\.json`, not shared or user settings/);
+  assert.match(skill, /Each project must opt in: this writes only its `\.claude\/settings\.local\.json`/);
+  assert.match(skill, /local Collector to local Grafana/);
+  assert.match(skill, /API-equivalent cost; input, output, and cache\ntoken totals; tool-call names and counts; plus model, session, agent, and activity information/);
+  assert.match(skill, /never records\nprompt or response text, code or file contents, tool inputs or results, credentials, or environment values/);
   assert.match(skill, /restart Claude Code.*re-run `\/workbench:init-workspace`/s);
   assert.match(skill, /Read the current Toolshed marketplace manifest and\n`references\/stack-plugins\.md`/);
   assert.match(skill, /Do not maintain a hard-coded plugin list in this skill/);
