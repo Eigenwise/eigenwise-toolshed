@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import type { BoardState } from '../../state/board.svelte';
 	import type { Ticket } from '../../types';
 	import StoryPicker from './StoryPicker.svelte';
@@ -81,6 +82,18 @@
 	async function assignStory(ticket: Ticket, nextStoryId: string) {
 		await board.patchTicket(ticket, { storyId: nextStoryId || null });
 	}
+
+	onMount(() => {
+		board.setDialogSaveAction(async () => {
+			if (!board.openDialog) return;
+			if (editingTicket) {
+				close();
+				return;
+			}
+			await create();
+		});
+		return () => board.setDialogSaveAction(null);
+	});
 </script>
 
 {#if board.openDialog === 'create' || editingTicket}

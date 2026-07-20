@@ -16,7 +16,7 @@ function query(values: Query = {}) {
 }
 
 export class ApiClient {
-  constructor(private readonly fetcher: typeof fetch = fetch) {}
+  constructor(private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {}
 
   private async request<T>(method: Method, pathname: string, body?: unknown): Promise<T> {
     const response = await this.fetcher(pathname, {
