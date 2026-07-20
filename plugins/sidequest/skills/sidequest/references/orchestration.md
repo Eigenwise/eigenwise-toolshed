@@ -189,11 +189,7 @@ reflexively go synchronous to save money, and do not answer the wakeup cost by w
 
 ## Discovery and research
 
-Default to fanning understanding out, not reading it serially on the lead. A single named file or a
-one-step lookup stays inline (`Read`, `Glob`, `Grep`, `WebFetch`), and a codebase you already know needs no
-ticket. But once understanding a subsystem would take roughly four or more file reads or a broad grep across
-it, that serial reading is spending orchestrator context on discovery a cheap executor should do — file a
-`codebase-exploration` spike, dispatch it, and let its comment hand the findings back. Any delegated
+Default to fanning understanding out, not reading it serially on the lead. A single named file or one-step lookup stays inline (`Read`, `Glob`, `Grep`, `WebFetch`). Before opening a second file to answer one question or broad-grepping unfamiliar code, file a `codebase-exploration` spike, dispatch it, and let its comment hand the findings back. Any delegated
 exploration, research, review, or domain analysis requires that ticket first; route and dispatch it, then
 spawn the returned executor, and its concise findings inform the next ticket boundaries. Workflow agents
 remain governed by their Workflow contract.

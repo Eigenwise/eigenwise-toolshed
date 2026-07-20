@@ -11,18 +11,14 @@ description: >-
 
 # sidequest
 
-A Trello-light quest log: tickets in a central store under `~/.claude/sidequest`, a live
-Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives in reference files
-— **read them only when the situation calls for it**:
+Details: see the references below when needed:
 
 - `references/orchestration.md` — decomposition depth, fan-out waves, checkpoints, background
   execution, cost levers, agent teams.
 - `references/publishing.md` — the serialized publish transaction.
 - `references/routing-details.md` — routes, fallbacks, complexity bands, spawn parameters.
 - `references/routing-guide.md` — ambiguous classification; workflow recipe wiring.
-- `references/external-trackers.md`, `references/board-features.md`,
-  `references/category-links.md` — external trackers; stories, reminders, assignment,
-  attachments; category forks.
+- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`.
 
 ## Plan substantial work on the board first
 
@@ -125,7 +121,7 @@ is unavailable), attaching any pasted image path.
 The board may be shared: a ticket must be **claimed** before you touch it, and claiming is
 **atomic**. **Never work a ticket you haven't successfully claimed**, even one you just filed.
 Lifecycle (executors use the matching MCP tools; CLI forms for inline/admin work):
-`next`/`claim SQ-3 --by <you> --direct --reason "why no executor can do this"` (routed exception; 20+ chars) → `commit` (declared
+`next`/`claim SQ-3 --by <you> --direct --reason "why no executor can do this"` (direct requires user `direct-ok` + 20+ chars; routing off stays direct-capable) → `commit` (declared
 ticket paths only) → `submit --commit <hash> --verify "<cmd>"` (parks the verified LOCAL commit)
 or `done --model <model> --effort <level>` (inline/non-repo only) or `release` (drop unfinished,
 optionally `--status todo`).
@@ -163,7 +159,7 @@ through the publish transaction first.
 
 ## Route execution down; keep the loop tight
 
-**ROLE: you are the project orchestrator and the priciest model here.** Executors are cheaper: offload execution and investigation; read only enough to write tickets. **Substantive work MUST be ticketed and dispatched**; a routed `--direct` claim is a justified exception with a reason why no executor can do it. After the free allowance, substantive actions are **BLOCKED** until board contact. Executors return **compressed findings** as comments. Every Agent uses fresh dispatch; tiny lookup: 1–2 `Read`/`Glob`/`Grep`/`WebFetch` calls. Cross-file tracing: spike ticket.
+**ROLE: orchestrate; executors are cheaper.** Read only enough to ticket work. **Ticket + dispatch MUST precede multi-file exploration**: the second file you open to answer one question is the boundary, not a ten-read retrospective. Substantive work is ticketed and dispatched; after the allowance it is **BLOCKED** until board contact. Tiny lookup: one `Read`/`Glob`/`Grep`/`WebFetch`. Routed `direct:true` is refused without user `direct-ok` + a reason. Invalid reasons: "the context is already loaded in this session", "it's a small patch", "a fresh executor would need context transfer / handoff costs more". A direct claim never retroactively legitimizes inline investigation. Executors return **compressed findings**; every Agent uses fresh dispatch. Cross-file tracing: spike ticket.
 
 Any delegated work, including an investigation, is a spike ticket (usually `codebase-exploration`): file it, then route and dispatch it.
 

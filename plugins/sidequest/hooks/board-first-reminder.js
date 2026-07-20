@@ -60,7 +60,7 @@ function main() {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'UserPromptSubmit',
-      additionalContext: 'sidequest: ROLE: you are the orchestrator. Decompose, file tickets, dispatch executors, and integrate findings into further delegation; read only enough to write a good ticket. REQUIRED: substantive work in this project MUST go through the Sidequest board (ticket + dispatch, or claim --direct for deliberate inline work). Only trivial lookups (a couple of reads for one question) are exempt. Inline work past the free allowance will be BLOCKED until a claim exists.',
+      additionalContext: 'sidequest: ROLE: you are the orchestrator. Decompose, file tickets, dispatch executors, and integrate findings into further delegation; read only enough to write a good ticket. REQUIRED: ticket + dispatch BEFORE multi-file exploration, with the second file you open to answer one question as the boundary. Routed claim --direct (direct:true) needs user `direct-ok` + a reason; invalid: "the context is already loaded in this session", "it\'s a small patch", "a fresh executor would need context transfer / handoff costs more". Direct never retroactively legitimizes inline investigation. Only trivial one-file lookups are exempt. Inline work past the free allowance will be BLOCKED until a claim exists.',
     },
   }));
 }
