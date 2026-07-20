@@ -240,7 +240,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
   for (const title of [
     'Tokens & models', 'Tool activity', 'MCP', 'Sessions & agents',
-    'Subscription & limits', 'Gateway internals', 'Board cost attribution',
+    'Gateway internals', 'Board cost attribution',
   ]) {
     const row = byTitle.get(title);
     assert.equal(row?.type, 'row', `missing dashboard row: ${title}`);
@@ -252,7 +252,6 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
     'Hook execution activity / failures', 'Subagent lifecycle activity',
-    'Subscription rate-limit burn', 'Subscription window resets',
     'Ticket dispatch usage and route drift',
   ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
   const toolDurationP95 = byTitle.get('Tool activity duration p95');
@@ -297,22 +296,6 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.match(byTitle.get('Models in use').targets[0].expr, /\[\$__range\]/);
   assert.equal(byTitle.get('Models in use').targets[0].instant, true);
 
-  const subscriptionBurn = byTitle.get('Subscription rate-limit burn');
-  assert.equal(subscriptionBurn.type, 'timeseries');
-  assert.equal(subscriptionBurn.fieldConfig.defaults.unit, 'percent');
-  assert.match(subscriptionBurn.targets[0].expr, /rate_limit_five_hour_used_percent_value/);
-  assert.match(subscriptionBurn.targets[1].expr, /rate_limit_seven_day_used_percent_value/);
-  for (const target of subscriptionBurn.targets) assert.match(target.expr, /\[\$__auto\]/);
-  const subscriptionResets = byTitle.get('Subscription window resets');
-  assert.equal(subscriptionResets.type, 'stat');
-  assert.equal(subscriptionResets.fieldConfig.defaults.unit, 'dateTimeFromNow');
-  assert.match(subscriptionResets.targets[0].expr, /rate_limit_five_hour_reset_at_ms_value/);
-  assert.match(subscriptionResets.targets[1].expr, /rate_limit_seven_day_reset_at_ms_value/);
-  for (const target of subscriptionResets.targets) {
-    assert.equal(target.instant, true);
-    assert.match(target.expr, /\[\$__range\]/);
-  }
-
   // Binary + between per-type vectors drops any model missing a type (Codex
   // records carry no cache measurements), so the model panels must unwrap a
   // measurement present on every record.
@@ -338,10 +321,6 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.doesNotMatch(connectionActivity.targets[0].expr, /or vector\(0\)/);
   assert.equal(connectionActivity.targets[0].legendFormat, '{{workbench_attribute_mcp_server}} ({{workbench_attribute_status}})');
   assert.equal(connectionActivity.fieldConfig.defaults.noValue, 'No MCP connections reported');
-  const headroom = byTitle.get('Rate-limit and Codex throttle headroom');
-  for (const target of headroom.targets) assert.doesNotMatch(target.expr, /or vector\(0\)/);
-  assert.equal(headroom.fieldConfig.defaults.unit, 'tokens');
-  assert.equal(headroom.fieldConfig.defaults.noValue, 'No provider limit signal');
   for (const title of ['Tokens over time, by type', 'Tokens over time, by model', 'Context-window growth']) {
     assert.deepEqual(byTitle.get(title).options.legend, { displayMode: 'table', placement: 'right', calcs: ['sum'] });
   }
@@ -373,7 +352,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.equal(byTitle.get('Context-window growth').targets[0].legendFormat, 'session {{session_label}}');
   for (const title of [
     'Gateway usage by session', 'Orchestrator vs executor usage', 'Input composition over time',
-    'Context-window growth', 'Prompt-cache economics', 'Rate-limit and Codex throttle headroom',
+    'Context-window growth', 'Prompt-cache economics',
     'MCP definition footprint by server',
   ]) {
     for (const target of byTitle.get(title).targets) assert.match(target.expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
