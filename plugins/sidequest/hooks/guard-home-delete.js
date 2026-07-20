@@ -33,19 +33,13 @@ function normalizePath(value) {
   return value.toLowerCase().replace(/[\\/]+$/, '');
 }
 
-function isSubagent(input) {
-  return [input.agent_id, input.agentId, input.agent_type, input.agentType]
-    .some((value) => {
-      const identity = String(value || '').trim().toLowerCase();
-      return identity && identity !== 'main' && identity !== 'main-thread';
-    });
-}
-
+// Deliberately NO subagent exemption here: the 2026-07-16 $home wipe was done
+// by an executor. This guard binds every caller.
 function main() {
   const raw = fs.readFileSync(0, 'utf8');
   if (!raw) return;
   const input = JSON.parse(raw);
-  if (!input || typeof input !== 'object' || isSubagent(input)) return;
+  if (!input || typeof input !== 'object') return;
   if (!['Bash', 'PowerShell'].includes(String(input.tool_name || ''))) return;
 
   const command = String(input.tool_input && input.tool_input.command || '');

@@ -12,14 +12,6 @@ function terminalDispatchTarget(agentName) {
   }
 }
 
-function isSubagent(input) {
-  return [input.agent_id, input.agentId, input.agent_type, input.agentType]
-    .some((value) => {
-      const identity = String(value || '').trim().toLowerCase();
-      return identity && identity !== 'main' && identity !== 'main-thread';
-    });
-}
-
 function deny(reason) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -34,7 +26,10 @@ function main() {
   const raw = fs.readFileSync(0, 'utf8');
   if (!raw) return;
   const input = JSON.parse(raw);
-  if (!input || typeof input !== 'object' || isSubagent(input)) return;
+  // Executors may message peers now (subagents can do anything), but the
+  // terminal-target check binds every caller: a queued message must never
+  // wake a finished executor.
+  if (!input || typeof input !== 'object') return;
   if (String(input.tool_name || '') !== 'SendMessage') return;
 
   const toRaw = input.tool_input && input.tool_input.to;

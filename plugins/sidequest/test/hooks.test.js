@@ -239,12 +239,17 @@ test('task-output guard: leaves subagent calls, background task IDs, and malform
   }
 });
 
-test('pre-tool near-cap hook leaves subagent calls untouched', () => {
-  const payload = { tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: `near-cap-${Date.now()}`, effort: 'high' };
+test('pre-tool hook warns a sidequest executor once near its turn backstop', () => {
+  const agentId = `near-cap-${Date.now()}`;
+  const payload = { tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: agentId, effort: 'high' };
   const first = execFileSync(process.execPath, [NEAR_TURN_CAP], {
     input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
   });
-  assert.equal(first, '');
+  const second = execFileSync(process.execPath, [NEAR_TURN_CAP], {
+    input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
+  });
+  assert.match(JSON.parse(first).hookSpecificOutput.additionalContext, /made 1 tool calls/);
+  assert.equal(second, '');
 });
 
 test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', () => {
@@ -666,11 +671,12 @@ function runHomeDeleteGuard(tool_name, command) {
   return runHookOutput(GUARD_HOME_DELETE, { tool_name, tool_input: { command } });
 }
 
-test('home-delete guard: subagent calls are untouched', () => {
-  assert.strictEqual(runHookOutput(GUARD_HOME_DELETE, {
+test('home-delete guard: binds subagents too — the incident was an executor', () => {
+  const out = runHookOutput(GUARD_HOME_DELETE, {
     agent_id: 'executor-644', agent_type: 'sidequest-exec-dispatch-high',
     tool_name: 'PowerShell', tool_input: { command: 'Remove-Item -Recurse -Force $home' },
-  }), null);
+  });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
 });
 
 test('home-delete guard: blocks a recursive delete using $home', () => {
