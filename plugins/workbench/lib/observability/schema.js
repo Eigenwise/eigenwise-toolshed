@@ -259,6 +259,7 @@ const ATTRIBUTE_SPECS = Object.freeze({
   path_class: 'identifier',
   permission_mode: 'identifier',
   provider: 'identifier',
+  project_name: 'identifier',
   requested_model: 'identifier',
   request_id_source: 'identifier',
   response_mode: 'identifier',
@@ -297,7 +298,7 @@ const EVENT_ATTRIBUTES = Object.freeze({
   'agent_sdk.assistant_usage': COMMON_ROUTING_ATTRIBUTES,
   'agent_sdk.terminal_result': [...COMMON_ROUTING_ATTRIBUTES, 'turns'],
   'otel.metric': ['model', 'provider', 'backend', 'status', 'activity_type'],
-  'hook.session_start': ['source', 'permission_mode', 'effort'],
+  'hook.session_start': ['source', 'project_name', 'permission_mode', 'effort'],
   'hook.session_end': ['end_reason', 'permission_mode', 'effort'],
   'hook.user_prompt_submit': ['permission_mode', 'effort'],
   'hook.pre_tool_use': ['tool_name', 'tool_kind', 'is_mcp', 'mcp_server', 'mcp_tool', 'permission_mode'],
@@ -321,13 +322,13 @@ const EVENT_ATTRIBUTES = Object.freeze({
   ],
   'gateway.token.usage': [
     'model', 'requested_model', 'backend', 'effort', 'via', 'status', 'status_code',
-    'agent_role', 'request_id_source', 'response_mode', 'token_estimator', 'cache_attribution',
+    'agent_role', 'request_id_source', 'response_mode', 'token_estimator', 'cache_attribution', 'project_name',
   ],
   'gateway.tool_result.usage': [
-    'model', 'requested_model', 'backend', 'effort', 'via', 'agent_role', 'tool_name',
+    'model', 'requested_model', 'backend', 'effort', 'via', 'agent_role', 'tool_name', 'project_name',
   ],
   'gateway.mcp.footprint': [
-    'mcp_server', 'model', 'requested_model', 'backend', 'effort', 'via', 'agent_role',
+    'mcp_server', 'model', 'requested_model', 'backend', 'effort', 'via', 'agent_role', 'project_name',
   ],
   'gateway.limit.signal': [
     'model', 'requested_model', 'backend', 'effort', 'via', 'status', 'status_code',

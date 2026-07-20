@@ -188,8 +188,45 @@ function openObservabilityStore(databaseFile, options = {}) {
   const statements = createStatements(database);
   let closed = false;
   let inTransaction = false;
+  const sessionProjects = new Map();
+  const SESSION_PROJECT_CAP = 2048;
+
+  function rememberProject(observation) {
+    if (observation.event_name !== 'hook.session_start' || !observation.session_id) return;
+    const projectName = observation.attributes && observation.attributes.project_name;
+    if (!observation.project_id && !projectName) return;
+    sessionProjects.delete(observation.session_id);
+    sessionProjects.set(observation.session_id, {
+      project_id: observation.project_id || null,
+      project_name: projectName || null,
+    });
+    while (sessionProjects.size > SESSION_PROJECT_CAP) sessionProjects.delete(sessionProjects.keys().next().value);
+  }
+
+  function enrichGateway(input) {
+    if (!input || !['gateway.token.usage', 'gateway.tool_result.usage', 'gateway.mcp.footprint'].includes(input.event_name)) return input;
+    const project = input.session_id ? sessionProjects.get(input.session_id) : null;
+    if (project) {
+      sessionProjects.delete(input.session_id);
+      sessionProjects.set(input.session_id, project);
+    }
+    return {
+      ...input,
+      project_id: project ? project.project_id : (input.project_id || null),
+      attributes: {
+        ...(input.attributes || {}),
+        ...(project && project.project_name ? { project_name: project.project_name } : {}),
+      },
+    };
+  }
+
+  function prepareInput(input) {
+    return enrichGateway(input);
+  }
 
   function assertOpen() {
+    if (closed) throw new Error('Workbench observability store is closed.');
+  } {
     if (closed) throw new Error('Workbench observability store is closed.');
   }
 
@@ -440,6 +477,7 @@ function openObservabilityStore(databaseFile, options = {}) {
     }
 
     insertRows(normalized.observation, normalized.measurements, normalized.links, fingerprint);
+    rememberProject(normalized.observation);
     const conflictEventIds = [
       ...recordRequestUsageConflicts(normalized.observation),
       ...recordAggregateCheckConflicts(normalized.observation),
@@ -456,13 +494,13 @@ function openObservabilityStore(databaseFile, options = {}) {
   }
 
   function ingest(input) {
-    const normalized = normalizeObservation(input, { now, randomUUID: createId });
+    const normalized = normalizeObservation(prepareInput(input), { now, randomUUID: createId });
     return transaction(() => ingestNormalized(normalized));
   }
 
   function ingestBatch(inputs) {
     if (!Array.isArray(inputs) || inputs.length === 0) throw new TypeError('A non-empty observation array is required.');
-    const normalized = inputs.map((input) => normalizeObservation(input, { now, randomUUID: createId }));
+    const normalized = inputs.map((input) => normalizeObservation(prepareInput(input), { now, randomUUID: createId }));
     return transaction(() => normalized.map(ingestNormalized));
   }
 
