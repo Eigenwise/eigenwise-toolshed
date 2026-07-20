@@ -38,7 +38,7 @@ const { claimRefusalMessage } = require('../lib/refusal-guidance');
  * ------------------------------------------------------------------ */
 
 // Flags that may be repeated collect into arrays; everything else is a scalar.
-const ARRAY_FLAGS = new Set(['image', 'label', 'file']);
+const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope']);
 const ALIASES = {
   t: 'title',
   d: 'desc',
@@ -823,17 +823,28 @@ function cmdCommit(opts, positional) {
   const by = workerId(opts);
   if (!ticket) fail(`commit: no ticket "${idOrRef}" in ${meta.name}.`);
   if (!ticket.claim || ticket.claim.by !== by) fail(`commit: ${ticket.ref} must be claimed by "${by}" before committing.`);
-  const result = commitScope.commitScoped(process.cwd(), opts.message, ticket.files);
+  const scope = store.effectiveScope(slug, ticket.files);
+  const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
     if (result.reason === 'missing_scope') fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
     if (result.reason === 'outside_scope') fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(', ')}.`);
+    if (result.reason === 'no_existing_scope') fail(`commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(', ')}.`);
     fail(`commit: git failed: ${result.message || result.reason}`);
   }
+  if (result.unscopedPaths.length) {
+    const body = `out-of-scope changes present: ${result.unscopedPaths.join(', ')} — widen scope + second commit, or discard`;
+    const comment = store.addComment(slug, ticket.ref, { by, body, kind: 'comment', source: 'cli' });
+    if (!comment.ok) fail(`commit: committed ${ticket.ref}, but couldn't record out-of-scope paths: ${comment.reason}`);
+  }
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ project: slug, ref: ticket.ref, commit: result.commit, paths: result.paths }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ project: slug, ref: ticket.ref, commit: result.commit, paths: result.paths, missingScopes: result.missingScopes, unscopedPaths: result.unscopedPaths }, null, 2) + '\n');
     return;
   }
-  console.log(`✓ ${ticket.ref} committed ${result.commit.slice(0, 12)} (${result.paths.join(', ')})`);
+  const warnings = [
+    result.missingScopes.length ? `missing declared paths: ${result.missingScopes.join(', ')}` : '',
+    result.unscopedPaths.length ? `out-of-scope changes: ${result.unscopedPaths.join(', ')}` : '',
+  ].filter(Boolean);
+  console.log(`✓ ${ticket.ref} committed ${result.commit.slice(0, 12)} (${result.paths.join(', ')})${warnings.length ? `\n  ${warnings.join('\n  ')}` : ''}`);
 }
 
 // Executor terminal for repo-changing tickets: park verified, committed work as
@@ -898,12 +909,14 @@ function cmdSubmit(opts, positional) {
       return commits.some((commit) => range.commits.includes(commit));
     });
   if (duplicate) fail(`submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`);
-  const scope = commitScope.validateCommitRangeScope(process.cwd(), range.commits, ticket.files);
-  if (!scope.ok) {
-    if (scope.reason === 'missing_scope') fail(`submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`);
-    if (scope.reason === 'outside_scope') fail(`submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scope.outside.join(', ')}.`);
-    fail(`submit: could not inspect ${opts.commit} from this worktree: ${scope.message || scope.reason}`);
+  const scope = store.effectiveScope(slug, ticket.files);
+  const scopedRange = commitScope.validateCommitRangeScope(process.cwd(), range.commits, scope);
+  if (!scopedRange.ok) {
+    if (scopedRange.reason === 'missing_scope') fail(`submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`);
+    if (scopedRange.reason === 'outside_scope') fail(`submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}.`);
+    fail(`submit: could not inspect ${opts.commit} from this worktree: ${scopedRange.message || scopedRange.reason}`);
   }
+  const unscopedPaths = commitScope.unscopedWorkingPaths(process.cwd(), scope);
   let res;
   try {
     res = store.submitTicket(slug, idOrRef, by, {
@@ -912,6 +925,7 @@ function cmdSubmit(opts, positional) {
       range,
       verify: opts.verify,
       worktree: opts.worktree,
+      unscopedPaths,
       force: !!opts.force,
       source: opts.source || 'cli',
       sessionId: sessionId(opts),
@@ -1537,6 +1551,20 @@ function cmdRoute(opts, positional) {
   if (!resolved || !resolved.exec) fail(`route: category "${category.id}" has no available route.`);
   const recipe = agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
   process.stdout.write(JSON.stringify(recipe, null, 2) + '\n');
+}
+
+function cmdBoardConfig(opts) {
+  const { slug, meta } = resolveProject(opts);
+  const result = opts['always-in-scope'] == null
+    ? { ok: true, config: store.boardConfig(slug) }
+    : store.setBoardConfig(slug, { alwaysInScope: opts['always-in-scope'] });
+  if (!result.ok) fail(`board-config: no board "${meta.name}".`);
+  const payload = { project: slug, projectName: meta.name, alwaysInScope: result.config.alwaysInScope };
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+    return;
+  }
+  console.log(`always in scope: ${payload.alwaysInScope.length ? payload.alwaysInScope.join(', ') : '(none)'}`);
 }
 
 function cmdProjects(opts) {
@@ -2252,6 +2280,10 @@ async function main() {
       break;
     case 'route':
       cmdRoute(opts, positional);
+      break;
+    case 'board-config':
+    case 'board_config':
+      cmdBoardConfig(opts);
       break;
     case 'projects':
     case 'boards':

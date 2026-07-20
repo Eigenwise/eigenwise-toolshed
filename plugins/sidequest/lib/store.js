@@ -812,6 +812,57 @@ function defaultProjectName(absPath) {
   return path.basename(path.resolve(absPath)) || 'project';
 }
 
+function normalizeAlwaysInScope(paths) {
+  if (!Array.isArray(paths)) throw new Error('alwaysInScope must be an array of repo-relative paths.');
+  const seen = new Set();
+  const normalized = [];
+  for (const value of paths) {
+    const item = String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+    const relative = item.replace(/\/+$/, '');
+    if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) {
+      throw new Error(`alwaysInScope path must stay inside the board repo: ${value}`);
+    }
+    const key = process.platform === 'win32' ? relative.toLowerCase() : relative;
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push(item);
+    }
+  }
+  return normalized;
+}
+
+function defaultAlwaysInScope(absPath) {
+  try {
+    return fs.statSync(path.join(absPath, 'docs')).isDirectory() ? ['docs/'] : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function boardConfig(slug) {
+  const meta = readMeta(slug);
+  if (!meta) return null;
+  return { alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path) };
+}
+
+function setBoardConfig(slug, patch) {
+  return withMetaLock(slug, () => {
+    const meta = readMeta(slug);
+    if (!meta) return { ok: false, reason: 'not_found' };
+    if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'alwaysInScope')) {
+      return { ok: true, config: boardConfig(slug) };
+    }
+    meta.alwaysInScope = normalizeAlwaysInScope(patch.alwaysInScope);
+    putProject(slug, meta);
+    return { ok: true, config: boardConfig(slug) };
+  });
+}
+
+function effectiveScope(slug, files) {
+  const config = boardConfig(slug);
+  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...((config && config.alwaysInScope) || [])]));
+}
+
 // Register (or refresh) a project and return { slug, dir, meta }. Creates the
 // directory tree on first use. `name` overrides the display name (defaults to
 // the folder basename).
@@ -822,7 +873,14 @@ function ensureProject(absPath, name) {
   ensureDir(ticketsDir(slug));
   let meta = readMeta(slug);
   if (!meta || typeof meta !== 'object') {
-    meta = { path: resolved, name: name || defaultProjectName(resolved), createdAt: new Date().toISOString(), seq: 0, storySeq: 0 };
+    meta = {
+      path: resolved,
+      name: name || defaultProjectName(resolved),
+      createdAt: new Date().toISOString(),
+      seq: 0,
+      storySeq: 0,
+      alwaysInScope: defaultAlwaysInScope(resolved),
+    };
     putProject(slug, meta);
   } else {
     // ensureProject runs on ordinary reads/writes, so restoring a board is
@@ -2349,6 +2407,12 @@ const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 const SUBMISSION_GITREF_MAX = 200;
 const SUBMISSION_WORKTREE_MAX = 500;
 
+function submissionUnscopedPaths(paths) {
+  return Array.from(new Set((Array.isArray(paths) ? paths : [])
+    .map((value) => String(value || '').trim().replace(/\\/g, '/'))
+    .filter(Boolean)));
+}
+
 function submissionRangeMetadata(range, commit) {
   if (!range) return null;
   const base = String(range.base || '').trim().toLowerCase();
@@ -2412,6 +2476,7 @@ function submitTicket(slug, idOrRef, by, opts) {
       gitRef: gitRef || submissionGitRef(t),
       verify,
       worktree,
+      unscopedPaths: submissionUnscopedPaths(opts.unscopedPaths),
       integratedAt: null,
     }, range || {});
     const dispatch = dispatchState(t);
@@ -3848,6 +3913,9 @@ module.exports = {
   projectDir,
   ensureProject,
   readMeta,
+  boardConfig,
+  setBoardConfig,
+  effectiveScope,
   listProjects,
   findProject,
   archiveProject,

@@ -24,7 +24,7 @@ locations from ticket data before reading them.
 
 **Worktree safety:** Declared-file tickets use an isolated worktree unless the ticket explicitly needs
 uncommitted shared-tree state. In a shared tree, after claiming inspect `git diff --cached --name-only`.
-Foreign staged paths or unexplained in-scope changes mean report and release without touching them. Stay
+Foreign staged paths or unexplained in-scope changes mean report and release without touching them. Out-of-scope changes are normal: commit what is declared, the rest is reported automatically; never release verified work over scope friction. Stay
 within declared files and scope test runs. Never read large files whole. Never publish, push, create or
 switch branches. NEVER edit or commit `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`.
 The orchestrator assigns release versions centrally, so repo bump guidance applies to its release; stop at the verified scoped commit and submit.

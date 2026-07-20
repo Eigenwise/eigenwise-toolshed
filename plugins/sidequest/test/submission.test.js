@@ -167,9 +167,33 @@ test('CLI: scoped commit excludes a foreign staged path and keeps it staged', ()
   assert.strictEqual(committed.status, 0, committed.stderr + committed.stdout);
   assert.equal(git(['show', '--format=', '--name-only', 'HEAD']), 'lib/cli-scoped.js');
   assert.equal(git(['diff', '--cached', '--name-only']), 'foreign.js');
+  assert.match(store.getTicket(slug, t.ref).comments.at(-1).body, /out-of-scope changes present: foreign\.js/);
   assert.strictEqual(runCli(['release', t.ref, '--by', 'scope-worker']).status, 0);
   git(['reset', '--', 'foreign.js']);
 });
+
+test('board always-in-scope paths commit and submit without ticket declaration', () => {
+  cleanBranch();
+  store.setBoardConfig(slug, { alwaysInScope: ['docs'] });
+  const t = addTicket('always-in-scope docs', { files: ['lib/fixture.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'docs-worker', '--direct']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'docs', 'guide.md'), 'guide\n');
+  git(['add', 'docs/guide.md']);
+
+  const committed = cliJson(['commit', t.ref, '--by', 'docs-worker', '--message', 'docs fixture', '--json']);
+  assert.deepStrictEqual(committed.paths, ['docs/guide.md']);
+  const commit = committed.commit;
+  pin(t, commit);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'foreign\n');
+  const submitted = runCli(['submit', t.ref, '--by', 'docs-worker', '--commit', commit]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  const after = store.getTicket(slug, t.ref);
+  assert.deepStrictEqual(after.submission.unscopedPaths, ['foreign.js']);
+  assert.deepStrictEqual(store.pulsePayload(slug, t.ref).submission.unscopedPaths, ['foreign.js']);
+  store.setBoardConfig(slug, { alwaysInScope: [] });
+});
+
 
 test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence comment, publish queue lists it', () => {
   cleanBranch();

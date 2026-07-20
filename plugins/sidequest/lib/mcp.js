@@ -750,16 +750,29 @@ const TOOLS = [
         return mutationAck(slug, { ok: false, ticket, reason: 'not_owner', message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.` });
       }
       const root = worktreeRoot(args.worktree, 'commit');
-      const result = commitScope.commitScoped(root, message, ticket.files);
+      const scope = store.effectiveScope(slug, ticket.files);
+      const result = commitScope.commitScoped(root, message, scope);
       if (!result.ok) {
         const message = result.reason === 'missing_scope'
           ? `commit: ${ticket.ref} has no declared file scope.`
           : result.reason === 'outside_scope'
             ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(', ')}.`
-            : `commit: git failed: ${result.message || result.reason}`;
+            : result.reason === 'no_existing_scope'
+              ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(', ')}.`
+              : `commit: git failed: ${result.message || result.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: result.reason, message });
       }
-      return mutationAck(slug, { ok: true, ticket }, { commit: result.commit, paths: result.paths });
+      if (result.unscopedPaths.length) {
+        const body = `out-of-scope changes present: ${result.unscopedPaths.join(', ')} — widen scope + second commit, or discard`;
+        const comment = store.addComment(slug, ticket.ref, { by, body, kind: 'comment', source: 'mcp' });
+        if (!comment.ok) throw new Error(`commit: committed ${ticket.ref}, but couldn't record out-of-scope paths: ${comment.reason}`);
+      }
+      return mutationAck(slug, { ok: true, ticket }, {
+        commit: result.commit,
+        paths: result.paths,
+        missingScopes: result.missingScopes,
+        unscopedPaths: result.unscopedPaths,
+      });
     },
   },
   {
@@ -808,21 +821,24 @@ const TOOLS = [
       if (duplicate) {
         return mutationAck(slug, { ok: false, ticket, reason: 'duplicate_submission', message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.` });
       }
-      const scope = commitScope.validateCommitRangeScope(root, range.commits, ticket.files);
-      if (!scope.ok) {
-        const message = scope.reason === 'missing_scope'
+      const scope = store.effectiveScope(slug, ticket.files);
+      const scopedRange = commitScope.validateCommitRangeScope(root, range.commits, scope);
+      if (!scopedRange.ok) {
+        const message = scopedRange.reason === 'missing_scope'
           ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`
-          : scope.reason === 'outside_scope'
-            ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scope.outside.join(', ')}.`
-            : `submit: could not inspect ${commit} from this worktree: ${scope.message || scope.reason}`;
-        return mutationAck(slug, { ok: false, ticket, reason: scope.reason, message });
+          : scopedRange.reason === 'outside_scope'
+            ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}.`
+            : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
+        return mutationAck(slug, { ok: false, ticket, reason: scopedRange.reason, message });
       }
+      const unscopedPaths = commitScope.unscopedWorkingPaths(root, scope);
       const res = store.submitTicket(slug, args.ref, by, {
         commit: range.commit,
         gitRef,
         range,
         verify: args.verify,
         worktree: args.worktree,
+        unscopedPaths,
         source: 'mcp',
         sessionId: sessionOf(args),
       });
@@ -1193,6 +1209,25 @@ const TOOLS = [
       }
       if (!store.removeCategory(id)) throw new Error(`category_rm: no category "${args.id}".`);
       return { ok: true, project: slug, projectName: meta.name, id, ticketCount };
+    },
+  },
+  {
+    name: 'board_config',
+    description: 'View or replace board-level always-in-scope paths. docs is included by default when the board repo has a docs directory.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP,
+        alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
+      },
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const result = args.alwaysInScope == null
+        ? { ok: true, config: store.boardConfig(slug) }
+        : store.setBoardConfig(slug, { alwaysInScope: args.alwaysInScope });
+      if (!result.ok) throw new Error(`board_config: no board "${meta.name}".`);
+      return { ok: true, project: slug, projectName: meta.name, alwaysInScope: result.config.alwaysInScope };
     },
   },
   {

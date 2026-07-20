@@ -1,6 +1,7 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 function normalizeScope(scope) {
@@ -75,6 +76,32 @@ function canonicalScope(scope, paths) {
 function canonicalScopedPaths(cwd, files) {
   const paths = trackedPaths(cwd);
   return scopedPaths(files).map((scope) => canonicalScope(scope, paths));
+}
+
+function existingScopedPaths(root, files) {
+  return canonicalScopedPaths(root, files).filter((scope) => fs.existsSync(path.resolve(root, scope)));
+}
+
+function workingPaths(cwd) {
+  const status = git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const entries = status.split('\0');
+  const paths = [];
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index];
+    if (!entry) continue;
+    const state = entry.slice(0, 2);
+    const file = entry.slice(3).replace(/\\/g, '/');
+    if (file) paths.push(file);
+    if (state.includes('R') || state.includes('C')) {
+      const previous = entries[++index];
+      if (previous) paths.push(previous.replace(/\\/g, '/'));
+    }
+  }
+  return Array.from(new Set(paths));
+}
+
+function unscopedWorkingPaths(cwd, files) {
+  return workingPaths(cwd).filter((file) => !isInScope(file, files));
 }
 
 function validateScopeResolution(root, files) {
@@ -231,10 +258,16 @@ function commitScoped(cwd, message, files) {
     const resolution = validateScopeResolution(root, scopes);
     if (!resolution.ok) return resolution;
     const canonicalScopes = canonicalScopedPaths(root, scopes);
-    git(root, ['commit', '--only', '-m', String(message || ''), '--', ...canonicalScopes]);
+    const missingScopes = canonicalScopes.filter((scope) => !fs.existsSync(path.resolve(root, scope)));
+    const commitScopes = existingScopedPaths(root, scopes);
+    const unscopedPaths = unscopedWorkingPaths(root, scopes);
+    if (!commitScopes.length) {
+      return { ok: false, reason: 'no_existing_scope', missingScopes, unscopedPaths };
+    }
+    git(root, ['commit', '--only', '-m', String(message || ''), '--', ...commitScopes]);
     const commit = git(root, ['rev-parse', 'HEAD']).trim();
     const validation = validateCommitScope(root, commit, scopes);
-    return Object.assign({ commit }, validation);
+    return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
   } catch (err) {
     return { ok: false, reason: 'git_error', message: err.message };
   }
@@ -251,5 +284,7 @@ module.exports = {
   validateStoredSubmissionRange,
   validateScopeResolution,
   repoRoot,
+  workingPaths,
+  unscopedWorkingPaths,
   commitScoped,
 };

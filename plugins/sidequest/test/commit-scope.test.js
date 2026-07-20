@@ -25,6 +25,18 @@ function repo() {
   return root;
 }
 
+test('missing declared paths warn while existing declared paths commit', () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
+  git(root, ['add', '.']);
+
+  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', 'plugins/sidequest/phantom.js']);
+  assert.equal(committed.ok, true, committed.message);
+  assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
+  assert.deepEqual(committed.missingScopes, ['plugins/sidequest/phantom.js']);
+});
+
+
 test('scoped commit leaves another executor’s staged file in the shared index', () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
@@ -34,6 +46,7 @@ test('scoped commit leaves another executor’s staged file in the shared index'
   const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest']);
   assert.equal(committed.ok, true);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
+  assert.deepEqual(committed.unscopedPaths, ['plugins/other-plugin/worker-b.js']);
   assert.equal(git(root, ['diff', '--cached', '--name-only']), 'plugins/other-plugin/worker-b.js');
   assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
 });

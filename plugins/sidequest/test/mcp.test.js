@@ -128,7 +128,7 @@ test('notifications/initialized takes no response', () => {
 test('tools/list advertises the board tools with input schemas', () => {
   const resp = mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'release', 'commit', 'submit', 'comment', 'ask', 'link', 'unlink', 'assign', 'dispatch', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'release', 'commit', 'submit', 'comment', 'ask', 'link', 'unlink', 'assign', 'dispatch', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -155,6 +155,22 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   assert.match(tools.find((tool) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool) => tool.name === 'done').description, /actual model and effort/);
 });
+
+test('board_config defaults docs to always-in-scope', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-docs-scope-'));
+  fs.mkdirSync(path.join(root, 'docs'));
+  const project = store.ensureProject(root, 'SQ docs config').slug;
+  assert.deepEqual(callTool('board_config', { project }).alwaysInScope, ['docs/']);
+});
+
+
+test('board_config reads and replaces always-in-scope paths', () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-board-config'), 'SQ config').slug;
+  const configured = callTool('board_config', { project, alwaysInScope: ['docs', 'notes'] });
+  assert.deepEqual(configured.alwaysInScope, ['docs', 'notes']);
+  assert.deepEqual(callTool('board_config', { project }).alwaysInScope, ['docs', 'notes']);
+});
+
 
 test('write acks and pulse stay lean: no body echoes, no lifecycle noise by default', () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-lean-shapes'), 'SQ lean shapes').slug;

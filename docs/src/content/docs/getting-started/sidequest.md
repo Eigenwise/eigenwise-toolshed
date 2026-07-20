@@ -25,7 +25,9 @@ Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned exe
 
 For deliberate orchestrator-owned inline work, such as a browser reproduction or review, claim directly with `sidequest claim SQ-3 --by <unique-worker-id> --direct` (MCP: `direct:true`). Do not start either path until its claim succeeds.
 
-Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when you need board administration. Keep a ticket's file scope accurate so parallel work stays isolated.
+Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when you need board administration. Keep a ticket's file scope accurate so parallel work stays isolated. `docs/` is always in scope on boards whose repo has a root docs directory, so a required prose update ships with the implementation. View or replace that board-level list with `sidequest board-config` or `sidequest board-config --always-in-scope docs/ --always-in-scope <path>` (MCP: `board_config`).
+
+A scoped commit commits its declared paths even when another changed file is outside the ticket. Sidequest reports those paths in the commit result, records a ticket comment, and carries them in the submission as `unscopedPaths`; make a second scoped commit after widening scope, or discard them. Missing declared paths are warnings when other declared paths can be committed.
 
 ![Sidequest kanban board](../../../assets/screenshots/sidequest-kanban.png)
 
