@@ -84,7 +84,11 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
   route. A plain generic Agent is denied by the Sidequest gate.
 - Worktree isolation: tickets with declared files carry `isolation: "worktree"` in `spawn`; pass it
   unchanged. `--shared-tree` / `{sharedTree:true}` is an escape hatch only for a task that depends
-  on uncommitted local state, and its reason belongs in a ticket comment before spawning.
+  on uncommitted local state, and its reason belongs in a ticket comment before spawning. A bounded
+  documentation artifact may close with `done` only when it declares its artifact directory as file scope,
+  was dispatched with shared-tree enabled, and includes this exact line:
+  `Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.`
+  Every other scoped ticket commits and submits.
 
 ## Re-scoring
 

@@ -53,6 +53,7 @@ const TEMP_PREFIX = 'sidequest-native-';
 const TICKET_PREFIX = 'sidequest-ticket-';
 const RELOAD_NOTICE = 'Reload plugins before spawning newly created temporary native agents.';
 const RESTART_NOTICE = RELOAD_NOTICE;
+const ARTIFACT_LIFECYCLE_MARKER = '[sidequest-artifact-mode]';
 
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -286,6 +287,12 @@ function ticketBrief(ticket, nonce, marker) {
     'Dispatch claim guard:',
     `Claim this ticket with \`--token ${nonce}\`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal.`,
   ];
+  if (store.sharedTreeArtifactMode(ticket)) {
+    parts.push(
+      'Artifact lifecycle exception:',
+      `${ARTIFACT_LIFECYCLE_MARKER}\nThis shared-tree artifact ticket may leave verified changes in its declared scope and close with done. Do not commit or submit it. All project source remains read-only.`
+    );
+  }
   // Last on purpose: the gateway resolves the LAST marker in the conversation,
   // so this one outranks any marker-shaped text inside the ticket description.
   if (marker) {
@@ -309,7 +316,9 @@ function renderTicketBriefing(ticket, nonce) {
 }
 
 function ticketIsolation(ticket, sharedTree) {
-  return !sharedTree && Array.isArray(ticket && ticket.files) && ticket.files.length ? 'worktree' : null;
+  const hasDeclaredScope = Array.isArray(ticket && ticket.files) && ticket.files.length > 0;
+  if (!hasDeclaredScope) return null;
+  return sharedTree === true ? null : 'worktree';
 }
 
 function withProjectIdentity(prompt, projectPath) {
@@ -573,6 +582,7 @@ module.exports = {
   TICKET_PREFIX,
   RELOAD_NOTICE,
   RESTART_NOTICE,
+  ARTIFACT_LIFECYCLE_MARKER,
   NON_MAX_EFFORTS,
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,

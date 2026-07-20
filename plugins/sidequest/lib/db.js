@@ -20,9 +20,13 @@ try {
   process.emitWarning = originalEmitWarning;
 }
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 const LEGACY_RUNTIME = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus', 'grade-4': 'fable', haiku: 'haiku', sonnet: 'sonnet', opus: 'opus', fable: 'fable' };
 const ROUTING_FALLBACK_DEFAULT = { model: 'sonnet', effort: 'high' };
+const OLD_CODEBASE_EXPLORATION = {
+  description: 'Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.',
+  contract: 'Read before concluding; cite files and symbols, with no edits.',
+};
 
 const TABLES = {
   projects: { key: 'slug', columns: ['slug', 'data'] },
@@ -154,6 +158,23 @@ function openDb(homeRoot) {
       db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(4));
     });
     schemaVersion = 4;
+  }
+  if (schemaVersion < 5) {
+    txn(db, () => {
+      const row = db.prepare("SELECT data FROM categories WHERE id = 'codebase-exploration'").get();
+      let category = null;
+      try { category = row ? JSON.parse(row.data) : null; } catch (_) {}
+      if (category
+        && category.description === OLD_CODEBASE_EXPLORATION.description
+        && category.contract === OLD_CODEBASE_EXPLORATION.contract) {
+        const next = DEFAULT_CATEGORIES.find((entry) => entry.id === 'codebase-exploration');
+        category.description = next.description;
+        category.contract = next.contract;
+        db.prepare("UPDATE categories SET data = ? WHERE id = 'codebase-exploration'").run(JSON.stringify(category));
+      }
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(5));
+    });
+    schemaVersion = 5;
   }
   db.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;
   return db;

@@ -444,6 +444,23 @@ test('dispatch returns a complete Claude worktree spawn spec', () => {
   assert.equal(dispatched.projectPath, PROJ);
 });
 
+test('MCP shared-tree dispatch activates the bounded artifact lifecycle', () => {
+  store.setCategory({ id: 'dispatch-artifact', name: 'Dispatch Artifact', route: { model: 'sonnet', effort: 'medium' } });
+  const added = callTool('add', {
+    title: 'shared-tree artifact',
+    description: `Write only the declared documentation artifact.\n${store.SHARED_TREE_ARTIFACT_MARKER}`,
+    category: 'dispatch-artifact',
+    files: ['.claude/.codebase-info/'],
+  });
+  const dispatched = callTool('dispatch', { ref: added.ref, sharedTree: true });
+  const stored = store.getTicket(added.project, added.ref);
+
+  assert.strictEqual(dispatched.spawn.isolation, undefined);
+  assert.strictEqual(stored.dispatch.sharedTree, true);
+  assert.strictEqual(stored.dispatch.artifactMode, true);
+  assert.match(agentsync.renderTicketBriefing(stored, dispatched.token), /\[sidequest-artifact-mode\]/);
+});
+
 test('native_agent carries ticket anchors and verify command through its stable fallback', () => {
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
   try {

@@ -59,7 +59,7 @@ function rowCounts(database) {
   };
 }
 
-test('schema v4 migration adds an empty project category layer to a v3 database', () => {
+test('schema migrations add the project category layer to a v3 database', () => {
   const homeRoot = makeHome();
   const dbPath = path.join(homeRoot, 'sidequest.db');
   const seed = String.raw`
@@ -72,7 +72,7 @@ test('schema v4 migration adds an empty project category layer to a v3 database'
   assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
 
   const database = db.openDb(homeRoot);
-  assert.equal(db.getRow(database, 'meta', 'schema_version'), 4);
+  assert.equal(db.getRow(database, 'meta', 'schema_version'), 5);
   assert.deepEqual(db.getRow(database, 'categories', 'fixture').id, 'fixture');
   assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_categories'").get().name, 'project_categories');
   assert.deepEqual(db.listRows(database, 'project_categories', { project: 'missing' }), []);

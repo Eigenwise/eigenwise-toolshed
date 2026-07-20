@@ -39,6 +39,7 @@ const telemetry = require('./telemetry.js');
 const { routingDisabledMessage } = require('./refusal-guidance.js');
 
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
+const SHARED_TREE_ARTIFACT_MARKER = 'Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.';
 
 function spawnDescription(ticket, resolved) {
   const title = String(ticket && ticket.title || 'Sidequest ticket').replace(/\s+/g, ' ').trim();
@@ -1797,6 +1798,22 @@ function dispatchState(ticket) {
   return ticket && ticket.dispatch && typeof ticket.dispatch === 'object' ? ticket.dispatch : null;
 }
 
+function sharedTreeArtifactRequested(ticket) {
+  return String(ticket && ticket.description || '')
+    .split(/\r?\n/)
+    .some((line) => line.trim() === SHARED_TREE_ARTIFACT_MARKER);
+}
+
+function sharedTreeArtifactMode(ticket) {
+  const state = dispatchState(ticket);
+  return Boolean(state
+    && state.sharedTree === true
+    && state.artifactMode === true
+    && Array.isArray(ticket && ticket.files)
+    && ticket.files.length === 1
+    && ticket.files[0] === state.artifactScope);
+}
+
 function activeDispatchRoute(ticket) {
   const state = dispatchState(ticket);
   if (!state || state.terminalAt || !ticket.dispatchNonce) return null;
@@ -1937,8 +1954,13 @@ function prepareDispatch(slug, idOrRef, opts) {
     }
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
     t.dispatchExecutor = stableExecutorName(t);
+    const sharedTree = Object.hasOwn(opts, 'sharedTree') ? opts.sharedTree === true : Boolean(current && current.sharedTree);
+    const artifactMode = sharedTree && Array.isArray(t.files) && t.files.length === 1 && sharedTreeArtifactRequested(t);
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
+      sharedTree,
+      artifactMode,
+      artifactScope: artifactMode ? t.files[0] : null,
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, resolveExec(t.model, t.effort)),
@@ -2046,6 +2068,9 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
     t.dispatchExecutor = fallback.exec.agent;
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
+      sharedTree: state.sharedTree === true,
+      artifactMode: state.artifactMode === true,
+      artifactScope: state.artifactScope || null,
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, resolveExec(t.model, t.effort)),
@@ -2293,6 +2318,15 @@ function releaseTicket(slug, idOrRef, by, opts) {
         return { ok: true, idempotent: true, ticket: t, comment };
       }
       return { ok: false, reason: 'done', ticket: t };
+    }
+    const executorDone = opts.status === 'done' && (opts.source === 'cli' || opts.source === 'mcp');
+    if (executorDone && Array.isArray(t.files) && t.files.length && !sharedTreeArtifactMode(t)) {
+      return {
+        ok: false,
+        reason: 'submission_required',
+        message: `${t.ref} has declared repository write scope. Commit and submit verified changes; done is reserved for non-repo work or an active shared-tree artifact dispatch.`,
+        ticket: t,
+      };
     }
     const held = t.claim;
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
@@ -3905,6 +3939,9 @@ module.exports = {
   resolveModelId,
   resolveExec,
   spawnDescription,
+  SHARED_TREE_ARTIFACT_MARKER,
+  sharedTreeArtifactRequested,
+  sharedTreeArtifactMode,
   resolveCategoryRoute,
   claudeQuotaFailure,
   classifyModelFilter,
