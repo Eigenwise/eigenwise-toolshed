@@ -27,6 +27,7 @@ const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
 const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
+const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 
 const BUDGET = {
@@ -277,6 +278,36 @@ test('pre-tool inline-work nudge ignores subagents and routing-disabled boards',
   try {
     const disabled = { session_id: `inline-disabled-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
     for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, disabled), null);
+  } finally {
+    store.setProjectRouting(slug, 'enabled');
+  }
+});
+
+test('user-prompt reminder fires once for the first human prompt', () => {
+  const payload = { session_id: `board-first-${Date.now()}`, cwd: BOARD_PATH, prompt: 'Fix the board hook.' };
+  const reminder = runHookOutput(BOARD_FIRST_REMINDER, payload);
+  assert.equal(reminder.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(reminder.hookSpecificOutput.additionalContext, /substantive work goes through the board/);
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, payload), null);
+});
+
+test('user-prompt reminder ignores automation without consuming the session flag', () => {
+  const payload = { session_id: `board-automation-${Date.now()}`, cwd: BOARD_PATH };
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<task-notification>Executor completed.</task-notification>' }), null);
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<agent-message>Worker needs input.</agent-message>' }), null);
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command>Command output.</local-command>' }), null);
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command-caveat>Command output.</local-command-caveat>' }), null);
+  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /claim --direct/);
+});
+
+test('user-prompt reminder ignores subagents and routing-disabled boards', () => {
+  const subagent = { session_id: `board-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', prompt: 'Implement the ticket.' };
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, subagent), null);
+
+  store.setProjectRouting(slug, 'disabled');
+  try {
+    const disabled = { session_id: `board-disabled-${Date.now()}`, cwd: BOARD_PATH, prompt: 'Implement the ticket.' };
+    assert.equal(runHookOutput(BOARD_FIRST_REMINDER, disabled), null);
   } finally {
     store.setProjectRouting(slug, 'enabled');
   }
@@ -800,7 +831,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   }
 
   const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
-  assert.strictEqual(config.hooks.UserPromptSubmit, undefined);
+  assert.ok(config.hooks.UserPromptSubmit.some((entry) => entry.hooks
+    .some((hook) => hook.command.includes('board-first-reminder.js'))), 'the board-first reminder must run for user prompts');
   assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
   assert.ok(config.hooks.PreToolUse.some((entry) => entry.matcher === '*'
     && entry.hooks.some((hook) => hook.command.includes('inline-work-nudge.js'))), 'the inline-work reminder must be registered for every tool');
