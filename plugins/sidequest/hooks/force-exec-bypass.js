@@ -44,18 +44,10 @@ function agentDenyReason(type) {
     return `sidequest: ${type} is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.`;
   }
   return `sidequest: ${type || 'custom'} is a generic Agent, not a Sidequest ticket executor. ` +
-    'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. For delegated exploration, research, review, or analysis, file a ticket, route it, dispatch it, and spawn the returned executor. ' +
-    'Quick read-only scout: generic Agent prompt starts [sidequest-scout]; no ticket, edits, or writes. Never use this for ticket work.';
+    'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor.';
 }
 
 const REF_RE = /\bSQ-\d+\b/gi;
-const SCOUT_PREFIX_RE = /^\s*\[sidequest-scout\]/;
-
-function scoutPrompt(prompt) {
-  if (typeof prompt !== 'string') return null;
-  const match = SCOUT_PREFIX_RE.exec(prompt);
-  return match ? prompt.slice(match[0].length) : null;
-}
 
 function extractRefs(prompt) {
   if (typeof prompt !== 'string' || !prompt) return [];
@@ -227,20 +219,6 @@ function main() {
   const type = String(toolInput.subagent_type || '');
   const classification = classifyExecutor(type);
   if (!isCurrentExecutor(classification)) {
-    const prompt = scoutPrompt(toolInput.prompt);
-    if (!type.startsWith('sidequest-') && prompt !== null) {
-      if (extractRefs(prompt).length) {
-        process.stdout.write(JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'deny',
-            permissionDecisionReason:
-              'sidequest: the [sidequest-scout] marker cannot be used for ticket work. Dispatch it instead.',
-          },
-        }));
-      }
-      return;
-    }
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

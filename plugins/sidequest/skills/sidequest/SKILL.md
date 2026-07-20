@@ -170,8 +170,7 @@ is the auditable inline escape hatch. Executors own their tickets; investigation
 findings** (~1–2k tokens) as comments, not transcripts. Every Agent launch uses a freshly dispatched
 Sidequest executor; tiny lookups use `Read`/`Glob`/`Grep`/`WebFetch` inline.
 
-Quick read-only scout: generic Agent prompt starts `[sidequest-scout]`; no ticket, edits, or writes.
-Substantial exploration or research goes through the taxonomy: file a ticket, then route and dispatch it.
+Any delegated work, including an investigation, is a spike ticket (usually `codebase-exploration`): file it, then route and dispatch it.
 
 **The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
 submit verified commits → read each thread, re-run the verify, publish the wave in one

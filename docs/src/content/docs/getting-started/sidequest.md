@@ -15,6 +15,8 @@ Reload Claude Code, then open the board with `/sidequest:board`. The dashboard s
 
 Categories describe the kind of work and carry executor guidance, a model route, and an effort. **Default settings** are shared by every board. **Board settings** fork a category for one board, and the dashboard marks each category as inherited or customized. Resetting a customized category relinks it to the defaults.
 
+Keep tiny lookups inline with `Read`, `Glob`, `Grep`, or `WebFetch`. Every delegated task goes through a ticket and routed dispatch, including an investigation: file a spike (usually `codebase-exploration`), dispatch it, then spawn the returned executor. Routing selects the model, so Sidequest has no unrouted delegation path.
+
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Direct claims still work, but `dispatch` returns `routing disabled on this board`. Turn it back on with `sidequest routing enabled --project <board>`.
 
 Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when you need board administration. Keep a ticket's file scope accurate so parallel work stays isolated.

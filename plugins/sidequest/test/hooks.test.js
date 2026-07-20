@@ -33,6 +33,8 @@ const BUDGET = {
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
 
+const RETIRED_SCOUT = `sidequest-${'scout'}`;
+
 // Run a hook with the given stdin payload and return the injected
 // additionalContext string (or '' when the hook stays silent).
 function runHookOutput(script, payload, envOverrides) {
@@ -93,7 +95,7 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
 });
 
-test('pre-tool hook: generic agents get direct-tool guidance and Sidequest-shaped types get a version diagnosis', () => {
+test('pre-tool hook: generic agents are denied and directed to ticketed spikes', () => {
   for (const [subagent_type, prompt] of [
     ['Explore', 'Locate the current hook contract.'],
     ['claude-code-guide', 'Check the current Agent-tool documentation.'],
@@ -107,45 +109,37 @@ test('pre-tool hook: generic agents get direct-tool guidance and Sidequest-shape
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', subagent_type);
     assert.match(reason, /generic Agent, not a Sidequest ticket executor/);
     assert.match(reason, /Read, Glob, Grep, or WebFetch inline/);
-    assert.match(reason, /file a ticket, route it, dispatch it/);
-    assert.match(reason, /\[sidequest-scout\]/);
-    assert.match(reason, /Never use this for ticket work/);
+    assert.match(reason, /quick investigation, needs a ticket: file a spike/);
+    assert.match(reason, /codebase-exploration/);
+    assert.match(reason, /route it, dispatch it, then spawn the returned executor/);
     assert.doesNotMatch(reason, /fresh dispatch briefing/);
   }
   const mismatch = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-scout', isolation: 'worktree', prompt: 'Quick read-only scout.' },
+    tool_input: { subagent_type: 'sidequest-invalid', isolation: 'worktree', prompt: 'Quick lookup.' },
   });
   assert.equal(mismatch.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(
     mismatch.hookSpecificOutput.permissionDecisionReason,
-    'sidequest: sidequest-scout is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.'
+    'sidequest: sidequest-invalid is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.'
   );
-  assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, /\[sidequest-scout\]/);
+  assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
-test('pre-tool hook: generic scouts bypass the gate but cannot perform ticket work', () => {
-  const scout = runHookOutput(FORCE_BYPASS, {
+test('pre-tool hook: a marked generic agent is still denied', () => {
+  const marked = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
       subagent_type: 'Explore',
       isolation: 'worktree',
-      prompt: ' \n\t[sidequest-scout]\nQuick read-only scout. Make no edits or writes.',
+      prompt: ` \n\t[${RETIRED_SCOUT}]\nQuick read-only lookup.`,
     },
   });
-  assert.equal(scout, null);
-
-  const ticketScout = runHookOutput(FORCE_BYPASS, {
-    tool_name: 'Agent',
-    tool_input: {
-      subagent_type: 'Explore',
-      isolation: 'worktree',
-      prompt: '[sidequest-scout]\nLook at SQ-123 and return concise file pointers.',
-    },
-  });
-  assert.equal(ticketScout.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(ticketScout.hookSpecificOutput.permissionDecisionReason, /scout\] marker cannot be used for ticket work/);
-  assert.match(ticketScout.hookSpecificOutput.permissionDecisionReason, /Dispatch it instead/);
+  const reason = marked.hookSpecificOutput.permissionDecisionReason;
+  assert.equal(marked.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(reason, /generic Agent, not a Sidequest ticket executor/);
+  assert.match(reason, /file a spike/);
+  assert.match(reason, /returned executor/);
 });
 
 test('pre-tool hook keeps builtin models and strips a stable dispatch executor model', () => {
@@ -563,7 +557,8 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   assert.match(ctx, /substantive investigations and changes are board tickets/, 'must preserve ticket-first substantive work');
   assert.match(ctx, /Every Agent launch uses that executor/, 'must require every Agent launch to use a dispatched executor');
   assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/, 'must give tiny lookups direct tools');
-  assert.match(ctx, /substantial exploration\/research\/review\/analysis: file a taxonomy ticket, then dispatch/, 'must route delegated work through the board');
+  assert.match(ctx, /Any delegated work, including a quick investigation, is a spike ticket/, 'must make every investigation ticketed');
+  assert.match(ctx, /usually `codebase-exploration`/, 'must name the usual investigation category');
   assert.ok(ctx.includes('fresh `dispatch`'), 'must require a fresh dispatch result');
   assert.ok(ctx.includes('exact stable executor, spawn, and token'), 'must use the exact instant dispatch result');
   assert.match(ctx, /Dispatch is instant: no registration\/watcher wait/, 'must replace the registration wait flow');
@@ -586,15 +581,15 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   );
 });
 
-test('session-start: teaches the scout marker and taxonomy route from turn zero', () => {
+test('session-start: teaches ticketed investigation spikes from turn zero', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /Quick read-only scout: generic Agent prompt starts \[sidequest-scout\]; no ticket, edits, or writes\./);
-  assert.match(ctx, /substantial exploration\/research\/review\/analysis: file a taxonomy ticket, then dispatch\./);
+  assert.match(ctx, /Any delegated work, including a quick investigation, is a spike ticket/);
+  assert.match(ctx, /usually `codebase-exploration`/);
   const pluginRoot = path.join(__dirname, '..');
   const deny = fs.readFileSync(path.join(HOOKS, 'force-exec-bypass.js'), 'utf8');
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
-  for (const surface of [deny, skill.replaceAll('`', '')]) {
-    assert.match(surface, /Quick read-only scout: generic Agent prompt starts \[sidequest-scout\]; no ticket, edits, or writes\./);
+  for (const surface of [deny, skill, ctx]) {
+    assert.doesNotMatch(surface, new RegExp(RETIRED_SCOUT), 'published guidance must not carry the retired bypass');
   }
 });
 
@@ -764,13 +759,19 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(readme, /marker-triggered capture/);
   assert.doesNotMatch(readme, /native_agent/);
   assert.match(readme, /exact stable executor/);
-  assert.match(readme, /\[sidequest-scout\]/);
+  assert.match(readme, /no unrouted delegation/);
+  assert.match(readme, /codebase-exploration/);
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
-  assert.match(skill, /\[sidequest-scout\]/);
+  assert.match(skill, /spike ticket/);
+  assert.match(skill, /codebase-exploration/);
   for (const file of [
+    path.join(pluginRoot, 'README.md'),
+    path.join(HOOKS, 'force-exec-bypass.js'),
+    path.join(HOOKS, 'session-start.js'),
+    path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'),
     path.join(pluginRoot, 'skills', 'sidequest', 'references', 'orchestration.md'),
   ]) {
-    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /\[sidequest-scout\]|\bscouts?\b/i, `${file} must not teach scout bypasses`);
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), new RegExp(RETIRED_SCOUT), `${file} must not carry the retired bypass`);
   }
 });
 
@@ -1216,7 +1217,7 @@ test('subagent-stop: legacy ticket executors without identity stay silent', () =
 test('pre-tool hook: dispatch executor requires a canonical route marker and legacy executors cannot launch', () => {
   const missingMarker = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-no-marker', prompt: '[sidequest-scout]\nwork SQ-377' },
+    tool_input: { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-no-marker', prompt: 'work SQ-377' },
   });
   assert.equal(missingMarker.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(
