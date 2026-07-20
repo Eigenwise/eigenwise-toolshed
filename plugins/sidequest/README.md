@@ -300,6 +300,11 @@ loses a race it just moves on, so two agents never collide. Only **independent**
 anything that shares files or has a `depends-on` link stays sequential (blocked tickets aren't even in
 `ready`). The bundled hook and skill make this the default behavior, not an afterthought.
 
+A bounded documentation artifact can remain in the shared working tree for the caller to review. That
+exception needs an explicit artifact lifecycle sentence in the ticket, one declared artifact directory,
+and `--shared-tree` (MCP `sharedTree:true`); Sidequest marks the executor briefing and permits `done`
+without commit or submit. Other tickets with declared file scope still require commit and submit.
+
 ## Native routed execution
 
 Routed tickets run through the current Claude Code conversation only. Call `sidequest dispatch SQ-n` (or
