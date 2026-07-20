@@ -98,7 +98,6 @@ test('pre-tool hook: generic agents get direct-tool guidance and Sidequest-shape
     ['Explore', 'Locate the current hook contract.'],
     ['claude-code-guide', 'Check the current Agent-tool documentation.'],
     ['web-researcher', 'Research the latest routing guidance.'],
-    ['code-explorer', '[sidequest-scout]\nQuick read-only scout. Make no edits or writes. Return concise file pointers.'],
   ]) {
     const out = runHookOutput(FORCE_BYPASS, {
       tool_name: 'Agent',
@@ -123,6 +122,30 @@ test('pre-tool hook: generic agents get direct-tool guidance and Sidequest-shape
     'sidequest: sidequest-scout is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.'
   );
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, /\[sidequest-scout\]/);
+});
+
+test('pre-tool hook: generic scouts bypass the gate but cannot perform ticket work', () => {
+  const scout = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: 'Explore',
+      isolation: 'worktree',
+      prompt: ' \n\t[sidequest-scout]\nQuick read-only scout. Make no edits or writes.',
+    },
+  });
+  assert.equal(scout, null);
+
+  const ticketScout = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: 'Explore',
+      isolation: 'worktree',
+      prompt: '[sidequest-scout]\nLook at SQ-123 and return concise file pointers.',
+    },
+  });
+  assert.equal(ticketScout.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(ticketScout.hookSpecificOutput.permissionDecisionReason, /scout\] marker cannot be used for ticket work/);
+  assert.match(ticketScout.hookSpecificOutput.permissionDecisionReason, /Dispatch it instead/);
 });
 
 test('pre-tool hook keeps builtin models and strips a stable dispatch executor model', () => {
@@ -1180,7 +1203,7 @@ test('subagent-stop: legacy ticket executors without identity stay silent', () =
 test('pre-tool hook: dispatch executor requires a canonical route marker and legacy executors cannot launch', () => {
   const missingMarker = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-no-marker', prompt: 'work SQ-377' },
+    tool_input: { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-no-marker', prompt: '[sidequest-scout]\nwork SQ-377' },
   });
   assert.equal(missingMarker.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(

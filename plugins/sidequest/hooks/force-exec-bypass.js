@@ -49,6 +49,13 @@ function agentDenyReason(type) {
 }
 
 const REF_RE = /\bSQ-\d+\b/gi;
+const SCOUT_PREFIX_RE = /^\s*\[sidequest-scout\]/;
+
+function scoutPrompt(prompt) {
+  if (typeof prompt !== 'string') return null;
+  const match = SCOUT_PREFIX_RE.exec(prompt);
+  return match ? prompt.slice(match[0].length) : null;
+}
 
 function extractRefs(prompt) {
   if (typeof prompt !== 'string' || !prompt) return [];
@@ -220,6 +227,20 @@ function main() {
   const type = String(toolInput.subagent_type || '');
   const classification = classifyExecutor(type);
   if (!isCurrentExecutor(classification)) {
+    const prompt = scoutPrompt(toolInput.prompt);
+    if (!type.startsWith('sidequest-') && prompt !== null) {
+      if (extractRefs(prompt).length) {
+        process.stdout.write(JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason:
+              'sidequest: the [sidequest-scout] marker cannot be used for ticket work. Dispatch it instead.',
+          },
+        }));
+      }
+      return;
+    }
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
