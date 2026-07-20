@@ -300,6 +300,22 @@ async function handle(req, res) {
     return;
   }
 
+  // --- Per-board routing switch (/api/projects/:slug/routing) ---
+  const pr = /^\/api\/projects\/([^/]+)\/routing$/.exec(pathname);
+  if ((req.method === 'POST' || req.method === 'PUT') && pr) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+      if (!['enabled', 'disabled'].includes(body.routing)) throw new Error();
+    } catch (_) {
+      sendJson(res, 400, { error: 'routing must be enabled or disabled' });
+      return;
+    }
+    const result = store.setProjectRouting(pr[1], body.routing);
+    sendJson(res, result.ok ? 200 : 404, result);
+    return;
+  }
+
   // --- Per-project notification switch (/api/projects/:slug/notify) ---
   const pn = /^\/api\/projects\/([^/]+)\/notify$/.exec(pathname);
   if ((req.method === 'POST' || req.method === 'PUT') && pn) {

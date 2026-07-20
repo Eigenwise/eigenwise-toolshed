@@ -69,6 +69,28 @@ test('fallback chain resolves primary, category fallback, global fallback, and s
   assert.match(safety.warnings.join(' '), /hardwired sonnet\/high/);
 });
 
+test('routing-disabled board rejects dispatch but preserves direct claims and old metadata defaults', () => {
+  const { store, slug } = freshStore();
+  const ticket = store.createTicket(slug, { title: 'direct only', category: 'coding.easy' });
+  assert.equal(store.listProjects().find((project) => project.slug === slug).routing, 'enabled');
+  assert.equal(store.setProjectRouting(slug, 'disabled').routing, 'disabled');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref), /routing disabled on this board/);
+  const claim = store.claimTicket(slug, ticket.ref, 'inline-worker', { direct: true });
+  assert.equal(claim.ok, true);
+});
+
+test('legacy project metadata defaults routing to enabled', () => {
+  const { store, slug } = freshStore();
+  const meta = store.readMeta(slug);
+  delete meta.routing;
+  const db = require('node:sqlite').DatabaseSync;
+  const handle = new db(path.join(process.env.SIDEQUEST_HOME, 'sidequest.db'));
+  handle.prepare('UPDATE projects SET data = ? WHERE slug = ?').run(JSON.stringify(meta), slug);
+  handle.close();
+  assert.equal(store.projectRoutingEnabled(slug), true);
+  assert.equal(store.listProjects().find((project) => project.slug === slug).routing, 'enabled');
+});
+
 test('legacy complexity maps to fixed categories at read time without persistence', () => {
   const { store, slug } = freshStore();
   for (const [complexity, category] of [[1, 'coding.easy'], [5, 'coding.normal'], [10, 'coding.hard']]) {

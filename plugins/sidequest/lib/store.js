@@ -893,6 +893,22 @@ function setProjectNotify(slug, on) {
   });
 }
 
+function setProjectRouting(slug, routing) {
+  if (!['enabled', 'disabled'].includes(routing)) throw new Error('Routing must be enabled or disabled.');
+  return withMetaLock(slug, () => {
+    const meta = readMeta(slug);
+    if (!meta) return { ok: false, reason: 'not_found' };
+    meta.routing = routing;
+    putProject(slug, meta);
+    return { ok: true, routing: meta.routing };
+  });
+}
+
+function projectRoutingEnabled(slug) {
+  const meta = readMeta(slug);
+  return !meta || meta.routing !== 'disabled';
+}
+
 // Board-level archive is a reversible project-row stamp. Project data and tickets
 // remain in place, and repeat calls keep the original archive timestamp.
 function archiveProject(slug) {
@@ -963,6 +979,7 @@ function listProjects(opts) {
       open: counts.todo + counts.doing,
       lastActivity,
       notify: meta.notify !== false, // per-project notification switch (absent == on)
+      routing: meta.routing === 'disabled' ? 'disabled' : 'enabled',
       stories: listStories(slug).length,
       archivedAt,
     });
@@ -1794,6 +1811,7 @@ function expiredPreparedDispatch(state, now) {
 
 function prepareDispatch(slug, idOrRef, opts) {
   opts = opts || {};
+  if (!projectRoutingEnabled(slug)) throw new Error('routing disabled on this board');
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   return withTicketLock(slug, found.id, () => {
@@ -3818,6 +3836,8 @@ module.exports = {
   deleteProjectExact,
   mergeProject,
   setProjectNotify,
+  setProjectRouting,
+  projectRoutingEnabled,
   copyAsset,
   saveAssetData,
   assetPath,

@@ -170,6 +170,19 @@ test('stable cwd lets a detached child outlive a removed worktree-like cwd', { t
   assert.strictEqual(fs.readFileSync(marker, 'utf8'), 'ready');
 });
 
+test('dashboard exposes default and board settings with a routing opt-out', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  assert.match(server, /projects.*routing/s);
+  assert.match(server, /setProjectRouting/);
+  assert.match(html, /Default settings/);
+  assert.match(html, /Board settings/);
+  assert.match(html, /INHERITED FROM DEFAULTS/);
+  assert.match(html, /CUSTOMIZED ON THIS BOARD/);
+  assert.match(html, /routingDisabledNote/);
+  assert.match(html, /applyRoutingVisibility/);
+});
+
 test('dashboard exposes board archive routes and guarded project controls', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
   const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');

@@ -204,6 +204,9 @@
   .settings-panel .sp-col { padding: 10px 17px 20px; min-width: 0; border-left: 1px solid var(--line-soft); }
   .settings-panel .sp-col .pop-head:first-child { padding-top: 10px; }
   .routing-panel { padding: 16px 18px 14px; border-bottom: 1px solid var(--line-soft); background: linear-gradient(90deg, var(--gold-soft), transparent 62%); }
+  .routing-disabled-note { margin: 14px 17px; padding: 12px 13px; border: 1px solid var(--line-soft); border-left: 3px solid var(--text-faint); border-radius: var(--radius-sm); color: var(--text-dim); background: var(--panel); font-size: 12px; line-height: 1.45; }
+  .board-routing-control { display: grid; gap: 8px; }
+  .board-routing-control select { width: 100%; box-sizing: border-box; padding: 7px 8px; color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); font: 12px var(--sans); }
   .routing-head { display: flex; align-items: flex-start; gap: 16px; }
   .routing-head h3 { margin: 0; font-family: var(--serif); font-size: 19px; font-weight: 500; }
   .routing-head p { margin: 3px 0 0; color: var(--text-faint); font-size: 11.5px; }
@@ -479,7 +482,7 @@
   .category-delta-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 5px 6px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
   .category-delta-field b { color: var(--gold-bright); font: 700 10px var(--mono); letter-spacing: .03em; text-transform: uppercase; }
   .category-delta-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 600 11px var(--mono); }
-  .category-delta-value::after { content: " · shared default on hover"; color: var(--text-faint); font-weight: 400; }
+  .category-delta-value::after { content: " · default setting on hover"; color: var(--text-faint); font-weight: 400; }
   .category-restore-note { margin: 10px 0 -3px; color: var(--text-faint); font-size: 11px; }
   .category-restore-note b { color: var(--text-dim); font-weight: 650; }
   .category-list { padding: 13px 15px 18px; max-height: none; overflow: visible; display: flex; flex-direction: column; }
@@ -773,14 +776,15 @@
           </div>
           <div class="sp-grid">
             <div>
-              <section class="routing-panel" aria-labelledby="routingTitle">
+              <section class="routing-panel" id="routingPanel" aria-labelledby="routingTitle">
                 <div class="routing-head"><div><h3 id="routingTitle">Global fallback</h3><p>Used only when a category route cannot run.</p></div></div>
                 <div class="fallback-control" id="globalFallbackControl"></div>
               </section>
-              <section class="category-settings" aria-labelledby="categoriesTitle">
-                <div class="cat-head"><div class="cat-head-copy"><h3 id="categoriesTitle">Categories</h3><p>Each kind of work routes to a model. Global defaults apply to every board; switch to a board to override, add, or switch off a category just for it.</p></div><div class="category-scope-wrap"><span class="category-scope-label">Editing</span><span class="category-scope-project" id="categoryScopeProject"></span><div class="category-scope" id="categoryScope" role="group" aria-label="Category layer"></div></div></div>
+              <section class="category-settings" id="categorySettings" aria-labelledby="categoriesTitle">
+                <div class="cat-head"><div class="cat-head-copy"><h3 id="categoriesTitle">Category settings</h3><p>Default settings apply to every board. Board settings are private overrides, and editing one creates a board-specific override.</p></div><div class="category-scope-wrap"><span class="category-scope-label">Settings layer</span><span class="category-scope-project" id="categoryScopeProject"></span><div class="category-scope" id="categoryScope" role="group" aria-label="Category settings layer"></div></div></div>
                 <div class="category-list" id="categoryList"></div>
               </section>
+              <div class="routing-disabled-note" id="routingDisabledNote" hidden>Routing is disabled on this board. Tickets can still be claimed directly, but Sidequest will not prepare routed dispatches.</div>
             </div>
             <div class="sp-col">
               <div class="pop-head">Desktop notifications</div>
@@ -795,6 +799,8 @@
               <label class="pop-row"><input type="checkbox" data-notif="comment" /><span>Comments<em>notes Claude leaves on a ticket</em></span></label>
               <label class="pop-row"><input type="checkbox" data-notif="created" /><span>New tickets<em>filed by Claude in the background</em></span></label>
               <label class="pop-row"><input type="checkbox" data-notif="status" /><span>Status changes<em>Claude moved a ticket between columns</em></span></label>
+              <div class="pop-head">Board settings</div>
+              <div class="board-routing-control" id="boardRoutingControl"></div>
               <div class="pop-head">Per-project<span id="projNotifyHint" style="margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;color:var(--text-faint)"></span></div>
               <div class="proj-notify-list" id="projNotifyList"></div>
             </div>
@@ -1128,6 +1134,32 @@
   function currentProjectMeta() {
     if (state.current === "all") return null;
     return state.projects.filter(function (project) { return project.slug === state.current; })[0] || null;
+  }
+  function routingEnabledHere() {
+    var project = currentProjectMeta();
+    return !project || project.routing !== "disabled";
+  }
+  function renderBoardRoutingSettings() {
+    var box = $("boardRoutingControl"); if (!box) return;
+    var project = currentProjectMeta();
+    if (!project) { box.innerHTML = '<span style="color:var(--text-faint);font-size:12px">Open a board to change its routing.</span>'; return; }
+    var enabled = project.routing !== "disabled";
+    box.innerHTML = '<label for="boardRouting"><b>Routing</b><em>Choose whether this board can prepare routed dispatches.</em></label><select id="boardRouting"><option value="enabled"' + (enabled ? ' selected' : '') + '>Enabled</option><option value="disabled"' + (!enabled ? ' selected' : '') + '>Disabled</option></select>';
+    $("boardRouting").addEventListener("change", function () {
+      var next = this.value;
+      mutate("PUT", "/api/projects/" + encodeURIComponent(project.slug) + "/routing", { routing: next }).then(function () {
+        project.routing = next;
+        applyRoutingVisibility(); renderBoard(); toast("Routing " + next + " for " + project.name);
+      }).catch(function (error) { toast("Routing failed: " + error.message); this.value = enabled ? "enabled" : "disabled"; });
+    });
+  }
+  function applyRoutingVisibility() {
+    var enabled = routingEnabledHere();
+    var panel = $("routingPanel"), settings = $("categorySettings"), note = $("routingDisabledNote"), field = $("categoryField");
+    if (panel) panel.hidden = !enabled;
+    if (settings) settings.hidden = !enabled;
+    if (note) note.hidden = enabled;
+    if (field) field.style.display = enabled ? "" : "none";
   }
   function slugOf(t) { return t._slug || t.project || (state.current !== "all" ? state.current : null); }
   function assetUrl(t, file) { return "/api/asset/" + encodeURIComponent(slugOf(t)) + "/" + encodeURIComponent(t.id) + "/" + encodeURIComponent(file); }
@@ -1850,8 +1882,8 @@
     var isGlobal = categoryProject() === "all";
     var boardName = currentBoardName();
     var banner = isGlobal
-      ? '<div class="category-scope-banner shared"><b>Shared default</b><span>' + (create ? "New category, available to every board." : "Editing the shared default. Applies to every board that hasn’t customized this category.") + '</span></div>'
-      : '<div class="category-scope-banner board"><b>' + esc(boardName) + '</b><span>' + (create ? "New category for this board only." : "Saving makes this board its own copy. It stops following the shared default; other boards are unaffected.") + '</span></div>';
+      ? '<div class="category-scope-banner shared"><b>Default settings</b><span>' + (create ? "New category, available to every board." : "Editing default settings. Applies to every board that hasn’t customized this category.") + '</span></div>'
+      : '<div class="category-scope-banner board"><b>Board settings</b><span>' + (create ? "New category for this board only." : "Editing creates a board-specific override. Other boards are unaffected.") + '</span></div>';
       var data = routingCatalog.categoryDraftAvailable ? '<div class="category-draft"><input type="text" data-category-draft placeholder="Describe the category in one sentence" /><button type="button" data-draft-category>Draft</button><small>Draft fills the form for review. It never saves on its own.</small></div>' : '';
     return '<div class="category-edit">' +
       banner +
@@ -1901,8 +1933,8 @@
     var canProject = state.current !== "all";
     var boardName = canProject ? currentBoardName() : "This board";
     if (projectLabel) projectLabel.textContent = "";
-    box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Global defaults</button>' +
-      '<button type="button" data-scope="project" class="scope-board' + (state.categoryScope === "project" ? ' active' : '') + '"' + (canProject ? '' : ' disabled') + ' title="' + esc(canProject ? boardName : "Open a board to edit its own categories") + '">' + esc(boardName) + '</button>';
+    box.innerHTML = '<button type="button" data-scope="global"' + (state.categoryScope === "global" ? ' class="active"' : '') + '>Default settings</button>' +
+      '<button type="button" data-scope="project" class="scope-board' + (state.categoryScope === "project" ? ' active' : '') + '"' + (canProject ? '' : ' disabled') + ' title="' + esc(canProject ? boardName : "Open a board to edit its settings") + '">Board settings</button>';
     box.querySelectorAll('[data-scope]').forEach(function (button) { button.addEventListener("click", function () {
       if (button.disabled) return;
       state.categoryScope = button.dataset.scope;
@@ -1920,10 +1952,10 @@
     var changed = Object.keys(layer.data || {}).map(function (key) {
       var before = values(layer.base && layer.base[key], key);
       var after = values(category[key], key);
-      return '<div class="category-delta-field"><b>' + esc(labels[key] || key) + '</b><span class="category-delta-value" title="Shared default: ' + esc(before) + '">' + esc(after) + '</span></div>';
+      return '<div class="category-delta-field"><b>' + esc(labels[key] || key) + '</b><span class="category-delta-value" title="Default setting: ' + esc(before) + '">' + esc(after) + '</span></div>';
     });
     if (!changed.length) return "";
-    return '<div class="category-delta"><div class="category-delta-head"><strong>This board’s changes</strong><span>Hover any value to compare with the shared default</span></div><div class="category-delta-list">' + changed.join("") + '</div></div>';
+    return '<div class="category-delta"><div class="category-delta-head"><strong>This board’s changes</strong><span>Hover any value to compare with the default setting</span></div><div class="category-delta-list">' + changed.join("") + '</div></div>';
   }
   function renderCategorySettings() {
     var box = $("categoryList"); if (!box) return;
@@ -1949,7 +1981,7 @@
       // whose shared default was removed) can only be deleted, not reset.
       var localOnly = layerKind === "ADD" || (layerKind === "DETACH" && !layer.base);
       var customized = layerKind === "OVERRIDE" || (layerKind === "DETACH" && layer.base);
-      var label = layerKind === "ADD" ? "ADDED HERE" : (layerKind === "OVERRIDE" || layerKind === "DETACH") ? "CUSTOMIZED" : layerKind === "DISABLE" ? "DISABLED HERE" : "";
+      var label = !projectScope ? "DEFAULT SETTINGS" : layerKind === "ADD" ? "BOARD-ONLY" : (layerKind === "OVERRIDE" || layerKind === "DETACH") ? "CUSTOMIZED ON THIS BOARD" : layerKind === "DISABLE" ? "DISABLED ON THIS BOARD" : "INHERITED FROM DEFAULTS";
       // The left rail colour mirrors the layer badge so the split reads at a
       // glance: purple = board-local, indigo = customized, grey = inherited.
       var rail = "var(--line-soft)";
@@ -1966,7 +1998,7 @@
         if (projectScope) {
           if (localOnly) actions += '<button type="button" class="danger" data-delete-category>Delete</button>';
           else if (category.id !== "general") actions += '<button type="button" class="danger" data-disable-category>Disable here</button>';
-          if (customized) actions += '<button type="button" data-reset-category>Reset to shared default</button>';
+          if (customized) actions += '<button type="button" data-reset-category>Reset to default</button>';
         } else if (category.id !== "general") {
           actions += '<button type="button" class="danger" data-delete-category>Delete</button>';
         }
@@ -2026,12 +2058,12 @@
       } else {
         var empty = el("div", "cat-group local");
         empty.innerHTML = '<div class="cat-group-head"><span class="cat-group-eyebrow">Local to ' + esc(boardName) + '</span><span class="cat-group-count">0</span><span class="cat-group-line"></span></div>' +
-          '<div class="cat-empty">Nothing overridden yet. <b>' + esc(boardName) + '</b> follows every global default below — edit or disable one to make it local to this board.</div>';
+          '<div class="cat-empty">Nothing overridden yet. <b>' + esc(boardName) + '</b> follows every default setting below — edit or disable one to make it local to this board.</div>';
         box.appendChild(empty);
       }
-      appendGroup("inherited", "Inherited from global", "Following the shared defaults. Editing one here creates a board-local copy; the global default stays untouched.", inherited);
+      appendGroup("inherited", "Inherited from defaults", "Following the default settings. Editing one here creates a board-specific override; the defaults stay untouched.", inherited);
     } else {
-      appendGroup("global", "Global categories", "Shared defaults. Every board inherits these unless it overrides them.", cats);
+      appendGroup("global", "Default categories", "Default settings apply to every board unless it has a board-specific override.", cats);
     }
 
     var add = el("details", "category-add");
@@ -2153,7 +2185,7 @@
     // complexity remains context, while model color always comes from that slug.
     var chipSvg = '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>';
     var modelChip = "";
-    if (t.model || t.effort) {
+    if (routingEnabledHere() && (t.model || t.effort)) {
       var routeColor = t.model ? modelColor(t.model) : "#52545f";
       var routeLabel = (t.model || "any") + (t.effort ? "·" + t.effort : "");
       var complexityPrefix = t.complexity ? "C" + t.complexity + " · " : "";
@@ -2283,6 +2315,7 @@
     $("mUnclassified").checked = false;
     $("mUnclassifiedField").style.display = isEdit ? "none" : "";
     populateCategorySelect();
+    applyRoutingVisibility();
     renderLegacyComplexity(isEdit ? ticket : null);
     // Show any agent claim as a read-only hint (it's a separate axis from assignee).
     var hint = $("mClaimHint");
@@ -2902,6 +2935,8 @@
     markSeen(slug);            // opening a board clears its unread badge
     deriveVisible();
     renderRail();
+    renderBoardRoutingSettings();
+    applyRoutingVisibility();
     renderStoryMenu();         // rescope the story filter to the new board
     loadTickets().then(function () { renderBoard(); lastSig = signature(); });
     if (state.categoryScope === "project") loadCategories().then(function () { categoryScopeControls(); renderCategorySettings(); renderRoutingPlan(); populateCategorySelect(); });
@@ -2963,7 +2998,9 @@
         renderRail();          // reflect unread badges + mute marks
         if ($("settingsPop").classList.contains("show")) {
           renderProjectNotifySettings();
-          if (!document.querySelector('details.category-add[open], .category-row .category-edit')) renderCategorySettings();
+          renderBoardRoutingSettings();
+          applyRoutingVisibility();
+          if (routingEnabledHere() && !document.querySelector('details.category-add[open], .category-row .category-edit')) renderCategorySettings();
         }
       }
       if (state.view === "archive") {
@@ -3252,7 +3289,7 @@
       settingsPop.classList.toggle("show", opening);
       $("settingsBtn").classList.toggle("on", opening);
       $("settingsBtn").setAttribute("aria-expanded", opening ? "true" : "false");
-      if (opening) { renderProjectNotifySettings(); renderGlobalFallback(); renderCategorySettings(); }
+      if (opening) { renderProjectNotifySettings(); renderBoardRoutingSettings(); applyRoutingVisibility(); if (routingEnabledHere()) { renderGlobalFallback(); renderCategorySettings(); } }
     });
     settingsPop.addEventListener("mousedown", function (e) { if (e.target === settingsPop) closeSettings(); });
     document.addEventListener("click", function (e) {

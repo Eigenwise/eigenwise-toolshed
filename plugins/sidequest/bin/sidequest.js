@@ -1543,6 +1543,20 @@ function cmdProjects(opts) {
   }
 }
 
+function cmdRouting(opts, positional) {
+  const { slug, meta } = resolveProject(opts);
+  const routing = positional[0];
+  if (routing != null && !['enabled', 'disabled'].includes(routing)) fail('routing: pass enabled or disabled.');
+  const result = routing == null
+    ? { ok: true, routing: store.projectRoutingEnabled(slug) ? 'enabled' : 'disabled' }
+    : store.setProjectRouting(slug, routing);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, result), null, 2) + '\n');
+    return;
+  }
+  console.log(`✓ routing ${result.routing} on ${meta.name}`);
+}
+
 // Board archive commands always require an explicit reference. Never call the
 // normal default-project resolver here: running one from an unrelated cwd must
 // not archive that cwd's board by accident.
@@ -1968,6 +1982,7 @@ Usage:
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n> [--force]
   sidequest projects [--archived] [--json]
+  sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]
   sidequest archive-board <board-ref>                  archive a board
   sidequest unarchive-board <board-ref>                restore an archived board
   sidequest dashboard [--port N] [--no-open]     open the live board in the browser
@@ -2227,6 +2242,9 @@ async function main() {
     case 'projects':
     case 'boards':
       cmdProjects(opts);
+      break;
+    case 'routing':
+      cmdRouting(opts, positional);
       break;
     case 'archive-board':
     case 'archive_board':
