@@ -63,8 +63,13 @@ function fixtureText(value) {
 
 function assertSyntheticFixture() {
   const text = fixtureText(FIXTURE);
-  const forbidden = [process.cwd(), os.userInfo().username, ...Object.values(process.env)]
-    .filter((value) => typeof value === 'string' && value.length > 3);
+  // Only genuinely identifying environment values: paths and the username.
+  // Matching every env value false-positives on generic words ("high", "true")
+  // that legitimately appear in the fixture.
+  const forbidden = [
+    process.cwd(), os.userInfo().username, os.homedir(), os.tmpdir(),
+    ...Object.values(process.env).filter((value) => typeof value === 'string' && /[\\/]/.test(value)),
+  ].filter((value) => typeof value === 'string' && value.length > 3);
   assert.match(text, /acme-webshop/);
   for (const value of forbidden) assert.equal(text.includes(value), false, `Synthetic fixture contains environment text: ${value}`);
 }
@@ -173,13 +178,30 @@ async function captureGrafana(browser, grafanaPort) {
   await page.close();
 }
 
+// The dashboard renders each board's filesystem path in the sidebar; the seeded
+// board lives under the OS temp dir, which embeds the local username. Replace
+// any path-looking sidebar text with a neutral fake path before capturing —
+// the privacy gate forbids environment-derived strings in committed imagery.
+async function maskEnvironmentPaths(page) {
+  await page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const pathLike = /^[A-Za-z]:[\\/]|^\/(home|Users|tmp)\//;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (pathLike.test(node.textContent.trim())) node.textContent = '~/projects/acme-webshop';
+    }
+  });
+}
+
 async function captureSidequest(browser, port) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'dark', deviceScaleFactor: 1 });
   await page.goto(`http://127.0.0.1:${port}`, { waitUntil: 'networkidle' });
+  await maskEnvironmentPaths(page);
   await page.screenshot({ path: path.join(outputDir, 'sidequest-kanban.png'), fullPage: true });
   const card = page.getByText('Build cart summary', { exact: true });
   await card.click();
   await page.waitForTimeout(200);
+  await maskEnvironmentPaths(page);
   await page.screenshot({ path: path.join(outputDir, 'sidequest-ticket-detail.png'), fullPage: true });
   await page.close();
 }
