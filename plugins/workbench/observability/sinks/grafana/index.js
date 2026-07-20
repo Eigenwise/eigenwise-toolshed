@@ -77,7 +77,7 @@ function setup(config = {}, context = {}) {
   const dataDir = context.dataDir;
   const runtime = runtimeConfig(config);
   const format = `{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels "${VERSION_LABEL}"}}|{{json .HostConfig.PortBindings}}`;
-  const inspected = spawn(docker, ['inspect', '--format', format, runtime.container], { encoding: 'utf8' });
+  const inspected = spawn(docker, ['inspect', '--format', format, runtime.container], { encoding: 'utf8', windowsHide: true });
   if (inspected.status === 0) {
     const state = parseInspection(inspected.stdout);
     const current = context.forceRecreate !== true
@@ -89,13 +89,13 @@ function setup(config = {}, context = {}) {
       return { image: IMAGE, dataDir, container: runtime.container, resumed: false };
     }
     if (current) {
-      const restarted = spawn(docker, ['start', runtime.container], { encoding: 'utf8' });
+      const restarted = spawn(docker, ['start', runtime.container], { encoding: 'utf8', windowsHide: true });
       if (restarted.error || restarted.status !== 0) {
         throw new Error('Docker could not resume the pinned loopback-only dashboard container.');
       }
       return { image: IMAGE, dataDir, container: runtime.container, resumed: true };
     }
-    const removed = spawn(docker, ['rm', '--force', runtime.container], { encoding: 'utf8' });
+    const removed = spawn(docker, ['rm', '--force', runtime.container], { encoding: 'utf8', windowsHide: true });
     if (removed.error || removed.status !== 0) {
       throw new Error('Docker could not replace the stale dashboard container.');
     }
@@ -113,7 +113,7 @@ function setup(config = {}, context = {}) {
   ];
   if (context.pluginVersion) args.push('--label', `${VERSION_LABEL}=${context.pluginVersion}`);
   args.push(IMAGE);
-  const result = spawn(docker, args, { encoding: 'utf8' });
+  const result = spawn(docker, args, { encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) {
     throw new Error('Docker could not start the pinned loopback-only dashboard container.');
   }
@@ -124,23 +124,23 @@ function teardown(config = {}, context = {}) {
   const docker = context.docker || 'docker';
   const spawn = context.spawnSync || spawnSync;
   const { container } = runtimeConfig(config);
-  const inspected = spawn(docker, ['inspect', '--format', '{{.State.Running}}', container], { encoding: 'utf8' });
+  const inspected = spawn(docker, ['inspect', '--format', '{{.State.Running}}', container], { encoding: 'utf8', windowsHide: true });
   if (inspected.error) return { container, stopped: false, removed: false, dataDeleted: false, unavailable: true };
   if (inspected.status !== 0) {
     if (!context.deleteData) return { container, stopped: false, removed: false, dataDeleted: false };
-    const deleted = spawn(docker, ['volume', 'rm', DATA_VOLUME], { encoding: 'utf8' });
+    const deleted = spawn(docker, ['volume', 'rm', DATA_VOLUME], { encoding: 'utf8', windowsHide: true });
     if (deleted.error) return { container, stopped: false, removed: false, dataDeleted: false, unavailable: true };
     return { container, stopped: false, removed: false, dataDeleted: deleted.status === 0 };
   }
   const running = String(inspected.stdout).trim() === 'true';
   if (running) {
-    const stopped = spawn(docker, ['stop', container], { encoding: 'utf8' });
+    const stopped = spawn(docker, ['stop', container], { encoding: 'utf8', windowsHide: true });
     if (stopped.error || stopped.status !== 0) throw new Error('Docker could not stop the dashboard container.');
   }
   if (!context.deleteData) return { container, stopped: running, removed: false, dataDeleted: false };
-  const removed = spawn(docker, ['rm', '--force', container], { encoding: 'utf8' });
+  const removed = spawn(docker, ['rm', '--force', container], { encoding: 'utf8', windowsHide: true });
   if (removed.error || removed.status !== 0) throw new Error('Docker could not remove the dashboard container.');
-  const deleted = spawn(docker, ['volume', 'rm', DATA_VOLUME], { encoding: 'utf8' });
+  const deleted = spawn(docker, ['volume', 'rm', DATA_VOLUME], { encoding: 'utf8', windowsHide: true });
   if (deleted.error || deleted.status !== 0) throw new Error('Docker could not delete the dashboard data volume.');
   return { container, stopped: running, removed: true, dataDeleted: true };
 }
