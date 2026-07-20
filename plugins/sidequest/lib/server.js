@@ -61,7 +61,7 @@ function probeCategoryDraft() {
     }
   });
 }
-void probeCategoryDraft().then((available) => {
+const categoryDraftProbe = probeCategoryDraft().then((available) => {
   categoryDraftAvailable = available;
 });
 function sendJson(res, code, obj) {
@@ -1085,6 +1085,7 @@ function listenOn(server, port, host, triesLeft) {
   });
 }
 async function start(requestedPort) {
+  await categoryDraftProbe;
   const host = "127.0.0.1";
   const startPort = Number(requestedPort) || Number(process.env.SIDEQUEST_PORT) || 41730;
   const server = http.createServer((req, res) => {

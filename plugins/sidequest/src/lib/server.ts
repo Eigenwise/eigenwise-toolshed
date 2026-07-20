@@ -88,7 +88,7 @@ function probeCategoryDraft() {
   });
 }
 
-void probeCategoryDraft().then((available?: any) => {
+const categoryDraftProbe = probeCategoryDraft().then((available?: any) => {
   categoryDraftAvailable = available;
 });
 
@@ -1273,6 +1273,7 @@ function listenOn(server?: any, port?: any, host?: any, triesLeft?: any) {
 
 // Start the dashboard server. Resolves to { port, url } once listening.
 async function start(requestedPort?: any) {
+  await categoryDraftProbe;
   const host = '127.0.0.1';
   const startPort = Number(requestedPort) || Number(process.env.SIDEQUEST_PORT) || 41730;
   const server = http.createServer((req?: any, res?: any) => {
