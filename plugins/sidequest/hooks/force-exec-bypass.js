@@ -210,6 +210,8 @@ function denyReason(res, type) {
   }
 }
 
+const HARNESS_UTILITY_TYPES = new Set(['claude-code-guide', 'statusline-setup']);
+
 function main() {
   const raw = fs.readFileSync(0, 'utf8');
   if (!raw) return;
@@ -217,6 +219,12 @@ function main() {
   const toolInput = input && input.tool_input;
   if (!toolInput || typeof toolInput !== 'object') return;
   const type = String(toolInput.subagent_type || '');
+  if (HARNESS_UTILITY_TYPES.has(type)) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: toolInput },
+    }));
+    return;
+  }
   const classification = classifyExecutor(type);
   if (!isCurrentExecutor(classification)) {
     process.stdout.write(JSON.stringify({

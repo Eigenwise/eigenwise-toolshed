@@ -220,7 +220,7 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
     complexityWhy: 'exercise the MCP commit and submit terminal worktree lifecycle',
   });
   const by = 'mcp-worktree-worker';
-  assert.equal(callTool('claim', { project, ref: ticket.ref, by, direct: true }).ok, true);
+  assert.equal(callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The test needs a direct local worktree lifecycle.' }).ok, true);
 
   fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(worktree, 'lib', 'allowed.js'), 'allowed\n');
@@ -250,7 +250,7 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
     title: 'MCP malformed submission', files: ['lib/other.js'], complexity: 3,
     complexityWhy: 'confirm malformed MCP submission input preserves the ticket claim',
   });
-  assert.equal(callTool('claim', { project, ref: malformed.ref, by: 'mcp-bad-worker', direct: true }).ok, true);
+  assert.equal(callTool('claim', { project, ref: malformed.ref, by: 'mcp-bad-worker', direct: true, reason: 'The malformed submit fixture needs a claim.' }).ok, true);
   const bad = callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
@@ -264,7 +264,7 @@ test('MCP submit refuses out-of-scope committed ranges', () => {
     complexityWhy: 'confirm MCP submit refuses a committed range outside the declared scope',
   });
   const by = 'mcp-range-worker';
-  assert.equal(callTool('claim', { project, ref: ticket.ref, by, direct: true }).ok, true);
+  assert.equal(callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The test needs a direct local worktree lifecycle.' }).ok, true);
   fs.writeFileSync(path.join(worktree, 'foreign.js'), 'foreign\n');
   gitAt(worktree, ['add', 'foreign.js']);
   gitAt(worktree, ['commit', '-m', 'foreign work']);
@@ -693,7 +693,7 @@ test('claim -> comment -> done return compact acknowledgements', () => {
   const ref = added.ref;
   const ticket = store.getTicket(added.project, ref);
 
-  const claim = callTool('claim', { ref, by: 'mcp-worker-1', direct: true });
+  const claim = callTool('claim', { ref, by: 'mcp-worker-1', direct: true, reason: 'This compact acknowledgement test owns the ticket.' });
   assert.deepStrictEqual(Object.keys(claim).sort(), ['claim', 'ok', 'project', 'ref', 'status']);
   assert.strictEqual(claim.status, 'doing');
 
@@ -780,11 +780,17 @@ test('MCP blocks no-dispatch routed claims and records an explicit direct resear
   assert.strictEqual(refused.reason, 'dispatch_required');
   assert.match(refused.message, /dispatch/i);
   assert.match(refused.message, /direct:true/i);
-  const direct = callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true });
+  const missingReason = callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true });
+  assert.strictEqual(missingReason.ok, false);
+  assert.strictEqual(missingReason.reason, 'direct_reason_required');
+  assert.match(missingReason.message, /reason/i);
+  const reason = 'No executor can access this isolated test fixture.';
+  const direct = callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true, reason });
   assert.strictEqual(direct.ok, true);
   const pulse = callTool('pulse', { ref: added.ref });
   assert.strictEqual(pulse.direct.by, 'mcp-inline');
   assert.strictEqual(pulse.direct.model, ticket.model);
+  assert.strictEqual(pulse.direct.reason, reason);
 });
 
 test('MCP claim rejects a generic executor for a Codex route', () => {

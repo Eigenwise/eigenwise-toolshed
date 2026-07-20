@@ -31,8 +31,9 @@ const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 
 const BUDGET = {
-  session: 2850,
-  compact: 1000,
+  session: 4700,
+  compact: 2900,
+  workforce: 1800,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
 
@@ -98,10 +99,16 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
 });
 
-test('pre-tool hook: generic agents are denied and directed to ticketed spikes', () => {
+test('pre-tool hook: harness utilities pass through and generic agents are denied', () => {
+  for (const subagent_type of ['claude-code-guide', 'statusline-setup']) {
+    const original = { subagent_type, isolation: 'worktree', model: 'opus', prompt: 'Read-only harness utility.' };
+    const out = runHookOutput(FORCE_BYPASS, { tool_name: 'Agent', tool_input: original });
+    assert.deepStrictEqual(out.hookSpecificOutput.updatedInput, original, subagent_type);
+  }
   for (const [subagent_type, prompt] of [
+    ['fork', 'Delegate a quick lookup.'],
     ['Explore', 'Locate the current hook contract.'],
-    ['claude-code-guide', 'Check the current Agent-tool documentation.'],
+    ['general-purpose', 'Investigate this code path.'],
     ['web-researcher', 'Research the latest routing guidance.'],
   ]) {
     const out = runHookOutput(FORCE_BYPASS, {
@@ -252,7 +259,7 @@ test('pre-tool inline-work nudge gives three grace actions, then blocks with the
   assert.equal(denial.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(denial.hookSpecificOutput.permissionDecisionReason, /BLOCKED/);
   assert.match(denial.hookSpecificOutput.permissionDecisionReason, /`add` → `dispatch <ref>`/);
-  assert.match(denial.hookSpecificOutput.permissionDecisionReason, /`claim <ref> --direct`/);
+  assert.match(denial.hookSpecificOutput.permissionDecisionReason, /`claim <ref> --direct --reason/);
 });
 
 test('pre-tool inline-work nudge permits reads indefinitely after the read spiral notice', () => {
@@ -735,6 +742,19 @@ test('session-start: carries the route-down + tight-loop doctrine', () => {
   );
 });
 
+test('session-start: shows the live investigation workforce within its cap', () => {
+  for (const source of ['', 'compact', 'resume']) {
+    const ctx = runHook(SESSION, { session_id: `workforce-${source || 'startup'}`, source });
+    const start = ctx.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:');
+    assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
+    const workforce = ctx.slice(start);
+    assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `${source || 'startup'} workforce is ${Buffer.byteLength(workforce)} bytes`);
+    for (const id of ['codebase-exploration', 'debugging', 'spike-investigation', 'deep-research', 'web-research']) {
+      assert.match(workforce, new RegExp(`${id} — .+ \\(.+·.+\\)`), id);
+    }
+  }
+});
+
 test('session-start: teaches ticketed investigation spikes from turn zero', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.match(ctx, /Any delegated work, including a quick investigation, is a spike ticket/);
@@ -772,7 +792,7 @@ test('session-start: stays inside its byte budget and off the retired doctrine',
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.ok(
     ctx.length <= BUDGET.session,
-    `session block is ${ctx.length} chars — budget is ${BUDGET.session}; trim it, don't raise the budget`
+    `session block is ${ctx.length} chars — budget is ${BUDGET.session}; trim the briefing or workforce section`
   );
   assertNoRetiredDoctrine(ctx, 'session-start');
 });
@@ -1151,7 +1171,7 @@ test('subagent-stop: long-run threshold settings do not suppress a held-claim ve
 });
 
 // Registered LAST: creates extra fixture categories, which would otherwise grow
-// the taxonomy line inside earlier byte-budget assertions.
+// the live workforce section inside earlier byte-budget assertions.
 test('pre-tool hook: dispatch executor rejects conflicting route markers and ignores prose sibling refs', () => {
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-dispatch-catalog-'));
   fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });

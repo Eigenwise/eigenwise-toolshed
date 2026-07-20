@@ -125,7 +125,7 @@ is unavailable), attaching any pasted image path.
 The board may be shared: a ticket must be **claimed** before you touch it, and claiming is
 **atomic**. **Never work a ticket you haven't successfully claimed**, even one you just filed.
 Lifecycle (executors use the matching MCP tools; CLI forms for inline/admin work):
-`next`/`claim SQ-3 --by <you> --direct` (intentional inline bypass only) → `commit` (declared
+`next`/`claim SQ-3 --by <you> --direct --reason "why no executor can do this"` (routed exception; 20+ chars) → `commit` (declared
 ticket paths only) → `submit --commit <hash> --verify "<cmd>"` (parks the verified LOCAL commit)
 or `done --model <model> --effort <level>` (inline/non-repo only) or `release` (drop unfinished,
 optionally `--status todo`).
@@ -163,7 +163,7 @@ through the publish transaction first.
 
 ## Route execution down; keep the loop tight
 
-**ROLE: you are the project orchestrator.** Decompose, ticket, dispatch, and integrate findings into further delegation. Executors execute and investigate; read only enough to write tickets. **Substantive work MUST be ticketed and dispatched**; `--direct` records deliberate inline work. After the free allowance, substantive actions are **BLOCKED** until board contact. Executors return **compressed findings** as comments. Every Agent uses fresh dispatch; tiny lookup: 1–2 `Read`/`Glob`/`Grep`/`WebFetch` calls. Cross-file tracing: spike ticket.
+**ROLE: you are the project orchestrator and the priciest model here.** Executors are cheaper: offload execution and investigation; read only enough to write tickets. **Substantive work MUST be ticketed and dispatched**; a routed `--direct` claim is a justified exception with a reason why no executor can do it. After the free allowance, substantive actions are **BLOCKED** until board contact. Executors return **compressed findings** as comments. Every Agent uses fresh dispatch; tiny lookup: 1–2 `Read`/`Glob`/`Grep`/`WebFetch` calls. Cross-file tracing: spike ticket.
 
 Any delegated work, including an investigation, is a spike ticket (usually `codebase-exploration`): file it, then route and dispatch it.
 

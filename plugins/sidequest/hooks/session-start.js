@@ -27,38 +27,50 @@
 
 const path = require('path');
 
-const MAX_TAXONOMY_BYTES = 400;
-const MAX_TAXONOMY_IDS = 10;
+const MAX_WORKFORCE_BYTES = 1800;
+const MAX_WORKFORCE_DESCRIPTION = 90;
 
-function taxonomyIds(ids) {
-  const shown = ids.slice(0, MAX_TAXONOMY_IDS);
-  return shown.join(', ') + (shown.length < ids.length ? `, +${ids.length - shown.length} more` : '');
+function truncateText(value, max) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
 }
 
-function taxonomyLine() {
+function workforceSection() {
   try {
     const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
     const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     const found = store.findProject(store.nearestRepoRoot(start));
     const project = found.ok ? found.slug : '';
-    const globalIds = store.getCategories({ includeDisabled: false }).map((category) => category.id);
-    const effectiveIds = new Set(store.getCategories({ project, includeDisabled: false }).map((category) => category.id));
-    const projectIds = project
-      ? store.getProjectCategories(project).rows
-        .filter((row) => row.kind === 'ADD' && effectiveIds.has(row.id))
-        .map((row) => row.id)
-      : [];
-    const line = 'taxonomy (' + globalIds.length + '): ' + taxonomyIds(globalIds) +
-      (projectIds.length ? ' | project: ' + taxonomyIds(projectIds) : '');
-    return Buffer.byteLength(line) <= MAX_TAXONOMY_BYTES ? line : '';
+    const header = 'YOUR EXECUTORS — delegate work AND investigation to them:';
+    const entries = store.getCategories({ project, includeDisabled: false }).map((category) => {
+      const route = store.resolveCategoryRoute(category);
+      return {
+        id: String(category.id || '').trim(),
+        route: `(${route.model}·${route.effort})`,
+        description: truncateText(category.description, MAX_WORKFORCE_DESCRIPTION),
+      };
+    });
+    const bytesFor = (lines) => Buffer.byteLength([header, ...lines].join('\n'));
+    const base = entries.map((entry) => `${entry.id} — ${entry.route}`);
+    if (bytesFor(base) > MAX_WORKFORCE_BYTES) return [header, ...base].join('\n');
+    const priority = new Set(['codebase-exploration', 'debugging', 'spike-investigation', 'deep-research', 'web-research']);
+    const preferred = [...entries.filter((entry) => priority.has(entry.id)), ...entries.filter((entry) => !priority.has(entry.id))];
+    const descriptions = new Map();
+    for (const entry of preferred) {
+      if (!entry.description) continue;
+      descriptions.set(entry.id, entry.description);
+      const lines = entries.map((candidate) => `${candidate.id} — ${descriptions.get(candidate.id) ? descriptions.get(candidate.id) + ' ' : ''}${candidate.route}`);
+      if (bytesFor(lines) > MAX_WORKFORCE_BYTES) descriptions.delete(entry.id);
+    }
+    return [header, ...entries.map((entry) => `${entry.id} — ${descriptions.get(entry.id) ? descriptions.get(entry.id) + ' ' : ''}${entry.route}`)].join('\n');
   } catch (_) {
     return '';
   }
 }
 
-function withTaxonomy(context) {
-  const line = taxonomyLine();
-  return line ? context + '\n' + line : context;
+function withWorkforce(context) {
+  const section = workforceSection();
+  return section ? context + '\n' + section : context;
 }
 
 // Returns the parsed stdin payload, or null if stdin was empty/unparseable.
@@ -112,7 +124,7 @@ function nudgeOff() {
 function emit(context, notice) {
   const output = notice ? context + '\n' + notice : context;
   process.stdout.write(
-    JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: withTaxonomy(output) } })
+    JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: withWorkforce(output) } })
   );
 }
 
@@ -142,7 +154,7 @@ function main() {
   if (source === 'compact' || source === 'resume') {
     emit(
       '=== sidequest (active — context restored) ===\n' +
-        'ROLE: ORCHESTRATOR. Reload Sidequest. REQUIRED: Substantive work needs a board ticket; fresh dispatch\'s exact token-gated executor and spawn. Every Agent launch must use that executor. Tiny lookup: Read, Glob, Grep, or WebFetch inline; tracing code across files needs a spike ticket. BLOCKED after allowance until a claim. Use mcp__plugin_sidequest_board__list with status=doing FIRST; CLI fallback: `' + cli + ' list --status doing`.\n' +
+        'ROLE: ORCHESTRATOR. You are the session\'s most expensive model; executors are cheaper. Offload execution and investigation by default, and read only to write better tickets. Reload Sidequest. REQUIRED: Substantive work needs a board ticket; fresh dispatch\'s exact token-gated executor and spawn. Every Agent launch must use that executor. Tiny lookup: Read, Glob, Grep, or WebFetch inline; tracing code across files needs a spike ticket. BLOCKED after allowance until a claim. Use mcp__plugin_sidequest_board__list with status=doing FIRST; CLI fallback: `' + cli + ' list --status doing`.\n' +
         'Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Denied: pulse + deny, ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop.\n' ,
       restartNotice
     );
@@ -151,7 +163,7 @@ function main() {
 
   emit(
     '=== sidequest (active) ===\n' +
-      'ROLE: you are this project\'s ORCHESTRATOR. Ticket, dispatch, integrate findings into further delegation. Executors execute/investigate; read only to write tickets.\n' +
+      'ROLE: you are this project\'s ORCHESTRATOR and the most expensive model in this session. Executors execute/investigate and are cheaper: offload execution and investigation by default; read only to write better tickets. Ticket, dispatch, integrate findings into further delegation.\n' +
       'Reload the Sidequest skill before acting. Plan multi-part: independently checkable ATOMIC tickets. ' +
       'Atomic = one change, investigation, spike, or review one agent checks. Split for parallelism; keep tightly coupled work together. ' +
       'Specs need exact anchors, contract, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. several deliverables on one ticket is a smell: use a ticketed planning investigation that pins the shared contract, a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest locally.\n' +

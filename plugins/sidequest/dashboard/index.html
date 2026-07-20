@@ -421,6 +421,7 @@
   .claimchip .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; box-shadow: 0 0 0 0 rgba(76,139,110,.5); animation: claimpulse 2s ease-out infinite; }
   .claimchip.stale { color: var(--text-faint); background: var(--panel-2); border-color: var(--line-soft); }
   .claimchip.stale .pulse { animation: none; }
+  .directchip { font-family: var(--mono); font-size: 10px; color: var(--gold-bright); background: var(--gold-soft); border: 1px solid var(--gold-line); padding: 2px 7px; border-radius: var(--radius-sm); white-space: nowrap; }
   @keyframes claimpulse { 0% { box-shadow: 0 0 0 0 rgba(76,139,110,.5); } 70%,100% { box-shadow: 0 0 0 5px rgba(76,139,110,0); } }
   /* A ticket assigned to a person; the human "you" gets the brand treatment. */
   .assignchip { font-family: var(--mono); font-size: 10px; color: var(--indigo); background: rgba(64,70,131,.08); border: 1px solid rgba(64,70,131,.3); padding: 2px 7px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 5px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2151,6 +2152,10 @@
         esc(t.claim.by) + '"><span class="pulse"></span>' + esc(t.claim.by) + (stale ? " (stale)" : "") + '</span>';
     }
 
+    var direct = t.directClaim && t.directClaim.reason
+      ? '<span class="directchip" title="direct claim: ' + esc(t.directClaim.reason) + '">direct</span>'
+      : "";
+
     var assign = "";
     if (t.assignee) {
       var mine = isMine(t);
@@ -2202,7 +2207,7 @@
       '<div class="top"><span class="ref">' + esc(t.ref) + '</span>' + badge + storyChip + categoryChip +
       '<span class="prio-tag" data-p="' + esc(t.priority) + '">' + esc(t.priority) + '</span></div>' +
       '<div class="title">' + esc(t.title) + '</div>' + desc + thumbs +
-      '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + modelChip + labels + filesChip + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
+      '<div class="foot">' + qChip + blockedChip + reminderChip + assign + claim + direct + modelChip + labels + filesChip + cmtCount + '<span class="time">' + relTime(t.updatedAt) + '</span></div>';
 
     c.addEventListener("click", function (e) { if (e.target.tagName === "IMG") { openLightbox(e.target.src); return; } openEditor(t); });
     c.addEventListener("keydown", function (e) { if (e.key === "Enter") openEditor(t); });

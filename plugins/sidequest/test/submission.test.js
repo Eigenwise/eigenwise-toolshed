@@ -157,7 +157,7 @@ test('brief and pulse surface a pending submission', () => {
 
 test('CLI: scoped commit excludes a foreign staged path and keeps it staged', () => {
   const t = addTicket('cli scoped commit', { files: ['lib/cli-scoped.js'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'scope-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'scope-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'cli-scoped.js'), 'scoped\n');
   fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'foreign\n');
@@ -176,7 +176,7 @@ test('board always-in-scope paths commit and submit without ticket declaration',
   cleanBranch();
   store.setBoardConfig(slug, { alwaysInScope: ['docs'] });
   const t = addTicket('always-in-scope docs', { files: ['lib/fixture.js'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'docs-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'docs-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
   fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'docs', 'guide.md'), 'guide\n');
   git(['add', 'docs/guide.md']);
@@ -198,7 +198,7 @@ test('board always-in-scope paths commit and submit without ticket declaration',
 test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence comment, publish queue lists it', () => {
   cleanBranch();
   const t = addTicket('cli submit round-trip');
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'cli-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'cli-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
 
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'submitted fixture\n');
@@ -225,7 +225,7 @@ test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence commen
   assert.ok(queue.tickets.some((x) => x.ref === t.ref));
 
   // done without integration is the orchestrator's call; the CLI still guards claims:
-  const reclaim = runCli(['claim', t.ref, '--by', 'other', '--direct']);
+  const reclaim = runCli(['claim', t.ref, '--by', 'other', '--direct', '--reason', 'The submission fixture needs an inline claim.']);
   assert.strictEqual(reclaim.status, 1);
   assert.match(reclaim.stdout, /READY_FOR_INTEGRATION/);
 
@@ -237,7 +237,7 @@ test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence commen
 test('CLI: submit rejects worktree-bound verify commands and preserves portable commands', () => {
   cleanBranch();
   const t = addTicket('worktree-bound verify command');
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'verify-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'verify-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
 
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'submitted fixture\n');
@@ -270,7 +270,7 @@ test('CLI: submit rejects worktree-bound verify commands and preserves portable 
 test('CLI: SQ-406-shaped two-commit submissions retain implementation and tests in order', () => {
   cleanBranch();
   const t = addTicket('SQ-406-shaped range', { files: ['lib', 'test'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'range-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'range-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
   fs.mkdirSync(path.join(PROJECT_DIR, 'test'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'implementation.js'), 'module.exports = true;\n');
@@ -294,7 +294,7 @@ test('CLI: SQ-406-shaped two-commit submissions retain implementation and tests 
 test('CLI: hidden out-of-scope path in the first range commit is refused', () => {
   cleanBranch();
   const t = addTicket('hidden first commit scope', { files: ['lib/allowed.js'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'scope-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'scope-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'foreign\n');
   git(['add', 'foreign.js']);
@@ -315,7 +315,7 @@ test('CLI: hidden out-of-scope path in the first range commit is refused', () =>
 test('CLI: unrelated durable-ref history is refused', () => {
   cleanBranch();
   const t = addTicket('unrelated submission', { files: ['lib/unrelated.js'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'unrelated-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'unrelated-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
   git(['checkout', '--orphan', `unrelated-${++branchSeq}`]);
   git(['rm', '-rf', '.']);
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
@@ -334,7 +334,7 @@ test('CLI: unrelated durable-ref history is refused', () => {
 test('CLI: a range containing another queued ticket commit is refused', () => {
   cleanBranch();
   const first = addTicket('first queued submission', { files: ['lib/first.js'] });
-  assert.strictEqual(runCli(['claim', first.ref, '--by', 'first-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', first.ref, '--by', 'first-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'first.js'), 'first\n');
   git(['add', 'lib/first.js']);
@@ -344,7 +344,7 @@ test('CLI: a range containing another queued ticket commit is refused', () => {
   assert.strictEqual(runCli(['submit', first.ref, '--by', 'first-worker', '--commit', firstTip]).status, 0);
 
   const second = addTicket('second includes first', { files: ['lib'] });
-  assert.strictEqual(runCli(['claim', second.ref, '--by', 'second-worker', '--direct']).status, 0);
+  assert.strictEqual(runCli(['claim', second.ref, '--by', 'second-worker', '--direct', '--reason', 'The submission fixture needs an inline claim.']).status, 0);
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'second.js'), 'second\n');
   git(['add', 'lib/second.js']);
   git(['commit', '-m', 'second ticket']);

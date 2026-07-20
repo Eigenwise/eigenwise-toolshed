@@ -8,9 +8,10 @@ const CLAIM_REFUSAL_MESSAGES = Object.freeze({
   busy: (ref) => `${ref} is temporarily locked by another claim attempt. Retry \`sidequest claim ${ref}\` in a moment.`,
   empty: () => 'No tickets are available on this board. Run \`sidequest ready\` to inspect the queue.',
   submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow, or use \`sidequest submit ${ref} --clear\` before re-claiming.`,
-  dispatch_required: (ref) => `${ref} is category-routed and has no prepared dispatch. Run \`sidequest dispatch ${ref}\` and spawn its returned executor, or for deliberate inline work use \`sidequest claim ${ref} --direct\` (MCP \`direct:true\`).`,
+  dispatch_required: (ref) => `${ref} is category-routed and has no prepared dispatch. File a spike for investigation when needed, then run \`sidequest dispatch ${ref}\` and spawn its returned executor. Inline is a justified exception: \`sidequest claim ${ref} --direct --reason "why no executor can do this"\` (MCP \`direct:true\` with \`reason\`).`,
   token: (ref) => `${ref} has a prepared dispatch whose token was missing or invalid. Re-run \`sidequest dispatch ${ref}\` and claim with its returned \`--token\` and \`--executor\`.`,
   executor_mismatch: (ref) => `${ref} has a prepared dispatch for a different executor. Re-run \`sidequest dispatch ${ref}\` and claim with its returned \`--executor\` and \`--token\`.`,
+  direct_reason_required: (ref) => `${ref} is category-routed. Dispatch and spawn its executor, including for investigations via a spike ticket. Inline is a justified exception: add \`--reason "why no executor can do this"\` (at least 20 characters) to \`sidequest claim ${ref} --direct\`, or pass MCP \`reason\`.`,
   direct_conflict: (ref) => `${ref} already has a prepared dispatch. Run \`sidequest dispatch ${ref}\` and spawn its returned executor with the current token.`,
   not_claimed: (ref) => `${ref} is not claimed by anyone. Run \`sidequest claim ${ref}\` before submitting.`,
   no_submission: (ref) => `${ref} has no submission to clear. Run \`sidequest submissions\` to inspect work awaiting integration.`,
@@ -22,7 +23,7 @@ function claimRefusalMessage(reason, ref, claim) {
 }
 
 function routingDisabledMessage(ref) {
-  return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`, or use \`sidequest claim ${ref} --direct\` for deliberate inline work.`;
+  return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; on routed work, inline is a justified exception: \`sidequest claim ${ref} --direct --reason "why no executor can do this"\`.`;
 }
 
 module.exports = { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, routingDisabledMessage };

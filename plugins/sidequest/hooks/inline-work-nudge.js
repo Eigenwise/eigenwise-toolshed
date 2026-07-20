@@ -108,11 +108,11 @@ function main() {
     state.substantiveActions += 1;
     if (!state.nudged && state.substantiveActions >= THRESHOLD) {
       state.nudged = true;
-      additionalContext = 'sidequest: REQUIRED: substantive work MUST use a ticket and dispatch, or claim --direct for deliberate inline work. 3 more substantive actions and Edit/Write/Bash will be BLOCKED until this session claims a ticket.';
+      additionalContext = 'sidequest: REQUIRED: substantive work MUST use a ticket and dispatch. Investigation is a spike ticket. Inline is a justified exception: claim --direct with a reason why no executor can do it. 3 more substantive actions and Edit/Write/Bash will be BLOCKED until this session claims a ticket.';
     } else if (state.nudged) {
       state.graceActions = (Number(state.graceActions) || 0) + 1;
       if (state.graceActions > GRACE_ACTIONS) {
-        denial = 'sidequest: BLOCKED: substantive inline work requires a board record. File + dispatch now (`add` → `dispatch <ref>`), or claim deliberate inline work (`claim <ref> --direct`; MCP: `direct:true`).';
+        denial = 'sidequest: BLOCKED: substantive inline work requires a board record. File + dispatch now (`add` → `dispatch <ref>`), including a spike for investigation. Inline is a justified exception: `claim <ref> --direct --reason "why no executor can do this"` (MCP: `direct:true` + `reason`).';
       }
     }
   }
@@ -121,7 +121,7 @@ function main() {
     state.readActions += 1;
     if (!state.readSpiralNudged && state.readActions >= READ_THRESHOLD) {
       state.readSpiralNudged = true;
-      additionalContext = 'sidequest: REQUIRED: cross-file tracing MUST use a spike ticket and dispatch, or claim --direct for deliberate inline work. Further substantive actions are BLOCKED after the inline-work allowance until this session claims a ticket.';
+      additionalContext = 'sidequest: REQUIRED: cross-file tracing MUST use a spike ticket and dispatch. Inline is a justified exception: claim --direct with a reason why no executor can do it. Further substantive actions are BLOCKED after the inline-work allowance until this session claims a ticket.';
     }
   }
   saveState(file, state);

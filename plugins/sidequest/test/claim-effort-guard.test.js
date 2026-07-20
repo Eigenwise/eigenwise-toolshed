@@ -135,14 +135,21 @@ test('an explicit direct claim records the bypass on no-file routed research wor
   const ref = cliJson(['add', '-t', 'research fixture', '--category', 'guard.claude']).ticket.ref;
   const before = ticket(ref);
   assert.deepEqual(before.files, []);
-  const claim = cliJson(['claim', ref, '--by', 'inline-worker', '--direct']);
+  const missingReasonResult = runCli(['claim', ref, '--by', 'inline-worker', '--direct', '--json']);
+  assert.equal(missingReasonResult.status, 1);
+  const missingReason = JSON.parse(missingReasonResult.stdout);
+  assert.equal(missingReason.reason, 'direct_reason_required');
+  const reason = 'No executor can access this isolated local fixture.';
+  const claim = cliJson(['claim', ref, '--by', 'inline-worker', '--direct', '--reason', reason]);
   assert.equal(claim.ticket.directClaim.model, before.model);
   assert.equal(claim.ticket.directClaim.effort, before.effort);
   const pulse = cliJson(['pulse', ref]);
   assert.equal(pulse.direct.by, 'inline-worker');
   assert.equal(pulse.direct.model, before.model);
+  assert.equal(pulse.direct.reason, reason);
   const brief = cliJson(['list', '--brief']).tickets.find((candidate) => candidate.ref === ref);
   assert.equal(brief.direct.by, 'inline-worker');
+  assert.equal(brief.direct.reason, reason);
 });
 
 test('instant dispatch targets the stable executor, gates the claim, and clears on done and release without deleting the stable def', () => {
@@ -280,7 +287,7 @@ test('an unavailable primary uses the category fallback effort for the guard', (
   const wrong = runCli(['claim', ref, '--by', 'w1', '--effort', 'high']);
   assert.notEqual(wrong.status, 0);
   assert.match(wrong.stdout + wrong.stderr, /sidequest-exec-medium/);
-  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct']).ok, true);
+  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct', '--reason', 'The fixture validates direct effort handling.']).ok, true);
 });
 
 test('a concrete Haiku category keeps its configured effort guard', () => {
@@ -290,5 +297,5 @@ test('a concrete Haiku category keeps its configured effort guard', () => {
   assert.equal(derived.effort, 'medium');
   const wrong = runCli(['claim', ref, '--by', 'w1', '--effort', 'high']);
   assert.notEqual(wrong.status, 0);
-  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct']).ok, true);
+  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct', '--reason', 'The fixture validates direct effort handling.']).ok, true);
 });
