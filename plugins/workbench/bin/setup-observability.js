@@ -26,7 +26,7 @@ const LOOPBACK = '127.0.0.1';
 const DEFAULT_PORTS = Object.freeze({ collector: 4318, observer: 14319, dashboard: 3000, dashboardOtlp: 14318 });
 const OBSERVER_PORT = DEFAULT_PORTS.observer;
 const COLLECTOR_PORT = DEFAULT_PORTS.collector;
-const STATUSLINE_MARKER = 'workbench-statusline.js';
+const STATUSLINE_SHIM = 'workbench-statusline.js';
 const MANAGED_DASHBOARD_CONTAINER = 'workbench-otel-lgtm';
 
 function managedPort(value, fallback, name) {
@@ -124,18 +124,74 @@ function writePrivateJson(filePath, value) {
   try { fs.chmodSync(path.dirname(filePath), 0o700); fs.chmodSync(filePath, 0o600); } catch {}
 }
 
+function statuslineShimPath(home = os.homedir()) {
+  return path.join(home, '.claude', STATUSLINE_SHIM);
+}
+
+function statuslineCommand(home = os.homedir()) {
+  return `node --no-warnings "${statuslineShimPath(home)}"`;
+}
+
+function managedStatuslineCommand(command, home = os.homedir()) {
+  return String(command || '') === statuslineCommand(home)
+    || /[\\/]plugins[\\/]cache[\\/]eigenwise-toolshed[\\/]workbench[\\/][^\\/]+[\\/]bin[\\/]workbench-statusline\.js/i.test(String(command || ''));
+}
+
+function statuslineShim() {
+  return `'use strict';
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+function compareVersions(left, right) {
+  const parts = (value) => String(value || '').split(/[^0-9]+/).map(Number);
+  const a = parts(left);
+  const b = parts(right);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function currentWorkbenchStatusline() {
+  const registryPath = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  const installs = registry.plugins?.['workbench@eigenwise-toolshed'] || [];
+  const candidates = installs
+    .filter((install) => install?.installPath)
+    .map((install) => ({ ...install, script: path.join(install.installPath, 'bin', 'workbench-statusline.js') }))
+    .filter((install) => fs.existsSync(install.script));
+  candidates.sort((left, right) => compareVersions(right.version, left.version)
+    || String(right.lastUpdated || '').localeCompare(String(left.lastUpdated || '')));
+  return candidates[0]?.script;
+}
+
+const script = currentWorkbenchStatusline();
+if (script) require(script).main();
+`;
+}
+
+function ensureStatuslineShim(home = os.homedir()) {
+  const filePath = statuslineShimPath(home);
+  const source = statuslineShim();
+  let current = null;
+  try { current = fs.readFileSync(filePath, 'utf8'); } catch {}
+  if (current !== source) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(filePath, source, { encoding: 'utf8', mode: 0o600 });
+  }
+  return filePath;
+}
+
 function mergeObservabilitySettings(settings, options = {}) {
   const next = structuredClone(settings || {});
-  const workbenchRoot = options.workbenchRoot || path.resolve(__dirname, '..');
-  const statuslineCommand = `node --no-warnings "${path.join(workbenchRoot, 'bin', 'workbench-statusline.js')}"`;
   const environment = { ...(next.env || {}) };
-  const existingStatusLine = next.statusLine || options.inheritedStatusLine;
+  const existingStatusLine = next.statusLine || options.inheritedStatusLine || options.userStatusLine;
 
-  if (!String(existingStatusLine?.command || '').includes(STATUSLINE_MARKER)) {
-    if (existingStatusLine?.type === 'command' && existingStatusLine.command) {
-      environment.WORKBENCH_STATUSLINE_RENDER = existingStatusLine.command;
-    }
-    next.statusLine = { type: 'command', command: statuslineCommand };
+  if (!existingStatusLine) {
+    next.statusLine = { type: 'command', command: statuslineCommand(options.home) };
   }
 
   next.env = { ...environment, ...observabilityEnvironment(options.ports) };
@@ -148,7 +204,7 @@ function removeObservabilitySettings(settings, options = {}) {
   const previousStatusline = environment.WORKBENCH_STATUSLINE_RENDER;
   for (const name of [...Object.keys(OBSERVABILITY_ENV), 'WORKBENCH_STATUSLINE_RENDER']) delete environment[name];
 
-  if (String(next.statusLine?.command || '').includes(STATUSLINE_MARKER)) {
+  if (managedStatuslineCommand(next.statusLine?.command, options.home)) {
     if (previousStatusline && previousStatusline !== options.inheritedStatuslineCommand) {
       next.statusLine = { ...next.statusLine, type: 'command', command: previousStatusline };
     } else {
@@ -168,6 +224,10 @@ function legacyProjectSettingsPath(projectDir) {
   return path.join(projectDir, '.claude', 'settings.json');
 }
 
+function userSettingsPath(home = os.homedir()) {
+  return path.join(home, '.claude', 'settings.json');
+}
+
 function updateSettingsFile(filePath, transform) {
   if (!fs.existsSync(filePath)) return { changed: false, settings: {} };
   const before = readJson(filePath);
@@ -178,26 +238,43 @@ function updateSettingsFile(filePath, transform) {
 }
 
 function applySettings(projectDir, options = {}) {
-  const legacy = updateSettingsFile(legacyProjectSettingsPath(projectDir), removeObservabilitySettings);
+  const legacy = updateSettingsFile(legacyProjectSettingsPath(projectDir), (settings) => removeObservabilitySettings(settings, options));
   const settingsPath = projectSettingsPath(projectDir);
   const before = readJson(settingsPath);
+  const userStatusLine = readJson(options.userSettingsPath || userSettingsPath(options.home)).statusLine;
+  const existingStatusLine = before.statusLine || legacy.settings.statusLine || userStatusLine;
   const after = mergeObservabilitySettings(before, {
     ...options,
     inheritedStatusLine: legacy.settings.statusLine,
+    userStatusLine,
   });
   const changed = JSON.stringify(before) !== JSON.stringify(after);
-  if (changed) writePrivateJson(settingsPath, after);
-  return { settingsPath, changed, migratedLegacy: legacy.changed, settings: after };
+  const statusLineInstalled = !existingStatusLine && Boolean(after.statusLine);
+  if (changed) {
+    if (statusLineInstalled) ensureStatuslineShim(options.home);
+    writePrivateJson(settingsPath, after);
+  }
+  return {
+    settingsPath,
+    changed,
+    migratedLegacy: legacy.changed,
+    settings: after,
+    statusLine: {
+      installed: statusLineInstalled,
+      existing: existingStatusLine?.command,
+      command: statuslineCommand(options.home),
+    },
+  };
 }
 
-function removeSettings(projectDir) {
+function removeSettings(projectDir, options = {}) {
   const legacyPath = legacyProjectSettingsPath(projectDir);
-  const legacy = { filePath: legacyPath, ...updateSettingsFile(legacyPath, removeObservabilitySettings) };
+  const legacy = { filePath: legacyPath, ...updateSettingsFile(legacyPath, (settings) => removeObservabilitySettings(settings, options)) };
   const inheritedStatuslineCommand = legacy.settings.statusLine?.command;
   const localPath = projectSettingsPath(projectDir);
   const local = {
     filePath: localPath,
-    ...updateSettingsFile(localPath, (settings) => removeObservabilitySettings(settings, { inheritedStatuslineCommand })),
+    ...updateSettingsFile(localPath, (settings) => removeObservabilitySettings(settings, { ...options, inheritedStatuslineCommand })),
   };
   const results = [local, legacy];
   return { changed: results.some((result) => result.changed), files: results };
@@ -435,7 +512,7 @@ async function setupObservability(options = {}) {
       });
     }
     const projects = [...new Set([...before.observability.projects, plan.projectDir])];
-    const projectSettings = projects.map((projectDir) => ({ projectDir, ...removeSettings(projectDir) }));
+    const projectSettings = projects.map((projectDir) => ({ projectDir, ...removeSettings(projectDir, options) }));
     const settings = { changed: projectSettings.some((result) => result.changed), projects: projectSettings };
     if (options.deleteData) deleteLocalObservabilityData(plan.dataDir);
     writeObservabilityConfig(plan.observabilityConfig, config);
@@ -587,6 +664,9 @@ async function main() {
     return;
   }
   process.stdout.write(`Observability is prepared in ${result.dataDir}.\n`);
+  if (result.settings.statusLine?.existing) {
+    process.stdout.write(`Status line left unchanged: ${result.settings.statusLine.existing}. Workbench would use: ${result.settings.statusLine.command}.\n`);
+  }
   process.stdout.write(`Downstream sink: ${result.sink.id}.\n`);
   process.stdout.write(verificationGuidance(result.config.observability.ports));
   if (result.dashboardSkipped) {
@@ -615,6 +695,7 @@ module.exports = {
   dockerAvailable,
   downloadCollector,
   ensureCollectorConfig,
+  ensureStatuslineShim,
   mergeObservabilitySettings,
   normalizeManagedConfig,
   observabilityEnvironment,
@@ -628,6 +709,9 @@ module.exports = {
   setupObservability,
   setupPlan,
   startLgtm,
+  statuslineCommand,
+  statuslineShimPath,
+  userSettingsPath,
   verificationGuidance,
   verifyCommand,
 };

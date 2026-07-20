@@ -44,7 +44,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/setup-observability.js" --project "<absolute-pro
 
 `--lgtm` remains a compatibility alias for `--dashboard`; use dashboard language with users. The private config also supports `otlp` and reserves `posthog`. A user who explicitly asks for generic OTLP must set the HTTPS base endpoint and any headers under `observability.sinks.otlp`; secrets do not belong in project settings or command arguments.
 
-The helper checksum-verifies the pinned Collector, writes loopback-only config, stores consent plus sink/dashboard/ports in the single private `observability.json`, preserves existing project settings, and wraps an existing status-line renderer. Workbench's hooks already capture metadata-only lifecycle events, so never hand-write duplicate hook entries.
+The helper checksum-verifies the pinned Collector, writes loopback-only config, stores consent plus sink/dashboard/ports in the single private `observability.json`, and preserves existing project or user status-line settings. When no status line exists, it installs a stable `~/.claude/workbench-statusline.js` shim that resolves the current Workbench cache entry at runtime. Workbench's hooks already capture metadata-only lifecycle events, so never hand-write duplicate hook entries.
 
 After consent, every startup/resume launches a fail-open background ensure pass. It restores the observer and Collector when their configured ports are quiet, adopts or heals the configured dashboard container when Docker is present, and refreshes managed runtime files after a Workbench update. The observer drains its spool and downstream outbox continuously. Users do not start these processes manually.
 

@@ -176,4 +176,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { buildStatuslineObservations, formatRateLimitStatus, renderPassthrough, renderStatusline };
+module.exports = { buildStatuslineObservations, formatRateLimitStatus, main, renderPassthrough, renderStatusline };

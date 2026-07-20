@@ -115,6 +115,39 @@ test('check mode skips updates but runs gateway doctor', () => withRegistry(regi
   assert.equal(calls[0].args.at(-1), 'doctor');
 }));
 
+test('heals stale Workbench status line pins after updating', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-statusline-'));
+  try {
+    const registryFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+    const settingsFile = path.join(home, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(registryFile), { recursive: true });
+    const workbenchCache = path.join(home, 'cache', 'workbench', '0.30.0');
+    fs.mkdirSync(path.join(workbenchCache, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(workbenchCache, 'bin', 'workbench-statusline.js'), 'module.exports = { main() {} };');
+    const configuredRegistry = structuredClone(registry);
+    configuredRegistry.plugins['workbench@eigenwise-toolshed'] = [{ scope: 'user', version: '0.30.0', installPath: workbenchCache }];
+    fs.writeFileSync(registryFile, JSON.stringify(configuredRegistry));
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      statusLine: { type: 'command', command: 'node "C:/Users/example/.claude/plugins/cache/eigenwise-toolshed/workbench/0.20.0/bin/workbench-statusline.js"' },
+    }));
+
+    const result = runUpdate({
+      home,
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false },
+      run: () => ({ ok: true }),
+      report: () => {},
+    });
+
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.equal(result.healedStatuslines.length, 1);
+    assert.equal(settings.statusLine.command, `node --no-warnings "${path.join(home, '.claude', 'workbench-statusline.js')}"`);
+    assert.ok(fs.existsSync(path.join(home, '.claude', 'workbench-statusline.js')));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('continues after failures and returns every failed operation', () => withRegistry(registry, (registryFile) => {
   const failed = runUpdate({
     registryFile,

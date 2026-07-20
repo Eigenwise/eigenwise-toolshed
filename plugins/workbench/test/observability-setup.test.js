@@ -59,7 +59,7 @@ test('prints copy-pasteable observer verification guidance', () => {
   );
 });
 
-test('merges safe local OTLP settings and wraps an existing status line', () => {
+test('merges safe local OTLP settings without replacing an existing status line', () => {
   const settings = mergeObservabilitySettings({
     env: { KEEP_ME: 'yes' },
     hooks: { SessionEnd: [{ hooks: [{ type: 'command', command: 'existing-hook' }] }] },
@@ -67,9 +67,9 @@ test('merges safe local OTLP settings and wraps an existing status line', () => 
   }, { workbenchRoot: 'C:/Workbench' });
 
   assert.equal(settings.env.KEEP_ME, 'yes');
-  assert.equal(settings.env.WORKBENCH_STATUSLINE_RENDER, 'node custom-statusline.js');
+  assert.equal(settings.env.WORKBENCH_STATUSLINE_RENDER, undefined);
   assert.deepEqual(Object.fromEntries(Object.entries(settings.env).filter(([key]) => key in OBSERVABILITY_ENV)), OBSERVABILITY_ENV);
-  assert.match(settings.statusLine.command, /workbench-statusline\.js/);
+  assert.equal(settings.statusLine.command, 'node custom-statusline.js');
   assert.deepEqual(settings.hooks, { SessionEnd: [{ hooks: [{ type: 'command', command: 'existing-hook' }] }] });
 });
 
@@ -97,12 +97,46 @@ test('preserves existing project settings when applying the setup', () => {
     assert.equal(projectSettings.permissions.allow[0], 'Read');
     assert.equal(projectSettings.statusLine.command, 'node inherited-statusline.js');
     assert.match(result.settingsPath, /settings\.local\.json$/);
-    assert.match(result.settings.statusLine.command, /workbench-statusline\.js/);
-    assert.equal(result.settings.env.WORKBENCH_STATUSLINE_RENDER, 'node inherited-statusline.js');
+    assert.equal(result.settings.statusLine, undefined);
+    assert.equal(result.settings.env.WORKBENCH_STATUSLINE_RENDER, undefined);
     removeSettings(directory);
     const cleanedLocal = JSON.parse(fs.readFileSync(result.settingsPath, 'utf8'));
     assert.equal(cleanedLocal.statusLine, undefined);
     assert.equal(projectSettings.statusLine.command, 'node inherited-statusline.js');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('installs a stable status line shim when none is configured', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-statusline-shim-'));
+  try {
+    const result = applySettings(path.join(directory, 'project'), { home: directory });
+    const shimPath = path.join(directory, '.claude', 'workbench-statusline.js');
+
+    assert.equal(result.settings.statusLine.command, `node --no-warnings "${shimPath}"`);
+    assert.match(fs.readFileSync(shimPath, 'utf8'), /installed_plugins\.json/);
+    assert.doesNotMatch(result.settings.statusLine.command, /plugins[\\/]cache/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('leaves an existing user status line untouched', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-user-statusline-'));
+  try {
+    const projectDir = path.join(directory, 'project');
+    const userSettings = path.join(directory, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(userSettings), { recursive: true });
+    fs.writeFileSync(userSettings, JSON.stringify({ statusLine: { type: 'command', command: 'node user-statusline.js' } }));
+
+    const result = applySettings(projectDir, { home: directory });
+    const projectSettings = JSON.parse(fs.readFileSync(result.settingsPath, 'utf8'));
+    const savedUserSettings = JSON.parse(fs.readFileSync(userSettings, 'utf8'));
+
+    assert.equal(savedUserSettings.statusLine.command, 'node user-statusline.js');
+    assert.equal(projectSettings.statusLine, undefined);
+    assert.equal(result.statusLine.existing, 'node user-statusline.js');
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -232,7 +266,7 @@ test('uses dashboard language, keeps the lgtm alias, and defaults bare setup fro
   assert.throws(() => parseArgs(['--dashboard', '--sink', 'otlp']), /cannot be combined/);
 });
 
-test('removes only Workbench settings and restores a wrapped status line', () => {
+test('removes only Workbench settings without changing a status line', () => {
   const configured = mergeObservabilitySettings({
     env: { KEEP_ME: 'yes' },
     statusLine: { type: 'command', command: 'node custom-statusline.js' },
