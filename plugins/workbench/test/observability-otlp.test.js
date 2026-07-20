@@ -98,6 +98,19 @@ test('MCP connection and hook execution events map their activity facets', () =>
   assert.equal(hook.measurements.find((measurement) => measurement.name === 'duration_ms').value, 12);
 });
 
+test('hook and MCP metadata facets stay in the canonical schema', () => {
+  const body = {
+    resourceLogs: [{ resource: { attributes: [] }, scopeLogs: [{ logRecords: [
+      { timeUnixNano: NANO, eventName: 'hook_execution_start', attributes: attrs({ hook_name: 'observability', hook_event: 'PreToolUse', plugin_name: 'workbench', mcp_server: 'sidequest' }) },
+      { timeUnixNano: NANO, eventName: 'mcp_server_connection', attributes: attrs({ mcp_server: 'sidequest', plugin_name: 'sidequest', status: 'ok' }) },
+      { timeUnixNano: NANO, eventName: 'claude_code.tool_result', attributes: attrs({ tool_name: 'mcp__sidequest__list', mcp_server: 'sidequest', plugin_name: 'sidequest', status: 'ok' }) },
+    ] }] }],
+  };
+  const observations = otlpToObservations('logs', body);
+  accept(observations);
+  assert.equal(observations.some((observation) => observation.event_name === 'schema_drop'), false);
+  assert.equal(observations.find((observation) => observation.event_name === 'claude_code.hook_execution_start').attributes.plugin_name, 'workbench');
+});
 test('an unmapped log event name becomes an explicit coverage gap, never a guess', () => {
   const body = {
     resourceLogs: [{ resource: { attributes: [] }, scopeLogs: [{ logRecords: [{ timeUnixNano: NANO, eventName: 'vendor.custom.thing', attributes: [] }] }] }],

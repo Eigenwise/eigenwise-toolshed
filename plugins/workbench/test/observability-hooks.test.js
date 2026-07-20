@@ -38,6 +38,27 @@ test('every mapped hook event yields an acceptable canonical observation', () =>
   }
 });
 
+test('every mapped hook event ingests without schema drops', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-hook-schema-'));
+  const store = openObservabilityStore(path.join(dir, 'observability.db'), { outboxEnabled: false });
+  t.after(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const payloads = [
+    { hook_event_name: 'SessionStart', session_id: 'session-1', permission_mode: 'default', effort: 'medium' },
+    { hook_event_name: 'SessionEnd', session_id: 'session-1', reason: 'logout' },
+    { hook_event_name: 'UserPromptSubmit', session_id: 'session-1', permission_mode: 'acceptEdits' },
+    { hook_event_name: 'PreToolUse', session_id: 'session-1', tool_name: 'mcp__server__read', permission_mode: 'default' },
+    { hook_event_name: 'PostToolUse', session_id: 'session-1', tool_name: 'mcp__server__read', status: 'ok' },
+    { hook_event_name: 'Stop', session_id: 'session-1', reason: 'end_turn' },
+    { hook_event_name: 'SubagentStart', session_id: 'session-1', agent_type: 'worker', model: 'claude-test', effort: 'high' },
+    { hook_event_name: 'SubagentStop', session_id: 'session-1', agent_type: 'worker', model: 'claude-test', effort: 'high', status: 'completed' },
+    { hook_event_name: 'TaskCompleted', session_id: 'session-1', task_status: 'completed' },
+  ];
+  for (const payload of payloads) store.ingest(buildObservation(payload, NOW));
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
+});
 test('session start emits the project basename and cwd hash, never the path itself', () => {
   const cwd = 'C:\\dev\\eigenwise-public\\eigenwise-toolshed';
   const observation = buildObservation({
