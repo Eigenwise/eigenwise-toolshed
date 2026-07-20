@@ -9,7 +9,7 @@ Workbench handles workspace setup, plugin updates, local health checks, observab
 /plugin install workbench@eigenwise-toolshed --scope user
 ```
 
-Reload Claude Code after installing. From a project directory, run `/workbench:init-workspace`. The interview chooses the project plugins and writes the `.claude/` configuration. The reload boundary matters because Claude Code discovers plugin skills and hooks when a session starts.
+Reload Claude Code after installing. From a project directory, run `/workbench:init-workspace`. Setup starts with telemetry consent before it inspects the project. If you opt in, Workbench configures and verifies local telemetry, then stops so you can restart Claude Code and run `/workbench:init-workspace` again; the completed telemetry setup is remembered on re-entry. If you decline, it moves straight to a plugin picker built from the current Toolshed marketplace catalog, before project assessment. It then assesses the project, interviews you about the setup, installs the selected plugins, and writes the `.claude/` configuration. The reload boundary matters because Claude Code discovers plugin skills and hooks when a session starts.
 
 At session start, Workbench can tell you when the loaded Workbench version is behind the installed version. Run `/reload-plugins` to pick up the installed version, or restart Claude Code if reload does not work. It can also report Toolshed updates available from its cached marketplace data. That cached signal is not a live network check: run `/update-toolshed`, then `/reload-plugins` to refresh the plugins and load them in the current session.
 
