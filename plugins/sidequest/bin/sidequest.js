@@ -607,7 +607,7 @@ function sessionId(opts) {
 
 function reportClaimFailure(action, idOrRef, res, meta) {
   process.exitCode = 1;
-  console.log(`✗ ${res.message || claimRefusalMessage(res.reason, idOrRef, res.claim)}`);
+  console.log(`✗ ${res.message || claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim)}`);
 }
 
 // An executor is spawned as `sidequest-exec-<effort>`, its effort baked into the
@@ -731,7 +731,7 @@ function cmdClaim(opts, positional) {
   const warnings = res.ok ? claimPlanningWarnings(res.ticket, meta.path) : [];
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });
-    if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.claim);
+    if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim);
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
     return;
@@ -1079,7 +1079,7 @@ function cmdNext(opts) {
   if (!validateModelFilter('next', opts)) return;
   const by = workerId(opts);
   const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, direct: !!opts.direct, reason: opts.reason, source: opts.source || 'cli', sessionId: sessionId(opts) });
-  if (!res.ok && res.reason) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || 'next ticket', res.claim);
+  if (!res.ok && res.reason) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || 'next ticket', res.ticket || res.claim);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
