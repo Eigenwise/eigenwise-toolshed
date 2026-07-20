@@ -107,8 +107,11 @@ test('MCP: list/ready with brief:true return the compact shape', () => {
   }
 });
 
-test('MCP: waves are refs with and without brief (one shape per field)', () => {
-  const full = callTool('ready', {});
+test('MCP: ready defaults compact; brief:false keeps ref waves with full tickets', () => {
+  const brief = callTool('ready', {});
+  for (const ticket of brief.tickets) assert.deepStrictEqual(Object.keys(ticket).sort(), BRIEF_KEYS);
+
+  const full = callTool('ready', { brief: false });
   for (const wave of full.waves) {
     for (const r of wave) {
       assert.strictEqual(typeof r, 'string', 'non-brief waves must also be refs, not ticket objects');

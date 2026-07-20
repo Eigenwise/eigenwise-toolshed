@@ -198,7 +198,7 @@ function requireKnownModel(action, value) {
  *  content block. A thrown Error becomes an isError tool result the model reads.
  * ------------------------------------------------------------------ */
 
-const PROJECT_PROP = { type: 'string', description: 'Board (default: current project).' };
+const PROJECT_PROP = { type: 'string', description: 'Board (current project).' };
 const MODEL_FILTER_PROP = { type: 'string', description: 'Filter by resolved model slug.' };
 
 const TOOL_DESCRIPTION_OVERRIDES = {
@@ -268,16 +268,6 @@ function closeDispatchExecutor(ticket) {
   if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
 }
 
-function categoryEcho(ticket) {
-  if (!ticket || !ticket.category) return null;
-  return {
-    id: ticket.category.id,
-    name: ticket.category.name,
-    description: ticket.category.description,
-    route: { model: ticket.model, effort: ticket.effort, executor: ticket.exec && ticket.exec.agent },
-  };
-}
-
 function mutationAck(project, result, changed) {
   const ticket = result.ticket;
   const out = { ok: !!result.ok, project };
@@ -289,6 +279,49 @@ function mutationAck(project, result, changed) {
     return out;
   }
   return Object.assign(out, changed || {});
+}
+
+function compactComment(comment) {
+  return {
+    id: comment.id,
+    at: comment.at,
+    by: comment.by,
+    kind: comment.kind,
+    body: comment.body,
+  };
+}
+
+function categoryListEntry(category, localRow, ticketCount, full) {
+  if (!full) {
+    return {
+      id: category.id,
+      name: category.name,
+      description: category.description,
+      enabled: category.enabled,
+    };
+  }
+  return Object.assign({}, category, {
+    origin: localRow ? (localRow.kind === 'ADD' ? 'project' : category.linkState) : 'global',
+    localRow: localRow ? { id: localRow.id, kind: localRow.kind } : null,
+    ticketCount,
+  });
+}
+
+function compactPulse(pulse) {
+  return {
+    ref: pulse.ref,
+    status: pulse.status,
+    claim: pulse.claim,
+    working: pulse.working,
+    lastActivityAt: pulse.lastActivityAt,
+    lastComment: pulse.lastComment,
+    dispatch: pulse.dispatch && {
+      state: pulse.dispatch.state,
+      executor: pulse.dispatch.executor,
+      agentName: pulse.dispatch.agentName,
+      outcome: pulse.dispatch.outcome,
+    },
+  };
 }
 
 function requiredText(args, key, action) {
@@ -324,19 +357,6 @@ function verifyEmbedsWorktreeRoot(verify, root) {
     offset = comparableCommand.indexOf(comparableRoot, offset + comparableRoot.length);
   }
   return false;
-}
-
-function changedTicketFields(ticket, args) {
-  const fields = {};
-  for (const key of ['title', 'description', 'priority', 'labels', 'files', 'complexity']) {
-    if (args[key] !== undefined) fields[key] = ticket[key];
-  }
-  if (args.anchors !== undefined) fields.anchors = ticket.executorAnchors;
-  if (args.verify !== undefined) fields.verify = ticket.executorVerify;
-  if (args.story !== undefined) fields.storyId = ticket.storyId;
-  if (args.category !== undefined) fields.categoryId = ticket.categoryId;
-  if (args.why !== undefined) fields.why = ticket.complexityWhy;
-  return fields;
 }
 
 function withoutCategories(payload) {
@@ -389,7 +409,8 @@ const TOOLS = [
       properties: {
         project: PROJECT_PROP,
         ref: { type: 'string', description: 'Ticket ref or id.' },
-        detail: { type: 'boolean', description: 'Include full dispatch lifecycle (timestamps, attempts, session).' },
+        detail: { type: 'boolean', description: 'Legacy alias for full.' },
+        full: { type: 'boolean', description: 'Include submission, git, and full dispatch lifecycle.' },
       },
       required: ['ref'],
     },
@@ -397,14 +418,8 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const pulse = store.pulsePayload(slug, args.ref);
       if (!pulse) throw new Error(`pulse: no ticket "${args.ref}" in ${meta.name}`);
-      const out = Object.assign({ project: slug, projectName: meta.name }, withoutCategories(pulse));
-      if (!args.detail && out.dispatch) {
-        const d = out.dispatch;
-        out.dispatch = { state: d.state, executor: d.executor, agentName: d.agentName, tokenPrefix: d.tokenPrefix, route: d.route, outcome: d.outcome };
-        if (d.recovery) out.dispatch.recovery = d.recovery;
-        if (Array.isArray(d.attempts) && d.attempts.length) out.dispatch.attempts = d.attempts.length;
-      }
-      return out;
+      const payload = (args.full || args.detail) ? withoutCategories(pulse) : compactPulse(pulse);
+      return Object.assign({ project: slug }, payload);
     },
   },
   {
@@ -437,7 +452,7 @@ const TOOLS = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       requireKnownModelFilter('ready', args.model);
-      const payload = store.readyPayload(slug, { model: args.model, category: args.category, brief: args.brief });
+      const payload = store.readyPayload(slug, { model: args.model, category: args.category, brief: args.brief !== false });
       return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(payload));
     },
   },
@@ -493,11 +508,9 @@ const TOOLS = [
         source: 'mcp',
       });
       const ticket = store.getTicket(slug, created.ref) || created;
-      const changed = { title: ticket.title, category: categoryEcho(ticket) };
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
       if (category && !categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
-      if (warnings.length) changed.warnings = warnings;
-      return mutationAck(slug, { ok: true, ticket }, changed);
+      return mutationAck(slug, { ok: true, ticket }, warnings.length ? { warnings } : null);
     },
   },
   {
@@ -549,12 +562,9 @@ const TOOLS = [
       const updated = store.updateTicket(slug, args.ref, patch);
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
-      const changed = changedTicketFields(t, args);
-      if (args.category !== undefined) changed.category = categoryEcho(t);
       const warnings = store.ticketReferenceWarnings(slug, t.title, t.description);
       if (patch.category && !categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
-      if (warnings.length) changed.warnings = warnings;
-      return mutationAck(slug, { ok: true, ticket: t }, changed);
+      return mutationAck(slug, { ok: true, ticket: t }, warnings.length ? { warnings } : null);
     },
   },
   {
@@ -574,13 +584,13 @@ const TOOLS = [
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
       if (ticket.claim && ticket.claim.by && !store.isClaimStale(ticket.claim) && !args.force) {
-        return { ok: false, project: slug, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
+        return { ok: false, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
       }
-      const removed = { ref: ticket.ref, title: ticket.title };
+      const ref = ticket.ref;
       if (!store.deleteTicket(slug, ticket.id)) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
       }
-      return { ok: true, project: slug, removed, ref: removed.ref, title: removed.title };
+      return { ok: true, ref };
     },
   },
   {
@@ -596,7 +606,10 @@ const TOOLS = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      if (args.done) return Object.assign({ project: slug }, store.archiveAllDone(slug, { source: 'mcp' }));
+      if (args.done) {
+        const result = store.archiveAllDone(slug, { source: 'mcp' });
+        return { ok: result.ok, archived: result.archived.length };
+      }
       const ref = requiredText(args, 'ref', 'archive');
       const result = store.archiveTicket(slug, ref, { source: 'mcp' });
       if (!result.ok) throw new Error(`archive: no ticket "${ref}" on ${meta.name}.`);
@@ -641,10 +654,10 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'claim');
       const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token, !!args.direct);
-      if (drift) return Object.assign({ ok: false, project: slug }, drift);
+      if (drift) return Object.assign({ ok: false }, drift);
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
       if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim);
-      return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
+      return mutationAck(slug, res);
     },
   },
   {
@@ -682,7 +695,7 @@ const TOOLS = [
       requireKnownModelFilter('next', args.model);
       const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, direct: !!args.direct, reason: args.reason, source: 'mcp', sessionId: sessionOf(args) });
       if (!res.ok) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || 'next ticket', res.ticket || res.claim);
-      return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
+      return mutationAck(slug, res);
     },
   },
   {
@@ -707,7 +720,7 @@ const TOOLS = [
       const ticket = store.getTicket(slug, args.ref);
       const res = store.completeTicket(slug, args.ref, by, { source: 'mcp', model: args.model, effort: args.effort, sessionId: sessionOf(args) });
       if (res.ok) closeDispatchExecutor(ticket);
-      return mutationAck(slug, res, res.ok ? { workedBy: res.ticket.workedBy } : null);
+      return mutationAck(slug, res);
     },
   },
   {
@@ -774,12 +787,7 @@ const TOOLS = [
         const comment = store.addComment(slug, ticket.ref, { by, body, kind: 'comment', source: 'mcp' });
         if (!comment.ok) throw new Error(`commit: committed ${ticket.ref}, but couldn't record out-of-scope paths: ${comment.reason}`);
       }
-      return mutationAck(slug, { ok: true, ticket }, {
-        commit: result.commit,
-        paths: result.paths,
-        missingScopes: result.missingScopes,
-        unscopedPaths: result.unscopedPaths,
-      });
+      return mutationAck(slug, { ok: true, ticket }, { commit: result.commit });
     },
   },
   {
@@ -854,7 +862,7 @@ const TOOLS = [
         if (!comment.ok) throw new Error(`submit: recorded ${ticket.ref}, but could not add evidence comment: ${comment.reason}`);
       }
       if (res.ok) closeDispatchExecutor(ticket);
-      return mutationAck(slug, res, res.ok ? { submission: res.ticket.submission } : null);
+      return mutationAck(slug, res);
     },
   },
   {
@@ -890,14 +898,15 @@ const TOOLS = [
     description: 'Read a ticket\'s full comment thread BEFORE working it.',
     inputSchema: {
       type: 'object',
-      properties: { ref: { type: 'string' }, project: PROJECT_PROP },
+      properties: { ref: { type: 'string' }, project: PROJECT_PROP, full: { type: 'boolean', description: 'Include source metadata for diagnostics.' } },
       required: ['ref'],
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const t = store.getTicket(slug, args.ref);
       if (!t) throw new Error(`comments: no ticket "${args.ref}".`);
-      return { project: slug, ref: t.ref, comments: t.comments || [], needsResponse: store.needsResponse(t) };
+      const comments = args.full ? (t.comments || []) : (t.comments || []).map(compactComment);
+      return { ref: t.ref, comments, needsResponse: store.needsResponse(t) };
     },
   },
   {
@@ -960,6 +969,7 @@ const TOOLS = [
         ref: { type: 'string' },
         project: PROJECT_PROP,
         sharedTree: { type: 'boolean', description: 'Use shared state or leave an explicitly marked artifact.' },
+        full: { type: 'boolean', description: 'Include token, executor, warnings, and recovery details.' },
       },
       required: ['ref'],
     },
@@ -972,6 +982,15 @@ const TOOLS = [
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
       const agent = prepared.ticket.dispatchExecutor;
+      const spawn = agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt, agentsync.spawnDescription(prepared.ticket, resolved));
+      if (!args.full) {
+        return {
+          ref: prepared.ticket.ref,
+          effort: prepared.ticket.effort,
+          runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
+          spawn,
+        };
+      }
       return {
         project: slug,
         projectPath: meta.path,
@@ -984,7 +1003,7 @@ const TOOLS = [
         token: prepared.token,
         recovery: prepared.recovery || null,
         warnings: store.dispatchWarnings(prepared.ticket),
-        spawn: agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt, agentsync.spawnDescription(prepared.ticket, resolved)),
+        spawn,
         guidance: prepared.recovery
           ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
           : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
@@ -1061,7 +1080,7 @@ const TOOLS = [
   {
     name: 'category_list',
     description: 'List the project\'s ticket categories with their shared/forked/pinned/disabled provenance.',
-    inputSchema: { type: 'object', properties: { project: PROJECT_PROP, global: { type: 'boolean', description: 'Show global-only policy instead of the resolved project taxonomy.' } } },
+    inputSchema: { type: 'object', properties: { project: PROJECT_PROP, global: { type: 'boolean', description: 'Show global-only policy instead of the resolved project taxonomy.' }, full: { type: 'boolean', description: 'Include routing, contract, and project provenance.' } } },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const projectScope = !args.global;
@@ -1069,11 +1088,17 @@ const TOOLS = [
       const layer = projectScope ? store.getProjectCategories(slug) : { rows: [], warnings: [] };
       const categories = store.getCategories(projectScope ? { project: slug, withState: true } : undefined).map((category) => {
         const localRow = layer.rows.find((row) => row.id === category.id) || null;
-        return Object.assign({}, category, { origin: localRow ? (localRow.kind === 'ADD' ? 'project' : category.linkState) : 'global', localRow, ticketCount: usage(category.id) });
+        return categoryListEntry(category, localRow, usage(category.id), !!args.full);
       });
-      for (const localRow of layer.rows.filter((row) => row.kind === 'DISABLE')) categories.push({ id: localRow.id, origin: 'disabled', localRow, effective: null, ticketCount: usage(localRow.id) });
+      if (args.full) {
+        for (const localRow of layer.rows.filter((row) => row.kind === 'DISABLE')) {
+          categories.push({ id: localRow.id, origin: 'disabled', localRow: { id: localRow.id, kind: localRow.kind }, effective: null, ticketCount: usage(localRow.id) });
+        }
+      }
       categoryListServed = true;
-      return { project: slug, projectName: meta.name, categories, warnings: layer.warnings };
+      return args.full
+        ? { project: slug, projectName: meta.name, categories, warnings: layer.warnings }
+        : { categories };
     },
   },
   {
