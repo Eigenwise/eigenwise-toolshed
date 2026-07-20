@@ -36,6 +36,7 @@ const db = require('./db.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
+const { routingDisabledMessage } = require('./refusal-guidance.js');
 
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
 
@@ -1811,7 +1812,7 @@ function expiredPreparedDispatch(state, now) {
 
 function prepareDispatch(slug, idOrRef, opts) {
   opts = opts || {};
-  if (!projectRoutingEnabled(slug)) throw new Error('routing disabled on this board');
+  if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   return withTicketLock(slug, found.id, () => {

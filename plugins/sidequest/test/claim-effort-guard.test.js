@@ -106,7 +106,10 @@ test('a category-routed claim requires a prepared token even with its resolved e
   const derived = ticket(ref);
   const rejected = runCli(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', derived.exec.agent, '--json']);
   assert.notEqual(rejected.status, 0);
-  assert.equal(JSON.parse(rejected.stdout).reason, 'dispatch_required');
+  const payload = JSON.parse(rejected.stdout);
+  assert.equal(payload.reason, 'dispatch_required');
+  assert.match(payload.message, /dispatch/i);
+  assert.match(payload.message, /--direct/i);
   assert.equal(ticket(ref).status, 'todo');
   const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, ref);
   const claim = cliJson(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', derived.exec.agent, '--token', prepared.token]);

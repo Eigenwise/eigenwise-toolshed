@@ -713,6 +713,8 @@ test('MCP blocks no-dispatch routed claims and records an explicit direct resear
   const refused = callTool('claim', { ref: added.ref, by: 'mcp-routed', effort: ticket.effort, executor: ticket.exec.agent });
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'dispatch_required');
+  assert.match(refused.message, /dispatch/i);
+  assert.match(refused.message, /direct:true/i);
   const direct = callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true });
   assert.strictEqual(direct.ok, true);
   const pulse = callTool('pulse', { ref: added.ref });

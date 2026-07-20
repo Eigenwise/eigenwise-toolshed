@@ -28,6 +28,7 @@ const store = require('./store');
 const work = require('./work');
 const agentsync = require('./agentsync');
 const commitScope = require('./commit-scope');
+const { claimRefusalMessage } = require('./refusal-guidance');
 
 const SERVER_NAME = 'sidequest';
 // The latest MCP protocol revision we implement. In `initialize` we echo the
@@ -133,7 +134,7 @@ function effortDrift(slug, idOrRef, claimedEffort) {
     derivedModel: t.model,
     derivedEffort,
     claimedEffort: claimed,
-    message: `${t.ref} resolves to ${t.model}·${derivedEffort} — spawn ${execName}, not an exec-${claimed}. Claim refused.`,
+    message: `${t.ref} resolves to ${t.model}·${derivedEffort}, but ${claimed} was requested. Run sidequest dispatch ${t.ref}, then spawn ${execName}.`,
   };
 }
 
@@ -147,7 +148,7 @@ function executorDrift(slug, idOrRef, claimedEffort, executorName, token, direct
       reason: 'executor_mismatch', ref: t.ref,
       derivedModel: t.model, derivedEffort: t.effort,
       executor: executorName || null, expectedExecutor: t.dispatchExecutor,
-      message: `${t.ref} has a prepared dispatch and requires ${t.dispatchExecutor} with its token. Claim refused.`,
+      message: `${t.ref} has a prepared dispatch for ${t.dispatchExecutor}, not ${executorName || 'this executor'}. Re-run sidequest dispatch ${t.ref} and claim with its returned executor and token.`,
     };
   }
   if (t && t.dispatchNonce && token === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
@@ -158,7 +159,7 @@ function executorDrift(slug, idOrRef, claimedEffort, executorName, token, direct
     reason: 'executor_mismatch', ref: t.ref,
     derivedModel: t.model, derivedEffort: t.effort, backend: t.exec.backend,
     runsLabel: t.exec.runsLabel, executor: executorName, expectedExecutor: t.exec.agent,
-    message: `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Spawn ${t.exec.agent} or use Sidequest dispatch. Claim refused.`,
+    message: `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Run sidequest dispatch ${t.ref}, then spawn ${t.exec.agent}.`,
   };
 }
 
@@ -626,6 +627,7 @@ const TOOLS = [
       const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token, !!args.direct);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
+      if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.claim);
       return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
     },
   },

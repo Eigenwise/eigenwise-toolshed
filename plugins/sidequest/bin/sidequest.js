@@ -31,6 +31,7 @@ const store = require('../lib/store');
 const agentsync = require('../lib/agentsync');
 const work = require('../lib/work');
 const commitScope = require('../lib/commit-scope');
+const { claimRefusalMessage } = require('../lib/refusal-guidance');
 
 /* ------------------------------------------------------------------ *
  *  Arg parsing
@@ -584,21 +585,7 @@ function sessionId(opts) {
 
 function reportClaimFailure(action, idOrRef, res, meta) {
   process.exitCode = 1;
-  const c = res.claim || {};
-  const messages = {
-    not_found: `${idOrRef} no longer exists on ${meta.name} — nothing to ${action}.`,
-    done: `${idOrRef} is already done — skip it.`,
-    claimed: `${idOrRef} is already claimed by "${c.by}" (since ${c.at}). Do NOT work it.`,
-    not_owner: `${idOrRef} is claimed by "${c.by}", not you — use --force only if you are certain.`,
-    busy: `${idOrRef} is locked by another claim right now — retry in a moment.`,
-    empty: `no available tickets in ${meta.name}.`,
-    submitted: `${idOrRef} is READY_FOR_INTEGRATION (submitted commit awaiting the publish transaction) — integrate it, or clear the submission before re-claiming.`,
-    dispatch_required: `${idOrRef} is category-routed and must be prepared with sidequest dispatch before an executor can claim it. Use --direct only for an intentional inline bypass.`,
-    direct_conflict: `${idOrRef} already has a prepared dispatch. Claim it with that token and executor, or release and re-plan before using --direct.`,
-    not_claimed: `${idOrRef} is not claimed by anyone — claim it before submitting (a submit is the terminal act of a claimed run).`,
-    no_submission: `${idOrRef} has no submission to clear.`,
-  };
-  console.log(`✗ ${messages[res.reason] || action + ' failed: ' + res.reason}`);
+  console.log(`✗ ${res.message || claimRefusalMessage(res.reason, idOrRef, res.claim)}`);
 }
 
 // An executor is spawned as `sidequest-exec-<effort>`, its effort baked into the
@@ -629,7 +616,7 @@ function effortDriftReason(slug, idOrRef, claimedEffort) {
     claimedEffort: claimed,
     message:
       `${t.ref} resolves to ${t.model}·${derivedEffort}, but you claimed as ${claimed} effort. ` +
-      `Spawn ${execName}${modelHint} instead. Not claimed: the ticket stays free for the matching executor.`,
+      `Run sidequest dispatch ${t.ref}, then spawn ${execName}${modelHint}. The ticket remains free for that executor.`,
   };
 }
 
@@ -663,7 +650,7 @@ function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token, 
     return {
       reason: 'token',
       ref: t.ref,
-      message: `${t.ref}'s dispatch was superseded by a newer preparation. Re-run sidequest dispatch and use its returned token.`,
+      message: `${t.ref}'s dispatch was superseded by a newer preparation. Re-run sidequest dispatch ${t.ref} and use its returned token.`,
     };
   }
   if (t && t.dispatchNonce && token === t.dispatchNonce && executorName !== t.dispatchExecutor) {
@@ -674,7 +661,7 @@ function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token, 
       derivedEffort: t.effort,
       executor: executorName || null,
       expectedExecutor: t.dispatchExecutor,
-      message: `${t.ref} has a prepared dispatch and requires ${t.dispatchExecutor} with its token. Claim refused.`,
+      message: `${t.ref} has a prepared dispatch for ${t.dispatchExecutor}, not ${executorName || 'this executor'}. Re-run sidequest dispatch ${t.ref} and claim with its returned executor and token.`,
     };
   }
   if (t && t.dispatchNonce && token === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
@@ -692,7 +679,7 @@ function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token, 
     expectedExecutor: expected,
     message:
       `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. ` +
-      `Spawn ${expected} or use sidequest dispatch instead. Not claimed: the ticket stays free for the authoritative runtime.`,
+      `Run sidequest dispatch ${t.ref}, then spawn ${expected}. The ticket remains free for the authoritative runtime.`,
   };
 }
 
@@ -721,7 +708,9 @@ function cmdClaim(opts, positional) {
   const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts) });
   const warnings = res.ok ? claimPlanningWarnings(res.ticket, meta.path) : [];
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, { warnings }), null, 2) + '\n');
+    const payload = Object.assign({ project: slug }, res, { warnings });
+    if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.claim);
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
     return;
   }

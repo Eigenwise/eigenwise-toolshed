@@ -74,7 +74,7 @@ test('routing-disabled board rejects dispatch but preserves direct claims and ol
   const ticket = store.createTicket(slug, { title: 'direct only', category: 'coding.easy' });
   assert.equal(store.listProjects().find((project) => project.slug === slug).routing, 'enabled');
   assert.equal(store.setProjectRouting(slug, 'disabled').routing, 'disabled');
-  assert.throws(() => store.prepareDispatch(slug, ticket.ref), /routing disabled on this board/);
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref), /sidequest routing enabled/);
   const claim = store.claimTicket(slug, ticket.ref, 'inline-worker', { direct: true });
   assert.equal(claim.ok, true);
 });
