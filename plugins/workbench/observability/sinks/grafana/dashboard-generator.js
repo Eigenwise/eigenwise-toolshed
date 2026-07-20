@@ -33,7 +33,10 @@ function projectMatchers(projects, kind) {
 }
 
 function filterPrometheus(expression, projects) {
-  const matcher = `project_id${projectMatchers(projects, 'project_id')}`;
+  // The claude_code metrics carry the sanitized project BASENAME in their
+  // project_id label (OTEL_RESOURCE_ATTRIBUTES project.id), not the registry's
+  // sha256 project_id — matching on the hash starves every panel.
+  const matcher = `project_id${projectMatchers(projects, 'project_name')}`;
   const filtered = expression.replace(/project_id=~"\$project"/g, matcher);
   if (filtered.includes('claude_code_') && !filtered.includes(matcher)) {
     throw new Error(`Dashboard query is missing its project filter: ${expression}`);

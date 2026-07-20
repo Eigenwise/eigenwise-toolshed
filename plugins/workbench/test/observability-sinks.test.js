@@ -161,7 +161,11 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   const regularExpressions = regularPanels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   assert.ok(regularExpressions.every((expression) => !expression.includes('$project')));
   for (const expression of regularExpressions.filter((expression) => expression.includes('claude_code_'))) {
-    assert.match(expression, /project_id=~"a{64}\|b{64}"/);
+    // The metric's project_id label carries the sanitized basename (OTel
+    // resource attribute), never the registry's sha256 — matching hashes
+    // starved every claude_code panel.
+    assert.match(expression, /project_id=~"atlas\|beacon"/);
+    assert.doesNotMatch(expression, /[0-9a-f]{64}/);
   }
   for (const expression of regularExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name=~"atlas\|beacon"/);
@@ -175,7 +179,8 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   const atlas = dashboards.find(({ dashboard }) => dashboard.title === 'Claude Code — atlas').dashboard;
   const atlasExpressions = atlas.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   for (const expression of atlasExpressions.filter((expression) => expression.includes('claude_code_'))) {
-    assert.match(expression, /project_id="a{64}"/);
+    assert.match(expression, /project_id="atlas"/);
+    assert.doesNotMatch(expression, /[0-9a-f]{64}/);
   }
   for (const expression of atlasExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name="atlas"/);
