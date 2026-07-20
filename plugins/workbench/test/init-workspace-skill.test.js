@@ -65,6 +65,17 @@ test('init-workspace starts with telemetry consent, project intent, then the liv
   assert.doesNotMatch(skill, /1\. \*\*What is this project and who is it for\?\*\*/);
 });
 
+test('init-workspace keeps CLAUDE.md and live rules as complementary defaults', () => {
+  assert.match(skill, /Recommend a lightweight static one seeded through `\/init`/);
+  assert.match(skill, /Either answer keeps the live-rules plan/);
+  assert.match(skill, /CLAUDE\.md holds always-loaded project context;\s+live rules handle conditional behavioral enforcement/);
+  assert.match(skill, /Recommend a lightweight `CLAUDE\.md` alongside live rules/);
+  assert.match(skill, /They have separate jobs: `CLAUDE\.md` is the\nalways-loaded, static project context/);
+  assert.match(skill, /Live rules are conditional, targeted behavioral enforcement that gets injected when applicable/);
+  assert.match(skill, /One does\nnot replace the other; together they are the default setup/);
+  assert.doesNotMatch(skill, /rely on live rules instead/i);
+});
+
 test('catalog has reproducible current plugin sources and LSP checks', () => {
   assert.match(catalog, /`typescript-lsp@claude-plugins-official`/);
   assert.match(catalog, /`typescript-language-server --version`/);

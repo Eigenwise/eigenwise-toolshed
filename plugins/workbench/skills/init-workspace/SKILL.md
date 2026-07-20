@@ -138,7 +138,7 @@ recite):
    `CONTRIBUTING` or style doc to point a rule at, house preferences).
 4. **Stack extras** — recommend only missing catalog plugins that fit the confirmed project. Keep the
    picker selection unless the user changes it; do not repeat the broad Toolshed plugin question.
-5. **CLAUDE.md?** Do they want one seeded (you'll delegate to `/init`), or skip it?
+5. **CLAUDE.md?** Recommend a lightweight static one seeded through `/init`; they can skip it for now if they prefer. Either answer keeps the live-rules plan. CLAUDE.md holds always-loaded project context; live rules handle conditional behavioral enforcement.
 
 Use the `AskUserQuestion` tool for the choices with clear options (stack extras, codebase-or-not,
 `CLAUDE.md` yes/no); ask the open ones (what is this, conventions) in plain text. If the user said
@@ -231,11 +231,16 @@ codebase this is light (the map will cover structure); for greenfield it's a rea
 
 ### 2e. `CLAUDE.md` (optional)
 
-If the user wanted one, **delegate to the built-in `/init`** rather than hand-rolling it. Note the
+Recommend a lightweight `CLAUDE.md` alongside live rules. They have separate jobs: `CLAUDE.md` is the
+always-loaded, static project context — what the project is, its stack, and its build and test commands.
+Live rules are conditional, targeted behavioral enforcement that gets injected when applicable. One does
+not replace the other; together they are the default setup.
+
+If the user wants `CLAUDE.md`, **delegate to the built-in `/init`** rather than hand-rolling it. Note the
 deliberate exception: every other toolshed plugin says never touch `CLAUDE.md`, because their hooks
 handle injection. `init-workspace` is the one-time static setup, so seeding `CLAUDE.md` here is correct,
-and the self-improvement loop is explicitly allowed to update it later. Say this out loud so it
-doesn't read as breaking the house rule.
+and the self-improvement loop is explicitly allowed to update it later. Say this out loud so it doesn't
+read as breaking the house rule.
 
 ## Phase 3 — Reload boundary
 
