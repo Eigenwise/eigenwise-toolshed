@@ -56,7 +56,7 @@
     },
     {
       "id": 1,
-      "title": "Total tokens",
+      "title": "Fresh input (uncached)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -95,15 +95,15 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))",
+          "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range]))",
           "instant": true
         }
       ],
-      "description": "Exact Prometheus token-counter increase over the selected range. Matches the Tokens total in Usage by project."
+      "description": "Fresh input after prompt-cache hits. Every request replays its full context, but cache reads serve most of it."
     },
     {
       "id": 2,
-      "title": "Input tokens",
+      "title": "Cache reads (billed at 10%)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -142,15 +142,15 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range]))",
+          "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range]))",
           "instant": true
         }
       ],
-      "description": "Exact Prometheus input-token counter increase over the selected range."
+      "description": "Previously seen context served from the prompt cache. It still counts as context volume, but API-equivalent pricing is 0.1× fresh input."
     },
     {
       "id": 3,
-      "title": "Output tokens",
+      "title": "Output (priced about 5× input)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -193,11 +193,11 @@
           "instant": true
         }
       ],
-      "description": "Exact Prometheus output-token counter increase over the selected range."
+      "description": "New model output. API-equivalent output pricing is roughly five times fresh-input pricing, depending on the model."
     },
     {
       "id": 4,
-      "title": "Cost (USD)",
+      "title": "Cost (USD, burn proxy)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -241,7 +241,22 @@
           "instant": true
         }
       ],
-      "description": "Exact Prometheus cost-counter increase over the selected range. Matches the Cost total in Usage by project."
+      "description": "Reported API-equivalent cost over the selected range. This is the closest available proxy for subscription-window burn; raw token volume overstates it because cache reads are discounted."
+    },
+    {
+      "id": 30,
+      "title": "How tokens become cost",
+      "type": "text",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Every request replays its full context** (conversation, system prompt, and tools). Context volume = fresh input + cache reads + cache creation, so fresh input is naturally small. **Cost is a weighted sum:** input × 1.0, cache creation × 1.25, cache reads × 0.1, and output × about 5. **USD cost is the best proxy for subscription-window burn** because cheap cache reads dominate raw token totals."
+      }
     },
     {
       "id": 5,
@@ -253,7 +268,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 8,
         "w": 12,
         "h": 8
       },
@@ -295,6 +310,85 @@
       ]
     },
     {
+      "id": 31,
+      "title": "Cost over time, by token type",
+      "description": "Approximate cost allocation: each interval’s reported USD cost is split by input × 1.0, cache reads × 0.1, cache creation × 1.25, and output × 5.0. The four series add up to reported cost; per-model price differences stay in that reported total.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "fresh input",
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval])) or vector(0)) * (sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)))"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "cache reads",
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval])) or vector(0)) * (0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)))"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "cache creation",
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval])) or vector(0)) * (1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)))"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "legendFormat": "output",
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval])) or vector(0)) * (5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)))"
+        }
+      ]
+    },
+    {
       "id": 6,
       "title": "Tokens over time, by model",
       "description": "Full input context volume by resolved gateway model. Adding per-type vectors would drop models missing a type (Codex has no cache measurements), so this tracks context_tokens, present on every record.",
@@ -304,8 +398,8 @@
         "uid": "loki"
       },
       "gridPos": {
-        "x": 12,
-        "y": 5,
+        "x": 0,
+        "y": 16,
         "w": 12,
         "h": 8
       },
@@ -350,15 +444,15 @@
     },
     {
       "id": 7,
-      "title": "Cost over time",
+      "title": "Cost over time, by project",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
-        "y": 13,
+        "x": 12,
+        "y": 16,
         "w": 12,
         "h": 8
       },
@@ -402,8 +496,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 13,
+        "x": 0,
+        "y": 24,
         "w": 12,
         "h": 8
       },
@@ -481,9 +575,9 @@
         "uid": "loki"
       },
       "gridPos": {
-        "x": 0,
-        "y": 21,
-        "w": 24,
+        "x": 12,
+        "y": 24,
+        "w": 12,
         "h": 6
       },
       "options": {
@@ -532,7 +626,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 30,
         "w": 24,
         "h": 7
       },
@@ -579,7 +673,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 34,
+        "y": 37,
         "w": 24,
         "h": 1
       },
@@ -596,7 +690,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 38,
         "w": 12,
         "h": 8
       },
@@ -664,7 +758,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 35,
+        "y": 38,
         "w": 6,
         "h": 4
       },
@@ -726,7 +820,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 35,
+        "y": 38,
         "w": 6,
         "h": 4
       },
@@ -775,7 +869,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 39,
+        "y": 42,
         "w": 12,
         "h": 8
       },
@@ -823,7 +917,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 47,
+        "y": 50,
         "w": 24,
         "h": 1
       },
@@ -840,7 +934,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 51,
         "w": 12,
         "h": 8
       },
@@ -914,7 +1008,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 48,
+        "y": 51,
         "w": 12,
         "h": 8
       },
@@ -936,7 +1030,7 @@
           },
           "queryType": "instant",
           "instant": true,
-          "expr": "sum by (workbench_attribute_mcp_server) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.mcp.footprint\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$__range]))",
+          "expr": "avg by (workbench_attribute_mcp_server) (avg_over_time({service_name=\"workbench-observer\"} |= \"gateway.mcp.footprint\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$__range]))",
           "legendFormat": "{{workbench_attribute_mcp_server}}"
         }
       ],
@@ -966,7 +1060,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 59,
         "w": 24,
         "h": 8
       },
@@ -1041,7 +1135,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 67,
         "w": 24,
         "h": 6
       },
@@ -1090,7 +1184,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 70,
+        "y": 73,
         "w": 24,
         "h": 1
       },
@@ -1107,7 +1201,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 71,
+        "y": 74,
         "w": 12,
         "h": 8
       },
@@ -1159,7 +1253,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 71,
+        "y": 74,
         "w": 12,
         "h": 8
       },
@@ -1213,7 +1307,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 79,
+        "y": 82,
         "w": 12,
         "h": 8
       },
@@ -1265,7 +1359,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 79,
+        "y": 82,
         "w": 12,
         "h": 8
       },
@@ -1314,7 +1408,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 87,
+        "y": 90,
         "w": 24,
         "h": 1
       },
@@ -1331,7 +1425,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 88,
+        "y": 91,
         "w": 12,
         "h": 8
       },
@@ -1421,7 +1515,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 88,
+        "y": 91,
         "w": 12,
         "h": 8
       },
@@ -1493,7 +1587,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 96,
+        "y": 99,
         "w": 24,
         "h": 8
       },
@@ -1539,7 +1633,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 104,
+        "y": 107,
         "w": 24,
         "h": 1
       },
@@ -1556,7 +1650,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 105,
+        "y": 108,
         "w": 24,
         "h": 9
       },

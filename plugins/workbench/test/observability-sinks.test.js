@@ -247,13 +247,34 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     assert.equal(row.collapsed, false);
   }
   for (const title of [
-    'Tokens over time, by type', 'Tokens over time, by model', 'Models in use', 'Token volume by backend',
+    'Tokens over time, by type', 'Cost over time, by token type', 'Tokens over time, by model', 'Models in use', 'Token volume by backend',
     'Tool activity by name', 'MCP activity by server / tool', 'MCP definition footprint by server',
     'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
     'Hook execution activity / failures', 'Subagent lifecycle activity',
     'Ticket dispatch usage and route drift',
   ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
+
+  for (const title of [
+    'Fresh input (uncached)', 'Cache reads (billed at 10%)',
+    'Output (priced about 5× input)', 'Cost (USD, burn proxy)',
+  ]) assert.equal(byTitle.get(title)?.type, 'stat', `missing explanatory stat: ${title}`);
+  const tokenModel = byTitle.get('How tokens become cost');
+  assert.equal(tokenModel?.type, 'text');
+  assert.match(tokenModel.options.content, /Context volume = fresh input \+ cache reads \+ cache creation/);
+  assert.match(tokenModel.options.content, /cache reads × 0\.1/);
+  const tokenByType = byTitle.get('Tokens over time, by type');
+  const costByType = byTitle.get('Cost over time, by token type');
+  assert.equal(costByType.fieldConfig.defaults.unit, 'currencyUSD');
+  assert.equal(costByType.gridPos.y, tokenByType.gridPos.y);
+  assert.equal(costByType.gridPos.x, tokenByType.gridPos.x + tokenByType.gridPos.w);
+  assert.equal(costByType.gridPos.h, tokenByType.gridPos.h);
+  assert.match(costByType.description, /Approximate cost allocation/);
+  assert.deepEqual(costByType.targets.map(({ legendFormat }) => legendFormat), ['fresh input', 'cache reads', 'cache creation', 'output']);
+  for (const target of costByType.targets) {
+    assert.match(target.expr, /or vector\(0\)/);
+    assert.match(target.expr, /claude_code_cost_usage_USD_total/);
+  }
   const toolDurationP95 = byTitle.get('Tool activity duration p95');
   assert.equal(toolDurationP95.targets[0].expr, 'quantile_over_time(0.95, {service_name="workbench-observer"} |= "hook.post_tool_use" | unwrap workbench_measurement_duration_ms_value [$__range]) by ()');
   for (const title of ['Tool activity by name', 'MCP activity by server / tool']) {
@@ -269,6 +290,8 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.match(definitionPanel.targets[0].expr, /gateway\.mcp\.footprint/);
   assert.match(definitionPanel.targets[0].expr, /workbench_attribute_mcp_server/);
   assert.match(definitionPanel.targets[0].expr, /workbench_measurement_input_mcp_tools_tokens_value/);
+  assert.match(definitionPanel.targets[0].expr, /avg_over_time/);
+  assert.doesNotMatch(definitionPanel.targets[0].expr, /sum_over_time/);
   assert.doesNotMatch(definitionPanel.targets[0].expr, /plugin_sidequest_board|plugin_playwright_playwright/);
   assert.match(definitionPanel.description, /new servers appear automatically/i);
   assert.ok(definitionPanel.transformations.some(({ id }) => id === 'organize'));
