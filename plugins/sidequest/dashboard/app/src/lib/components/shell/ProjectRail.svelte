@@ -32,6 +32,11 @@
     return Number(project.unread ?? project.unseen ?? 0);
   }
 
+  function projectLocation(path?: string) {
+    if (!path) return '';
+    return path.split(/[\\/]+/).filter(Boolean).slice(-2).join(' / ');
+  }
+
   async function refreshArchivedProjects() {
     try {
       board.archivedProjects = (await board.api.archivedProjects()).projects;
@@ -82,7 +87,7 @@
       {@const projectCounts = counts(project)}
       <button class:active={board.selectedProject === project.slug && board.view === 'board'} onclick={() => board.selectProject(project.slug)} oncontextmenu={(event) => showMenu(event, project)}>
         <span class="project-row"><b>{project.name}</b>{#if project.notify === false}<span class="muted" title="Notifications muted">muted</span>{/if}{#if unread(project)}<mark>{unread(project) > 99 ? '99+' : unread(project)}</mark>{/if}<small>{total}</small></span>
-        <span class="project-path" title={project.path}>{project.path}</span>
+        <span class="project-path" title={project.path}>{projectLocation(project.path)}</span>
         <span class="progress" aria-hidden="true"><i style:--size={`${projectCounts.todo}`} class="todo"></i><i style:--size={`${projectCounts.doing}`} class="doing"></i><i style:--size={`${projectCounts.done}`} class="done"></i></span>
       </button>
     {/each}
