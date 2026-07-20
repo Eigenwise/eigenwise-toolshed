@@ -69,14 +69,71 @@ Get the lay of the land first, then pick a path:
 
 Then branch:
 
-- **Existing project with real code → full mapping.** Continue with Steps 1–8.
-- **Greenfield (empty repo, scaffold only, or just a spec/README) → seed mapping.** Jump to the
-  **Greenfield projects** section below, then do Step 8.
-- **Large codebase (hundreds+ of source files) → parallelize.** See **Large codebases** below,
-  then Steps 7–8.
+- **Existing project with real code → use the Sidequest handoff below when it is available.** Its
+  artifact writer performs Steps 1–8; otherwise continue inline with Steps 1–8.
+- **Greenfield (empty repo, scaffold only, or just a spec/README) → seed mapping inline.** Jump to the
+  **Greenfield projects** section below, then do Step 8. Do not file a mapping ticket for this.
+- **Large codebase (hundreds+ of source files) → use the large-repo story below when Sidequest is
+  available.** Otherwise parallelize inline as described there, then complete Steps 7–8.
 
 Also check today's actual date (it's provided in the session context, or run `date`) so the
 "Last Updated" stamps are real, not placeholders.
+
+### Sidequest handoff for an existing project
+
+Inspect the session tool roster before doing mapping reads. The handoff is available only when the
+normal native `Agent` tool and Sidequest's `category_list`, `add`, `comment`, `dispatch`, and `pulse`
+tools are present. Do not probe the Sidequest CLI or dashboard. Read the live `codebase-exploration`
+category with `category_list`; delegate only when it is enabled and its live contract permits one
+bounded documentation-artifact write. The required contract language is that project source remains
+read-only while a ticket may explicitly name one bounded documentation artifact directory as its only
+write scope.
+
+- When the tools are absent, continue inline without an error banner.
+- When Sidequest is present but the category is missing, disabled, or still says `no edits`, continue
+  inline and tell the user: `Sidequest is loaded, but its live taxonomy cannot accept map artifacts yet.`
+- When the category is ready, create one artifact ticket for a small or medium initial map. Use category
+  `codebase-exploration`, `files: [".claude/.codebase-info/"]`, and this exact carve-out:
+  `Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.`
+
+Record the starting `HEAD` (or `null` outside Git) and the initial working-tree status outside
+`.claude/.codebase-info/` in the ticket. Its deliverable is warranted atomic docs, a compact linked
+`INDEX.md`, and a final `.map-state.json` with exact document hashes. Tell the writer to inspect the
+current shared tree; skip generated, vendor, and secret material; verify every cited path; never touch
+`CLAUDE.md`; and never invoke `map-codebase` again or create nested mapping tickets. Include this
+lifecycle marker verbatim:
+
+```text
+Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.
+```
+
+Before dispatch, post this reason as a ticket comment:
+
+```text
+Shared-tree dispatch is required because the map must describe the current working tree, including intentional uncommitted source, and the generated .claude/.codebase-info/** files must remain visible to the invoking session.
+```
+
+Dispatch with `{ sharedTree: true }`. Pass every returned spawn field to the native `Agent` unchanged.
+Then end the turn and resume only on the native completion notification. Do not poll or start a proxy
+waiter. Do not make concurrent project edits while the writer owns the shared tree.
+
+On completion, read the ticket evidence and verify `INDEX.md`, changed paths, and state/hash consistency
+without repeating the codebase reading. Run:
+
+```text
+node -e "const fs=require('node:fs'),c=require('node:crypto'),p='.claude/.codebase-info/',s=JSON.parse(fs.readFileSync(p+'.map-state.json','utf8'));if(!Array.isArray(s.documents))throw Error('documents');for(const n of new Set(['INDEX.md',...s.documents])){const b=fs.readFileSync(p+n);if(!s.hashes||s.hashes[n]!==c.createHash('sha256').update(b).digest('hex'))throw Error(n)}"
+```
+
+Require the writer's evidence to name cited-path checks, docs created/updated/removed, and confirmation
+that `CLAUDE.md` is untouched. If source moved during mapping, the writer reconciles once or releases
+rather than certifying a mixed snapshot.
+
+For an add, dispatch, spawn, or executor failure, inspect `pulse` and the ticket thread first. Make at
+most one diagnose-first redispatch, only when that diagnosis changes the launch and no live claim
+remains. After a second failure, record the evidence on the ticket, make sure no writer owns the claim,
+and complete the map inline in this same shared tree. Validate or repair any partial map before replacing
+state, comment that the ticket completed through inline fallback, and give the user one short line naming
+the delegation failure and inline fallback.
 
 ### Step 1 — Identify the stack
 
@@ -177,13 +234,18 @@ A brand-new or empty project has little to map yet — so seed the map with *int
 
 ## Large codebases
 
-For hundreds or thousands of source files, don't try to read everything serially:
+For hundreds or thousands of source files, do not try to read everything serially:
 
-- Map the top-level structure first, then **fan out exploration in parallel** using the Task tool —
-  e.g., one subagent per major area (`apps/web`, `services/api`, `packages/core`) or per document,
-  each returning a concise structured summary. Consolidate their reports into the atomic docs.
-- Favor breadth over exhaustive depth: capture each area's purpose, entry points, and key files
-  rather than every file. The map is a guide, not a mirror.
+- When the Sidequest preflight is ready, create one `codebase-exploration` story with read-only area
+  tickets, then one final artifact-writer ticket depending on them. Area tickets report concise paths,
+  symbols, entry points, and flows in their ticket threads. They do not write the map. The final writer
+  reads those threads, reconciles them against the shared tree, and uses the same artifact scope,
+  carve-out, lifecycle marker, shared-tree reason, and verification as an initial-map ticket. Do not
+  create nested generic tasks.
+- When Sidequest is unavailable, map the areas inline in the invoking session. Keep the same bounded
+  pass over top-level structure and major flows rather than starting nested generic tasks.
+- Favor breadth over exhaustive depth: capture each area's purpose, entry points, and key files rather
+  than every file. The map is a guide, not a mirror.
 - If you must sample rather than cover everything, say so in the relevant doc.
 
 ## Guidelines

@@ -45,6 +45,65 @@ find . -type f -newer .claude/.codebase-info/INDEX.md \
   -not -path '*/dist/*' -not -path '*/build/*' -not -path '*/target/*' -not -path '*/.venv/*'
 ```
 
+### Step 2a — Decide whether to hand off
+
+A true no-op stays inline: report that no documented behavior, structure, interface, dependency, or
+convention changed, then leave the map alone. Do not create a ticket merely to refresh timestamps or
+state.
+
+For a meaningful refresh, inspect the session tool roster before reading further. The handoff requires
+the native `Agent` tool plus Sidequest `category_list`, `add`, `comment`, `dispatch`, and `pulse`. Do not
+probe the Sidequest CLI or dashboard. Read the live `codebase-exploration` category and hand off only
+when it is enabled and its contract permits one bounded documentation-artifact write while keeping
+project source read-only.
+
+- When the tools are absent, continue inline without an error banner.
+- When Sidequest is present but the category is missing, disabled, or still read-only, continue inline
+  and say: `Sidequest is loaded, but its live taxonomy cannot accept map artifacts yet.`
+- When it is ready, create one `codebase-exploration` artifact ticket with
+  `files: [".claude/.codebase-info/"]` and this exact clause:
+  `Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.`
+
+The incremental ticket records the stored `gitCommit`, current `HEAD`, initial dirty-source status
+outside `.claude/.codebase-info/`, and the current map document list. Its writer diffs from stored state
+through the visible working tree, reassesses the warranted docs, preserves intentional manual map edits,
+touches only affected docs, and replaces `.map-state.json` last. It must inspect the shared tree, verify
+every cited path, skip generated/vendor/secret material, never touch `CLAUDE.md`, and never invoke
+`map-codebase` or create nested mapping tickets. Include this lifecycle marker verbatim:
+
+```text
+Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.
+```
+
+Before dispatch, comment this reason:
+
+```text
+Shared-tree dispatch is required because the map must describe the current working tree, including intentional uncommitted source, and the generated .claude/.codebase-info/** files must remain visible to the invoking session.
+```
+
+Dispatch with `{ sharedTree: true }`, pass returned spawn fields to the native `Agent` unchanged, then
+end the turn. Resume only on native completion, never by polling or a proxy waiter. Do not make
+concurrent project edits while the writer owns the shared tree.
+
+On completion, inspect the ticket evidence and verify `INDEX.md`, changed paths, and hashes without
+redoing the codebase reading:
+
+```text
+node -e "const fs=require('node:fs'),c=require('node:crypto'),p='.claude/.codebase-info/',s=JSON.parse(fs.readFileSync(p+'.map-state.json','utf8'));if(!Array.isArray(s.documents))throw Error('documents');for(const n of new Set(['INDEX.md',...s.documents])){const b=fs.readFileSync(p+n);if(!s.hashes||s.hashes[n]!==c.createHash('sha256').update(b).digest('hex'))throw Error(n)}"
+```
+
+Require cited-path checks, docs created/updated/removed, and confirmation that `CLAUDE.md` is untouched.
+A writer whose source snapshot moves reconciles once or releases rather than certifying a mixed snapshot.
+For a broad diff, use a `codebase-exploration` story with read-only area tickets and one dependent final
+artifact writer. Area tickets report paths, symbols, entry points, and flows in their threads; never use
+nested generic tasks.
+
+For an add, dispatch, spawn, or executor failure, inspect `pulse` and the ticket thread. Retry once only
+when a diagnosis changes the launch and no live claim remains. After a second failure, record the
+evidence, ensure no writer owns the claim, validate or repair any partial map inline in this shared tree,
+replace state last, and comment that the ticket completed through inline fallback. Give the user one short
+line naming the failure and inline fallback.
+
 ### Step 3 — Re-assess the warranted doc set, then map changes to documents
 
 An update is not only "edit the docs that exist." First **re-evaluate which documents this codebase
@@ -114,8 +173,8 @@ commit the changes so the team and future sessions stay in sync.
 - **Surgical, not sweeping.** Targeted edits keep diffs reviewable and history meaningful.
 - **Verify before writing.** Every path you add must exist; every path you remove must really be
   gone.
-- **No churn for churn's sake.** If nothing meaningful changed, say so and update only the
-  `mappedAt`/`gitCommit` in state (or nothing at all).
+- **No churn for churn's sake.** If nothing meaningful changed, say so and leave the map and state
+  untouched.
 - **Never touch `CLAUDE.md`.** The plugin's hook handles loading; the map lives entirely in
   `.claude/.codebase-info/`. Leave `CLAUDE.md` (and `CLAUDE.local.md`) alone.
 

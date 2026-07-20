@@ -92,6 +92,17 @@ committed beside it, so you can see what the docs look like in practice.
 
 Works on any stack, and on both existing and brand-new (greenfield) projects.
 
+## Mapping with Sidequest
+
+With Sidequest installed and its `codebase-exploration` category enabled for bounded documentation
+artifacts, mapping an existing project runs as one tracked shared-tree artifact task. It maps the actual
+working tree, including intentional uncommitted source, and leaves only
+`.claude/.codebase-info/` as working-tree output for you to review and commit.
+
+Greenfield seeds and refreshes with no meaningful documentation change stay inline. A large project uses
+read-only area exploration tickets plus one final map writer. If Sidequest is unavailable or its live
+category contract cannot accept the artifact scope, codebase-mapper just completes the same map inline.
+
 ## What it creates
 
 A set of atomic docs in `.claude/.codebase-info/`, and only the ones your project actually warrants.

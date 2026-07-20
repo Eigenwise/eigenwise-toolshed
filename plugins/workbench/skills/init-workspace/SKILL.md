@@ -275,7 +275,8 @@ installed, enabled, and at its requested scope. Then do the work that needed the
 empirically — this is the part that separates "wrote some files" from "set up a working workspace."
 
 1. **Codebase map** (skip for a not-a-codebase project). Invoke `map-codebase`. For a big repo it
-   fans out; for greenfield it seeds a lean map from the intent you captured. Confirm
+   fans out; with a ready Sidequest it can hand off an existing-code map and resume on the writer's
+   completion. Wait for that completion before Phase 4 continues, then confirm
    `.claude/.codebase-info/INDEX.md` exists.
 2. **live-rules is injecting.** On this turn, confirm the live-rules content is actually in your
    context (the plugin injects a recognizable rules block on SessionStart and every prompt). If you
