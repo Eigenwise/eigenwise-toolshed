@@ -166,6 +166,7 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
   config.observability.sink = 'grafana-lgtm';
   config.observability.dashboard = true;
   config.observability.dashboardVersion = '0.0.0';
+  config.observability.optedInProjects = [{ project_name: 'atlas', project_id: 'a'.repeat(64), optedInAt: '2026-07-20T00:00:00.000Z' }];
   config.observability.sinks = {
     'grafana-lgtm': {
       container: 'workbench-otel-lgtm',
@@ -183,6 +184,10 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
   });
   assert.equal(skipped.dashboardSkipped, true);
   assert.equal(readObservabilityConfig(configFile).observability.dashboardVersion, '0.0.0');
+  const generatedDashboard = JSON.parse(fs.readFileSync(path.join(dataDir, 'grafana-dashboards', 'claude-code-usage.json'), 'utf8'));
+  const generatedExpressions = generatedDashboard.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
+  assert.ok(generatedExpressions.some((expression) => expression.includes('workbench_attribute_project_name="atlas"')));
+  assert.ok(fs.existsSync(path.join(dataDir, 'grafana-dashboards', `claude-code-${'a'.repeat(16)}.json`)));
   const dockerCalls = [];
 
   const result = await ensureObservability({
@@ -200,6 +205,7 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
 
   assert.equal(result.dashboardDrift, true);
   assert.deepEqual(dockerCalls.map((call) => call[1][0]), ['inspect', 'rm', 'run']);
+  assert.ok(dockerCalls[2][1].includes(`${path.join(dataDir, 'grafana-dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
   assert.equal(readObservabilityConfig(configFile).observability.dashboardVersion, setup.pluginVersion());
 });
 

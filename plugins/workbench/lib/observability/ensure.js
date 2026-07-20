@@ -7,6 +7,7 @@ const net = require('node:net');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const grafanaLgtm = require('../../observability/sinks/grafana/index.js');
+const { provisionDashboards } = require('../../observability/sinks/grafana/dashboard-generator.js');
 const {
   DEFAULT_SINK,
   defaultConfigPath,
@@ -271,10 +272,12 @@ async function ensureObservability(options = {}) {
     let dashboard = null;
     let dashboardSkipped = false;
     if (state.dashboard) {
+      const dashboardDir = provisionDashboards(dataDir, state.optedInProjects);
       if (setup.dockerAvailable(options)) {
         dashboard = grafanaLgtm.setup(state.sinks[DEFAULT_SINK] || {}, {
           ...options,
           dataDir,
+          dashboardDir,
           pluginVersion: currentPluginVersion,
           forceRecreate: pluginDrift || dashboardDrift,
         });

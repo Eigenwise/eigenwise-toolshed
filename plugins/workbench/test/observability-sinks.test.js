@@ -10,6 +10,7 @@ const { DEFAULT_PORTS, normalizeManagedConfig } = require('../bin/setup-observab
 const { flushOutbox } = require('../lib/observability/outbox.js');
 const { buildOtlpPayload, openObservabilityStore } = require('../lib/observability/store.js');
 const grafana = require('../observability/sinks/grafana/index.js');
+const { generatedDashboards, provisionDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
 const posthog = require('../observability/sinks/posthog/index.js');
 const {
   DEFAULT_SINK,
@@ -141,6 +142,53 @@ test('Grafana replaces a stale managed container and can delete its data volume'
   assert.deepEqual(teardownCalls.map((call) => call[1].slice(0, 2)), [
     ['inspect', '--format'], ['stop', 'workbench-otel-lgtm'], ['rm', '--force'], ['volume', 'rm'],
   ]);
+});
+
+test('provisions opted-in global and per-project Grafana dashboards', (t) => {
+  const directory = temporaryDirectory();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const projects = [
+    { project_name: 'atlas', project_id: 'a'.repeat(64), optedInAt: '2026-07-20T00:00:00.000Z' },
+    { project_name: 'beacon', project_id: 'b'.repeat(64), optedInAt: '2026-07-20T00:00:00.000Z' },
+  ];
+  const dashboards = generatedDashboards(projects);
+  assert.equal(dashboards.length, 3);
+  const global = dashboards.find(({ fileName }) => fileName === 'claude-code-usage.json').dashboard;
+  assert.equal(global.title, 'Claude Code Usage');
+  assert.equal(global.uid, 'claude-code-usage');
+  assert.deepEqual(global.templating, { list: [] });
+  const regularPanels = global.panels.filter(({ title }) => title !== 'Unattributed sessions');
+  const regularExpressions = regularPanels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
+  assert.ok(regularExpressions.every((expression) => !expression.includes('$project')));
+  for (const expression of regularExpressions.filter((expression) => expression.includes('claude_code_'))) {
+    assert.match(expression, /project_id=~"a{64}\|b{64}"/);
+  }
+  for (const expression of regularExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
+    assert.match(expression, /workbench_attribute_project_name=~"atlas\|beacon"/);
+  }
+  const unattributed = global.panels.find(({ title }) => title === 'Unattributed sessions');
+  assert.equal(unattributed.type, 'stat');
+  assert.equal(unattributed.targets.length, 2);
+  assert.match(unattributed.targets[0].expr, /workbench_attribute_project_name !~ "atlas\|beacon"/);
+  assert.match(unattributed.targets[1].expr, /context_tokens_value/);
+
+  const atlas = dashboards.find(({ dashboard }) => dashboard.title === 'Claude Code — atlas').dashboard;
+  const atlasExpressions = atlas.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
+  for (const expression of atlasExpressions.filter((expression) => expression.includes('claude_code_'))) {
+    assert.match(expression, /project_id="a{64}"/);
+  }
+  for (const expression of atlasExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
+    assert.match(expression, /workbench_attribute_project_name="atlas"/);
+  }
+
+  const output = provisionDashboards(directory, projects);
+  assert.deepEqual(fs.readdirSync(output).sort(), dashboards.map(({ fileName }) => fileName).sort());
+  provisionDashboards(directory, []);
+  const empty = JSON.parse(fs.readFileSync(path.join(output, 'claude-code-usage.json'), 'utf8'));
+  assert.deepEqual(fs.readdirSync(output), ['claude-code-usage.json']);
+  assert.equal(empty.panels.length, 1);
+  assert.equal(empty.panels[0].title, 'Unattributed sessions');
+  assert.match(empty.panels[0].targets[0].expr, /\$\^/);
 });
 
 test('validates explicit generic OTLP egress and credentials', () => {

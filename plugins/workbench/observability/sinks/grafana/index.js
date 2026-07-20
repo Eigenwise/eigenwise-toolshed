@@ -103,12 +103,13 @@ function setup(config = {}, context = {}) {
 
   const provisioningTarget = '/otel-lgtm/grafana/conf/provisioning/dashboards';
   const dashboardsTarget = '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards';
+  const dashboardDir = context.dashboardDir || path.join(__dirname, 'dashboards');
   const args = [
     'run', '--detach', '--name', runtime.container, '--restart', 'unless-stopped',
     '--publish', `${LOOPBACK}:${runtime.grafanaPort}:3000`, '--publish', `${LOOPBACK}:${runtime.otlpPort}:4318`,
     '--volume', `${DATA_VOLUME}:/data`,
     '--volume', `${path.join(__dirname, 'provisioning')}:${provisioningTarget}:ro`,
-    '--volume', `${path.join(__dirname, 'dashboards')}:${dashboardsTarget}:ro`,
+    '--volume', `${dashboardDir}:${dashboardsTarget}:ro`,
   ];
   if (context.pluginVersion) args.push('--label', `${VERSION_LABEL}=${context.pluginVersion}`);
   args.push(IMAGE);
