@@ -865,7 +865,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'comment',
-    description: 'Add a durable handoff comment (decisions, constraints, risks, evidence); not progress narration. Use ask for human questions.',
+    description: 'Add a durable handoff comment (decisions, constraints, risks, evidence); not progress narration.',
     inputSchema: {
       type: 'object',
       properties: { ref: { type: 'string' }, project: PROJECT_PROP, body: { type: 'string' }, by: { type: 'string' } },
@@ -889,7 +889,7 @@ const TOOLS: ToolDefinition[] = [
       const { slug, meta } = resolveProject(args.project);
       const t = store.getTicket(slug, args.ref);
       if (!t) throw new Error(`comments: no ticket "${args.ref}".`);
-      return { project: slug, ref: t.ref, comments: t.comments || [], needsResponse: store.needsResponse(t) };
+      return { project: slug, ref: t.ref, comments: t.comments || [] };
     },
   },
   {

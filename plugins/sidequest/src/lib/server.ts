@@ -917,15 +917,12 @@ async function handle(req?: any, res?: any) {
     if (q.limit) opts.limit = Number(q.limit);
     const notifications = store.listNotifications(opts);
     // Unread counts are computed server-wide (kind-agnostic, no limit) so the bell
-    // badge, its "question" urgency cue, and the inbox category tabs stay correct
-    // even when the newest-N page the client holds doesn't include an older unread
-    // question — otherwise a blocking question aged past the page would read as
-    // routine. "Needs you" = questions + due reminders; the rest is activity.
+    // badge and inbox category tabs stay correct even when the newest-N page the
+    // client holds doesn't include an older unread event.
     const unreadList = store.listNotifications(Object.assign({}, opts, { unreadOnly: true, kind: undefined, limit: undefined }));
     const unread = unreadList.length;
-    const unreadQuestions = unreadList.filter((n?: any) => n.kind === 'question').length;
-    const unreadNeeds = unreadList.filter((n?: any) => n.kind === 'question' || n.kind === 'reminder').length;
-    sendJson(res, 200, { notifications, unread, unreadQuestions, unreadNeeds });
+    const unreadNeeds = unreadList.filter((n?: any) => n.kind === 'reminder').length;
+    sendJson(res, 200, { notifications, unread, unreadNeeds });
     return;
   }
 
@@ -965,7 +962,7 @@ async function handle(req?: any, res?: any) {
   }
 
   // --- Notify prefs: which background-event kinds get queued as notifications
-  // (question/comment/created/status). Kept server-side (not just the
+  // (comment/created/status). Kept server-side (not just the
   // dashboard's localStorage) so the queue can honor an opt-out even with no
   // dashboard tab open — see store.queueEventNotification(). ---
   if (req.method === 'GET' && pathname === '/api/notify-prefs') {

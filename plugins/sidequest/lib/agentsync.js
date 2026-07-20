@@ -153,10 +153,9 @@ function ticketCommentsDigest(comments) {
   if (!Array.isArray(comments) || !comments.length) return "(No ticket comments were recorded.)";
   const selected = comments.slice(-COMMENT_DIGEST_MAX_COMMENTS).reverse();
   const entries = selected.map((comment) => {
-    const kind = comment && comment.kind === "question" ? "Question" : "Comment";
     const by = clippedText(comment && comment.by ? comment.by : "unknown", 80, "…");
     const body = clippedText(comment && comment.body ? comment.body : String(comment || ""), COMMENT_DIGEST_BODY_MAX_CHARS, "… [read the full thread]");
-    return `- ${kind} by ${by}: ${body}`;
+    return `- Comment by ${by}: ${body}`;
   });
   if (comments.length > selected.length) entries.push(`- ${comments.length - selected.length} earlier comment(s) omitted; read the full thread.`);
   return clippedText(entries.join("\n"), COMMENT_DIGEST_MAX_CHARS, "\n[Digest truncated; read the full thread.]");

@@ -818,9 +818,8 @@ async function handle(req, res) {
     const notifications = store.listNotifications(opts);
     const unreadList = store.listNotifications(Object.assign({}, opts, { unreadOnly: true, kind: void 0, limit: void 0 }));
     const unread = unreadList.length;
-    const unreadQuestions = unreadList.filter((n) => n.kind === "question").length;
-    const unreadNeeds = unreadList.filter((n) => n.kind === "question" || n.kind === "reminder").length;
-    sendJson(res, 200, { notifications, unread, unreadQuestions, unreadNeeds });
+    const unreadNeeds = unreadList.filter((n) => n.kind === "reminder").length;
+    sendJson(res, 200, { notifications, unread, unreadNeeds });
     return;
   }
   if (req.method === "POST" && pathname === "/api/notifications/read") {

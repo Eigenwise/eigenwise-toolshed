@@ -217,8 +217,7 @@ async function cmdList(opts) {
       const lnk = t.links && t.links.length ? `  ⇄${t.links.length}` : "";
       const cmt = t.comments && t.comments.length ? `  💬${t.comments.length}` : "";
       const files = t.files && t.files.length ? `  📁${t.files.length}` : "";
-      const ask = store.needsResponse(t) ? "  ❓ awaiting reply" : "";
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${ask}`);
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}`);
     }
   }
 }
@@ -1046,21 +1045,19 @@ async function cmdUnremind(opts, positional) {
 }
 async function cmdComment(opts, positional) {
   const idOrRef = positional[0];
-  if (!idOrRef) fail('comment: pass a ticket id or ref, e.g. sidequest comment SQ-3 -m "note" [--kind question]');
+  if (!idOrRef) fail('comment: pass a ticket id or ref, e.g. sidequest comment SQ-3 -m "note"');
   const body = await bodyFromOpts(opts, "comment");
   if (!body || !String(body).trim()) fail('comment: -m/--body or --body-file is required, e.g. sidequest comment SQ-3 -m "note"');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
-  const kind = opts.kind === "question" ? "question" : "comment";
-  const res = store.addComment(slug, idOrRef, { by, body, kind, source: opts.source || "cli" });
+  const res = store.addComment(slug, idOrRef, { by, body, source: opts.source || "cli" });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
   if (res.ok) {
-    const tag = kind === "question" ? "?" : "»";
-    console.log(`✓ ${tag} comment added to ${res.ticket.ref} by "${by}"  — ${meta.name}`);
+    console.log(`✓ » comment added to ${res.ticket.ref} by "${by}"  — ${meta.name}`);
   } else {
     process.exitCode = 1;
     const messages = {
@@ -1089,8 +1086,7 @@ async function cmdComments(opts, positional) {
   }
   console.log(`${t.ref} — ${comments.length} comment(s)`);
   for (const c of comments) {
-    const tag = c.kind === "question" ? "?" : "»";
-    console.log(`  ${tag} [${c.at}] ${c.by}: ${c.body}`);
+    console.log(`  » [${c.at}] ${c.by}: ${c.body}`);
   }
 }
 async function cmdLink(opts, positional) {
@@ -1819,7 +1815,7 @@ Reminders (fires into the notification queue/bell inbox when the dashboard serve
   sidequest unremind <id|SQ-n>                      cancel a pending reminder
 
 Comments:
-  sidequest comment <id|SQ-n> (-m "body" | --body-file path) [--by who] [--kind comment|question]   durable cross-actor handoff; keep going
+  sidequest comment <id|SQ-n> (-m "body" | --body-file path) [--by who]   durable cross-actor handoff; keep going
   sidequest comments <id|SQ-n> [--json]            list a ticket's comment thread
 
 Links / dependencies:
