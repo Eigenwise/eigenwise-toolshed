@@ -109,8 +109,12 @@ function globalDashboard(template, projects) {
   return dashboard;
 }
 
+// By-project breakdowns can only ever show the board's own project — global-only.
+const GLOBAL_ONLY_PANELS = new Set(['Usage by project', 'Cost over time, by project']);
+
 function perProjectDashboard(template, project) {
   const dashboard = filterDashboard(template, [project]);
+  dashboard.panels = dashboard.panels.filter((panel) => !GLOBAL_ONLY_PANELS.has(panel.title));
   dashboard.title = `Claude Code — ${project.project_name}`;
   dashboard.uid = `claude-code-${project.project_id.slice(0, 16)}`;
   return dashboard;

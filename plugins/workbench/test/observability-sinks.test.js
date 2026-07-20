@@ -182,6 +182,14 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
     assert.match(expression, /project_id="atlas"/);
     assert.doesNotMatch(expression, /[0-9a-f]{64}/);
   }
+  // By-project breakdowns are global-only; on a one-project board they can
+  // only ever show the board itself.
+  const atlasTitles = atlas.panels.map(({ title }) => title);
+  assert.equal(atlasTitles.includes('Usage by project'), false);
+  assert.equal(atlasTitles.includes('Cost over time, by project'), false);
+  const globalTitles = global.panels.map(({ title }) => title);
+  assert.ok(globalTitles.includes('Usage by project'));
+  assert.ok(globalTitles.includes('Cost over time, by project'));
   for (const expression of atlasExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name="atlas"/);
   }
