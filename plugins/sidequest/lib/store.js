@@ -3070,7 +3070,12 @@ function lastCommentPulse(ticket) {
 function gitPulse(projectPath, files) {
   if (!projectPath || !Array.isArray(files) || !files.length) return null;
   try {
-    const git = (args) => execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const git = (args) => execFileSync('git', args, {
+      cwd: projectPath,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    }).trim();
     if (git(['rev-parse', '--is-inside-work-tree']) !== 'true') return null;
     const commit = git(['log', '-1', '--format=%H%x1f%s%x1f%cI', '--', ...files]);
     const [hash, subject, at] = commit ? commit.split('\x1f') : [];

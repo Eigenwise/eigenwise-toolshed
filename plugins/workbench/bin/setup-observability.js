@@ -327,7 +327,7 @@ async function downloadCollector(options) {
   const tarArgs = platform === 'win32' && tar === 'tar'
     ? ['--force-local', '-xf', archivePath, '-C', collectorDir]
     : ['-xf', archivePath, '-C', collectorDir];
-  const result = (options.spawnSync || spawnSync)(tar, tarArgs, { encoding: 'utf8' });
+  const result = (options.spawnSync || spawnSync)(tar, tarArgs, { encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) throw new Error('Could not extract the pinned Collector archive.');
   try { fs.unlinkSync(archivePath); } catch {}
   return resolveCollectorBinary(dataDir, options.environment);

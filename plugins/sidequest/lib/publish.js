@@ -42,6 +42,7 @@ function gitCommonDir(repoPath) {
     cwd: repoPath,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   }).trim();
   return path.resolve(repoPath, out);
 }

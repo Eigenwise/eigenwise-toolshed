@@ -68,6 +68,7 @@ test('SessionStart launch detaches the bounded ensure worker after consent', (t)
   assert.ok(call.args.includes('--run'));
   assert.equal(call.options.detached, true);
   assert.equal(call.options.stdio, 'ignore');
+  assert.equal(call.options.windowsHide, true);
   assert.equal(unref, true);
 });
 
