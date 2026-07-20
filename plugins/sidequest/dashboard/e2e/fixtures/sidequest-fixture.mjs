@@ -7,7 +7,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import net from 'node:net';
 
 const require = createRequire(import.meta.url);
-const root = resolve(import.meta.dirname, '..', '..', '..', '..', '..', '..');
+const root = resolve(import.meta.dirname, '..', '..', '..', '..', '..');
 const bin = join(root, 'plugins', 'sidequest', 'bin', 'sidequest.js');
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
