@@ -68,6 +68,8 @@ Also check what's already there:
 
 ## Phase 1 — Interview and selection
 
+Before the normal interview, inspect the machine-local Codex gateway mode with `codex-gateway env --show-mode`. When no mode is saved, ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the choice with `codex-gateway env --mode global` or `codex-gateway env --mode local`; do not ask again once a mode exists, and later setup flows honor it silently. Do not ask during non-interactive setup: default to local and say `wiring mode defaulted to per-project; run codex-gateway env --mode global to change`.
+
 Keep it short and propose defaults from what you detected, so the user confirms rather than types
 essays. Ask what you genuinely can't infer. A good compact set (adapt, don't recite):
 

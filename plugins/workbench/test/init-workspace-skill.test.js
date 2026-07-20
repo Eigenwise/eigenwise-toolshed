@@ -32,6 +32,13 @@ test('init-workspace keeps a single failure-safe reload boundary', () => {
   assert.match(skill, /confirm every selected plugin is\ninstalled, enabled, and at its requested scope/);
 });
 
+test('init-workspace asks for wiring mode only on an unset machine', () => {
+  assert.match(skill, /Global \(all projects wired automatically via user settings\) or per-project \(each project opts in via its private settings\.local\.json — recommended\)\?/);
+  assert.match(skill, /Persist the choice with `codex-gateway env --mode global` or `codex-gateway env --mode local`/);
+  assert.match(skill, /do not ask again once a mode exists/);
+  assert.match(skill, /wiring mode defaulted to per-project; run codex-gateway env --mode global to change/);
+});
+
 test('catalog has reproducible current plugin sources and LSP checks', () => {
   assert.match(catalog, /`typescript-lsp@claude-plugins-official`/);
   assert.match(catalog, /`typescript-language-server --version`/);

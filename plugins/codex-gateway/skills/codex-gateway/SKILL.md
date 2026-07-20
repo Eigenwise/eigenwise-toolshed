@@ -21,6 +21,8 @@ All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" <command>`
 
 ## First-time setup
 
+Before wiring a machine with no saved mode (`env --show-mode` says it defaulted), ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the answer with `env --mode global` or `env --mode local`; do not ask again once a mode exists. If setup must run without interaction, use local and say `wiring mode defaulted to per-project; run codex-gateway env --mode global to change`.
+
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
 state; act on it. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
 (sha256-verified) and starts everything. Re-running it later is also the upgrade path.
@@ -34,10 +36,11 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" setup    # finishes the wiring
 
 `login` opens the user's browser; they complete it themselves (suggest `! node ... login` if it
 needs a real TTY). Local wiring is the default: run `env --write-project` from the current repo,
-or `/update-toolshed` to wire recorded projects and migrate an older global block. It writes
-`.claude/settings.local.json`; unrecorded projects stay unwired until explicitly wired. Global
-`~/.claude/settings.json` wiring is still available after `env --mode global`, followed by
-`env --write-user`. All wiring changes apply to new Claude Code sessions, so restart after the
+or `/workbench:update-toolshed` to wire recorded projects and migrate an older global block. It writes
+`.claude/settings.local.json`; unrecorded projects stay unwired until explicitly wired. To switch a
+saved mode and migrate recorded projects, run `/workbench:update-toolshed --wiring-mode local` or
+`/workbench:update-toolshed --wiring-mode global`. The global switch preserves existing local blocks
+and names them as redundant; it never deletes them. All wiring changes apply to new Claude Code sessions, so restart after the
 write. The Codex rows appear in `/model` labeled "From gateway". Discovery needs Claude Code
 v2.1.129+ and fails silently if the shim answers slowly; `models` shows exactly what's advertised.
 

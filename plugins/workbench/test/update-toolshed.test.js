@@ -9,6 +9,7 @@ const test = require('node:test');
 const {
   gatewayCommand,
   gatewayWiringMode,
+  hasGatewayWiringMode,
   installedPlugins,
   marketplacesFor,
   parseArgs,
@@ -207,6 +208,51 @@ test('global mode writes only user settings', () => withRegistry(registry, (regi
   }
 }));
 
+test('mode switch migrates recorded projects and retains redundant local blocks', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-mode-switch-'));
+  try {
+    const lines = [];
+    const calls = [];
+    const result = runUpdate({
+      home,
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false, wiringMode: 'global' },
+      run: (command) => {
+        calls.push(command);
+        return { ok: true };
+      },
+      report: (line) => lines.push(line),
+    });
+
+    assert.equal(hasGatewayWiringMode(home), true);
+    assert.equal(gatewayWiringMode(home), 'global');
+    assert.equal(result.healedGatewayWiring.mode, 'global');
+    assert.deepEqual(calls.filter((command) => command.args.includes('env')).map((command) => command.args.slice(-1)), [['--write-user']]);
+    assert.match(lines.join('\n'), /Existing per-project blocks remain in 2 recorded project\(s\); they are redundant/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}));
+
+test('headless update defaults an unset wiring mode to per-project with a notice', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-default-mode-'));
+  try {
+    const lines = [];
+    runUpdate({
+      home,
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false },
+      run: () => ({ ok: true }),
+      report: (line) => lines.push(line),
+    });
+
+    assert.equal(hasGatewayWiringMode(home), false);
+    assert.match(lines.join('\n'), /Wiring mode defaulted to per-project; run \/workbench:update-toolshed --wiring-mode global to change\./);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}));
+
 test('heals stale Workbench status line pins after updating', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-statusline-'));
   try {
@@ -255,10 +301,17 @@ test('continues after failures and returns every failed operation', () => withRe
   assert.match(failed.failures.join('\n'), /codex-gateway setup/);
 }));
 
-test('parses check and dry-run options', () => {
+test('parses check, dry-run, and wiring-mode options', () => {
   assert.deepEqual(parseArgs(['--check', '--dry-run', '--claude', 'claude-dev']), {
     check: true,
     dryRun: true,
     claude: 'claude-dev',
   });
+  assert.deepEqual(parseArgs(['--wiring-mode', 'global']), {
+    check: false,
+    dryRun: false,
+    claude: 'claude',
+    wiringMode: 'global',
+  });
+  assert.throws(() => parseArgs(['--wiring-mode', 'elsewhere']), /--wiring-mode requires local or global/);
 });

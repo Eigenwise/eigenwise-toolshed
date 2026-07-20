@@ -20,6 +20,11 @@ function parseArgs(argv) {
     else if (arg === '--claude') {
       options.claude = argv[index + 1];
       index += 1;
+    } else if (arg === '--wiring-mode') {
+      const mode = argv[index + 1];
+      if (!['local', 'global'].includes(mode)) throw new Error('--wiring-mode requires local or global');
+      options.wiringMode = mode;
+      index += 1;
     } else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -29,7 +34,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  return `Usage: node update-toolshed.js [--check] [--dry-run] [--claude <command>]
+  return `Usage: node update-toolshed.js [--check] [--dry-run] [--claude <command>] [--wiring-mode local|global]
 
 Refreshes the eigenwise-toolshed marketplace, then updates every recorded Toolshed
 plugin install at user, project, and local scope. Project and local installs run from
@@ -37,7 +42,8 @@ their recorded project directory so Claude Code updates the right scope.
 
   --check       Read installed versions and run codex-gateway doctor without updating
   --dry-run     Print every command without running it
-  --claude      Claude Code command to run (default: claude)`;
+  --claude      Claude Code command to run (default: claude)
+  --wiring-mode Switch Codex gateway wiring and migrate recorded projects`;
 }
 
 function registryPath(home = os.homedir()) {
@@ -179,6 +185,18 @@ function gatewayWiringMode(home = os.homedir()) {
   } catch { return 'local'; }
 }
 
+function hasGatewayWiringMode(home = os.homedir()) {
+  try {
+    return ['local', 'global'].includes(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'wiring.json'), 'utf8')).mode);
+  } catch { return false; }
+}
+
+function setGatewayWiringMode(home, mode) {
+  const file = path.join(home, '.claude', 'codex-gateway', 'wiring.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify({ mode }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
 function gatewayWiringCommand(instances, scope, projectPath, remove = false) {
   const gateway = gatewayCommand(instances, 'env');
   if (!gateway) return null;
@@ -195,13 +213,16 @@ function recordedProjects(instances) {
 }
 
 function healGatewayWiring(instances, options, run, report) {
-  const mode = gatewayWiringMode(options.home);
+  const mode = options.wiringMode ?? gatewayWiringMode(options.home);
   const projects = recordedProjects(instances);
   if (mode === 'global') {
     const command = gatewayWiringCommand(instances, 'user');
     if (!command) return { mode, results: [], failures: [] };
     const ok = execute(command, options, run, report);
-    if (ok) report('Global gateway wiring applies to new Claude Code sessions. Restart open sessions.');
+    if (ok) {
+      report('Global gateway wiring applies to new Claude Code sessions. Restart open sessions.');
+      if (projects.length > 0) report(`Existing per-project blocks remain in ${projects.length} recorded project(s); they are redundant while global mode is active.`);
+    }
     return { mode, results: [command], failures: ok ? [] : [command.label] };
   }
 
@@ -271,6 +292,8 @@ function execute(command, options, run, report) {
 }
 
 function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log }) {
+  const modeWasConfigured = hasGatewayWiringMode(home);
+  if (options.wiringMode && !options.check && !options.dryRun) setGatewayWiringMode(home, options.wiringMode);
   const registry = readRegistry(registryFile);
   let instances = toolshedPlugins(registry);
 
@@ -283,6 +306,8 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   report(`Found ${instances.length} Toolshed plugin install(s) from ${marketplaces.length} marketplace(s):`);
   for (const instance of instances) report(`- ${instance.id} ${instance.version ?? 'unknown'} (${instance.scope}${instance.projectPath ? `, ${instance.projectPath}` : ''})`);
   report('Other marketplaces are managed by Claude Code auto-update — not touched.');
+  if (!modeWasConfigured && !options.wiringMode) report('Wiring mode defaulted to per-project; run /workbench:update-toolshed --wiring-mode global to change.');
+  if (options.wiringMode) report(`Wiring mode ${options.dryRun || options.check ? 'would switch' : 'switched'} to ${options.wiringMode}.`);
 
   const failures = [];
   if (!options.check) {
@@ -363,6 +388,8 @@ module.exports = {
   gatewayCommand,
   gatewayWiringCommand,
   gatewayWiringMode,
+  hasGatewayWiringMode,
+  setGatewayWiringMode,
   healGatewayWiring,
   healStaleStatuslines,
   healStatusline,

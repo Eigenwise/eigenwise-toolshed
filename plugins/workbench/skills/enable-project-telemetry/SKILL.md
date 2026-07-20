@@ -14,6 +14,8 @@ project.
 
 ## Enable
 
+Before the telemetry consent, inspect the machine-local Codex gateway mode with `codex-gateway env --show-mode`. When no mode is saved, ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the answer with `codex-gateway env --mode global` or `codex-gateway env --mode local`; never ask again once it exists. For a non-interactive invocation, leave the mode unset, use local behavior, and report `wiring mode defaulted to per-project; run codex-gateway env --mode global to change`.
+
 1. Confirm the user wants metadata-only usage telemetry for the current project. Say it writes this project's
    `.claude/settings.local.json`, starts or reuses the local loopback observer and Collector, and records a
    machine-local registry entry. It does not capture prompts, responses, tool content, raw request bodies,

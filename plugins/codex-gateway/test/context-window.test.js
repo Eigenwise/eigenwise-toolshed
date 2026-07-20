@@ -676,6 +676,36 @@ test('doctor describes local settings.local.json wiring', () => {
   }
 });
 
+test('env shows the local default until the user saves a wiring mode', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-wiring-mode-'));
+  try {
+    const first = spawnSync(process.execPath, [CLI, 'env', '--show-mode'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      encoding: 'utf8',
+    });
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, /wiring mode: local \(defaulted to per-project\)/);
+    assert.match(first.stdout, /wiring mode defaulted to per-project; run codex-gateway env --mode global to change/);
+
+    const selected = spawnSync(process.execPath, [CLI, 'env', '--mode', 'global'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      encoding: 'utf8',
+    });
+    assert.equal(selected.status, 0, selected.stderr);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'wiring.json'), 'utf8')).mode, 'global');
+
+    const later = spawnSync(process.execPath, [CLI, 'env', '--show-mode'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      encoding: 'utf8',
+    });
+    assert.equal(later.status, 0, later.stderr);
+    assert.match(later.stdout, /wiring mode: global/);
+    assert.doesNotMatch(later.stdout, /defaulted to per-project/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('claude-* passthrough is byte-identical and never subjected to Codex window/error rewriting', async (t) => {
   // The Anthropic path returns a context-overflow-shaped 400. A claude model must
   // see it UNCHANGED (no 413 normalization, no 'prompt is too long' rewrite) and

@@ -132,8 +132,8 @@ const USAGE = `usage: codex-gateway.js <command>
   status           show what's running
   models           show the model list the shim advertises to Claude Code
   catalog [--json] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
-  env [--write-user | --write-project | --remove] [--mode local|global]
-                   print the Claude Code env block, select wiring mode, or merge/remove it
+  env [--show-mode | --write-user | --write-project | --remove] [--mode local|global]
+                   print the Claude Code env block, inspect/select wiring mode, or merge/remove it
                    (local writes go to .claude/settings.local.json)
   doctor           full health check
   remote-control <enable|disable|doctor>
@@ -225,10 +225,20 @@ function spawnDetached(name, command, cmdArgs, env) {
   return child.pid;
 }
 
+function hasWiringMode() {
+  try {
+    return ['local', 'global'].includes(JSON.parse(fs.readFileSync(WIRING_CONFIG_PATH, 'utf8')).mode);
+  } catch { return false; }
+}
+
 function wiringMode() {
   try {
     return JSON.parse(fs.readFileSync(WIRING_CONFIG_PATH, 'utf8')).mode === 'global' ? 'global' : 'local';
   } catch { return 'local'; }
+}
+
+function wiringModeDefaultNotice() {
+  return 'wiring mode defaulted to per-project; run codex-gateway env --mode global to change';
 }
 
 function writeWiringMode(mode) {
@@ -641,7 +651,7 @@ async function setup() {
     }
     return;
   }
-  writeEnv('user', false, { mode });
+  writeEnv(selectedWiringScope(), false, { mode });
 }
 
 // ------------------------------------------------------- process management
@@ -765,6 +775,13 @@ async function statusReport() {
 // -------------------------------------------------------------- env wiring
 
 function envCommand() {
+  if (flag('--show-mode')) {
+    const configured = hasWiringMode();
+    log(`wiring mode: ${wiringMode()}${configured ? '' : ' (defaulted to per-project)'}`);
+    if (!configured) log(wiringModeDefaultNotice());
+    return;
+  }
+
   const modeIndex = args.indexOf('--mode');
   const requestedMode = modeIndex === -1 ? null : args[modeIndex + 1];
   if (flag('--mode') && !['local', 'global'].includes(requestedMode)) die('env --mode must be local or global', 2);
@@ -775,15 +792,15 @@ function envCommand() {
   if (!scope) {
     if (requestedMode) {
       log(`wiring mode set to ${requestedMode}. ${requestedMode === 'local'
-        ? 'Run env --write-project in each project, or /update-toolshed to wire recorded projects.'
-        : 'Run env --write-user to wire ~/.claude/settings.json.'}`);
+        ? 'Run /workbench:update-toolshed to migrate recorded projects from global wiring, or run env --write-project in this project.'
+        : 'Run /workbench:update-toolshed to write global wiring. Existing project settings.local.json blocks stay in place.'}`);
       log('Settings changes apply to new Claude Code sessions.');
       return;
     }
     log('add this to the "env" block of this project\'s .claude/settings.local.json:');
     log(JSON.stringify({ env: envBlockFor('default') }, null, 2));
     log('\nor run: env --write-project   (this repo) / env --write-user   (global mode)');
-    log('\nLocal wiring is the default. It applies to new Claude Code sessions after restart.');
+    log(`\n${hasWiringMode() ? `${wiringMode() === 'local' ? 'Local' : 'Global'} wiring is the selected mode.` : wiringModeDefaultNotice()}. It applies to new Claude Code sessions after restart.`);
     log('RC-compatibility mode (restores /remote-control) is opt-in and automatic once you add the');
     log('hosts entry yourself; see the RC-compatibility mode section of the README.');
     return;
@@ -870,6 +887,7 @@ async function doctor() {
   const activeMode = wiringMode();
   const activeScope = selectedWiringScope();
   log(`wiring mode: ${activeMode} (${activeMode === 'local' ? 'per-project .claude/settings.local.json' : 'global ~/.claude/settings.json'})`);
+  if (!hasWiringMode()) log(wiringModeDefaultNotice());
   for (const scope of ['project', 'user']) {
     try {
       const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
@@ -2293,6 +2311,7 @@ if (require.main === module) {
       // overflow fix. No auto-download inside the keepalive hook.
       warnIfProxyOutdated();
       if (!wired) {
+        if (!hasWiringMode()) log(wiringModeDefaultNotice());
         log(isAuthed()
           ? 'codex-gateway is running but Claude Code is not wired to it. Run env --write-project to use this project\'s .claude/settings.local.json, then restart.'
           : 'codex-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the codex-gateway skill.');
@@ -2345,6 +2364,8 @@ module.exports = {
   writeEnv,
   writeWiringMode,
   wiringMode,
+  hasWiringMode,
+  wiringModeDefaultNotice,
   migrateLegacyProjectSettings,
   settingsPath,
   createHostsBypassResolver,
