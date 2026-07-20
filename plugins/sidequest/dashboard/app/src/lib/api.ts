@@ -57,6 +57,8 @@ export class ApiClient {
   tickets(project: string = 'all', archived = false) { return this.request<{ project: string; tickets: Ticket[] }>('GET', `/api/tickets${query({ project, archived: archived || undefined })}`); }
   createTicket(body: JsonRecord) { return this.request<{ ticket: Ticket }>('POST', '/api/tickets', { ...body, source: 'dashboard' }); }
   updateTicket(id: string, project: string, body: JsonRecord) { return this.request<{ ticket: Ticket }>('PATCH', `/api/tickets/${path(id)}${query({ project })}`, { ...body, source: 'dashboard' }); }
+  uploadAttachments(id: string, project: string, imagesData: { name: string; base64: string }[]) { return this.updateTicket(id, project, { imagesData }); }
+  removeAttachments(id: string, project: string, removeAssets: string[]) { return this.updateTicket(id, project, { removeAssets }); }
   deleteTicket(id: string, project: string) { return this.request<JsonRecord>('DELETE', `/api/tickets/${path(id)}${query({ project })}`); }
   addComment(id: string, project: string, body: JsonRecord) { return this.request<JsonRecord>('POST', `/api/tickets/${path(id)}/comment${query({ project })}`, { by: 'you', ...body, source: 'dashboard' }); }
   setReminder(id: string, project: string, fireAt: string) { return this.request<JsonRecord>('POST', `/api/tickets/${path(id)}/reminder${query({ project })}`, { fireAt, source: 'dashboard' }); }

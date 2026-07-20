@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BoardState } from '../app/src/lib/state/board.svelte';
+import { ApiClient } from '../app/src/lib/api';
 import type { Snapshot } from '../app/src/lib/types';
 
 const snapshot = (): Snapshot => ({
@@ -28,6 +29,42 @@ describe('BoardState', () => {
     expect(state.counts).toEqual({ todo: 0, doing: 1, done: 0 });
     expect(state.unreadBuckets.needs.map((notification) => notification.id)).toEqual(['n1']);
     expect(state.categoryGroups.enabled.map((category) => category.id)).toEqual(['general']);
+  });
+
+  it('filters tickets by assignee alongside the other board filters', () => {
+    const state = new BoardState();
+    const data = snapshot();
+    data.tickets[0].assignee = 'you';
+    data.tickets[1].claim = { by: 'agent', at: new Date().toISOString() };
+    state.applySnapshot(data);
+
+    state.assignee = 'you';
+    expect(state.visibleTickets.map((ticket) => ticket.id)).toEqual(['1']);
+    state.assignee = 'agent';
+    expect(state.visibleTickets.map((ticket) => ticket.id)).toEqual(['2']);
+    state.assignee = 'unassigned';
+    expect(state.visibleTickets.map((ticket) => ticket.id)).toEqual(['3']);
+  });
+
+  it('holds a pending poll snapshot until a ticket mutation completes', async () => {
+    let finish: () => void = () => {};
+    const api = {
+      updateTicket: () => new Promise((resolve) => { finish = () => resolve({ ticket: snapshot().tickets[0] }); })
+    } as unknown as ApiClient;
+    const state = new BoardState(api);
+    state.applySnapshot(snapshot());
+    const ticket = state.raw!.tickets[0];
+    const save = state.patchTicket(ticket, { title: 'Saved' });
+    const next = snapshot();
+    next.tickets[0].title = 'From poll';
+    state.applySnapshot(next);
+
+    expect(state.mutations).toBe(1);
+    expect(state.raw?.tickets[0].title).toBe('First');
+    finish();
+    await save;
+    expect(state.mutations).toBe(0);
+    expect(state.raw?.tickets[0].title).toBe('From poll');
   });
 
   it('keeps the newest snapshot until an interaction lock clears', () => {
