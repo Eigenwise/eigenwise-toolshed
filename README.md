@@ -1,6 +1,7 @@
 # 🧰 eigenwise-toolshed
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin_marketplace-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![Docs](https://img.shields.io/badge/docs-online-CB7D32)](https://eigenwise.github.io/eigenwise-toolshed/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](./LICENSE)
 [![No dependencies](https://img.shields.io/badge/dependencies-none,_Node_stdlib_only-brightgreen)](#install)
 [![Last commit](https://img.shields.io/github/last-commit/Eigenwise/eigenwise-toolshed)](https://github.com/Eigenwise/eigenwise-toolshed/commits/main)

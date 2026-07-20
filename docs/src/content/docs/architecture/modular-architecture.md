@@ -1,4 +1,7 @@
-# Modular toolshed architecture
+---
+title: Modular toolshed architecture
+description: The small integration points that let Toolshed plugins work together.
+---
 
 The toolshed has independent plugins that can share small, file-based integration points when needed.
 
