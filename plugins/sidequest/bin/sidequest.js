@@ -2012,7 +2012,7 @@ Working the board safely (multi-agent):
     several; "none" clears (update only). 'ready' groups tickets into parallel-safe waves by declared file
     scope: tickets in the same wave never touch overlapping files/directories; untagged tickets never conflict.
   sidequest add/update ... --anchors "file:line symbol" --verify "<exact command>"
-    seed a bounded executor with scout findings and its exact check. Anchors (4k), verify (1k), and the
+    seed a bounded executor with investigation findings and its exact check. Anchors (4k), verify (1k), and the
     final prompt (7.6k) stay below the Windows command-line ceiling; values are preserved verbatim.
 
 Complexity is legacy input. Category routing chooses the concrete model and effort:

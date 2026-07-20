@@ -313,10 +313,10 @@ then invoke that exact spawn spec with Agent. Pass `spawn.prompt` unchanged, inc
 route marker when present. The executor must claim with that token, exact executor, and stamped effort.
 `sidequest work`/`drain` cannot invoke the current conversation's Agent tool.
 
-Generic/custom background agents are only for a quick read-only scout. The bundled Agent hook allows one when the
-prompt's first non-whitespace text is `[sidequest-scout]`; use it only for quick work with no edits or writes. A scout
-prompt that names an `SQ-n` ticket is denied and must be dispatched instead. Other generic/custom launches are denied
-and directed back to a ticket plus fresh dispatch. Built-in read-only lookup agents remain available.
+Generic/custom Agent launches are denied. Keep a tiny lookup inline with `Read`, `Glob`, `Grep`, or `WebFetch`.
+Any delegated work goes through a ticket and fresh dispatch, including a quick investigation: file it as a spike
+(usually `codebase-exploration`), route it, dispatch it, and spawn the returned executor. Routing controls the
+model, so there is no unrouted delegation.
 
 ## Comments & questions
 
