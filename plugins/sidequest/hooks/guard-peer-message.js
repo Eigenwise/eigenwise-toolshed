@@ -1,87 +1,105 @@
 #!/usr/bin/env node
-'use strict';
-/**
- * sidequest - PreToolUse hook: keep executors reporting UP, not sideways.
- *
- * A sidequest executor's only channels are its final message (to whoever spawned
- * it) and comments on its OWN ticket. When an executor instead SendMessage's a
- * peer, that peer gets a nudge it never asked for — and if the peer re-nudges
- * back, or a SubagentStop re-injects the same context, you get the Contractify
- * loop: a reviewer scoped to one file re-woken ~6x by an unrelated executor's
- * SQ-70 message. This hook denies that at the tool boundary.
- *
- * A terminal dispatch is a hard lifecycle boundary too. The board keeps the mapped
- * executor name after completion so this hook can deny a delayed main-thread or
- * peer message before Claude Code delivers it and wakes a finished worker. Later
- * work must use a fresh dispatch, which gets a fresh briefing and route marker.
- *
- * PreToolUse stdin carries `agent_type` ONLY when the caller is a subagent (it's
- * absent on main-thread calls — docs: agent-sdk/hooks). The terminal-target check
- * applies to every caller. Otherwise only `sidequest-` executors are denied when
- * messaging a target other than `main`.
- *
- * Fail-soft by construction: a missing/garbage payload, an unknown target, or a
- * failed store lookup yields NO output (allow).
- *
- * Design constraints (shared with the rest of the toolshed):
- *   - Node stdlib only, cross-platform.
- *   - Fail-soft: any error -> exit 0 with no output.
- */
+"use strict";
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 
-const fs = require('fs');
-const path = require('path');
-
-function terminalDispatchTarget(agentName) {
+// src/hooks/shared/input.ts
+var import_node_fs = __toESM(require("node:fs"));
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function readStdin() {
   try {
-    const root = process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
-    return require(path.join(root, 'lib', 'store.js')).terminalDispatchTarget(agentName);
+    const raw = import_node_fs.default.readFileSync(0, "utf8");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : null;
   } catch (_) {
     return null;
   }
 }
-
-function deny(reason) {
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: reason,
-    },
-  }));
+function stringField(input, ...names) {
+  for (const name of names) {
+    const value = input[name];
+    if (value != null) return String(value);
+  }
+  return "";
 }
 
+// src/hooks/shared/output.ts
+function writeJson(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+function writeDeny(hookEventName, permissionDecisionReason) {
+  writeJson({
+    hookSpecificOutput: {
+      hookEventName,
+      permissionDecision: "deny",
+      permissionDecisionReason
+    }
+  });
+}
+
+// src/hooks/shared/paths.ts
+var import_node_path = __toESM(require("node:path"));
+function pluginRoot() {
+  return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
+}
+function runtimeModule(name) {
+  return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
+}
+
+// src/hooks/guard-peer-message.ts
+function terminalDispatchTarget(agentName) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.terminalDispatchTarget(agentName);
+  } catch (_) {
+    return null;
+  }
+}
 function main() {
-  const raw = fs.readFileSync(0, 'utf8');
-  if (!raw) return;
-  const input = JSON.parse(raw);
-  if (!input || typeof input !== 'object') return;
-  if (String(input.tool_name || '') !== 'SendMessage') return;
-
-  const agentType = String(input.agent_type || input.agentType || '');
-
-  const toRaw = input.tool_input && input.tool_input.to;
-  const to = String(toRaw == null ? '' : toRaw).trim();
+  const input = readStdin();
+  if (!input || stringField(input, "tool_name") !== "SendMessage" || !isRecord(input.tool_input)) return;
+  const agentType = stringField(input, "agent_type", "agentType");
+  const toRaw = input.tool_input.to;
+  const to = String(toRaw == null ? "" : toRaw).trim();
   const terminal = terminalDispatchTarget(to);
   if (terminal) {
-    deny(
-      `sidequest: ${terminal.ref} is terminal (${terminal.outcome}) and executor "${to}" is closed. ` +
-      'Drop this queued steering message so it cannot wake a finished executor. Redispatch the ticket for later work; TaskStop the mapped executor if it is still listed.'
+    writeDeny(
+      "PreToolUse",
+      `sidequest: ${terminal.ref} is terminal (${terminal.outcome}) and executor "${to}" is closed. Drop this queued steering message so it cannot wake a finished executor. Redispatch the ticket for later work; TaskStop the mapped executor if it is still listed.`
     );
     return;
   }
-  if (!agentType.startsWith('sidequest-')) return; // main thread / non-executor -> allow
-  if (to.toLowerCase() === 'main') return; // reporting up to the main conversation is allowed
-
-  deny(
-    `sidequest: an executor (${agentType}) may not message another agent` +
-    (to ? ` ("${to}")` : '') +
-    '. Executors report UP — put it in your final message to the orchestrator, or a comment on your own ticket, and let the orchestrator route anything another ticket\'s owner needs. Do not nudge peers.'
+  if (!agentType.startsWith("sidequest-") || to.toLowerCase() === "main") return;
+  writeDeny(
+    "PreToolUse",
+    `sidequest: an executor (${agentType}) may not message another agent` + (to ? ` ("${to}")` : "") + ". Executors report UP — put it in your final message to the orchestrator, or a comment on your own ticket, and let the orchestrator route anything another ticket's owner needs. Do not nudge peers."
   );
 }
-
 try {
   main();
 } catch (_) {
-  // Fail soft. A hook bug must never block unrelated SendMessage calls.
   process.exit(0);
 }

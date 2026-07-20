@@ -1,65 +1,76 @@
 #!/usr/bin/env node
-'use strict';
-/**
- * sidequest - SessionEnd hook: release this session's claims immediately
- *
- * A claim carries a TTL (default 60 min) so a crashed worker's ticket eventually
- * frees up. But when a whole SESSION ends we KNOW its claims are dead right then —
- * no reason to make a dependent ticket wait out the TTL. This hook fires on that
- * boundary, reads the ending session's id, and asks the store to release exactly
- * the claims that session took (moving each ticket back to `todo`), so the ready
- * pool recovers instantly.
- *
- * It is SAFE by construction: store.reconcileSession only touches claims the
- * worker registry attributes to THIS session id, skips anything already done or
- * re-claimed by another session, and is a no-op for an unknown/absent id. The TTL
- * stays the untouched backstop for anything the registry never saw.
- *
- * Design constraints (shared with the rest of the toolshed):
- *   - Node stdlib only, cross-platform.
- *   - Fail-soft: any error -> exit 0 with no output. It must never break session teardown.
- */
+"use strict";
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 
-const path = require('path');
-
+// src/hooks/shared/input.ts
+var import_node_fs = __toESM(require("node:fs"));
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 function readStdin() {
   try {
-    const fs = require('fs');
-    const raw = fs.readFileSync(0, 'utf8');
+    const raw = import_node_fs.default.readFileSync(0, "utf8");
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : null;
+    return isRecord(parsed) ? parsed : null;
   } catch (_) {
     return null;
   }
 }
-
-function pluginRoot() {
-  return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
+function stringField(input, ...names) {
+  for (const name of names) {
+    const value = input[name];
+    if (value != null) return String(value);
+  }
+  return "";
 }
 
+// src/hooks/shared/paths.ts
+var import_node_path = __toESM(require("node:path"));
+function pluginRoot() {
+  return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
+}
+function runtimeModule(name) {
+  return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
+}
+
+// src/hooks/session-end.ts
 function main() {
   const data = readStdin();
-  if (!data) process.exit(0);
-  const sessionId = data.session_id || data.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
-  if (!sessionId) process.exit(0); // nothing to attribute claims to
-
-  const reason = data.reason ? `session ended (${data.reason})` : 'session ended';
-  let store;
+  if (!data) return;
+  const sessionId = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+  if (!sessionId) return;
+  const reasonValue = data.reason;
+  const reason = reasonValue ? `session ended (${String(reasonValue)})` : "session ended";
   try {
-    store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+    const store = require(runtimeModule("store"));
+    store.reconcileSession(sessionId, { reason, source: "session-end" });
+    const agentsync = require(runtimeModule("agentsync"));
+    agentsync.cleanupNativeAgents({ sessionId });
   } catch (_) {
-    process.exit(0); // can't load the store -> the TTL still covers everything
   }
-  try {
-    store.reconcileSession(String(sessionId), { reason, source: 'session-end' });
-    require(path.join(pluginRoot(), 'lib', 'agentsync.js')).cleanupNativeAgents({ sessionId: String(sessionId) });
-  } catch (_) {
-    /* best effort */
-  }
-  process.exit(0);
 }
-
 try {
   main();
 } catch (_) {
