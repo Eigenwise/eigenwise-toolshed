@@ -212,11 +212,20 @@ function denyReason(res, type) {
 
 const HARNESS_UTILITY_TYPES = new Set(['claude-code-guide', 'statusline-setup']);
 
+function isSubagent(input) {
+  return [input.agent_id, input.agentId, input.agent_type, input.agentType]
+    .some((value) => {
+      const identity = String(value || '').trim().toLowerCase();
+      return identity && identity !== 'main' && identity !== 'main-thread';
+    });
+}
+
 function main() {
   const raw = fs.readFileSync(0, 'utf8');
   if (!raw) return;
   const input = JSON.parse(raw);
-  const toolInput = input && input.tool_input;
+  if (!input || typeof input !== 'object' || isSubagent(input)) return;
+  const toolInput = input.tool_input;
   if (!toolInput || typeof toolInput !== 'object') return;
   const type = String(toolInput.subagent_type || '');
   if (HARNESS_UTILITY_TYPES.has(type)) {

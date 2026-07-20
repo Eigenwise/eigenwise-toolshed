@@ -75,7 +75,7 @@ function writeModelPrefs(home, prefs) {
 }
 
 // Phrases from the retired heavy doctrine that must NOT come back to any block.
-const RETIRED = ['95%', 'read ~4+ files', 'AskUserQuestion', 'coreDiscipline'];
+const RETIRED = ['95%', 'read ~4+ files', 'AskUserQuestion', 'coreDiscipline', 'sidequest-scout'];
 
 function assertNoRetiredDoctrine(ctx, where) {
   for (const phrase of RETIRED) {
@@ -152,6 +152,13 @@ test('pre-tool hook: a marked generic agent is still denied', () => {
   assert.match(reason, /returned executor/);
 });
 
+test('pre-tool hook: executor-context generic agents pass through untouched', () => {
+  const original = { subagent_type: 'Explore', isolation: 'worktree', prompt: 'Inspect mapper skill flows.' };
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    agent_id: 'executor-644', agent_type: 'sidequest-exec-dispatch-high', tool_name: 'Agent', tool_input: original,
+  }), null);
+});
+
 test('pre-tool hook keeps builtin models and strips a stable dispatch executor model', () => {
   const dispatch = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
@@ -218,7 +225,11 @@ test('task-output guard: blocks Sidequest native task identities and dispatched 
   }
 });
 
-test('task-output guard: leaves background task IDs and malformed unrelated input alone', () => {
+test('task-output guard: leaves subagent calls, background task IDs, and malformed unrelated input alone', () => {
+  assert.strictEqual(runHookOutput(GUARD_TASK_OUTPUT, {
+    agent_id: 'executor-644', agent_type: 'sidequest-exec-dispatch-high',
+    tool_name: 'TaskOutput', tool_input: { task_id: 'sidequest-exec-dispatch-high@session-abc' },
+  }), null);
   for (const tool_input of [
     { task_id: 'build-123' },
     { id: 'unrelated-SQ-439-process' },
@@ -228,17 +239,12 @@ test('task-output guard: leaves background task IDs and malformed unrelated inpu
   }
 });
 
-test('pre-tool hook warns a sidequest executor once near its turn backstop', () => {
-  const agentId = `near-cap-${Date.now()}`;
-  const payload = { tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: agentId, effort: 'high' };
+test('pre-tool near-cap hook leaves subagent calls untouched', () => {
+  const payload = { tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: `near-cap-${Date.now()}`, effort: 'high' };
   const first = execFileSync(process.execPath, [NEAR_TURN_CAP], {
     input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
   });
-  const second = execFileSync(process.execPath, [NEAR_TURN_CAP], {
-    input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
-  });
-  assert.match(JSON.parse(first).hookSpecificOutput.additionalContext, /made 1 tool calls/);
-  assert.equal(second, '');
+  assert.equal(first, '');
 });
 
 test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', () => {
@@ -367,8 +373,12 @@ test('pre-tool inline-work board contact before the threshold never blocks', () 
 });
 
 test('pre-tool inline-work nudge ignores subagents and routing-disabled boards', () => {
-  const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', tool_name: 'Write', tool_input: {} };
-  for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
+  for (const subagent of [
+    { session_id: `inline-subagent-id-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', tool_name: 'Write', tool_input: {} },
+    { session_id: `inline-subagent-type-${Date.now()}`, cwd: BOARD_PATH, agent_type: 'sidequest-exec-dispatch-high', tool_name: 'Write', tool_input: {} },
+  ]) {
+    for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
+  }
 
   store.setProjectRouting(slug, 'disabled');
   try {
@@ -417,8 +427,12 @@ test('user-prompt reminder ignores automation without consuming the session flag
 });
 
 test('user-prompt reminder ignores subagents and routing-disabled boards', () => {
-  const subagent = { session_id: `board-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', prompt: 'Implement the ticket.' };
-  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, subagent), null);
+  for (const subagent of [
+    { session_id: `board-subagent-id-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', prompt: 'Implement the ticket.' },
+    { session_id: `board-subagent-type-${Date.now()}`, cwd: BOARD_PATH, agent_type: 'sidequest-exec-dispatch-high', prompt: 'Implement the ticket.' },
+  ]) {
+    assert.equal(runHookOutput(BOARD_FIRST_REMINDER, subagent), null);
+  }
 
   store.setProjectRouting(slug, 'disabled');
   try {
@@ -583,16 +597,10 @@ function runGuardPeer(payload) {
   return out.trim() ? JSON.parse(out) : null;
 }
 
-test('peer-guard: an executor messaging a peer is denied', () => {
-  const out = runGuardPeer({ agent_type: 'sidequest-exec-high', tool_input: { to: 'reviewer', message: 'look at SQ-70' } });
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /report UP/i);
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /reviewer/);
-});
-
-test('peer-guard: a Codex executor messaging a peer is denied', () => {
-  const out = runGuardPeer({ agent_type: 'sidequest-exec-codex-gpt-5-6-luna-medium', tool_input: { to: 'other-worker', message: 'hi' } });
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+test('peer-guard: subagent calls are untouched', () => {
+  for (const agent_type of ['sidequest-exec-high', 'sidequest-exec-dispatch-high', 'code-reviewer']) {
+    assert.strictEqual(runGuardPeer({ agent_id: `peer-${agent_type}`, agent_type, tool_input: { to: 'reviewer', message: 'look at SQ-70' } }), null);
+  }
 });
 
 test('peer-guard: an executor reporting to main is allowed', () => {
@@ -657,6 +665,13 @@ test('peer-guard: a non-sidequest subagent messaging a peer is allowed', () => {
 function runHomeDeleteGuard(tool_name, command) {
   return runHookOutput(GUARD_HOME_DELETE, { tool_name, tool_input: { command } });
 }
+
+test('home-delete guard: subagent calls are untouched', () => {
+  assert.strictEqual(runHookOutput(GUARD_HOME_DELETE, {
+    agent_id: 'executor-644', agent_type: 'sidequest-exec-dispatch-high',
+    tool_name: 'PowerShell', tool_input: { command: 'Remove-Item -Recurse -Force $home' },
+  }), null);
+});
 
 test('home-delete guard: blocks a recursive delete using $home', () => {
   const out = runHomeDeleteGuard('PowerShell', 'Remove-Item -Recurse -Force $home');

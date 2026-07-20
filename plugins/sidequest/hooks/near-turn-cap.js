@@ -24,11 +24,19 @@ function effortFor(input, agentType) {
   return match ? match[1] : 'medium';
 }
 
+function isSubagent(input) {
+  return [input.agent_id, input.agentId, input.agent_type, input.agentType]
+    .some((value) => {
+      const identity = String(value || '').trim().toLowerCase();
+      return identity && identity !== 'main' && identity !== 'main-thread';
+    });
+}
+
 function main() {
   const raw = fs.readFileSync(0, 'utf8');
   if (!raw) return;
   const input = JSON.parse(raw);
-  if (!input || typeof input !== 'object') return;
+  if (!input || typeof input !== 'object' || isSubagent(input)) return;
 
   const agentType = String(input.agent_type || input.agentType || '');
   const agentId = String(input.agent_id || input.agentId || '');

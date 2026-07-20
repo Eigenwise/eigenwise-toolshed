@@ -46,6 +46,14 @@ function sidequestTaskId(value, dispatchedIds) {
   return lowered.includes('sidequest') && /@session-[^\s]+/i.test(value);
 }
 
+function isSubagent(input) {
+  return [input.agent_id, input.agentId, input.agent_type, input.agentType]
+    .some((value) => {
+      const identity = String(value || '').trim().toLowerCase();
+      return identity && identity !== 'main' && identity !== 'main-thread';
+    });
+}
+
 function deny() {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -58,7 +66,7 @@ function deny() {
 
 function main() {
   const data = readStdin();
-  if (!data || data.tool_name !== 'TaskOutput' || !data.tool_input || typeof data.tool_input !== 'object') return;
+  if (!data || isSubagent(data) || data.tool_name !== 'TaskOutput' || !data.tool_input || typeof data.tool_input !== 'object') return;
   const sessionId = String(data.session_id || data.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '');
   const dispatchedIds = sessionDispatchIds(sessionId);
   if (sidequestTaskId(data.tool_input.task_id, dispatchedIds) || sidequestTaskId(data.tool_input.id, dispatchedIds)) deny();

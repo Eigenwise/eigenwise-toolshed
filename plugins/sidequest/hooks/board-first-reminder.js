@@ -14,6 +14,14 @@ function sessionId(input) {
   return String(input.session_id || input.sessionId || '').trim();
 }
 
+function isSubagent(input) {
+  return [input.agent_id, input.agentId, input.agent_type, input.agentType]
+    .some((value) => {
+      const identity = String(value || '').trim().toLowerCase();
+      return identity && identity !== 'main' && identity !== 'main-thread';
+    });
+}
+
 function stateFile(id) {
   const home = process.env.SIDEQUEST_HOME || path.join(os.homedir(), '.claude', 'sidequest');
   return path.join(home, 'tmp', 'state', `board-first-${encodeURIComponent(id)}.json`);
@@ -45,7 +53,7 @@ function main() {
   const raw = fs.readFileSync(0, 'utf8');
   if (!raw) return;
   const input = JSON.parse(raw);
-  if (!input || typeof input !== 'object' || input.agent_id || input.agentId) return;
+  if (!input || typeof input !== 'object' || isSubagent(input)) return;
 
   const id = sessionId(input);
   const prompt = String(input.prompt || '').trim();
