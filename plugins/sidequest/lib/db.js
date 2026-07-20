@@ -1,51 +1,159 @@
-'use strict';
-
-const fs = require('fs');
-const path = require('path');
-const { DEFAULT_CATEGORIES } = require('./category-defaults.js');
-const { discoverExternalModels } = require('./discovery.js');
-
+"use strict";
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var db_exports = {};
+__export(db_exports, {
+  CURRENT_SCHEMA_VERSION: () => CURRENT_SCHEMA_VERSION,
+  assertWritable: () => assertWritable,
+  countRows: () => countRows,
+  deleteRow: () => deleteRow,
+  getRow: () => getRow,
+  hasRow: () => hasRow,
+  listRows: () => listRows,
+  listRowsPage: () => listRowsPage,
+  openDb: () => openDb,
+  prepareCached: () => prepareCached,
+  putRow: () => putRow,
+  selectRow: () => selectRow,
+  selectRows: () => selectRows,
+  txn: () => txn
+});
+module.exports = __toCommonJS(db_exports);
+var import_node_fs = __toESM(require("node:fs"));
+var import_node_path = __toESM(require("node:path"));
+var import_category_defaults = require("./category-defaults.js");
+var import_discovery = require("./discovery.js");
 const originalEmitWarning = process.emitWarning;
-process.emitWarning = function emitWarningWithoutSqliteExperimentalWarning(warning, ...args) {
-  if (warning === 'SQLite is an experimental feature and might change at any time' && args[0] === 'ExperimentalWarning') {
+process.emitWarning = ((warning, ...args) => {
+  if (warning === "SQLite is an experimental feature and might change at any time" && args[0] === "ExperimentalWarning") {
     return;
   }
-  return originalEmitWarning.call(this, warning, ...args);
-};
-
-let DatabaseSync;
+  Reflect.apply(originalEmitWarning, process, [warning, ...args]);
+});
+let DatabaseSyncConstructor;
 try {
-  ({ DatabaseSync } = require('node:sqlite'));
+  ({ DatabaseSync: DatabaseSyncConstructor } = require("node:sqlite"));
 } finally {
   process.emitWarning = originalEmitWarning;
 }
-
 const CURRENT_SCHEMA_VERSION = 4;
-const LEGACY_RUNTIME = { 'grade-1': 'haiku', 'grade-2': 'sonnet', 'grade-3': 'opus', 'grade-4': 'fable', haiku: 'haiku', sonnet: 'sonnet', opus: 'opus', fable: 'fable' };
-const ROUTING_FALLBACK_DEFAULT = { model: 'sonnet', effort: 'high' };
-
-const TABLES = {
-  projects: { key: 'slug', columns: ['slug', 'data'] },
-  tickets: { key: 'id', columns: ['id', 'project', 'ref', 'status', 'archived', 'ord', 'claim_by', 'data'], orderBy: 'ord' },
-  stories: { key: 'id', columns: ['id', 'project', 'data'] },
-  categories: { key: 'id', columns: ['id', 'data'] },
-  project_categories: { key: ['project', 'id'], columns: ['project', 'id', 'kind', 'data'] },
-  globals: { key: 'key', columns: ['key', 'data'] },
-  meta: { key: 'key', columns: ['key', 'value'] },
+const LEGACY_RUNTIME = {
+  "grade-1": "haiku",
+  "grade-2": "sonnet",
+  "grade-3": "opus",
+  "grade-4": "fable",
+  haiku: "haiku",
+  sonnet: "sonnet",
+  opus: "opus",
+  fable: "fable"
 };
-
+const ROUTING_FALLBACK_DEFAULT = { model: "sonnet", effort: "high" };
+const TABLES = {
+  projects: { key: "slug", columns: ["slug", "data"] },
+  tickets: { key: "id", columns: ["id", "project", "ref", "status", "archived", "ord", "claim_by", "data"], orderBy: "ord" },
+  stories: { key: "id", columns: ["id", "project", "data"] },
+  categories: { key: "id", columns: ["id", "data"] },
+  project_categories: { key: ["project", "id"], columns: ["project", "id", "kind", "data"] },
+  globals: { key: "key", columns: ["key", "data"] },
+  meta: { key: "key", columns: ["key", "value"] }
+};
+const statementCaches = /* @__PURE__ */ new WeakMap();
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 function tableSpec(table) {
   const spec = TABLES[table];
   if (!spec) throw new Error(`Unknown database table: ${table}`);
   return spec;
 }
-
+function keyColumns(spec) {
+  return typeof spec.key === "string" ? [spec.key] : spec.key;
+}
+function keyValues(spec, key) {
+  const columns = keyColumns(spec);
+  if (columns.length === 1) return [key];
+  if (!isRecord(key)) throw new Error(`Composite key for ${columns.join(", ")} requires an object.`);
+  return columns.map((column) => key[column]);
+}
+function keyWhere(spec) {
+  return keyColumns(spec).map((column) => `${column} = ?`).join(" AND ");
+}
+function payloadColumn(spec) {
+  return spec.columns.includes("data") ? "data" : "value";
+}
+function parsePayload(row, column) {
+  return JSON.parse(row[column]);
+}
+function filtersFor(table, whereObj) {
+  const spec = tableSpec(table);
+  const filters = Object.entries(whereObj ?? {});
+  for (const [column] of filters) {
+    if (!spec.columns.includes(column)) throw new Error(`Unknown ${table} column: ${column}`);
+  }
+  return filters;
+}
+function whereClause(filters) {
+  return filters.length ? ` WHERE ${filters.map(([column]) => `${column} = ?`).join(" AND ")}` : "";
+}
+function parseStoredRecord(value) {
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function prepareCached(database, sql) {
+  let cache = statementCaches.get(database);
+  if (!cache) {
+    cache = /* @__PURE__ */ new Map();
+    statementCaches.set(database, cache);
+  }
+  let statement = cache.get(sql);
+  if (!statement) {
+    statement = database.prepare(sql);
+    cache.set(sql, statement);
+  }
+  return statement;
+}
+function selectRows(database, sql, parameters = []) {
+  return prepareCached(database, sql).all(...parameters);
+}
+function selectRow(database, sql, parameters = []) {
+  return prepareCached(database, sql).get(...parameters) ?? null;
+}
 function openDb(homeRoot) {
-  fs.mkdirSync(homeRoot, { recursive: true });
-  const db = new DatabaseSync(path.join(homeRoot, 'sidequest.db'), { timeout: 5000 });
-  db.exec('PRAGMA journal_mode=WAL');
-  db.exec('PRAGMA busy_timeout=5000');
-  db.exec(`
+  import_node_fs.default.mkdirSync(homeRoot, { recursive: true });
+  const database = new DatabaseSyncConstructor(import_node_path.default.join(homeRoot, "sidequest.db"), { timeout: 5e3 });
+  database.exec("PRAGMA journal_mode=WAL");
+  database.exec("PRAGMA busy_timeout=5000");
+  database.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       slug TEXT PRIMARY KEY,
       data TEXT
@@ -79,22 +187,21 @@ function openDb(homeRoot) {
     );
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
   `);
-
-  const schemaRow = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+  const schemaRow = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
   let schemaVersion = Number(schemaRow && JSON.parse(schemaRow.value));
   if (!Number.isInteger(schemaVersion) || schemaVersion < 1) schemaVersion = 1;
   if (schemaVersion < 2) {
-    txn(db, () => {
-      db.exec(`
+    txn(database, () => {
+      database.exec(`
         CREATE TABLE IF NOT EXISTS categories (
           id TEXT PRIMARY KEY,
           data TEXT
         )
       `);
-      for (const category of DEFAULT_CATEGORIES) {
-        db.prepare('INSERT OR IGNORE INTO categories (id, data) VALUES (?, ?)').run(category.id, JSON.stringify(category));
+      for (const category of import_category_defaults.DEFAULT_CATEGORIES) {
+        prepareCached(database, "INSERT OR IGNORE INTO categories (id, data) VALUES (?, ?)").run(category.id, JSON.stringify(category));
       }
-      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(2));
+      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(2));
     });
     schemaVersion = 2;
   }
@@ -102,46 +209,48 @@ function openDb(homeRoot) {
     throw new Error(`Sidequest database schema ${schemaVersion} is newer than supported schema ${CURRENT_SCHEMA_VERSION}.`);
   }
   if (schemaVersion < 3) {
-    txn(db, () => {
-      const prefsRow = db.prepare("SELECT data FROM globals WHERE key = 'model-prefs'").get();
-      let prefs = {};
-      try { prefs = prefsRow ? JSON.parse(prefsRow.data) : {}; } catch (_) { prefs = {}; }
-      const discovered = discoverExternalModels();
+    txn(database, () => {
+      const prefsRow = prepareCached(database, "SELECT data FROM globals WHERE key = 'model-prefs'").get();
+      const prefs = parseStoredRecord(prefsRow?.data);
+      const discovered = (0, import_discovery.discoverExternalModels)();
       const byKey = new Map(discovered.map((entry) => [`${entry.source}:${entry.slug}`, entry]));
       const bySlug = new Map(discovered.map((entry) => [entry.slug, entry]));
-      const rows = db.prepare('SELECT id, data FROM categories').all();
+      const rows = prepareCached(database, "SELECT id, data FROM categories").all();
       for (const row of rows) {
-        let category;
-        try { category = JSON.parse(row.data); } catch (_) { continue; }
-        const oldModel = category && category.route && String(category.route.model || '').trim().toLowerCase();
+        const category = parseStoredRecord(row.data);
+        const route = isRecord(category.route) ? category.route : null;
+        const oldModel = String(route?.model ?? "").trim().toLowerCase();
         const runtime = LEGACY_RUNTIME[oldModel];
-        if (!runtime) continue;
-        const configured = prefs.tierBackend && (prefs.tierBackend[oldModel] || prefs.tierBackend[runtime]);
-        const selected = typeof configured === 'string' ? configured.trim().toLowerCase() : 'claude';
-        const entry = byKey.get(selected) || bySlug.get(selected);
-        const model = selected !== 'claude' && !LEGACY_RUNTIME[selected] && entry ? entry.slug : runtime;
-        const effort = category.route.effort;
+        if (!runtime || !route) continue;
+        const tierBackend = isRecord(prefs.tierBackend) ? prefs.tierBackend : null;
+        const configured = tierBackend?.[oldModel] ?? tierBackend?.[runtime];
+        const selected = typeof configured === "string" ? configured.trim().toLowerCase() : "claude";
+        const entry = byKey.get(selected) ?? bySlug.get(selected);
+        const model = selected !== "claude" && !LEGACY_RUNTIME[selected] && entry ? entry.slug : runtime;
+        const effort = route.effort;
         category.route = { model, effort };
         category.fallback = { model: runtime, effort };
-        db.prepare('UPDATE categories SET data = ? WHERE id = ?').run(JSON.stringify(category), row.id);
+        prepareCached(database, "UPDATE categories SET data = ? WHERE id = ?").run(JSON.stringify(category), row.id);
       }
-      db.prepare("DELETE FROM globals WHERE key = 'model-prefs'").run();
-      const fallbackRow = db.prepare("SELECT data FROM globals WHERE key = 'routing-fallback'").get();
+      prepareCached(database, "DELETE FROM globals WHERE key = 'model-prefs'").run();
+      const fallbackRow = prepareCached(database, "SELECT data FROM globals WHERE key = 'routing-fallback'").get();
       let validFallback = false;
       try {
         const fallback = fallbackRow && JSON.parse(fallbackRow.data);
-        validFallback = fallback && typeof fallback.model === 'string' && typeof fallback.effort === 'string';
-      } catch (_) {}
-      if (!validFallback) {
-        db.prepare("INSERT INTO globals (key, data) VALUES ('routing-fallback', ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data").run(JSON.stringify(ROUTING_FALLBACK_DEFAULT));
+        validFallback = isRecord(fallback) && typeof fallback.model === "string" && typeof fallback.effort === "string";
+      } catch {
+        validFallback = false;
       }
-      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(3));
+      if (!validFallback) {
+        prepareCached(database, "INSERT INTO globals (key, data) VALUES ('routing-fallback', ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data").run(JSON.stringify(ROUTING_FALLBACK_DEFAULT));
+      }
+      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(3));
     });
     schemaVersion = 3;
   }
   if (schemaVersion < 4) {
-    txn(db, () => {
-      db.exec(`
+    txn(database, () => {
+      database.exec(`
         CREATE TABLE IF NOT EXISTS project_categories (
           project TEXT,
           id TEXT,
@@ -151,112 +260,107 @@ function openDb(homeRoot) {
         );
         CREATE INDEX IF NOT EXISTS project_categories_project_idx ON project_categories(project);
       `);
-      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(4));
+      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(4));
     });
     schemaVersion = 4;
   }
-  db.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;
-  return db;
+  const sidequestDatabase = database;
+  sidequestDatabase.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;
+  return sidequestDatabase;
 }
-
-function keyColumns(spec) {
-  return Array.isArray(spec.key) ? spec.key : [spec.key];
-}
-
-function keyValues(spec, key) {
-  const columns = keyColumns(spec);
-  if (columns.length === 1) return [key];
-  if (!key || typeof key !== 'object') throw new Error(`Composite key for ${columns.join(', ')} requires an object.`);
-  return columns.map((column) => key[column]);
-}
-
-function keyWhere(spec) {
-  return keyColumns(spec).map((column) => `${column} = ?`).join(' AND ');
-}
-
-function payloadColumn(spec) {
-  return spec.columns.includes('data') ? 'data' : 'value';
-}
-
-function getRow(db, table, key) {
+function getRow(database, table, key) {
   const spec = tableSpec(table);
   const column = payloadColumn(spec);
-  const row = db.prepare(`SELECT ${column} FROM ${table} WHERE ${keyWhere(spec)}`).get(...keyValues(spec, key));
-  return row ? JSON.parse(row[column]) : null;
+  const row = prepareCached(database, `SELECT ${column} FROM ${table} WHERE ${keyWhere(spec)}`).get(...keyValues(spec, key));
+  return row ? parsePayload(row, column) : null;
 }
-
-function assertWritable(db) {
-  const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+function assertWritable(database) {
+  const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
   const version = Number(row && JSON.parse(row.value));
   if (version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`Sidequest database schema ${version} is newer than supported schema ${CURRENT_SCHEMA_VERSION}; refusing write.`);
   }
 }
-
-function putRow(db, table, rowObj) {
-  assertWritable(db);
+function putRow(database, table, rowObject) {
+  assertWritable(database);
   const spec = tableSpec(table);
+  const object = rowObject;
   const values = spec.columns.map((column) => {
-    const value = rowObj[column];
-    return column === 'data' || column === 'value' ? JSON.stringify(value) : value;
+    const value = object[column];
+    return column === "data" || column === "value" ? JSON.stringify(value) : value;
   });
-  const assignments = spec.columns
-    .filter((column) => !keyColumns(spec).includes(column))
-    .map((column) => `${column} = excluded.${column}`)
-    .join(', ');
-  const placeholders = spec.columns.map(() => '?').join(', ');
-  const result = db.prepare(`
-    INSERT INTO ${table} (${spec.columns.join(', ')}) VALUES (${placeholders})
-    ON CONFLICT(${keyColumns(spec).join(', ')}) DO UPDATE SET ${assignments}
-  `).run(...values);
-  return result.changes;
+  const assignments = spec.columns.filter((column) => !keyColumns(spec).includes(column)).map((column) => `${column} = excluded.${column}`).join(", ");
+  const placeholders = spec.columns.map(() => "?").join(", ");
+  return prepareCached(database, `
+    INSERT INTO ${table} (${spec.columns.join(", ")}) VALUES (${placeholders})
+    ON CONFLICT(${keyColumns(spec).join(", ")}) DO UPDATE SET ${assignments}
+  `).run(...values).changes;
 }
-
-function deleteRow(db, table, key) {
-  assertWritable(db);
-  const spec = tableSpec(table);
-  return db.prepare(`DELETE FROM ${table} WHERE ${keyWhere(spec)}`).run(...keyValues(spec, key)).changes > 0;
+function deleteRow(database, table, key) {
+  assertWritable(database);
+  return prepareCached(database, `DELETE FROM ${table} WHERE ${keyWhere(tableSpec(table))}`).run(...keyValues(tableSpec(table), key)).changes !== 0;
 }
-
-function listRows(db, table, whereObj) {
+function listRows(database, table, whereObj) {
   const spec = tableSpec(table);
   const column = payloadColumn(spec);
-  const filters = Object.entries(whereObj || {});
-  for (const [filterColumn] of filters) {
-    if (!spec.columns.includes(filterColumn)) throw new Error(`Unknown ${table} column: ${filterColumn}`);
-  }
-  const where = filters.length ? ` WHERE ${filters.map(([filterColumn]) => `${filterColumn} = ?`).join(' AND ')}` : '';
-  const orderBy = spec.orderBy ? ` ORDER BY ${spec.orderBy}` : '';
-  const rows = db.prepare(`SELECT ${column} FROM ${table}${where}${orderBy}`).all(...filters.map(([, value]) => value));
-  return rows.map((row) => JSON.parse(row[column]));
+  const filters = filtersFor(table, whereObj);
+  const orderBy = spec.orderBy ? ` ORDER BY ${spec.orderBy}` : "";
+  const rows = prepareCached(database, `SELECT ${column} FROM ${table}${whereClause(filters)}${orderBy}`).all(...filters.map(([, value]) => value));
+  return rows.map((row) => parsePayload(row, column));
 }
-
-// Existence check that never parses the payload — callers use it to detect a
-// persisted record without triggering a read that would throw on a corrupt blob.
-function hasRow(db, table, key) {
+function listRowsPage(database, table, whereObj, options) {
+  if (!Number.isInteger(options.limit) || options.limit < 0) throw new RangeError("Page limit must be a non-negative integer.");
+  const offset = options.offset ?? 0;
+  if (!Number.isInteger(offset) || offset < 0) throw new RangeError("Page offset must be a non-negative integer.");
   const spec = tableSpec(table);
-  return db.prepare(`SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== undefined;
+  const column = payloadColumn(spec);
+  const filters = filtersFor(table, whereObj);
+  const orderBy = spec.orderBy ? ` ORDER BY ${spec.orderBy}` : "";
+  const rows = prepareCached(database, `SELECT ${column} FROM ${table}${whereClause(filters)}${orderBy} LIMIT ? OFFSET ?`).all(...filters.map(([, value]) => value), options.limit, offset);
+  return rows.map((row) => parsePayload(row, column));
 }
-
-function txn(db, fn) {
-  const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
-  if (row) assertWritable(db);
-  // IMMEDIATE takes the write lock at BEGIN so concurrent writers queue on
-  // busy_timeout instead of both grabbing a read lock and deadlocking on the
-  // upgrade (SQLITE_BUSY isn't retryable once two txns hold the shared lock).
-  db.exec('BEGIN IMMEDIATE');
+function countRows(database, table, whereObj) {
+  const filters = filtersFor(table, whereObj);
+  const row = prepareCached(database, `SELECT COUNT(*) AS count FROM ${table}${whereClause(filters)}`).get(...filters.map(([, value]) => value));
+  return Number(row?.count ?? 0);
+}
+function hasRow(database, table, key) {
+  const spec = tableSpec(table);
+  return prepareCached(database, `SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== void 0;
+}
+function txn(database, fn) {
+  const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
+  if (row) assertWritable(database);
+  database.exec("BEGIN IMMEDIATE");
   try {
     const result = fn();
-    db.exec('COMMIT');
+    if (isRecord(result) && typeof result.then === "function") {
+      throw new TypeError("SQLite transaction callbacks must be synchronous.");
+    }
+    database.exec("COMMIT");
     return result;
   } catch (error) {
     try {
-      db.exec('ROLLBACK');
-    } catch (_) {
-      // Preserve the operation error if a rollback is no longer possible.
+      database.exec("ROLLBACK");
+    } catch {
     }
     throw error;
   }
 }
-
-module.exports = { CURRENT_SCHEMA_VERSION, openDb, getRow, putRow, deleteRow, listRows, hasRow, txn };
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  CURRENT_SCHEMA_VERSION,
+  assertWritable,
+  countRows,
+  deleteRow,
+  getRow,
+  hasRow,
+  listRows,
+  listRowsPage,
+  openDb,
+  prepareCached,
+  putRow,
+  selectRow,
+  selectRows,
+  txn
+});
