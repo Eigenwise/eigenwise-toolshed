@@ -97,39 +97,64 @@ async function flushOutbox(store, options = {}) {
   const result = { selected: rows.length, delivered: 0, failed: 0, exhausted: 0 };
   const headers = requestHeaders(options.headers);
   const signal = requestSignal(options.signal, positiveTimeout(options.timeoutMs));
+  const fail = (row, code) => {
+    const nextAttempts = Number(row.attempts) + 1;
+    store.failOutbox(row.id, code, {
+      maxAttempts,
+      retryAt: retryTime(now, Number(row.attempts), baseDelayMs, maxDelayMs),
+    });
+    result.failed += 1;
+    if (nextAttempts >= maxAttempts) result.exhausted += 1;
+  };
+  const post = async (body) => sendWithDeadline(send, endpoint, {
+    method: 'POST',
+    headers,
+    body,
+    redirect: 'error',
+    signal,
+  }, signal);
+
+  if (typeof options.mapObservation === 'function' || typeof options.encodeBatch === 'function') {
+    if (typeof options.mapObservation !== 'function' || typeof options.encodeBatch !== 'function') {
+      throw new Error('A batched outbox requires both mapObservation and encodeBatch.');
+    }
+    if (typeof store.getObservation !== 'function') throw new TypeError('A batched outbox requires canonical observation lookup.');
+    const batchSize = Math.max(1, Math.min(Number(options.batchSize) || 50, 100));
+    for (let index = 0; index < rows.length; index += batchSize) {
+      const batch = rows.slice(index, index + batchSize);
+      try {
+        const body = options.encodeBatch(batch.map((row) => options.mapObservation(store.getObservation(row.event_id))));
+        const response = await post(body);
+        if (response.ok) {
+          store.acknowledgeOutbox(batch.map((row) => row.id));
+          result.delivered += batch.length;
+        } else {
+          for (const row of batch) fail(row, `http_${response.status}`);
+        }
+      } catch (error) {
+        const code = error && typeof error.name === 'string'
+          ? `transport_${error.name.toLowerCase()}`
+          : 'transport_error';
+        for (const row of batch) fail(row, code);
+      }
+    }
+    return result;
+  }
 
   for (const row of rows) {
     try {
-      const response = await sendWithDeadline(send, endpoint, {
-        method: 'POST',
-        headers,
-        body: row.payload_json,
-        redirect: 'error',
-        signal,
-      }, signal);
+      const response = await post(row.payload_json);
       if (response.ok) {
         store.acknowledgeOutbox([row.id]);
         result.delivered += 1;
-        continue;
+      } else {
+        fail(row, `http_${response.status}`);
       }
-      const nextAttempts = Number(row.attempts) + 1;
-      store.failOutbox(row.id, `http_${response.status}`, {
-        maxAttempts,
-        retryAt: retryTime(now, Number(row.attempts), baseDelayMs, maxDelayMs),
-      });
-      result.failed += 1;
-      if (nextAttempts >= maxAttempts) result.exhausted += 1;
     } catch (error) {
-      const nextAttempts = Number(row.attempts) + 1;
       const code = error && typeof error.name === 'string'
         ? `transport_${error.name.toLowerCase()}`
         : 'transport_error';
-      store.failOutbox(row.id, code, {
-        maxAttempts,
-        retryAt: retryTime(now, Number(row.attempts), baseDelayMs, maxDelayMs),
-      });
-      result.failed += 1;
-      if (nextAttempts >= maxAttempts) result.exhausted += 1;
+      fail(row, code);
     }
   }
 

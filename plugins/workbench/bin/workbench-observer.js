@@ -114,8 +114,13 @@ function createObserver(options = {}) {
     endpoint: outbox.endpoint,
     headers: outbox.headers,
     allowRemote: outbox.allowRemote,
+    batchSize: outbox.batchSize,
+    mapObservation: outbox.mapObservation,
+    encodeBatch: outbox.encodeBatch,
     fetch: options.fetch,
-    maxAttempts: options.maxOutboxAttempts,
+    maxAttempts: options.maxOutboxAttempts || outbox.maxAttempts,
+    baseDelayMs: outbox.baseDelayMs,
+    maxDelayMs: outbox.maxDelayMs,
   });
 
   const server = http.createServer(async (request, response) => {

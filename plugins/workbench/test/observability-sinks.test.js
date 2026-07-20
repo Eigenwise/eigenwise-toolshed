@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -9,6 +10,7 @@ const { DEFAULT_PORTS, normalizeManagedConfig } = require('../bin/setup-observab
 const { flushOutbox } = require('../lib/observability/outbox.js');
 const { buildOtlpPayload, openObservabilityStore } = require('../lib/observability/store.js');
 const grafana = require('../observability/sinks/grafana/index.js');
+const posthog = require('../observability/sinks/posthog/index.js');
 const {
   DEFAULT_SINK,
   SINK_IDS,
@@ -168,8 +170,14 @@ test('validates explicit generic OTLP egress and credentials', () => {
     observability: { sink: 'otlp', sinks: { otlp: { endpoint: 'https://token@otlp.example.test' } } },
   }), /credentials in headers/);
   assert.throws(() => resolveSink({
-    observability: { sink: 'posthog', sinks: {} },
-  }), /event mapper/);
+    observability: { sink: 'posthog', sinks: { posthog: { host: 'https://us.i.posthog.com', apiKey: 'phc_test' } } },
+  }), /allowRemote/);
+  assert.throws(() => resolveSink({
+    observability: { sink: 'posthog', sinks: { posthog: { host: 'https://example.test', apiKey: 'phc_test', allowRemote: true } } },
+  }), /US or EU/);
+  assert.throws(() => resolveSink({
+    observability: { sink: 'posthog', sinks: { posthog: { host: 'https://eu.i.posthog.com', apiKey: 'phx_private', allowRemote: true } } },
+  }), /project API key/);
 });
 
 test('persists sink config in a private dedicated file', (t) => {
@@ -370,6 +378,76 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   ]) {
     for (const target of byTitle.get(title).targets) assert.match(target.expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   }
+});
+
+test('PostHog batches canonical events through an isolated receiver and retries atomically', async (t) => {
+  const directory = temporaryDirectory();
+  const store = openObservabilityStore(path.join(directory, 'observability.db'));
+  const requests = [];
+  const receiver = http.createServer((request, response) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      requests.push({ url: request.url, headers: request.headers, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+      response.writeHead(requests.length === 1 ? 503 : 200).end();
+    });
+  });
+  await new Promise((resolve) => receiver.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    receiver.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  store.ingest(observation('posthog-one'));
+  store.ingest({ ...observation('posthog-two'), session_id: 'session-posthog' });
+  const runtime = posthog.resolve({
+    host: `http://127.0.0.1:${receiver.address().port}`,
+    apiKey: 'phc_private_project_key',
+    batchSize: 10,
+    baseDelayMs: 1,
+    maxDelayMs: 2,
+  });
+  assert.equal(runtime.collectorExporter, null);
+  assert.equal(JSON.stringify(runtime), JSON.stringify({
+    id: 'posthog',
+    egress: 'loopback',
+    collectorExporter: null,
+    outbox: {
+      enabled: true,
+      endpoint: `http://127.0.0.1:${receiver.address().port}/batch/`,
+      headers: {},
+      allowRemote: false,
+      batchSize: 10,
+      maxAttempts: 8,
+      baseDelayMs: 1,
+      maxDelayMs: 2,
+    },
+  }));
+
+  const first = await flushOutbox(store, { ...runtime.outbox, now: new Date(Date.now() + 1_000) });
+  assert.deepEqual(first, { selected: 2, delivered: 0, failed: 2, exhausted: 0 });
+  const second = await flushOutbox(store, { ...runtime.outbox, now: new Date(Date.now() + 5_000) });
+  assert.deepEqual(second, { selected: 2, delivered: 2, failed: 0, exhausted: 0 });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].url, '/batch/');
+  assert.equal(requests[1].headers.authorization, undefined);
+  assert.equal(requests[1].body.api_key, 'phc_private_project_key');
+  assert.equal(requests[1].body.batch.length, 2);
+  assert.equal(requests[1].body.batch[0].event, 'workbench.claude_code.api_request');
+  assert.equal(requests[1].body.batch[1].properties.distinct_id, 'session-posthog');
+  assert.equal(requests[1].body.batch[1].properties.$session_id, 'session-posthog');
+  assert.equal(requests[1].body.batch[0].properties.$process_person_profile, false);
+  assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM otlp_outbox').get().count, 0);
+
+  const mapped = posthog.mapObservation({
+    ...observation('redaction-check'),
+    event_id: 'redaction-check',
+    attributes: { model: 'claude-opus-4-8', raw_body: 'private content' },
+    measurements: [],
+  });
+  assert.equal(mapped.properties.workbench_attribute_model, 'claude-opus-4-8');
+  assert.doesNotMatch(JSON.stringify(mapped), /private content|raw_body/);
 });
 
 test('generic OTLP forwards private headers only after explicit remote opt-in', async (t) => {
