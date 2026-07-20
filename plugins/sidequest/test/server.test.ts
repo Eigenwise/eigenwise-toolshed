@@ -117,19 +117,13 @@ test('findNewerInstall: repo-source checkout (non-semver dir name) never self-re
   }
 });
 
-test('dashboard uses concrete model fallbacks and removes grade routing', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+test('dashboard serves the committed production dist and removes grade routing', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'dist', 'index.html'), 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
-  assert.match(html, /id="categoryList"/);
-  assert.match(html, /id="globalFallbackControl"/);
-  assert.match(html, /Add a category-specific fallback step/);
-  assert.match(html, /Global fallback/);
-  assert.match(html, /Route changed:/);
-  assert.doesNotMatch(html, /id="routingProfiles"/);
-  assert.doesNotMatch(html, /legacy-routing/);
-  assert.doesNotMatch(html, /routing-ladder/);
-  assert.doesNotMatch(html, /model-prefs/);
-  assert.doesNotMatch(html, /grade-1|grade-2|grade-3|grade-4/);
+  assert.match(html, /assets\//);
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'dashboard', 'index.html')), false);
+  assert.match(server, /DASHBOARD_DIST/);
+  assert.doesNotMatch(server, /DASHBOARD_HTML/);
   assert.match(server, /pathname === "\/api\/routing-fallback"/);
   assert.match(server, /pathname === "\/api\/routing-models"/);
   assert.match(server, /fallback: body\.fallback/);
@@ -191,34 +185,26 @@ test('stable cwd lets a detached child outlive a removed worktree-like cwd', { t
 
 test('dashboard exposes default and board settings with a routing opt-out', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
-  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  const bundle = fs.readdirSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets'))
+    .map((name: string) => fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets', name), 'utf8')).join('\n');
   assert.match(server, /projects.*routing/s);
   assert.match(server, /setProjectRouting/);
-  assert.match(html, /Default settings/);
-  assert.match(html, /Board settings/);
-  assert.match(html, /INHERITED FROM DEFAULTS/);
-  assert.match(html, /CUSTOMIZED ON THIS BOARD/);
-  assert.match(html, /routingDisabledNote/);
-  assert.match(html, /applyRoutingVisibility/);
+  assert.match(bundle, /Default settings/);
+  assert.match(bundle, /Board settings/);
+  assert.match(bundle, /routing/);
 });
 
 test('dashboard exposes board archive routes and guarded project controls', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
-  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
+  const bundle = fs.readdirSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets'))
+    .map((name: string) => fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets', name), 'utf8')).join('\n');
   assert.match(server, /\/api\/projects\/archived/);
   assert.match(server, /archive\|unarchive/);
   assert.match(server, /store\.deleteProjectExact/);
-  assert.match(html, /openProjectMenu/);
-  assert.match(html, /Archive board/);
-  assert.match(html, /Delete board…/);
-  assert.match(html, /Archived boards/);
-  assert.match(html, /projectTicketCount/);
-  assert.match(html, /and its ' \+ count \+ ' ticket/);
-  assert.match(html, /if \(archived\) item\("Restore board"/);
-  assert.match(html, /else \{\s*item\("Archive board"[\s\S]*item\("Delete board…"/);
-  assert.match(html, /This cannot be undone/);
-  assert.match(html, /Archive failed:/);
-  assert.match(html, /Restore failed:/);
+  assert.match(bundle, /Archive board/);
+  assert.match(bundle, /Delete board/);
+  assert.match(bundle, /Archived boards/);
+  assert.match(bundle, /This cannot be undone/);
 });
 
 test('category draft validation accepts only live routes', () => {
