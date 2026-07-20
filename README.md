@@ -21,7 +21,7 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 | [**workbench**](./plugins/workbench) | The one user-scope install for workspace setup, Toolshed updates, health checks, retrospectives, and the freshness guard. Use `/init-workspace`, `/update-toolshed`, `/workbench-doctor`, and `/retro`. |
 | [**codebase-mapper**](./plugins/codebase-mapper) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
 | [**live-rules**](./plugins/live-rules) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
-| [**sidequest**](./plugins/sidequest) | A Trello-light quest log for Claude Code. Side issues you mention mid-task get captured as tickets on the spot, with pasted images attached, then managed on a live, self-hosted Kanban dashboard spanning every project you work in. Category-based routing picks a concrete model and reasoning effort per ticket, with category and global fallbacks. |
+| [**sidequest**](./plugins/sidequest) | The Toolshed's core work board and board-first orchestration loop. Tickets are classified into categories that route each one to a concrete model and reasoning effort, then dispatched to token-gated executors. Side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in. |
 
 *More tools will move into the shed over time.*
 

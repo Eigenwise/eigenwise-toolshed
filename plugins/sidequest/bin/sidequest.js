@@ -2074,7 +2074,7 @@ function cmdStop() {
 function help() {
   const colorNames = Object.keys(store.STORY_COLOR_NAMES || {}).join(', ');
   console.log(
-    `sidequest — a Trello-light quest log for Claude Code
+    `sidequest — work board and orchestration loop for Claude Code
 
 Usage:
   sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
