@@ -30,6 +30,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { stableClaudeName, stableDispatchName } = require('./exec-names.js');
+const { spawnDescription } = require('./spawn-description.js');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const db = require('./db.js');
@@ -1836,6 +1837,7 @@ function prepareDispatch(slug, idOrRef, opts) {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
+      description: spawnDescription(t, resolveExec(t.model, t.effort)),
       route: { model: t.model, effort: t.effort },
       preparedAt: now,
       launchedAt: null,
@@ -1942,6 +1944,7 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
       sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
+      description: spawnDescription(t, resolveExec(t.model, t.effort)),
       route: { model: fallback.model, effort: fallback.effort },
       preparedAt: now,
       launchedAt: null,

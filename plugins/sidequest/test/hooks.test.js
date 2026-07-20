@@ -995,6 +995,45 @@ test('pre-tool hook: dispatch executor rejects a route marker with different eff
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /executor effort "high" does not match route marker effort "medium"/);
 });
 
+test('pre-tool hook: dispatch spawns require their issued description without touching ordinary executor calls', () => {
+  const ticket = addEffortTicket('preserve exact dispatch description', 'high');
+  const sessionId = `description-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const projectPath = store.readMeta(slug).path;
+  const description = prepared.ticket.dispatch.description;
+  const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
+  const base = {
+    subagent_type: prepared.ticket.dispatchExecutor,
+    name: 'exact-description',
+    description,
+    prompt,
+  };
+
+  const exact = runHookOutput(FORCE_BYPASS, { session_id: sessionId, tool_name: 'Agent', tool_input: base });
+  assert.equal(exact.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(exact.hookSpecificOutput.updatedInput.description, description);
+
+  const paraphrased = runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    tool_name: 'Agent',
+    tool_input: { ...base, description: 'shorter paraphrase' },
+  });
+  assert.equal(paraphrased.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(paraphrased.hookSpecificOutput.permissionDecisionReason.includes(description));
+
+  const ordinary = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: 'sidequest-exec-high',
+      model: 'sonnet',
+      description: 'ordinary executor launch',
+      prompt: 'Read one file.',
+    },
+  });
+  assert.equal(ordinary.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(ordinary.hookSpecificOutput.updatedInput.description, 'ordinary executor launch');
+});
+
 test('dispatch ledger records an authoritative launch, agent bind, and claim acknowledgement', () => {
   const ticket = addEffortTicket('dispatch launch acknowledgement', 'high');
   const sessionId = `launch-${++sqSeq}`;
@@ -1004,7 +1043,12 @@ test('dispatch ledger records an authoritative launch, agent bind, and claim ack
   const launch = runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
     tool_name: 'Agent',
-    tool_input: { subagent_type: prepared.ticket.dispatchExecutor, name: 'dispatch-ledger', prompt },
+    tool_input: {
+      subagent_type: prepared.ticket.dispatchExecutor,
+      name: 'dispatch-ledger',
+      description: prepared.ticket.dispatch.description,
+      prompt,
+    },
   });
   const agentName = launch.hookSpecificOutput.updatedInput.name;
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'launched');
@@ -1039,6 +1083,7 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
     tool_input: {
       subagent_type: prepared.ticket.dispatchExecutor,
       name: 'sidequest-exec-dispatch-high',
+      description: prepared.ticket.dispatch.description,
       prompt: `Work ${prepared.ticket.ref} --project "${projectPath}" --token ${prepared.token}`,
     },
   }));

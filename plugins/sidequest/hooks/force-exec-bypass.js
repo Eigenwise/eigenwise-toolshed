@@ -173,6 +173,25 @@ function dispatchRouteMarkers(input) {
   return [...prompt.matchAll(ROUTE_MARKER_RE)].map((match) => ({ model: match[1], effort: match[2] }));
 }
 
+function expectedDispatchDescription(input) {
+  const prompt = input && input.tool_input && input.tool_input.prompt;
+  const launches = dispatchLaunches(prompt);
+  if (launches.length !== 1) return null;
+  const projectArg = extractProjectArg(prompt) || input.cwd || process.env.CLAUDE_PROJECT_DIR;
+  if (!projectArg) return null;
+  try {
+    const store = require(path.join(pluginRoot(), 'lib', 'store.js'));
+    const found = store.findProject(projectArg);
+    if (!found.ok) return null;
+    const ticket = store.getTicket(found.slug, launches[0].ref);
+    if (!ticket || ticket.dispatchNonce !== launches[0].token) return null;
+    const description = ticket.dispatch && ticket.dispatch.description;
+    return typeof description === 'string' && description ? description : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function denyReason(res, type) {
   const retry = 'Re-read the wave (`ready --brief`) and re-spawn with `model: exec.model`.';
   const base = `sidequest: ${type} was spawned without \`model\` and it couldn't be resolved`;
@@ -233,6 +252,17 @@ function main() {
   }
 
   const updatedInput = { ...toolInput, mode: 'bypassPermissions' };
+  const expectedDescription = expectedDispatchDescription(input);
+  if (expectedDescription && toolInput.description !== expectedDescription) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: `sidequest: dispatch description must match the prepared spawn. Re-run dispatch and pass its spawn unchanged. Expected description: ${expectedDescription}`,
+      },
+    }));
+    return;
+  }
   const launchAgentName = dispatchAgentName(input);
   if (launchAgentName) updatedInput.name = launchAgentName;
 

@@ -75,6 +75,7 @@ function launch(ticket, sessionId) {
       subagent_type: prepared.ticket.dispatchExecutor,
       model: 'fable',
       name: `quota-${ticket.ref.toLowerCase()}`,
+      description: prepared.ticket.dispatch.description,
       prompt: dispatchPrompt(ticket, prepared.token),
     },
   });
