@@ -34,6 +34,7 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 const mcp = require('../lib/mcp.js');
 const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
+const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 
 // Write a fake codex-gateway catalog (mirrors test/discovery.test.js) so a
 // discovered+enabled custom slug can be exercised over the MCP surface.
@@ -294,7 +295,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', () => 
   store.setCategory({ id: 'dispatch-codex', name: 'Dispatch Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const slug = store.ensureProject(PROJ).slug;
 
-  const addedInstant = callTool('add', { title: 'instant dispatch', category: 'dispatch-codex' });
+  const addedInstant = callTool('add', { title: 'instant dispatch', description: DISPATCH_DESCRIPTION, category: 'dispatch-codex' });
   const instant = callTool('dispatch', { ref: addedInstant.ref, session: 'mcp-dispatch-session' });
   assert.equal(instant.mode, 'instant');
   assert.deepEqual(instant.exec, {
@@ -345,9 +346,9 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', () => 
 test('MCP dispatch records the runtime session and the Agent lifecycle binds it', () => {
   const slug = store.ensureProject(PROJ).slug;
   store.setCategory({ id: 'mcp-runtime-session', name: 'MCP runtime session', route: { model: 'sonnet', effort: 'high' } });
-  const friendly = callTool('add', { title: 'friendly dispatch session', category: 'mcp-runtime-session' });
-  const omitted = callTool('add', { title: 'omitted dispatch session', category: 'mcp-runtime-session' });
-  const real = callTool('add', { title: 'runtime dispatch session', category: 'mcp-runtime-session' });
+  const friendly = callTool('add', { title: 'friendly dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
+  const omitted = callTool('add', { title: 'omitted dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
+  const real = callTool('add', { title: 'runtime dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
 
   const friendlyDispatch = callTool('dispatch', { ref: friendly.ref, session: 'hh6-quant' });
   callTool('dispatch', { ref: omitted.ref });
@@ -377,7 +378,7 @@ test('MCP dispatch records the runtime session and the Agent lifecycle binds it'
 
 test('MCP dispatch refuses a caller session label without runtime identity', () => {
   const slug = store.ensureProject(PROJ).slug;
-  const ticket = callTool('add', { title: 'missing runtime dispatch session', category: 'mcp-runtime-session' });
+  const ticket = callTool('add', { title: 'missing runtime dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
   const runtime = process.env.CLAUDE_CODE_SESSION_ID;
   const legacy = process.env.CLAUDE_SESSION_ID;
   delete process.env.CLAUDE_CODE_SESSION_ID;
@@ -396,7 +397,7 @@ test('MCP dispatch refuses a caller session label without runtime identity', () 
 
 test('dispatch returns a complete Claude worktree spawn spec', () => {
   store.setCategory({ id: 'dispatch-fable', name: 'Dispatch Fable', route: { model: 'fable', effort: 'xhigh' } });
-  const added = callTool('add', { title: 'complete instant spawn', category: 'dispatch-fable', files: ['plugins/sidequest'] });
+  const added = callTool('add', { title: 'complete instant spawn', description: DISPATCH_DESCRIPTION, category: 'dispatch-fable', files: ['plugins/sidequest'] });
   const dispatched = callTool('dispatch', { ref: added.ref });
 
   const { prompt, ...spawn } = dispatched.spawn;
@@ -483,19 +484,39 @@ test('add rejects incomplete routing inputs', () => {
   assert.ok(callToolRaw('add', { title: 'bad', complexity: 3, why: 'too short' }).isError, 'a thin why errors');
   assert.ok(callToolRaw('add', { title: 'direct', complexity: 3, why: 'x'.repeat(25), model: 'grade-3' }).isError, 'a direct model errors');
 });
-test('add returns a compact acknowledgement', () => {
+test('add returns a compact category acknowledgement', () => {
   const out = callTool('add', { title: 'MCP add works', complexity: 3, why: 'a real motivation referencing the actual single-file change' });
-  assert.deepStrictEqual(Object.keys(out).sort(), ['ok', 'project', 'ref', 'status', 'title']);
+  assert.deepStrictEqual(Object.keys(out).sort(), ['category', 'ok', 'project', 'ref', 'status', 'title']);
   assert.match(out.ref, /^SQ-\d+$/);
   assert.strictEqual(out.status, 'todo');
+  assert.equal(typeof out.category.name, 'string');
+  assert.equal(typeof out.category.description, 'string');
+  assert.equal(typeof out.category.route.model, 'string');
+});
+
+test('dispatch rejects a thin routed brief but only warns about a missing coding verify command', () => {
+  const added = callTool('add', { title: 'thin dispatch fixture', category: 'debugging' });
+  assert.equal(added.ok, true);
+  const refused = callToolRaw('dispatch', { ref: added.ref });
+  assert.ok(refused.isError);
+  assert.match(refused.content[0].text, /executor's entire brief is this ticket/);
+
+  callTool('update', { ref: added.ref, description: DISPATCH_DESCRIPTION });
+  const dispatched = callTool('dispatch', { ref: added.ref });
+  assert.match(dispatched.warnings[0], /no verify command/);
+
+  const research = callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'deep-research' });
+  assert.deepEqual(callTool('dispatch', { ref: research.ref }).warnings, []);
 });
 
 test('update returns only its changed fields', () => {
   store.setCategory({ id: 'mcp-update-echo', name: 'MCP update echo', route: { model: 'opus', effort: 'high' } });
   const added = callTool('add', { title: 'MCP update echo', category: 'mechanical' });
   const updated = callTool('update', { ref: added.ref, category: 'mcp-update-echo' });
-  assert.deepStrictEqual(Object.keys(updated).sort(), ['categoryId', 'ok', 'project', 'ref', 'status']);
+  assert.deepStrictEqual(Object.keys(updated).sort(), ['category', 'categoryId', 'ok', 'project', 'ref', 'status']);
   assert.strictEqual(updated.categoryId, 'mcp-update-echo');
+  assert.equal(updated.category.name, 'MCP update echo');
+  assert.equal(updated.category.route.model, 'opus');
 });
 
 test('add and update attach unknown ticket-ref warnings to compact acknowledgements', () => {

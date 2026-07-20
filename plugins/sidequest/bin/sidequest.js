@@ -195,6 +195,21 @@ function categoryIdOrFail(slug, category) {
   return id;
 }
 
+function categoryEcho(ticket) {
+  if (!ticket || !ticket.category) return null;
+  return {
+    id: ticket.category.id,
+    name: ticket.category.name,
+    description: ticket.category.description,
+    route: { model: ticket.model, effort: ticket.effort, executor: ticket.exec && ticket.exec.agent },
+  };
+}
+
+function categoryEchoLine(ticket) {
+  const category = categoryEcho(ticket);
+  return category ? `  category: ${category.name} — ${category.description}  [${category.route.model} · ${category.route.effort}]` : '';
+}
+
 function cmdAdd(opts) {
   if (!opts.title) fail('add: --title is required (e.g. sidequest add -t "Contact form does not send")');
   guardDirectRouting(opts);
@@ -229,7 +244,7 @@ function cmdAdd(opts) {
   warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
 
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, ticket, warnings }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, ticket, category: categoryEcho(ticket), warnings }, null, 2) + '\n');
     return;
   }
   const pr = PRIORITY_MARK[ticket.priority] ? ` ${PRIORITY_MARK[ticket.priority]}` : '';
@@ -237,6 +252,8 @@ function cmdAdd(opts) {
   const story = ticket.storyId ? store.getStory(slug, ticket.storyId) : null;
   const st = story ? `  ↳${story.ref}` : '';
   console.log(`✓ ${ticket.ref}${pr}  "${ticket.title}"  [${ticket.status}/${ticket.priority}]${imgs}${st}${modelMark(ticket)}  — ${meta.name}`);
+  const categoryLine = categoryEchoLine(ticket);
+  if (categoryLine) console.log(categoryLine);
   for (const w of warnings) console.log(`  ! ${w}`);
   const info = store.readServerInfo();
   if (info && info.url) console.log(`  board: ${info.url}`);
@@ -337,12 +354,16 @@ function cmdUpdate(opts, positional) {
     ...store.ticketPlanningWarnings(updated, meta.path),
   ];
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ ok: true, ticket: updated, warnings }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ ok: true, ticket: updated, category: opts.category != null ? categoryEcho(updated) : undefined, warnings }, null, 2) + '\n');
     return;
   }
   const story = updated.storyId ? store.getStory(slug, updated.storyId) : null;
   const st = story ? `  ↳${story.ref}` : '';
   console.log(`✓ ${updated.ref} updated  [${updated.status}/${updated.priority}]${st}${modelMark(updated)}  "${updated.title}"`);
+  if (opts.category != null) {
+    const categoryLine = categoryEchoLine(updated);
+    if (categoryLine) console.log(categoryLine);
+  }
   for (const warning of warnings) console.log(`  ! ${warning}`);
 }
 
@@ -1388,6 +1409,9 @@ function cmdDispatch(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('dispatch: pass a ticket ref, e.g. sidequest dispatch SQ-12.');
   const { slug, meta } = resolveProject(opts);
+  const ticket = store.getTicket(slug, idOrRef);
+  const descriptionError = store.dispatchDescriptionError(ticket);
+  if (descriptionError) fail(descriptionError);
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   let prepared;
   try {
@@ -1411,6 +1435,7 @@ function cmdDispatch(opts, positional) {
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
     recovery: prepared.recovery || null,
+    warnings: store.dispatchWarnings(prepared.ticket),
     spawn,
     guidance: prepared.recovery
       ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`

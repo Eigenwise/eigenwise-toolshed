@@ -1216,6 +1216,8 @@ function coercePriority(p, fallback) {
 
 const EXECUTOR_ANCHORS_MAX = 4000;
 const EXECUTOR_VERIFY_MAX = 1000;
+const DISPATCH_DESCRIPTION_MIN = 80;
+const DISPATCH_DESCRIPTION_GUIDANCE = "the executor's entire brief is this ticket; add a description (Where / Contract / Verify) and a verify command, then dispatch";
 
 // Per-ticket executor context stays deliberately small: this data may be passed
 // through a Windows command surface with an 8191-character ceiling. Keep the
@@ -1233,6 +1235,19 @@ function ticketReferenceWarnings(slug, title, description) {
   const known = new Set(listTickets(slug).map((ticket) => String(ticket.ref).toUpperCase()));
   const unknown = [...refs].filter((ref) => !known.has(ref));
   return unknown.length ? [`Unknown ticket refs: ${unknown.join(', ')}.`] : [];
+}
+
+function dispatchDescriptionError(ticket) {
+  if (!ticket || !ticket.model || !ticket.effort) return null;
+  if (String(ticket.description || '').trim().length >= DISPATCH_DESCRIPTION_MIN) return null;
+  return `dispatch: ${DISPATCH_DESCRIPTION_GUIDANCE}.`;
+}
+
+function dispatchWarnings(ticket) {
+  const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
+  if (!/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || ''))) return [];
+  if (String(ticket.executorVerify || '').trim()) return [];
+  return ['Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.'];
 }
 
 function ticketPlanningWarnings(ticket, projectPath) {
@@ -3796,6 +3811,9 @@ module.exports = {
   ROUTING_FALLBACK_DEFAULT,
   EXECUTOR_ANCHORS_MAX,
   EXECUTOR_VERIFY_MAX,
+  DISPATCH_DESCRIPTION_MIN,
+  dispatchDescriptionError,
+  dispatchWarnings,
   ticketReferenceWarnings,
   ticketPlanningWarnings,
   coerceComplexity,

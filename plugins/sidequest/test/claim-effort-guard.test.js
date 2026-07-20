@@ -57,7 +57,7 @@ function ticket(ref) {
 }
 
 function seed(category) {
-  return cliJson(['add', '-t', 'guard fixture', '--category', category]).ticket.ref;
+  return cliJson(['add', '-t', 'guard fixture', '-d', 'Where: claim guard fixture. Contract: exercise token-gated routed claims without changing state. Verify: inspect the claim response.', '--category', category]).ticket.ref;
 }
 
 function otherEffort(effort) {

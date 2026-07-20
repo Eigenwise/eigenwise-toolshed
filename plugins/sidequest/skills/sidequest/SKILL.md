@@ -91,7 +91,7 @@ temporary `SIDEQUEST_HOME` and distinct port, never on the shared board.
 
 `sidequest add -t "Contact form does not send" -d "..." -p high -l bug --category <id>` — read
 the live taxonomy (`category_list` MCP / `sidequest category list --json`), pick the narrowest
-category by its description, stamp it with `--category` (a project-scoped match beats a global row;
+category by its description, never its name, stamp it with `--category` (a project-scoped match beats a global row;
 classify by the deliverable; never copy category tables into prompts). Too underspecified
 → the taxonomy's fallback; reclassify once evidence exists.
 `--complexity 1-10` + `--why` is the legacy fallback for ambiguity — never set
@@ -99,7 +99,7 @@ classify by the deliverable; never copy category tables into prompts). Too under
 US-n` · `--anchors "file:line symbol"` / `--verify "exact command"` (seeded verbatim; anchors
 <4k, verify <1k).
 
-**Descriptions are developer-to-developer specs, never a PM summary**: **Where** — exact
+**Descriptions are developer-to-developer specs, never a PM summary. The executor's entire brief is this description:** **Where** — exact
 anchors; **Contract** — behavior/edge cases or the question to answer; **Bounds**;
 **Dependencies/decisions**; **Verify** — the exact command or answer shape. Bugs carry the
 reproduction. **Scale the spec inversely to the executor's model** and **front-load everything

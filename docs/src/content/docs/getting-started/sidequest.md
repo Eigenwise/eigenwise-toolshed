@@ -13,7 +13,7 @@ Reload Claude Code, then open the board with `/sidequest:board`. The dashboard s
 
 ## Categories and dispatch
 
-Categories describe the kind of work and carry executor guidance, a model route, and an effort. **Default settings** are shared by every board. **Board settings** fork a category for one board, and the dashboard marks each category as inherited or customized. Resetting a customized category relinks it to the defaults.
+Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. **Default settings** are shared by every board. **Board settings** fork a category for one board, and the dashboard marks each category as inherited or customized. Resetting a customized category relinks it to the defaults.
 
 Keep tiny lookups inline with `Read`, `Glob`, `Grep`, or `WebFetch`. Every delegated task goes through a ticket and routed dispatch, including an investigation: file a spike (usually `codebase-exploration`), dispatch it, then spawn the returned executor. Routing selects the model, so Sidequest has no unrouted delegation path.
 
@@ -21,7 +21,7 @@ A board can opt out of routed dispatches with `sidequest routing disabled --proj
 
 ## Work a ticket
 
-Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. It claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
+Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
 
 For deliberate orchestrator-owned inline work, such as a browser reproduction or review, claim directly with `sidequest claim SQ-3 --by <unique-worker-id> --direct` (MCP: `direct:true`). Do not start either path until its claim succeeds.
 

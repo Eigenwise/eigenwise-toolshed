@@ -266,6 +266,16 @@ function closeDispatchExecutor(ticket) {
   if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
 }
 
+function categoryEcho(ticket) {
+  if (!ticket || !ticket.category) return null;
+  return {
+    id: ticket.category.id,
+    name: ticket.category.name,
+    description: ticket.category.description,
+    route: { model: ticket.model, effort: ticket.effort, executor: ticket.exec && ticket.exec.agent },
+  };
+}
+
 function mutationAck(project, result, changed) {
   const ticket = result.ticket;
   const out = { ok: !!result.ok, project };
@@ -481,7 +491,7 @@ const TOOLS = [
         source: 'mcp',
       });
       const ticket = store.getTicket(slug, created.ref) || created;
-      const changed = { title: ticket.title };
+      const changed = { title: ticket.title, category: categoryEcho(ticket) };
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
       if (warnings.length) changed.warnings = warnings;
       return mutationAck(slug, { ok: true, ticket }, changed);
@@ -537,6 +547,7 @@ const TOOLS = [
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
       const changed = changedTicketFields(t, args);
+      if (args.category !== undefined) changed.category = categoryEcho(t);
       const warnings = store.ticketReferenceWarnings(slug, t.title, t.description);
       if (warnings.length) changed.warnings = warnings;
       return mutationAck(slug, { ok: true, ticket: t }, changed);
@@ -931,6 +942,8 @@ const TOOLS = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
+      if (descriptionError) throw new Error(descriptionError);
       const prepared = store.prepareDispatch(slug, args.ref, { sessionId: requireDispatchSession() });
       const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
@@ -947,6 +960,7 @@ const TOOLS = [
         tokenPrefix: prepared.token.slice(0, 12),
         token: prepared.token,
         recovery: prepared.recovery || null,
+        warnings: store.dispatchWarnings(prepared.ticket),
         spawn: agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt, agentsync.spawnDescription(prepared.ticket, resolved)),
         guidance: prepared.recovery
           ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`

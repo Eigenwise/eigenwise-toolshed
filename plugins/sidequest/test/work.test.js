@@ -90,7 +90,10 @@ test('executorPrompt refuses task context beyond the Windows-safe bound', () => 
 
 test('CLI dispatch exposes the routed executor API model', () => {
   store.setCategory({ id: 'api-model-dispatch', name: 'API model dispatch', route: { model: 'opus', effort: 'high' } });
-  const t = ticket({ category: 'api-model-dispatch' });
+  const t = ticket({
+    category: 'api-model-dispatch',
+    description: 'Where: API model dispatch fixture. Contract: expose the routed executor model through CLI dispatch. Verify: inspect the JSON response.',
+  });
   const res = runCli(['dispatch', t.ref]);
   assert.strictEqual(res.status, 0, res.stderr);
   const dispatched = JSON.parse(res.stdout);

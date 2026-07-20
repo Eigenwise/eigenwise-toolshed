@@ -45,7 +45,12 @@ store.setCategory({
 });
 
 function createFixture(title) {
-  return store.createTicket(slug, { title, category: 'quota.fixture', source: 'test' });
+  return store.createTicket(slug, {
+    title,
+    description: 'Where: quota fallback fixture. Contract: adopt the prepared fallback route after quota failure. Verify: inspect the replacement dispatch result.',
+    category: 'quota.fixture',
+    source: 'test',
+  });
 }
 
 function dispatchPrompt(ticket, token) {
