@@ -79,4 +79,38 @@ describe('BoardState', () => {
     state.setDragging(false);
     expect(state.raw?.tickets[0].title).toBe('Updated while dragging');
   });
+
+  it('routes settings writes through the state mutation boundary', async () => {
+    const calls: string[] = [];
+    const api = {
+      setProjectRouting: async () => { calls.push('routing'); return {}; },
+      setProjectNotify: async () => { calls.push('notify'); return {}; },
+      setNotifyPrefs: async () => { calls.push('prefs'); return { prefs: { question: false } }; },
+      setRoutingFallback: async () => { calls.push('fallback'); return { fallback: {}, catalog: {} }; },
+      createCategory: async () => { calls.push('category'); return { category: { id: 'ops', name: 'Operations' } }; }
+    } as unknown as ApiClient;
+    const state = new BoardState(api);
+    state.applySnapshot(snapshot());
+
+    await state.setProjectRouting('alpha', 'disabled');
+    await state.setProjectMuted('alpha', true);
+    await state.setNotifyPreferences({ question: false });
+    await state.setGlobalFallback({ model: 'sonnet', effort: 'high' });
+    await state.createCategory({ id: 'ops', name: 'Operations' });
+
+    expect(calls).toEqual(['routing', 'notify', 'prefs', 'fallback', 'category']);
+    expect(state.notifyPreferences).toEqual({ question: false });
+  });
+
+  it('dispatches Ctrl or Command Enter to the registered dialog save action', async () => {
+    const state = new BoardState();
+    const save = async () => { state.toast('saved'); };
+    const preventDefault = () => state.toast('prevented');
+    state.openDialog = 'SQ-1';
+    state.setDialogSaveAction(save);
+
+    await expect(state.saveDialogFromShortcut({ ctrlKey: true, metaKey: false, key: 'Enter', preventDefault })).resolves.toBe(true);
+    await expect(state.saveDialogFromShortcut({ ctrlKey: false, metaKey: false, key: 'Enter', preventDefault })).resolves.toBe(false);
+    expect(state.toasts).toEqual(['prevented', 'saved']);
+  });
 });
