@@ -167,6 +167,67 @@ function gatewayCommand(instances, action) {
   };
 }
 
+function gatewayWiringMode(home = os.homedir()) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'wiring.json'), 'utf8')).mode === 'global'
+      ? 'global'
+      : 'local';
+  } catch { return 'local'; }
+}
+
+function gatewayWiringCommand(instances, scope, projectPath, remove = false) {
+  const gateway = gatewayCommand(instances, 'env');
+  if (!gateway) return null;
+  return {
+    ...gateway,
+    args: [...gateway.args, scope === 'project' ? '--write-project' : '--write-user', ...(remove ? ['--remove'] : [])],
+    cwd: scope === 'project' ? projectPath : undefined,
+    label: remove ? 'codex-gateway remove legacy global wiring' : `codex-gateway wire ${scope}${projectPath ? ` (${projectPath})` : ''}`,
+  };
+}
+
+function recordedProjects(instances) {
+  return [...new Set(instances.map((instance) => instance.projectPath).filter(Boolean))];
+}
+
+function healGatewayWiring(instances, options, run, report) {
+  const mode = gatewayWiringMode(options.home);
+  const projects = recordedProjects(instances);
+  if (mode === 'global') {
+    const command = gatewayWiringCommand(instances, 'user');
+    if (!command) return { mode, results: [], failures: [] };
+    const ok = execute(command, options, run, report);
+    if (ok) report('Global gateway wiring applies to new Claude Code sessions. Restart open sessions.');
+    return { mode, results: [command], failures: ok ? [] : [command.label] };
+  }
+
+  if (projects.length === 0) {
+    report('Gateway local wiring: no recorded projects found. Legacy global wiring was left in place. Wire a new project with: codex-gateway env --write-project');
+    return { mode, results: [], failures: [] };
+  }
+
+  const results = [];
+  const failures = [];
+  for (const projectPath of projects) {
+    const command = gatewayWiringCommand(instances, 'project', projectPath);
+    if (!command) continue;
+    results.push(command);
+    if (!execute(command, options, run, report)) failures.push(command.label);
+  }
+  if (failures.length > 0) {
+    report('Gateway local wiring kept legacy global settings because one or more recorded projects could not be wired.');
+    return { mode, results, failures };
+  }
+
+  const remove = gatewayWiringCommand(instances, 'user', undefined, true);
+  if (remove) {
+    results.push(remove);
+    if (!execute(remove, options, run, report)) failures.push(remove.label);
+  }
+  if (failures.length === 0) report('Gateway local wiring applies to new Claude Code sessions. Restart open sessions.');
+  return { mode, results, failures };
+}
+
 function commandText(command) {
   return [command.command, ...command.args].map((part) => JSON.stringify(part)).join(' ');
 }
@@ -237,12 +298,21 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
 
   const gatewayAction = options.check ? 'doctor' : 'setup';
   const gateway = gatewayCommand(instances, gatewayAction);
+  let gatewaySetupOk = true;
   if (gateway) {
-    if (!execute(gateway, options, run, report)) failures.push(gateway.label);
-    if (!options.dryRun && !options.check) {
-      const doctor = gatewayCommand(instances, 'doctor');
-      if (doctor && !execute(doctor, options, run, report)) failures.push(doctor.label);
-    }
+    gatewaySetupOk = execute(gateway, options, run, report);
+    if (!gatewaySetupOk) failures.push(gateway.label);
+  }
+
+  let healedGatewayWiring = { mode: gatewayWiringMode(home), results: [], failures: [] };
+  if (!options.check && gateway && gatewaySetupOk) {
+    healedGatewayWiring = healGatewayWiring(instances, { ...options, home }, run, report);
+    failures.push(...healedGatewayWiring.failures);
+  }
+
+  if (gateway && !options.dryRun && !options.check && gatewaySetupOk) {
+    const doctor = gatewayCommand(instances, 'doctor');
+    if (doctor && !execute(doctor, options, run, report)) failures.push(doctor.label);
   }
 
   const healedStatuslines = options.check ? [] : healStaleStatuslines(instances, { home, dryRun: options.dryRun });
@@ -253,7 +323,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   for (const line of reloadAdvice(instances)) report(line);
   if (failures.length > 0) report(`\nCompleted with ${failures.length} failure(s): ${failures.join(', ')}`);
   else report('\nCompleted successfully.');
-  return { ok: failures.length === 0, instances, failures, healedStatuslines };
+  return { ok: failures.length === 0, instances, failures, healedGatewayWiring, healedStatuslines };
 }
 
 function main() {
@@ -286,6 +356,9 @@ if (require.main === module) main();
 module.exports = {
   GATEWAY_MARKETPLACE,
   gatewayCommand,
+  gatewayWiringCommand,
+  gatewayWiringMode,
+  healGatewayWiring,
   healStaleStatuslines,
   healStatusline,
   installedPlugins,

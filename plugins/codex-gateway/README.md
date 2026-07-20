@@ -52,25 +52,28 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
 /plugin install codex-gateway@eigenwise-toolshed
 ```
 
-**Install it at user scope** (that's the default for `/plugin install`). codex-gateway wires a
-global env var (`ANTHROPIC_BASE_URL`, so every session everywhere routes through the shim) and its
-keepalive hook has to run in every project. A project-only or local install leaves your other
-projects pointing at a shim that nothing keeps alive there, so requests in those projects fail.
-`doctor` warns you if it finds a project-only install; reinstall with
-`claude plugin install codex-gateway@eigenwise-toolshed --scope user`.
+**Install it at user scope** (that's the default for `/plugin install`) so its keepalive hook is
+available wherever you work. Gateway wiring is private and defaults to each recorded project's
+`.claude/settings.local.json`, never the team's committed `settings.json`. Run `/update-toolshed`
+to wire recorded projects and migrate an older global gateway block. Projects the updater has not
+recorded stay unwired until you run `node <plugin>/bin/codex-gateway.js env --write-project` from
+that project. Global `~/.claude/settings.json` wiring remains available when you explicitly select
+it with `env --mode global`; `doctor` reports the active mode. Settings changes apply to new Claude
+Code sessions, so restart open sessions after wiring.
 
 On your next session, Claude notices the plugin isn't set up yet (a one-line SessionStart nudge)
-and offers to finish the job. Say yes. `setup` is one command: it downloads claude-code-proxy
-(sha256-verified), starts the gateway, and wires your settings; the only thing it can't do for
-you is the ChatGPT browser sign-in, which it asks for when needed. Then restart Claude Code and
-open `/model`: the Codex rows are there, labeled "From gateway".
+and offers to finish the job. `setup` downloads claude-code-proxy and starts the gateway; then run
+`/update-toolshed` to wire every recorded project locally. The only thing it can't do for you is
+the ChatGPT browser sign-in, which it asks for when needed. Restart Claude Code and open `/model`:
+the Codex rows are there.
 
 Prefer doing it by hand? Same thing:
 
 ```bash
-node <plugin>/bin/codex-gateway.js setup   # download + start + wire; prompts for login if needed
+node <plugin>/bin/codex-gateway.js setup   # download + start; prompts for login if needed
 node <plugin>/bin/codex-gateway.js login   # ChatGPT sign-in in your browser (if asked)
-node <plugin>/bin/codex-gateway.js setup   # finishes the wiring after sign-in
+node <plugin>/bin/codex-gateway.js setup   # finishes setup after sign-in
+node <plugin>/bin/codex-gateway.js env --write-project  # writes this project's settings.local.json
 ```
 
 ### Verify the install
@@ -83,7 +86,8 @@ node <plugin>/bin/codex-gateway.js models
 ```
 
 `doctor` should show the proxy binary, a successful Codex auth status, both local ports, a written
-catalog, and user settings wired to the shim. `models` should return `claude-codex-*` rows. Then
+catalog, the active wiring mode, and local `.claude/settings.local.json` wiring (or global user
+settings if selected). `models` should return `claude-codex-*` rows. Then
 open `/model` and select a row labeled `From gateway`. If the rows are missing, check that Claude
 Code is v2.1.129 or newer, restart once more, and run `models` to confirm the shim has a catalog.
 
@@ -100,7 +104,7 @@ release and is the upgrade path.
 | `ensure [--quiet]` | Start whatever's down; the SessionStart hook runs this |
 | `models` | Show exactly what the shim advertises to the picker |
 | `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
-| `env [--write-user\|--write-project\|--remove]` | Print or wire/unwire the Claude Code env block |
+| `env [--write-user\|--write-project\|--remove] [--mode local\|global]` | Select private local or global wiring, then wire/unwire the Claude Code env block |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
 | `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility procedure, or read-only diagnosis |
 

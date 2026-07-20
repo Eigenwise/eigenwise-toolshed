@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const {
   gatewayCommand,
+  gatewayWiringMode,
   installedPlugins,
   marketplacesFor,
   parseArgs,
@@ -115,6 +116,81 @@ test('check mode skips updates but runs gateway doctor', () => withRegistry(regi
   assert.equal(calls[0].args.at(-1), 'doctor');
 }));
 
+test('local mode wires recorded projects before removing the legacy global block', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-local-wiring-'));
+  try {
+    const calls = [];
+    const result = runUpdate({
+      home,
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false },
+      run: (command) => {
+        calls.push(command);
+        return { ok: true };
+      },
+      report: () => {},
+    });
+
+    const wiring = calls.filter((command) => command.args.includes('env'));
+    assert.deepEqual(wiring.map((command) => command.args.slice(-2)), [
+      ['env', '--write-project'],
+      ['env', '--write-project'],
+      ['--write-user', '--remove'],
+    ]);
+    assert.deepEqual(wiring.slice(0, 2).map((command) => command.cwd), ['C:/work/local', 'C:/work/project']);
+    assert.equal(result.healedGatewayWiring.mode, 'local');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}));
+
+test('local mode preserves global wiring when a recorded project fails', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-local-wiring-failure-'));
+  try {
+    const calls = [];
+    runUpdate({
+      home,
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false },
+      run: (command) => {
+        calls.push(command);
+        return { ok: !command.args.includes('--write-project') };
+      },
+      report: () => {},
+    });
+
+    assert.equal(calls.some((command) => command.args.includes('--remove')), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}));
+
+test('global mode writes only user settings', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-global-wiring-'));
+  try {
+    const config = path.join(home, '.claude', 'codex-gateway', 'wiring.json');
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    fs.writeFileSync(config, JSON.stringify({ mode: 'global' }));
+    assert.equal(gatewayWiringMode(home), 'global');
+    const calls = [];
+    runUpdate({
+      home,
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false },
+      run: (command) => {
+        calls.push(command);
+        return { ok: true };
+      },
+      report: () => {},
+    });
+
+    const wiring = calls.filter((command) => command.args.includes('env'));
+    assert.deepEqual(wiring.map((command) => command.args.slice(-1)), [['--write-user']]);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}));
+
 test('heals stale Workbench status line pins after updating', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-statusline-'));
   try {
@@ -157,12 +233,11 @@ test('continues after failures and returns every failed operation', () => withRe
   });
 
   assert.equal(failed.ok, false);
-  assert.equal(failed.failures.length, 10);
+  assert.equal(failed.failures.length, 9);
   assert.match(failed.failures.join('\n'), /another-marketplace marketplace/);
   assert.match(failed.failures.join('\n'), /eigenwise-toolshed marketplace/);
   assert.match(failed.failures.join('\n'), /other@another-marketplace/);
   assert.match(failed.failures.join('\n'), /codex-gateway setup/);
-  assert.match(failed.failures.join('\n'), /codex-gateway doctor/);
 }));
 
 test('parses check and dry-run options', () => {

@@ -44,6 +44,7 @@ const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'codex-gateway');
 const LOGS = path.join(STATE, 'logs');
 const BIN_DIR = path.join(STATE, 'bin');
+const WIRING_CONFIG_PATH = path.join(STATE, 'wiring.json');
 const PLUGIN_VERSION = readPluginVersion();
 const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-code-proxy');
 const SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
@@ -130,8 +131,9 @@ const USAGE = `usage: codex-gateway.js <command>
   status           show what's running
   models           show the model list the shim advertises to Claude Code
   catalog [--json] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
-  env [--write-user | --write-project | --remove]
-                   print the Claude Code env block, or merge/remove it in settings.json
+  env [--write-user | --write-project | --remove] [--mode local|global]
+                   print the Claude Code env block, select wiring mode, or merge/remove it
+                   (local writes go to .claude/settings.local.json)
   doctor           full health check
   remote-control <enable|disable|doctor>
                    manage the opt-in hosts-file compatibility mode
@@ -222,13 +224,86 @@ function spawnDetached(name, command, cmdArgs, env) {
   return child.pid;
 }
 
+function wiringMode() {
+  try {
+    return JSON.parse(fs.readFileSync(WIRING_CONFIG_PATH, 'utf8')).mode === 'global' ? 'global' : 'local';
+  } catch { return 'local'; }
+}
+
+function writeWiringMode(mode) {
+  if (!['local', 'global'].includes(mode)) throw new Error(`Unknown wiring mode: ${mode}`);
+  fs.mkdirSync(STATE, { recursive: true });
+  fs.writeFileSync(WIRING_CONFIG_PATH, JSON.stringify({ mode }, null, 2) + '\n', { mode: 0o600 });
+  return mode;
+}
+
+function selectedWiringScope() {
+  return wiringMode() === 'global' ? 'user' : 'project';
+}
+
 function settingsPath(scope) {
-  return scope === 'project'
-    ? path.join(process.cwd(), '.claude', 'settings.json')
-    : path.join(os.homedir(), '.claude', 'settings.json');
+  if (scope === 'project') return path.join(process.cwd(), '.claude', 'settings.local.json');
+  if (scope === 'legacy-project') return path.join(process.cwd(), '.claude', 'settings.json');
+  return path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+function readSettingsForWrite(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {};
+    throw new Error(`Could not read ${file}: ${error.message}`);
+  }
+}
+
+function writeSettings(file, settings) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+}
+
+function ownedGatewayEnvEntries(env) {
+  return Object.entries(env || {}).filter(([key, value]) => (
+    (key === 'ANTHROPIC_BASE_URL' && ourBaseUrls().includes(value))
+    || (Object.hasOwn(STATIC_ENV_BLOCK, key) && String(value) === String(STATIC_ENV_BLOCK[key]))
+  ));
+}
+
+function migrateLegacyProjectSettings() {
+  const legacyFile = settingsPath('legacy-project');
+  if (!fs.existsSync(legacyFile)) return { migrated: false };
+  const legacy = readSettingsForWrite(legacyFile);
+  const entries = ownedGatewayEnvEntries(legacy.env);
+  const legacyKeys = Object.entries(LEGACY_ENV_BLOCK)
+    .filter(([key, value]) => String(legacy.env?.[key]) === String(value))
+    .map(([key]) => key);
+  if (entries.length === 0 && legacyKeys.length === 0) return { migrated: false };
+
+  const localFile = settingsPath('project');
+  let nextLocal;
+  if (entries.length > 0) {
+    const local = readSettingsForWrite(localFile);
+    nextLocal = structuredClone(local);
+    nextLocal.env = { ...(nextLocal.env || {}) };
+    for (const [key, value] of entries) {
+      if (!Object.hasOwn(nextLocal.env, key)) nextLocal.env[key] = value;
+    }
+  }
+
+  const nextLegacy = structuredClone(legacy);
+  nextLegacy.env = { ...(nextLegacy.env || {}) };
+  for (const [key] of entries) delete nextLegacy.env[key];
+  for (const key of legacyKeys) delete nextLegacy.env[key];
+  if (!Object.keys(nextLegacy.env).length) delete nextLegacy.env;
+
+  if (nextLocal) writeSettings(localFile, nextLocal);
+  writeSettings(legacyFile, nextLegacy);
+  const baseUrl = Object.fromEntries(entries).ANTHROPIC_BASE_URL;
+  const mode = baseUrl === COMPAT_BASE_URL ? 'compat' : baseUrl === DEFAULT_BASE_URL ? 'default' : null;
+  return { migrated: true, legacyFile, localFile, keys: [...entries.map(([key]) => key), ...legacyKeys], mode };
 }
 
 function cleanLegacyEnvSettings() {
+  migrateLegacyProjectSettings();
   for (const scope of ['user', 'project']) {
     const file = settingsPath(scope);
     let settings;
@@ -243,7 +318,7 @@ function cleanLegacyEnvSettings() {
     }
     if (!changed) continue;
     if (!Object.keys(settings.env).length) delete settings.env;
-    fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+    writeSettings(file, settings);
   }
 }
 
@@ -265,26 +340,22 @@ function cleanLegacyGatewayModelCache() {
 
 function isWired() {
   if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL)) return true;
-  for (const scope of ['user', 'project']) {
-    try {
-      const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
-      if (s.env && ourBaseUrls().includes(s.env.ANTHROPIC_BASE_URL)) return true;
-    } catch { /* absent or unparsable */ }
-  }
-  return false;
+  try {
+    const s = JSON.parse(fs.readFileSync(settingsPath(selectedWiringScope()), 'utf8'));
+    return !!(s.env && ourBaseUrls().includes(s.env.ANTHROPIC_BASE_URL));
+  } catch { return false; }
 }
 
-// Which scope currently has a plugin-owned ANTHROPIC_BASE_URL, and which mode
-// it encodes. null means codex-gateway hasn't wired anything yet.
+// The selected wiring scope owns compatibility switching. A legacy global block
+// remains readable during migration but must never be changed in local mode.
 function wiredMode() {
-  for (const scope of ['user', 'project']) {
-    try {
-      const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
-      const base = s.env && s.env.ANTHROPIC_BASE_URL;
-      if (base === COMPAT_BASE_URL) return { scope, mode: 'compat' };
-      if (base === DEFAULT_BASE_URL) return { scope, mode: 'default' };
-    } catch { /* absent or unparsable */ }
-  }
+  const scope = selectedWiringScope();
+  try {
+    const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
+    const base = s.env && s.env.ANTHROPIC_BASE_URL;
+    if (base === COMPAT_BASE_URL) return { scope, mode: 'compat' };
+    if (base === DEFAULT_BASE_URL) return { scope, mode: 'default' };
+  } catch { /* absent or unparsable */ }
   return null;
 }
 
@@ -693,16 +764,31 @@ async function statusReport() {
 // -------------------------------------------------------------- env wiring
 
 function envCommand() {
+  const modeIndex = args.indexOf('--mode');
+  const requestedMode = modeIndex === -1 ? null : args[modeIndex + 1];
+  if (flag('--mode') && !['local', 'global'].includes(requestedMode)) die('env --mode must be local or global', 2);
+  if (requestedMode) writeWiringMode(requestedMode);
+
   const remove = flag('--remove');
   const scope = flag('--write-project') ? 'project' : flag('--write-user') ? 'user' : null;
   if (!scope) {
-    log('add this to the "env" block of your Claude Code settings.json:');
+    if (requestedMode) {
+      log(`wiring mode set to ${requestedMode}. ${requestedMode === 'local'
+        ? 'Run env --write-project in each project, or /update-toolshed to wire recorded projects.'
+        : 'Run env --write-user to wire ~/.claude/settings.json.'}`);
+      log('Settings changes apply to new Claude Code sessions.');
+      return;
+    }
+    log('add this to the "env" block of this project\'s .claude/settings.local.json:');
     log(JSON.stringify({ env: envBlockFor('default') }, null, 2));
-    log('\nor run: env --write-user   (global) / --write-project (this repo)');
-    log('\nRC-compatibility mode (restores /remote-control) is opt-in and automatic once you add the');
+    log('\nor run: env --write-project   (this repo) / env --write-user   (global mode)');
+    log('\nLocal wiring is the default. It applies to new Claude Code sessions after restart.');
+    log('RC-compatibility mode (restores /remote-control) is opt-in and automatic once you add the');
     log('hosts entry yourself; see the RC-compatibility mode section of the README.');
     return;
   }
+  if (scope === 'project') writeWiringMode('local');
+  if (scope === 'user' && !remove) writeWiringMode('global');
   writeEnv(scope, remove);
 }
 
@@ -710,9 +796,12 @@ function envCommand() {
 // function's own logging so a caller doing an automatic mode switch can print
 // its own single, more specific line instead.
 function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
+  const migration = scope === 'project' ? migrateLegacyProjectSettings() : null;
+  const effectiveMode = migration?.mode || mode;
   const file = settingsPath(scope);
-  let settings = {};
-  try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* new file */ }
+  if (remove && !fs.existsSync(file)) return { changed: false, file };
+  const settings = readSettingsForWrite(file);
+  const original = JSON.stringify(settings);
   settings.env = settings.env || {};
   if (remove) {
     if (ourBaseUrls().includes(settings.env.ANTHROPIC_BASE_URL)) delete settings.env.ANTHROPIC_BASE_URL;
@@ -721,20 +810,23 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
     }
     if (!Object.keys(settings.env).length) delete settings.env;
   } else {
-    Object.assign(settings.env, envBlockFor(mode));
+    Object.assign(settings.env, envBlockFor(effectiveMode));
     for (const [k, v] of Object.entries(LEGACY_ENV_BLOCK)) {
       if (String(settings.env[k]) === String(v)) delete settings.env[k];
     }
     cleanLegacyGatewayModelCache();
   }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
-  if (quiet) return;
+  if (remove && JSON.stringify(settings) === original) return { changed: false, file };
+  writeSettings(file, settings);
+  const verified = readSettingsForWrite(file);
+  const expected = remove ? undefined : envBlockFor(effectiveMode).ANTHROPIC_BASE_URL;
+  if (verified.env?.ANTHROPIC_BASE_URL !== expected) throw new Error(`Could not verify gateway settings in ${file}`);
+  if (quiet) return { changed: true, file };
   log(`${remove ? 'removed from' : 'written to'} ${file}`);
   if (!remove) {
-    log('every new Claude Code session now routes through the shim; the SessionStart');
-    log('hook keeps it alive. Restart Claude Code, then open /model to see the Codex rows.');
+    log('new Claude Code sessions now use this wiring. Restart Claude Code, then open /model to see the Codex rows.');
   }
+  return { changed: true, file };
 }
 
 // Called once per session (from `ensure`, after the shim is confirmed
@@ -774,20 +866,26 @@ async function doctor() {
   log(catalog && Array.isArray(catalog.models)
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH}`
     : 'catalog: not written yet');
-  for (const scope of ['user', 'project']) {
+  const activeMode = wiringMode();
+  const activeScope = selectedWiringScope();
+  log(`wiring mode: ${activeMode} (${activeMode === 'local' ? 'per-project .claude/settings.local.json' : 'global ~/.claude/settings.json'})`);
+  for (const scope of ['project', 'user']) {
     try {
       const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
       const base = s.env && s.env.ANTHROPIC_BASE_URL;
       const wired = ourBaseUrls().includes(base);
       const modeLabel = base === COMPAT_BASE_URL ? ' [RC-compatibility mode]' : base === DEFAULT_BASE_URL ? ' [default mode]' : '';
-      log(`${scope} settings: ${wired ? 'wired' + modeLabel : 'not wired'} (${settingsPath(scope)})`);
-    } catch { log(`${scope} settings: not wired`); }
+      const label = scope === 'project' ? 'project settings.local.json' : 'user settings.json';
+      log(`${label}: ${wired ? 'wired' + modeLabel : 'not wired'} (${settingsPath(scope)})${scope === activeScope ? ' [active]' : ''}`);
+    } catch {
+      const label = scope === 'project' ? 'project settings.local.json' : 'user settings.json';
+      log(`${label}: not wired${scope === activeScope ? ' [active]' : ''}`);
+    }
   }
+  if (activeMode === 'local') log('Local wiring applies to new Claude Code sessions. Run env --write-project in a new project.');
   const scope = installScope();
   if (scope === 'project-only') {
-    log('install scope: PROJECT-ONLY — codex-gateway wires a global env var and needs its');
-    log('  keepalive hook in every session; reinstall at user scope:');
-    log('  claude plugin install codex-gateway@eigenwise-toolshed --scope user');
+    log('install scope: PROJECT-ONLY — local wiring is supported for this project.');
   } else if (scope === 'user') {
     log('install scope: user (correct)');
   }
@@ -1329,7 +1427,7 @@ function runShim() {
   const usageEmitter = createGatewayUsageEmitter();
   const settingsWiring = wiredMode();
   if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL) && !settingsWiring) {
-    console.error('codex-gateway: ANTHROPIC_BASE_URL is shell-only; wire it through user or project settings so background sessions stay metered');
+    console.error('codex-gateway: ANTHROPIC_BASE_URL is shell-only; wire it through local .claude/settings.local.json or global settings so background sessions stay metered');
   }
   const sentrySessions = new Map();
   const compactTriggerIsFixed = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0;
@@ -2152,13 +2250,11 @@ if (require.main === module) {
       warnIfProxyOutdated();
       if (!wired) {
         log(isAuthed()
-          ? 'codex-gateway is running but Claude Code is not wired to it. Offer to run its env --write-user (see the codex-gateway skill), then restart.'
+          ? 'codex-gateway is running but Claude Code is not wired to it. Run env --write-project to use this project\'s .claude/settings.local.json, then restart.'
           : 'codex-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the codex-gateway skill.');
       } else {
-        if (installScope() === 'project-only') {
-          // wired (global env) but the keepalive hook only runs in the project it's
-          // installed in — every other project points at a shim nothing restarts.
-          log('codex-gateway is installed PROJECT-ONLY but wires a global env var, so other projects route through a shim its hook won\'t keep alive. Offer to reinstall it at user scope: claude plugin install codex-gateway@eigenwise-toolshed --scope user');
+        if (installScope() === 'project-only' && wiringMode() === 'global') {
+          log('codex-gateway is installed PROJECT-ONLY with global wiring. Other projects route through a shim this hook will not keep alive. Use local wiring, or reinstall at user scope.');
         }
         // Keep the wired env in sync with the hosts file every session: promote
         // to RC-compatibility mode once the entry appears (and :80 actually
@@ -2203,12 +2299,16 @@ module.exports = {
   ourBaseUrls,
   wiredMode,
   writeEnv,
+  writeWiringMode,
+  wiringMode,
+  migrateLegacyProjectSettings,
   settingsPath,
   createHostsBypassResolver,
   COMPAT_HOST,
   COMPAT_PORT,
   DEFAULT_BASE_URL,
   COMPAT_BASE_URL,
+  WIRING_CONFIG_PATH,
   parseSemver,
   semverLt,
   shimNeedsRestart,

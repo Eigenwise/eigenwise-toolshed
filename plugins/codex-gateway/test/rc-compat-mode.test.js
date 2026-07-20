@@ -168,8 +168,15 @@ test('writeEnv switches only the plugin-owned base URL and leaves unrelated sett
     if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
     if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
   });
+  const wiringConfig = gw.WIRING_CONFIG_PATH;
+  const previousWiringConfig = fs.existsSync(wiringConfig) ? fs.readFileSync(wiringConfig) : null;
+  t.after(() => {
+    if (previousWiringConfig) fs.writeFileSync(wiringConfig, previousWiringConfig);
+    else fs.rmSync(wiringConfig, { force: true });
+  });
   process.env.USERPROFILE = home;
   process.env.HOME = home;
+  gw.writeWiringMode('global');
 
   const file = gw.settingsPath('user');
   fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -624,6 +624,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(cwd, '.claude', 'settings.json'), JSON.stringify({
     env: {
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764',
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
       USER_SETTING: 'keep-me',
     },
@@ -635,7 +636,8 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   });
   assert.equal(result.status, 0, result.stderr);
 
-  const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
+  const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
+  const legacy = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
   assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
   assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
   // Fable is a 1M Claude model too; pin it so a gateway session gets its full
@@ -643,16 +645,35 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5[1m]');
   assert.equal(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '64000');
   assert.equal(settings.env.ENABLE_TOOL_SEARCH, 'true');
-  assert.equal(settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
-  assert.equal(settings.env.USER_SETTING, 'keep-me');
+  assert.equal(settings.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:18764');
+  assert.equal(legacy.env.ANTHROPIC_BASE_URL, undefined);
+  assert.equal(legacy.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
+  assert.equal(legacy.env.USER_SETTING, 'keep-me');
 
   const removed = spawnSync(process.execPath, [CLI, 'env', '--write-project', '--remove'], { cwd, encoding: 'utf8' });
   assert.equal(removed.status, 0, removed.stderr);
-  const after = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
+  const after = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
   assert.equal(after.env?.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
   assert.equal(after.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
   assert.equal(after.env?.ENABLE_TOOL_SEARCH, undefined);
-  assert.equal(after.env?.USER_SETTING, 'keep-me');
+  assert.equal(legacy.env?.USER_SETTING, 'keep-me');
+});
+
+test('doctor describes local settings.local.json wiring', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-doctor-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-doctor-project-'));
+  try {
+    const result = spawnSync(process.execPath, [CLI, 'doctor'], {
+      cwd,
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      encoding: 'utf8',
+    });
+    assert.match(result.stdout, /wiring mode: local/);
+    assert.match(result.stdout, /project settings\.local\.json: not wired/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test('claude-* passthrough is byte-identical and never subjected to Codex window/error rewriting', async (t) => {

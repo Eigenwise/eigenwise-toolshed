@@ -23,8 +23,7 @@ All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" <command>`
 
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
 state; act on it. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
-(sha256-verified), starts everything, and wires `env --write-user` automatically when ChatGPT
-auth is already valid. Re-running it later is also the upgrade path.
+(sha256-verified) and starts everything. Re-running it later is also the upgrade path.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" setup
@@ -34,10 +33,13 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/codex-gateway.js" setup    # finishes the wiring
 ```
 
 `login` opens the user's browser; they complete it themselves (suggest `! node ... login` if it
-needs a real TTY). Prefer `env --write-project` over the default user-wide wiring only if the
-user wants Codex models in this repo alone. After `env --write-user`, the user restarts Claude Code and
-the Codex rows appear in `/model` labeled "From gateway". Discovery needs Claude Code v2.1.129+
-and fails silently if the shim answers slowly; `models` shows exactly what's advertised.
+needs a real TTY). Local wiring is the default: run `env --write-project` from the current repo,
+or `/update-toolshed` to wire recorded projects and migrate an older global block. It writes
+`.claude/settings.local.json`; unrecorded projects stay unwired until explicitly wired. Global
+`~/.claude/settings.json` wiring is still available after `env --mode global`, followed by
+`env --write-user`. All wiring changes apply to new Claude Code sessions, so restart after the
+write. The Codex rows appear in `/model` labeled "From gateway". Discovery needs Claude Code
+v2.1.129+ and fails silently if the shim answers slowly; `models` shows exactly what's advertised.
 
 That restart is ONLY to surface new model rows in `/model` — model discovery happens once at
 session start. Restoring or refreshing auth on an already-wired install needs no restart: the
