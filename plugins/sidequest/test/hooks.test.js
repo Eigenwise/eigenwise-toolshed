@@ -14,7 +14,8 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
-const { slug } = store.ensureProject(path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board'));
+const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
+const { slug } = store.ensureProject(BOARD_PATH);
 const database = db.openDb(SIDEQUEST_HOME);
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
@@ -25,6 +26,7 @@ const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
+const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 
 const BUDGET = {
@@ -234,6 +236,50 @@ test('pre-tool hook warns a sidequest executor once near its turn backstop', () 
 test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', () => {
   assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_id: 'main-thread' }), null);
   assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_type: 'explore', agent_id: 'other-agent' }), null);
+});
+
+test('pre-tool inline-work nudge fires once after five substantive main-thread actions', () => {
+  const session_id = `inline-nudge-${Date.now()}`;
+  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
+  for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  const nudge = runHookOutput(INLINE_WORK_NUDGE, payload);
+  assert.match(nudge.hookSpecificOutput.additionalContext, /substantive work inline/);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+});
+
+test('pre-tool inline-work nudge stays quiet after a board interaction', () => {
+  const session_id = `inline-board-${Date.now()}`;
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
+  }), null);
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Edit', tool_input: {},
+    }), null);
+  }
+  const cliSession = `inline-cli-${Date.now()}`;
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Bash',
+    tool_input: { command: 'node "C:/plugins/sidequest/bin/sidequest.js" list' },
+  }), null);
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Edit', tool_input: {},
+    }), null);
+  }
+});
+
+test('pre-tool inline-work nudge ignores subagents and routing-disabled boards', () => {
+  const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', tool_name: 'Write', tool_input: {} };
+  for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
+
+  store.setProjectRouting(slug, 'disabled');
+  try {
+    const disabled = { session_id: `inline-disabled-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
+    for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, disabled), null);
+  } finally {
+    store.setProjectRouting(slug, 'enabled');
+  }
 });
 
 /* ------------------------------------------------------------------ *
@@ -756,6 +802,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
   assert.strictEqual(config.hooks.UserPromptSubmit, undefined);
   assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
+  assert.ok(config.hooks.PreToolUse.some((entry) => entry.matcher === '*'
+    && entry.hooks.some((hook) => hook.command.includes('inline-work-nudge.js'))), 'the inline-work reminder must be registered for every tool');
   assert.ok(config.hooks.PreToolUse.some((entry) => entry.matcher === 'Agent'
     && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry) => entry.matcher === 'TaskOutput'

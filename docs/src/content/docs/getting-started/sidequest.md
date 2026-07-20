@@ -19,6 +19,8 @@ Keep tiny lookups inline with `Read`, `Glob`, `Grep`, or `WebFetch`. Every deleg
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
 
+When an active routed board sees five substantive main-thread actions with no board interaction, Sidequest adds one reminder to file a ticket or claim one directly for deliberate inline work. It ignores subagents, pure read-only shell commands, and boards with routing disabled.
+
 ## Work a ticket
 
 Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
