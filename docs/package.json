@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro check && astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "screenshots": "node screenshots/capture.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.3",
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
+    "playwright": "^1.61.1",
     "typescript": "^6.0.3"
   }
 }

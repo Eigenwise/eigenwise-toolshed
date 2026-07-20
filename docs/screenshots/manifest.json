@@ -1,0 +1,12 @@
+{
+  "viewport": "1400px wide, dark mode",
+  "generatedBy": "npm run screenshots",
+  "files": {
+    "sidequest-kanban.png": "Synthetic Acme Webshop Sidequest board.",
+    "sidequest-ticket-detail.png": "Synthetic Acme Webshop ticket detail.",
+    "observability-tokens-models.png": "Synthetic Grafana Tokens & models view.",
+    "observability-mcp.png": "Synthetic Grafana MCP view.",
+    "observability-who-is-burning.png": "Synthetic Grafana model burn table.",
+    "observability-board-costs.png": "Synthetic Grafana Sidequest board-cost rollup."
+  }
+}
