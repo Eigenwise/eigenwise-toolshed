@@ -27,7 +27,7 @@ const { callTool } = makeMcpCaller(mcp);
 let ref;
 
 test('seed telemetry fixture', () => {
-  const ticket = cliJson(['add', '-t', 'telemetry fixture', '--file', 'lib/tracked.js', '--complexity', '3', '--why', 'a routine tracked-file fixture for telemetry-read coverage', '--json']);
+  const ticket = cliJson(['add', '-t', 'telemetry fixture', '--file', 'lib/tracked.js', '--complexity', '3', '--why', 'a routine tracked-file fixture for telemetry-read coverage', '--label', 'direct-ok', '--json']);
   ref = ticket.ticket.ref;
   assert.strictEqual(runCli(['claim', ref, '--by', 'telemetry-worker', '--direct', '--reason', 'The telemetry fixture needs an inline claim.']).status, 0);
   assert.strictEqual(runCli(['comment', ref, '--by', 'telemetry-worker', '-m', 'a recent telemetry note']).status, 0);

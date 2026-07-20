@@ -49,6 +49,7 @@ async function addTicket(index) {
     '-t', `parallel ticket ${index}`,
     '--complexity', '1',
     '--why', 'concurrent subprocess fixture for SQLite writer safety',
+    '--label', 'direct-ok',
     '--json',
   ]);
   assert.strictEqual(result.status, 0, `add ${index} failed\n${result.stderr}\n${result.stdout}`);

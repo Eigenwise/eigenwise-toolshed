@@ -2185,13 +2185,17 @@ function reconcileLaunchedDispatches(sessionId, opts) {
 // stale or opts.force; on success it moves the ticket to "doing" unless opts.status is false.
 const DIRECT_REASON_MIN_LENGTH = 20;
 
-function isRoutedTicket(ticket) {
-  return Boolean(ticket && ticket.model && ticket.effort && ticket.exec);
+function isRoutedTicket(slug, ticket) {
+  return projectRoutingEnabled(slug) && Boolean(ticket && ticket.model && ticket.effort && ticket.exec);
 }
 
 function directReason(reason) {
   const value = String(reason || '').trim();
   return value.length >= DIRECT_REASON_MIN_LENGTH ? value : null;
+}
+
+function hasDirectPermission(ticket) {
+  return Array.isArray(ticket.labels) && ticket.labels.some((label) => String(label).toLowerCase() === 'direct-ok');
 }
 
 function claimTicket(slug, idOrRef, by, opts) {
@@ -2204,11 +2208,12 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (!t) return { ok: false, reason: 'not_found' };
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
+    if (opts.direct && isRoutedTicket(slug, t) && (opts.source === 'cli' || opts.source === 'mcp') && !hasDirectPermission(t)) return { ok: false, reason: 'direct_not_allowed', ticket: t };
+    if (opts.direct && isRoutedTicket(slug, t) && (opts.source === 'cli' || opts.source === 'mcp') && !directReason(opts.reason)) return { ok: false, reason: 'direct_reason_required', ticket: t };
     if (opts.direct && t.dispatchNonce) return { ok: false, reason: 'direct_conflict', ticket: t };
-    if (opts.direct && isRoutedTicket(t) && (opts.source === 'cli' || opts.source === 'mcp') && !directReason(opts.reason)) return { ok: false, reason: 'direct_reason_required', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
-    if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
+    if (!opts.direct && isRoutedTicket(slug, t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     // Submitted work awaits the orchestrator's publish transaction, not another
     // executor: re-claiming it would fork the already-verified commit. The
@@ -2220,7 +2225,7 @@ function claimTicket(slug, idOrRef, by, opts) {
     }
     const now = new Date().toISOString();
     t.claim = { by, at: now };
-    if (opts.direct && isRoutedTicket(t)) {
+    if (opts.direct && isRoutedTicket(slug, t)) {
       t.directClaim = {
         by,
         at: now,
@@ -2675,7 +2680,7 @@ function claimNext(slug, by, opts) {
     });
   for (const cand of candidates) {
     const res = claimTicket(slug, cand.id, by, { direct: !!opts.direct, reason: opts.reason, source: opts.source, sessionId: opts.sessionId });
-    if (res.ok || res.reason === 'direct_reason_required') return res;
+    if (res.ok || res.reason === 'direct_not_allowed' || res.reason === 'direct_reason_required') return res;
     // Lost the race or it changed under us — try the next candidate.
   }
   return { ok: false, reason: 'empty' };

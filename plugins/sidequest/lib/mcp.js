@@ -620,7 +620,7 @@ const TOOLS = [
   },
   {
     name: 'claim',
-    description: 'Claim a ticket; proceed only on ok:true. Routed work needs a dispatch token and executor; direct:true requires a reason.',
+    description: 'Claim a ticket; routed work needs a dispatch token and executor. direct:true is only available on a user-labeled direct-ok ticket and needs a reason.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -630,8 +630,8 @@ const TOOLS = [
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         executor: { type: 'string', description: 'Exact executor name from the dispatch.' },
         token: { type: 'string', description: 'Dispatch token (required for routed claims).' },
-        direct: { type: 'boolean', description: 'Inline exception; requires reason.' },
-        reason: { type: 'string', description: 'Direct rationale (20+ chars).' },
+        direct: { type: 'boolean', description: 'User-granted direct-ok exception; requires reason.' },
+        reason: { type: 'string', description: 'Direct rationale (20+ chars, required with direct:true).' },
         force: { type: 'boolean', description: 'Steal a live claim only when certain.' },
         session: { type: 'string' },
       },
@@ -643,7 +643,7 @@ const TOOLS = [
       const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token, !!args.direct);
       if (drift) return Object.assign({ ok: false, project: slug }, drift);
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
-      if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.claim);
+      if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim);
       return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
     },
   },
@@ -670,8 +670,8 @@ const TOOLS = [
         model: { type: 'string', description: 'Filter to a resolved Claude runtime or discovered Codex model slug.' },
         category: { type: 'string', description: 'Filter to a category ID.' },
         priority: { type: 'string', enum: store.VALID_PRIORITY },
-        direct: { type: 'boolean', description: 'Inline exception; requires reason.' },
-        reason: { type: 'string', description: 'Direct rationale (20+ chars).' },
+        direct: { type: 'boolean', description: 'User-granted direct-ok exception; requires reason.' },
+        reason: { type: 'string', description: 'Direct rationale (20+ chars, required with direct:true).' },
         session: { type: 'string' },
       },
       required: ['by'],
@@ -681,6 +681,7 @@ const TOOLS = [
       const by = requireBy(args, 'next');
       requireKnownModelFilter('next', args.model);
       const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, direct: !!args.direct, reason: args.reason, source: 'mcp', sessionId: sessionOf(args) });
+      if (!res.ok) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || 'next ticket', res.ticket || res.claim);
       return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
     },
   },

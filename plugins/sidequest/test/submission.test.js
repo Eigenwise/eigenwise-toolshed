@@ -57,6 +57,7 @@ function addTicket(title, extra) {
     title,
     complexity: 3,
     complexityWhy: 'fixture for the submission lifecycle tests, single mechanical change',
+    labels: ['direct-ok'],
     files: ['lib/fixture.js'],
     source: 'cli',
   }, extra || {}));

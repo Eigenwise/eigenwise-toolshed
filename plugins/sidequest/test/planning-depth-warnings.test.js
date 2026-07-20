@@ -45,6 +45,7 @@ test('claim echoes missing planning context for dispatch visibility', () => {
   const added = cliJson([
     'add', '-t', 'claim warning', '--complexity', '4',
     '--why', 'claim a complexity four ticket to expose the dispatch context warning',
+    '--label', 'direct-ok',
   ]);
   const claim = cliJson(['claim', added.ticket.ref, '--by', 'planning-warning-worker', '--direct', '--reason', 'The planning-warning fixture needs an inline claim.']);
 
@@ -58,6 +59,7 @@ test('add warns when declared file scope does not exist in the repo', () => {
     'add', '-t', 'missing scope', '--complexity', '3',
     '--why', 'exercise warning coverage for an invalid declared scope',
     '--file', 'missing/scope.js',
+    '--label', 'direct-ok',
   ]);
 
   assert.deepStrictEqual(added.warnings, [MISSING_SCOPE_WARNING]);
@@ -68,6 +70,7 @@ test('claim echoes declared file scope warning for dispatch visibility', () => {
     'add', '-t', 'claim missing scope', '--complexity', '3',
     '--why', 'claim a ticket with an invalid declared scope for dispatch warning',
     '--file', 'missing/scope.js',
+    '--label', 'direct-ok',
   ]);
   const claim = cliJson(['claim', added.ticket.ref, '--by', 'scope-warning-worker', '--direct', '--reason', 'The planning-warning fixture needs an inline claim.']);
 

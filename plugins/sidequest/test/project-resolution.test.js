@@ -175,7 +175,7 @@ test('CLI: unknown-name error lists the known project names', () => {
 test('CLI: name resolves to the right board (with real tickets), case-insensitively, through list/claim/release', () => {
   const projAbs = path.join(FAKE_ROOT, 'RoundTrip-Project');
   const added = cliJson(
-    ['add', '-t', 'round trip ticket', '--complexity', '2', '--why', 'ticket used to prove --project name resolution round-trips cleanly'],
+    ['add', '-t', 'round trip ticket', '--complexity', '2', '--why', 'ticket used to prove --project name resolution round-trips cleanly', '--label', 'direct-ok'],
     { cwd: projAbs }
   );
   const ref = added.ticket.ref;

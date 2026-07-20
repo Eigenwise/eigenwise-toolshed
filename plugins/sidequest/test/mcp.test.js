@@ -216,7 +216,7 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
   const ticket = store.createTicket(project, {
-    title: 'MCP terminal lifecycle', files: ['lib/allowed.js'], complexity: 3,
+    title: 'MCP terminal lifecycle', files: ['lib/allowed.js'], labels: ['direct-ok'], complexity: 3,
     complexityWhy: 'exercise the MCP commit and submit terminal worktree lifecycle',
   });
   const by = 'mcp-worktree-worker';
@@ -247,7 +247,7 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   assert.ok(after.comments.some((comment) => comment.body === 'MCP terminal evidence'));
 
   const malformed = store.createTicket(project, {
-    title: 'MCP malformed submission', files: ['lib/other.js'], complexity: 3,
+    title: 'MCP malformed submission', files: ['lib/other.js'], labels: ['direct-ok'], complexity: 3,
     complexityWhy: 'confirm malformed MCP submission input preserves the ticket claim',
   });
   assert.equal(callTool('claim', { project, ref: malformed.ref, by: 'mcp-bad-worker', direct: true, reason: 'The malformed submit fixture needs a claim.' }).ok, true);
@@ -260,7 +260,7 @@ test('MCP submit refuses out-of-scope committed ranges', () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
   const ticket = store.createTicket(project, {
-    title: 'MCP range scope refusal', files: ['lib/allowed.js'], complexity: 3,
+    title: 'MCP range scope refusal', files: ['lib/allowed.js'], labels: ['direct-ok'], complexity: 3,
     complexityWhy: 'confirm MCP submit refuses a committed range outside the declared scope',
   });
   const by = 'mcp-range-worker';
@@ -689,7 +689,7 @@ test('MCP admin/config tools share CLI state transitions', () => {
 
 
 test('claim -> comment -> done return compact acknowledgements', () => {
-  const added = callTool('add', { title: 'work me', complexity: 2, why: 'a mechanical change to exercise the claim/done path over MCP' });
+  const added = callTool('add', { title: 'work me', complexity: 2, why: 'a mechanical change to exercise the claim/done path over MCP', labels: ['direct-ok'] });
   const ref = added.ref;
   const ticket = store.getTicket(added.project, ref);
 
@@ -771,7 +771,7 @@ test('MCP claim passes prepared dispatch token and executor through to the store
   assert.strictEqual(accepted.ok, true);
 });
 
-test('MCP blocks no-dispatch routed claims and records an explicit direct research bypass', () => {
+test('MCP requires direct-ok for routed direct claims and records approved bypasses', () => {
   const added = callTool('add', { title: 'no-file research', category: 'mechanical' });
   const ticket = store.getTicket(added.project, added.ref);
   assert.deepStrictEqual(ticket.files, []);
@@ -780,11 +780,22 @@ test('MCP blocks no-dispatch routed claims and records an explicit direct resear
   assert.strictEqual(refused.reason, 'dispatch_required');
   assert.match(refused.message, /dispatch/i);
   assert.match(refused.message, /direct:true/i);
+  const reason = 'No executor can access this isolated test fixture.';
+  const denied = callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true, reason });
+  assert.strictEqual(denied.ok, false);
+  assert.strictEqual(denied.reason, 'direct_not_allowed');
+  assert.match(denied.message, new RegExp(`${ticket.model}\\s*·\\s*${ticket.effort}`));
+  assert.match(denied.message, /context already loaded/i);
+  assert.match(denied.message, /small change/i);
+  assert.match(denied.message, /handoff\/transfer cost/i);
+  assert.match(denied.message, /retroactively legitimize prior inline investigation/i);
+  assert.equal(store.getTicket(added.project, added.ref).claim, null);
+
+  store.updateTicket(added.project, added.ref, { labels: ['direct-ok'] });
   const missingReason = callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true });
   assert.strictEqual(missingReason.ok, false);
   assert.strictEqual(missingReason.reason, 'direct_reason_required');
   assert.match(missingReason.message, /reason/i);
-  const reason = 'No executor can access this isolated test fixture.';
   const direct = callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true, reason });
   assert.strictEqual(direct.ok, true);
   const pulse = callTool('pulse', { ref: added.ref });

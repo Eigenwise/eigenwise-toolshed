@@ -19,7 +19,7 @@ function bodyFile(name, body) {
 }
 
 function ticket(title) {
-  return cliJson(['add', '--title', title, '--complexity', '2', '--why', 'a small CLI fixture for body-file round-trip coverage', '--json']).ticket.ref;
+  return cliJson(['add', '--title', title, '--complexity', '2', '--why', 'a small CLI fixture for body-file round-trip coverage', '--label', 'direct-ok', '--json']).ticket.ref;
 }
 
 test('comment reads markdown unchanged from --body-file', () => {
