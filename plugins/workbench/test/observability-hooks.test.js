@@ -30,8 +30,10 @@ test('every mapped hook event yields an acceptable canonical observation', () =>
     SubagentStop: { hook_event_name: 'SubagentStop', session_id: 'session-1', agent_id: 'agent-a', agent_type: 'sidequest-exec-dispatch-high', model: 'gpt-5.6-sol', status: 'completed' },
   };
   for (const [event, payload] of Object.entries(payloads)) {
-    const observation = buildObservation(payload, NOW);
+    const observation = buildObservation({ ...payload, cwd: 'C:\\dev\\eigenwise-public\\eigenwise-toolshed' }, NOW);
     assert.equal(observation.event_name, EVENT_MAP[event]);
+    assert.equal(observation.attributes.project_name, 'eigenwise-toolshed');
+    assert.match(observation.project_id, /^[0-9a-f]{64}$/);
     accept(observation);
   }
 });
@@ -51,6 +53,18 @@ test('session start emits the project basename and cwd hash, never the path itse
   const nameless = buildObservation({ hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup' }, NOW);
   assert.equal(nameless.attributes.project_name, undefined);
   assert.equal(nameless.project_id, undefined);
+});
+
+test('post-tool observations re-announce their project after an observer restart', () => {
+  const observation = buildObservation({
+    hook_event_name: 'PostToolUse',
+    session_id: 'session-1',
+    tool_name: 'Bash',
+    cwd: 'C:\\dev\\eigenwise-public\\eigenwise-toolshed',
+  }, NOW);
+  assert.equal(observation.attributes.project_name, 'eigenwise-toolshed');
+  assert.match(observation.project_id, /^[0-9a-f]{64}$/);
+  accept(observation);
 });
 
 test('tool facets classify native vs MCP tools without capturing arguments', () => {

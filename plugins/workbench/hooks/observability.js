@@ -86,12 +86,12 @@ function buildObservation(payload, now) {
 
   const observedAt = (now instanceof Date ? now : new Date()).toISOString();
   const attributes = {};
-  const project = eventName === 'hook.session_start' ? projectMetadata(payload.cwd) : {};
+  const project = projectMetadata(payload.cwd);
+  assign(attributes, 'project_name', project.project_name);
   const permissionMode = identifier(payload.permission_mode);
   const effortValue = effort(payload.effort);
 
   if (eventName === 'hook.session_start') {
-    assign(attributes, 'project_name', project.project_name);
     assign(attributes, 'source', identifier(payload.source));
     assign(attributes, 'permission_mode', permissionMode);
     assign(attributes, 'effort', effortValue);

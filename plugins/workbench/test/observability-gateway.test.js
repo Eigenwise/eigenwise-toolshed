@@ -348,7 +348,7 @@ test('gateway mcp-footprint records keep their server label and drop nothing', a
   assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
 });
 
-test('gateway records inherit their session project from the session-start hook', (t) => {
+test('gateway records inherit projects from post-tool hooks after an observer restart', (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-project-'));
   const store = openObservabilityStore(path.join(directory, 'observability.db'));
   t.after(() => {
@@ -359,13 +359,13 @@ test('gateway records inherit their session project from the session-start hook'
   const projectId = 'b'.repeat(64);
   store.ingest({
     source: 'hook',
-    source_event_id: 'session-start-project',
+    source_event_id: 'post-tool-project',
     source_schema: 'hook-v1',
     observed_at: '2026-07-20T08:00:00.000Z',
-    event_name: 'hook.session_start',
+    event_name: 'hook.post_tool_use',
     project_id: projectId,
     session_id: 'session-with-project',
-    attributes: { source: 'startup', project_name: 'eigenwise-toolshed' },
+    attributes: { project_name: 'eigenwise-toolshed', tool_name: 'Bash', tool_kind: 'native', is_mcp: false },
   });
 
   const gatewayRecord = (id, sessionId) => ({
@@ -392,4 +392,43 @@ test('gateway records inherit their session project from the session-start hook'
   assert.equal(JSON.parse(byId['gateway-project-known'].attributes_json).project_name, 'eigenwise-toolshed');
   assert.equal(byId['gateway-project-unknown'].project_id, null);
   assert.equal(JSON.parse(byId['gateway-project-unknown'].attributes_json).project_name, undefined);
+});
+
+test('store warms session projects from stored hook observations', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-warm-project-'));
+  const databaseFile = path.join(directory, 'observability.db');
+  const projectId = 'c'.repeat(64);
+  const first = openObservabilityStore(databaseFile, { outboxEnabled: false });
+  first.ingest({
+    source: 'hook',
+    source_event_id: 'post-tool-warm-project',
+    source_schema: 'hook-v1',
+    observed_at: '2026-07-20T08:00:00.000Z',
+    event_name: 'hook.post_tool_use',
+    project_id: projectId,
+    session_id: 'session-warm-project',
+    attributes: { project_name: 'eigenwise-toolshed', tool_name: 'Bash', tool_kind: 'native', is_mcp: false },
+  });
+  first.close();
+
+  const store = openObservabilityStore(databaseFile, { outboxEnabled: false });
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  store.ingest({
+    source: 'codex_gateway',
+    source_event_id: 'gateway-warm-project',
+    source_schema: 'gateway-usage-v1',
+    observed_at: '2026-07-20T08:00:01.000Z',
+    event_name: 'gateway.token.usage',
+    session_id: 'session-warm-project',
+    request_id: 'request-warm-project',
+    attributes: { model: 'claude-opus-4-8', backend: 'anthropic', agent_role: 'orchestrator' },
+    measurements: [{ name: 'context_tokens', value: 1000, unit: 'tokens', scope: 'request', quality: 'derived_exact' }],
+  });
+
+  const gateway = store.database.prepare("SELECT project_id, attributes_json FROM observation WHERE source_event_id = 'gateway-warm-project'").get();
+  assert.equal(gateway.project_id, projectId);
+  assert.equal(JSON.parse(gateway.attributes_json).project_name, 'eigenwise-toolshed');
 });

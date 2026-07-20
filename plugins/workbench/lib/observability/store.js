@@ -192,7 +192,7 @@ function openObservabilityStore(databaseFile, options = {}) {
   const SESSION_PROJECT_CAP = 2048;
 
   function rememberProject(observation) {
-    if (observation.event_name !== 'hook.session_start' || !observation.session_id) return;
+    if (!observation.session_id) return;
     const projectName = observation.attributes && observation.attributes.project_name;
     if (!observation.project_id && !projectName) return;
     sessionProjects.delete(observation.session_id);
@@ -202,6 +202,36 @@ function openObservabilityStore(databaseFile, options = {}) {
     });
     while (sessionProjects.size > SESSION_PROJECT_CAP) sessionProjects.delete(sessionProjects.keys().next().value);
   }
+
+  function warmProjectMap() {
+    const rows = database.prepare(`
+      SELECT session_id, project_id, project_name
+      FROM (
+        SELECT
+          session_id,
+          project_id,
+          json_extract(attributes_json, '$.project_name') AS project_name,
+          observed_at,
+          event_id
+        FROM observation
+        WHERE event_name LIKE 'hook.%'
+          AND session_id IS NOT NULL
+          AND (project_id IS NOT NULL OR json_extract(attributes_json, '$.project_name') IS NOT NULL)
+        ORDER BY observed_at DESC, event_id DESC
+        LIMIT ?
+      )
+      ORDER BY observed_at ASC, event_id ASC
+    `).all(SESSION_PROJECT_CAP);
+    for (const row of rows) {
+      rememberProject({
+        session_id: row.session_id,
+        project_id: row.project_id,
+        attributes: { project_name: row.project_name },
+      });
+    }
+  }
+
+  warmProjectMap();
 
   function enrichGateway(input) {
     if (!input || !['gateway.token.usage', 'gateway.tool_result.usage', 'gateway.mcp.footprint'].includes(input.event_name)) return input;
