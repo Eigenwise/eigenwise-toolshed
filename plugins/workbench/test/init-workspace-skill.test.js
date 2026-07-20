@@ -9,6 +9,7 @@ const root = path.join(__dirname, '..');
 const skill = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'SKILL.md'), 'utf8');
 const catalog = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'stack-plugins.md'), 'utf8');
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+const observability = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'observability.md'), 'utf8');
 
 test('init-workspace installs selected plugins before dependent workspace artifacts', () => {
   assert.match(skill, /only prerequisite is \*\*Workbench installed at user scope\*\*/);
@@ -45,4 +46,12 @@ test('Workbench README describes the install-one-plugin bootstrap', () => {
   assert.match(readme, /one bootstrap entrypoint/);
   assert.match(readme, /installs the selected plugins at project scope by default/);
   assert.match(readme, /verifies every selected plugin works/);
+});
+
+test('observability retention guidance matches the store', () => {
+  for (const document of [readme, observability]) {
+    assert.match(document, /does not automatically age-prune SQLite observations/);
+    assert.match(document, /Acknowledged hook-spool and OTLP outbox rows are deleted as soon as they drain/);
+    assert.doesNotMatch(document, /retained for 30 days|retained for 365 days|under 24 hours/);
+  }
 });

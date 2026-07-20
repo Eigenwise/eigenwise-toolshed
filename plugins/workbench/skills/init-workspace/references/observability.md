@@ -71,4 +71,4 @@ For the dashboard, open its configured loopback URL (default `http://127.0.0.1:3
 
 ## Retention and deletion
 
-Safe detailed facts are retained for 30 days. Daily rollups are retained for 365 days. Acknowledged spool/outbox rows are retained for under 24 hours. Dashboard data is retained for seven days. `--disable` stops managed processes and the dashboard container, removes Workbench's project env wiring, and keeps data by default. Add `--delete-data` only after the user chooses deletion.
+Workbench does not automatically age-prune SQLite observations or resolved reports. Acknowledged hook-spool and OTLP outbox rows are deleted as soon as they drain. Dashboard data is retained for seven days. `--disable` stops managed processes and the dashboard container, removes Workbench's project env wiring, and keeps data by default. Add `--delete-data` only after the user chooses deletion.
