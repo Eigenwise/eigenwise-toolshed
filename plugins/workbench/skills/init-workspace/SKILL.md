@@ -149,6 +149,19 @@ Before creating an LSP plugin plan, run its required binary check from the catal
 binary and its exact install hint, but never run a package manager yourself. Let the user either install
 it, continue knowing code intelligence stays unavailable until they do, or drop that plugin.
 
+### Git setup for non-repos
+
+If Phase 0 found that the project directory is not a git repo, ask once with `AskUserQuestion` after
+the user has confirmed their intended stack and before any pre-reload artifact is written. Recommend
+`git init` with this short reason: it preserves the workspace setup and lets future sessions share it.
+
+- On yes, run `git init` in the project root, then write or merge a stack-appropriate `.gitignore`
+  derived from the detected or confirmed stack. Never overwrite an existing `.gitignore`.
+- On no, respect it without asking again. Record that the user declined so Phase 5 can give the one
+  relevant reminder.
+- Never auto-commit. Git initialization and `.gitignore` are the only changes in this step; the user
+  still owns the first commit.
+
 ## Phase 2 — Install, then pre-reload writes
 
 ### 2a. Build and run the plugin plan
@@ -284,8 +297,10 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 
 - Tell the user **exactly what they got**: which plugins are enabled, which rules are live (and that
   editing them takes effect next prompt), whether a map was built, and where the board is.
-- **Commit reminder.** In a git repo, tell them to commit `.claude/` so the team and every future
-  session share the setup. Offer to do it (ship-by-default if that's their preference).
+- **Commit reminder.** If the project is a git repo, tell them to commit `.claude/` so the team and
+  every future session share the setup. Offer to do it (ship-by-default if that's their preference). If
+  they declined Git setup, say once that the workspace is uncommitted and that they can run `git init`,
+  add a stack-appropriate `.gitignore`, then commit `.claude/` when they want to back it up.
 - **Point at the self-improvement loop.** Remind them the workspace now nudges itself to improve after
   work, and that `retro` runs a deeper reflection pass on demand.
 

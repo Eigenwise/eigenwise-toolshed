@@ -32,6 +32,23 @@ test('init-workspace keeps a single failure-safe reload boundary', () => {
   assert.match(skill, /confirm every selected plugin is\ninstalled, enabled, and at its requested scope/);
 });
 
+test('init-workspace offers Git before writing greenfield workspace artifacts', () => {
+  const stack = skill.indexOf('Stack** — confirm what you detected');
+  const gitSetup = skill.indexOf('### Git setup for non-repos');
+  const phaseTwo = skill.indexOf('## Phase 2 — Install, then pre-reload writes');
+
+  assert.ok(stack >= 0 && stack < gitSetup && gitSetup < phaseTwo);
+  assert.match(skill, /not a git repo, ask once with `AskUserQuestion`/);
+  assert.match(skill, /before any pre-reload artifact is written/);
+  assert.match(skill, /preserves the workspace setup and lets future sessions share it/);
+  assert.match(skill, /On yes, run `git init` in the project root/);
+  assert.match(skill, /stack-appropriate `\.gitignore`/);
+  assert.match(skill, /Never overwrite an existing `\.gitignore`/);
+  assert.match(skill, /On no, respect it without asking again/);
+  assert.match(skill, /Never auto-commit/);
+  assert.match(skill, /they declined Git setup, say once that the workspace is uncommitted/);
+});
+
 test('init-workspace asks for wiring mode only on an unset machine', () => {
   assert.match(skill, /Global \(all projects wired automatically via user settings\) or per-project \(each project opts in via its private settings\.local\.json — recommended\)\?/);
   assert.match(skill, /Persist the choice with `codex-gateway env --mode global` or `codex-gateway env --mode local`/);
