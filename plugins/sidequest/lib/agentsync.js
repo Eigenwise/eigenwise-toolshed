@@ -324,6 +324,63 @@ function quotedShellArgument(value) {
   return `"${String(value || '').replace(/"/g, '\\"')}"`;
 }
 
+function dispatchLauncherPath() {
+  return path.join(store.homeRoot(), 'sidequest-launcher.js');
+}
+
+function dispatchLauncherSource() {
+  return `'use strict';
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+function compareVersions(left, right) {
+  const parts = (value) => String(value || '').split(/[^0-9]+/).map(Number);
+  const a = parts(left);
+  const b = parts(right);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function currentSidequestCli() {
+  const claudeHome = process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  const installs = registry.plugins?.['sidequest@eigenwise-toolshed'] || [];
+  const candidates = installs
+    .filter((install) => install?.installPath)
+    .map((install) => ({ ...install, script: path.join(install.installPath, 'bin', 'sidequest.js') }))
+    .filter((install) => fs.existsSync(install.script));
+  candidates.sort((left, right) => compareVersions(right.version, left.version)
+    || String(right.lastUpdated || '').localeCompare(String(left.lastUpdated || '')));
+  return candidates[0]?.script;
+}
+
+const script = currentSidequestCli();
+if (!script) throw new Error("Sidequest is not installed in Claude Code's plugin registry.");
+const result = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: true });
+if (result.error) throw result.error;
+process.exit(result.status == null ? 1 : result.status);
+`;
+}
+
+function ensureDispatchLauncher() {
+  const filePath = dispatchLauncherPath();
+  const source = dispatchLauncherSource();
+  let current = null;
+  try { current = fs.readFileSync(filePath, 'utf8'); } catch (_) {}
+  if (current !== source) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(filePath, source, { encoding: 'utf8', mode: 0o600 });
+  }
+  return filePath;
+}
+
 function renderDispatchStub(ticket, nonce, projectPath) {
   const briefing = renderTicketBriefing(ticket, nonce);
   const project = String(projectPath || '').trim();
@@ -331,7 +388,7 @@ function renderDispatchStub(ticket, nonce, projectPath) {
   const marker = briefing.match(/^\[sidequest-route [^\n]+\]$/m)?.[0];
   const command = [
     'node',
-    quotedShellArgument(path.join(__dirname, '..', 'bin', 'sidequest.js')),
+    quotedShellArgument(ensureDispatchLauncher()),
     'briefing',
     String(ticket.ref),
     '--token',

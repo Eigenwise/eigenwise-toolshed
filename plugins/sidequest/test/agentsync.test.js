@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const { spawnSync } = require('node:child_process');
 
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-home-'));
 const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-nodisc-'));
@@ -210,6 +211,50 @@ test('declared-file tickets receive a worktree spawn unless shared-tree is expli
     effort: 'high', isolation: 'worktree',
   }, { dir: tmpDir(), waitMs: 0 });
   assert.equal(created.spawn.isolation, 'worktree');
+});
+
+test('renderDispatchStub keeps its briefing command alive after the dispatched cache version is removed', () => {
+  clearCatalog();
+  const claudeHome = tmpDir();
+  const staleInstall = path.join(claudeHome, 'cache', 'sidequest', '2.42.0');
+  const currentInstall = path.join(claudeHome, 'cache', 'sidequest', '2.41.0');
+  const writeCli = (install) => {
+    const bin = path.join(install, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'sidequest.js'), "process.stdout.write(process.argv.slice(2).join(' '));");
+  };
+  writeCli(staleInstall);
+  writeCli(currentInstall);
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: {
+      'sidequest@eigenwise-toolshed': [
+        { installPath: staleInstall, version: '2.42.0', lastUpdated: '2026-07-19T00:00:00.000Z' },
+        { installPath: currentInstall, version: '2.41.0', lastUpdated: '2026-07-20T00:00:00.000Z' },
+      ],
+    },
+  }));
+
+  const stub = agentsync.renderDispatchStub({
+    ref: 'SQ-586', title: 'Stable briefing launcher', model: 'opus', effort: 'high',
+    dispatchExecutor: 'sidequest-exec-high', category: {},
+  }, 'briefing-token', 'C:\\dev\\fixture');
+  const launcher = stub.match(/FIRST action: run `node "([^"]+)"/)[1];
+  assert.match(launcher, /sidequest-launcher\.js$/);
+  assert.doesNotMatch(stub, new RegExp(staleInstall.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+  const runBriefing = () => spawnSync(process.execPath, [launcher, 'briefing', 'SQ-586', '--token', 'briefing-token', '--project', 'C:\\dev\\fixture'], {
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_CLAUDE_HOME: claudeHome },
+  });
+  const intact = runBriefing();
+  assert.equal(intact.status, 0, intact.stderr);
+  assert.equal(intact.stdout, 'briefing SQ-586 --token briefing-token --project C:\\dev\\fixture');
+
+  fs.rmSync(staleInstall, { recursive: true, force: true });
+  const recovered = runBriefing();
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.equal(recovered.stdout, 'briefing SQ-586 --token briefing-token --project C:\\dev\\fixture');
 });
 
 test('renderTicketBriefing contains only ticket-specific dispatch context', () => {
