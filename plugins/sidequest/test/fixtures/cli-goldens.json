@@ -1,0 +1,30 @@
+{
+  "help": {
+    "args": ["--help"],
+    "status": 0,
+    "stdoutBytes": 10398,
+    "stdoutSha256": "c68d368f0bcee5ab2baee9ef7e41805f21206335000cc2ae5810d329126ea1cf",
+    "stderr": ""
+  },
+  "unknown": {
+    "args": ["not-a-command"],
+    "status": 1,
+    "stdoutBytes": 0,
+    "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr": "sidequest: unknown command \"not-a-command\". Run \"sidequest help\".\n"
+  },
+  "askRemoved": {
+    "args": ["ask"],
+    "status": 1,
+    "stdoutBytes": 0,
+    "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr": "sidequest: unknown command \"ask\". Run \"sidequest help\".\n"
+  },
+  "awaitRemoved": {
+    "args": ["await"],
+    "status": 1,
+    "stdoutBytes": 0,
+    "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr": "sidequest: unknown command \"await\". Run \"sidequest help\".\n"
+  }
+}

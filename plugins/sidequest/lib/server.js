@@ -6,9 +6,7 @@ const path = require("path");
 const url = require("url");
 const { spawn } = require("child_process");
 const store = require("./store");
-const DASHBOARD_ROOT = path.join(__dirname, "..", "dashboard");
-const DASHBOARD_DIST = path.join(DASHBOARD_ROOT, "dist");
-const DASHBOARD_HTML = path.join(DASHBOARD_ROOT, "index.html");
+const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard", "dist");
 let PLUGIN_VERSION = null;
 try {
   PLUGIN_VERSION = require("../.claude-plugin/plugin.json").version || null;
@@ -90,7 +88,7 @@ async function readStaticFile(file) {
 }
 async function serveStatic(pathname, res) {
   if (pathname === "/" || pathname === "/index.html") {
-    const shell = await readStaticFile(path.join(DASHBOARD_DIST, "index.html")) || await readStaticFile(DASHBOARD_HTML);
+    const shell = await readStaticFile(path.join(DASHBOARD_DIST, "index.html"));
     if (!shell) {
       sendText(res, 500, "sidequest dashboard file is missing. Reinstall the plugin.", "text/plain; charset=utf-8");
       return true;
