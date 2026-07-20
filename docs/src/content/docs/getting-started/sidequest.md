@@ -13,7 +13,9 @@ Reload Claude Code, then open the board with `/sidequest:board`. The dashboard s
 
 ## Categories and dispatch
 
-Categories describe the kind of work and carry executor guidance, a model route, and an effort. A ticket is claimed before an executor touches it. The dispatch flow is: select a ready ticket, claim it, run the scoped work and verification, then submit the commit. The board records the route and verification evidence.
+Categories describe the kind of work and carry executor guidance, a model route, and an effort. **Default settings** are shared by every board. **Board settings** fork a category for one board, and the dashboard marks each category as inherited or customized. Resetting a customized category relinks it to the defaults.
+
+A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Direct claims still work, but `dispatch` returns `routing disabled on this board`. Turn it back on with `sidequest routing enabled --project <board>`.
 
 Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when you need board administration. Keep a ticket's file scope accurate so parallel work stays isolated.
 
