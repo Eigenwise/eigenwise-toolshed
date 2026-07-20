@@ -123,7 +123,7 @@ function sourceFreshness(instance, plugin, entry, runGit = (args) => childProces
   return 'unknown';
 }
 
-function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness = sourceFreshness) {
+function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness = sourceFreshness, updates = []) {
   const problems = [];
   const manifests = new Map();
   const names = [...new Set(instances.map((instance) => pluginIdParts(instance.id)?.marketplace).filter(Boolean))];
@@ -161,8 +161,10 @@ function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshn
 
     if (plugin.version) {
       const comparison = compareVersions(instance.version, plugin.version);
-      if (comparison === -1) problems.push(`${instance.id} ${instance.version} is behind cached ${plugin.version}`);
-      else if (comparison === null) problems.push(`${instance.id} freshness is unknown because its version cannot be compared`);
+      if (comparison === -1) {
+        problems.push(`${instance.id} ${instance.version} is behind cached ${plugin.version}`);
+        updates.push({ name: parts.name, installed: instance.version, available: plugin.version });
+      } else if (comparison === null) problems.push(`${instance.id} freshness is unknown because its version cannot be compared`);
       continue;
     }
 
@@ -230,13 +232,14 @@ function audit(options = {}) {
   };
   const boards = options.boards || sidequestBoards(home);
   const mappings = boardMappings(boards, instances);
+  const updates = [];
   const problems = [
-    ...installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness),
+    ...installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness, updates),
     ...gatewayFreshness(instances, checkGateway),
     ...requiredVersions(versions),
     ...mappings.problems,
   ];
-  return { problems: [...new Set(problems)].sort(), mappings: mappings.mappings, instances };
+  return { problems: [...new Set(problems)].sort(), mappings: mappings.mappings, instances, updates };
 }
 
 function warning(problems) {
@@ -253,11 +256,47 @@ function emitWarning(problems, debouncer = defaultDebouncer) {
   return debouncer.first(state) ? message : '';
 }
 
+function loadedPluginVersion(pluginRoot = process.env.CLAUDE_PLUGIN_ROOT) {
+  return pluginRoot ? readJson(path.join(pluginRoot, '.claude-plugin', 'plugin.json'))?.version || null : null;
+}
+
+function newerWorkbenchVersion(instances, loadedVersion) {
+  return instances
+    .filter((instance) => pluginIdParts(instance.id)?.name === 'workbench')
+    .find((instance) => compareVersions(loadedVersion, instance.version) === -1)?.version || null;
+}
+
+function compressedUpdates(updates) {
+  const unique = new Map();
+  for (const update of updates) {
+    const existing = unique.get(update.name);
+    if (!existing || compareVersions(existing.available, update.available) === -1) unique.set(update.name, update);
+  }
+  const values = [...unique.values()].sort((left, right) => left.name.localeCompare(right.name));
+  const shown = values.slice(0, 3).map((update) => `${update.name} ${update.installed} → ${update.available}`);
+  return shown.length ? `${shown.join(', ')}${values.length > shown.length ? `, +${values.length - shown.length} more` : ''}` : '';
+}
+
+function systemMessage(result, loadedVersion) {
+  const messages = [];
+  const installedVersion = newerWorkbenchVersion(result.instances, loadedVersion);
+  if (installedVersion) messages.push(`Toolshed: workbench ${loadedVersion} loaded, ${installedVersion} installed — /reload-plugins to pick it up.`);
+  const updates = compressedUpdates(result.updates);
+  if (updates) messages.push(`Toolshed updates available (cached): ${updates} — /update-toolshed, then /reload-plugins.`);
+  return messages.join('\n');
+}
+
 function main() {
   try {
     const result = audit();
-    const message = emitWarning(result.problems);
-    if (message) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: message } }));
+    const context = emitWarning(result.problems);
+    const notice = systemMessage(result, loadedPluginVersion());
+    if (context || notice) {
+      const output = {};
+      if (context) output.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: context };
+      if (notice) output.systemMessage = notice;
+      process.stdout.write(JSON.stringify(output));
+    }
   } catch (_) {
     // A read-only audit must never stop Claude Code from starting.
   }
@@ -274,11 +313,15 @@ module.exports = {
   autoUpdateEnabled,
   boardMappings,
   compareVersions,
+  compressedUpdates,
   createDebouncer,
   emitWarning,
   gatewayFreshness,
   installedFreshness,
+  loadedPluginVersion,
+  newerWorkbenchVersion,
   pluginInstances,
   sourceFreshness,
+  systemMessage,
   warning,
 };

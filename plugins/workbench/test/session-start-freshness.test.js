@@ -1,6 +1,10 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -207,4 +211,100 @@ test('debounces the same state but reports a changed state', () => {
   assert.match(emitWarning(['stale cache'], debouncer), /stale cache/);
   assert.equal(emitWarning(['stale cache'], debouncer), '');
   assert.match(emitWarning(['stale cache', 'proxy down'], debouncer), /proxy down/);
+});
+
+const hookPath = path.join(__dirname, '..', 'hooks', 'session-start-freshness.js');
+
+function hookOutput({ registry, manifest, loadedVersion, marketplaces = {} }) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-freshness-'));
+  const cache = path.join(home, 'marketplace');
+  const pluginRoot = path.join(home, 'workbench');
+  try {
+    fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
+    fs.mkdirSync(path.join(cache, '.claude-plugin'), { recursive: true });
+    fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), registry);
+    fs.writeFileSync(path.join(home, '.claude', 'plugins', 'known_marketplaces.json'), JSON.stringify({
+      'eigenwise-toolshed': {
+        autoUpdate: true,
+        lastUpdated: new Date().toISOString(),
+        installLocation: cache,
+      },
+      ...marketplaces,
+    }));
+    fs.writeFileSync(path.join(cache, '.claude-plugin', 'marketplace.json'), manifest);
+    fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: loadedVersion }));
+    const output = childProcess.execFileSync(process.execPath, [hookPath], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: pluginRoot },
+      timeout: 10_000,
+    });
+    return output ? JSON.parse(output) : null;
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+function hookFixture(plugins, versions) {
+  return {
+    registry: JSON.stringify({ plugins }),
+    manifest: JSON.stringify({
+      plugins: Object.entries(versions).map(([name, version]) => ({ name, version })),
+    }),
+  };
+}
+
+test('writes a reload notice to SessionStart hook stdout for a stale session', () => {
+  const output = hookOutput({
+    ...hookFixture({ 'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.49.0' }] }, { workbench: '0.49.0' }),
+    loadedVersion: '0.48.0',
+  });
+
+  assert.equal(output.systemMessage, 'Toolshed: workbench 0.48.0 loaded, 0.49.0 installed — /reload-plugins to pick it up.');
+  assert.equal(output.hookSpecificOutput, undefined);
+});
+
+test('writes cached update availability to SessionStart hook stdout', () => {
+  const output = hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.49.0' }],
+      'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '2.41.0' }],
+    }, { workbench: '0.50.0', sidequest: '2.42.0' }),
+    loadedVersion: '0.49.0',
+  });
+
+  assert.equal(output.systemMessage, 'Toolshed updates available (cached): sidequest 2.41.0 → 2.42.0, workbench 0.49.0 → 0.50.0 — /update-toolshed, then /reload-plugins.');
+});
+
+test('emits no SessionStart message when every version is current', () => {
+  const output = hookOutput({
+    ...hookFixture({ 'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.49.0' }] }, { workbench: '0.49.0' }),
+    loadedVersion: '0.49.0',
+  });
+
+  assert.equal(output, null);
+});
+
+test('fails open without a SessionStart message for malformed local state', () => {
+  const output = hookOutput({
+    registry: '{malformed',
+    manifest: '{malformed',
+    loadedVersion: '0.49.0',
+  });
+
+  assert.equal(output, null);
+});
+
+test('limits update notices to three plugins', () => {
+  const output = hookOutput({
+    ...hookFixture({
+      'alpha@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
+      'beta@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
+      'gamma@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
+      'omega@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
+    }, { alpha: '1.1.0', beta: '1.1.0', gamma: '1.1.0', omega: '1.1.0' }),
+    loadedVersion: '0.49.0',
+  });
+
+  assert.match(output.systemMessage, /alpha 1.0.0 → 1.1.0, beta 1.0.0 → 1.1.0, gamma 1.0.0 → 1.1.0, \+1 more/);
 });
