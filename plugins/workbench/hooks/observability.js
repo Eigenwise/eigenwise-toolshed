@@ -209,4 +209,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { EVENT_MAP, buildObservation, spool, defaultSpoolPath };
+module.exports = { EVENT_MAP, buildObservation, defaultSpoolPath, projectMetadata, spool };

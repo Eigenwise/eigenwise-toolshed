@@ -476,7 +476,9 @@ async function setupObservability(options = {}) {
     }
   }
 
-  const settings = applySettings(plan.projectDir, { ...options, ports: config.observability.ports });
+  const settings = options.applyProjectSettings === false
+    ? { changed: false, skipped: true, settingsPath: projectSettingsPath(plan.projectDir) }
+    : applySettings(plan.projectDir, { ...options, ports: config.observability.ports });
   const managedConfig = normalizeManagedConfig({
     ...config,
     observability: {

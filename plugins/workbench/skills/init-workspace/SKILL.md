@@ -84,7 +84,10 @@ essays. Ask what you genuinely can't infer. A good compact set (adapt, don't rec
    default is project scope, local is only for an explicitly personal-per-repo choice, and user is
    only for an explicitly cross-project choice.
 6. **CLAUDE.md?** Do they want one seeded (you'll delegate to `/init`), or skip it?
-7. **Usage observability?** Ask whether to enable metadata-only usage observability. Say that it downloads a pinned Collector, edits project `settings.local.json`, and can add a local dashboard through Docker. Show the current state when it is already configured, then offer to keep it, change its sink/dashboard/ports, or disable it and keep/delete its data. Read `references/observability.md` before applying the answer.
+7. **Usage observability?** Offer the per-project metadata-only opt-in through `/enable-project-telemetry`.
+   Say it writes this project's `settings.local.json`, prepares the loopback Collector and observer, and
+   can use the local dashboard when configured. Do not turn it on during workspace setup: leave the user
+   with the explicit opt-in step after reload.
 
 Use the `AskUserQuestion` tool for the choices with clear options (plugins, codebase-or-not,
 `CLAUDE.md` yes/no); ask the open ones (what is this, conventions) in plain text. If the user said
@@ -139,7 +142,9 @@ pre-reload artifacts.
 
 ### 2b. Optional local telemetry
 
-Use `references/observability.md` now for every observability answer, including reconfiguration or disable. Run the helper's check pass, show the current state and delta, then apply the confirmed change after the plugin installer succeeds and before any reload request. On a partial failure, stop and give the exact rerun command. Do not request reload or claim the workspace setup completed.
+Do not enable telemetry as part of `init-workspace`. If the user chose it in the interview, leave them a
+post-reload pointer to `/enable-project-telemetry`; that skill owns the explicit per-project consent, runtime
+preparation, settings merge, registry entry, and reload boundary.
 
 ### 2c. Atomic live rules
 
