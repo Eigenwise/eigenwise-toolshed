@@ -19,7 +19,7 @@ Keep tiny lookups inline with `Read`, `Glob`, `Grep`, or `WebFetch`. Every deleg
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
 
-When an active routed board sees five substantive main-thread actions with no board interaction, Sidequest adds one reminder to file a ticket or claim one directly for deliberate inline work. It ignores subagents, pure read-only shell commands, and boards with routing disabled.
+On the first prompt in each session, an active routed board adds one reminder: substantive work goes through a ticket and dispatch, or a `--direct` claim for deliberate inline work. Trivial lookups are exempt. Later, if the session reaches five substantive main-thread actions with no board interaction, Sidequest adds one more reminder. Both skip subagents, pure read-only shell commands, and boards with routing disabled.
 
 ## Work a ticket
 
