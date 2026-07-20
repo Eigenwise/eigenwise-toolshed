@@ -82,7 +82,7 @@
       {@const projectCounts = counts(project)}
       <button class:active={board.selectedProject === project.slug && board.view === 'board'} onclick={() => board.selectProject(project.slug)} oncontextmenu={(event) => showMenu(event, project)}>
         <span class="project-row"><b>{project.name}</b>{#if project.notify === false}<span class="muted" title="Notifications muted">muted</span>{/if}{#if unread(project)}<mark>{unread(project) > 99 ? '99+' : unread(project)}</mark>{/if}<small>{total}</small></span>
-        <span class="project-path">{project.path}</span>
+        <span class="project-path" title={project.path}>{project.path}</span>
         <span class="progress" aria-hidden="true"><i style:--size={`${projectCounts.todo}`} class="todo"></i><i style:--size={`${projectCounts.doing}`} class="doing"></i><i style:--size={`${projectCounts.done}`} class="done"></i></span>
       </button>
     {/each}
@@ -114,7 +114,7 @@
 <style>
   .rail { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; gap: 1rem; min-height: 100vh; padding: 1rem; background: var(--surface); border-right: 1px solid var(--border); }
   .brand { display: grid; gap: .1rem; padding: .25rem .5rem; color: var(--accent); letter-spacing: -.02em; } .brand strong { font-family: var(--font-serif); font-size: 1.3rem; } .brand span, .connection { color: var(--text-muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
-  nav { display: grid; align-content: start; gap: .3rem; overflow: auto; } button { width: 100%; border: 0; border-radius: var(--radius); padding: .55rem; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; } button:hover { background: var(--surface-muted); } button.active { background: var(--accent-soft); color: var(--accent); }
+  nav { display: grid; align-content: start; gap: .3rem; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; } nav::-webkit-scrollbar { width: .45rem; } nav::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--border); } button { width: 100%; border: 0; border-radius: var(--radius); padding: .55rem; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; } button:hover { background: var(--surface-muted); } button.active { background: var(--accent-soft); color: var(--accent); }
   .project-row { display: flex; align-items: center; gap: .4rem; min-width: 0; } .project-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86rem; } .project-row small { margin-left: auto; color: var(--text-muted); font-family: var(--font-mono); font-size: .7rem; } mark { padding: .08rem .3rem; border-radius: 999px; background: var(--warning); color: white; font: 700 .66rem var(--font-mono); } .muted { color: var(--text-muted); font-size: .65rem; }
   .project-path { display: block; overflow: hidden; color: var(--text-muted); font-size: .69rem; text-overflow: ellipsis; white-space: nowrap; } .progress { display: flex; height: .2rem; margin-top: .45rem; overflow: hidden; border-radius: 999px; background: var(--border); } .progress i { flex: var(--size, 0); } .todo { background: #7180b3; } .doing { background: var(--warning); } .done { background: var(--accent); }
   .archived-group { margin-top: .5rem; color: var(--text-muted); font-size: .78rem; } summary { padding: .35rem .55rem; cursor: pointer; } summary span { font-family: var(--font-mono); } .archived { color: var(--text-muted); font-size: .8rem; }

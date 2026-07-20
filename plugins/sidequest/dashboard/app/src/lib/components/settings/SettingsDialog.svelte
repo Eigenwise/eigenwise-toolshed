@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Category, JsonRecord, Project } from '../../types';
   import type { BoardState } from '../../state/board.svelte';
+  import Select, { type SelectOption } from '../ui/Select.svelte';
 
   let { state: board }: { state: BoardState } = $props();
 
@@ -30,6 +31,8 @@
   let categories = $derived((board.raw?.categories ?? []).filter((category) => categoryScope === 'default' || !category.dangling));
   let models = $derived(modelOptions());
   let efforts = $derived(effortOptions());
+  let modelSelectOptions = $derived<SelectOption[]>(models.map((value) => ({ value, label: value })));
+  let effortSelectOptions = $derived<SelectOption[]>(efforts.map((value) => ({ value, label: value })));
   let globalFallback = $derived(record(board.routingCatalog.globalFallback));
 
   function record(value: unknown): JsonRecord {
@@ -126,15 +129,13 @@
     }
   }
 
-  async function updateFallback(event: Event) {
-    const target = event.currentTarget as HTMLSelectElement;
-    await board.setGlobalFallback({ model: target.value, effort: text(globalFallback.effort, 'high') });
+  async function updateFallback(value: string) {
+    await board.setGlobalFallback({ model: value, effort: text(globalFallback.effort, 'high') });
     board.toast('Global fallback saved.');
   }
 
-  async function updateFallbackEffort(event: Event) {
-    const target = event.currentTarget as HTMLSelectElement;
-    await board.setGlobalFallback({ model: text(globalFallback.model, 'sonnet'), effort: target.value });
+  async function updateFallbackEffort(value: string) {
+    await board.setGlobalFallback({ model: text(globalFallback.model, 'sonnet'), effort: value });
     board.toast('Global fallback saved.');
   }
 
@@ -210,8 +211,8 @@
             <p class="hint">Open a board to change its routing.</p>
           {/if}
           {#if selectedProject?.routing !== 'disabled'}
-            <label class="field"><span>Global fallback model</span><select value={text(globalFallback.model, 'sonnet')} onchange={updateFallback}>{#each models as model (model)}<option value={model}>{model}</option>{/each}</select></label>
-            <label class="field"><span>Global fallback effort</span><select value={text(globalFallback.effort, 'high')} onchange={updateFallbackEffort}>{#each efforts as effort (effort)}<option value={effort}>{effort}</option>{/each}</select></label>
+            <label class="field"><span>Global fallback model</span><Select label="Global fallback model" value={text(globalFallback.model, 'sonnet')} options={modelSelectOptions} onchange={updateFallback} /></label>
+            <label class="field"><span>Global fallback effort</span><Select label="Global fallback effort" value={text(globalFallback.effort, 'high')} options={effortSelectOptions} onchange={updateFallbackEffort} /></label>
           {/if}
 
           <div class="category-heading"><div><h3>Categories</h3><p class="hint">Routes for ticket work.</p></div><button onclick={() => startCategoryEdit()}>Add category</button></div>
@@ -226,8 +227,8 @@
               <label class="field"><span>Category ID</span><input required disabled={Boolean(editingCategory)} value={categoryDraft.id} oninput={(event) => categoryDraft.id = inputValue(event)} /></label>
               <label class="field"><span>Name</span><input required value={categoryDraft.name} oninput={(event) => categoryDraft.name = inputValue(event)} /></label>
               <label class="field"><span>Classifier description</span><textarea value={categoryDraft.description} oninput={(event) => categoryDraft.description = inputValue(event)}></textarea></label>
-              <div class="route-fields"><label class="field"><span>Primary model</span><select value={categoryDraft.model} onchange={(event) => categoryDraft.model = selectValue(event)}>{#each models as model (model)}<option value={model}>{model}</option>{/each}</select></label><label class="field"><span>Effort</span><select value={categoryDraft.effort} onchange={(event) => categoryDraft.effort = selectValue(event)}>{#each efforts as effort (effort)}<option value={effort}>{effort}</option>{/each}</select></label></div>
-              <div class="route-fields"><label class="field"><span>Fallback model</span><select value={categoryDraft.fallbackModel} onchange={(event) => categoryDraft.fallbackModel = selectValue(event)}><option value="">Use global fallback</option>{#each models as model (model)}<option value={model}>{model}</option>{/each}</select></label><label class="field"><span>Fallback effort</span><select value={categoryDraft.fallbackEffort} disabled={!categoryDraft.fallbackModel} onchange={(event) => categoryDraft.fallbackEffort = selectValue(event)}>{#each efforts as effort (effort)}<option value={effort}>{effort}</option>{/each}</select></label></div>
+              <div class="route-fields"><label class="field"><span>Primary model</span><Select label="Primary model" value={categoryDraft.model} options={modelSelectOptions} onchange={(value) => { categoryDraft.model = value; }} /></label><label class="field"><span>Effort</span><Select label="Effort" value={categoryDraft.effort} options={effortSelectOptions} onchange={(value) => { categoryDraft.effort = value; }} /></label></div>
+              <div class="route-fields"><label class="field"><span>Fallback model</span><Select label="Fallback model" value={categoryDraft.fallbackModel} options={[{ value: '', label: 'Use global fallback' }, ...modelSelectOptions]} onchange={(value) => { categoryDraft.fallbackModel = value; }} /></label><label class="field"><span>Fallback effort</span><Select label="Fallback effort" value={categoryDraft.fallbackEffort} options={effortSelectOptions} disabled={!categoryDraft.fallbackModel} onchange={(value) => { categoryDraft.fallbackEffort = value; }} /></label></div>
               <label class="field"><span>Executor instructions</span><textarea value={categoryDraft.contract} oninput={(event) => categoryDraft.contract = inputValue(event)}></textarea></label>
               {#if categoryScope === 'default'}<label class="switch"><input type="checkbox" checked={categoryDraft.enabled} onchange={(event) => categoryDraft.enabled = checkboxValue(event)} /><span><strong>Enabled</strong><small>Available for ticket routing.</small></span></label>{/if}
               <div class="form-actions"><button type="button" onclick={() => categoryEditorOpen = false}>Cancel</button><button class="primary" disabled={saving} type="submit">{saving ? 'Saving…' : 'Save category'}</button></div>
@@ -270,7 +271,7 @@
 {/if}
 
 <style>
-  button, input, textarea, select { font: inherit; }
+  button, input, textarea { font: inherit; }
   button { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: .42rem .6rem; }
   button.primary { background: var(--accent); color: white; border-color: var(--accent); }
   button.danger { color: var(--danger); }
@@ -286,7 +287,7 @@
   .notifications-section { border-left: 1px solid var(--border); padding-left: 1.25rem; }
   .field { display: grid; gap: .3rem; margin: .65rem 0; font-size: .86rem; }
   .field > span { color: var(--text-muted); font-weight: 600; }
-  input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: .45rem; }
+  input, textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: .45rem; }
   textarea { min-height: 4.5rem; resize: vertical; }
   .switch { display: flex; gap: .6rem; align-items: start; padding: .6rem 0; border-bottom: 1px solid var(--border); }
   .switch input { width: auto; margin-top: .2rem; accent-color: var(--accent); }
