@@ -140,6 +140,25 @@ test('findNewerInstall: never throws even with guards disabled', () => {
   assert.doesNotThrow(() => findNewerInstall());
 });
 
+test('findNewerInstall: resolves the registry install after the cache layout moves', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-registry-layout-'));
+  const legacyRoot = path.join(root, 'legacy-cache', '1.89.0');
+  const newestRoot = path.join(root, 'registry-cache', '2.0.0');
+  const registryPath = path.join(root, 'claude', 'plugins', 'installed_plugins.json');
+  fs.mkdirSync(legacyRoot, { recursive: true });
+  fs.mkdirSync(path.join(newestRoot, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(newestRoot, '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(newestRoot, 'bin', 'sidequest.js'), '');
+  fs.writeFileSync(path.join(newestRoot, '.claude-plugin', 'plugin.json'), '{}');
+  fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+  fs.writeFileSync(registryPath, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ installPath: newestRoot, version: '2.0.0' }],
+  } }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  assert.strictEqual(findNewerInstall({ selfRoot: legacyRoot, selfVersion: '1.89.0', registryPath, ignoreOptOut: true }), path.join(newestRoot, 'bin', 'sidequest.js'));
+});
+
 test('detached dashboard spawn options use a stable cwd and preserve lifecycle flags', () => {
   const cli = fs.readFileSync(DASHBOARD_BIN, 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
@@ -348,17 +367,48 @@ function isAlive(pid) {
   }
 }
 
+function runCli(script, args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script, ...args], { env, windowsHide: true });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr || `sidequest exited ${code}`));
+    });
+  });
+}
+
+function availablePort() {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close((error) => error ? reject(error) : resolve(port));
+    });
+  });
+}
+
 test('dashboard self-updates to a newer cached install at the same URL', { timeout: 180000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-upgrade-'));
   const oldRoot = path.join(root, '1.37.0');
   const newRoot = path.join(root, '1.37.1');
   const source = path.join(__dirname, '..');
   const home = path.join(root, 'home');
+  const claudeHome = path.join(root, 'claude');
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
   copyPlugin(source, oldRoot, '1.37.0');
+  fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+  fs.writeFileSync(registryPath, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ installPath: newRoot, version: '1.37.1' }],
+  } }));
 
-  const port = 50000 + Math.floor(Math.random() * 10000);
+  const port = await availablePort();
   const env = Object.assign({}, process.env, {
     SIDEQUEST_HOME: home,
+    SIDEQUEST_CLAUDE_HOME: claudeHome,
     SIDEQUEST_VERSION_WATCH_MS: '100',
   });
   delete env.SIDEQUEST_NO_HOT_RECYCLE;
@@ -403,9 +453,56 @@ test('dashboard self-updates to a newer cached install at the same URL', { timeo
   assert.strictEqual(isAlive(old.pid), false);
 });
 
-/* ------------------------------------------------------------------ *
- *  listenOn — walks past refused ports (SQ-591)
- * ------------------------------------------------------------------ */
+test('dashboard heals a stale recorded server through the registry launcher', { timeout: 180000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-heal-'));
+  const oldRoot = path.join(root, 'legacy-cache', '1.89.0');
+  const newRoot = path.join(root, 'registry-cache', '2.0.0');
+  const claudeHome = path.join(root, 'claude');
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
+  const source = path.join(__dirname, '..');
+  const home = path.join(root, 'home');
+  const port = await availablePort();
+  copyPlugin(source, oldRoot, '1.89.0');
+  copyPlugin(source, newRoot, '2.0.0');
+  fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+  fs.writeFileSync(registryPath, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ installPath: newRoot, version: '2.0.0' }],
+  } }));
+  const env = Object.assign({}, process.env, {
+    SIDEQUEST_HOME: home,
+    SIDEQUEST_CLAUDE_HOME: claudeHome,
+    SIDEQUEST_NO_HOT_RECYCLE: '1',
+  });
+  const old = spawn(process.execPath, [path.join(oldRoot, 'bin', 'sidequest.js'), 'serve', '--port', String(port)], {
+    env,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  let replacementPid = null;
+  t.after(() => {
+    for (const pid of [old.pid, replacementPid]) {
+      if (pid && isAlive(pid)) {
+        try { process.kill(pid); } catch (_) {}
+      }
+    }
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+  });
+
+  await waitFor(async () => {
+    try { return (await fetchJson(port, '/api/health')).version === '1.89.0'; } catch (_) { return false; }
+  }, 120000, 'the stale dashboard');
+  await runCli(path.join(newRoot, 'bin', 'sidequest.js'), ['dashboard', '--port', String(port), '--no-open'], env);
+  await waitFor(async () => {
+    try {
+      const health = await fetchJson(port, '/api/health');
+      replacementPid = health.pid;
+      return health.version === '2.0.0';
+    } catch (_) {
+      return false;
+    }
+  }, 30000, 'the healed dashboard');
+});
+
 
 function fakeServer(refusals) {
   const server = new EventEmitter();

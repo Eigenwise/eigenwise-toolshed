@@ -590,6 +590,7 @@ module.exports = {
   nativeAgentSource,
   withProjectIdentity,
   renderDispatchStub,
+  ensureDispatchLauncher,
   agentSpawn,
   spawnDescription,
   ticketIsolation,

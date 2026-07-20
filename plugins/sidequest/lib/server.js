@@ -1038,28 +1038,45 @@ function pickNewerInstall(entries, selfVersion) {
 // bin/sidequest.js, or null if there is none (or recycling is disabled/unsafe
 // for this process). Wrapped so any readdir/fs surprise degrades to "no
 // newer install" rather than taking the server down.
-function findNewerInstall() {
+function findNewerInstall(options) {
   try {
-    const selfRoot = path.resolve(__dirname, '..');
+    const opts = options || {};
+    const selfRoot = opts.selfRoot || path.resolve(__dirname, '..');
+    const selfVersion = opts.selfVersion || path.basename(selfRoot);
+    if (!CLEAN_SEMVER_RE.test(selfVersion)) return null;
+    if (process.env.SIDEQUEST_NO_HOT_RECYCLE && !opts.ignoreOptOut) return null;
+
+    const claudeHome = opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+    const registryPath = opts.registryPath || path.join(claudeHome, 'plugins', 'installed_plugins.json');
+    let registry;
+    try { registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')); } catch (_) { registry = null; }
+    const installed = registry && registry.plugins && registry.plugins['sidequest@eigenwise-toolshed'];
+    if (Array.isArray(installed)) {
+      const entries = installed.map((install) => {
+        const root = install && install.installPath;
+        return {
+          name: root,
+          version: install && install.version,
+          hasBin: typeof root === 'string' && fs.existsSync(path.join(root, 'bin', 'sidequest.js')) && fs.existsSync(path.join(root, '.claude-plugin', 'plugin.json')),
+        };
+      });
+      const target = pickNewerInstall(entries, selfVersion);
+      if (target) return path.join(target, 'bin', 'sidequest.js');
+    }
+
     const parent = path.dirname(selfRoot);
-    const selfName = path.basename(selfRoot);
-    // Repo-source checkouts (basename e.g. "sidequest", not a version dir)
-    // must never self-recycle — there's no "sibling install" concept there.
-    if (!CLEAN_SEMVER_RE.test(selfName)) return null;
-    // Tests and the isolated verify-server opt out explicitly.
-    if (process.env.SIDEQUEST_NO_HOT_RECYCLE) return null;
-    const names = fs.readdirSync(parent);
-    const entries = names.map((name) => {
+    const entries = fs.readdirSync(parent).map((name) => {
       const dir = path.join(parent, name);
-      const hasBin =
-        fs.existsSync(path.join(dir, 'bin', 'sidequest.js')) &&
-        fs.existsSync(path.join(dir, '.claude-plugin', 'plugin.json'));
-      return { name, version: name, hasBin };
+      return {
+        name,
+        version: name,
+        hasBin: fs.existsSync(path.join(dir, 'bin', 'sidequest.js')) && fs.existsSync(path.join(dir, '.claude-plugin', 'plugin.json')),
+      };
     });
-    const target = pickNewerInstall(entries, selfName);
+    const target = pickNewerInstall(entries, selfVersion);
     return target ? path.join(parent, target, 'bin', 'sidequest.js') : null;
   } catch (_) {
-    return null; // best effort — an unreadable install list just disables the check
+    return null;
   }
 }
 

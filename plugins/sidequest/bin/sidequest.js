@@ -1872,30 +1872,59 @@ function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Whether a recorded pid still refers to a live process (not just "the health
-// endpoint didn't answer in time" — a hung-but-alive process needs killing
-// before we replace it, or it's left behind as a zombie).
 function isPidAlive(pid) {
   if (!pid) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (e) {
-    return e && e.code === 'EPERM'; // exists, just not ours to signal — still alive
+    return e && e.code === 'EPERM';
   }
 }
 
-// Reap a recorded server: kill its pid (best-effort — it may already be gone)
-// and clear the lockfile so nothing reuses/attaches to it again.
-function reapServer(info) {
-  if (info && info.pid) {
-    try {
-      process.kill(info.pid);
-    } catch (_) {
-      /* already gone */
-    }
+function compareVersions(left, right) {
+  const parse = (value) => /^\d+\.\d+\.\d+$/.test(String(value || '')) ? String(value).split('.').map(Number) : null;
+  const a = parse(left);
+  const b = parse(right);
+  if (!a || !b) return null;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
   }
-  store.clearServerInfo();
+  return 0;
+}
+
+function isVersionAtLeast(version, baseline) {
+  if (!baseline) return true;
+  const comparison = compareVersions(version, baseline);
+  return comparison !== null && comparison >= 0;
+}
+
+function isRecordedServer(health, info) {
+  return Boolean(health && info && Number.isInteger(Number(health.pid)) && Number(health.pid) === Number(info.pid));
+}
+
+async function waitForPidExit(pid, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 10000);
+  while (isPidAlive(pid)) {
+    if (Date.now() >= deadline) return false;
+    await delay(50);
+  }
+  return true;
+}
+
+async function reapServer(info, health) {
+  if (health && !isRecordedServer(health, info)) return false;
+  if (info && info.pid && isPidAlive(info.pid)) {
+    try {
+      process.kill(info.pid, 'SIGTERM');
+    } catch (_) {
+      return false;
+    }
+    if (!await waitForPidExit(info.pid)) return false;
+  }
+  const current = store.readServerInfo();
+  if (current && current.pid === info.pid) store.clearServerInfo();
+  return true;
 }
 
 // Look at the recorded server (if any) and decide what to do with it:
@@ -1909,20 +1938,25 @@ async function resolveRunningServer() {
   if (!existing || !existing.port) return null;
   const health = await checkHealthPatient(existing.port);
   if (health) {
-    // A missing/older version on the live health payload means the process
-    // was started before this plugin update — exactly the "stale ladder"
-    // scenario from SQ-92 — so it gets recycled rather than trusted.
-    if (PLUGIN_VERSION && health.version !== PLUGIN_VERSION) {
-      reapServer(existing);
-      return { action: 'reap', reason: `stale version ${health.version || 'unknown'} (installed: ${PLUGIN_VERSION})`, existing };
+    if (!isRecordedServer(health, existing)) {
+      const current = store.readServerInfo();
+      if (current && current.pid === existing.pid) store.clearServerInfo();
+      return { action: 'foreign', reason: 'listener pid differs from server-info', existing };
+    }
+    if (PLUGIN_VERSION && compareVersions(existing.version, PLUGIN_VERSION) < 0) {
+      if (!await reapServer(existing, health)) {
+        return { action: 'blocked', reason: `stale version ${existing.version || 'unknown'} could not stop`, existing };
+      }
+      return { action: 'reap', reason: `stale version ${existing.version || 'unknown'} (installed: ${PLUGIN_VERSION})`, existing };
     }
     return { action: 'reuse', existing };
   }
   if (isPidAlive(existing.pid)) {
-    reapServer(existing);
+    if (!await reapServer(existing)) return { action: 'blocked', reason: 'unresponsive server could not stop', existing };
     return { action: 'reap', reason: 'unresponsive', existing };
   }
-  store.clearServerInfo();
+  const current = store.readServerInfo();
+  if (current && current.pid === existing.pid) store.clearServerInfo();
   return { action: 'reap', reason: 'dead', existing };
 }
 
@@ -1932,22 +1966,19 @@ async function ensureServer(requestedPort) {
   if (running && running.action === 'reuse') {
     return running.existing.url || `http://127.0.0.1:${running.existing.port}`;
   }
-  // Spawn the server detached so it outlives this short-lived CLI process.
-  // Reusing the previous port when we just reaped a stale/dead instance keeps
-  // "--no-open" deterministic instead of creeping to the next free port.
+  if (running && running.action === 'blocked') throw new Error(`the dashboard server is ${running.reason}`);
   const port = requestedPort || (running && running.existing && running.existing.port) || undefined;
-  const args = [path.join(__dirname, 'sidequest.js'), 'serve'];
+  const args = [agentsync.ensureDispatchLauncher(), 'serve'];
   if (port) args.push('--port', String(port));
   const child = spawn(process.execPath, args, { cwd: os.homedir(), detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
 
-  // Wait for it to record itself and answer health.
   for (let i = 0; i < 60; i++) {
     await delay(150);
     const info = store.readServerInfo();
-    if (info && info.port) {
+    if (info && info.port && isVersionAtLeast(info.version, PLUGIN_VERSION)) {
       const health = await checkHealth(info.port);
-      if (health) return info.url || `http://127.0.0.1:${info.port}`;
+      if (health && isRecordedServer(health, info) && isVersionAtLeast(health.version, PLUGIN_VERSION)) return info.url || `http://127.0.0.1:${info.port}`;
     }
   }
   throw new Error('the dashboard server did not start in time');
