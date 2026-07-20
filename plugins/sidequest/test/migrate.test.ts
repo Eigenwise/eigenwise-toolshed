@@ -117,11 +117,42 @@ test('schema v4 migration adds an empty project category layer to a v3 database'
   assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
 
   const database = db.openDb(homeRoot);
-  assert.equal(db.getRow(database, 'meta', 'schema_version'), 4);
+  assert.equal(db.getRow(database, 'meta', 'schema_version'), 5);
   assert.deepEqual(db.getRow<{ id: string }>(database, 'categories', 'fixture')?.id, 'fixture');
   assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_categories'").get()?.name, 'project_categories');
   assert.deepEqual(db.listRows(database, 'project_categories', { project: 'missing' }), []);
   database.close();
+});
+
+test('schema v5 migration refreshes only an uncustomized codebase-exploration category', () => {
+  const oldText = {
+    description: 'Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.',
+    contract: 'Read before concluding; cite files and symbols, with no edits.',
+  };
+  for (const customized of [false, true]) {
+    const homeRoot = makeHome();
+    const dbPath = path.join(homeRoot, 'sidequest.db');
+    const contract = customized ? 'My hand-tuned contract.' : oldText.contract;
+    const seed = String.raw`
+      const { DatabaseSync } = require('node:sqlite');
+      const database = new DatabaseSync(${JSON.stringify(dbPath)});
+      database.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT); CREATE TABLE project_categories (project TEXT, id TEXT, kind TEXT, data TEXT, PRIMARY KEY (project, id)); INSERT INTO meta VALUES ('schema_version', '4');");
+      database.prepare('INSERT INTO categories VALUES (?, ?)').run('codebase-exploration', JSON.stringify({ id: 'codebase-exploration', name: 'Codebase exploration', description: ${JSON.stringify(oldText.description)}, contract: ${JSON.stringify(contract)}, route: { model: 'codex-gpt-5-6-luna', effort: 'medium' } }));
+      database.close();
+    `;
+    assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
+
+    const database = db.openDb(homeRoot);
+    assert.equal(db.getRow(database, 'meta', 'schema_version'), 5);
+    const category = db.getRow<{ contract: string }>(database, 'categories', 'codebase-exploration');
+    if (customized) {
+      assert.equal(category?.contract, 'My hand-tuned contract.');
+    } else {
+      assert.notEqual(category?.contract, oldText.contract);
+      assert.match(category?.contract ?? '', /bounded documentation artifact directory/);
+    }
+    database.close();
+  }
 });
 
 test('migrates a JSON tree into SQLite without deleting its rollback copy', () => {

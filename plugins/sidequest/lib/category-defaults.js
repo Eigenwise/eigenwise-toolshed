@@ -46,7 +46,7 @@ const DEFAULT_CATEGORIES = [
       "effort": "medium"
     },
     "fallback": null,
-    "contract": "Read before concluding; cite files and symbols, with no edits.",
+    "contract": "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact directory as its only write scope.",
     "enabled": true
   },
   {

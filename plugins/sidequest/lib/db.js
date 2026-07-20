@@ -61,7 +61,11 @@ try {
 } finally {
   process.emitWarning = originalEmitWarning;
 }
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
+const OLD_CODEBASE_EXPLORATION = {
+  description: "Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.",
+  contract: "Read before concluding; cite files and symbols, with no edits."
+};
 const LEGACY_RUNTIME = {
   "grade-1": "haiku",
   "grade-2": "sonnet",
@@ -263,6 +267,28 @@ function openDb(homeRoot) {
       prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(4));
     });
     schemaVersion = 4;
+  }
+  if (schemaVersion < 5) {
+    txn(database, () => {
+      const row = prepareCached(database, "SELECT data FROM categories WHERE id = 'codebase-exploration'").get();
+      let category = null;
+      try {
+        const parsed = row ? JSON.parse(row.data) : null;
+        category = isRecord(parsed) ? parsed : null;
+      } catch {
+        category = null;
+      }
+      if (category && category.description === OLD_CODEBASE_EXPLORATION.description && category.contract === OLD_CODEBASE_EXPLORATION.contract) {
+        const next = import_category_defaults.DEFAULT_CATEGORIES.find((entry) => entry.id === "codebase-exploration");
+        if (next) {
+          category.description = next.description;
+          category.contract = next.contract;
+          prepareCached(database, "UPDATE categories SET data = ? WHERE id = 'codebase-exploration'").run(JSON.stringify(category));
+        }
+      }
+      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(5));
+    });
+    schemaVersion = 5;
   }
   const sidequestDatabase = database;
   sidequestDatabase.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;
