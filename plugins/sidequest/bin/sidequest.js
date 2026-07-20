@@ -31,6 +31,7 @@ const store = require('../lib/store');
 const agentsync = require('../lib/agentsync');
 const work = require('../lib/work');
 const commitScope = require('../lib/commit-scope');
+const worktrees = require('../lib/worktrees');
 const { claimRefusalMessage } = require('../lib/refusal-guidance');
 
 /* ------------------------------------------------------------------ *
@@ -74,7 +75,7 @@ function parseArgs(argv) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -1042,6 +1043,35 @@ function cmdSweepClaims(opts) {
     return;
   }
   console.log(`✓ swept ${res.released.length} stale claim(s) from ${meta.name} (TTL ${Math.round(res.ttlMs / 60000)}m)`);
+}
+
+function cmdWorktrees(opts) {
+  if (!opts.sweep) fail('worktrees: pass --sweep to inspect stale agent worktrees.');
+  const { slug, meta } = resolveProject(opts);
+  let result;
+  try {
+    result = worktrees.sweep(meta.path, store.listTickets(slug), {
+      execute: !!opts.yes,
+      currentPath: store.nearestRepoRoot(process.cwd()),
+    });
+  } catch (error) {
+    fail(`worktrees: ${(error && error.message) || error}`);
+  }
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, result), null, 2) + '\n');
+    if (result.failures.length) process.exitCode = 1;
+    return;
+  }
+  console.log(`worktrees sweep: ${result.dryRun ? 'dry run' : 'executed'} for ${meta.name}`);
+  for (const entry of result.entries) {
+    const ticket = entry.ticket ? ` ${entry.ticket}` : '';
+    const ahead = entry.ahead == null ? '?' : entry.ahead;
+    console.log(`  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${entry.clean ? 'clean' : 'dirty'}; ahead ${ahead}]`);
+  }
+  if (result.dryRun) console.log('  pass --yes to remove the planned worktrees.');
+  if (result.removed.length) console.log(`  removed ${result.removed.length} worktree(s).`);
+  for (const failure of result.failures) console.log(`  ERROR ${failure.path || 'prune'}: ${failure.message}`);
+  if (result.failures.length) process.exitCode = 1;
 }
 
 function cmdNext(opts) {
@@ -2079,6 +2109,7 @@ Native Agent dispatch (routed work stays in this conversation):
     tickets recover immediately instead of waiting out the claim TTL; safe — it only touches that session's
     claims). Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.
   sidequest claims sweep [--project <path-or-slug>]  release claims older than SIDEQUEST_CLAIM_TTL_MIN (default 60m)
+  sidequest worktrees --sweep [--yes] [--project <path-or-slug>]  list stale agent worktrees; dry run by default, --yes removes only safe entries
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
@@ -2193,6 +2224,9 @@ async function main() {
     case 'claims':
       if (positional[0] !== 'sweep') fail('claims: expected `sidequest claims sweep`');
       cmdSweepClaims(opts);
+      break;
+    case 'worktrees':
+      cmdWorktrees(opts);
       break;
     case 'next':
     case 'grab':

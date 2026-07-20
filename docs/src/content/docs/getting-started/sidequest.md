@@ -31,6 +31,8 @@ Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when yo
 
 A scoped commit commits its declared paths even when another changed file is outside the ticket. Sidequest reports those paths in the commit result, records a ticket comment, and carries them in the submission as `unscopedPaths`; make a second scoped commit after widening scope, or discard them. Missing declared paths are warnings when other declared paths can be committed.
 
+Run `sidequest worktrees --sweep` from a board repo to inspect stale executor worktrees. It only plans removals by default. `--yes` removes finished, integrated, or already-merged clean `agent-*` worktrees, then prunes Git's worktree registry. Dirty, ahead, locked, and current worktrees stay put.
+
 ![Sidequest kanban board](../../../assets/screenshots/sidequest-kanban.png)
 
 ![Sidequest ticket detail](../../../assets/screenshots/sidequest-ticket-detail.png)
