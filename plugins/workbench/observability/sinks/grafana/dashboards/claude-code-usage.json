@@ -150,7 +150,7 @@
     },
     {
       "id": 3,
-      "title": "Output (priced about 5× input)",
+      "title": "Output tokens (raw)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -193,11 +193,11 @@
           "instant": true
         }
       ],
-      "description": "New model output. API-equivalent output pricing is roughly five times fresh-input pricing, depending on the model."
+      "description": "New model output, shown as raw tokens. API-equivalent output pricing is roughly five times fresh-input pricing, depending on the model."
     },
     {
       "id": 4,
-      "title": "Cost (USD, burn proxy)",
+      "title": "Cost (USD estimate)",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -311,8 +311,8 @@
     },
     {
       "id": 31,
-      "title": "Cost over time, by token type",
-      "description": "Approximate cost allocation: each interval’s reported USD cost is split by input × 1.0, cache reads × 0.1, cache creation × 1.25, and output × 5.0. The four series add up to reported cost; per-model price differences stay in that reported total.",
+      "title": "Cost allocation, by token type (USD)",
+      "description": "API-equivalent cost allocation in USD for the selected range. Each series uses the same selected-range total as Cost (USD estimate), so the four legend Totals add up to that card within rounding. The total is split by input × 1.0, cache reads × 0.1, cache creation × 1.25, and output × 5.0; per-model price differences stay in the reported USD total.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -357,7 +357,8 @@
             "uid": "prometheus"
           },
           "legendFormat": "fresh input",
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval])) or vector(0)) * (sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)))"
+          "instant": true,
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range])) or vector(0)) * (sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
         },
         {
           "refId": "B",
@@ -366,7 +367,8 @@
             "uid": "prometheus"
           },
           "legendFormat": "cache reads",
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval])) or vector(0)) * (0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)))"
+          "instant": true,
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range])) or vector(0)) * (0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
         },
         {
           "refId": "C",
@@ -375,7 +377,8 @@
             "uid": "prometheus"
           },
           "legendFormat": "cache creation",
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval])) or vector(0)) * (1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)))"
+          "instant": true,
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range])) or vector(0)) * (1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
         },
         {
           "refId": "D",
@@ -384,7 +387,8 @@
             "uid": "prometheus"
           },
           "legendFormat": "output",
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__rate_interval])) or vector(0)) * (5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__rate_interval])) or vector(0)))"
+          "instant": true,
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range])) or vector(0)) * (5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
         }
       ]
     },
