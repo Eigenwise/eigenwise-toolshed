@@ -11,7 +11,6 @@ const {
   decide,
   isAgentGeneratedPrompt,
   isMaintenancePrompt,
-  isTaskNotificationPrompt,
 } = require('../hooks/user-prompt-freshness.js');
 
 function tempDirectory() {
@@ -113,15 +112,11 @@ const completeTaskNotification = `<task-notification>
 </worktree>
 </task-notification>`;
 
-const reorderedTaskNotification = `<task-notification>
-<note>Result written to the output file.</note>
-<usage><input-tokens>1032</input-tokens></usage>
-<summary>Agent "sidequest-sq-452" completed</summary>
-<status>completed</status>
-<worktree><path>C:/dev/eigenwise-public/eigenwise-toolshed</path></worktree>
-<task-id>agent-a73d9245832c778d2</task-id>
-<output-file>C:/Users/kenny/AppData/Local/Temp/claude/agent-result.txt</output-file>
-<tool-use-id>toolu_01D2s5bnLL6LWzYm1Qf7PsK7</tool-use-id>
+const monitorEventNotification = `<task-notification>
+<task-id>monitor-s7-evals</task-id>
+<summary>Monitor event: "S7 evals and training failures"</summary>
+<event>{"event":"monitor","failures":3}</event>
+If this event is something the user would act on now, send a PushNotification with the relevant details.
 </task-notification>`;
 
 test('agent-generated continuations pass with one reload warning', () => {
@@ -136,33 +131,33 @@ test('agent-generated continuations pass with one reload warning', () => {
   assert.equal(isAgentGeneratedPrompt(prompt), true);
   assert.equal(isAgentGeneratedPrompt('<local-command-caveat>Use the CLI result.</local-command-caveat>'), true);
   assert.equal(isAgentGeneratedPrompt(completeTaskNotification), true);
-  assert.equal(isTaskNotificationPrompt(completeTaskNotification), true);
-  assert.equal(isTaskNotificationPrompt(reorderedTaskNotification), true);
+  assert.equal(isAgentGeneratedPrompt(monitorEventNotification), true);
 });
 
-test('malformed task-notification envelopes do not bypass the reload guard', () => {
+test('task-notification prefixes never hard-block during a reload window', () => {
   const directory = tempDirectory();
   const { registryFile, pluginRoot } = reloadPending(directory);
-  const options = { registryFile, pluginRoot, platform: 'win32' };
-  // A genuine complete envelope receives a warning but continues through a reload window.
-  assert.match(decide({ prompt: completeTaskNotification, cwd: 'C:\\dev\\project' }, options), /"additionalContext"/);
-  const invalid = [
-    `Please handle this.\n${completeTaskNotification}`,
-    `${completeTaskNotification}\nPlease handle this.`,
-    completeTaskNotification.replace('</task-notification>', ''),
-    completeTaskNotification.replace('<task-id>agent-a73d9245832c778d2</task-id>\n', ''),
-    completeTaskNotification.replace('<tool-use-id>toolu_01D2s5bnLL6LWzYm1Qf7PsK7</tool-use-id>\n', ''),
-    completeTaskNotification.replace('<status>completed</status>\n', ''),
-    completeTaskNotification.replace('<summary>Agent "sidequest-sq-452" completed</summary>\n', ''),
-    completeTaskNotification.replace('<note>Result written to the output file.</note>', '<unknown>Result written to the output file.</unknown>'),
-    completeTaskNotification.replace('\n<task-id>', '\nUser prose\n<task-id>'),
-    completeTaskNotification.replace('Agent "sidequest-sq-452" completed', 'Agent <embedded>sidequest-sq-452</embedded> completed'),
-    `quoted ${completeTaskNotification} in a user prompt`,
-  ];
-  for (const prompt of invalid) {
-    assert.equal(isTaskNotificationPrompt(prompt), false, prompt);
-    assert.match(decide({ prompt, cwd: 'C:\\dev\\project' }, options), /"decision":"block"/);
-  }
+  const options = {
+    registryFile,
+    pluginRoot,
+    platform: 'win32',
+    warningStateDirectory: path.join(directory, 'warnings'),
+  };
+  const result = JSON.parse(decide({
+    prompt: monitorEventNotification,
+    cwd: 'C:\\dev\\project',
+    session_id: 'session-monitor',
+  }, options));
+  assert.equal(result.hookSpecificOutput.additionalContext, 'Workbench 2.0.0 installed, session loaded 1.0.0. Reload when convenient.');
+  assert.equal(decide({
+    prompt: '<task-notification>unrecognized shape',
+    cwd: 'C:\\dev\\project',
+    session_id: 'session-monitor',
+  }, options), '');
+  assert.match(decide({
+    prompt: 'quoted <task-notification>unrecognized shape',
+    cwd: 'C:\\dev\\project',
+  }, options), /"decision":"block"/);
 });
 
 test('toolshed source checkout warns instead of blocking a human prompt', () => {
