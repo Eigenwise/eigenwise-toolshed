@@ -1738,6 +1738,32 @@ function setDispatchTerminal(ticket, outcome, source) {
   delete state.supersededTokens;
 }
 
+function appendReworkEvent(ticket, kind, details) {
+  const dispatch = dispatchState(ticket);
+  const route = dispatch && dispatch.route && typeof dispatch.route === 'object' ? dispatch.route : {};
+  const at = details.at || new Date().toISOString();
+  if (!Array.isArray(ticket.reworkEvents)) ticket.reworkEvents = [];
+  ticket.reworkEvents.push({
+    kind,
+    at,
+    source: details.source || 'store',
+    by: details.by || null,
+    fromStatus: details.fromStatus || null,
+    toStatus: details.toStatus || null,
+    attempt: dispatch ? {
+      agentId: dispatch.agentId || null,
+      agentName: dispatch.agentName || null,
+      route: { model: route.model || null, effort: route.effort || null },
+      preparedAt: dispatch.preparedAt || null,
+      launchedAt: dispatch.launchedAt || null,
+      boundAt: dispatch.boundAt || null,
+      claimedAt: dispatch.claimedAt || null,
+      terminalAt: dispatch.terminalAt || at,
+      outcome: dispatch.outcome || null,
+    } : null,
+  });
+}
+
 function dispatchTokenDigest(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
 }
@@ -2152,6 +2178,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
     const now = new Date().toISOString();
+    const previousStatus = t.status;
     let comment = null;
     const dispatch = dispatchState(t);
     t.claim = null;
@@ -2159,6 +2186,15 @@ function releaseTicket(slug, idOrRef, by, opts) {
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
+    if (t.status === 'todo' && (previousStatus !== 'todo' || (held && held.by))) {
+      appendReworkEvent(t, 'released_to_todo', {
+        at: now,
+        source: opts.source || 'cli',
+        by,
+        fromStatus: previousStatus,
+        toStatus: t.status,
+      });
+    }
     if (opts.workedBy) t.workedBy = opts.workedBy; // self-reported provenance stamp (done transition only)
     if (t.status === 'done') {
       t.completion = {
@@ -2361,11 +2397,19 @@ function clearSubmission(slug, idOrRef, opts) {
     if (!t) return { ok: false, reason: 'not_found' };
     if (!t.submission) return { ok: false, reason: 'no_submission', ticket: t };
     const cleared = t.submission;
+    const previousStatus = t.status;
+    const now = new Date().toISOString();
     t.submission = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
+    appendReworkEvent(t, 'submission_cleared', {
+      at: now,
+      source: opts.source || 'cli',
+      fromStatus: previousStatus,
+      toStatus: t.status,
+    });
     t.lastEventType = 'status';
     t.lastEventSource = opts.source ? String(opts.source) : 'cli';
-    t.updatedAt = new Date().toISOString();
+    t.updatedAt = now;
     putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t, cleared };

@@ -232,7 +232,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
   for (const title of [
     'Tokens & models', 'Tool activity', 'MCP', 'Sessions & agents',
-    'Subscription & limits', 'Gateway internals',
+    'Subscription & limits', 'Gateway internals', 'Board cost attribution',
   ]) {
     const row = byTitle.get(title);
     assert.equal(row?.type, 'row', `missing dashboard row: ${title}`);
@@ -245,6 +245,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
     'Hook execution activity / failures', 'Subagent lifecycle activity',
     'Subscription rate-limit burn', 'Subscription window resets',
+    'Ticket dispatch usage and route drift',
   ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
   const toolDurationP95 = byTitle.get('Tool activity duration p95');
   assert.equal(toolDurationP95.targets[0].expr, 'quantile_over_time(0.95, {service_name="workbench-observer"} |= "hook.post_tool_use" | unwrap workbench_measurement_duration_ms_value [$__range]) by ()');
@@ -346,6 +347,21 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.match(sessionUsage.targets[0].expr, /workbench_session_id != ""/);
   assert.match(JSON.stringify(sessionUsage.transformations), /Context tokens/);
   assert.match(JSON.stringify(sessionUsage.transformations), /"Time":true/);
+  const boardCost = byTitle.get('Ticket dispatch usage and route drift');
+  assert.equal(boardCost.type, 'table');
+  assert.match(boardCost.description, /Batched agents mapped to multiple tickets are excluded/i);
+  assert.ok(boardCost.targets.every((target) => target.instant === true));
+  assert.ok(boardCost.targets.every((target) => target.expr.includes('$__range')));
+  assert.ok(boardCost.targets.slice(0, 3).every((target) => target.expr.includes('gateway.token.usage')));
+  assert.match(boardCost.targets[3].expr, /sidequest\.ticket/);
+  assert.match(boardCost.targets[3].expr, /on \(workbench_agent_id\)/);
+  assert.match(boardCost.targets[3].expr, /== 1/);
+  assert.doesNotMatch(JSON.stringify(boardCost.targets), /group_left/);
+  assert.match(boardCost.targets[0].expr, /workbench_measurement_context_tokens_value/);
+  assert.match(boardCost.targets[2].expr, /workbench_measurement_cost_usd_value/);
+  assert.ok(boardCost.transformations.some(({ id }) => id === 'merge'));
+  assert.match(JSON.stringify(boardCost.transformations), /Configured route/);
+  assert.match(JSON.stringify(boardCost.transformations), /Resolved model/);
   assert.equal(byTitle.get('Context-window growth').targets[0].legendFormat, 'session {{session_label}}');
   for (const title of [
     'Gateway usage by session', 'Orchestrator vs executor usage', 'Input composition over time',

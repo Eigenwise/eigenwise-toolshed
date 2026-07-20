@@ -1,5 +1,7 @@
 'use strict';
 
+const { buildBoardCostReport } = require('./board-cost.js');
+
 const QUALITY_LABELS = Object.freeze({
   exact_provider: 'exact',
   exact_client: 'exact',
@@ -280,7 +282,7 @@ function coverage(store) {
   };
 }
 
-function buildTokenUsageReport(store) {
+function buildTokenUsageReport(store, options = {}) {
   if (!store || !store.database || typeof store.queryView !== 'function') throw new TypeError('A Workbench observability store is required.');
   return {
     generated_at: new Date().toISOString(),
@@ -293,7 +295,7 @@ function buildTokenUsageReport(store) {
     cache_economics: cacheEconomics(store),
     limit_signals: limitSignals(store),
     execution_tree: executionTree(store), tools: toolTable(store), route_comparison: routeComparison(store),
-    ticket_usage: ticketUsage(store), coverage: coverage(store),
+    ticket_usage: ticketUsage(store), board_costs: buildBoardCostReport(store, options.board), coverage: coverage(store),
   };
 }
 
@@ -314,6 +316,25 @@ function formatTokenUsageReport(report) {
   for (const row of report.context_timeline) lines.push(`${row.observed_at} context ${textValue(row.context_tokens)} / window ${textValue(row.context_window_tokens)} | occupancy ${textValue(row.occupancy)} | growth ${textValue(row.growth_tokens)} | compaction pre ${textValue(row.compaction.pre_tokens)} post ${textValue(row.compaction.post_tokens)}`);
   lines.push('', `Execution tree (${report.execution_tree.length})`, `Tools (${report.tools.length})`, `Route comparison (${report.route_comparison.length})`, `Ticket usage (${report.ticket_usage.length})`);
   for (const row of report.ticket_usage) lines.push(`${row.ticket_ref || 'unattributed'}: ${textValue(row.request_count)} requests, cost ${textValue(row.estimated_cost_usd)} (${row.attribution})`);
+  const board = report.board_costs;
+  if (board.available) {
+    lines.push('', `Board cost attribution (${board.tickets.length} tickets)`);
+    for (const row of board.tickets) {
+      lines.push(`${row.ticket_ref} [${row.category || 'uncategorized'}]: ${textValue(row.usage.tokens.total)} tokens, ${textValue(row.usage.estimated_cost_usd)} cost, ${textValue(row.attempt_count)} attempts (${row.attribution})`);
+    }
+    lines.push('', `Category cost (${board.categories.length})`);
+    for (const row of board.categories) {
+      lines.push(`${row.category}: ${textValue(row.usage.tokens.total)} tokens total, ${textValue(row.average_tokens_per_ticket)} average per ticket, ${textValue(row.average_estimated_cost_usd_per_ticket)} average cost`);
+    }
+    lines.push('', 'Orchestrator / executor split');
+    for (const row of board.execution_split) lines.push(`${row.role}: ${textValue(row.usage.tokens.total)} tokens, ${textValue(row.usage.estimated_cost_usd)} cost`);
+    lines.push('', `Bounce / rework (${board.rework.length})`);
+    for (const row of board.rework) lines.push(`${row.ticket_ref}: ${textValue(row.bounce_count)} bounces, ${textValue(row.attempt_count)} attempts, ${textValue(row.usage.tokens.total)} tokens, ${textValue(row.usage.estimated_cost_usd)} cost`);
+    lines.push('', `Route drift (${board.route_drift.rollups.length})`);
+    for (const row of board.route_drift.rollups) lines.push(`${row.configured_model} -> ${row.worked_model}: ${textValue(row.ticket_count)} tickets, ${textValue(row.usage.tokens.total)} tokens, ${textValue(row.usage.estimated_cost_usd)} cost`);
+  } else {
+    lines.push('', `Board cost attribution unavailable: ${board.reason}`);
+  }
   lines.push('', 'Data quality');
   for (const row of report.coverage.measurements_by_quality) lines.push(`${row.quality}: ${row.count}`);
   lines.push(`Explicitly unavailable: ${report.coverage.explicitly_unavailable.join('; ')}`);

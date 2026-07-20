@@ -7,7 +7,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { buildTokenUsageReport, formatTokenUsageReport } = require('../lib/observability/report.js');
+const { defaultSidequestHome, readSidequestBoard } = require('../lib/observability/board-cost.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { parseArgs } = require('../bin/token-usage-report.js');
+const { DatabaseSync } = require('node:sqlite');
 
 const PROJECT_ID = 'a'.repeat(64);
 
@@ -24,6 +27,102 @@ function temporaryStore(t) {
 function ingest(store, input) {
   const result = store.ingest({ source_schema: '1', project_id: PROJECT_ID, ...input });
   assert.equal(result.accepted, true);
+}
+
+function ingestGatewayUsage(store, id, agentId, contextTokens, outputTokens, costUsd) {
+  ingest(store, {
+    source: 'codex_gateway',
+    source_event_id: `gateway-${id}`,
+    observed_at: `2026-07-19T12:${String(id).padStart(2, '0')}:00.000Z`,
+    event_name: 'gateway.token.usage',
+    session_id: 'board-cost-session',
+    request_id: `board-cost-request-${id}`,
+    ...(agentId ? { agent_id: agentId } : {}),
+    attributes: { model: 'gpt-fixture', backend: 'codex', effort: 'high', status: 'ok' },
+    measurements: [
+      { name: 'input_tokens', value: contextTokens, unit: 'tokens', scope: 'request', quality: 'exact_provider' },
+      { name: 'output_tokens', value: outputTokens, unit: 'tokens', scope: 'request', quality: 'exact_provider' },
+      { name: 'cache_read_tokens', value: 0, unit: 'tokens', scope: 'request', quality: 'exact_provider' },
+      { name: 'cache_creation_tokens', value: 0, unit: 'tokens', scope: 'request', quality: 'exact_provider' },
+      { name: 'context_tokens', value: contextTokens, unit: 'tokens', scope: 'request', quality: 'exact_provider' },
+      { name: 'cost_usd', value: costUsd, unit: 'usd', scope: 'request', quality: 'estimate' },
+    ],
+  });
+}
+
+function seedSidequestBoard(t) {
+  const sidequestHome = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-board-cost-'));
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-board-project-'));
+  t.after(() => {
+    fs.rmSync(sidequestHome, { recursive: true, force: true });
+    fs.rmSync(projectPath, { recursive: true, force: true });
+  });
+  const database = new DatabaseSync(path.join(sidequestHome, 'sidequest.db'));
+  database.exec(`
+    CREATE TABLE projects (slug TEXT PRIMARY KEY, data TEXT);
+    CREATE TABLE tickets (id TEXT PRIMARY KEY, project TEXT, ref TEXT, status TEXT, archived INTEGER, ord REAL, claim_by TEXT, data TEXT);
+    CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT);
+    CREATE TABLE project_categories (project TEXT, id TEXT, kind TEXT, data TEXT, PRIMARY KEY (project, id));
+  `);
+  const slug = 'board-cost-fixture';
+  database.prepare('INSERT INTO projects (slug, data) VALUES (?, ?)')
+    .run(slug, JSON.stringify({ path: projectPath, name: 'Board cost fixture' }));
+  database.prepare('INSERT INTO categories (id, data) VALUES (?, ?)').run('coding.hard', JSON.stringify({
+    id: 'coding.hard',
+    name: 'Hard coding',
+    route: { model: 'gpt-primary', effort: 'xhigh' },
+    fallback: { model: 'gpt-fallback', effort: 'xhigh' },
+    enabled: true,
+  }));
+  const insertTicket = database.prepare(`
+    INSERT INTO tickets (id, project, ref, status, archived, ord, claim_by, data)
+    VALUES (?, ?, ?, ?, 0, ?, NULL, ?)
+  `);
+  insertTicket.run('ticket-1', slug, 'SQ-1', 'done', 1, JSON.stringify({
+    id: 'ticket-1',
+    ref: 'SQ-1',
+    status: 'done',
+    category: 'coding.hard',
+    workedBy: { model: 'gpt-fallback', effort: 'xhigh' },
+    reworkEvents: [{
+      kind: 'released_to_todo',
+      at: '2026-07-19T11:30:00.000Z',
+      attempt: {
+        agentId: 'agent-attempt-1',
+        route: { model: 'gpt-primary', effort: 'xhigh' },
+        preparedAt: '2026-07-19T11:00:00.000Z',
+        terminalAt: '2026-07-19T11:30:00.000Z',
+        outcome: 'released',
+      },
+    }],
+    dispatch: {
+      agentId: 'agent-attempt-2',
+      route: { model: 'gpt-fallback', effort: 'xhigh' },
+      preparedAt: '2026-07-19T11:31:00.000Z',
+      terminalAt: '2026-07-19T12:30:00.000Z',
+      outcome: 'done',
+    },
+  }));
+  insertTicket.run('ticket-2', slug, 'SQ-2', 'done', 2, JSON.stringify({
+    id: 'ticket-2',
+    ref: 'SQ-2',
+    status: 'done',
+    category: 'coding.hard',
+    workedBy: { model: 'gpt-primary', effort: 'xhigh' },
+    dispatch: {
+      agentId: 'agent-ticket-2',
+      route: { model: 'gpt-primary', effort: 'xhigh' },
+      preparedAt: '2026-07-19T11:45:00.000Z',
+      terminalAt: '2026-07-19T12:20:00.000Z',
+      outcome: 'done',
+    },
+  }));
+  database.close();
+  return {
+    sidequestHome,
+    projectPath,
+    board: readSidequestBoard({ sidequestHome, projectPath }),
+  };
 }
 
 test('builds a quality-labeled report from resolved SQLite views', (t) => {
@@ -75,6 +174,102 @@ test('builds a quality-labeled report from resolved SQLite views', (t) => {
   assert.equal(report.ticket_usage[0].attribution, 'direct-only');
   assert.ok(report.coverage.explicitly_unavailable.includes('hidden MCP usage'));
   assert.match(formatTokenUsageReport(report), /cache creation 5 \(exact\)/);
+});
+
+test('joins the read-only Sidequest board to gateway usage by dispatch agent', (t) => {
+  const store = temporaryStore(t);
+  const fixture = seedSidequestBoard(t);
+  assert.equal(fixture.board.available, true);
+  assert.equal(fixture.board.source, undefined);
+
+  ingestGatewayUsage(store, 1, 'agent-attempt-1', 100, 20, 0.2);
+  ingestGatewayUsage(store, 2, 'agent-attempt-2', 200, 30, 0.4);
+  ingestGatewayUsage(store, 3, 'agent-ticket-2', 50, 10, 0.1);
+  ingestGatewayUsage(store, 4, null, 500, 50, 0.8);
+  ingestGatewayUsage(store, 5, 'unmapped-agent', 40, 5, 0.05);
+
+  const report = buildTokenUsageReport(store, { board: fixture.board });
+  const board = report.board_costs;
+  assert.equal(board.available, true);
+  assert.equal(board.source.read_only, true);
+  assert.equal(board.source.join_key, 'agent_id');
+
+  const bounced = board.tickets.find((row) => row.ticket_ref === 'SQ-1');
+  assert.equal(bounced.attempt_count.value, 2);
+  assert.equal(bounced.bounce_count.value, 1);
+  assert.equal(bounced.usage.request_count.value, 2);
+  assert.equal(bounced.usage.tokens.total.value, 350);
+  assert.ok(Math.abs(bounced.usage.estimated_cost_usd.value - 0.6) < 1e-9);
+  assert.deepEqual(bounced.attempts.map((attempt) => attempt.usage.tokens.total.value), [120, 230]);
+
+  const category = board.categories.find((row) => row.category === 'coding.hard');
+  assert.equal(category.ticket_count.value, 2);
+  assert.equal(category.attempt_count.value, 3);
+  assert.equal(category.usage.tokens.total.value, 410);
+  assert.equal(category.average_tokens_per_ticket.value, 205);
+  assert.ok(Math.abs(category.average_estimated_cost_usd_per_ticket.value - 0.35) < 1e-9);
+
+  const split = new Map(board.execution_split.map((row) => [row.role, row.usage]));
+  assert.equal(split.get('board_executor').tokens.total.value, 410);
+  assert.equal(split.get('orchestrator').tokens.total.value, 550);
+  assert.equal(split.get('unmapped_agent').tokens.total.value, 45);
+
+  assert.equal(board.rework.length, 1);
+  assert.equal(board.rework[0].attempts.length, 2);
+  const drift = board.route_drift.tickets.find((row) => row.ticket_ref === 'SQ-1');
+  assert.equal(drift.configured_model, 'gpt-primary');
+  assert.equal(drift.worked_model, 'gpt-fallback');
+  assert.equal(drift.drifted, true);
+  assert.equal(drift.usage.tokens.total.value, 350);
+  assert.match(formatTokenUsageReport(report), /SQ-1 \[coding\.hard\]: 350 \(derived\) tokens/);
+  assert.match(formatTokenUsageReport(report), /gpt-primary -> gpt-fallback/);
+});
+
+test('does not duplicate a batched agent across multiple tickets', (t) => {
+  const store = temporaryStore(t);
+  ingestGatewayUsage(store, 6, 'shared-batch-agent', 90, 10, 0.25);
+  const board = {
+    available: true,
+    reason: null,
+    sidequest_home: 'C:/fixture/sidequest',
+    database_file: 'C:/fixture/sidequest/sidequest.db',
+    project_path: 'C:/fixture/project',
+    project_slug: 'fixture',
+    categories: [{ id: 'coding.hard', route: { model: 'gpt-primary', effort: 'xhigh' } }],
+    tickets: ['SQ-10', 'SQ-11'].map((ref) => ({
+      ref,
+      status: 'done',
+      category: 'coding.hard',
+      workedBy: { model: 'gpt-primary', effort: 'xhigh' },
+      dispatch: {
+        agentId: 'shared-batch-agent',
+        route: { model: 'gpt-primary', effort: 'xhigh' },
+        preparedAt: '2026-07-19T12:00:00.000Z',
+        outcome: 'done',
+      },
+    })),
+  };
+
+  const costs = buildTokenUsageReport(store, { board }).board_costs;
+  assert.deepEqual(costs.coverage.ambiguous_agent_ids, ['shared-batch-agent']);
+  assert.equal(costs.execution_split.find((row) => row.role === 'board_executor').usage.tokens.total.value, 100);
+  for (const ticket of costs.tickets) {
+    assert.equal(ticket.attribution, 'unavailable');
+    assert.equal(ticket.usage.tokens.total.value, null);
+    assert.equal(ticket.attempts[0].attribution, 'ambiguous-shared-agent');
+  }
+});
+
+test('uses SIDEQUEST_HOME and project overrides in report arguments', () => {
+  const options = parseArgs(
+    ['--sidequest-home', 'C:/fixture/sidequest', '--project', 'C:/fixture/project', '--format', 'json'],
+    { SIDEQUEST_HOME: 'C:/ignored', CLAUDE_PROJECT_DIR: 'C:/ignored-project' },
+    'C:/ignored-cwd',
+  );
+  assert.equal(options.sidequestHome, 'C:/fixture/sidequest');
+  assert.equal(options.projectPath, 'C:/fixture/project');
+  assert.equal(options.format, 'json');
+  assert.equal(defaultSidequestHome({ SIDEQUEST_HOME: 'C:/configured' }, 'C:/home'), path.resolve('C:/configured'));
 });
 
 test('keeps unavailable report values explicit', (t) => {

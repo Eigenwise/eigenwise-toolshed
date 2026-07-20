@@ -1751,6 +1751,134 @@
           "legendFormat": "{{workbench_attribute_hook_name}}"
         }
       ]
+    },
+    {
+      "id": 107,
+      "title": "Board cost attribution",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 121,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 29,
+      "title": "Ticket dispatch usage and route drift",
+      "description": "Selected-range gateway usage joined to Sidequest ticket snapshots by dispatch agent ID. Each row is one unique dispatch attempt: repeated ticket rows are rework, and configured vs resolved model shows route drift. Batched agents mapped to multiple tickets are excluded rather than double-counted; the SQLite report retains their ambiguity and the structured bounce history. Dollar cost appears only when a cost_usd estimate is present.",
+      "type": "table",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 122,
+        "w": 24,
+        "h": 9
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": true,
+          "reducer": [
+            "sum"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #C"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_agent_id, workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_agent_id != \"\" | unwrap workbench_measurement_context_tokens_value [$__range]))",
+          "legendFormat": "{{workbench_agent_id}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_agent_id, workbench_attribute_model) (count_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_agent_id != \"\" [$__range]))",
+          "legendFormat": "{{workbench_agent_id}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "sum by (workbench_agent_id, workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_agent_id != \"\" | unwrap workbench_measurement_cost_usd_value [$__range]))",
+          "legendFormat": "{{workbench_agent_id}}"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "instant",
+          "instant": true,
+          "expr": "((sum by (workbench_agent_id, workbench_ticket_ref, workbench_attribute_category, workbench_attribute_configured_model) (count_over_time({service_name=\"workbench-observer\"} |= \"sidequest.ticket\" | workbench_agent_id != \"\" | workbench_ticket_ref != \"\" | workbench_attribute_category != \"\" | workbench_attribute_configured_model != \"\" | workbench_session_id !~ \"(probe|session-gateway).*\" [$__range])) > bool 0) and on (workbench_agent_id) (count by (workbench_agent_id) (sum by (workbench_agent_id, workbench_ticket_ref, workbench_attribute_category, workbench_attribute_configured_model) (count_over_time({service_name=\"workbench-observer\"} |= \"sidequest.ticket\" | workbench_agent_id != \"\" | workbench_ticket_ref != \"\" | workbench_attribute_category != \"\" | workbench_attribute_configured_model != \"\" | workbench_session_id !~ \"(probe|session-gateway).*\" [$__range])) > bool 0) == 1))",
+          "legendFormat": "{{workbench_ticket_ref}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value #D": true
+            },
+            "renameByName": {
+              "workbench_ticket_ref": "Ticket",
+              "workbench_attribute_category": "Category",
+              "workbench_attribute_configured_model": "Configured route",
+              "workbench_attribute_model": "Resolved model",
+              "workbench_agent_id": "Dispatch agent",
+              "Value #A": "Context tokens",
+              "Value #B": "Requests",
+              "Value #C": "Estimated cost"
+            }
+          }
+        }
+      ]
     }
   ]
 }

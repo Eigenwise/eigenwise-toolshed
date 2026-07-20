@@ -141,6 +141,68 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
   assert.equal(store.getTicket(slug, ticket.ref).lastEventType, 'dispatch');
 });
 
+test('release and submission clear retain structured rework attempts', () => {
+  const ticket = createFixture('structured rework fixture');
+  const firstSession = `rework-first-${Date.now()}`;
+  const first = store.prepareDispatch(slug, ticket.ref, { sessionId: firstSession });
+  const executor = first.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId: firstSession,
+    token: first.token,
+    executor,
+    agentName: 'rework-first-worker',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(firstSession, executor, 'rework-agent-1', 'rework-first-worker').ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'rework-first-worker', {
+    sessionId: firstSession,
+    token: first.token,
+    executor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'rework-first-worker', {
+    status: 'todo',
+    source: 'test',
+  }).ok, true);
+
+  let after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.reworkEvents.length, 1);
+  assert.equal(after.reworkEvents[0].kind, 'released_to_todo');
+  assert.equal(after.reworkEvents[0].attempt.agentId, 'rework-agent-1');
+  assert.deepEqual(after.reworkEvents[0].attempt.route, { model: 'sonnet', effort: 'high' });
+  assert.equal(after.reworkEvents[0].attempt.outcome, 'released');
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'rework-first-worker', {
+    status: 'todo',
+    source: 'test',
+  }).ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).reworkEvents.length, 1);
+
+  const secondSession = `rework-second-${Date.now()}`;
+  const second = store.prepareDispatch(slug, ticket.ref, { sessionId: secondSession });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId: secondSession,
+    token: second.token,
+    executor,
+    agentName: 'rework-second-worker',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(secondSession, executor, 'rework-agent-2', 'rework-second-worker').ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'rework-second-worker', {
+    sessionId: secondSession,
+    token: second.token,
+    executor,
+  }).ok, true);
+  assert.equal(store.submitTicket(slug, ticket.ref, 'rework-second-worker', {
+    commit: 'abc1234def5678',
+    source: 'test',
+  }).ok, true);
+  assert.equal(store.clearSubmission(slug, ticket.ref, { status: 'todo', source: 'test' }).ok, true);
+
+  after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.reworkEvents.length, 2);
+  assert.equal(after.reworkEvents[1].kind, 'submission_cleared');
+  assert.equal(after.reworkEvents[1].attempt.agentId, 'rework-agent-2');
+  assert.equal(after.reworkEvents[1].attempt.outcome, 'submitted');
+  assert.equal(Object.hasOwn(after.reworkEvents[1], 'submission'), false);
+});
+
 test('prepared dispatches expire on the configured TTL with an audit comment', () => {
   const ticket = createFixture('prepared expiry fixture');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'prepared-expiry' });
