@@ -34,9 +34,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { stableClaudeName, stableDispatchName } = require('./exec-names.js');
-const { spawnDescription } = require('./spawn-description.js');
 const crypto = require('crypto');
 const store = require('./store.js');
+const { spawnDescription } = store;
 
 const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md');
 

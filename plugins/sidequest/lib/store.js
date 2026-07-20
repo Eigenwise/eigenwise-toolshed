@@ -30,13 +30,24 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { stableClaudeName, stableDispatchName } = require('./exec-names.js');
-const { spawnDescription } = require('./spawn-description.js');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const db = require('./db.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
+
+const AGENT_DESCRIPTION_MAX_LENGTH = 80;
+
+function spawnDescription(ticket, resolved) {
+  const title = String(ticket && ticket.title || 'Sidequest ticket').replace(/\s+/g, ' ').trim();
+  const route = resolved && resolved.backend === 'codex'
+    ? String(resolved.runsLabel || resolved.runsModel || '').replace(/\s+/g, ' ').trim()
+    : '';
+  const suffix = route ? ` (${route})` : '';
+  const maxTitleLength = Math.max(1, AGENT_DESCRIPTION_MAX_LENGTH - suffix.length);
+  return `${title.slice(0, maxTitleLength).trimEnd()}${suffix}`.slice(0, AGENT_DESCRIPTION_MAX_LENGTH);
+}
 
 /* ------------------------------------------------------------------ *
  *  Roots and path helpers
@@ -3771,6 +3782,7 @@ module.exports = {
   routingModels,
   resolveModelId,
   resolveExec,
+  spawnDescription,
   resolveCategoryRoute,
   claudeQuotaFailure,
   classifyModelFilter,
