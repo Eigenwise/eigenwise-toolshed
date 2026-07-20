@@ -20,3 +20,5 @@ Workbench can prepare the local observer and an OpenTelemetry Collector. The col
 The statusline shim is installed by the setup flow when selected. It reports the current context and usage path while the observer records metadata counts. Use `/workbench:workbench-doctor` when the dashboard is empty or the statusline says the local service is unavailable.
 
 Use `/workbench:update-toolshed` to refresh installed Toolshed plugins and the gateway proxy. It leaves third-party marketplaces and plugins alone, then tells you which affected Toolshed sessions to reload.
+
+When no wiring mode is saved, the first interactive setup asks once: "Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?" It persists your answer and does not ask again. Non-interactive runs use per-project mode and print a notice. Change it later with `/workbench:update-toolshed --wiring-mode global|local`; global mode keeps existing local blocks and lists them as redundant.
