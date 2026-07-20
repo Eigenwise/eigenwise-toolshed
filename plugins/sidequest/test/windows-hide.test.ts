@@ -1,9 +1,16 @@
-'use strict';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import test from 'node:test';
 
-const assert = require('node:assert/strict');
-const path = require('node:path');
-const test = require('node:test');
-const { inspectPlugin, inspectSource, unhiddenCalls } = require('../../test-support/windows-hide.js');
+interface ChildProcessCall {
+  hidden: boolean;
+}
+
+const { inspectPlugin, inspectSource, unhiddenCalls } = require('../../test-support/windows-hide.js') as {
+  inspectPlugin(root: string): ChildProcessCall[];
+  inspectSource(source: string, file: string): ChildProcessCall[];
+  unhiddenCalls(calls: ChildProcessCall[]): ChildProcessCall[];
+};
 
 const pluginRoot = path.join(__dirname, '..');
 

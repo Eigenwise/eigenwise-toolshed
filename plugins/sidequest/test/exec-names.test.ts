@@ -1,7 +1,5 @@
-'use strict';
-
-const test = require('node:test');
-const assert = require('node:assert');
+import test from 'node:test';
+import assert from 'node:assert';
 
 const {
   CLAUDE_PREFIX,
@@ -11,7 +9,15 @@ const {
   isEffort,
   stableClaudeName,
   stableDispatchName,
-} = require('../lib/exec-names.js');
+} = require('../lib/exec-names.js') as {
+  CLAUDE_PREFIX: string;
+  DISPATCH_PREFIX: string;
+  EFFORTS: readonly string[];
+  classify(name: unknown): { kind: string; effort: string | null };
+  isEffort(value: unknown): boolean;
+  stableClaudeName(effort: string): string;
+  stableDispatchName(effort: string): string;
+};
 
 test('builders produce the current public stable names', () => {
   assert.strictEqual(stableClaudeName('high'), 'sidequest-exec-high');

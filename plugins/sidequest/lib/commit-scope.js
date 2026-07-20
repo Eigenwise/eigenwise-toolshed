@@ -1,26 +1,67 @@
-'use strict';
-
-const { execFileSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-
-function normalizeScope(scope) {
-  return String(scope || '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^\.\//, '')
-    .replace(/\/\*\*$/, '')
-    .replace(/\/+$/, '');
+"use strict";
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var commit_scope_exports = {};
+__export(commit_scope_exports, {
+  commitPaths: () => commitPaths,
+  commitScoped: () => commitScoped,
+  isInScope: () => isInScope,
+  rangePaths: () => rangePaths,
+  repoRoot: () => repoRoot,
+  scopedPaths: () => scopedPaths,
+  submissionRange: () => submissionRange,
+  unscopedWorkingPaths: () => unscopedWorkingPaths,
+  validateCommitRangeScope: () => validateCommitRangeScope,
+  validateCommitScope: () => validateCommitScope,
+  validateScopeResolution: () => validateScopeResolution,
+  validateStoredSubmissionRange: () => validateStoredSubmissionRange,
+  workingPaths: () => workingPaths
+});
+module.exports = __toCommonJS(commit_scope_exports);
+var import_node_child_process = require("node:child_process");
+var import_node_fs = __toESM(require("node:fs"));
+var import_node_path = __toESM(require("node:path"));
+function isRecord(value) {
+  return value !== null && typeof value === "object";
 }
-
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function normalizeScope(scope) {
+  return String(scope || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/\*\*$/, "").replace(/\/+$/, "");
+}
 function scopeKey(scope) {
   const normalized = normalizeScope(scope);
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
-
 function scopedPaths(files) {
   const paths = [];
-  const seen = new Set();
+  const seen = /* @__PURE__ */ new Set();
   for (const file of Array.isArray(files) ? files : []) {
     const scope = normalizeScope(file);
     const key = scopeKey(scope);
@@ -31,38 +72,29 @@ function scopedPaths(files) {
   }
   return paths;
 }
-
 function isInScope(file, files) {
-  const path = scopeKey(file);
+  const filePath = scopeKey(file);
   return scopedPaths(files).some((scope) => {
     const key = scopeKey(scope);
-    return path === key || path.startsWith(`${key}/`);
+    return filePath === key || filePath.startsWith(`${key}/`);
   });
 }
-
 function git(cwd, args) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  return (0, import_node_child_process.execFileSync)("git", args, { cwd, encoding: "utf8", windowsHide: true });
 }
-
 function gitResult(cwd, args) {
   try {
     return { ok: true, value: git(cwd, args).trim() };
   } catch (error) {
-    return { ok: false, message: error.message };
+    return { ok: false, message: errorMessage(error) };
   }
 }
-
 function repoRoot(cwd) {
-  return git(cwd, ['rev-parse', '--show-toplevel']).trim();
+  return git(cwd, ["rev-parse", "--show-toplevel"]).trim();
 }
-
 function trackedPaths(cwd) {
-  return git(cwd, ['ls-files', '--full-name', '-z'])
-    .split('\0')
-    .filter(Boolean)
-    .map((file) => file.replace(/\\/g, '/'));
+  return git(cwd, ["ls-files", "--full-name", "-z"]).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
 }
-
 function canonicalScope(scope, paths) {
   const normalized = normalizeScope(scope);
   const key = scopeKey(normalized);
@@ -72,58 +104,48 @@ function canonicalScope(scope, paths) {
   });
   return matchingPath ? matchingPath.slice(0, normalized.length) : normalized;
 }
-
 function canonicalScopedPaths(cwd, files) {
   const paths = trackedPaths(cwd);
   return scopedPaths(files).map((scope) => canonicalScope(scope, paths));
 }
-
 function existingScopedPaths(root, files) {
-  return canonicalScopedPaths(root, files).filter((scope) => fs.existsSync(path.resolve(root, scope)));
+  return canonicalScopedPaths(root, files).filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)));
 }
-
 function workingPaths(cwd) {
-  const status = git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-  const entries = status.split('\0');
+  const status = git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  const entries = status.split("\0");
   const paths = [];
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index];
     if (!entry) continue;
     const state = entry.slice(0, 2);
-    const file = entry.slice(3).replace(/\\/g, '/');
+    const file = entry.slice(3).replace(/\\/g, "/");
     if (file) paths.push(file);
-    if (state.includes('R') || state.includes('C')) {
+    if (state.includes("R") || state.includes("C")) {
       const previous = entries[++index];
-      if (previous) paths.push(previous.replace(/\\/g, '/'));
+      if (previous) paths.push(previous.replace(/\\/g, "/"));
     }
   }
   return Array.from(new Set(paths));
 }
-
 function unscopedWorkingPaths(cwd, files) {
   return workingPaths(cwd).filter((file) => !isInScope(file, files));
 }
-
 function validateScopeResolution(root, files) {
   const scopes = scopedPaths(files);
-  if (!scopes.length) return { ok: false, reason: 'missing_scope', outside: [] };
+  if (!scopes.length) return { ok: false, reason: "missing_scope", outside: [] };
   const outside = scopes.filter((scope) => {
-    const relative = path.relative(root, path.resolve(root, scope));
-    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    const relative = import_node_path.default.relative(root, import_node_path.default.resolve(root, scope));
+    return relative === ".." || relative.startsWith(`..${import_node_path.default.sep}`) || import_node_path.default.isAbsolute(relative);
   });
-  return { ok: outside.length === 0, reason: outside.length ? 'outside_scope' : null, outside };
+  return { ok: outside.length === 0, reason: outside.length ? "outside_scope" : null, outside };
 }
-
 function commitPaths(cwd, commit) {
-  return git(cwd, ['diff-tree', '--root', '--no-commit-id', '-r', '--name-only', '-z', commit])
-    .split('\0')
-    .filter(Boolean)
-    .map((file) => file.replace(/\\/g, '/'));
+  return git(cwd, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit]).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
 }
-
 function rangePaths(cwd, commits) {
   const paths = [];
-  const seen = new Set();
+  const seen = /* @__PURE__ */ new Set();
   for (const commit of commits) {
     for (const file of commitPaths(cwd, commit)) {
       const key = scopeKey(file);
@@ -135,85 +157,73 @@ function rangePaths(cwd, commits) {
   }
   return paths;
 }
-
 function validatePaths(files, paths) {
   const scopes = scopedPaths(files);
-  if (!scopes.length) return { ok: false, reason: 'missing_scope', paths: [], outside: [] };
+  if (!scopes.length) return { ok: false, reason: "missing_scope", paths: [], outside: [] };
   const outside = paths.filter((file) => !isInScope(file, scopes));
-  return { ok: outside.length === 0, reason: outside.length ? 'outside_scope' : null, paths, outside };
+  return { ok: outside.length === 0, reason: outside.length ? "outside_scope" : null, paths, outside };
 }
-
 function validateCommitScope(cwd, commit, files) {
   try {
     return validatePaths(files, commitPaths(cwd, commit));
-  } catch (err) {
-    return { ok: false, reason: 'git_error', paths: [], outside: [], message: err.message };
+  } catch (error) {
+    return { ok: false, reason: "git_error", paths: [], outside: [], message: errorMessage(error) };
   }
 }
-
 function validateCommitRangeScope(cwd, commits, files) {
   try {
     return validatePaths(files, rangePaths(cwd, commits));
-  } catch (err) {
-    return { ok: false, reason: 'git_error', paths: [], outside: [], message: err.message };
+  } catch (error) {
+    return { ok: false, reason: "git_error", paths: [], outside: [], message: errorMessage(error) };
   }
 }
-
 function resolvedCommit(cwd, name) {
-  return gitResult(cwd, ['rev-parse', '--verify', `${name}^{commit}`]);
+  return gitResult(cwd, ["rev-parse", "--verify", `${String(name || "").trim()}^{commit}`]);
 }
-
 function isAncestor(cwd, ancestor, descendant) {
   try {
-    git(cwd, ['merge-base', '--is-ancestor', ancestor, descendant]);
+    git(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]);
     return true;
-  } catch (_) {
+  } catch {
     return false;
   }
 }
-
-function submissionRange(cwd, opts) {
-  opts = opts || {};
-  const gitRef = String(opts.gitRef || '').trim();
-  const upstream = String(opts.upstream || 'origin/main').trim();
-  const tipName = String(opts.commit || '').trim();
-  if (!gitRef) return { ok: false, reason: 'missing_git_ref' };
-
+function submissionRange(cwd, options) {
+  const opts = isRecord(options) ? options : {};
+  const gitRef = String(opts.gitRef || "").trim();
+  const upstream = String(opts.upstream || "origin/main").trim();
+  const tipName = String(opts.commit || "").trim();
+  if (!gitRef) return { ok: false, reason: "missing_git_ref" };
   const tip = resolvedCommit(cwd, tipName);
-  if (!tip.ok) return { ok: false, reason: 'missing_commit', message: tip.message };
+  if (!tip.ok) return { ok: false, reason: "missing_commit", message: tip.message };
   const refTip = resolvedCommit(cwd, gitRef);
-  if (!refTip.ok) return { ok: false, reason: 'missing_git_ref', message: refTip.message };
-  if (tip.value !== refTip.value) return { ok: false, reason: 'tip_mismatch', tip: tip.value, refTip: refTip.value, gitRef };
-
+  if (!refTip.ok) return { ok: false, reason: "missing_git_ref", message: refTip.message };
+  if (tip.value !== refTip.value) return { ok: false, reason: "tip_mismatch", tip: tip.value, refTip: refTip.value, gitRef };
   const currentUpstream = resolvedCommit(cwd, upstream);
-  if (!currentUpstream.ok) return { ok: false, reason: 'missing_upstream', upstream, message: currentUpstream.message };
+  if (!currentUpstream.ok) return { ok: false, reason: "missing_upstream", upstream, message: currentUpstream.message };
   const recordedUpstream = opts.upstreamCommit ? resolvedCommit(cwd, opts.upstreamCommit) : null;
-  if (recordedUpstream && !recordedUpstream.ok) return { ok: false, reason: 'missing_recorded_upstream', message: recordedUpstream.message };
+  if (recordedUpstream && !recordedUpstream.ok) return { ok: false, reason: "missing_recorded_upstream", message: recordedUpstream.message };
   if (recordedUpstream && !isAncestor(cwd, recordedUpstream.value, currentUpstream.value)) {
-    return { ok: false, reason: 'expected_upstream_diverged', upstream, upstreamCommit: recordedUpstream.value, currentUpstream: currentUpstream.value };
+    return { ok: false, reason: "expected_upstream_diverged", upstream, upstreamCommit: recordedUpstream.value, currentUpstream: currentUpstream.value };
   }
   const requestedBase = opts.base ? resolvedCommit(cwd, opts.base) : null;
-  if (requestedBase && !requestedBase.ok) return { ok: false, reason: 'missing_base', message: requestedBase.message };
+  if (requestedBase && !requestedBase.ok) return { ok: false, reason: "missing_base", message: requestedBase.message };
   if (requestedBase && !isAncestor(cwd, requestedBase.value, currentUpstream.value)) {
-    return { ok: false, reason: 'base_not_reachable', base: requestedBase.value, upstream, upstreamCommit: currentUpstream.value };
+    return { ok: false, reason: "base_not_reachable", base: requestedBase.value, upstream, upstreamCommit: currentUpstream.value };
   }
-
-  const mergeBase = gitResult(cwd, ['merge-base', currentUpstream.value, tip.value]);
-  if (!mergeBase.ok || !mergeBase.value) return { ok: false, reason: 'unrelated_history', upstream, tip: tip.value, message: mergeBase.message };
+  const mergeBase = gitResult(cwd, ["merge-base", currentUpstream.value, tip.value]);
+  if (!mergeBase.ok || !mergeBase.value) return { ok: false, reason: "unrelated_history", upstream, tip: tip.value, message: mergeBase.ok ? void 0 : mergeBase.message };
   if (requestedBase && requestedBase.value !== mergeBase.value) {
-    return { ok: false, reason: 'diverged_history', base: requestedBase.value, actualBase: mergeBase.value, upstream, tip: tip.value };
+    return { ok: false, reason: "diverged_history", base: requestedBase.value, actualBase: mergeBase.value, upstream, tip: tip.value };
   }
-
-  const commitList = gitResult(cwd, ['rev-list', '--reverse', `${mergeBase.value}..${tip.value}`]);
-  if (!commitList.ok) return { ok: false, reason: 'git_error', message: commitList.message };
+  const commitList = gitResult(cwd, ["rev-list", "--reverse", `${mergeBase.value}..${tip.value}`]);
+  if (!commitList.ok) return { ok: false, reason: "git_error", message: commitList.message };
   const commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
-  if (!commits.length) return { ok: false, reason: 'empty_range', base: mergeBase.value, tip: tip.value };
-
-  const parents = gitResult(cwd, ['rev-list', '--parents', `${mergeBase.value}..${tip.value}`]);
-  if (!parents.ok) return { ok: false, reason: 'git_error', message: parents.message };
+  if (!commits.length) return { ok: false, reason: "empty_range", base: mergeBase.value, tip: tip.value };
+  const parents = gitResult(cwd, ["rev-list", "--parents", `${mergeBase.value}..${tip.value}`]);
+  if (!parents.ok) return { ok: false, reason: "git_error", message: parents.message };
   const mergeCommit = parents.value.split(/\r?\n/).find((line) => line.trim().split(/\s+/).length > 2);
-  if (mergeCommit) return { ok: false, reason: 'merge_commit', commit: mergeCommit.trim().split(/\s+/)[0] };
-
+  if (mergeCommit) return { ok: false, reason: "merge_commit", commit: mergeCommit.trim().split(/\s+/)[0] };
   try {
     return {
       ok: true,
@@ -223,68 +233,67 @@ function submissionRange(cwd, opts) {
       upstream,
       upstreamCommit: currentUpstream.value,
       commits,
-      changedPaths: rangePaths(cwd, commits),
+      changedPaths: rangePaths(cwd, commits)
     };
   } catch (error) {
-    return { ok: false, reason: 'git_error', message: error.message };
+    return { ok: false, reason: "git_error", message: errorMessage(error) };
   }
 }
-
-function validateStoredSubmissionRange(cwd, submission) {
+function validateStoredSubmissionRange(cwd, submissionValue) {
+  const submission = isRecord(submissionValue) ? submissionValue : {};
   const range = submissionRange(cwd, {
-    commit: submission && submission.commit,
-    gitRef: submission && submission.gitRef,
-    upstream: submission && submission.upstream,
-    upstreamCommit: submission && submission.upstreamCommit,
-    base: submission && submission.base,
+    commit: submission.commit,
+    gitRef: submission.gitRef,
+    upstream: submission.upstream,
+    upstreamCommit: submission.upstreamCommit,
+    base: submission.base
   });
   if (!range.ok) return range;
   const storedCommits = Array.isArray(submission.commits) ? submission.commits : [];
   if (storedCommits.length && JSON.stringify(storedCommits) !== JSON.stringify(range.commits)) {
-    return Object.assign({ ok: false, reason: 'range_changed', storedCommits }, range);
+    return Object.assign({ ok: false, reason: "range_changed", storedCommits }, range);
   }
   const storedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths : [];
   if (storedPaths.length && JSON.stringify(storedPaths) !== JSON.stringify(range.changedPaths)) {
-    return Object.assign({ ok: false, reason: 'changed_paths_changed', storedPaths }, range);
+    return Object.assign({ ok: false, reason: "changed_paths_changed", storedPaths }, range);
   }
   return range;
 }
-
 function commitScoped(cwd, message, files) {
   const scopes = scopedPaths(files);
-  if (!scopes.length) return { ok: false, reason: 'missing_scope' };
+  if (!scopes.length) return { ok: false, reason: "missing_scope" };
   try {
     const root = repoRoot(cwd);
     const resolution = validateScopeResolution(root, scopes);
     if (!resolution.ok) return resolution;
     const canonicalScopes = canonicalScopedPaths(root, scopes);
-    const missingScopes = canonicalScopes.filter((scope) => !fs.existsSync(path.resolve(root, scope)));
+    const missingScopes = canonicalScopes.filter((scope) => !import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)));
     const commitScopes = existingScopedPaths(root, scopes);
     const unscopedPaths = unscopedWorkingPaths(root, scopes);
     if (!commitScopes.length) {
-      return { ok: false, reason: 'no_existing_scope', missingScopes, unscopedPaths };
+      return { ok: false, reason: "no_existing_scope", missingScopes, unscopedPaths };
     }
-    git(root, ['commit', '--only', '-m', String(message || ''), '--', ...commitScopes]);
-    const commit = git(root, ['rev-parse', 'HEAD']).trim();
+    git(root, ["commit", "--only", "-m", String(message || ""), "--", ...commitScopes]);
+    const commit = git(root, ["rev-parse", "HEAD"]).trim();
     const validation = validateCommitScope(root, commit, scopes);
     return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
-  } catch (err) {
-    return { ok: false, reason: 'git_error', message: err.message };
+  } catch (error) {
+    return { ok: false, reason: "git_error", message: errorMessage(error) };
   }
 }
-
-module.exports = {
-  scopedPaths,
-  isInScope,
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
   commitPaths,
-  rangePaths,
-  validateCommitScope,
-  validateCommitRangeScope,
-  submissionRange,
-  validateStoredSubmissionRange,
-  validateScopeResolution,
-  repoRoot,
-  workingPaths,
-  unscopedWorkingPaths,
   commitScoped,
-};
+  isInScope,
+  rangePaths,
+  repoRoot,
+  scopedPaths,
+  submissionRange,
+  unscopedWorkingPaths,
+  validateCommitRangeScope,
+  validateCommitScope,
+  validateScopeResolution,
+  validateStoredSubmissionRange,
+  workingPaths
+});

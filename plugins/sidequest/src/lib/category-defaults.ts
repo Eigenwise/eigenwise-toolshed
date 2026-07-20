@@ -1,27 +1,5 @@
-"use strict";
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
-var category_defaults_exports = {};
-__export(category_defaults_exports, {
-  DEFAULT_CATEGORIES: () => DEFAULT_CATEGORIES
-});
-module.exports = __toCommonJS(category_defaults_exports);
-const DEFAULT_CATEGORIES = [
+// Regenerate this list whenever global categories are edited.
+export const DEFAULT_CATEGORIES = [
   {
     "id": "architecture-design",
     "name": "Architecture design",
@@ -67,7 +45,7 @@ const DEFAULT_CATEGORIES = [
   {
     "id": "debugging",
     "name": "Debugging",
-    "description": 'Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. The first job is to reproduce and narrow the hypothesis space. Use testing instead when the intended behavior is already known and only verification is needed — the two share a verification step but start from opposite certainty about the cause. "Why is this slow" belongs here; "does approach X make it faster" is spike-investigation.',
+    "description": "Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. The first job is to reproduce and narrow the hypothesis space. Use testing instead when the intended behavior is already known and only verification is needed — the two share a verification step but start from opposite certainty about the cause. \"Why is this slow\" belongs here; \"does approach X make it faster\" is spike-investigation.",
     "route": {
       "model": "codex-gpt-5-6-terra",
       "effort": "high"
@@ -175,7 +153,7 @@ const DEFAULT_CATEGORIES = [
   {
     "id": "spike-investigation",
     "name": "Spike or investigation",
-    "description": `Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system ("does approach X actually work/perform here"); if it's answerable by reading external sources — docs, tool behavior, comparative research — use web-research or deep-research instead.`,
+    "description": "Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system (\"does approach X actually work/perform here\"); if it's answerable by reading external sources — docs, tool behavior, comparative research — use web-research or deep-research instead.",
     "route": {
       "model": "codex-gpt-5-6-sol",
       "effort": "high"
@@ -257,7 +235,3 @@ const DEFAULT_CATEGORIES = [
     "enabled": true
   }
 ];
-// Annotate the CommonJS export names for ESM import in node:
-0 && (module.exports = {
-  DEFAULT_CATEGORIES
-});

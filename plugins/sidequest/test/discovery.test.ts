@@ -1,18 +1,36 @@
-'use strict';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const os = require('node:os');
-const path = require('node:path');
-const fs = require('node:fs');
+type CatalogModel = Record<string, unknown>;
+interface CatalogHeader {
+  schemaVersion?: number;
+  schema?: number;
+  source?: string;
+  updatedAt?: string;
+}
+interface ResolvedExec {
+  agent: string;
+  model: string;
+  runsModel?: string;
+}
 
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-home-'));
 const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-empty-'));
 process.env.SIDEQUEST_DISCOVERY_DIRS = empty;
-const discovery = require('../lib/discovery.js');
-const store = require('../lib/store.js');
+const discovery = require('../lib/discovery.js') as {
+  discoverExternalModels(): Array<{ slug: string; id: string; label: string; source: string }>;
+};
+const store = require('../lib/store.js') as {
+  CLAUDE_RUNTIMES: readonly string[];
+  VALID_EFFORTS: readonly string[];
+  resolveExec(model: string, effort: string): ResolvedExec | null;
+  classifyModelFilter(model: string): string;
+};
 
-function writeCatalog(models, catalog = { schemaVersion: 3, source: 'codex-gateway' }) {
+function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = { schemaVersion: 3, source: 'codex-gateway' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-'));
   const dir = path.join(root, 'codex-gateway');
   fs.mkdirSync(dir, { recursive: true });
@@ -59,7 +77,7 @@ test('discovery ignores future catalog schemas', () => {
 test('Claude runtimes resolve to their stable executor at every stamped effort', () => {
   for (const model of store.CLAUDE_RUNTIMES) {
     for (const effort of store.VALID_EFFORTS) {
-      const resolved = store.resolveExec(model, effort);
+      const resolved = store.resolveExec(model, effort) as ResolvedExec;
       assert.equal(resolved.agent, `sidequest-exec-${effort}`);
       assert.equal(resolved.model, model);
     }
@@ -68,7 +86,7 @@ test('Claude runtimes resolve to their stable executor at every stamped effort',
 
 test('concrete discovered route resolves while an absent route is unavailable', () => {
   writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }]);
-  assert.equal(store.resolveExec('codex-gpt-test', 'high').runsModel, 'codex-gpt-test');
+  assert.equal(store.resolveExec('codex-gpt-test', 'high')!.runsModel, 'codex-gpt-test');
   assert.equal(store.resolveExec('missing-model', 'high'), null);
   assert.equal(store.classifyModelFilter('missing-model'), 'unknown');
 });

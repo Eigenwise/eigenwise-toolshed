@@ -1,8 +1,18 @@
-'use strict';
+import test from 'node:test';
+import assert from 'node:assert/strict';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, routingDisabledMessage } = require('../lib/refusal-guidance.js');
+interface ClaimIdentity {
+  by?: string;
+  at?: string;
+}
+
+type RefusalMessage = (ref: string, claim: ClaimIdentity) => string;
+
+const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, routingDisabledMessage } = require('../lib/refusal-guidance.js') as {
+  CLAIM_REFUSAL_MESSAGES: Record<string, RefusalMessage>;
+  claimRefusalMessage(reason: string, ref: string, claim?: ClaimIdentity): string;
+  routingDisabledMessage(ref: string): string;
+};
 
 test('claim refusal guidance always gives an actionable next step', () => {
   for (const [reason, message] of Object.entries(CLAIM_REFUSAL_MESSAGES)) {

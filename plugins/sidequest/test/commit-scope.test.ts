@@ -1,18 +1,32 @@
-'use strict';
+import test from 'node:test';
+import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
-const test = require('node:test');
-const assert = require('node:assert');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { execFileSync } = require('child_process');
-const commitScope = require('../lib/commit-scope');
+interface ScopeResult {
+  ok: boolean;
+  reason?: string | null;
+  message?: string;
+  commit: string;
+  paths: string[];
+  outside: string[];
+  missingScopes: string[];
+  unscopedPaths: string[];
+}
 
-function git(repo, args) {
+const commitScope = require('../lib/commit-scope.js') as {
+  commitScoped(cwd: string, message: string, files: string[]): ScopeResult;
+  commitPaths(cwd: string, commit: string): string[];
+  validateCommitScope(cwd: string, commit: string, files: string[]): ScopeResult;
+};
+
+function git(repo: string, args: string[]): string {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true }).trim();
 }
 
-function repo() {
+function repo(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-'));
   git(root, ['init']);
   git(root, ['config', 'user.name', 'Sidequest Test']);
@@ -31,7 +45,7 @@ test('missing declared paths warn while existing declared paths commit', () => {
   git(root, ['add', '.']);
 
   const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', 'plugins/sidequest/phantom.js']);
-  assert.equal(committed.ok, true, committed.message);
+  assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
   assert.deepEqual(committed.missingScopes, ['plugins/sidequest/phantom.js']);
 });
@@ -57,7 +71,7 @@ test('scoped commit preserves an uppercase tracked path from a nested directory'
   git(root, ['add', 'README.md']);
 
   const committed = commitScope.commitScoped(path.join(root, 'plugins', 'sidequest'), 'preserve README case', ['README.md']);
-  assert.equal(committed.ok, true, committed.message);
+  assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['README.md']);
   assert.equal(git(root, ['show', '--format=', '--name-only', 'HEAD']), 'README.md');
 });
@@ -68,7 +82,7 @@ test('Windows scope matching emits canonical tracked casing', { skip: process.pl
   git(root, ['add', 'README.md']);
 
   const committed = commitScope.commitScoped(path.join(root, 'plugins', 'sidequest'), 'canonical README case', ['readme.md']);
-  assert.equal(committed.ok, true, committed.message);
+  assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['README.md']);
   assert.equal(git(root, ['show', '--format=', '--name-only', 'HEAD']), 'README.md');
 });

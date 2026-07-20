@@ -1,0 +1,22 @@
+{
+  "name": "@eigenwise/sidequest",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/build.mjs",
+    "drift": "npm run build && node scripts/drift.mjs",
+    "test:files": "node --import tsx --test",
+    "test:full": "npm run typecheck && npm run build && npm run drift && node --import tsx --test test/*.test.ts",
+    "test:perf": "node --import tsx --test test/*.perf.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "esbuild": "0.28.1",
+    "tsx": "4.23.1",
+    "typescript": "7.0.2"
+  }
+}
