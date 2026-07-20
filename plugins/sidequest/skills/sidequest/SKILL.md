@@ -207,10 +207,10 @@ hand-pick either. Legacy complexity maps to bands at read time (1–3/4–6/7–
    then spawn the exact `agent` a fresh `dispatch <ref>` returned through native Agent,
    every spawn field unchanged (including `isolation`). **Claude routes**: `model: exec.model` +
    `mode: "bypassPermissions"` + a unique `name` (omitting `model` inherits the pricey session
-   model). **Codex routes** (`exec.model` null): `model` OMITTED — the prompt's
+   model). This includes Haiku: use the stable executor and model the dispatch returned, never a
+   plain generic Agent. **Codex routes** (`exec.model` null): `model` OMITTED — the prompt's
    `[sidequest-route ...]` marker carries the real model; any `model` value silently runs
-   Anthropic. Effort rides **verbatim** — a mismatched claim is refused. Haiku tickets (null
-   `exec.agent`): plain named Agent, `model: haiku`. Detail and fallbacks:
+   Anthropic. Effort rides **verbatim** — a mismatched claim is refused. Detail and fallbacks:
    `references/routing-details.md`.
 4. **Claim by resolved route:** `next --model X` / `ready --model X` filter by resolved route.
 

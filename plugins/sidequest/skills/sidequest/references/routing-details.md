@@ -79,8 +79,9 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
 - `<effort>` is the ticket's `effort` verbatim from the fresh read, never a level you judge fits
   better: the executor claims with `--effort <baked level>` and the board refuses the claim on a
   mismatch, bouncing the ticket back.
-- A haiku ticket has no effort: `exec.agent` is null; spawn a plain Agent with `model: haiku`,
-  still uniquely named.
+- **Haiku routes:** spawn the stable executor returned in `exec.agent` with
+  `model: exec.model`, `mode: "bypassPermissions"`, and a unique `name`, like every other Claude
+  route. A plain generic Agent is denied by the Sidequest gate.
 - Worktree isolation: tickets with declared files carry `isolation: "worktree"` in `spawn`; pass it
   unchanged. `--shared-tree` / `{sharedTree:true}` is an escape hatch only for a task that depends
   on uncommitted local state, and its reason belongs in a ticket comment before spawning.

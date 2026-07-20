@@ -161,6 +161,13 @@ test('pre-tool hook keeps builtin models and strips a stable dispatch executor m
   assert.equal(builtIn.hookSpecificOutput.updatedInput.model, 'opus');
   assert.equal(builtIn.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
 
+  const haiku = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-medium', model: 'haiku', name: 'sq210-haiku' },
+  });
+  assert.equal(haiku.hookSpecificOutput.updatedInput.model, 'haiku');
+  assert.equal(haiku.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
   for (const subagent_type of ['sidequest-native-sq-210-gpt-5-6-terra', 'sidequest-ticket-sq-584-haiku-b37fffcb']) {
     const out = runHookOutput(FORCE_BYPASS, { tool_name: 'Agent', tool_input: { subagent_type, prompt: 'work SQ-210' } });
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
