@@ -15,8 +15,7 @@ Run the portable updater from this plugin installation:
 node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js"
 ```
 
-It reads Claude Code's installed-plugin registry, refreshes `eigenwise-toolshed`, updates every recorded
-Toolshed installation from the matching scope and project directory, then runs `codex-gateway setup` and
+It reads Claude Code's installed-plugin registry, refreshes only `eigenwise-toolshed`, and updates only Toolshed plugins from that marketplace at their recorded scope and project directory. It does not inspect, refresh, or update third-party marketplaces or plugins. It then runs `codex-gateway setup` and
 `doctor` when that plugin is installed. In the default local gateway mode it also writes every recorded
 project's `.claude/settings.local.json`, moves only gateway-owned legacy keys out of `settings.json`, and
 removes the old user block only after every project succeeds. Unrecorded projects stay unwired until

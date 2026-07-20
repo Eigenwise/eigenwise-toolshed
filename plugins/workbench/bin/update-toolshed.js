@@ -31,9 +31,9 @@ function parseArgs(argv) {
 function usage() {
   return `Usage: node update-toolshed.js [--check] [--dry-run] [--claude <command>]
 
-Refreshes every marketplace that has an installed plugin, then updates every recorded
-user, project, and local plugin install. Project and local installs run from their
-recorded project directory so Claude Code updates the right scope.
+Refreshes the eigenwise-toolshed marketplace, then updates every recorded Toolshed
+plugin install at user, project, and local scope. Project and local installs run from
+their recorded project directory so Claude Code updates the right scope.
 
   --check       Read installed versions and run codex-gateway doctor without updating
   --dry-run     Print every command without running it
@@ -128,6 +128,10 @@ function installedPlugins(registry) {
       || left.scope.localeCompare(right.scope)
       || leftProject.localeCompare(rightProject);
   });
+}
+
+function toolshedPlugins(registry) {
+  return installedPlugins(registry).filter((instance) => pluginIdParts(instance.id)?.marketplace === GATEWAY_MARKETPLACE);
 }
 
 function marketplacesFor(registryOrInstances) {
@@ -268,16 +272,17 @@ function execute(command, options, run, report) {
 
 function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log }) {
   const registry = readRegistry(registryFile);
-  let instances = installedPlugins(registry);
+  let instances = toolshedPlugins(registry);
 
   if (instances.length === 0) {
-    report(`No user, project, or local plugin installs found in ${registryFile}.`);
+    report(`No user, project, or local Toolshed plugin installs found in ${registryFile}.`);
     return { ok: true, instances, failures: [] };
   }
 
-  const marketplaces = marketplacesFor(registry);
-  report(`Found ${instances.length} plugin install(s) from ${marketplaces.length} marketplace(s):`);
+  const marketplaces = marketplacesFor(instances);
+  report(`Found ${instances.length} Toolshed plugin install(s) from ${marketplaces.length} marketplace(s):`);
   for (const instance of instances) report(`- ${instance.id} ${instance.version ?? 'unknown'} (${instance.scope}${instance.projectPath ? `, ${instance.projectPath}` : ''})`);
+  report('Other marketplaces are managed by Claude Code auto-update — not touched.');
 
   const failures = [];
   if (!options.check) {
@@ -291,7 +296,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
       if (!execute(command, options, run, report)) failures.push(command.label);
     }
 
-    if (!options.dryRun) instances = installedPlugins(readRegistry(registryFile));
+    if (!options.dryRun) instances = toolshedPlugins(readRegistry(registryFile));
   } else {
     report('\nCheck mode does not refresh marketplaces or update plugins. Claude Code normally checks plugin updates after session start with up to a 10-minute delay when marketplace auto-update is enabled.');
   }
@@ -367,6 +372,7 @@ module.exports = {
   parseArgs,
   registryPath,
   runUpdate,
+  toolshedPlugins,
   updateCommand,
   workbenchStatuslinePin,
 };

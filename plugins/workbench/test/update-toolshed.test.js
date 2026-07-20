@@ -77,7 +77,7 @@ test('uses the installed codex-gateway setup and doctor commands', () => {
   assert.equal(doctor.args.at(-1), 'doctor');
 });
 
-test('dry-run refreshes every marketplace and reports every plugin scope without executing', () => withRegistry(registry, (registryFile) => {
+test('dry-run scopes the update plan to Toolshed and does not enumerate third-party plugins', () => withRegistry(registry, (registryFile) => {
   const calls = [];
   const lines = [];
   const result = runUpdate({
@@ -92,28 +92,44 @@ test('dry-run refreshes every marketplace and reports every plugin scope without
 
   assert.equal(result.ok, true);
   assert.equal(calls.length, 0);
-  assert.match(lines.join('\n'), /marketplace.*update.*another-marketplace/);
   assert.match(lines.join('\n'), /marketplace.*update.*eigenwise-toolshed/);
-  assert.match(lines.join('\n'), /marketplace.*update.*managed-marketplace/);
-  assert.match(lines.join('\n'), /other@another-marketplace \(user\)/);
+  assert.doesNotMatch(lines.join('\n'), /another-marketplace|managed-marketplace|other@another-marketplace/);
+  assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
   assert.match(lines.join('\n'), /sidequest@eigenwise-toolshed \(project, C:\/work\/project\)/);
   assert.match(lines.join('\n'), /codex-gateway setup/);
 }));
 
-test('check mode skips updates but runs gateway doctor', () => withRegistry(registry, (registryFile) => {
-  const calls = [];
+test('update and check modes touch only Toolshed installs', () => withRegistry(registry, (registryFile) => {
+  const updateCalls = [];
   runUpdate({
     registryFile,
-    options: { claude: 'claude', dryRun: false, check: true },
+    options: { claude: 'claude', dryRun: false, check: false },
     run: (command) => {
-      calls.push(command);
+      updateCalls.push(command);
       return { ok: true };
     },
     report: () => {},
   });
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].args.at(-1), 'doctor');
+  assert.ok(updateCalls.some((command) => command.args.join(' ') === 'plugin marketplace update eigenwise-toolshed'));
+  assert.equal(updateCalls.some((command) => command.args.join(' ').includes('another-marketplace') || command.args.join(' ').includes('other@')), false);
+
+  const checkCalls = [];
+  const lines = [];
+  runUpdate({
+    registryFile,
+    options: { claude: 'claude', dryRun: false, check: true },
+    run: (command) => {
+      checkCalls.push(command);
+      return { ok: true };
+    },
+    report: (line) => lines.push(line),
+  });
+
+  assert.equal(checkCalls.length, 1);
+  assert.equal(checkCalls[0].args.at(-1), 'doctor');
+  assert.equal(checkCalls[0].args.join(' ').includes('another-marketplace'), false);
+  assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
 }));
 
 test('local mode wires recorded projects before removing the legacy global block', () => withRegistry(registry, (registryFile) => {
@@ -233,10 +249,9 @@ test('continues after failures and returns every failed operation', () => withRe
   });
 
   assert.equal(failed.ok, false);
-  assert.equal(failed.failures.length, 9);
-  assert.match(failed.failures.join('\n'), /another-marketplace marketplace/);
+  assert.equal(failed.failures.length, 6);
   assert.match(failed.failures.join('\n'), /eigenwise-toolshed marketplace/);
-  assert.match(failed.failures.join('\n'), /other@another-marketplace/);
+  assert.doesNotMatch(failed.failures.join('\n'), /another-marketplace|other@another-marketplace/);
   assert.match(failed.failures.join('\n'), /codex-gateway setup/);
 }));
 
