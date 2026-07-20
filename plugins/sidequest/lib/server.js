@@ -1155,7 +1155,9 @@ function listenOn(server, port, host, triesLeft) {
   return new Promise((resolve, reject) => {
     const onError = (err) => {
       server.removeListener('listening', onListening);
-      if (err && err.code === 'EADDRINUSE' && triesLeft > 0) {
+      // EACCES: Windows excluded port ranges (netsh show excludedportrange)
+      // refuse the bind outright; walk past them like an occupied port.
+      if (err && (err.code === 'EADDRINUSE' || err.code === 'EACCES') && triesLeft > 0) {
         resolve(listenOn(server, port + 1, host, triesLeft - 1));
       } else {
         reject(err);
@@ -1184,7 +1186,7 @@ async function start(requestedPort) {
       }
     });
   });
-  const port = await listenOn(server, startPort, host, 40);
+  const port = await listenOn(server, startPort, host, 700);
   const info = { port, pid: process.pid, url: `http://${host}:${port}`, startedAt: START_TIME, version: PLUGIN_VERSION };
   store.writeServerInfo(info);
 
@@ -1204,4 +1206,4 @@ async function start(requestedPort) {
   return { server, port, url: info.url };
 }
 
-module.exports = { start, pickNewerInstall, findNewerInstall, categoryDraftPrompt, validateCategoryDraft, draftCategory, setCategoryDraftSpawn: (value) => { categoryDraftSpawn = value || spawn; }, setCategoryDraftAvailable: (value) => { categoryDraftAvailable = value; }, setCategoryDraftTimeout: (value) => { categoryDraftTimeoutMs = value || CATEGORY_DRAFT_TIMEOUT_MS; } };
+module.exports = { start, listenOn, pickNewerInstall, findNewerInstall, categoryDraftPrompt, validateCategoryDraft, draftCategory, setCategoryDraftSpawn: (value) => { categoryDraftSpawn = value || spawn; }, setCategoryDraftAvailable: (value) => { categoryDraftAvailable = value; }, setCategoryDraftTimeout: (value) => { categoryDraftTimeoutMs = value || CATEGORY_DRAFT_TIMEOUT_MS; } };

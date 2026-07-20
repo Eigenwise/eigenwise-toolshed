@@ -22,7 +22,7 @@ process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-server-te
 process.env.SIDEQUEST_NO_HOT_RECYCLE = '1';
 
 const { EventEmitter } = require('events');
-const { start, pickNewerInstall, findNewerInstall, validateCategoryDraft, setCategoryDraftSpawn, setCategoryDraftAvailable, setCategoryDraftTimeout } = require('../lib/server.js');
+const { start, listenOn, pickNewerInstall, findNewerInstall, validateCategoryDraft, setCategoryDraftSpawn, setCategoryDraftAvailable, setCategoryDraftTimeout } = require('../lib/server.js');
 const store = require('../lib/store.js');
 
 /* ------------------------------------------------------------------ *
@@ -401,4 +401,45 @@ test('dashboard self-updates to a newer cached install at the same URL', { timeo
   assert.strictEqual(newHealth.version, '1.37.1');
   assert.notStrictEqual(newHealth.pid, oldHealth.pid);
   assert.strictEqual(isAlive(old.pid), false);
+});
+
+/* ------------------------------------------------------------------ *
+ *  listenOn — walks past refused ports (SQ-591)
+ * ------------------------------------------------------------------ */
+
+function fakeServer(refusals) {
+  const server = new EventEmitter();
+  server.listen = (port) => {
+    setImmediate(() => {
+      const code = refusals.get(port);
+      if (code) server.emit('error', Object.assign(new Error(code), { code }));
+      else server.emit('listening');
+    });
+  };
+  return server;
+}
+
+test('listenOn walks past EADDRINUSE and Windows-excluded EACCES ports', async () => {
+  const refusals = new Map([[50000, 'EACCES'], [50001, 'EACCES'], [50002, 'EADDRINUSE']]);
+  const port = await listenOn(fakeServer(refusals), 50000, '127.0.0.1', 700);
+  assert.strictEqual(port, 50003);
+});
+
+test('listenOn clears a 600-port excluded block within its walk budget', async () => {
+  const refusals = new Map();
+  for (let port = 52092; port <= 52691; port++) refusals.set(port, 'EACCES');
+  const port = await listenOn(fakeServer(refusals), 52092, '127.0.0.1', 700);
+  assert.strictEqual(port, 52692);
+});
+
+test('listenOn rejects non-retryable errors and an exhausted budget', async () => {
+  await assert.rejects(
+    () => listenOn(fakeServer(new Map([[50000, 'EPERM']])), 50000, '127.0.0.1', 700),
+    (err) => err.code === 'EPERM',
+  );
+  const refusals = new Map([[50000, 'EACCES'], [50001, 'EACCES']]);
+  await assert.rejects(
+    () => listenOn(fakeServer(refusals), 50000, '127.0.0.1', 1),
+    (err) => err.code === 'EACCES',
+  );
 });
