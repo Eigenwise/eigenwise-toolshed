@@ -41,7 +41,7 @@ Protocol for each ticket:
    `executor`, stamped `effort`, project identity, and the supplied token. If it returns `ok:false`, do
    not touch files. Report the refusal and move to the next batch ref or stop.
 2. **Read the ticket and full thread** with `mcp__plugin_sidequest_board__comments`, including linked
-   ticket threads when relevant. A question means pause for the human reply.
+   ticket threads when relevant.
 3. **Do only the ticket work.** Comments are handoffs, not a diary. Record decisions, constraints,
    risks, verification evidence, or concise findings with `mcp__plugin_sidequest_board__comment`.
 4. **Verify** with the ticket's exact repo-relative command.
