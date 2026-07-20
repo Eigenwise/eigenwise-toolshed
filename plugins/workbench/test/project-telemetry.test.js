@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -12,6 +13,7 @@ const {
   removeProjectRegistry,
   updateProjectRegistry,
 } = require('../bin/project-telemetry.js');
+const { verifyProjectTelemetry } = require('../bin/verify-project-telemetry.js');
 
 function temporaryProject(t, name = 'telemetry-project') {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-project-telemetry-'));
@@ -94,4 +96,49 @@ test('keeps a machine-local opted-in project registry in sync', (t) => {
   const removed = removeProjectRegistry(projectDir, { configFile });
   assert.equal(removed.changed, true);
   assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')).observability.optedInProjects, []);
+});
+
+test('verifies project telemetry through Grafana datasource proxy outcomes', async (t) => {
+  const { directory, projectDir } = temporaryProject(t);
+  const cases = [
+    { name: 'finds a metric', result: [{ value: [1, '13'] }], expected: { found: true, reason: undefined } },
+    { name: 'reports an empty metric result', result: [], expected: { found: false, reason: 'metric_not_found' } },
+    { name: 'reports a Grafana query failure', statusCode: 404, expected: { found: false, reason: 'dashboard_unreachable' } },
+  ];
+
+  for (const scenario of cases) {
+    const requests = [];
+    const server = http.createServer((request, response) => {
+      requests.push(request.url);
+      if (request.url === '/health') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (request.url === '/api/datasources') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify([{ type: 'prometheus', uid: 'local-prometheus' }]));
+        return;
+      }
+      if (request.url.startsWith('/api/datasources/proxy/uid/local-prometheus/api/v1/query')) {
+        response.writeHead(scenario.statusCode || 200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ data: { result: scenario.result } }));
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+
+    const configFile = path.join(directory, `${scenario.name}.json`);
+    const { port } = server.address();
+    fs.writeFileSync(configFile, JSON.stringify({ observability: { dashboard: true, ports: { observer: port, dashboard: port } } }));
+    const result = await verifyProjectTelemetry(projectDir, { configFile });
+
+    assert.deepEqual({ found: result.found, reason: result.reason }, scenario.expected);
+    assert.ok(requests.some((url) => url.startsWith('/api/datasources/proxy/uid/local-prometheus/api/v1/query')));
+  }
 });

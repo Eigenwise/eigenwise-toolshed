@@ -44,9 +44,16 @@ async function verifyProjectTelemetry(projectDir, options = {}) {
   const observerHealthy = observer?.statusCode === 200 && observer.body?.ok === true;
   if (!config.dashboard) return { found: false, project, observerHealthy, reason: 'dashboard_not_configured' };
 
+  const dashboardUrl = `http://127.0.0.1:${config.ports?.dashboard || 3000}`;
+  const dataSources = await getJson(`${dashboardUrl}/api/datasources`);
+  if (dataSources?.statusCode !== 200) return { found: false, project, observerHealthy, reason: 'dashboard_unreachable' };
+
+  const dataSource = Array.isArray(dataSources.body) && dataSources.body.find((candidate) => candidate.type === 'prometheus');
   const query = `claude_code_token_usage_tokens_total{project_id=${JSON.stringify(project)}}`;
-  const dashboard = await getJson(`http://127.0.0.1:${config.ports?.dashboard || 3000}/api/prom/api/v1/query?query=${encodeURIComponent(query)}`);
-  const found = dashboard?.statusCode === 200 && Array.isArray(dashboard.body?.data?.result) && dashboard.body.data.result.length > 0;
+  const dashboard = await getJson(`${dashboardUrl}/api/datasources/proxy/uid/${encodeURIComponent(dataSource?.uid || 'prometheus')}/api/v1/query?query=${encodeURIComponent(query)}`);
+  if (dashboard?.statusCode !== 200) return { found: false, project, observerHealthy, reason: 'dashboard_unreachable' };
+
+  const found = Array.isArray(dashboard.body?.data?.result) && dashboard.body.data.result.length > 0;
   return { found, project, observerHealthy, reason: found ? undefined : 'metric_not_found' };
 }
 
