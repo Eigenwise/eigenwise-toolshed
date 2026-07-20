@@ -69,6 +69,6 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/token-usage-report.js"
 
 For the dashboard, open its configured loopback URL (default `http://127.0.0.1:3000`). It uses the pinned `grafana/otel-lgtm:0.11.0` image and persistent Docker data. SQLite remains the report source of truth while Docker is unavailable or stopped.
 
-## Retention and deletion
+## Deletion
 
-Workbench does not automatically age-prune SQLite observations or resolved reports. Acknowledged hook-spool and OTLP outbox rows are deleted as soon as they drain. Dashboard data is retained for seven days. `--disable` stops managed processes and the dashboard container, removes Workbench's project env wiring, and keeps data by default. Add `--delete-data` only after the user chooses deletion.
+Local data stays until the user deletes it (the Grafana demo dashboard keeps seven days). `--disable` stops managed processes and the dashboard container, removes Workbench's project env wiring, and keeps data by default. Add `--delete-data` only after the user chooses deletion.

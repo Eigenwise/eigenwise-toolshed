@@ -57,8 +57,8 @@ test('Workbench README describes the install-one-plugin bootstrap', () => {
 
 test('observability retention guidance matches the store', () => {
   for (const document of [readme, observability]) {
-    assert.match(document, /does not automatically age-prune SQLite observations/);
-    assert.match(document, /Acknowledged hook-spool and OTLP outbox rows are deleted as soon as they drain/);
-    assert.doesNotMatch(document, /retained for 30 days|retained for 365 days|under 24 hours/);
+    assert.match(document, /stays until (?:you|the user) deletes? it/);
+    assert.doesNotMatch(document, /retained for 30 days|retained for 365 days|under 24 hours|age-prune/);
   }
+  assert.match(observability, /--delete-data/);
 });

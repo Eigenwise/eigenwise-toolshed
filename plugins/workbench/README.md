@@ -48,7 +48,7 @@ Consent, enabled state, sink, dashboard choice, ports, private provider settings
 
 After consent, a fail-open SessionStart ensure hook keeps the observer, Collector, and opted-in dashboard alive without prompts or OS services. It is a silent no-op when no enabled consent record exists, adopts healthy loopback listeners, heals managed version drift, and leaves startup immediately through a detached worker. The observer continuously drains both hook spool and downstream outbox without overlapping flushes.
 
-SQLite is the source of truth and works without Docker. The optional `grafana/otel-lgtm:0.11.0` viewer uses the managed `workbench-otel-lgtm` container, a persistent `/data` volume, configurable loopback-only ports, and seven-day demo retention. Workbench does not automatically age-prune SQLite observations or resolved reports. Acknowledged hook-spool and OTLP outbox rows are deleted as soon as they drain. No prompt, response, tool-content, raw-body, credential, or environment-value capture is enabled.
+SQLite is the source of truth and works without Docker. The optional `grafana/otel-lgtm:0.11.0` viewer uses the managed `workbench-otel-lgtm` container, a persistent `/data` volume, configurable loopback-only ports, and seven-day demo retention. Your local data stays until you delete it. No prompt, response, tool-content, raw-body, credential, or environment-value capture is enabled.
 
 ## Agent SDK observability
 
