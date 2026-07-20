@@ -199,6 +199,79 @@ test('dispatch model reuses a session route after compaction and logs cache hits
   ]);
 });
 
+test('dispatch route survives a shim restart before a compacted continuation', async (t) => {
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-session-route-restart-'));
+  const routeLog = path.join(logDir, 'routes.jsonl');
+  const routeCache = path.join(logDir, 'dispatch-routes.json');
+  const forwarded = [];
+  const proxy = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (req.url === '/v1/models') {
+        res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
+        return;
+      }
+      const payload = JSON.parse(Buffer.concat(chunks).toString());
+      forwarded.push(payload);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ type: 'message', model: payload.model, content: [] }));
+    });
+  });
+  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  t.after(() => proxy.close());
+
+  const env = {
+    ...process.env,
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG_PATH: routeLog,
+    CODEX_GATEWAY_DISPATCH_CACHE_PATH: routeCache,
+    CODEX_GATEWAY_SENTRY: '0',
+  };
+  let child = spawn(process.execPath, [CLI, 'serve-shim'], { env, stdio: 'ignore' });
+  t.after(() => child.kill());
+  await waitForHealthz(shimPort);
+
+  const initial = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('[switchboard-route model=gpt-5.6-terra effort=high] work the ticket'),
+    'restart-session',
+  );
+  child.kill();
+  await new Promise((resolve) => child.once('exit', resolve));
+
+  child = spawn(process.execPath, [CLI, 'serve-shim'], { env, stdio: 'ignore' });
+  await waitForHealthz(shimPort);
+  const compacted = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('Compacted context with no route marker'),
+    'restart-session',
+  );
+
+  assert.equal(initial.status, 200);
+  assert.equal(compacted.status, 200);
+  assert.deepEqual(forwarded.map(({ model, output_config: outputConfig }) => ({ model, outputConfig })), [
+    { model: 'gpt-5.6-terra', outputConfig: { effort: 'high' } },
+    { model: 'gpt-5.6-terra', outputConfig: { effort: 'high' } },
+  ]);
+  const persisted = JSON.parse(fs.readFileSync(routeCache, 'utf8'));
+  assert.equal(persisted.version, 1);
+  assert.deepEqual(persisted.routes.map(([key, route]) => ({ key, model: route.model, effort: route.effort })), [
+    { key: JSON.stringify(['restart-session', null]), model: 'gpt-5.6-terra', effort: 'high' },
+  ]);
+
+  const routes = fs.readFileSync(routeLog, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(routes.map(({ via, sessionId, effort }) => ({ via, sessionId, effort })), [
+    { via: 'dispatch', sessionId: 'restart-session', effort: 'high' },
+    { via: 'dispatch-cached', sessionId: 'restart-session', effort: 'high' },
+  ]);
+});
+
 test('native Agent route survives repeated tools and the compaction identity transition', async (t) => {
   const shimPort = await freePort();
   const proxyPort = await freePort();

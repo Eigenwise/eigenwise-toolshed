@@ -64,6 +64,7 @@ const ANTHROPIC_UPSTREAM = process.env.CODEX_GATEWAY_ANTHROPIC_UPSTREAM || 'http
 // picks this up at its next natural restart. See requestRouteLog below.
 const REQUEST_ROUTE_LOG = process.env.CODEX_GATEWAY_REQUEST_LOG !== '0';
 const REQUEST_ROUTE_LOG_PATH = process.env.CODEX_GATEWAY_REQUEST_LOG_PATH || path.join(LOGS, 'request-routes.jsonl');
+const DISPATCH_ROUTE_CACHE_PATH = process.env.CODEX_GATEWAY_DISPATCH_CACHE_PATH || path.join(STATE, 'dispatch-routes.json');
 const ROUTE_TELEMETRY_ENABLED = process.env.CLAUDE_CODE_PROPAGATE_TRACEPARENT === '1';
 const ROUTE_TELEMETRY_TIMEOUT_MS = 500;
 const TRACE_HEADERS = ['traceparent', 'tracestate', 'baggage'];
@@ -973,11 +974,18 @@ const DISPATCH_CACHE_MAX_SESSIONS = Number.isInteger(configuredDispatchCacheMaxS
   : 500;
 
 class DispatchSessionRouteCache {
-  constructor({ ttlMs = DISPATCH_CACHE_TTL_MS, maxSessions = DISPATCH_CACHE_MAX_SESSIONS, now = Date.now } = {}) {
+  constructor({
+    ttlMs = DISPATCH_CACHE_TTL_MS,
+    maxSessions = DISPATCH_CACHE_MAX_SESSIONS,
+    now = Date.now,
+    cachePath = null,
+  } = {}) {
     this.ttlMs = ttlMs;
     this.maxSessions = maxSessions;
     this.now = now;
+    this.cachePath = cachePath;
     this.routes = new Map();
+    this.load();
   }
 
   get(requestIdentity) {
@@ -987,27 +995,63 @@ class DispatchSessionRouteCache {
     const now = this.now();
     if (now - entry.lastUsedAt >= this.ttlMs) {
       this.routes.delete(requestIdentity);
+      this.persist();
       return null;
     }
     entry.lastUsedAt = now;
     this.routes.delete(requestIdentity);
     this.routes.set(requestIdentity, entry);
+    this.persist();
     return { model: entry.model, effort: entry.effort };
   }
 
   set(requestIdentity, route) {
-    if (!requestIdentity || !route) return;
+    if (!requestIdentity || !route || !validDispatchRoute(route)) return;
     const now = this.now();
-    for (const [key, entry] of this.routes) {
-      if (now - entry.lastUsedAt < this.ttlMs) break;
-      this.routes.delete(key);
-    }
+    this.prune(now);
     this.routes.delete(requestIdentity);
     this.routes.set(requestIdentity, { model: route.model, effort: route.effort, lastUsedAt: now });
-    while (this.routes.size > this.maxSessions) {
-      this.routes.delete(this.routes.keys().next().value);
-    }
+    this.prune(now);
+    this.persist();
   }
+
+  load() {
+    if (!this.cachePath) return;
+    try {
+      const stored = JSON.parse(fs.readFileSync(this.cachePath, 'utf8'));
+      if (!stored || stored.version !== 1 || !Array.isArray(stored.routes)) return;
+      for (const entry of stored.routes) {
+        const [key, route] = Array.isArray(entry) ? entry : [];
+        if (typeof key !== 'string' || !Number.isFinite(route?.lastUsedAt) || !validDispatchRoute(route)) continue;
+        this.routes.set(key, { model: route.model, effort: route.effort, lastUsedAt: route.lastUsedAt });
+      }
+      this.prune(this.now());
+      this.persist();
+    } catch {}
+  }
+
+  prune(now) {
+    for (const [key, entry] of this.routes) {
+      if (now - entry.lastUsedAt >= this.ttlMs) this.routes.delete(key);
+    }
+    while (this.routes.size > this.maxSessions) this.routes.delete(this.routes.keys().next().value);
+  }
+
+  persist() {
+    if (!this.cachePath) return;
+    try {
+      fs.mkdirSync(path.dirname(this.cachePath), { recursive: true });
+      const tempPath = `${this.cachePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify({ version: 1, routes: [...this.routes] }) + '\n', { mode: 0o600 });
+      fs.renameSync(tempPath, this.cachePath);
+    } catch {}
+  }
+}
+
+function validDispatchRoute(route) {
+  return typeof route?.model === 'string'
+    && /^[a-z0-9][a-z0-9.-]{0,63}$/.test(route.model)
+    && (route.effort == null || ['low', 'medium', 'high', 'xhigh', 'max'].includes(route.effort));
 }
 
 function sessionIdFromMetadata(metadata) {
@@ -1423,7 +1467,7 @@ function runShim() {
     data: [...DEFAULT_MODELS, 'auto'].map(gatewayModel),
   };
   const counters = { models: 0, codex: 0, anthropic: 0 };
-  const dispatchRoutes = new DispatchSessionRouteCache();
+  const dispatchRoutes = new DispatchSessionRouteCache({ cachePath: DISPATCH_ROUTE_CACHE_PATH });
   const usageEmitter = createGatewayUsageEmitter();
   const settingsWiring = wiredMode();
   if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL) && !settingsWiring) {
