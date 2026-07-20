@@ -47,8 +47,17 @@ function directLinks(ticket, dispatch) {
   return links;
 }
 
-function ticketObservation(projectSlug, ticket) {
+function projectIdentity(project) {
+  const slug = identifier(typeof project === 'string' ? project : project?.slug);
+  const projectId = typeof project?.path === 'string' && project.path.length > 0
+    ? crypto.createHash('sha256').update(project.path).digest('hex')
+    : null;
+  return { slug, projectId };
+}
+
+function ticketObservation(project, ticket) {
   if (!ticket || typeof ticket !== 'object') return null;
+  const { slug: projectSlug, projectId } = projectIdentity(project);
   const ticketRef = identifier(ticket.ref);
   const observedAt = ticket.updatedAt || ticket.createdAt;
   if (!ticketRef || typeof observedAt !== 'string' || !Number.isFinite(Date.parse(observedAt))) return null;
@@ -93,6 +102,7 @@ function ticketObservation(projectSlug, ticket) {
     ticket_ref: ticketRef,
     attributes,
   };
+  assign(observation, 'project_id', projectId);
   assign(observation, 'task_id', taskId);
   assign(observation, 'route_id', routeId);
   assign(observation, 'session_id', sessionId);
@@ -118,8 +128,8 @@ function send(observation) {
   request.end(body);
 }
 
-function emitTicket(projectSlug, ticket) {
-  const observation = ticketObservation(projectSlug, ticket);
+function emitTicket(project, ticket) {
+  const observation = ticketObservation(project, ticket);
   if (observation) send(observation);
 }
 

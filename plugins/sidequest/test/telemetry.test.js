@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const { makeCliRunner, makeMcpCaller } = require('./_helpers.js');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-telemetry-home-'));
@@ -88,7 +89,9 @@ test('native lifecycle observations include only allowlisted metadata', () => {
     },
     updatedAt: '2026-07-19T10:00:00.000Z',
   };
-  const observation = telemetry.ticketObservation('project-42', ticket);
+  const project = { slug: 'project-42', path: 'C:\\workspace\\canonical-project' };
+  const observation = telemetry.ticketObservation(project, ticket);
+  const projectId = crypto.createHash('sha256').update(project.path).digest('hex');
   assert.deepStrictEqual(observation.attributes, {
     category: 'coding.normal',
     configured_model: 'terra',
@@ -103,15 +106,16 @@ test('native lifecycle observations include only allowlisted metadata', () => {
     claim_session_id: 'session-42',
     task_status: 'doing',
   });
+  assert.strictEqual(observation.project_id, projectId);
   assert.strictEqual(observation.task_id, 'task-42');
   assert.strictEqual(observation.route_id, 'dispatch-42');
   assert.strictEqual(observation.session_id, 'session-42');
   assert.strictEqual(observation.agent_id, 'agent-42');
   assert.match(observation.source_event_id, /^sidequest_[a-f0-9]{64}$/);
-  assert.strictEqual(telemetry.ticketObservation('project-42', ticket).source_event_id, observation.source_event_id);
-  assert.strictEqual(telemetry.ticketObservation('project-42', Object.assign({}, ticket, { submission: { commit: 'abc1234' } })).attributes.task_status, 'submitted');
+  assert.strictEqual(telemetry.ticketObservation(project, ticket).source_event_id, observation.source_event_id);
+  assert.strictEqual(telemetry.ticketObservation(project, Object.assign({}, ticket, { submission: { commit: 'abc1234' } })).attributes.task_status, 'submitted');
   const serialized = JSON.stringify(observation);
-  for (const secret of ['do not emit this title', 'or this description', 'must-not-leak']) assert.ok(!serialized.includes(secret));
+  for (const secret of ['do not emit this title', 'or this description', 'must-not-leak', project.path]) assert.ok(!serialized.includes(secret));
 });
 
 test('shared store boundary emits once for MCP mutations', () => {

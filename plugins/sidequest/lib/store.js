@@ -245,7 +245,8 @@ function putTicket(slug, ticket) {
     claim_by: stored.claim && stored.claim.by ? stored.claim.by : null,
     data: stored,
   });
-  telemetry.emitTicket(slug, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
+  const project = readMeta(slug);
+  telemetry.emitTicket({ slug, path: project && project.path }, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
 }
 
 function putStory(slug, story) {

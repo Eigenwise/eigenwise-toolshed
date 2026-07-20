@@ -8,6 +8,7 @@ const { projectName, registryEntry, telemetryEnvironment } = require('../bin/pro
 const { EVENT_MAP, buildObservation, projectMetadata } = require('../hooks/observability.js');
 const { ticketObservation: adapterTicketObservation } = require('../lib/observability/adapters/sidequest.js');
 const { normalizeObservation } = require('../lib/observability/ingest.js');
+const { openObservabilityStore } = require('../lib/observability/store.js');
 const { otlpToObservations } = require('../lib/observability/otlp.js');
 const { normalizeAssistantUsage, normalizeTerminalResult } = require('../lib/observability/sdk.js');
 const { ALLOWED_EVENTS, ALLOWED_MEASUREMENTS, ATTRIBUTE_SPECS } = require('../lib/observability/schema.js');
@@ -126,7 +127,7 @@ function sidequestFixtures(projectId) {
   };
   return [
     { name: 'sidequest-adapter', observation: adapterTicketObservation(ticket, { projectId }) },
-    { name: 'sidequest-native', observation: nativeTicketObservation('canonical-project', ticket) },
+    { name: 'sidequest-native', observation: nativeTicketObservation({ slug: 'canonical-project', path: PROJECT_DIR }, ticket) },
   ];
 }
 
@@ -208,6 +209,7 @@ test('canonical project identity stays aligned across Workbench emitters and sel
   assert.equal(sdk.project_id, identity.project_id);
   assert.equal(sdk.session_id, 'session-canonical');
   assert.equal(adapter.project_id, identity.project_id);
+  assert.equal(native.project_id, identity.project_id);
   assert.equal(native.session_id, 'session-canonical');
   assert.equal(native.agent_id, 'agent-canonical');
   assert.equal(gateway.project_id, identity.project_id);
@@ -219,4 +221,20 @@ test('canonical project identity stays aligned across Workbench emitters and sel
   assert.ok(selectors.some((selector) => selector.includes(`project_id="${identity.project_name}"`)));
 });
 
-test('native Sidequest identity joins the canonical project', { todo: 'SQ-585 supplies the native sidequest project hash.' }, () => {});
+test('native Sidequest identity joins the canonical project after ingest', () => {
+  const projectId = projectMetadata(PROJECT_DIR).project_id;
+  const [{ observation: adapter }, { observation: native }] = sidequestFixtures(projectId);
+  const store = openObservabilityStore(':memory:', { outboxEnabled: false });
+  try {
+    assert.equal(store.ingest(adapter).accepted, true);
+    assert.equal(store.ingest(native).accepted, true);
+    const rows = store.database.prepare(`
+      SELECT project_id FROM observation
+      WHERE event_name = 'sidequest.ticket'
+      ORDER BY source_schema
+    `).all();
+    assert.deepEqual(rows.map(({ project_id: value }) => value), [projectId, projectId]);
+  } finally {
+    store.close();
+  }
+});
