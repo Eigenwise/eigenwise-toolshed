@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const THRESHOLD = 5;
-const READ_THRESHOLD = 12;
+const READ_THRESHOLD = 6;
 const GRACE_ACTIONS = 3;
 const AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
 
@@ -55,6 +55,12 @@ function isSubstantive(input, toolName, command) {
 function isReadClass(toolName, command) {
   return toolName === 'Read' || toolName === 'Grep' || toolName === 'Glob' ||
     (toolName === 'Bash' && Boolean(command) && isPureRead(command));
+}
+
+function readSource(input, toolName, command) {
+  if (toolName === 'Bash') return command;
+  const toolInput = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+  return `${toolName}\n${String(toolInput.file_path || toolInput.path || '')}\n${String(toolInput.pattern || '')}`;
 }
 
 function loadState(file) {
@@ -117,11 +123,19 @@ function main() {
     }
   }
   if (isReadClass(toolName, command) && !state.boardInteraction) {
-    state.readActions = Number(state.readActions) || 0;
-    state.readActions += 1;
-    if (!state.readSpiralNudged && state.readActions >= READ_THRESHOLD) {
-      state.readSpiralNudged = true;
-      additionalContext = 'sidequest: REQUIRED: cross-file tracing MUST use a spike ticket and dispatch. Inline is a justified exception: claim --direct with a reason why no executor can do it. Further substantive actions are BLOCKED after the inline-work allowance until this session claims a ticket.';
+    const source = readSource(input, toolName, command);
+    state.readSources = Array.isArray(state.readSources) ? state.readSources : [];
+    if (!state.readSources.includes(source)) {
+      state.readSources.push(source);
+      if (!state.readNudged && state.readSources.length >= READ_THRESHOLD) {
+        state.readNudged = true;
+        additionalContext = 'sidequest: REQUIRED: cross-file investigation needs a spike ticket and dispatch. 3 more distinct source reads/searches will be BLOCKED until this session has board contact.';
+      } else if (state.readNudged) {
+        state.readGraceActions = (Number(state.readGraceActions) || 0) + 1;
+        if (state.readGraceActions > GRACE_ACTIONS) {
+          denial = 'sidequest: BLOCKED: cross-file investigation is a spike ticket. File + dispatch now (`add` → `dispatch <ref>`).';
+        }
+      }
     }
   }
   saveState(file, state);

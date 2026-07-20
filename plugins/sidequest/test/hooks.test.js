@@ -262,44 +262,75 @@ test('pre-tool inline-work nudge gives three grace actions, then blocks with the
   assert.match(denial.hookSpecificOutput.permissionDecisionReason, /`claim <ref> --direct --reason/);
 });
 
-test('pre-tool inline-work nudge permits reads indefinitely after the read spiral notice', () => {
+test('pre-tool inline-work nudge counts distinct source reads, then blocks the read spiral', () => {
   const session_id = `inline-read-${Date.now()}`;
   const reads = [
-    { tool_name: 'Read', tool_input: {} },
-    { tool_name: 'Grep', tool_input: {} },
-    { tool_name: 'Glob', tool_input: {} },
-    { tool_name: 'Bash', tool_input: { command: 'git diff --stat' } },
+    { tool_name: 'Read', tool_input: { file_path: 'src/one.js' } },
+    { tool_name: 'Read', tool_input: { file_path: 'src/two.js' } },
+    { tool_name: 'Grep', tool_input: { path: 'src', pattern: 'three' } },
+    { tool_name: 'Glob', tool_input: { path: 'src', pattern: '**/four.js' } },
+    { tool_name: 'Bash', tool_input: { command: 'git show HEAD:src/five.js' } },
+    { tool_name: 'Bash', tool_input: { command: 'git show HEAD:src/six.js' } },
   ];
-  for (let i = 0; i < 11; i += 1) {
-    assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[i % reads.length] }), null);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[0] }), null);
+  for (let i = 1; i < reads.length - 1; i += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[i] }), null);
   }
-  const nudge = runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[3] });
-  assert.match(nudge.hookSpecificOutput.additionalContext, /REQUIRED/);
-  for (let i = 0; i < 40; i += 1) {
-    const result = runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[i % reads.length] });
-    assert.equal(result, null);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[0] }), null);
+  const nudge = runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[5] });
+  assert.match(nudge.hookSpecificOutput.additionalContext, /cross-file investigation/);
+  assert.match(nudge.hookSpecificOutput.additionalContext, /3 more distinct source reads\/searches/);
+  for (const file_path of ['src/seven.js', 'src/eight.js', 'src/nine.js']) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path },
+    }), null);
   }
+  const denial = runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: 'src/ten.js' },
+  });
+  assert.equal(denial.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denial.hookSpecificOutput.permissionDecisionReason, /cross-file investigation is a spike ticket/);
+  assert.match(denial.hookSpecificOutput.permissionDecisionReason, /`add` → `dispatch <ref>`/);
 });
 
-test('pre-tool inline-work nudge lets both reminders fire once in one session', () => {
+test('pre-tool inline-work nudge keeps substantive and read counters separate', () => {
   const session_id = `inline-both-${Date.now()}`;
   const write = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
   for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
   assert.match(runHookOutput(INLINE_WORK_NUDGE, write).hookSpecificOutput.additionalContext, /REQUIRED/);
 
-  const read = { session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
-  for (let i = 0; i < 11; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, read), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, read).hookSpecificOutput.additionalContext, /REQUIRED/);
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: `src/${i}.js` },
+    }), null);
+  }
+  const nudge = runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: 'src/six.js' },
+  });
+  assert.match(nudge.hookSpecificOutput.additionalContext, /cross-file investigation/);
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, read), null);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: 'src/zero.js' },
+  }), null);
 });
 
-test('pre-tool inline-work board interaction permanently clears the gate', () => {
+test('pre-tool inline-work board interaction clears both gates', () => {
   const session_id = `inline-board-${Date.now()}`;
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: `src/${i}.js` },
+    }), null);
+  }
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: 'src/six.js' },
+  }).hookSpecificOutput.additionalContext, /cross-file investigation/);
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
     session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: { direct: true },
   }), null);
   for (let i = 0; i < 12; i += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: `src/after-${i}.js` },
+    }), null);
     assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
       session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
     }), null);
@@ -311,7 +342,7 @@ test('pre-tool inline-work board interaction permanently clears the gate', () =>
   }), null);
   for (let i = 0; i < 12; i += 1) {
     assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
+      session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: `src/cli-${i}.js` },
     }), null);
   }
 });
