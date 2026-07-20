@@ -39,6 +39,20 @@ test('init-workspace asks for wiring mode only on an unset machine', () => {
   assert.match(skill, /wiring mode defaulted to per-project; run codex-gateway env --mode global to change/);
 });
 
+test('init-workspace starts with telemetry consent and then the live plugin picker', () => {
+  const telemetry = skill.indexOf('### Telemetry consent');
+  const picker = skill.indexOf('### Plugin picker');
+  const assessment = skill.indexOf('## Phase 0 — Assess');
+
+  assert.ok(telemetry >= 0 && telemetry < picker && picker < assessment);
+  assert.match(skill, /This is the first question in the whole flow/);
+  assert.match(skill, /`\.claude\/settings\.local\.json`, not shared or user settings/);
+  assert.match(skill, /restart Claude Code.*re-run `\/workbench:init-workspace`/s);
+  assert.match(skill, /Read the current Toolshed marketplace manifest and\n`references\/stack-plugins\.md`/);
+  assert.match(skill, /Do not maintain a hard-coded plugin list in this skill/);
+  assert.match(skill, /already-installed state/);
+});
+
 test('catalog has reproducible current plugin sources and LSP checks', () => {
   assert.match(catalog, /`typescript-lsp@claude-plugins-official`/);
   assert.match(catalog, /`typescript-language-server --version`/);
