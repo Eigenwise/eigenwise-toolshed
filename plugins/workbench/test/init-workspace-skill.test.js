@@ -39,21 +39,30 @@ test('init-workspace asks for wiring mode only on an unset machine', () => {
   assert.match(skill, /wiring mode defaulted to per-project; run codex-gateway env --mode global to change/);
 });
 
-test('init-workspace starts with telemetry consent and then the live plugin picker', () => {
+test('init-workspace starts with telemetry consent, project intent, then the live plugin picker', () => {
   const telemetry = skill.indexOf('### Telemetry consent');
+  const intent = skill.indexOf('### Project intent');
   const picker = skill.indexOf('### Plugin picker');
   const assessment = skill.indexOf('## Phase 0 — Assess');
 
-  assert.ok(telemetry >= 0 && telemetry < picker && picker < assessment);
+  assert.ok(telemetry >= 0 && telemetry < intent && intent < picker && picker < assessment);
   assert.match(skill, /This is the first question in the whole flow/);
   assert.match(skill, /Each project must opt in: this writes only its `\.claude\/settings\.local\.json`/);
   assert.match(skill, /local Collector to local Grafana/);
   assert.match(skill, /API-equivalent cost; input, output, and cache\ntoken totals; tool-call names and counts; plus model, session, agent, and activity information/);
   assert.match(skill, /never records\nprompt or response text, code or file contents, tool inputs or results, credentials, or environment values/);
   assert.match(skill, /restart Claude Code.*re-run `\/workbench:init-workspace`/s);
+  assert.match(skill, /What is this project for, and who is\nit for\? One or two lines is plenty\./);
+  assert.match(skill, /Keep the answer in the session\/bootstrap plan/);
   assert.match(skill, /Read the current Toolshed marketplace manifest and\n`references\/stack-plugins\.md`/);
-  assert.match(skill, /Do not maintain a hard-coded plugin list in this skill/);
-  assert.match(skill, /already-installed state/);
+  assert.match(skill, /recommendation grounded in the stated project purpose and any visible stack signals/);
+  assert.match(skill, /recommended for this project because \.\.\./);
+  assert.match(skill, /probably not needed\nhere/);
+  assert.match(skill, /Do not fall back to generic core\/extra tiers/);
+  assert.match(skill, /Do not maintain a hard-coded plugin\s+list in this skill/);
+  assert.match(skill, /already-installed\s+state/);
+  assert.match(skill, /The project-intent answer was collected before the picker/);
+  assert.doesNotMatch(skill, /1\. \*\*What is this project and who is it for\?\*\*/);
 });
 
 test('catalog has reproducible current plugin sources and LSP checks', () => {

@@ -29,18 +29,20 @@ choices come from `references/stack-plugins.md` (which plugins) and `references/
 ## The shape of the job
 
 There is one hard constraint that dictates everything: plugins must be installed before any workspace
-artifact relies on them, and installed plugins take effect only after Claude reloads them. Put the
-Toolshed setup ahead of every project question, then split the project setup at its reload boundary:
+artifact relies on them, and installed plugins take effect only after Claude reloads them. Ask for
+telemetry consent before inspecting the project, then learn the project's intent before recommending
+any Toolshed plugins. Split the project setup at its reload boundary:
 
 1. **Telemetry consent** — ask first, then stop for a restart only when the user opts in.
-2. **Plugin picker** — ask second, from the current marketplace catalog.
-3. **Assess** the project (Phase 0).
-4. **Interview and select project details** (Phase 1).
-5. **Install selected plugins, then write pre-reload artifacts** (Phase 2).
-6. **Reload boundary** — stop, ask the user for one reload, and wait (Phase 3).
-7. **Post-reload** — build the map, bring up the board, and verify every selected plugin is loaded and
+2. **Project intent** — ask what the project is for, with any useful clues from a non-empty repo.
+3. **Plugin picker** — offer the current marketplace catalog with recommendations based on that intent.
+4. **Assess** the project (Phase 0).
+5. **Interview and select project details** (Phase 1).
+6. **Install selected plugins, then write pre-reload artifacts** (Phase 2).
+7. **Reload boundary** — stop, ask the user for one reload, and wait (Phase 3).
+8. **Post-reload** — build the map, bring up the board, and verify every selected plugin is loaded and
    usable (Phase 4).
-8. **Wrap up** — commit reminder and what they got (Phase 5).
+9. **Wrap up** — commit reminder and what they got (Phase 5).
 
 Read `references/stack-plugins.md` before the plugin picker and `references/rule-templates.md` before
 Phase 1; read `references/self-improvement.md` and `references/structure-notes.md` when you reach those
@@ -65,24 +67,37 @@ prompt or response text, code or file contents, tool inputs or results, credenti
   verification. After it finishes, stop. Tell the user to restart Claude Code because its OTEL settings only
   apply to a new session, then re-run `/workbench:init-workspace`. Do not assess the project or ask the
   plugin question first.
-- **No:** continue immediately to the plugin picker. Do not ask again during this run.
+- **No:** continue immediately to the project-intent question. Do not ask again during this run.
 
 A telemetry restart also satisfies a pending plugin reload boundary. On re-entry, detect the completed
-telemetry setup and continue with the picker or later phase without repeating answered setup questions.
+telemetry setup and continue with the project-intent question, picker, or later phase without repeating
+answered setup questions.
+
+### Project intent
+
+Ask this plain-text question before listing any plugin options: **"What is this project for, and who is
+it for? One or two lines is plenty."** For a non-empty repo, first inspect only enough of the visible
+project signals to pair the question with a useful inference, such as "I see a Rust audio-plugin project;
+what does it make and who uses it?" Keep that inference tentative and let the user correct it.
+
+Keep the answer in the session/bootstrap plan. On re-entry, use a previously captured answer rather than
+asking again. A telemetry restart does not create an answer because this question happens after the restart.
 
 ### Plugin picker
 
-Ask this second, before Phase 0. Read the current Toolshed marketplace manifest and
+Ask this third, before Phase 0. Read the current Toolshed marketplace manifest and
 `references/stack-plugins.md`, then offer the available plugins with a one-line plain-language description
-for each. Do not maintain a hard-coded plugin list in this skill: the current marketplace/catalog is the
-source of truth. Include the already-installed state in the options, so a re-entry does not ask the user to
-install a plugin that is already present. Use `AskUserQuestion` with multi-select when the current catalog
-fits its option limit; otherwise present grouped choices and collect the selection before moving on.
+and a recommendation grounded in the stated project purpose and any visible stack signals. Say why when
+a plugin fits (for example, "recommended for this project because ...") and say "probably not needed
+here" when it does not. Do not fall back to generic core/extra tiers. Do not maintain a hard-coded plugin
+list in this skill: the current marketplace/catalog is the source of truth. Include the already-installed
+state in the options, so a re-entry does not ask the user to install a plugin that is already present. Use
+`AskUserQuestion` with multi-select when the current catalog fits its option limit; otherwise present
+grouped choices and collect the selection before moving on.
 
-The picker is a broad Toolshed choice, not the later stack-specific recommendation. It should let a user
-choose tools such as the work board, Codex gateway, live rules, codebase mapping, and any current catalog
-extras before the project assessment provides stack signals. Keep the selected set for the installer plan;
-Phase 1 may recommend only missing, relevant stack extras rather than re-asking for the whole set.
+The picker is a broad Toolshed choice informed by the project purpose, not a substitute for the later
+assessment. Keep the selected set for the installer plan; Phase 1 may recommend only missing, relevant
+stack extras rather than re-asking for the whole set.
 
 ## Phase 0 — Assess
 
@@ -111,19 +126,19 @@ Also check what's already there:
 Before the normal interview, inspect the machine-local Codex gateway mode with `codex-gateway env --show-mode`. When no mode is saved, ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the choice with `codex-gateway env --mode global` or `codex-gateway env --mode local`; do not ask again once a mode exists, and later setup flows honor it silently. Do not ask during non-interactive setup: default to local and say `wiring mode defaulted to per-project; run codex-gateway env --mode global to change`.
 
 Keep it short and propose defaults from what you detected, so the user confirms rather than types
-essays. Ask what you genuinely can't infer. A good compact set (adapt, don't recite):
+essays. The project-intent answer was collected before the picker; use it to seed the map and structure
+notes, and do not ask it again. Ask what you genuinely can't infer. A good compact set (adapt, don't
+recite):
 
-1. **What is this project and who is it for?** One line. (Grounds the map seed and structure notes.
-   For a greenfield repo this is the most important answer.)
-2. **Stack** — confirm what you detected, and anything not yet visible (intended stack for
+1. **Stack** — confirm what you detected, and anything not yet visible (intended stack for
    greenfield; test framework; deploy target like Cloudflare/Vercel/AWS).
-3. **Codebase or not?** Confirm your Phase 0 read ("this looks like a docs wiki, so I'll skip the
+2. **Codebase or not?** Confirm your Phase 0 read ("this looks like a docs wiki, so I'll skip the
    codebase map, sound right?").
-4. **Team or solo, and any existing conventions** worth encoding as rules (commit style, a
+3. **Team or solo, and any existing conventions** worth encoding as rules (commit style, a
    `CONTRIBUTING` or style doc to point a rule at, house preferences).
-5. **Stack extras** — recommend only missing catalog plugins that fit the confirmed project. Keep the
+4. **Stack extras** — recommend only missing catalog plugins that fit the confirmed project. Keep the
    picker selection unless the user changes it; do not repeat the broad Toolshed plugin question.
-6. **CLAUDE.md?** Do they want one seeded (you'll delegate to `/init`), or skip it?
+5. **CLAUDE.md?** Do they want one seeded (you'll delegate to `/init`), or skip it?
 
 Use the `AskUserQuestion` tool for the choices with clear options (stack extras, codebase-or-not,
 `CLAUDE.md` yes/no); ask the open ones (what is this, conventions) in plain text. If the user said
