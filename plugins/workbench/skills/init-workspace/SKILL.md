@@ -303,7 +303,8 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 - [ ] Workbench is installed at user scope
 - [ ] Telemetry consent was the first question; a yes completed the telemetry flow and restarted Claude Code
       before resuming
-- [ ] Current marketplace catalog plugin picker was the second question, before Phase 0
+- [ ] Project intent was asked before the picker; current marketplace catalog plugin picker came third with
+      intent-grounded recommendations, before Phase 0
 - [ ] Phase 0 assessment done (new/existing, codebase/not, existing `.claude/` read and merged)
 - [ ] Stack and compact project-detail interview complete; LSP binary prerequisites checked
 - [ ] Bootstrap plan created in the session scratchpad; helper check and install both succeeded
