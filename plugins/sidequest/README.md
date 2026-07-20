@@ -13,12 +13,7 @@
 
 *Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
 
-**A Trello-light quest log for Claude Code.** The stray issues you mention while Claude is busy with
-something else — *"oh, and the contact form doesn't send"* — get captured as **tickets** on the spot,
-with any image you pasted attached, and land on a **live, self-hosted Kanban dashboard** that spans
-every project you work in.
-
-You stay on your main quest; the side quests get written down.
+**A local work board and board-first orchestration loop for Claude Code.** It files tickets, classifies them into categories that route work to the right model and effort, and dispatches token-gated executors. The local Kanban dashboard is the surface across every project you work in.
 
 ![The sidequest dashboard showing one board across every project](docs/board.png)
 

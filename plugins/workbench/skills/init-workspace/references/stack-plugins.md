@@ -12,7 +12,7 @@ Select these for every codebase:
 |---|---|---|
 | `codebase-mapper@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Codebase map and injected index |
 | `live-rules@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Scoped, live workspace rules |
-| `sidequest@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Work board, unless the user opts out |
+| `sidequest@eigenwise-toolshed` | `Eigenwise/eigenwise-toolshed` | Local work board and board-first orchestration loop: routes category-classified tickets to the right model and effort, then dispatches token-gated executors |
 
 The helper installs the toolshed marketplace at project scope. Preserve its portable
 `extraKnownMarketplaces` declaration only when the plugin CLI did not already make it visible in
