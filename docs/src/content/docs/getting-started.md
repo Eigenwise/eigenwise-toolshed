@@ -1,13 +1,25 @@
 ---
 title: Getting started
-description: Install the marketplace and choose the first tool you need.
+description: Install the marketplace, reload Claude Code, and start a workspace.
 ---
 
-Eigenwise Toolshed is a public Claude Code plugin marketplace. Install the plugins you want, reload Claude Code, then use the setup guide for the tool that matches the job in front of you.
+Eigenwise Toolshed is a Claude Code plugin marketplace. Add it once, install the plugins you need, then reload Claude Code so the new skills and hooks are discovered.
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
 /plugin install workbench@eigenwise-toolshed --scope user
 ```
 
-Start with [Workbench](./workbench/) when you want a project ready for Claude Code, or head to the [plugin reference](../reference/) if you already know what you are after.
+Install project plugins with `--scope project` when their settings should travel with the repository. Claude Code only loads a plugin at the reload boundary, so start a new session after installing or updating one.
+
+## First workspace
+
+With Workbench installed, run the workspace setup skill from the project you want to prepare:
+
+```text
+/workbench:init-workspace
+```
+
+It walks through project-side configuration, then writes the `.claude/` files the project selected. Install `codebase-mapper` when you want a maintained map of the codebase, and `live-rules` when rules should be injected as prompts and edits happen.
+
+For local usage data, opt in separately with `/workbench:enable-project-telemetry`. See [observability](./observability/) before enabling it.

@@ -1,11 +1,13 @@
 ---
 title: Plugin reference
-description: A quick map of the Toolshed plugins and what each one owns.
+description: Generated reference for every Toolshed plugin.
 ---
 
-Each plugin has one clear job. Use this section when you want the short version of what a plugin installs, where it runs, and which part of the Claude Code workflow it owns.
+This section is generated from the plugin manifests, skills, hooks, binaries, and marketplace metadata. The pages are rebuilt from the repository whenever the docs build runs.
 
-- [Workbench](./workbench/) handles workspace setup and upkeep.
-- [Codebase Mapper](./codebase-mapper/) keeps a useful project map close at hand.
-- [Live Rules](./live-rules/) loads rules when they actually apply.
-- [Sidequest](./sidequest/) captures and runs side work.
+- [Workbench](./reference/workbench/) handles workspace setup and upkeep.
+- [Codex Gateway](./reference/codex-gateway/) connects supported Codex models.
+- [Sidequest](./reference/sidequest/) captures and runs side work.
+- [Codebase Mapper](./reference/codebase-mapper/) keeps a project map close at hand.
+- [Live Rules](./reference/live-rules/) loads rules when they apply.
+- [Marketplace versions](./reference/marketplace/) lists the shipped versions.

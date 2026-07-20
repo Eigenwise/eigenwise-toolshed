@@ -1,8 +1,15 @@
 ---
 title: Codex Gateway setup
-description: Use your Codex subscription models from Claude Code.
+description: Use your ChatGPT and Codex subscription models from Claude Code.
 ---
 
-Codex Gateway puts supported ChatGPT and Codex subscription models in the Claude Code model picker through a local proxy. Install it when you want Sidequest or your own sessions to route work through those models.
+Codex Gateway runs a local proxy and puts `claude-codex-*` models in Claude Code's `/model` picker. It uses your ChatGPT/Codex subscription through the supported proxy, so no OpenAI API key is required.
 
-The setup, login check, and compatibility notes will live here as the gateway guide fills out.
+```text
+/plugin install codex-gateway@eigenwise-toolshed --scope user
+/codex-gateway:codex-gateway setup
+```
+
+The setup skill installs or updates the proxy, checks authentication, and starts the local gateway. Use `/codex-gateway:codex-gateway doctor` when the picker is missing models or the gateway port is unavailable. Once it is healthy, choose a `claude-codex-*` model with `/model`; regular Claude model ids continue to use the Anthropic API.
+
+Claude Code Remote Control cannot use a local `ANTHROPIC_BASE_URL` in the same way. Run `/codex-gateway:remote-control-compatibility` to safely switch compatibility mode on or off before using Remote Control, then restore gateway mode when you return.

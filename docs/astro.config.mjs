@@ -66,6 +66,7 @@ export default defineConfig({
             { label: 'Codebase Mapper', slug: 'reference/codebase-mapper' },
             { label: 'Live Rules', slug: 'reference/live-rules' },
             { label: 'Sidequest', slug: 'reference/sidequest' },
+            { label: 'Marketplace versions', slug: 'reference/marketplace' },
           ],
         },
       ],

@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
+    "generate": "node scripts/generate-reference.mjs",
+    "dev": "npm run generate && astro dev",
+    "prebuild": "npm run generate",
     "build": "astro check && astro build",
     "preview": "astro preview",
     "screenshots": "node screenshots/capture.mjs"
