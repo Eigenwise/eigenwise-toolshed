@@ -5,13 +5,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecycle-home-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
 
+const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecycle-project-'));
 execFileSync('git', ['init', '--quiet'], { cwd: PROJECT, windowsHide: true });
 const { slug } = store.ensureProject(PROJECT);
@@ -36,6 +37,18 @@ function claim(prepared, by) {
     executor: prepared.ticket.dispatchExecutor,
     source: 'mcp',
   });
+}
+
+function runCli(args) {
+  const result = spawnSync(process.execPath, [BIN, ...args, '--project', PROJECT], {
+    cwd: PROJECT,
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, { SIDEQUEST_HOME }),
+  });
+  return {
+    status: result.status,
+    output: `${result.stdout || ''}${result.stderr || ''}`,
+  };
 }
 
 function writeProjectFile(relativePath, body) {
@@ -119,6 +132,40 @@ test('update status done cannot bypass claimed, dispatched, or submitted lifecyc
     () => store.updateTicket(slug, submitted.ref, { status: 'done' }),
     /pending submission.*integration lifecycle/
   );
+});
+
+test('released routed work refuses store status closure and allows provenance-stamped grooming closure', () => {
+  const created = ticket('released scoped work', 'Released routed work keeps its lifecycle authority.');
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
+  assert.strictEqual(claim(prepared, 'released-worker').ok, true);
+
+  const released = store.releaseTicket(slug, created.ref, 'released-worker', { status: 'todo', source: 'mcp' });
+  assert.strictEqual(released.ok, true);
+  assert.strictEqual(released.ticket.dispatch.outcome, 'released');
+  assert.ok(released.ticket.dispatch.terminalAt);
+  assert.strictEqual(released.ticket.dispatchNonce, null);
+  assert.throws(
+    () => store.updateTicket(slug, created.ref, { status: 'done' }),
+    /routed dispatch history.*done\/completeTicket.*grooming closure/
+  );
+
+  const groomed = store.completeTicket(slug, created.ref, 'board-groomer', { source: 'mcp' });
+  assert.strictEqual(groomed.ok, true);
+  assert.strictEqual(groomed.ticket.status, 'done');
+  assert.strictEqual(groomed.ticket.completion.by, 'board-groomer');
+  assert.ok(groomed.ticket.completion.at);
+});
+
+test('released routed work refuses CLI update status done', () => {
+  const created = ticket('released CLI scoped work', 'CLI updates must keep released dispatch authority.');
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
+  assert.strictEqual(claim(prepared, 'released-cli-worker').ok, true);
+  assert.strictEqual(store.releaseTicket(slug, created.ref, 'released-cli-worker', { status: 'todo', source: 'mcp' }).ok, true);
+
+  const updated = runCli(['update', created.ref, '--status', 'done']);
+  assert.notStrictEqual(updated.status, 0);
+  assert.match(updated.output, /routed dispatch history.*done\/completeTicket.*grooming closure/);
+  assert.strictEqual(store.getTicket(slug, created.ref).status, 'todo');
 });
 
 test('update status done still closes a plain unclaimed and undispatched ticket', () => {
