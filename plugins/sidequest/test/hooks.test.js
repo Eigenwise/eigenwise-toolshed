@@ -291,6 +291,14 @@ test('pre-tool inline-work nudge counts distinct source reads, then blocks the r
   assert.equal(denial.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(denial.hookSpecificOutput.permissionDecisionReason, /cross-file investigation is a spike ticket/);
   assert.match(denial.hookSpecificOutput.permissionDecisionReason, /`add` → `dispatch <ref>`/);
+  const retried = runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: { file_path: 'src/ten.js' },
+  });
+  assert.equal(retried.hookSpecificOutput.permissionDecision, 'deny',
+    'a denied source retried verbatim must stay denied, not pass as a re-read');
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, ...reads[0],
+  }), null, 'a source read before the gate tripped stays re-readable');
 });
 
 test('pre-tool inline-work nudge keeps substantive and read counters separate', () => {

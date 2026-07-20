@@ -126,14 +126,17 @@ function main() {
     const source = readSource(input, toolName, command);
     state.readSources = Array.isArray(state.readSources) ? state.readSources : [];
     if (!state.readSources.includes(source)) {
-      state.readSources.push(source);
-      if (!state.readNudged && state.readSources.length >= READ_THRESHOLD) {
-        state.readNudged = true;
-        additionalContext = 'sidequest: REQUIRED: cross-file investigation needs a spike ticket and dispatch. 3 more distinct source reads/searches will be BLOCKED until this session has board contact.';
+      if (state.readNudged && (Number(state.readGraceActions) || 0) >= GRACE_ACTIONS) {
+        // Denied sources stay unrecorded, or a verbatim retry would pass as a re-read.
+        denial = 'sidequest: BLOCKED: cross-file investigation is a spike ticket. File + dispatch now (`add` → `dispatch <ref>`).';
       } else if (state.readNudged) {
         state.readGraceActions = (Number(state.readGraceActions) || 0) + 1;
-        if (state.readGraceActions > GRACE_ACTIONS) {
-          denial = 'sidequest: BLOCKED: cross-file investigation is a spike ticket. File + dispatch now (`add` → `dispatch <ref>`).';
+        state.readSources.push(source);
+      } else {
+        state.readSources.push(source);
+        if (state.readSources.length >= READ_THRESHOLD) {
+          state.readNudged = true;
+          additionalContext = 'sidequest: REQUIRED: cross-file investigation needs a spike ticket and dispatch. 3 more distinct source reads/searches will be BLOCKED until this session has board contact.';
         }
       }
     }
