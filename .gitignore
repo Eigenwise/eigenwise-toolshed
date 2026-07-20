@@ -23,3 +23,7 @@ yarn-error.log*
 # Logs
 *.log
 .sq-shots/
+
+# Playwright MCP session artifacts and ad-hoc verification captures
+.playwright-mcp/
+/*.png
