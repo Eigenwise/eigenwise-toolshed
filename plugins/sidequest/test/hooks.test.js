@@ -248,14 +248,43 @@ test('pre-tool inline-work nudge fires once after five substantive main-thread a
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
 });
 
+test('pre-tool inline-work nudge detects a read spiral after twelve main-thread reads', () => {
+  const session_id = `inline-read-${Date.now()}`;
+  const reads = [
+    { tool_name: 'Read', tool_input: {} },
+    { tool_name: 'Grep', tool_input: {} },
+    { tool_name: 'Glob', tool_input: {} },
+    { tool_name: 'Bash', tool_input: { command: 'git diff --stat' } },
+  ];
+  for (let i = 0; i < 11; i += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[i % reads.length] }), null);
+  }
+  const nudge = runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[3] });
+  assert.match(nudge.hookSpecificOutput.additionalContext, /tracing across files/);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[0] }), null);
+});
+
+test('pre-tool inline-work nudge lets both reminders fire once in one session', () => {
+  const session_id = `inline-both-${Date.now()}`;
+  const write = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
+  for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).hookSpecificOutput.additionalContext, /substantive work inline/);
+
+  const read = { session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
+  for (let i = 0; i < 11; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, read), null);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, read).hookSpecificOutput.additionalContext, /tracing across files/);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, read), null);
+});
+
 test('pre-tool inline-work nudge stays quiet after a board interaction', () => {
   const session_id = `inline-board-${Date.now()}`;
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
     session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
   }), null);
-  for (let i = 0; i < 5; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id, cwd: BOARD_PATH, tool_name: 'Edit', tool_input: {},
+      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {},
     }), null);
   }
   const cliSession = `inline-cli-${Date.now()}`;
@@ -263,24 +292,32 @@ test('pre-tool inline-work nudge stays quiet after a board interaction', () => {
     session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Bash',
     tool_input: { command: 'node "C:/plugins/sidequest/bin/sidequest.js" list' },
   }), null);
-  for (let i = 0; i < 5; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Edit', tool_input: {},
+      session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Glob', tool_input: {},
     }), null);
   }
 });
 
 test('pre-tool inline-work nudge ignores subagents and routing-disabled boards', () => {
-  const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', tool_name: 'Write', tool_input: {} };
-  for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
+  const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', tool_name: 'Read', tool_input: {} };
+  for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
 
   store.setProjectRouting(slug, 'disabled');
   try {
-    const disabled = { session_id: `inline-disabled-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
-    for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, disabled), null);
+    const disabled = { session_id: `inline-disabled-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
+    for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, disabled), null);
   } finally {
     store.setProjectRouting(slug, 'enabled');
   }
+});
+
+test('pre-tool inline-work nudge ignores automation prompts', () => {
+  const payload = {
+    session_id: `inline-automation-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {},
+    prompt: '<task-notification>Executor completed.</task-notification>',
+  };
+  for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
 });
 
 test('user-prompt reminder fires once for the first human prompt', () => {
@@ -773,7 +810,7 @@ test('session-start: compact and resume preserve the minimum ticket and executor
     assert.match(ctx, /fresh dispatch's exact token-gated executor and spawn/, `${source} must preserve exact dispatch execution`);
     assert.match(ctx, /Every Agent launch must use that executor/, `${source} must require dispatch for every Agent launch`);
     assert.match(ctx, /Read, Glob, Grep, or WebFetch inline/, `${source} must name direct lookup tools`);
-    assert.ok(ctx.includes('delegated exploration/research/review/analysis gets a ticket first'), `${source} must route delegated work through the board`);
+    assert.match(ctx, /tracing code across files needs a spike ticket/, `${source} must route multi-file investigation through the board`);
     assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), `${source} must prefer the MCP doing-list read`);
     assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
     assert.ok(ctx.includes('never TaskOutput'), `${source} must ban native Agent TaskOutput polling`);

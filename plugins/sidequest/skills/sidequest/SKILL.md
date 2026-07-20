@@ -168,7 +168,7 @@ execution to each ticket's stamped model; inline only trivial one-step work. **F
 substantial work before starting it**; a claim without its prepared token is refused, and `--direct`
 is the auditable inline escape hatch. Executors own their tickets; investigations return **compressed
 findings** (~1–2k tokens) as comments, not transcripts. Every Agent launch uses a freshly dispatched
-Sidequest executor; tiny lookups use `Read`/`Glob`/`Grep`/`WebFetch` inline.
+Sidequest executor; tiny lookup: 1–2 `Read`/`Glob`/`Grep`/`WebFetch` calls. Cross-file tracing: spike ticket.
 
 Any delegated work, including an investigation, is a spike ticket (usually `codebase-exploration`): file it, then route and dispatch it.
 

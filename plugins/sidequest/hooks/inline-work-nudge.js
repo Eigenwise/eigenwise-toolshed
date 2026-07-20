@@ -5,6 +5,8 @@ const os = require('os');
 const path = require('path');
 
 const THRESHOLD = 5;
+const READ_THRESHOLD = 12;
+const AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
 
 function pluginRoot() {
   return process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..');
@@ -49,6 +51,11 @@ function isSubstantive(input, toolName, command) {
   return toolName === 'Bash' && Boolean(command) && !isPureRead(command);
 }
 
+function isReadClass(toolName, command) {
+  return toolName === 'Read' || toolName === 'Grep' || toolName === 'Glob' ||
+    (toolName === 'Bash' && Boolean(command) && isPureRead(command));
+}
+
 function loadState(file) {
   try {
     const state = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -72,7 +79,8 @@ function main() {
   const id = sessionId(input);
   const toolName = String(input.tool_name || input.toolName || '');
   const command = shellCommand(input);
-  if (!id || !toolName || !boardFor(input)) return;
+  const prompt = String(input.prompt || '').trim();
+  if (!id || !toolName || AUTOMATION_TAG.test(prompt) || !boardFor(input)) return;
 
   const file = stateFile(id);
   const state = loadState(file);
@@ -81,19 +89,31 @@ function main() {
     saveState(file, state);
     return;
   }
-  if (!isSubstantive(input, toolName, command)) return;
 
-  state.substantiveActions = Number(state.substantiveActions) || 0;
-  state.substantiveActions += 1;
-  const shouldNudge = !state.nudged && !state.boardInteraction && state.substantiveActions >= THRESHOLD;
-  if (shouldNudge) state.nudged = true;
+  let additionalContext = '';
+  if (isSubstantive(input, toolName, command)) {
+    state.substantiveActions = Number(state.substantiveActions) || 0;
+    state.substantiveActions += 1;
+    if (!state.nudged && !state.boardInteraction && state.substantiveActions >= THRESHOLD) {
+      state.nudged = true;
+      additionalContext = 'sidequest: this session looks like it is doing substantive work inline. File it as a ticket and either dispatch it or claim it --direct if inline is deliberate; trivial one-liners are fine without.';
+    }
+  }
+  if (isReadClass(toolName, command)) {
+    state.readActions = Number(state.readActions) || 0;
+    state.readActions += 1;
+    if (!state.readSpiralNudged && !state.boardInteraction && state.readActions >= READ_THRESHOLD) {
+      state.readSpiralNudged = true;
+      additionalContext = 'sidequest: this session is tracing across files. A multi-file investigation is a spike ticket (usually codebase-exploration): file and dispatch it, or claim --direct if inline is deliberate.';
+    }
+  }
   saveState(file, state);
-  if (!shouldNudge) return;
+  if (!additionalContext) return;
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      additionalContext: 'sidequest: this session looks like it is doing substantive work inline. File it as a ticket and either dispatch it or claim it --direct if inline is deliberate; trivial one-liners are fine without.',
+      additionalContext,
     },
   }));
 }

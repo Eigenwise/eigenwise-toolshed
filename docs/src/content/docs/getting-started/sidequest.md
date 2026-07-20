@@ -15,11 +15,11 @@ Reload Claude Code, then open the board with `/sidequest:board`. The dashboard s
 
 Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. **Default settings** are shared by every board. **Board settings** fork a category for one board, and the dashboard marks each category as inherited or customized. Resetting a customized category relinks it to the defaults.
 
-Keep tiny lookups inline with `Read`, `Glob`, `Grep`, or `WebFetch`. Every delegated task goes through a ticket and routed dispatch, including an investigation: file a spike (usually `codebase-exploration`), dispatch it, then spawn the returned executor. Routing selects the model, so Sidequest has no unrouted delegation path.
+Keep trivial lookups inline: a couple `Read`, `Glob`, `Grep`, or `WebFetch` calls that answer one question. Tracing a code path across files is a spike ticket. Every delegated task goes through a ticket and routed dispatch, including an investigation: file a spike (usually `codebase-exploration`), dispatch it, then spawn the returned executor. Routing selects the model, so Sidequest has no unrouted delegation path.
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
 
-On the first prompt in each session, an active routed board adds one reminder: substantive work goes through a ticket and dispatch, or a `--direct` claim for deliberate inline work. Trivial lookups are exempt. Later, if the session reaches five substantive main-thread actions with no board interaction, Sidequest adds one more reminder. Both skip subagents, pure read-only shell commands, and boards with routing disabled.
+On the first prompt in each session, an active routed board adds one reminder: substantive work goes through a ticket and dispatch, or a `--direct` claim for deliberate inline work. Trivial lookups are exempt. Later, Sidequest adds one substantive-work reminder after five main-thread actions, and one read-spiral reminder after twelve `Read`, `Grep`, `Glob`, or pure-read Bash actions with no board interaction. Both skip subagents, automation prompts, and boards with routing disabled.
 
 ## Work a ticket
 
