@@ -36,6 +36,23 @@ test('every mapped hook event yields an acceptable canonical observation', () =>
   }
 });
 
+test('session start emits the project basename and cwd hash, never the path itself', () => {
+  const cwd = 'C:\\dev\\eigenwise-public\\eigenwise-toolshed';
+  const observation = buildObservation({
+    hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', cwd,
+  }, NOW);
+  assert.equal(observation.attributes.project_name, 'eigenwise-toolshed');
+  assert.match(observation.project_id, /^[0-9a-f]{64}$/);
+  const serialized = JSON.stringify(observation);
+  assert.equal(serialized.includes('eigenwise-public'), false, 'full path leaked into the observation');
+  assert.equal(serialized.includes('C:\\\\dev'), false, 'path prefix leaked into the observation');
+  accept(observation);
+
+  const nameless = buildObservation({ hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup' }, NOW);
+  assert.equal(nameless.attributes.project_name, undefined);
+  assert.equal(nameless.project_id, undefined);
+});
+
 test('tool facets classify native vs MCP tools without capturing arguments', () => {
   const mcp = buildObservation({ hook_event_name: 'PreToolUse', session_id: 's', tool_name: 'mcp__plugin_sidequest_board__list', tool_input: { secret: 'x' } }, NOW);
   assert.equal(mcp.attributes.is_mcp, true);

@@ -220,13 +220,7 @@ function openObservabilityStore(databaseFile, options = {}) {
     };
   }
 
-  function prepareInput(input) {
-    return enrichGateway(input);
-  }
-
   function assertOpen() {
-    if (closed) throw new Error('Workbench observability store is closed.');
-  } {
     if (closed) throw new Error('Workbench observability store is closed.');
   }
 
@@ -494,13 +488,13 @@ function openObservabilityStore(databaseFile, options = {}) {
   }
 
   function ingest(input) {
-    const normalized = normalizeObservation(prepareInput(input), { now, randomUUID: createId });
+    const normalized = normalizeObservation(enrichGateway(input), { now, randomUUID: createId });
     return transaction(() => ingestNormalized(normalized));
   }
 
   function ingestBatch(inputs) {
     if (!Array.isArray(inputs) || inputs.length === 0) throw new TypeError('A non-empty observation array is required.');
-    const normalized = inputs.map((input) => normalizeObservation(prepareInput(input), { now, randomUUID: createId }));
+    const normalized = inputs.map((input) => normalizeObservation(enrichGateway(input), { now, randomUUID: createId }));
     return transaction(() => normalized.map(ingestNormalized));
   }
 

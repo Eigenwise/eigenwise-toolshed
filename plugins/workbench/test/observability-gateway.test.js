@@ -347,3 +347,49 @@ test('gateway mcp-footprint records keep their server label and drop nothing', a
   assert.equal(byServer.plugin_playwright_playwright, 1650);
   assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
 });
+
+test('gateway records inherit their session project from the session-start hook', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-project-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'));
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const projectId = 'b'.repeat(64);
+  store.ingest({
+    source: 'hook',
+    source_event_id: 'session-start-project',
+    source_schema: 'hook-v1',
+    observed_at: '2026-07-20T08:00:00.000Z',
+    event_name: 'hook.session_start',
+    project_id: projectId,
+    session_id: 'session-with-project',
+    attributes: { source: 'startup', project_name: 'eigenwise-toolshed' },
+  });
+
+  const gatewayRecord = (id, sessionId) => ({
+    source: 'codex_gateway',
+    source_event_id: `gateway-project-${id}`,
+    source_schema: 'gateway-usage-v1',
+    observed_at: '2026-07-20T08:00:01.000Z',
+    event_name: 'gateway.token.usage',
+    session_id: sessionId,
+    request_id: `request-project-${id}`,
+    attributes: { model: 'claude-opus-4-8', backend: 'anthropic', agent_role: 'orchestrator' },
+    measurements: [
+      { name: 'context_tokens', value: 1000, unit: 'tokens', scope: 'request', quality: 'derived_exact' },
+    ],
+  });
+  store.ingest(gatewayRecord('known', 'session-with-project'));
+  store.ingest(gatewayRecord('unknown', 'session-without-hook'));
+
+  const rows = store.database.prepare(
+    "SELECT source_event_id, project_id, attributes_json FROM observation WHERE event_name = 'gateway.token.usage'",
+  ).all();
+  const byId = Object.fromEntries(rows.map((row) => [row.source_event_id, row]));
+  assert.equal(byId['gateway-project-known'].project_id, projectId);
+  assert.equal(JSON.parse(byId['gateway-project-known'].attributes_json).project_name, 'eigenwise-toolshed');
+  assert.equal(byId['gateway-project-unknown'].project_id, null);
+  assert.equal(JSON.parse(byId['gateway-project-unknown'].attributes_json).project_name, undefined);
+});

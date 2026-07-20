@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -23,6 +24,17 @@ const EVENT_MAP = Object.freeze({
 
 function identifier(value) {
   return typeof value === 'string' && SAFE_IDENTIFIER.test(value) ? value : null;
+}
+
+function projectMetadata(cwd) {
+  if (typeof cwd !== 'string' || cwd.length === 0) return {};
+  const basename = cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  const projectName = basename.replace(/[^A-Za-z0-9_.:@-]/g, '-').slice(0, 64);
+  if (!projectName || !/^[A-Za-z0-9]/.test(projectName)) return {};
+  return {
+    project_id: crypto.createHash('sha256').update(cwd).digest('hex'),
+    project_name: projectName,
+  };
 }
 
 function first(...values) {
@@ -74,10 +86,12 @@ function buildObservation(payload, now) {
 
   const observedAt = (now instanceof Date ? now : new Date()).toISOString();
   const attributes = {};
+  const project = eventName === 'hook.session_start' ? projectMetadata(payload.cwd) : {};
   const permissionMode = identifier(payload.permission_mode);
   const effortValue = effort(payload.effort);
 
   if (eventName === 'hook.session_start') {
+    assign(attributes, 'project_name', project.project_name);
     assign(attributes, 'source', identifier(payload.source));
     assign(attributes, 'permission_mode', permissionMode);
     assign(attributes, 'effort', effortValue);
@@ -118,6 +132,7 @@ function buildObservation(payload, now) {
     event_name: eventName,
     attributes,
   };
+  assign(observation, 'project_id', project.project_id);
   assign(observation, 'session_id', identifier(payload.session_id));
   assign(observation, 'prompt_id', identifier(first(payload.prompt_id, payload.promptId)));
   assign(observation, 'agent_id', identifier(payload.agent_id));
