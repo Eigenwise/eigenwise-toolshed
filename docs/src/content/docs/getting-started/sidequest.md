@@ -19,7 +19,7 @@ Keep trivial lookups inline: a couple `Read`, `Glob`, `Grep`, or `WebFetch` call
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
 
-On the first prompt in each session, an active routed board adds one reminder: substantive work goes through a ticket and dispatch, or a `--direct` claim for deliberate inline work. Trivial lookups are exempt. Later, Sidequest adds one substantive-work reminder after five main-thread actions, and one read-spiral reminder after twelve `Read`, `Grep`, `Glob`, or pure-read Bash actions with no board interaction. Both skip subagents, automation prompts, and boards with routing disabled.
+The main agent is the orchestrator: it decomposes work, files tickets, dispatches executors, and turns their findings into the next delegation. Executors own substantive implementation and investigation; the main agent reads only enough to write a well-anchored ticket. On the first prompt in each session, an active routed board says this explicitly and states **REQUIRED:** substantive work must use a ticket and dispatch, or a `--direct` claim for deliberate inline work. Trivial lookups are exempt. After five main-thread substantive actions, Sidequest gives three more substantive actions, then **BLOCKS** `Edit`, `Write`, `NotebookEdit`, and non-read Bash until a board interaction occurs. It also adds one read-spiral notice after twelve `Read`, `Grep`, `Glob`, or pure-read Bash actions with no board interaction. Reads stay allowed, and both paths skip subagents, automation prompts, and boards with routing disabled.
 
 ## Work a ticket
 

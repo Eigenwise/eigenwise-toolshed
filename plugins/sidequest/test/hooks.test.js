@@ -239,16 +239,23 @@ test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', 
   assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_type: 'explore', agent_id: 'other-agent' }), null);
 });
 
-test('pre-tool inline-work nudge fires once after five substantive main-thread actions', () => {
+test('pre-tool inline-work nudge gives three grace actions, then blocks with the board fix', () => {
   const session_id = `inline-nudge-${Date.now()}`;
   const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
   for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
   const nudge = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.match(nudge.hookSpecificOutput.additionalContext, /substantive work inline/);
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  assert.match(nudge.hookSpecificOutput.additionalContext, /REQUIRED/);
+  assert.match(nudge.hookSpecificOutput.additionalContext, /3 more substantive actions/);
+  assert.doesNotMatch(nudge.hookSpecificOutput.additionalContext, /looks like|consider/i);
+  for (let i = 0; i < 3; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  const denial = runHookOutput(INLINE_WORK_NUDGE, payload);
+  assert.equal(denial.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denial.hookSpecificOutput.permissionDecisionReason, /BLOCKED/);
+  assert.match(denial.hookSpecificOutput.permissionDecisionReason, /`add` → `dispatch <ref>`/);
+  assert.match(denial.hookSpecificOutput.permissionDecisionReason, /`claim <ref> --direct`/);
 });
 
-test('pre-tool inline-work nudge detects a read spiral after twelve main-thread reads', () => {
+test('pre-tool inline-work nudge permits reads indefinitely after the read spiral notice', () => {
   const session_id = `inline-read-${Date.now()}`;
   const reads = [
     { tool_name: 'Read', tool_input: {} },
@@ -260,52 +267,66 @@ test('pre-tool inline-work nudge detects a read spiral after twelve main-thread 
     assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[i % reads.length] }), null);
   }
   const nudge = runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[3] });
-  assert.match(nudge.hookSpecificOutput.additionalContext, /tracing across files/);
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[0] }), null);
+  assert.match(nudge.hookSpecificOutput.additionalContext, /REQUIRED/);
+  for (let i = 0; i < 40; i += 1) {
+    const result = runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[i % reads.length] });
+    assert.equal(result, null);
+  }
 });
 
 test('pre-tool inline-work nudge lets both reminders fire once in one session', () => {
   const session_id = `inline-both-${Date.now()}`;
   const write = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
   for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).hookSpecificOutput.additionalContext, /substantive work inline/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).hookSpecificOutput.additionalContext, /REQUIRED/);
 
   const read = { session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
   for (let i = 0; i < 11; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, read), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, read).hookSpecificOutput.additionalContext, /tracing across files/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, read).hookSpecificOutput.additionalContext, /REQUIRED/);
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, read), null);
 });
 
-test('pre-tool inline-work nudge stays quiet after a board interaction', () => {
+test('pre-tool inline-work board interaction permanently clears the gate', () => {
   const session_id = `inline-board-${Date.now()}`;
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
+    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: { direct: true },
   }), null);
   for (let i = 0; i < 12; i += 1) {
     assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {},
+      session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
     }), null);
   }
   const cliSession = `inline-cli-${Date.now()}`;
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
     session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Bash',
-    tool_input: { command: 'node "C:/plugins/sidequest/bin/sidequest.js" list' },
+    tool_input: { command: 'node "C:/plugins/sidequest/bin/sidequest.js" claim SQ-3 --direct' },
   }), null);
   for (let i = 0; i < 12; i += 1) {
     assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
-      session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Glob', tool_input: {},
+      session_id: cliSession, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
     }), null);
   }
 });
 
+test('pre-tool inline-work board contact before the threshold never blocks', () => {
+  const session_id = `inline-early-board-${Date.now()}`;
+  const write = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__list', tool_input: {},
+  }), null);
+  for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
+});
+
 test('pre-tool inline-work nudge ignores subagents and routing-disabled boards', () => {
-  const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', tool_name: 'Read', tool_input: {} };
+  const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', tool_name: 'Write', tool_input: {} };
   for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
 
   store.setProjectRouting(slug, 'disabled');
   try {
-    const disabled = { session_id: `inline-disabled-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
+    const disabled = { session_id: `inline-disabled-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
     for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, disabled), null);
   } finally {
     store.setProjectRouting(slug, 'enabled');
@@ -320,11 +341,23 @@ test('pre-tool inline-work nudge ignores automation prompts', () => {
   for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
 });
 
-test('user-prompt reminder fires once for the first human prompt', () => {
+test('pre-tool inline-work nudge fails open on hook errors', () => {
+  const result = runHookOutput(INLINE_WORK_NUDGE, {
+    session_id: `inline-hook-error-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
+  }, { CLAUDE_PLUGIN_ROOT: path.join(os.tmpdir(), 'missing-sidequest-plugin-root') });
+  assert.equal(result, null);
+});
+
+test('user-prompt reminder establishes the orchestrator role and blocks ignored inline work', () => {
   const payload = { session_id: `board-first-${Date.now()}`, cwd: BOARD_PATH, prompt: 'Fix the board hook.' };
   const reminder = runHookOutput(BOARD_FIRST_REMINDER, payload);
+  const context = reminder.hookSpecificOutput.additionalContext;
   assert.equal(reminder.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
-  assert.match(reminder.hookSpecificOutput.additionalContext, /substantive work goes through the board/);
+  assert.match(context, /ROLE: you are the orchestrator/);
+  assert.match(context, /REQUIRED/);
+  assert.match(context, /BLOCKED/);
+  assert.doesNotMatch(context, /looks like|consider/i);
+  assert.ok(context.indexOf('ROLE:') < context.indexOf('REQUIRED:'), 'role framing must precede enforcement mechanics');
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, payload), null);
 });
 
@@ -839,6 +872,17 @@ test('session-start: source=startup still gets the full block', () => {
   const ctx = runHook(SESSION, { session_id: 't', source: 'startup' });
   assert.ok(ctx.includes('external tracker'), 'startup source must still carry the full nudge');
   assert.ok(ctx.includes('Reload the Sidequest skill'), 'startup must reload the sidequest skill');
+});
+
+test('session-start: frames the main agent as orchestrator before mechanics', () => {
+  const ctx = runHook(SESSION, { session_id: 't', source: 'startup' });
+  assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
+  assert.ok(ctx.indexOf('ROLE:') < ctx.indexOf('Reload the Sidequest skill'), 'role framing must open the briefing before mechanics');
+  assert.match(ctx, /Executors execute\/investigate/);
+  assert.match(ctx, /REQUIRED/);
+  assert.match(ctx, /BLOCKED/);
+  assert.doesNotMatch(ctx, /looks like|consider/i);
+  assert.ok(ctx.length <= BUDGET.session, `session block is ${ctx.length} chars — budget is ${BUDGET.session}`);
 });
 
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {

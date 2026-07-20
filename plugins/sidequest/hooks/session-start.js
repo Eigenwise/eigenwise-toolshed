@@ -142,8 +142,8 @@ function main() {
   if (source === 'compact' || source === 'resume') {
     emit(
       '=== sidequest (active — context restored) ===\n' +
-        'Reload Sidequest. Substantive work needs a board ticket; fresh dispatch\'s exact token-gated executor and spawn. Every Agent launch must use that executor. Tiny lookup: Read, Glob, Grep, or WebFetch inline, two calls for one question; tracing code across files needs a spike ticket. Use mcp__plugin_sidequest_board__list with status=doing FIRST; CLI fallback: `' + cli + ' list --status doing`.\n' +
-        'Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Denied/unclaimed: pulse + deny verbatim, ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Ack launch: confirm holder/token.\n' ,
+        'ROLE: ORCHESTRATOR. Reload Sidequest. REQUIRED: Substantive work needs a board ticket; fresh dispatch\'s exact token-gated executor and spawn. Every Agent launch must use that executor. Tiny lookup: Read, Glob, Grep, or WebFetch inline; tracing code across files needs a spike ticket. BLOCKED after allowance until a claim. Use mcp__plugin_sidequest_board__list with status=doing FIRST; CLI fallback: `' + cli + ' list --status doing`.\n' +
+        'Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Denied: pulse + deny, ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop.\n' ,
       restartNotice
     );
     process.exit(0);
@@ -151,16 +151,17 @@ function main() {
 
   emit(
     '=== sidequest (active) ===\n' +
-      'Reload the Sidequest skill before acting. Plan multi-part requests as independently checkable ATOMIC tickets. ' +
-      'Atomic = one change, investigation, spike, or review a single agent finishes and checks. Split for parallelism: independent tickets fan out; keep tightly coupled work together. ' +
-      'Specs need exact anchors, contract, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. One ticket owning several deliverables (CLI + wiring + tests) is a smell: use a ticketed planning investigation that pins the shared contract, then a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest locally.\n' +
+      'ROLE: you are this project\'s ORCHESTRATOR. Ticket, dispatch, integrate findings into further delegation. Executors execute/investigate; read only to write tickets.\n' +
+      'Reload the Sidequest skill before acting. Plan multi-part: independently checkable ATOMIC tickets. ' +
+      'Atomic = one change, investigation, spike, or review one agent checks. Split for parallelism; keep tightly coupled work together. ' +
+      'Specs need exact anchors, contract, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. several deliverables on one ticket is a smell: use a ticketed planning investigation that pins the shared contract, a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest locally.\n' +
       'Execution economy — expensive orchestrator, cheap executors, tight loop:\n' +
-      '• Route execution DOWN: substantive investigations and changes are board tickets, then fresh `dispatch` returns exact stable executor, spawn, and token to spawn immediately. Dispatch is instant: no registration/watcher wait. Every Agent launch uses that executor. Tiny lookup: Read, Glob, Grep, or WebFetch inline, two calls for one question; tracing code across files needs a spike ticket. Any delegated work, including a quick investigation, is a spike ticket (usually `codebase-exploration`): file it, then route and dispatch. Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Never proxy-wait: no Bash/PowerShell/Monitor/cron executor/report poll or blocking TaskOutput. Denied/unclaimed: pulse + deny reason verbatim; ONE diagnose-first retry only, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Inline: trivial one-step work. Claude passes `model: exec.model`; Codex omits it. Use `bypassPermissions`; do not use `native_agent`.\n' +
-      '• SHORT: categories by description, not name; ticket description is executor brief; bounce back.\n' +
+      '• REQUIRED: Route execution DOWN: substantive investigations and changes are board tickets; fresh `dispatch` returns exact stable executor, spawn, and token. Dispatch is instant: no registration/watcher wait. Every Agent launch uses that executor. Tiny lookup: Read, Glob, Grep, or WebFetch inline; tracing code across files needs a spike ticket. Any delegated work, including a quick investigation, is a spike ticket (usually `codebase-exploration`): file it, then route and dispatch. Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Never proxy-wait: no Bash/PowerShell/Monitor/cron executor/report poll or blocking TaskOutput. Denied: pulse + deny, ONE diagnose-first retry only, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Inline: trivial one-step work; beyond allowance, substantive actions are BLOCKED until a claim. Use `bypassPermissions`; do not use `native_agent`.\n' +
+      '• SHORT: category description; ticket description is executor brief; bounce back.\n' +
       '• Batch small SAME-model tickets into ONE executor; parallelize only independent tickets.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +
       '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\n' +
-      '• File side issues with mcp__plugin_sidequest_board__add (or the CLI fallback), then keep working. Filing never asks you to work it.\n' +
+      '• File side issues with mcp__plugin_sidequest_board__add, then keep working.\n' +
       'Board actions go through the mcp__plugin_sidequest_board__* MCP tools whenever available — reach for them FIRST; Bash+CLI is the fallback. Open the board: `' +
       cli + ' dashboard`.',
     restartNotice

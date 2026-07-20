@@ -60,7 +60,7 @@ function main() {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'UserPromptSubmit',
-      additionalContext: 'sidequest: substantive work goes through the board. File ticket(s) and dispatch, or claim --direct for deliberate inline work; trivial lookups are exempt.',
+      additionalContext: 'sidequest: ROLE: you are the orchestrator. Decompose, file tickets, dispatch executors, and integrate findings into further delegation; read only enough to write a good ticket. REQUIRED: substantive work in this project MUST go through the Sidequest board (ticket + dispatch, or claim --direct for deliberate inline work). Only trivial lookups (a couple of reads for one question) are exempt. Inline work past the free allowance will be BLOCKED until a claim exists.',
     },
   }));
 }

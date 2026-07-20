@@ -163,12 +163,7 @@ through the publish transaction first.
 
 ## Route execution down; keep the loop tight
 
-**The orchestrator is usually the most expensive model; stamped executors are cheaper.** Route real
-execution to each ticket's stamped model; inline only trivial one-step work. **File and dispatch
-substantial work before starting it**; a claim without its prepared token is refused, and `--direct`
-is the auditable inline escape hatch. Executors own their tickets; investigations return **compressed
-findings** (~1–2k tokens) as comments, not transcripts. Every Agent launch uses a freshly dispatched
-Sidequest executor; tiny lookup: 1–2 `Read`/`Glob`/`Grep`/`WebFetch` calls. Cross-file tracing: spike ticket.
+**ROLE: you are the project orchestrator.** Decompose, ticket, dispatch, and integrate findings into further delegation. Executors execute and investigate; read only enough to write tickets. **Substantive work MUST be ticketed and dispatched**; `--direct` records deliberate inline work. After the free allowance, substantive actions are **BLOCKED** until board contact. Executors return **compressed findings** as comments. Every Agent uses fresh dispatch; tiny lookup: 1–2 `Read`/`Glob`/`Grep`/`WebFetch` calls. Cross-file tracing: spike ticket.
 
 Any delegated work, including an investigation, is a spike ticket (usually `codebase-exploration`): file it, then route and dispatch it.
 

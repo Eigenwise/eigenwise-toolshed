@@ -6,6 +6,7 @@ const path = require('path');
 
 const THRESHOLD = 5;
 const READ_THRESHOLD = 12;
+const GRACE_ACTIONS = 3;
 const AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
 
 function pluginRoot() {
@@ -70,6 +71,16 @@ function saveState(file, state) {
   fs.writeFileSync(file, JSON.stringify(state));
 }
 
+function deny(reason) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  }));
+}
+
 function main() {
   const raw = fs.readFileSync(0, 'utf8');
   if (!raw) return;
@@ -91,23 +102,30 @@ function main() {
   }
 
   let additionalContext = '';
-  if (isSubstantive(input, toolName, command)) {
+  let denial = '';
+  if (isSubstantive(input, toolName, command) && !state.boardInteraction) {
     state.substantiveActions = Number(state.substantiveActions) || 0;
     state.substantiveActions += 1;
-    if (!state.nudged && !state.boardInteraction && state.substantiveActions >= THRESHOLD) {
+    if (!state.nudged && state.substantiveActions >= THRESHOLD) {
       state.nudged = true;
-      additionalContext = 'sidequest: this session looks like it is doing substantive work inline. File it as a ticket and either dispatch it or claim it --direct if inline is deliberate; trivial one-liners are fine without.';
+      additionalContext = 'sidequest: REQUIRED: substantive work MUST use a ticket and dispatch, or claim --direct for deliberate inline work. 3 more substantive actions and Edit/Write/Bash will be BLOCKED until this session claims a ticket.';
+    } else if (state.nudged) {
+      state.graceActions = (Number(state.graceActions) || 0) + 1;
+      if (state.graceActions > GRACE_ACTIONS) {
+        denial = 'sidequest: BLOCKED: substantive inline work requires a board record. File + dispatch now (`add` → `dispatch <ref>`), or claim deliberate inline work (`claim <ref> --direct`; MCP: `direct:true`).';
+      }
     }
   }
-  if (isReadClass(toolName, command)) {
+  if (isReadClass(toolName, command) && !state.boardInteraction) {
     state.readActions = Number(state.readActions) || 0;
     state.readActions += 1;
-    if (!state.readSpiralNudged && !state.boardInteraction && state.readActions >= READ_THRESHOLD) {
+    if (!state.readSpiralNudged && state.readActions >= READ_THRESHOLD) {
       state.readSpiralNudged = true;
-      additionalContext = 'sidequest: this session is tracing across files. A multi-file investigation is a spike ticket (usually codebase-exploration): file and dispatch it, or claim --direct if inline is deliberate.';
+      additionalContext = 'sidequest: REQUIRED: cross-file tracing MUST use a spike ticket and dispatch, or claim --direct for deliberate inline work. Further substantive actions are BLOCKED after the inline-work allowance until this session claims a ticket.';
     }
   }
   saveState(file, state);
+  if (denial) return deny(denial);
   if (!additionalContext) return;
 
   process.stdout.write(JSON.stringify({
