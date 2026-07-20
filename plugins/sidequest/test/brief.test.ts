@@ -93,12 +93,12 @@ test('CLI: ready --json --brief returns compact tickets + ref waves', () => {
   }
 });
 
-test('MCP: list/ready with brief:true return the compact shape', () => {
-  const list = callTool('list', {});
+test('MCP: list/ready with brief:true return the compact shape', async () => {
+  const list = await callTool('list', {});
   for (const t of list.tickets) {
     assert.deepStrictEqual(Object.keys(t).sort(), BRIEF_KEYS);
   }
-  const ready = callTool('ready', { brief: true });
+  const ready = await callTool('ready', { brief: true });
   for (const t of ready.tickets) {
     assert.deepStrictEqual(Object.keys(t).sort(), BRIEF_KEYS);
   }
@@ -107,8 +107,8 @@ test('MCP: list/ready with brief:true return the compact shape', () => {
   }
 });
 
-test('MCP: waves are refs with and without brief (one shape per field)', () => {
-  const full = callTool('ready', {});
+test('MCP: waves are refs with and without brief (one shape per field)', async () => {
+  const full = await callTool('ready', {});
   for (const wave of full.waves) {
     for (const r of wave) {
       assert.strictEqual(typeof r, 'string', 'non-brief waves must also be refs, not ticket objects');
@@ -118,10 +118,10 @@ test('MCP: waves are refs with and without brief (one shape per field)', () => {
   assert.ok(full.tickets.some((t?: any) => typeof t.description === 'string'), 'full tickets still ride in tickets');
 });
 
-test('MCP: list defaults compact and detail:true returns full tickets', () => {
-  const list = callTool('list', {});
+test('MCP: list defaults compact and detail:true returns full tickets', async () => {
+  const list = await callTool('list', {});
   for (const ticket of list.tickets) assert.deepStrictEqual(Object.keys(ticket).sort(), BRIEF_KEYS);
-  const full = callTool('list', { detail: true });
+  const full = await callTool('list', { detail: true });
   const a = full.tickets.find((t?: any) => t.ref === refA);
   assert.ok(a.description.includes('long developer-to-developer'), 'detail:true keeps full bodies');
 });

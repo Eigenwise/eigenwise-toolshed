@@ -27,7 +27,7 @@ interface McpResponse {
 }
 
 interface McpModule {
-  handleRequest(request: UnknownRecord): unknown;
+  handleRequest(request: UnknownRecord): Promise<unknown>;
 }
 
 export function makeCliRunner(bin: string, envOverrides?: NodeJS.ProcessEnv, options?: CliRunnerOptions) {
@@ -53,8 +53,8 @@ export function makeCliRunner(bin: string, envOverrides?: NodeJS.ProcessEnv, opt
 export function makeMcpCaller(mcp: McpModule) {
   let id = 0;
 
-  function callToolRaw(name: string, args?: UnknownRecord): McpToolResult | undefined {
-    const response = mcp.handleRequest({
+  async function callToolRaw(name: string, args?: UnknownRecord): Promise<McpToolResult | undefined> {
+    const response = await mcp.handleRequest({
       jsonrpc: '2.0',
       id: ++id,
       method: 'tools/call',
@@ -63,8 +63,8 @@ export function makeMcpCaller(mcp: McpModule) {
     return response?.result;
   }
 
-  function callTool<T>(name: string, args?: UnknownRecord): T {
-    const result = callToolRaw(name, args);
+  async function callTool<T>(name: string, args?: UnknownRecord): Promise<T> {
+    const result = await callToolRaw(name, args);
     assert.ok(result, `tool ${name} returned a result`);
     assert.ok(!result.isError, `tool ${name} errored: ${result.content?.[0]?.text}`);
     return JSON.parse(result.content?.[0]?.text || '') as T;

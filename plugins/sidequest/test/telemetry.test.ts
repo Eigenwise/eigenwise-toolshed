@@ -52,7 +52,7 @@ fs.writeFileSync(path.join(PROJ, 'lib', 'tracked.js'), 'module.exports = 1;\n');
 execFileSync('git', ['add', '.'], { cwd: PROJ });
 execFileSync('git', ['commit', '--quiet', '-m', 'add tracked fixture'], { cwd: PROJ });
 
-const mcp = require('../lib/mcp.js') as { handleRequest(request: UnknownRecord): unknown };
+const mcp = require('../lib/mcp.js') as { handleRequest(request: UnknownRecord): Promise<unknown> };
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
 const { callTool } = makeMcpCaller(mcp);
@@ -65,7 +65,7 @@ test('seed telemetry fixture', () => {
   assert.strictEqual(runCli(['comment', ref, '--by', 'telemetry-worker', '-m', 'a recent telemetry note']).status, 0);
 });
 
-test('CLI and MCP pulse return the compact liveness shape with git activity', () => {
+test('CLI and MCP pulse return the compact liveness shape with git activity', async () => {
   const pulse = cliJson<Pulse>(['pulse', ref]);
   assert.deepStrictEqual(Object.keys(pulse).sort(), ['claim', 'comments', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastActivityAt', 'lastComment', 'project', 'projectName', 'ref', 'status', 'submission', 'title', 'working']);
   assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'by']);
@@ -73,12 +73,12 @@ test('CLI and MCP pulse return the compact liveness shape with git activity', ()
   assert.deepStrictEqual(pulse.lastComment, { at: pulse.lastComment.at, by: 'telemetry-worker', kind: 'comment', body: 'a recent telemetry note' });
   assert.match(pulse.git.commit.hash, /^[0-9a-f]{40}$/);
   assert.strictEqual(pulse.git.dirty, false);
-  const viaMcp = callTool<Pulse>('pulse', { ref });
+  const viaMcp = await callTool<Pulse>('pulse', { ref });
   assert.strictEqual(viaMcp.ref, ref);
   assert.strictEqual(viaMcp.git.commit.hash, pulse.git.commit.hash);
 });
 
-test('changes returns an ordered compact delta and reusable serverTime', () => {
+test('changes returns an ordered compact delta and reusable serverTime', async () => {
   const before = new Date(Date.now() - 1000).toISOString();
   assert.strictEqual(runCli(['comment', ref, '--by', 'telemetry-worker', '-m', 'a second telemetry note']).status, 0);
   const changes = cliJson<Changes>(['changes', '--since', before]);
@@ -89,7 +89,7 @@ test('changes returns an ordered compact delta and reusable serverTime', () => {
   assert.strictEqual(changed.lastEventType, 'comment');
   assert.strictEqual(changed.lastEventSource, 'cli');
   assert.ok(Date.parse(changes.serverTime) >= Date.parse(changed.updatedAt));
-  const viaMcp = callTool<Changes>('changes', { since: before });
+  const viaMcp = await callTool<Changes>('changes', { since: before });
   assert.ok(viaMcp.tickets.some((ticket) => ticket.ref === ref));
 });
 
@@ -153,14 +153,14 @@ test('native lifecycle observations include only allowlisted metadata', () => {
   for (const secret of ['do not emit this title', 'or this description', 'must-not-leak', project.path]) assert.ok(!serialized.includes(secret));
 });
 
-test('shared store boundary emits once for MCP mutations', () => {
+test('shared store boundary emits once for MCP mutations', async () => {
   const telemetry = require('../lib/telemetry.js') as {
     setTestSink(sink: ((observation: TicketObservation) => void) | null): void;
   };
   const observed: TicketObservation[] = [];
   telemetry.setTestSink((observation) => observed.push(observation));
   try {
-    const result = callTool<{ ok: boolean }>('update', { ref, status: 'todo' });
+    const result = await callTool<{ ok: boolean }>('update', { ref, status: 'todo' });
     assert.strictEqual(result.ok, true);
   } finally {
     telemetry.setTestSink(null);

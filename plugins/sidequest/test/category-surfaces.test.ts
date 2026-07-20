@@ -25,8 +25,8 @@ function freshMcp() {
   return require('../lib/mcp.js');
 }
 
-function call(mcp?: any, name?: any, args?: any) {
-  const response = mcp.handleRequest({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name, arguments: args } });
+async function call(mcp?: any, name?: any, args?: any) {
+  const response = await mcp.handleRequest({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name, arguments: args } });
   assert.ok(!response.result.isError, response.result.content[0].text);
   return JSON.parse(response.result.content[0].text);
 }
@@ -81,15 +81,15 @@ test('CLI global fallback reads and updates routing policy', () => {
   assert.ok(!JSON.stringify(run.body).includes('grade-'));
 });
 
-test('MCP category tools stamp tickets and reject unknown categories', () => {
+test('MCP category tools stamp tickets and reject unknown categories', async () => {
   const mcp = freshMcp();
-  const added = call(mcp, 'add', { title: 'Categorized MCP ticket', category: 'mechanical' });
+  const added = await call(mcp, 'add', { title: 'Categorized MCP ticket', category: 'mechanical' });
   assert.match(added.ref, /^SQ-\d+$/);
 
-  const listed = call(mcp, 'category_list', {});
+  const listed = await call(mcp, 'category_list', {});
   assert.ok(listed.categories.some((category?: any) => category.id === 'mechanical' && category.ticketCount === 1));
 
-  const raw = mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ref, category: 'missing' } } });
+  const raw = await mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ref, category: 'missing' } } });
   assert.ok(raw.result.isError);
   assert.match(raw.result.content[0].text, /unknown category.*valid:/i);
 });
@@ -173,22 +173,22 @@ test('CLI category edit forks a board category, and reset returns it to the shar
   assert.equal(run.body.effective.name, 'Mechanical change');
 });
 
-test('MCP category edit forks a board category; category_relink resets it to the shared default', () => {
+test('MCP category edit forks a board category; category_relink resets it to the shared default', async () => {
   const mcp = freshMcp();
   const scoped = process.env.CLAUDE_PROJECT_DIR;
   fs.mkdirSync(scoped, { recursive: true });
 
-  let result = call(mcp, 'category_edit', { project: scoped, id: 'mechanical', name: 'Local mechanical' });
+  let result = await call(mcp, 'category_edit', { project: scoped, id: 'mechanical', name: 'Local mechanical' });
   assert.deepEqual(Object.keys(result).sort(), ['id', 'localRow', 'ok', 'project']);
   assert.equal(result.localRow.kind, 'DETACH');
 
-  result = call(mcp, 'category_list', { project: scoped });
+  result = await call(mcp, 'category_list', { project: scoped });
   const category = result.categories.find((entry?: any) => entry.id === 'mechanical');
   assert.equal(category.linkState, 'detached');
   assert.equal(category.origin, 'detached');
   assert.deepEqual(result.warnings, []);
 
-  result = call(mcp, 'category_relink', { project: scoped, id: 'mechanical' });
+  result = await call(mcp, 'category_relink', { project: scoped, id: 'mechanical' });
   assert.deepEqual(result, { ok: true, project: result.project, id: 'mechanical', localRow: null });
 });
 

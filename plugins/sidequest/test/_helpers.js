@@ -26,12 +26,12 @@ function makeCliRunner(bin, envOverrides, options) {
 // which is why this takes the module rather than requiring it itself.
 function makeMcpCaller(mcp) {
   let idc = 0;
-  function callToolRaw(name, args) {
-    const resp = mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
+  async function callToolRaw(name, args) {
+    const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
     return resp && resp.result;
   }
-  function callTool(name, args) {
-    const result = callToolRaw(name, args);
+  async function callTool(name, args) {
+    const result = await callToolRaw(name, args);
     assert.ok(result, `tool ${name} returned a result`);
     assert.ok(!result.isError, `tool ${name} errored: ${result.content && result.content[0] && result.content[0].text}`);
     return JSON.parse(result.content[0].text);
