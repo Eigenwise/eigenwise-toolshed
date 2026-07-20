@@ -4,7 +4,7 @@
 const http = require('node:http');
 const path = require('node:path');
 const { defaultConfigPath, defaultDataDir, readObservabilityConfig } = require('../observability/sinks/index.js');
-const { projectId } = require('./project-telemetry.js');
+const { projectName } = require('./project-telemetry.js');
 
 function getJson(url) {
   return new Promise((resolve) => {
@@ -39,7 +39,7 @@ function parseArgs(argv) {
 async function verifyProjectTelemetry(projectDir, options = {}) {
   const configFile = options.configFile || defaultConfigPath(options.dataDir || defaultDataDir(options.environment));
   const config = readObservabilityConfig(configFile).observability;
-  const project = projectId(projectDir);
+  const project = projectName(projectDir);
   const observer = await getJson(`http://127.0.0.1:${config.ports?.observer || 14319}/health`);
   const observerHealthy = observer?.statusCode === 200 && observer.body?.ok === true;
   if (!config.dashboard) return { found: false, project, observerHealthy, reason: 'dashboard_not_configured' };

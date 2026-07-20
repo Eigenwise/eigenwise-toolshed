@@ -92,7 +92,6 @@ function buildObservation(payload, now) {
   const effortValue = effort(payload.effort);
 
   if (eventName === 'hook.session_start') {
-    assign(attributes, 'source', identifier(payload.source));
     assign(attributes, 'permission_mode', permissionMode);
     assign(attributes, 'effort', effortValue);
   } else if (eventName === 'hook.session_end' || eventName === 'hook.stop') {

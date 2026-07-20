@@ -14,7 +14,7 @@ const {
 
 const STATE_FILE = 'settings.local.workbench-telemetry.json';
 
-function projectId(projectDir) {
+function projectName(projectDir) {
   return projectMetadata(path.resolve(projectDir)).project_name;
 }
 
@@ -112,7 +112,7 @@ function restoreResourceAttributes(current, previous, added) {
 
 function telemetryEnvironment(projectDir, ports) {
   const attributes = parseResourceAttributes();
-  attributes.set('project.id', projectId(projectDir));
+  attributes.set('project.id', projectName(projectDir));
   attributes.set('service.name', 'claude-code');
   return {
     ...observabilityEnvironment(ports),
@@ -129,7 +129,7 @@ function mergeTelemetrySettings(settings, projectDir, options = {}) {
     Object.hasOwn(existingEnvironment, name) ? existingEnvironment[name] : null,
   ]));
   const attributes = parseResourceAttributes(existingEnvironment.OTEL_RESOURCE_ATTRIBUTES);
-  attributes.set('project.id', projectId(projectDir));
+  attributes.set('project.id', projectName(projectDir));
   attributes.set('service.name', 'claude-code');
   addedEnvironment.OTEL_RESOURCE_ATTRIBUTES = serializeResourceAttributes(attributes);
   next.env = { ...existingEnvironment, ...addedEnvironment };
@@ -219,7 +219,7 @@ async function main() {
     return;
   }
   const result = await enableProjectTelemetry(projectDir, options);
-  process.stdout.write(`Project telemetry enabled for ${projectId(projectDir)} in ${result.settingsPath}. Restart Claude Code before sending telemetry.\n`);
+  process.stdout.write(`Project telemetry enabled for ${projectName(projectDir)} in ${result.settingsPath}. Restart Claude Code before sending telemetry.\n`);
 }
 
 module.exports = {
@@ -229,7 +229,7 @@ module.exports = {
   enableProjectTelemetry,
   mergeTelemetrySettings,
   parseArgs,
-  projectId,
+  projectName,
   projectSettingsPath,
   registryEntry,
   registryConfigPath,
