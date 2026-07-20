@@ -302,8 +302,10 @@ anything that shares files or has a `depends-on` link stays sequential (blocked 
 
 A bounded documentation artifact can remain in the shared working tree for the caller to review. That
 exception needs an explicit artifact lifecycle sentence in the ticket, one declared artifact directory,
-and `--shared-tree` (MCP `sharedTree:true`); Sidequest marks the executor briefing and permits `done`
-without commit or submit. Other tickets with declared file scope still require commit and submit.
+and `--shared-tree` (MCP `sharedTree:true`). Dispatch pins that mode and scope, plus the shared tree's
+existing dirty paths. `done` then permits changes inside the artifact scope and refuses newly dirty paths
+outside it; pre-existing caller dirt is left alone. Other tickets with declared file scope still require
+commit and submit, and `update --status done` cannot bypass an active claim, dispatch, or submission.
 
 ## Native routed execution
 

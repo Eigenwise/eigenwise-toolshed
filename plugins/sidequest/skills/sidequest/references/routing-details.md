@@ -88,7 +88,8 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
   documentation artifact may close with `done` only when it declares its artifact directory as file scope,
   was dispatched with shared-tree enabled, and includes this exact line:
   `Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.`
-  Every other scoped ticket commits and submits.
+  Dispatch pins the artifact authority, scope, and existing dirty paths. `done` refuses any newly dirty
+  path outside that scope, so revert it or release the ticket. Every other scoped ticket commits and submits.
 
 ## Re-scoring
 

@@ -21,6 +21,8 @@ const { spawnSync, execFileSync } = require('child_process');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const PROJ = path.join(os.tmpdir(), 'sq-mcp-fixtures', 'board');
+fs.mkdirSync(PROJ, { recursive: true });
+execFileSync('git', ['init', '--quiet'], { cwd: PROJ, windowsHide: true });
 process.env.CLAUDE_PROJECT_DIR = PROJ;
 const MCP_SESSION_ID = `mcp-test-session-${process.pid}`;
 process.env.CLAUDE_CODE_SESSION_ID = MCP_SESSION_ID;
@@ -597,6 +599,24 @@ test('status validation fails loudly and directs deletion to remove', () => {
   assert.match(invalid.content[0].text, /remove tool/i);
   assert.throws(() => store.updateTicket(store.ensureProject(PROJ).slug, added.ref, { status: 'deleted' }), /remove tool/i);
   assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
+});
+
+test('CLI and MCP update cannot close claimed scoped work', () => {
+  const added = callTool('add', {
+    title: 'claimed update bypass',
+    files: ['lib/claimed.js'],
+    unclassified: true,
+  });
+  assert.strictEqual(store.claimTicket(added.project, added.ref, 'claimed-update-worker', { direct: true }).ok, true);
+
+  const refused = callToolRaw('update', { ref: added.ref, status: 'done' });
+  assert.ok(refused.isError);
+  assert.match(refused.content[0].text, /done\/completeTicket.*commit and submit/);
+  assert.throws(
+    () => runCli(['update', added.ref, '--status', 'done', '--project', added.project]),
+    (error) => /done\/completeTicket.*commit and submit/.test(error.stderr)
+  );
+  assert.strictEqual(store.getTicket(added.project, added.ref).status, 'doing');
 });
 
 test('CLI and MCP remove protect live claims but allow force and stale claims', () => {

@@ -103,6 +103,17 @@ test('schema v5 leaves customized global codebase exploration rows untouched', (
   }
 });
 
+test('schema v5 refuses to open a newer database schema', () => {
+  const { db, homeRoot } = makeDb();
+  db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(6));
+  db.close();
+
+  assert.throws(
+    () => openDb(homeRoot),
+    /database schema 6 is newer than supported schema 5/
+  );
+});
+
 test('putRow and getRow round-trip ticket data', () => {
   const { db } = makeDb();
   const row = ticket('tk_1', 'toolshed', 'todo', 1);
