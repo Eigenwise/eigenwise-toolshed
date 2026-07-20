@@ -24,11 +24,11 @@ const env = Object.assign({}, process.env, {
   CLAUDE_PROJECT_DIR: project,
 });
 
-function cli(...args) {
+function cli(...args: any[]) {
   return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env });
 }
 
-function jsonCli(...args) {
+function jsonCli(...args: any[]) {
   const result = cli(...args, '--json');
   return { result, body: result.stdout ? JSON.parse(result.stdout) : null };
 }
@@ -72,3 +72,5 @@ test('route requires JSON and names unknown and disabled categories', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /disabled for this project/i);
 });
+
+export {};

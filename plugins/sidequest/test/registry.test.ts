@@ -10,13 +10,13 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const writer = require('../hooks/registry-writer.js');
 
-function home(t) {
+function home(t?: any) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sidequest-registry-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return directory;
 }
 
-test('writes an atomic Sidequest registry breadcrumb', (t) => {
+test('writes an atomic Sidequest registry breadcrumb', (t?: any) => {
   const directory = home(t);
   const result = writer.writeBreadcrumb({ root, home: directory, version: '1.2.3' });
   const file = writer.registryPath(directory);
@@ -32,7 +32,7 @@ test('writes an atomic Sidequest registry breadcrumb', (t) => {
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['sidequest.json']);
 });
 
-test('preserves a future Sidequest registry schema', (t) => {
+test('preserves a future Sidequest registry schema', (t?: any) => {
   const directory = home(t);
   const file = writer.registryPath(directory);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -54,3 +54,5 @@ test('does not fail SessionStart when registry state cannot be initialized', () 
   assert.equal(result.status, 0);
   assert.equal(result.stdout, '');
 });
+
+export {};

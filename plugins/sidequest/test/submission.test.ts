@@ -25,7 +25,7 @@ const { makeCliRunner } = require('./_helpers.js');
 
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-project-'));
 const REMOTE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-remote-'));
-function git(args) {
+function git(args?: any) {
   return execFileSync('git', args, { cwd: PROJECT_DIR, encoding: 'utf8', windowsHide: true }).trim();
 }
 git(['init']);
@@ -43,7 +43,7 @@ function cleanBranch() {
   git(['checkout', '-f', '-B', `submission-${++branchSeq}`, 'origin/main']);
   git(['clean', '-fd']);
 }
-function pin(ticket, commit) {
+function pin(ticket?: any, commit?: any) {
   git(['update-ref', `refs/sidequest/${ticket.ref}`, commit]);
 }
 const { slug } = store.ensureProject(PROJECT_DIR);
@@ -52,7 +52,7 @@ const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_
 
 const COMMIT = 'abc1234def5678abc1234def5678abc1234def56';
 
-function addTicket(title, extra) {
+function addTicket(title?: any, extra?: any) {
   return store.createTicket(slug, Object.assign({
     title,
     complexity: 3,
@@ -107,7 +107,7 @@ test('submitted tickets leave the ready pool and refuse claims until cleared', (
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true }).ok, true);
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
 
-  const readyRefs = store.readyTickets(slug, {}).map((x) => x.ref);
+  const readyRefs = store.readyTickets(slug, {}).map((x?: any) => x.ref);
   assert.ok(!readyRefs.includes(t.ref), 'a submitted ticket is not re-dispatchable');
 
   const reclaim = store.claimTicket(slug, t.ref, 'worker-b', { direct: true });
@@ -115,7 +115,7 @@ test('submitted tickets leave the ready pool and refuse claims until cleared', (
   assert.strictEqual(reclaim.reason, 'submitted');
 
   const queue = store.submissionsPayload(slug);
-  assert.ok(queue.tickets.some((x) => x.ref === t.ref), 'the integration queue lists it');
+  assert.ok(queue.tickets.some((x?: any) => x.ref === t.ref), 'the integration queue lists it');
 
   // Orchestrator reset: integration bounced, the work must be redone.
   const cleared = store.clearSubmission(slug, t.ref, { status: 'todo' });
@@ -139,7 +139,7 @@ test('done consumes the submission: integratedAt is stamped and the queue drains
   assert.strictEqual(after.status, 'done');
   assert.ok(after.submission.integratedAt, 'done stamps the submission integrated');
   assert.strictEqual(store.pendingSubmission(after), false);
-  assert.ok(!store.submissionsPayload(slug).tickets.some((x) => x.ref === t.ref));
+  assert.ok(!store.submissionsPayload(slug).tickets.some((x?: any) => x.ref === t.ref));
 });
 
 test('brief and pulse surface a pending submission', () => {
@@ -219,10 +219,10 @@ test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence commen
   assert.deepStrictEqual(after.submission.commits, [commit]);
   assert.deepStrictEqual(after.submission.changedPaths, ['lib/fixture.js']);
   assert.strictEqual(after.submission.base, git(['rev-parse', 'origin/main']));
-  assert.ok(after.comments.some((c) => /READY_FOR_INTEGRATION evidence body/.test(c.body)));
+  assert.ok(after.comments.some((c?: any) => /READY_FOR_INTEGRATION evidence body/.test(c.body)));
 
   const queue = cliJson(['publish', 'queue', '--json']);
-  assert.ok(queue.tickets.some((x) => x.ref === t.ref));
+  assert.ok(queue.tickets.some((x?: any) => x.ref === t.ref));
 
   // done without integration is the orchestrator's call; the CLI still guards claims:
   const reclaim = runCli(['claim', t.ref, '--by', 'other', '--direct']);
@@ -286,7 +286,7 @@ test('CLI: SQ-406-shaped two-commit submissions retain implementation and tests 
   const submitted = runCli(['submit', t.ref, '--by', 'range-worker', '--commit', tests, '--verify', 'node --test plugins/sidequest/test/*.test.js']);
   assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
   const queue = cliJson(['publish', 'queue', '--json']);
-  const entry = queue.tickets.find((item) => item.ref === t.ref);
+  const entry = queue.tickets.find((item?: any) => item.ref === t.ref);
   assert.deepStrictEqual(entry.submission.commits, [implementation, tests]);
   assert.deepStrictEqual(entry.submission.changedPaths, ['lib/implementation.js', 'test/implementation.test.js']);
 });
@@ -355,3 +355,5 @@ test('CLI: a range containing another queued ticket commit is refused', () => {
   assert.match(submitted.stderr + submitted.stdout, new RegExp(first.ref));
   assert.strictEqual(runCli(['release', second.ref, '--by', 'second-worker']).status, 0);
 });
+
+export {};

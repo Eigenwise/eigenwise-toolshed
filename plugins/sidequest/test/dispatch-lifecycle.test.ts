@@ -30,7 +30,7 @@ store.setCategory({
   enabled: true,
 });
 
-function createFixture(title) {
+function createFixture(title?: any) {
   return store.createTicket(slug, {
     title,
     category: 'dispatch.lifecycle',
@@ -39,7 +39,7 @@ function createFixture(title) {
   });
 }
 
-function runForceBypass(payload) {
+function runForceBypass(payload?: any) {
   const output = execFileSync(process.execPath, [FORCE_EXEC_BYPASS], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
@@ -120,7 +120,7 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
   assert.equal(pulse.dispatch.state, 'claimed');
   assert.equal(pulse.working, true);
   assert.equal(pulse.lastActivityAt, pulse.claim.at);
-  assert.equal(store.changesPayload(slug, since).tickets.find((entry) => entry.ref === ticket.ref).lastEventType, 'dispatch');
+  assert.equal(store.changesPayload(slug, since).tickets.find((entry?: any) => entry.ref === ticket.ref).lastEventType, 'dispatch');
 
   store.addComment(slug, ticket.ref, {
     by: 'lifecycle-worker',
@@ -209,7 +209,7 @@ test('prepared dispatches expire on the configured TTL with an audit comment', (
   const expiresAt = Date.parse(prepared.ticket.dispatch.preparedAt) + store.preparedDispatchTtlMs() + 1;
 
   const swept = store.sweepStaleDispatches({ project: slug, now: expiresAt, source: 'test' });
-  assert.deepEqual(swept.expired.map((entry) => entry.ref), [ticket.ref]);
+  assert.deepEqual(swept.expired.map((entry?: any) => entry.ref), [ticket.ref]);
   const after = store.getTicket(slug, ticket.ref);
   assert.equal(after.dispatch.outcome, 'expired');
   assert.equal(after.dispatchNonce, null);
@@ -275,3 +275,5 @@ test('re-dispatch supersedes stale tokens and terminal cleanup removes active cr
   assert.equal(after.dispatch.terminalAt != null, true);
   assert.equal(after.dispatch.supersededTokens, undefined);
 });
+
+export {};

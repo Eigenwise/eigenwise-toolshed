@@ -36,32 +36,32 @@ store.setCategory({
   route: { model: 'haiku', effort: 'medium' }, enabled: true,
 });
 
-function runCli(args) {
+function runCli(args?: any) {
   const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_DISCOVERY_DIRS: process.env.SIDEQUEST_DISCOVERY_DIRS, CLAUDE_PROJECT_DIR: PROJ });
   const result = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env });
   return { status: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 
-function cliJson(args) {
+function cliJson(args?: any) {
   const result = runCli(args.concat(['--json']));
   assert.equal(result.status, 0, `expected success: ${args.join(' ')}\n${result.stderr}${result.stdout}`);
   return JSON.parse(result.stdout);
 }
 
-function ticket(ref) {
+function ticket(ref?: any) {
   const payload = cliJson(['list']);
-  const tickets = Array.isArray(payload.tickets) ? payload.tickets : [].concat(...Object.values(payload).filter(Array.isArray));
-  const found = tickets.find((candidate) => candidate.ref === ref);
+  const tickets = Array.isArray(payload.tickets) ? payload.tickets : ([] as any[]).concat(...Object.values(payload).filter(Array.isArray) as any[]);
+  const found = tickets.find((candidate?: any) => candidate.ref === ref);
   assert.ok(found, `ticket ${ref} not found`);
   return found;
 }
 
-function seed(category) {
+function seed(category?: any) {
   return cliJson(['add', '-t', 'guard fixture', '-d', 'Where: claim guard fixture. Contract: exercise token-gated routed claims without changing state. Verify: inspect the claim response.', '--category', category]).ticket.ref;
 }
 
-function otherEffort(effort) {
-  return store.VALID_EFFORTS.find((candidate) => candidate !== effort);
+function otherEffort(effort?: any) {
+  return store.VALID_EFFORTS.find((candidate?: any) => candidate !== effort);
 }
 
 test('Codex category routes reject a generic executor even when effort matches', () => {
@@ -141,7 +141,7 @@ test('an explicit direct claim records the bypass on no-file routed research wor
   const pulse = cliJson(['pulse', ref]);
   assert.equal(pulse.direct.by, 'inline-worker');
   assert.equal(pulse.direct.model, before.model);
-  const brief = cliJson(['list', '--brief']).tickets.find((candidate) => candidate.ref === ref);
+  const brief = cliJson(['list', '--brief']).tickets.find((candidate?: any) => candidate.ref === ref);
   assert.equal(brief.direct.by, 'inline-worker');
 });
 
@@ -202,8 +202,8 @@ test('claims sweep marks stale claims, audits release, and leaves fresh claims a
   });
 
   const before = cliJson(['list', '--brief']);
-  assert.equal(before.tickets.find((ticket) => ticket.ref === staleRef).claim.stale, true);
-  assert.equal(before.tickets.find((ticket) => ticket.ref === freshRef).claim.stale, false);
+  assert.equal(before.tickets.find((ticket?: any) => ticket.ref === staleRef).claim.stale, true);
+  assert.equal(before.tickets.find((ticket?: any) => ticket.ref === freshRef).claim.stale, false);
   const swept = cliJson(['claims', 'sweep']);
   assert.equal(swept.released.length, 1);
   assert.equal(ticket(staleRef).status, 'todo');
@@ -292,3 +292,5 @@ test('a concrete Haiku category keeps its configured effort guard', () => {
   assert.notEqual(wrong.status, 0);
   assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct']).ok, true);
 });
+
+export {};

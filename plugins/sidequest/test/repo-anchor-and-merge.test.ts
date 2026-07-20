@@ -133,11 +133,11 @@ function writeTempImage() {
   return f;
 }
 
-function assetFilesFor(slug, ticketId) {
+function assetFilesFor(slug?: any, ticketId?: any) {
   const dir = path.join(SIDEQUEST_HOME, 'projects', slug, 'assets', ticketId);
   try {
     return fs.readdirSync(dir);
-  } catch (_) {
+  } catch (_: any) {
     return [];
   }
 }
@@ -170,20 +170,20 @@ test('mergeProject: folds a board into another, renumbering refs above the desti
   // Dest holds the original + both merged tickets, with fresh refs above SQ-1.
   const destTickets = store.listTickets(dest.slug);
   assert.strictEqual(destTickets.length, 3);
-  const movedA = destTickets.find((t) => t.id === a.id);
-  const movedB = destTickets.find((t) => t.id === b.id);
+  const movedA = destTickets.find((t?: any) => t.id === a.id);
+  const movedB = destTickets.find((t?: any) => t.id === b.id);
   assert.ok(movedA && movedB, 'both source tickets should now live in dest');
   assert.strictEqual(movedA.ref, 'SQ-2');
   assert.strictEqual(movedB.ref, 'SQ-3');
 
   // The A→B link followed the renumber (its ref points at B's NEW ref).
-  const linkToB = movedA.links.find((l) => l.type === 'blocks');
+  const linkToB = movedA.links.find((l?: any) => l.type === 'blocks');
   assert.ok(linkToB, 'the blocks link should survive the merge');
   assert.strictEqual(linkToB.ref, movedB.ref, 'link ref must be remapped to B\'s new ref');
 
   // Story moved with a fresh US ref above dest\'s counter, and A still belongs to it.
   const destStories = store.listStories(dest.slug);
-  const movedStory = destStories.find((s) => s.id === story.id);
+  const movedStory = destStories.find((s?: any) => s.id === story.id);
   assert.ok(movedStory, 'the story should now live in dest');
   assert.strictEqual(movedStory.ref, 'US-1', 'dest had no stories, so it re-mints from US-1');
   assert.strictEqual(movedA.storyId, story.id, 'storyId (a stable id) must survive the move');
@@ -212,3 +212,5 @@ test('mergeProject: refuses to merge a board into itself', () => {
   const p = store.ensureProject(path.join(os.tmpdir(), 'sq-fx3', 'solo'), 'solo');
   assert.throws(() => store.mergeProject(p.slug, p.slug), /same board/i);
 });
+
+export {};

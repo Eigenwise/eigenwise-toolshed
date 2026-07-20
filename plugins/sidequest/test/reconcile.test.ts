@@ -23,7 +23,7 @@ const store = require('../lib/store.js');
 
 const { slug } = store.ensureProject(path.join(os.tmpdir(), 'sq-reconcile-fixtures', 'board'));
 
-function addTicket(title) {
+function addTicket(title?: any) {
   return store.createTicket(slug, { title, complexity: 3, complexityWhy: 'fixture for reconcile tests, single mechanical change', source: 'cli' });
 }
 
@@ -131,3 +131,5 @@ test('releaseTicket refuses a done ticket — a reconcile cannot un-complete fin
   assert.strictEqual(res.reason, 'done');
   assert.strictEqual(store.getTicket(slug, a.ref).status, 'done', 'status stays done — not resurrected');
 });
+
+export {};

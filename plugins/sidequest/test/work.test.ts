@@ -15,13 +15,13 @@ const store = require('../lib/store.js');
 const work = require('../lib/work.js');
 const { slug } = store.ensureProject(path.join(SIDEQUEST_HOME, 'fixture-project'), 'Fixture Project');
 
-function ticket(fields) {
+function ticket(fields?: any) {
   return store.createTicket(slug, Object.assign({ title: 'fixture', complexity: 1, complexityWhy: 'small behavioral fixture for dispatch tests' }, fields));
 }
-function result(ref) {
+function result(ref?: any) {
   return work.nativeDispatchRequired(slug, ref);
 }
-function runCli(args) {
+function runCli(args?: any) {
   return spawnSync(process.execPath, [BIN, ...args], {
     encoding: 'utf8',
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: path.join(SIDEQUEST_HOME, 'fixture-project') }),
@@ -121,3 +121,5 @@ test('native-only source guard keeps process launchers out of routed work', () =
   assert.doesNotMatch(source, /\bclaude\b\s*-p/);
   assert.doesNotMatch(source, /\bspawn\s*\(/);
 });
+
+export {};

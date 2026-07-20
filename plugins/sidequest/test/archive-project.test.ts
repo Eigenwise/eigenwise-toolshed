@@ -11,7 +11,7 @@ const store = require('../lib/store.js');
 const db = require('../lib/db.js');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 
-function runCli(args, cwd) {
+function runCli(args?: any, cwd?: any) {
   const res = spawnSync(process.execPath, [BIN, ...args], {
     encoding: 'utf8',
     env: Object.assign({}, process.env, { SIDEQUEST_HOME: process.env.SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: cwd || ACTIVE_PATH }),
@@ -19,7 +19,7 @@ function runCli(args, cwd) {
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
 }
 
-function cliJson(args, cwd) {
+function cliJson(args?: any, cwd?: any) {
   const res = runCli(args.concat('--json'), cwd);
   assert.strictEqual(res.status, 0, `expected success: ${args.join(' ')}\nstderr: ${res.stderr}`);
   return JSON.parse(res.stdout);
@@ -34,11 +34,11 @@ store.createTicket(archived.slug, { title: 'todo' });
 const doing = store.createTicket(archived.slug, { title: 'doing' });
 store.updateTicket(archived.slug, doing.ref, { status: 'doing' });
 
-function meta(slug) {
+function meta(slug?: any) {
   return store.readMeta(slug);
 }
 
-function writeMeta(slug, value) {
+function writeMeta(slug?: any, value?: any) {
   db.putRow(database, 'projects', { slug, data: value });
 }
 
@@ -55,8 +55,8 @@ test('archive and unarchive persist a reversible metadata round trip', () => {
 
 test('lists active and archived boards separately with counts and timestamp', () => {
   const result = store.archiveProject(archived.slug);
-  assert.ok(store.listProjects().some((project) => project.slug === active.slug));
-  assert.ok(!store.listProjects().some((project) => project.slug === archived.slug));
+  assert.ok(store.listProjects().some((project?: any) => project.slug === active.slug));
+  assert.ok(!store.listProjects().some((project?: any) => project.slug === archived.slug));
 
   const projects = store.listProjects({ archived: true });
   assert.strictEqual(projects.length, 1);
@@ -83,7 +83,7 @@ test('CLI board archive commands require an explicit board reference and round t
   assert.strictEqual(archivedResult.project, archived.slug);
 
   const activeBoards = cliJson(['projects']);
-  assert.ok(!activeBoards.projects.some((project) => project.slug === archived.slug));
+  assert.ok(!activeBoards.projects.some((project?: any) => project.slug === archived.slug));
   const archivedBoards = cliJson(['projects', '--archived']);
   assert.strictEqual(archivedBoards.projects.length, 1);
   assert.strictEqual(archivedBoards.projects[0].slug, archived.slug);
@@ -115,12 +115,12 @@ test('legacy metadata remains active and ensureProject does not silently restore
   const activeMeta = meta(active.slug);
   delete activeMeta.archivedAt;
   writeMeta(active.slug, activeMeta);
-  assert.strictEqual(store.listProjects().find((project) => project.slug === active.slug).archivedAt, null);
+  assert.strictEqual(store.listProjects().find((project?: any) => project.slug === active.slug).archivedAt, null);
 
   const result = store.archiveProject(archived.slug);
   store.ensureProject(ARCHIVED_PATH, 'Archived Board Renamed');
   assert.strictEqual(meta(archived.slug).archivedAt, result.archivedAt);
-  assert.ok(!store.listProjects().some((project) => project.slug === archived.slug));
+  assert.ok(!store.listProjects().some((project?: any) => project.slug === archived.slug));
   store.unarchiveProject(archived.slug);
 });
 
@@ -136,3 +136,5 @@ test('exact-slug project deletion removes only the named board', () => {
   assert.ok(store.readMeta(sibling.slug));
   assert.deepStrictEqual(store.deleteProjectExact(doomed.slug), { ok: false, reason: 'not_found' });
 });
+
+export {};
