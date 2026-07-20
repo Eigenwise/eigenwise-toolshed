@@ -5,7 +5,7 @@ import type { PollingController } from './polling';
 
 const statusOrder: Status[] = ['todo', 'doing', 'done'];
 type AssigneeFilter = 'all' | 'you' | 'agent' | 'unassigned';
-type NotificationKind = 'question' | 'comment' | 'created' | 'status';
+type NotificationKind = 'comment' | 'created' | 'status';
 
 export interface LightboxSelection {
   project: string;
@@ -61,8 +61,8 @@ export class BoardState {
     const notifications = this.raw?.notifications.notifications ?? [];
     return {
       all: notifications,
-      needs: notifications.filter((notification) => notification.kind === 'question' || notification.kind === 'reminder'),
-      activity: notifications.filter((notification) => notification.kind !== 'question' && notification.kind !== 'reminder')
+      needs: notifications.filter((notification) => notification.kind === 'reminder'),
+      activity: notifications.filter((notification) => notification.kind !== 'reminder')
     };
   });
   categoryGroups = $derived.by(() => (this.raw?.categories ?? []).reduce<Record<string, Category[]>>((groups, category) => {
@@ -129,7 +129,6 @@ export class BoardState {
   async restoreTicket(ticket: Ticket) { await this.mutate(() => this.api.unarchiveTicket(ticket.id, this.ticketProject(ticket))); }
   async archiveDone(project: Scope = this.selectedProject) { await this.mutate(() => this.api.archiveDone(project)); }
   async addComment(ticket: Ticket, body: string) { await this.mutate(() => this.api.addComment(ticket.id, this.ticketProject(ticket), { body, kind: 'comment' })); }
-  async askQuestion(ticket: Ticket, body: string) { await this.mutate(() => this.api.addComment(ticket.id, this.ticketProject(ticket), { body, kind: 'question' })); }
   async scheduleReminder(ticket: Ticket, fireAt: string) { await this.mutate(() => this.api.setReminder(ticket.id, this.ticketProject(ticket), fireAt)); }
   async cancelReminder(ticket: Ticket) { await this.mutate(() => this.api.cancelReminder(ticket.id, this.ticketProject(ticket))); }
   async linkTicket(ticket: Ticket, verb: string, to: string) { await this.mutate(() => this.api.linkTicket(ticket.id, this.ticketProject(ticket), verb, to)); }
@@ -225,7 +224,7 @@ export class BoardState {
   private notificationEventKey(ticket: Ticket) { return `${ticket.id}|${ticket.updatedAt ?? ''}`; }
   private notificationKind(ticket: Ticket): NotificationKind | null {
     const kind = ticket.lastEventType;
-    return kind === 'question' || kind === 'comment' || kind === 'created' || kind === 'status' ? kind : null;
+    return kind === 'comment' || kind === 'created' || kind === 'status' ? kind : null;
   }
   private canNotify(ticket: Ticket, kind: NotificationKind) {
     return ticket.source !== 'dashboard' && this.notifyPreferences[kind] !== false;

@@ -17,16 +17,14 @@ describe('ticket dialog actions', () => {
 
 		await state.autosaveTicket(ticket, { title: 'Saved title' });
 		await state.addComment(ticket, 'A note');
-		await state.askQuestion(ticket, 'Need an answer');
 		await state.linkTicket(ticket, 'blocks', 'SQ-2');
 		await state.unlinkTicket(ticket, 'SQ-2');
 
 		const requests = fetcher.mock.calls.map(([input, init]) => ({ url: String(input), body: String(init?.body ?? '') }));
 		expect(requests[0]).toMatchObject({ url: expect.stringContaining('/api/tickets/t-1?project=demo'), body: expect.stringContaining('Saved title') });
 		expect(requests[1].body).toContain('"kind":"comment"');
-		expect(requests[2].body).toContain('"kind":"question"');
-		expect(requests[3].body).toContain('"verb":"blocks"');
-		expect(requests[4].url).toContain('/link/SQ-2?project=demo');
+		expect(requests[2].body).toContain('"verb":"blocks"');
+		expect(requests[3].url).toContain('/link/SQ-2?project=demo');
 	});
 
 	it('escapes source HTML and rejects unsafe markdown links', () => {

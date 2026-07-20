@@ -252,8 +252,8 @@
           <h3>Keep the signal useful</h3>
           <button class="permission" onclick={() => void requestDesktopNotifications()}><strong>Desktop notifications</strong><span>{board.desktopNotificationPermission === 'granted' ? 'Enabled' : board.desktopNotificationPermission === 'unsupported' ? 'Unsupported here' : 'Click to enable'}</span></button>
           <div class="preference-list">
-            {#each ['question', 'comment', 'created', 'status'] as kind (kind)}
-              <label class="switch"><input type="checkbox" checked={board.notifyPreferences[kind] !== false} onchange={(event) => void setNotificationKind(kind, checkboxValue(event))} /><span><strong>{kind}</strong><small>{kind === 'question' ? 'Questions waiting for your reply.' : `Notify when a ticket is ${kind}.`}</small></span></label>
+            {#each ['comment', 'created', 'status'] as kind (kind)}
+              <label class="switch"><input type="checkbox" checked={board.notifyPreferences[kind] !== false} onchange={(event) => void setNotificationKind(kind, checkboxValue(event))} /><span><strong>{kind}</strong><small>Notify when a ticket is {kind}.</small></span></label>
             {/each}
           </div>
           <h3>Per-board mute</h3>

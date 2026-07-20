@@ -1262,7 +1262,7 @@ function createTicket(slug, fields) {
     executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, "executor verify command"),
     assets,
     comments: [],
-    // [{ id, by, body, kind: 'comment'|'question', at }]
+    // [{ id, by, body, kind: 'comment', at }]
     links: [],
     // [{ type: 'blocks'|'blocked-by'|'related', ref }]
     claim: null,
@@ -2418,7 +2418,6 @@ function deleteStory(slug, idOrRef) {
   }
   return true;
 }
-const COMMENT_KINDS = ["comment", "question"];
 const COMMENT_BODY_MAX = 16e3;
 function newCommentId() {
   return "c_" + Date.now().toString(36) + "_" + crypto.randomBytes(3).toString("hex");
@@ -2436,7 +2435,7 @@ function prepareComment(fields) {
   return {
     ok: true,
     by: String(fields.by || "agent"),
-    kind: COMMENT_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : "comment",
+    kind: "comment",
     body,
     source: fields.source ? String(fields.source) : "cli"
   };
@@ -2462,22 +2461,13 @@ function addComment(slug, idOrRef, fields) {
     if (!Array.isArray(t.comments)) t.comments = [];
     const comment = createComment(prepared);
     t.comments.push(comment);
-    t.lastEventType = comment.kind === "question" ? "question" : "comment";
+    t.lastEventType = "comment";
     t.lastEventSource = comment.source;
     t.updatedAt = comment.at;
     putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource, { commentBody: comment.body });
     return { ok: true, ticket: t, comment };
   });
-}
-function needsResponse(ticket) {
-  const comments = ticket && Array.isArray(ticket.comments) ? ticket.comments : [];
-  for (let i = comments.length - 1; i >= 0; i--) {
-    const c = comments[i];
-    if (c.source === "dashboard") return false;
-    if (c.kind === "question") return true;
-  }
-  return false;
 }
 function linkTypePair(verb) {
   switch (String(verb || "").toLowerCase().replace(/_/g, "-")) {
@@ -2603,7 +2593,6 @@ function briefTicket(slug, t, opts) {
     claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
-    awaitingReply: needsResponse(t),
     submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at } : null
   };
 }
@@ -2786,8 +2775,8 @@ function changesPayload(slug, since) {
   }));
   return { since: after, serverTime, tickets };
 }
-const NOTIFICATION_KINDS = ["question", "comment", "created", "status", "reminder"];
-const NOTIFY_PREF_DEFAULTS = { question: true, comment: true, created: true, status: true };
+const NOTIFICATION_KINDS = ["comment", "created", "status", "reminder"];
+const NOTIFY_PREF_DEFAULTS = { comment: true, created: true, status: true };
 const MAX_READ_KEPT = 100;
 function notificationsLockPath() {
   return path.join(projectsRoot(), ".notifications.lock");
@@ -2883,7 +2872,6 @@ function setNotifyPrefs(patch) {
 function eventNotificationCopy(ticket, kind, extra) {
   extra = extra || {};
   const ref = ticket.ref;
-  if (kind === "question") return { title: `❓ Question · ${ref}`, body: extra.commentBody || ticket.title };
   if (kind === "comment") {
     return { title: `💬 Comment · ${ref}`, body: extra.commentBody ? `${extra.commentBody}  —  ${ticket.title}` : ticket.title };
   }
@@ -3300,7 +3288,6 @@ module.exports = {
   updateStory,
   deleteStory,
   addComment,
-  needsResponse,
   linkTickets,
   unlinkTickets,
   openBlockers,

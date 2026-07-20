@@ -34,7 +34,7 @@ export interface Story { id: string; ref?: string; project?: string; title: stri
 export interface Category { id: string; name: string; enabled?: boolean; usageCount?: number; [key: string]: unknown; }
 export interface Notification { id: string; kind: string; read?: boolean; ticketId?: string; projectSlug?: string; [key: string]: unknown; }
 export interface Health { ok: true; name: string; pid: number; startedAt: string; version: string; }
-export interface NotificationPayload { notifications: Notification[]; unread: number; unreadQuestions: number; unreadNeeds: number; }
+export interface NotificationPayload { notifications: Notification[]; unread: number; unreadNeeds: number; }
 export interface Snapshot { projects: Project[]; tickets: Ticket[]; stories: Story[]; categories: Category[]; notifications: NotificationPayload; health: Health; }
 export interface RoutingCatalog { categoryDraftAvailable?: boolean; [key: string]: unknown; }
 export type JsonRecord = Record<string, unknown>;

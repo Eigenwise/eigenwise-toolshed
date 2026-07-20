@@ -7,13 +7,12 @@
 
   const tabLabels = { all: 'All', needs: 'Needs you', activity: 'Activity' };
   const emptyCopy = {
-    all: 'Nothing queued yet. Questions, comments, and status changes show up here.',
-    needs: 'Nothing needs you right now. Questions and reminders land here.',
+    all: 'Nothing queued yet. Comments, reminders, and status changes show up here.',
+    needs: 'Nothing needs you right now. Reminders land here.',
     activity: 'No activity yet. New tickets, moves, and comments show up here.'
   };
 
   let unread = $derived(state.raw?.notifications.unread ?? 0);
-  let unreadQuestions = $derived(state.raw?.notifications.unreadQuestions ?? 0);
   let unreadNeeds = $derived(state.raw?.notifications.unreadNeeds ?? 0);
   let activityUnread = $derived(Math.max(0, unread - unreadNeeds));
   let notificationIcon = '';
@@ -115,11 +114,10 @@
 </script>
 
 <button
-  class:urgent={unreadQuestions > 0}
   class="bell"
   aria-label="Notifications"
   aria-expanded={state.popover === 'inbox'}
-  title={unreadQuestions > 0 ? `${unreadQuestions} awaiting your reply` : `${unread} unread notifications`}
+  title={`${unread} unread notifications`}
   onclick={() => state.popover = state.popover === 'inbox' ? null : 'inbox'}
 >
   Inbox
@@ -144,7 +142,7 @@
     </div>
     <div class="notification-list">
       {#each state.unreadBuckets[state.inboxTab] as notification (notification.id)}
-        <button class:read={isRead(notification)} class:needs={notification.kind === 'question' || notification.kind === 'reminder'} class="notification" onclick={() => openNotification(notification)}>
+        <button class:read={isRead(notification)} class:needs={notification.kind === 'reminder'} class="notification" onclick={() => openNotification(notification)}>
           <span class="dot" aria-hidden="true"></span>
           <span class="copy">
             <strong>{notificationTitle(notification)}</strong>
@@ -163,7 +161,6 @@
   .bell, .quiet, .tabs button, .notification { border: 0; font: inherit; }
   .bell { border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: .5rem .65rem; border-radius: var(--radius); display: inline-flex; align-items: center; gap: .4rem; }
   .badge { min-width: 1.35rem; padding: .08rem .3rem; border-radius: 999px; background: var(--accent); color: white; font-size: .72rem; font-weight: 700; }
-  .urgent .badge { background: var(--danger); }
   .inbox { position: absolute; z-index: 20; right: 1rem; top: 4.25rem; width: min(25rem, calc(100vw - 2rem)); padding: 1rem; box-shadow: var(--shadow); }
   header { display: flex; justify-content: space-between; gap: .75rem; align-items: start; }
   h2, p { margin: 0; }

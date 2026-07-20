@@ -128,7 +128,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 At every natural wakeup, do a short self-check before launching more work. Check payload and context bloat
 (first trim raw reports or reopen only the ticket comments you need), lingering workers (pulse and clear
 finished workers), route anomalies (the fresh ticket `exec` object, claim token, executor, effort, and
-unchanged dispatch briefing), and board hygiene (stale claims, submitted tickets, unanswered questions,
+unchanged dispatch briefing), and board hygiene (stale claims, submitted tickets,
 and blocked work). These are event-driven checks, not a polling loop. File or release the smallest
 follow-up when something is off; do not let the main thread silently accumulate dead workers or stale
 board state.

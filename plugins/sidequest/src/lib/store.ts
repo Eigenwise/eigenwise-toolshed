@@ -1569,7 +1569,7 @@ function createTicket(slug?: any, fields?: any) {
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
     executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command'),
     assets,
-    comments: [],              // [{ id, by, body, kind: 'comment'|'question', at }]
+    comments: [],              // [{ id, by, body, kind: 'comment', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
     claim: null,               // { by, at } when an agent has claimed it to work on
     dispatchNonce: null,
@@ -2999,13 +2999,10 @@ function deleteStory(slug?: any, idOrRef?: any) {
 /* ------------------------------------------------------------------ *
  *  Comments
  *
- *  Each ticket carries a thread of comments. A comment of kind "question" is how
- *  an agent (or the user) flags that it needs a reply — the dashboard treats it
- *  as a higher-signal notification. Appends happen under the ticket lock so two
- *  simultaneous comments never clobber each other.
+ *  Appends happen under the ticket lock so two simultaneous comments never
+ *  clobber each other.
  * ------------------------------------------------------------------ */
 
-const COMMENT_KINDS = ['comment', 'question'];
 // Comments are durable cross-actor handoffs. Storage allows a useful evidence
 // report; agentsync independently bounds what reaches an executor prompt.
 const COMMENT_BODY_MAX = 16000;
@@ -3023,8 +3020,7 @@ function newCommentId() {
 // \x00" (it never was: spaces are 0x20 and are left untouched). Strip the C0
 // control range and DEL, keeping only the whitespace that legitimately appears
 // in prose (tab, newline, carriage return). This runs at the one shared write
-// path, so the MCP `comment`/`ask` tools, the CLI `comment` command, and the
-// dashboard all get the same normalization.
+// path, so every comment surface gets the same normalization.
 function stripControlChars(s?: any) {
   return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
@@ -3039,7 +3035,7 @@ function prepareComment(fields?: any) {
   return {
     ok: true,
     by: String(fields.by || 'agent'),
-    kind: COMMENT_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : 'comment',
+    kind: 'comment',
     body,
     source: fields.source ? String(fields.source) : 'cli',
   };
@@ -3067,27 +3063,13 @@ function addComment(slug?: any, idOrRef?: any, fields?: any) {
     if (!Array.isArray(t.comments)) t.comments = [];
     const comment = createComment(prepared);
     t.comments.push(comment);
-    t.lastEventType = comment.kind === 'question' ? 'question' : 'comment';
+    t.lastEventType = 'comment';
     t.lastEventSource = comment.source;
     t.updatedAt = comment.at;
     putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource, { commentBody: comment.body });
     return { ok: true, ticket: t, comment };
   });
-}
-
-// True while the most recent agent-asked question (kind=question, source=cli)
-// has not yet been followed by any comment from the dashboard (the human). An
-// agent-authored follow-up comment in between (e.g. a note-to-self) does not
-// count as an answer — only the human replying does.
-function needsResponse(ticket?: any) {
-  const comments = (ticket && Array.isArray(ticket.comments)) ? ticket.comments : [];
-  for (let i = comments.length - 1; i >= 0; i--) {
-    const c = comments[i];
-    if (c.source === 'dashboard') return false;
-    if (c.kind === 'question') return true;
-  }
-  return false;
 }
 
 /* ------------------------------------------------------------------ *
@@ -3250,7 +3232,6 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
-    awaitingReply: needsResponse(t),
     submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at } : null,
   };
 }
@@ -3492,14 +3473,14 @@ function changesPayload(slug?: any, since?: any) {
  *  read-modify-write-under-lock pattern used for tickets.
  * ------------------------------------------------------------------ */
 
-const NOTIFICATION_KINDS = ['question', 'comment', 'created', 'status', 'reminder'];
+const NOTIFICATION_KINDS = ['comment', 'created', 'status', 'reminder'];
 
-// The four background-event kinds a user can opt in/out of from the dashboard's
+// The three background-event kinds a user can opt in/out of from the dashboard's
 // settings popover (a 'reminder' notification isn't optional this way — only
 // *when* it fires is, via fireAt). Kept server-side, not just in the dashboard's
 // localStorage, so the queue below can honor the same opt-outs even when no
 // dashboard tab is open to gate on the client's behalf.
-const NOTIFY_PREF_DEFAULTS: Record<string, boolean> = { question: true, comment: true, created: true, status: true };
+const NOTIFY_PREF_DEFAULTS: Record<string, boolean> = { comment: true, created: true, status: true };
 
 // How many *read* notifications to retain. Unread ones are always kept; this
 // only caps the tail of already-seen history so the file can't grow forever.
@@ -3633,7 +3614,6 @@ function setNotifyPrefs(patch?: any) {
 function eventNotificationCopy(ticket?: any, kind?: any, extra?: any) {
   extra = extra || {};
   const ref = ticket.ref;
-  if (kind === 'question') return { title: `❓ Question · ${ref}`, body: extra.commentBody || ticket.title };
   if (kind === 'comment') {
     return { title: `💬 Comment · ${ref}`, body: extra.commentBody ? `${extra.commentBody}  —  ${ticket.title}` : ticket.title };
   }
@@ -4182,7 +4162,6 @@ module.exports = {
   updateStory,
   deleteStory,
   addComment,
-  needsResponse,
   linkTickets,
   unlinkTickets,
   openBlockers,

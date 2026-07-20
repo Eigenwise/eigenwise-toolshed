@@ -47,6 +47,8 @@ test('SQ-404: dispatch comments stay bounded while preserving a handoff cue', ()
   assert.ok(digest.length <= agentsync.COMMENT_DIGEST_MAX_CHARS, 'the executor prompt cannot absorb the full thread');
   assert.match(digest, /read the full thread/i);
   assert.match(digest, /Integration risk/);
+  assert.match(digest, /Comment by reviewer/);
+  assert.doesNotMatch(digest, /Question by/);
   assert.doesNotMatch(digest, /x{1000}/);
 });
 

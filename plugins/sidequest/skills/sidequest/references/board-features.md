@@ -28,11 +28,10 @@ sidequest story rm US-1                                               # delete (
 The dashboard has an in-app notification inbox (the bell, top-right), backed by a persistent
 server-side queue:
 
-- **Background events** — Claude/CLI creating, moving, commenting on, or asking a question about a
-  ticket enqueues a notification automatically (per-kind opt-in/out in the settings popover), even if
-  the dashboard tab was closed at the time. The inbox splits **Needs you** (questions + reminders)
-  from **Activity** (new tickets, moves, comments); a question turns the bell badge red. Nothing for
-  you to do — this is automatic.
+- **Background events** — Claude/CLI creating, moving, or commenting on a ticket enqueues a
+  notification automatically (per-kind opt-in/out in the settings popover), even if the dashboard
+  tab was closed at the time. The inbox splits **Needs you** (reminders) from **Activity** (new
+  tickets, moves, comments). Nothing for you to do — this is automatic.
 - **Per-project mute** — a muted board queues nothing, regardless of per-kind settings; its rail row
   shows a muted-bell mark.
 - **Desktop toasts** are a separate opt-in (settings popover), alongside the inbox.

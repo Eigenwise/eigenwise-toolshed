@@ -11,7 +11,7 @@ const fetcher = vi.fn((input: RequestInfo | URL) => {
   if (url.includes('/tickets')) return response({ tickets: [] });
   if (url.includes('/stories')) return response({ stories: [] });
   if (url.includes('/categories')) return response({ categories: [], warnings: [] });
-  if (url.includes('/notifications')) return response({ notifications: [], unread: 0, unreadQuestions: 0, unreadNeeds: 0 });
+  if (url.includes('/notifications')) return response({ notifications: [], unread: 0, unreadNeeds: 0 });
   return response({ ok: true, name: 'sidequest', pid: 1, startedAt: '2026-01-01', version: '1.0.0' });
 });
 

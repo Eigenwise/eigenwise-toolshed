@@ -34,7 +34,7 @@ export class PollingController {
         this.state.api.tickets('all'),
         this.state.api.stories('all').catch(() => ({ project: 'all', stories: this.state.raw?.stories ?? [] })),
         this.state.api.categories(this.state.selectedProject).catch(() => ({ project: this.state.selectedProject, categories: this.state.raw?.categories ?? [], warnings: [] })),
-        this.state.api.notifications({ limit: 50 }).catch(() => this.state.raw?.notifications ?? { notifications: [], unread: 0, unreadQuestions: 0, unreadNeeds: 0 }),
+        this.state.api.notifications({ limit: 50 }).catch(() => this.state.raw?.notifications ?? { notifications: [], unread: 0, unreadNeeds: 0 }),
         this.state.api.health().catch(() => this.state.raw?.health ?? null)
       ]);
       if (!health) return;

@@ -4,8 +4,7 @@ description: >-
   Open the sidequest board (a live Kanban of tickets) or manage tickets from the CLI/MCP: file,
   list, update, move, close, prioritize, label, or delete tickets — "show me the dashboard", "close SQ-3". Use to WORK the board ("grab the next task") — atomically CLAIM
   first. Use when the user hands you substantial or multi-part work — decompose it
-  into linked tickets BEFORE implementing. Use to comment, ask the user on-ticket questions (a question means
-  pause-and-wait), or relate tickets. Categories drive model/effort routing. For a
+  into linked tickets BEFORE implementing. Use to comment or relate tickets. Categories drive model/effort routing. For a
   mid-task side issue, file it with `add` and keep working. Filing never asks you to work it.
 ---
 
@@ -214,16 +213,13 @@ hand-pick either. Legacy complexity maps to bands at read time (1–3/4–6/7–
    `references/routing-details.md`.
 4. **Claim by resolved route:** `next --model X` / `ready --model X` filter by resolved route.
 
-## Comments & questions
+## Comments
 
-`comment SQ-3 -m` (durable handoff, keep working) · `ask SQ-3 -m` (addressed to the USER:
-needs a reply) · `comments SQ-3` (read the thread).
+`comment SQ-3 -m` (durable handoff, keep working) · `comments SQ-3` (read the thread).
 **Comments are cross-actor handoffs, not diary entries**: decisions, constraints, ruled-out
 approaches, risks, exact verification command/result, concise findings — no progress narration.
 **Write findings back after an investigation** — root cause with evidence (`file:line`), the fix,
-verification; the comment is the durable record. **An `ask` posts the question but does not
-itself pause** — follow with `sidequest await SQ-3` (blocks ≤120s; `--timeout`/`--poll` for longer). **Never continue past your own unanswered question** — `await` again or tell the user
-you're blocked. "❓ awaiting reply" in `list`/`comments` flags unanswered questions.
+verification; the comment is the durable record.
 
 ## Link tickets
 

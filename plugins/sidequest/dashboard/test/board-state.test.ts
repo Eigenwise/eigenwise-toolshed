@@ -12,7 +12,7 @@ const snapshot = (): Snapshot => ({
   ],
   stories: [],
   categories: [{ id: 'general', name: 'General' }],
-  notifications: { notifications: [{ id: 'n1', kind: 'question' }, { id: 'n2', kind: 'comment' }], unread: 2, unreadQuestions: 1, unreadNeeds: 1 },
+  notifications: { notifications: [{ id: 'n1', kind: 'reminder' }, { id: 'n2', kind: 'comment' }, { id: 'n3', kind: 'question' }], unread: 3, unreadNeeds: 1 },
   health: { ok: true, name: 'sidequest', pid: 1, startedAt: '2026-01-01', version: '1.0.0' }
 });
 
@@ -28,6 +28,7 @@ describe('BoardState', () => {
     expect(state.columns.doing.map((ticket) => ticket.id)).toEqual(['2']);
     expect(state.counts).toEqual({ todo: 0, doing: 1, done: 0 });
     expect(state.unreadBuckets.needs.map((notification) => notification.id)).toEqual(['n1']);
+    expect(state.unreadBuckets.activity.map((notification) => notification.id)).toEqual(['n2', 'n3']);
     expect(state.categoryGroups.enabled.map((category) => category.id)).toEqual(['general']);
   });
 
@@ -85,7 +86,7 @@ describe('BoardState', () => {
     const api = {
       setProjectRouting: async () => { calls.push('routing'); return {}; },
       setProjectNotify: async () => { calls.push('notify'); return {}; },
-      setNotifyPrefs: async () => { calls.push('prefs'); return { prefs: { question: false } }; },
+      setNotifyPrefs: async () => { calls.push('prefs'); return { prefs: { comment: false } }; },
       setRoutingFallback: async () => { calls.push('fallback'); return { fallback: {}, catalog: {} }; },
       createCategory: async () => { calls.push('category'); return { category: { id: 'ops', name: 'Operations' } }; }
     } as unknown as ApiClient;
@@ -94,12 +95,12 @@ describe('BoardState', () => {
 
     await state.setProjectRouting('alpha', 'disabled');
     await state.setProjectMuted('alpha', true);
-    await state.setNotifyPreferences({ question: false });
+    await state.setNotifyPreferences({ comment: false });
     await state.setGlobalFallback({ model: 'sonnet', effort: 'high' });
     await state.createCategory({ id: 'ops', name: 'Operations' });
 
     expect(calls).toEqual(['routing', 'notify', 'prefs', 'fallback', 'category']);
-    expect(state.notifyPreferences).toEqual({ question: false });
+    expect(state.notifyPreferences).toEqual({ comment: false });
   });
 
   it('dispatches Ctrl or Command Enter to the registered dialog save action', async () => {
