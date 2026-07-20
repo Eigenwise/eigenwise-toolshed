@@ -2,3 +2,4 @@ node_modules/
 # The production dashboard is committed for the plugin server.
 # Keep local Vite metadata ignored without excluding the generated app.
 .svelte-kit/
+test-results/
