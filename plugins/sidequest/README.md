@@ -31,8 +31,8 @@ You stay on your main quest; the side quests get written down.
 /plugin install sidequest@eigenwise-toolshed
 ```
 
-Then run `/reload-plugins` (or restart Claude Code). No dependencies, no build step — it's Node stdlib
-only (Claude Code already ships Node), cross-platform.
+Then run `/reload-plugins` (or restart Claude Code). The installed plugin runs committed CommonJS JavaScript and
+has no frontend or runtime install step. Repository development uses Node 22.5+.
 
 ## The idea
 
@@ -88,22 +88,19 @@ When **Claude** changes the board while you're working elsewhere, sidequest tell
 nags you about your own edits. Notifications live in a small **persistent queue on the server**, not
 just in the open tab, so they survive a reload and pile up even while no dashboard is open.
 
-- **The bell is an inbox.** Click it to open a readable list of what happened — questions, comments,
-  new tickets, status changes — newest first, each linking straight to its ticket. It's split into
-  **Needs you** (questions Claude is waiting on + your reminders) and **Activity** (new tickets, moves,
-  comments) so a question never gets buried in routine noise. A gold badge on the bell shows the unread
-  count — it turns **red** when any unread is a question waiting on your reply; click a notification (or
-  **mark all read**) to clear it.
+- **The bell is an inbox.** Click it to open a readable list of what happened — comments, new tickets, status
+  changes, and reminders — newest first, each linking straight to its ticket. It's split into **Needs you**
+  (your reminders) and **Activity** (new tickets, moves, comments) so reminders stay visible. A gold badge on
+  the bell shows the unread count; click a notification (or **mark all read**) to clear it.
 - **Sidebar unread badge.** Each project also shows a small gold badge counting the tickets Claude
   created or moved between columns since you last opened that board. Open the board and the badge
   clears. Changes *you* make in the dashboard (in any tab) never raise a badge or an inbox entry.
 - **Desktop notification.** Toggle this from the **gear** menu ("Desktop notifications") — when Claude
   does something in the background and you're not looking at the dashboard, you get a native toast on
   top of the inbox entry. Click it to jump straight to that board.
-- **Choose what pings you.** The gear menu lets you pick which events notify (and queue): **questions**,
-  **comments**, **new tickets**, **status changes** — each a toggle, honored server-side so an opted-out
-  kind never queues even with no tab open. A question from Claude is the one you'll usually want on,
-  since it means Claude is waiting on your answer.
+- **Choose what pings you.** The gear menu lets you pick which events notify (and queue): **comments**,
+  **new tickets**, and **status changes** — each a toggle, honored server-side so an opted-out kind never
+  queues even with no tab open.
 - **Mute a whole project.** The gear menu also has a per-project switch — turn a board off and it queues
   **nothing**, of any kind, regardless of the toggles above; its row in the sidebar shows a muted-bell
   mark. Handy for a chatty background project you don't want pinging you while you focus elsewhere.
@@ -318,25 +315,22 @@ Any delegated work goes through a ticket and fresh dispatch, including a quick i
 (usually `codebase-exploration`), route it, dispatch it, and spawn the returned executor. Routing controls the
 model, so there is no unrouted delegation.
 
-## Comments & questions
+## Comments
 
 Every ticket has a durable cross-actor handoff thread. A **comment** carries decisions, non-obvious constraints,
 recurring ruled-out approaches, integration risks, verification evidence, or concise findings. Skip routine
-progress narration, self-logs, and full green logs. A **question** requests your input and is the signal to
-*pause and wait for your reply*, not guess.
+progress narration, self-logs, and full green logs.
 
 Stored comments can hold longer evidence from `--body-file`; executor dispatch only carries a bounded recent
 excerpt, so read `sidequest comments SQ-3` before acting on a handoff.
 
 ```bash
-sidequest comment SQ-3 -m "Reusing the SQ-1 examples here."          # a note
-sidequest ask     SQ-3 -m "Should this cover the v2 API too?"        # a question (pauses; waits for you)
-sidequest comments SQ-3                                              # show the thread
+sidequest comment SQ-3 -m "Reusing the SQ-1 examples here."
+sidequest comments SQ-3
 ```
 
-On the dashboard, open a ticket to read the thread and reply; a ticket whose latest comment is an
-unanswered question shows a gold **❓ needs reply** chip on its card. A question from Claude notifies you
-(see below) so you can answer without watching the board.
+On the dashboard, open a ticket to read the thread and add a comment. Comments remain available alongside
+reminders and other ticket activity in the inbox.
 
 ## Links & dependencies
 
@@ -410,6 +404,38 @@ payloads, errors, and credentials stay out of telemetry. Each snapshot has a sta
 observer deduplication covers writes reached through either MCP or the CLI. Use `sidequest changes --since
 <serverTime>` to backfill a missed interval.
 
+## Developing Sidequest
+
+Runtime sources live under `src/` and compile to the committed CommonJS distribution in `bin/`, `lib/`, and
+`hooks/`. The marketplace cache runs those generated `.js` files directly, so contributors commit generated
+output and users do not install dependencies or build on their machines. The Node floor stays at 22.5+.
+
+From `plugins/sidequest/`:
+
+```bash
+npm ci
+npm run typecheck
+npm run build
+npm run build:check
+npm run test:full
+npm run test:perf
+```
+
+`test:full` type-checks, rebuilds, and runs the TypeScript test suites against the committed distribution.
+`test:perf` runs the isolated performance checks separately. Keep generated output in sync before committing.
+
+### Dashboard development
+
+The dashboard source is a private Svelte 5 and TypeScript app under `dashboard/`. Its production build is
+committed under `dashboard/dist/`; the installed plugin serves that build and never installs frontend
+packages. For local development, run an isolated Sidequest server, then from `plugins/sidequest/dashboard/`
+run `npm ci` and `npm run dev`. Vite serves the app with hot reload and proxies `/api` (including asset
+requests) to the isolated server.
+
+Run `npm run check`, `npm test`, and `npm run build` while developing. Run `npm run test:e2e` with Playwright
+against the built app and a synthetic isolated board, then confirm a clean build produces no diff in the
+committed `dist/` tree. Never use a live board for tests or screenshots.
+
 ## CLI
 
 Every action is a thin wrapper over one script, usable directly too:
@@ -434,7 +460,7 @@ node <plugin>/bin/sidequest.js commit SQ-3 --by <worker> --message "scoped chang
 node <plugin>/bin/sidequest.js submit SQ-3 --by <worker> --commit <hash> --verify "<exact command>"
 node <plugin>/bin/sidequest.js done SQ-3 --by <worker>       # direct inline or non-repo work only
 node <plugin>/bin/sidequest.js link SQ-4 depends-on SQ-3      # dependencies (blocks | depends-on | related)
-node <plugin>/bin/sidequest.js comment SQ-3 -m "note"         # ask = question (pause + await the reply)
+node <plugin>/bin/sidequest.js comment SQ-3 -m "note"
 node <plugin>/bin/sidequest.js archive --done                # tuck away all done  ·  unarchive <ref> restores
 node <plugin>/bin/sidequest.js assign SQ-3 [--to who=you]     # persistent owner  ·  unassign SQ-3 clears it
 node <plugin>/bin/sidequest.js remind SQ-3 --in 1h            # or --at "<date/time>"  ·  unremind SQ-3 cancels
