@@ -278,6 +278,26 @@ test('a re-dispatch rotates the token against a constant stable executor and rej
   assert.equal(cliJson(['claim', ref, '--by', 'latest', '--token', second.token, '--executor', second.ticket.dispatchExecutor]).ok, true);
 });
 
+test('fresh redispatch briefing includes every comment added after preparation and refuses a foreign project', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  const ref = seed('guard.codex');
+  store.prepareDispatch(slug, ref);
+  const first = store.addComment(slug, ref, { by: 'scout', kind: 'comment', body: 'First comment added before redispatch.' });
+  const second = store.addComment(slug, ref, { by: 'reviewer', kind: 'warning', body: 'Second comment added before redispatch.' });
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  const redispatched = store.prepareDispatch(slug, ref);
+  const briefing = runCli(['briefing', ref, '--token', redispatched.token]);
+  assert.equal(briefing.status, 0, briefing.stderr);
+  assert.ok(briefing.stdout.includes(first.comment.body));
+  assert.ok(briefing.stdout.includes(second.comment.body));
+  assert.ok(briefing.stdout.indexOf(first.comment.body) < briefing.stdout.indexOf(second.comment.body));
+
+  const foreignProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-briefing-foreign-'));
+  const foreign = runCli(['briefing', ref, '--token', redispatched.token, '--project', foreignProject]);
+  assert.notEqual(foreign.status, 0);
+  assert.match(foreign.stdout + foreign.stderr, /no ticket/i);
+});
 test('instant dispatch returns a stable executor, fetch stub, and token', () => {
   const ref = seed('guard.codex');
   const dispatched = cliJson(['dispatch', ref]);

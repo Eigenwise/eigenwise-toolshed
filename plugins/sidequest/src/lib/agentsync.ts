@@ -254,39 +254,64 @@ function waitForNativeAgentReload(waitMs?: any) {
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-const COMMENT_DIGEST_MAX_CHARS = 2400;
-const COMMENT_DIGEST_MAX_COMMENTS = 4;
-const COMMENT_DIGEST_BODY_MAX_CHARS = 500;
-
-function clippedText(value?: any, max?: any, suffix?: any) {
-  const text = String(value || '');
-  return text.length <= max ? text : `${text.slice(0, max - suffix.length)}${suffix}`;
-}
-
-function ticketCommentsDigest(comments?: any) {
+function ticketCommentsPacket(comments?: any) {
   if (!Array.isArray(comments) || !comments.length) return '(No ticket comments were recorded.)';
-  const selected: any[] = comments.slice(-COMMENT_DIGEST_MAX_COMMENTS).reverse();
-  const entries = selected.map((comment: any) => {
-    const by = clippedText(comment && comment.by ? comment.by : 'unknown', 80, '…');
-    const body = clippedText(comment && comment.body ? comment.body : String(comment || ''), COMMENT_DIGEST_BODY_MAX_CHARS, '… [read the full thread]');
-    return `- Comment by ${by}: ${body}`;
-  });
-  if (comments.length > selected.length) entries.push(`- ${comments.length - selected.length} earlier comment(s) omitted; read the full thread.`);
-  return clippedText(entries.join('\n'), COMMENT_DIGEST_MAX_CHARS, '\n[Digest truncated; read the full thread.]');
+  return comments.map((comment: any, index: number) => [
+    `### Comment ${index + 1}`,
+    `Author: ${comment && comment.by ? comment.by : 'unknown'}`,
+    `Kind: ${comment && comment.kind ? comment.kind : 'comment'}`,
+    `Recorded: ${comment && comment.at ? comment.at : '(timestamp unavailable)'}`,
+    'Body:',
+    comment && Object.hasOwn(comment, 'body') ? String(comment.body) : String(comment || ''),
+  ].join('\n')).join('\n\n');
 }
 
-function ticketBrief(ticket?: any, nonce?: any, marker?: any) {
+function ticketAssetsPacket(ticket?: any, slug?: any) {
+  const assets = Array.isArray(ticket && ticket.assets) ? ticket.assets : [];
+  if (!assets.length) return '(No attachments were recorded.)';
+  if (!slug) return assets.map((asset: any) => `- WARNING: attachment "${asset}" cannot be resolved because the ticket project is unavailable. Report this blocker before implementation.`).join('\n');
+  return assets.map((asset: any) => {
+    const absolutePath = path.resolve(store.assetPath(slug, ticket.id, asset));
+    try {
+      const stat = fs.statSync(absolutePath);
+      fs.accessSync(absolutePath, fs.constants.R_OK);
+      if (!stat.isFile()) throw new Error('not a file');
+      return `- \`${absolutePath}\`\n  Inspect this attachment before implementation.`;
+    } catch (_) {
+      return `- WARNING: attachment \`${absolutePath}\` is missing or unreadable. Report this blocker before implementation.`;
+    }
+  }).join('\n');
+}
+
+function ticketRouteMarker(ticket?: any) {
+  const resolved = store.resolveExec(ticket.model, ticket.effort);
+  return resolved && resolved.backend === 'codex' && resolved.dispatchModel
+    ? routeMarker(resolved.dispatchModel, ticket.effort)
+    : null;
+}
+
+function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
   const category = ticket.category || {};
+  const links = Array.isArray(ticket.links) && ticket.links.length
+    ? ticket.links.map((link: any) => `- ${link.type || 'related'}: ${link.ref || '(unknown ticket)'}`).join('\n')
+    : '(No ticket dependencies were recorded.)';
+  const declaredFiles = Array.isArray(ticket.files) && ticket.files.length
+    ? ticket.files.map((file: any) => `- ${file}`).join('\n')
+    : '(No files were declared.)';
+  const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(', ') : '(No labels were recorded.)';
   const parts = [
     '',
     '## This ticket',
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || '(Untitled ticket)'}`,
     `Description:\n${ticket.description || '(No additional description was recorded.)'}`,
+    `Category contract:\nCategory: ${category.id || ticket.categoryId || '(Unclassified)'}\nConfigured route: ${category.route?.model || '(No configured route)'} / ${category.route?.effort || '(No configured effort)'}\nDispatch route: ${ticket.model || category.route?.model || '(No route)'} / ${ticket.effort || category.route?.effort || '(No effort)'}\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
     `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
-    `Comments digest (bounded handoff context; read the full thread before acting on unresolved risks or questions):\n${ticketCommentsDigest(ticket.comments)}`,
-    `Category executor instructions:\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
+    `Declared files:\n${declaredFiles}`,
+    `Ticket state:\nStatus: ${ticket.status || '(Unknown)'}\nPriority: ${ticket.priority || '(Unknown)'}\nLabels: ${labels}\nStory: ${ticket.storyId || '(No story)'}\nDependencies:\n${links}`,
+    `Complete comment thread (chronological, inspect every entry before implementation):\n${ticketCommentsPacket(ticket.comments)}`,
+    `Attachments (inspect every readable attachment before implementation):\n${ticketAssetsPacket(ticket, slug)}`,
     'Dispatch claim guard:',
     `Claim this ticket with \`--token ${nonce}\`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal.`,
   ];
@@ -296,8 +321,6 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any) {
       `${ARTIFACT_LIFECYCLE_MARKER}\nThis shared-tree artifact ticket may leave verified changes in its declared scope and close with done. Do not commit or submit it. All project source remains read-only.`
     );
   }
-  // Last on purpose: the gateway resolves the LAST marker in the conversation,
-  // so this one outranks any marker-shaped text inside the ticket description.
   if (marker) {
     parts.push('Model route (gateway dispatch marker — never write another):', marker);
   }
@@ -305,17 +328,13 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any) {
 }
 
 // Stable executor definitions carry the invariant protocol as their system
-// prompt. The spawn prompt only carries the ticket-specific details and route
-// marker, so instant dispatch does not duplicate that protocol per ticket.
-function renderTicketBriefing(ticket?: any, nonce?: any) {
+// prompt. The spawn prompt only carries a fetch command and route marker, so
+// instant dispatch keeps the durable ticket packet out of the launch request.
+function renderTicketBriefing(ticket?: any, nonce?: any, slug?: any) {
   if (typeof nonce !== 'string' || !nonce.trim() || /[\r\n]/.test(nonce)) {
     throw new Error('dispatch briefing nonce is required and must be a non-empty one-line string.');
   }
-  const resolved = store.resolveExec(ticket.model, ticket.effort);
-  const marker = resolved && resolved.backend === 'codex' && resolved.dispatchModel
-    ? routeMarker(resolved.dispatchModel, ticket.effort)
-    : null;
-  return ticketBrief(ticket, nonce.trim(), marker);
+  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug);
 }
 
 function ticketIsolation(ticket?: any, sharedTree?: any) {
@@ -394,10 +413,9 @@ function ensureDispatchLauncher() {
 }
 
 function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
-  const briefing = renderTicketBriefing(ticket, nonce);
   const project = String(projectPath || '').trim();
   if (!project) throw new Error('Dispatch board project path is required.');
-  const marker = briefing.match(/^\[sidequest-route [^\n]+\]$/m)?.[0];
+  const marker = ticketRouteMarker(ticket);
   const command = [
     'node',
     quotedShellArgument(ensureDispatchLauncher()),
@@ -632,8 +650,8 @@ module.exports = {
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
   execMaxTurns,
-  ticketCommentsDigest,
-  COMMENT_DIGEST_MAX_CHARS,
+  ticketCommentsPacket,
+  ticketAssetsPacket,
   routeMarker,
   workflowRecipe,
   renderDispatchAgent,

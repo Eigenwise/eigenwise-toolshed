@@ -245,8 +245,12 @@ bypass.
 
 The normal per-ticket path is instant. Call `dispatch <ref>` (CLI) or the matching MCP tool and use
 its returned stable per-model `agent` and `spawn` object immediately. Pass `spawn.prompt`
-unchanged as the Agent prompt. It carries the full ticket contract, category contract,
-anchors, verify command, comments digest, and token-gated claim guard. Stable executors are
+unchanged as the Agent prompt. It stays a compact fetch stub with only the claim reference, token,
+board identity, and route marker. The executor's token-gated first action fetches the durable packet:
+full description, category contract and route, anchors, verify command, declared files, labels,
+priority, story and dependency state, every chronological comment, and every attachment as an absolute
+path. It inspects every readable attachment and reports missing or unreadable paths before implementation.
+Stable executors are
 ready from session start. Claude routes pass `model: exec.model`; Codex routes
 omit `model`: the shared `sidequest-exec-dispatch-<effort>` def pins the virtual `claude-codex-auto`,
 and `spawn.prompt` ends with `[sidequest-route model=... effort=...]`, which tells the codex-gateway shim which real

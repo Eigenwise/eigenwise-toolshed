@@ -34,8 +34,9 @@ Only the orchestrator decides a ticket's liveness from board `pulse` or `changes
 your own claim.
 
 **Dispatch briefing:** When the spawn prompt tells you to fetch a briefing, run that command as your first
-action. It is a token-gated preflight, then the printed ticket contract supplies the token and instructions for
-this protocol.
+action. It is a token-gated preflight, then the printed durable ticket packet supplies the complete contract.
+Read every section of that packet, the full chronological comment thread, and inspect every readable attachment
+before implementation. Report missing or unreadable attachments as blockers or warnings; never silently skip them.
 Protocol for each ticket:
 1. **Claim first** with `mcp__plugin_sidequest_board__claim`, passing `ref`, a unique `by`, exact
    `executor`, stamped `effort`, project identity, and the supplied token. If it returns `ok:false`, do

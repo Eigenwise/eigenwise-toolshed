@@ -36,20 +36,20 @@ function configure(store?: any, id?: any, route?: any, fallback?: any) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
-test('SQ-404: dispatch comments stay bounded while preserving a handoff cue', () => {
-  const digest = agentsync.ticketCommentsDigest([
-    { by: 'investigator', body: `Decision: use the durable thread. ${'x'.repeat(5481)}` },
-    { by: 'reviewer', kind: 'question', body: 'Integration risk: confirm the handoff before cherry-picking.' },
-    { by: 'worker', body: 'Verification: node --test plugins/sidequest/test/*.test.js passed.' },
-    { by: 'worker', body: 'Changed paths: plugins/sidequest/lib/agentsync.js.' },
-    { by: 'older-worker', body: 'Older context.' },
-  ]);
-  assert.ok(digest.length <= agentsync.COMMENT_DIGEST_MAX_CHARS, 'the executor prompt cannot absorb the full thread');
-  assert.match(digest, /read the full thread/i);
-  assert.match(digest, /Integration risk/);
-  assert.match(digest, /Comment by reviewer/);
-  assert.doesNotMatch(digest, /Question by/);
-  assert.doesNotMatch(digest, /x{1000}/);
+test('SQ-677: briefing comments preserve the full chronological durable thread', () => {
+  const comments = [
+    { by: 'investigator', kind: 'comment', at: '2026-07-20T00:00:00.000Z', body: `Decision:\n${'x'.repeat(5481)}` },
+    { by: 'reviewer', kind: 'warning', at: '2026-07-20T00:01:00.000Z', body: 'Integration risk: inspect every attachment.' },
+    { by: 'worker', kind: 'comment', at: '2026-07-20T00:02:00.000Z', body: 'Verification: node --test plugins/sidequest/test/*.test.js passed.' },
+  ];
+  const packet = agentsync.ticketCommentsPacket(comments);
+  assert.ok(packet.includes(comments[0]!.body));
+  assert.ok(packet.includes(comments[1]!.body));
+  assert.ok(packet.includes(comments[2]!.body));
+  assert.ok(packet.indexOf(comments[0]!.body) < packet.indexOf(comments[1]!.body));
+  assert.ok(packet.indexOf(comments[1]!.body) < packet.indexOf(comments[2]!.body));
+  assert.match(packet, /Author: reviewer/);
+  assert.match(packet, /Kind: warning/);
 });
 
 test('generation-two marker cannot be mistaken for the legacy marker', () => {
@@ -275,28 +275,54 @@ test('renderDispatchStub keeps its briefing command alive after the dispatched c
   assert.equal(recovered.stdout, 'briefing SQ-586 --token briefing-token --project C:\\dev\\fixture');
 });
 
-test('renderTicketBriefing contains only ticket-specific dispatch context', () => {
+test('SQ-677: fetched briefing carries the complete durable ticket packet while the spawn stays tiny', () => {
   seedCatalog([TERRA]);
-  const briefing = agentsync.renderTicketBriefing({
-    ref: 'SQ-334', title: 'Instant dispatch', description: 'Ride the briefing on the spawn prompt.',
+  const slug = 'briefing-測試';
+  const ticket = {
+    id: 'briefing-assets', ref: 'SQ-334', title: 'Instant dispatch',
+    description: 'First paragraph.\n\n- markdown keeps its exact shape\n- and blank lines',
     model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-exec-dispatch-high',
     executorAnchors: 'lib/store.js prepareDispatch', executorVerify: 'node --test plugins/sidequest/test/agentsync.test.js',
-    comments: [{ by: 'scout', body: 'Stable exec is pre-registered.' }],
-    category: { contract: 'Plan against the system, verify end to end.' },
-  }, 'instant-token-334');
+    files: ['plugins/sidequest/src/lib/agentsync.ts', 'docs/briefing notes.md'],
+    labels: ['dispatch', 'unicode'], priority: 'urgent', storyId: 'US-99', status: 'todo',
+    links: [{ type: 'blocked-by', ref: 'SQ-12' }, { type: 'related', ref: 'SQ-33' }],
+    comments: [
+      { by: 'scout', kind: 'comment', at: '2026-07-20T00:00:00.000Z', body: 'First durable comment.\n\nKeep this spacing.' },
+      { by: 'reviewer', kind: 'warning', at: '2026-07-20T00:01:00.000Z', body: 'Second durable comment, added before redispatch.' },
+    ],
+    assets: ['space file.png', '画像.png', 'missing file.png'],
+    category: { id: 'briefing.contract', route: { model: TERRA.slug, effort: 'high' }, contract: 'Plan against the durable packet, then verify end to end.' },
+  };
+  const assetDir = path.join(process.env.SIDEQUEST_HOME, 'projects', slug, 'assets', ticket.id);
+  fs.mkdirSync(assetDir, { recursive: true });
+  fs.writeFileSync(path.join(assetDir, ticket.assets[0]!), 'first');
+  fs.writeFileSync(path.join(assetDir, ticket.assets[1]!), 'second');
+
+  const briefing = agentsync.renderTicketBriefing(ticket, 'instant-token-334', slug);
+  const stub = agentsync.renderDispatchStub(Object.assign({}, ticket, { description: 'y'.repeat(100000), comments: [{ body: 'z'.repeat(100000) }] }), 'instant-token-334', 'C:\\dev\\fixture');
   assert.doesNotMatch(briefing, /^---$/m);
-  assert.doesNotMatch(briefing, /^name:/m);
-  assert.doesNotMatch(briefing, /You are a sidequest ticket executor/);
   assert.match(briefing, /## This ticket/);
-  assert.match(briefing, /Instant dispatch/);
-  assert.match(briefing, /Ride the briefing on the spawn prompt/);
-  assert.match(briefing, /Stable exec is pre-registered/);
-  assert.match(briefing, /Plan against the system, verify end to end/);
-  assert.doesNotMatch(briefing, /mcp__plugin_sidequest_board__claim/);
-  assert.match(briefing, /--token instant-token-334/);
-  assert.doesNotMatch(briefing, /mcp__plugin_sidequest_board__submit/);
-  assert.ok(Buffer.byteLength(briefing) < 4000, `ticket briefing is ${Buffer.byteLength(briefing)} bytes`);
+  assert.ok(briefing.includes(ticket.description));
+  assert.ok(briefing.includes(ticket.comments[0]!.body));
+  assert.ok(briefing.includes(ticket.comments[1]!.body));
+  assert.ok(briefing.indexOf(ticket.comments[0]!.body) < briefing.indexOf(ticket.comments[1]!.body));
+  assert.match(briefing, /Category: briefing\.contract/);
+  assert.match(briefing, /Configured route: codex-gpt-5-6-terra \/ high/);
+  assert.match(briefing, /Dispatch route: codex-gpt-5-6-terra \/ high/);
+  assert.match(briefing, /Priority: urgent/);
+  assert.match(briefing, /Story: US-99/);
+  assert.match(briefing, /blocked-by: SQ-12/);
+  assert.match(briefing, /docs\/briefing notes\.md/);
+  assert.match(briefing, /space file\.png/);
+  assert.match(briefing, /画像\.png/);
+  assert.match(briefing, /Inspect this attachment before implementation\./);
+  assert.match(briefing, /missing file\.png.*missing or unreadable/s);
+  assert.match(briefing, /inspect every entry before implementation/i);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
+  assert.ok(Buffer.byteLength(stub) < 600, `spawn stub is ${Buffer.byteLength(stub)} bytes`);
+  assert.doesNotMatch(stub, /y{1000}/);
+  assert.doesNotMatch(stub, /z{1000}/);
+  assert.doesNotMatch(stub, /## This ticket/);
 });
 
 test('artifact lifecycle marker appears only for a validated shared-tree artifact dispatch', () => {
