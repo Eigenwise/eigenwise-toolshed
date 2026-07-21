@@ -121,6 +121,34 @@ Also check what's already there:
   interview so you propose rather than interrogate.
 - **Git?** Note whether it's a git repo (affects the commit reminder and the map's state file).
 
+### Routing profile
+
+When Sidequest is selected, make one routing choice immediately after this scan and before the Phase 1
+interview. Infer a starter from plain repo signals: code and build files → `coding`; docs, posts, or
+content → `writing`; source corpora, datasets, or citation-heavy material → `research`; audio, scores,
+or music-production files → `creative-music`. If signals conflict, choose the closest fit and say why.
+
+Use one `AskUserQuestion` that proposes the inferred starter and offers: **Use this profile**, **Choose
+another starter**, or **Make a project profile**. Keep it conversational: do not turn category routing into
+a form or walk through every category. If the user chooses another starter, show the available profiles from
+`sidequest profile list` and let them name one in plain text. Record the accepted profile choice in the
+session/bootstrap plan; if Sidequest was not selected, skip this step.
+
+For **Make a project profile**, propose a small delta from the closest starter using the scan and the stated
+project purpose. Say which categories would change and why, then let the user confirm or tweak that delta in
+plain language. Create `<project>-routing` by cloning the closest starter, apply only the confirmed delta,
+and select it for the board:
+
+```sh
+sidequest profile create <project>-routing --from <starter> --description "<confirmed purpose>"
+sidequest profile use <project>-routing --project <board>
+```
+
+Apply profile-category changes with `--profile <project>-routing`, never `--profile <starter>`. A starter is
+shared policy and setup must never mutate it. Do not create a project profile when the user accepts or picks
+a starter. Keep the selected profile and any confirmed delta in the plan; Phase 4 applies the profile after
+Sidequest creates or opens the board.
+
 ## Phase 1 — Interview and selection
 
 Before the normal interview, inspect the machine-local Codex gateway mode with `codex-gateway env --show-mode`. When no mode is saved, ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the choice with `codex-gateway env --mode global` or `codex-gateway env --mode local`; do not ask again once a mode exists, and later setup flows honor it silently. Do not ask during non-interactive setup: default to local and say `wiring mode defaulted to per-project; run codex-gateway env --mode global to change`.
@@ -284,9 +312,10 @@ empirically — this is the part that separates "wrote some files" from "set up 
    back to reload/restart.
 3. **codebase-mapper is injecting.** Same check: confirm the `INDEX.md` hub is being injected on the
    prompt. Seeing it in context is the proof the hook fired.
-4. **sidequest board.** If selected, bring up the board (`sidequest dashboard`, or ask the board skill)
-   and report the URL, so the user sees the Kanban is live. Filing a throwaway ticket and deleting it
-   is a fine smoke test.
+4. **sidequest board.** If selected, bring up the board (`sidequest dashboard`, or ask the board skill), then
+   apply the profile recorded after Phase 0 with `sidequest profile use <profile> --project <board>`. For a
+   new project profile, create it from its recorded starter and apply only its confirmed delta before using
+   it. Report the URL and selected profile, so the user sees the Kanban and its routing policy are live.
 5. **Optional plugins.** Verify each selected extra is usable: an LSP responds and its binary is on
    `PATH`, a named skill resolves, or its documented integration opens. Keep it quick, but verify every
    selected plugin rather than assuming a loaded entry works.

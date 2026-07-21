@@ -116,3 +116,24 @@ test('observability retention guidance matches the store', () => {
   }
   assert.match(observability, /--delete-data/);
 });
+
+test('init-workspace proposes a routing profile from repository signals', () => {
+  const routing = skill.indexOf('### Routing profile');
+  const phaseOne = skill.indexOf('## Phase 1 — Interview and selection');
+
+  assert.ok(routing >= 0 && routing < phaseOne);
+  assert.match(skill, /code and build files → `coding`/);
+  assert.match(skill, /docs, posts, or\ncontent → `writing`/);
+  assert.match(skill, /source corpora, datasets, or citation-heavy material → `research`/);
+  assert.match(skill, /audio, scores,\nor music-production files → `creative-music`/);
+  assert.match(skill, /Use one `AskUserQuestion`/);
+  assert.match(skill, /\*\*Use this profile\*\*, \*\*Choose\nanother starter\*\*, or \*\*Make a project profile\*\*/);
+  assert.match(skill, /sidequest profile list/);
+  assert.match(skill, /<project>-routing/);
+  assert.match(skill, /sidequest profile create <project>-routing --from <starter>/);
+  assert.match(skill, /sidequest profile use <project>-routing --project <board>/);
+  assert.match(skill, /never `--profile <starter>`/);
+  assert.match(skill, /do not turn category routing into\na form or walk through every category/);
+  assert.match(skill, /Phase 4 applies the profile/);
+  assert.match(skill, /apply the profile recorded after Phase 0/);
+});
