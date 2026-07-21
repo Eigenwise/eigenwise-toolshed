@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.201.0",
+  "version": "3.202.0",
   "plugins": [
     {
       "name": "workbench",
@@ -31,7 +31,7 @@
       "name": "codex-gateway",
       "source": "./plugins/codex-gateway",
       "description": "Your ChatGPT/Codex subscription models in Claude Code's /model picker. A local gateway routes claude-codex-* models to OpenAI's Codex backend (via claude-code-proxy) and everything else to api.anthropic.com, so you switch between Claude and GPT-5.x mid-session like any other model. No OpenAI API key.",
-      "version": "0.32.0",
+      "version": "0.33.0",
       "author": {
         "name": "Eigenwise"
       },
