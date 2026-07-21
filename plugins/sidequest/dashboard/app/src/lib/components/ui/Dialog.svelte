@@ -14,8 +14,8 @@
 
 <style>
   .ui-dialog-backdrop { position:fixed; inset:0; z-index:40; display:grid; place-items:center; padding:1rem; background:oklch(.08 .02 240 / .72); backdrop-filter:blur(10px); }
-  dialog { width:min(44rem,100%); max-height:calc(100vh - 2rem); overflow:auto; border:1px solid var(--border); border-radius:calc(var(--radius) * 1.25); background:var(--surface); color:var(--text); box-shadow:var(--shadow); scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+  dialog { width:min(44rem,100%); max-height:calc(100vh - 2rem); overflow:auto; border:1px solid var(--border-strong); border-radius:var(--radius); background:var(--bg-deep); color:var(--text); scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
   dialog.wide { width:min(70rem, 100%); }
   dialog::-webkit-scrollbar, .ui-dialog-backdrop::-webkit-scrollbar { width:.55rem; }
-  dialog::-webkit-scrollbar-thumb, .ui-dialog-backdrop::-webkit-scrollbar-thumb { border-radius:999px; background:var(--border); }
+  dialog::-webkit-scrollbar-thumb, .ui-dialog-backdrop::-webkit-scrollbar-thumb { border-radius:var(--radius); background:var(--border); }
 </style>

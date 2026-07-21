@@ -163,17 +163,17 @@
 <style>
   .bell, .quiet, .tabs button, .notification { border: 0; font: inherit; }
   .bell { border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: .5rem .65rem; border-radius: var(--radius); display: inline-flex; align-items: center; gap: .4rem; }
-  .badge { min-width: 1.35rem; padding: .08rem .3rem; border-radius: 999px; background: var(--accent); color: var(--text-on-accent); font-size: .72rem; font-weight: 700; }
-  .inbox { position: absolute; z-index: 20; right: 1rem; top: 4.25rem; width: min(25rem, calc(100vw - 2rem)); padding: 1rem; box-shadow: var(--shadow); }
+  .badge { min-width: 1.35rem; padding: .08rem .3rem; border-radius: var(--radius); background: var(--accent); color: var(--text-on-accent); font-size: .72rem; font-weight: 700; }
+  .inbox { position: absolute; z-index: 20; right: 1rem; top: 4.25rem; width: min(25rem, calc(100vw - 2rem)); padding: 1rem; background: var(--bg-deep); border-color: var(--border-strong); }
   header { display: flex; justify-content: space-between; gap: .75rem; align-items: start; }
   h2, p { margin: 0; }
   .eyebrow { color: var(--text-muted); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
   h2 { margin-top: .2rem; font-size: 1.15rem; }
   .quiet { color: var(--accent); background: transparent; padding: .25rem; white-space: nowrap; }
   .quiet:disabled { color: var(--text-muted); }
-  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: .25rem; margin: 1rem 0 .6rem; background: var(--surface-muted); padding: .25rem; border-radius: calc(var(--radius) + 2px); }
-  .tabs button { background: transparent; color: var(--text-muted); padding: .4rem .25rem; border-radius: 5px; font-size: .78rem; }
-  .tabs button.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(31 41 51 / .12); }
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: .25rem; margin: 1rem 0 .6rem; background: var(--surface-muted); padding: .25rem; border-radius: var(--radius); }
+  .tabs button { background: transparent; border: 1px solid transparent; color: var(--text-muted); padding: .4rem .25rem; border-radius: var(--radius); font-size: .78rem; }
+  .tabs button.active { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }
   .tabs span { margin-left: .28rem; color: var(--accent); font-weight: 700; }
   .notification-list { max-height: min(60vh, 34rem); overflow: auto; }
   .notification { width: 100%; display: grid; grid-template-columns: .7rem 1fr auto; gap: .55rem; align-items: start; padding: .72rem .2rem; color: var(--text); text-align: left; background: transparent; border-top: 1px solid var(--border); }
