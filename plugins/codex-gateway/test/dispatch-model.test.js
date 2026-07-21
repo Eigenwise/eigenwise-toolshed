@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
@@ -312,6 +312,7 @@ test('buildCatalog publishes the v3 concrete-model contract without routing poli
   ]);
   assert.equal(catalog.schemaVersion, 3);
   assert.equal(catalog.source, 'codex-gateway');
+  assert.equal(catalog.writtenBy, JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version);
   assert.deepEqual(catalog.models, [
     {
       slug: 'codex-gpt-5-6-sol',
@@ -344,6 +345,71 @@ test('buildCatalog publishes the v3 concrete-model contract without routing poli
       label: 'GPT-5.6 Luna Fast',
     },
   ]);
+});
+
+test('writeCatalogFile preserves missing models from a same-schema subset write', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-subset-write-'));
+  const file = path.join(dir, 'catalog.json');
+  try {
+    const existing = gw.buildCatalog([
+      'claude-codex-gpt-5.6-terra',
+      'claude-codex-gpt-5.6-sol',
+    ]);
+    const subset = gw.buildCatalog(['claude-codex-gpt-5.6-terra']);
+    fs.writeFileSync(file, JSON.stringify(existing));
+
+    const written = gw.writeCatalogFile(file, subset);
+
+    assert.deepEqual(written.models.map((model) => model.id), [
+      'claude-codex-gpt-5.6-terra',
+      'claude-codex-gpt-5.6-sol',
+    ]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), written);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeCatalogFile replaces a catalog when the fetched set contains a new model', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-superset-write-'));
+  const file = path.join(dir, 'catalog.json');
+  try {
+    fs.writeFileSync(file, JSON.stringify(gw.buildCatalog(['claude-codex-gpt-5.6-terra'])));
+    const replacement = gw.buildCatalog([
+      'claude-codex-gpt-5.6-terra',
+      'claude-codex-gpt-5.6-sol',
+    ]);
+
+    const written = gw.writeCatalogFile(file, replacement);
+
+    assert.deepEqual(written, replacement);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), replacement);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('doctor prints the catalog writer version', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-doctor-'));
+  try {
+    const state = path.join(home, '.claude', 'codex-gateway');
+    fs.mkdirSync(state, { recursive: true });
+    fs.writeFileSync(path.join(state, 'catalog.json'), JSON.stringify({
+      schemaVersion: 3,
+      source: 'codex-gateway',
+      writtenBy: '0.30.0',
+      models: [],
+    }));
+
+    const result = spawnSync(process.execPath, [CLI, 'doctor'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      encoding: 'utf8',
+    });
+
+    assert.match(result.stdout, /catalog: 0 models at .+ \(writtenBy: 0\.30\.0\)/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('writeCatalogFile refuses to replace a future schema', () => {

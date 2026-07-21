@@ -882,7 +882,7 @@ async function doctor() {
   const ok = await statusReport();
   const catalog = readCatalog();
   log(catalog && Array.isArray(catalog.models)
-    ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH}`
+    ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
     : 'catalog: not written yet');
   const activeMode = wiringMode();
   const activeScope = selectedWiringScope();
@@ -1219,7 +1219,13 @@ function buildCatalog(ids) {
       const base = baseFromId(id);
       return { slug: slugFor(base, used), id, label: labelFor(base) };
     });
-  return { schemaVersion: CATALOG_SCHEMA_VERSION, source: 'codex-gateway', updatedAt: new Date().toISOString(), models };
+  return {
+    schemaVersion: CATALOG_SCHEMA_VERSION,
+    source: 'codex-gateway',
+    updatedAt: new Date().toISOString(),
+    writtenBy: PLUGIN_VERSION,
+    models,
+  };
 }
 
 function readJsonFile(file) {
@@ -1232,15 +1238,39 @@ function catalogSchemaVersion(catalog) {
   return Number.isInteger(version) && version > 0 ? version : null;
 }
 
+function catalogModelIds(catalog) {
+  return new Set(
+    Array.isArray(catalog?.models)
+      ? catalog.models.filter((model) => typeof model?.id === 'string').map((model) => model.id)
+      : [],
+  );
+}
+
+function mergeSubsetCatalog(existing, catalog) {
+  if (catalogSchemaVersion(existing) !== CATALOG_SCHEMA_VERSION || !Array.isArray(existing.models)) return catalog;
+
+  const existingIds = catalogModelIds(existing);
+  const fetchedIds = catalogModelIds(catalog);
+  const isStrictSubset = fetchedIds.size < existingIds.size && [...fetchedIds].every((id) => existingIds.has(id));
+  if (!isStrictSubset) return catalog;
+
+  // A removal-only response is indistinguishable from a stale writer. Adding a model makes the response authoritative, so intentional replacement can still remove entries.
+  const preserved = existing.models.filter((model) => typeof model?.id === 'string' && !fetchedIds.has(model.id));
+  log(`catalog: preserved ${preserved.map((model) => model.id).join(', ')} from a subset write`);
+  return { ...catalog, models: [...catalog.models, ...preserved] };
+}
+
 function writeCatalogFile(catalogPath, catalog) {
   const existing = readJsonFile(catalogPath);
   const storedVersion = catalogSchemaVersion(existing);
   if (storedVersion != null && storedVersion > CATALOG_SCHEMA_VERSION) {
     throw new Error(`refusing to overwrite catalog schema ${storedVersion} at ${catalogPath}; this gateway supports schema ${CATALOG_SCHEMA_VERSION}, upgrade required`);
   }
+  const nextCatalog = mergeSubsetCatalog(existing, catalog);
   const tempPath = `${catalogPath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(catalog, null, 2) + '\n');
+  fs.writeFileSync(tempPath, JSON.stringify(nextCatalog, null, 2) + '\n');
   fs.renameSync(tempPath, catalogPath);
+  return nextCatalog;
 }
 
 async function fetchShimModelIds() {
@@ -1261,8 +1291,7 @@ async function writeCatalog() {
   if (!ids.length) return null;
   const catalog = buildCatalog(ids);
   mkdirs();
-  writeCatalogFile(CATALOG_PATH, catalog);
-  return catalog;
+  return writeCatalogFile(CATALOG_PATH, catalog);
 }
 
 function readCatalog() {
