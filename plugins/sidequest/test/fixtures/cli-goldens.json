@@ -1,27 +1,35 @@
 {
   "help": {
-    "args": ["--help"],
+    "args": [
+      "--help"
+    ],
     "status": 0,
-    "stdoutBytes": 10469,
-    "stdoutSha256": "8438962c150d88b9ad3b43b93b01e7de31a21c3651503426793c825dd4d581c2",
+    "stdoutBytes": 10467,
+    "stdoutSha256": "d40151163b7077f846b77eefaf05d33119b34fd0c013b2bf3fe05c6819049136",
     "stderr": ""
   },
   "unknown": {
-    "args": ["not-a-command"],
+    "args": [
+      "not-a-command"
+    ],
     "status": 1,
     "stdoutBytes": 0,
     "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "stderr": "sidequest: unknown command \"not-a-command\". Run \"sidequest help\".\n"
   },
   "askRemoved": {
-    "args": ["ask"],
+    "args": [
+      "ask"
+    ],
     "status": 1,
     "stdoutBytes": 0,
     "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "stderr": "sidequest: unknown command \"ask\". Run \"sidequest help\".\n"
   },
   "awaitRemoved": {
-    "args": ["await"],
+    "args": [
+      "await"
+    ],
     "status": 1,
     "stdoutBytes": 0,
     "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

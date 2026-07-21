@@ -1701,6 +1701,9 @@ function updateDoneRefusal(ticket?: any) {
   if (ticket.dispatchNonce || (state && !state.terminalAt)) {
     return `${ticket.ref} has an active dispatch. Its executor must use done/completeTicket or commit and submit; update --status done cannot bypass that lifecycle.`;
   }
+  if (state) {
+    return `${ticket.ref} has routed dispatch history. Use done/completeTicket to record a grooming closure; scoped repository work must commit and submit.`;
+  }
   return null;
 }
 
@@ -2604,19 +2607,21 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const dispatch = dispatchState(t);
     const artifactDispatch = sharedTreeArtifactMode(t);
     const declaredFiles = dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : normalizeFiles(t.files);
+    const held = t.claim;
+    const liveClaim = held && held.by && !isClaimStale(held);
+    const activeDispatch = Boolean(t.dispatchNonce || (dispatch && !dispatch.terminalAt));
     if (executorDone && artifactDispatch) {
       const scopeCheck = artifactScopeCheck(slug, t, dispatch);
       if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
     }
-    if (executorDone && declaredFiles.length && !artifactDispatch) {
+    if (executorDone && declaredFiles.length && !artifactDispatch && (liveClaim || activeDispatch || pendingSubmission(t))) {
       return {
         ok: false,
         reason: 'submission_required',
-        message: `${t.ref} has declared repository write scope. Commit and submit verified changes; done is reserved for non-repo work or an active shared-tree artifact dispatch.`,
+        message: `${t.ref} has declared repository write scope. Commit and submit verified changes; done is reserved for non-repo work, an active shared-tree artifact dispatch, or a grooming closure after release.`,
         ticket: t,
       };
     }
-    const held = t.claim;
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }

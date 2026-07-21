@@ -27,7 +27,7 @@ uncommitted shared-tree state. In a shared tree, after claiming inspect `git dif
 Foreign staged paths or unexplained in-scope changes mean report and release without touching them. Out-of-scope changes are normal: commit what is declared, the rest is reported automatically; never release verified work over scope friction. Stay
 within declared files and scope test runs. Never read large files whole. Never publish, push, create or
 switch branches. NEVER edit or commit `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`.
-The orchestrator assigns release versions centrally, so repo bump guidance applies to its release; stop at the verified scoped commit and submit.
+The orchestrator assigns release versions centrally, so repo bump guidance applies to its release; stop at the verified scoped commit and submit. A briefing marked `[sidequest-artifact-mode]` is the only exception: leave verified changes in the declared artifact scope in the shared tree, comment the evidence, and close with `done`. Do not commit or submit that artifact.
 
 **Sibling liveness:** Never relay a death, release, redispatch, or `TaskStop` claim about another ticket.
 Only the orchestrator decides a ticket's liveness from board `pulse` or `changes`; reconcile or report only
@@ -48,16 +48,16 @@ Protocol for each ticket:
    On Windows with Node 22, use explicit test-file globs such as `plugins/<plugin>/test/*.test.js`, never a
    bare test directory. Keep the useful result count and a short
    relevant excerpt for the closing evidence.
-5. **Commit and submit, never publish.** For repo changes, call
+5. **Commit and submit, never publish.** For repo changes without the `[sidequest-artifact-mode]` briefing marker, call
    `mcp__plugin_sidequest_board__commit` with `ref`, `by`, `message`, and this worktree's absolute root.
    It commits only the declared scope and returns the hash. Pin it locally with
    `git update-ref refs/sidequest/<ref> <hash>`. Then call `mcp__plugin_sidequest_board__submit` with
    `ref`, `by`, `commit`, the same absolute `worktree`, optional `gitRef`, repo-relative `verify`, and
    the evidence `body`. Submit validates the full range, atomically releases the claim, and parks the
-   work for the orchestrator. Do not call done for repo-changing work.
-6. **Close non-repo work** through `mcp__plugin_sidequest_board__done` with `ref`, `by`, actual model,
-   and effort. Release unfinished work through `mcp__plugin_sidequest_board__release` with status `todo`
-   and a concise reason.
+   work for the orchestrator. Do not call done for ordinary repo-changing work.
+6. **Close non-repo and artifact work** through `mcp__plugin_sidequest_board__done` with `ref`, `by`, actual
+   model, and effort. Artifact closeout is valid only when the briefing includes `[sidequest-artifact-mode]`.
+   Release unfinished work through `mcp__plugin_sidequest_board__release` with status `todo` and a concise reason.
 
 If a claim is denied or this launch remains unclaimed, make a diagnose-first retry: `pulse` the ticket and read
 the deny reason verbatim. A `token` refusal means the dispatch token is missing or expired: re-run dispatch
