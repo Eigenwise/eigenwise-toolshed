@@ -1,6 +1,6 @@
 # TypeScript and async rewrite contract
 
-This is the binding contract for the Sidequest TypeScript rewrite. The rewrite changes the implementation language and selected I/O boundaries. It preserves the installed plugin's runtime paths, public behavior, persisted data, and Node-only deployment model.
+This is the binding contract for the Sidequest TypeScript rewrite. The rewrite changes the implementation language and selected I/O boundaries. It preserves the installed plugin's runtime paths, migrates persisted data, and keeps the Node-only deployment model. The final behavior includes the main-branch reconciliation decisions below.
 
 ## Decisions
 
@@ -13,8 +13,17 @@ This is the binding contract for the Sidequest TypeScript rewrite. The rewrite c
 | Database model | `node:sqlite` and the store stay synchronous. Query shape and caching address measured stalls. Promise wrappers around `DatabaseSync` are forbidden. |
 | Async model | HTTP, MCP transport, independent filesystem work, and child processes use async APIs. Hooks stay synchronous, bounded, single-shot programs. |
 | Hook packaging | One bundle per hook entry, with a tiny source-level shared core duplicated by the build. Heavy store modules stay external and load only on event paths that need them. |
-| Tests | Port all 36 current `node:test` suites to TypeScript one for one. Tests run against the exact committed/generated JavaScript distribution. |
-| Compatibility | Keep database schema version 4, every CLI flag and output contract, every MCP tool schema, hook event wiring, environment variables, and stable entrypoint path. This rewrite names no public break. |
+| Tests | Port every maintained `node:test` suite to TypeScript. Tests run against the exact committed/generated JavaScript distribution; legacy JavaScript test twins stay deleted. |
+| Compatibility | Keep stable runtime paths and configuration, migrate databases through schema 6, and preserve the reconciled CLI/MCP/hook contract. The approved removal of `ask`, `await`, and `needsResponse` is the intentional public break. |
+
+### Final reconciliation decisions
+
+- `ask`, `await`, and `needsResponse` remain removed. Legacy `question` rows are preserved as ordinary comments.
+- Databases migrate through schema 6. Schema 5 updates the bounded artifact category contract; schema 6 adds structured `artifactRoots` authority.
+- Shared-tree artifact completion requires category capability, one approved path, dispatch-pinned scope and dirty-state fingerprints, and direct-path checks at completion.
+- Board-first reminders are advisory. The inline-work hook records activity without denying tools or repeating reminders. Native `Explore`, `claude-code-guide`, and `statusline-setup` remain the narrow unrouted utility agents.
+- MCP reads default to bounded compact projections. `full:true` restores full records, while compact category and comment reads expose cursor metadata.
+- The Svelte dashboard ships from `dashboard/dist`; the retired `dashboard/index.html` and legacy JavaScript test twins stay deleted.
 
 ## 1. Fixed constraints
 
@@ -146,7 +155,7 @@ Async pays where the process can serve other work while it waits:
 
 The HTTP server already awaits body reads and category-draft child completion ([`lib/server.js:82-106`](../lib/server.js#L82-L106), [`lib/server.js:135-159`](../lib/server.js#L135-L159)). The rewrite continues that shape instead of changing every function signature mechanically.
 
-The current MCP handler calls every tool synchronously ([`lib/mcp.js:1323-1359`](../lib/mcp.js#L1323-L1359)), and the stdio entrypoint writes the return value immediately ([`bin/sidequest-mcp.js:19-45`](../bin/sidequest-mcp.js#L19-L45)). The TypeScript version may make the internal `handleRequest()` contract async. The external JSON-RPC frames, tool descriptors, error envelopes, notification behavior, and newline framing remain identical. Port direct unit callers to `await`; do not expose Promise details over MCP.
+The TypeScript MCP handler is async and the stdio entrypoint awaits each response. External JSON-RPC framing, notification behavior, descriptor ordering, and documented response shapes remain the contract. Direct unit callers await the handler; Promise details never cross MCP.
 
 ### 3.3 Hooks stay synchronous
 
@@ -192,14 +201,14 @@ Build output targets ES2022, so it emits native async syntax where used and no g
 
 ### Context byte budgets
 
-Keep the existing context limits in [`test/hooks.test.js:33-37`](../test/hooks.test.js#L33-L37):
+Keep the context limits in [`test/hooks.test.ts:33-38`](../test/hooks.test.ts#L33-L38):
 
 | Output | Current cap | Rewrite rule |
 | --- | ---: | --- |
-| Full SessionStart context | 2,850 characters | Preserve the cap and expectation text. Do not raise it for type/build details. |
-| Compact/resume SessionStart context | 1,000 bytes | Preserve the byte cap. |
+| Full SessionStart context | 4,700 bytes | Preserve the cap and final executor guidance. Do not raise it for type/build details. |
+| Compact/resume SessionStart context | 2,900 bytes | Preserve the byte cap. |
+| Workforce section | 1,800 bytes | Keep the live category/model/effort list bounded. |
 | Long-running SubagentStop note | 400 characters | Preserve the cap. |
-| Taxonomy addition | 400 bytes | Preserve the source cap in [`hooks/session-start.js:30-53`](../hooks/session-start.js#L30-L53). |
 
 Port these assertions before editing hook behavior. Generated code size never changes the allowed injected context size.
 
@@ -222,7 +231,7 @@ Wall-clock checks run in a dedicated `test:perf` script with isolated `SIDEQUEST
 
 ## 6. Test migration and exact Windows command
 
-The 36 current `test/*.test.js` files are the behavioral specification. Port every file to the same basename with `.test.ts`. Keep test names, inputs, fixtures, expected output, failure cases, Windows cases, concurrency cases, and subprocess coverage. A port may add types and `await` for newly async internal calls. It may not delete an assertion, convert a test to skip, broaden a matcher, or replace an end-to-end CLI/hook test with a unit-only test.
+The maintained `test/*.test.ts` files are the behavioral specification. Keep test names, inputs, fixtures, expected output, failure cases, Windows cases, concurrency cases, and subprocess coverage. A port may add types and `await` for newly async internal calls. It may not delete an assertion, convert a test to skip, broaden a matcher, or replace an end-to-end CLI/hook test with a unit-only test.
 
 Tests continue to target the stable generated paths under `bin/`, `lib/`, and `hooks/`. This makes the suite verify the code that the marketplace ships. Run the build before tests. `tsx` transpiles test files only and never enters the committed runtime graph.
 
@@ -234,7 +243,7 @@ Add package scripts with this contract:
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node scripts/build.mjs",
     "build:check": "npm run build && git diff --exit-code -- bin lib hooks",
-    "test:full": "npm run typecheck && npm run build:check && node --import tsx --test test/*.test.ts",
+    "test:full": "npm run typecheck && npm run build:check && node scripts/test-full.mjs",
     "test:perf": "node --import tsx --test test/*.perf.test.ts"
   }
 }
@@ -246,36 +255,36 @@ From the repository root, the exact full-suite command on Windows is:
 npm --prefix plugins/sidequest run test:full
 ```
 
-The script contains the explicit `test/*.test.ts` file glob. A bare `test` directory argument is forbidden because Node 22 on Windows does not discover it consistently.
+The runner enumerates `test/*.test.ts` and passes explicit file paths to Node. A bare `test` directory argument is forbidden because Node 22 on Windows does not discover it consistently.
 
 Add these migration guards before replacing behavior:
 
-1. Serialize `mcp.toolDescriptors()` from the current implementation into a checked fixture. The TypeScript implementation must produce the exact same JSON bytes, including tool order, property order, descriptions, required arrays, and numeric constraints.
-2. Snapshot representative CLI stdout, stderr, exit status, JSON output, help output, aliases, omitted-option defaults, and malformed-input behavior.
-3. Open a schema-v4 database produced by the current build, run reads and writes through the TypeScript build, then reopen it with the current build fixture. Compare persisted rows and schema version.
+1. Serialize the final `mcp.toolDescriptors()` contract into a checked fixture. The generated runtime must produce the exact same JSON bytes, including tool order, property order, descriptions, required arrays, and numeric constraints.
+2. Snapshot representative CLI stdout, stderr, exit status, JSON output, help output, aliases, omitted-option defaults, removed-command failures, and malformed-input behavior.
+3. Open a schema-v4 database, migrate it through schema 6, and prove legacy rows survive. Keep future-schema refusal and category migration coverage.
 4. Assert `.mcp.json` and `hooks/hooks.json` still point to existing stable files. Spawn every hook from its configured command path.
-5. Keep the current full-suite concurrency, future-schema refusal, migration, publish-lock, worktree, Windows, server, MCP stdio, and real CLI subprocess tests.
-6. Add an installed-copy smoke test that copies only marketplace-shipped files, omits `node_modules` and `src`, then runs CLI help, MCP initialize/tools-list, every cheap hook, and a temporary schema-v4 board.
+5. Keep the full-suite concurrency, migration, publish-lock, worktree, Windows, server, MCP stdio, artifact authority, and real CLI subprocess tests.
+6. Keep an installed-copy smoke test that copies only marketplace-shipped files, omits `node_modules`, `src`, tests, scripts, and the retired dashboard stub, then runs CLI help, MCP initialize/tools-list, every cheap hook, and a temporary migrated board.
 
 ## 7. Compatibility contract
 
 ### Database
 
-`CURRENT_SCHEMA_VERSION` stays `4` ([`lib/db.js:23`](../lib/db.js#L23)). The rewrite does not add, remove, rename, or reinterpret a table, column, index, global key, JSON payload field, status value, timestamp, ID, ref, ordering value, or claim field. It keeps WAL, the 5-second busy timeout, immediate write transactions, future-schema refusal, and migration of stores older than v4.
+`CURRENT_SCHEMA_VERSION` is `6` ([`src/lib/db.ts:23`](../src/lib/db.ts#L23)). Existing stores migrate in place: schema 5 refreshes the bounded artifact category contract, and schema 6 records structured artifact roots on untouched defaults. Ticket rows, comments, refs, ordering, and claims survive the migration; legacy `question` comments remain stored and read as ordinary comments.
 
-Performance work uses existing columns and indexes first. Any later schema/index change needs its own migration ticket, forward-version guard review, old/new process skew plan, and fixture. It cannot enter the TypeScript rewrite as an incidental optimization.
+Keep WAL, the 5-second busy timeout, immediate write transactions, future-schema refusal, and migrations from older stores. Further schema or index changes need their own migration ticket, forward-version guard review, old/new process skew plan, and fixture.
 
 ### CLI
 
-`bin/sidequest.js` stays the entrypoint. Preserve all command names, flags, short aliases, repeatable options, defaults, environment variables, path resolution, stdout/stderr text, JSON shapes, exit statuses, signal behavior, and side effects. Parsing may gain types; it cannot move to a third-party parser or normalize previously distinct inputs.
+`bin/sidequest.js` stays the entrypoint. Preserve final command names, flags, short aliases, defaults, environment variables, path resolution, stdout/stderr text, JSON shapes, exit statuses, signal behavior, and side effects. `ask` and `await` are deliberately absent and return the normal unknown-command failure.
 
 ### MCP
 
-`.mcp.json` remains byte-for-byte unchanged. Preserve the server name, protocol negotiation, newline JSON-RPC transport, notification handling, every tool name, descriptor order, description, input schema, default, response text/JSON shape, error envelope, and side effect. Async internal dispatch may change response completion order only for concurrently submitted read-only calls, which are correlated by id. Mutations remain arrival-ordered per board.
+`.mcp.json` remains byte-for-byte unchanged. Preserve the final server name, protocol negotiation, newline JSON-RPC transport, notification handling, descriptor order, input schemas, error envelopes, and mutation ordering. The `ask` and `await` tools remain absent. Compact reads and bounded mutation acknowledgements are the default response contract; documented `full` and cursor inputs restore detail where supported.
 
 ### Hooks
 
-`hooks/hooks.json` remains byte-for-byte unchanged. Preserve event names, matchers, command strings, timeouts, fail-soft exits, stdout JSON shapes, and environment-variable behavior. Every generated hook file exists at its current path. Hook build changes cannot add runtime setup output or warnings on stdout/stderr.
+`hooks/hooks.json` remains byte-for-byte unchanged. Preserve event names, matchers, command strings, timeouts, fail-soft exits, stdout JSON shapes, and environment-variable behavior. Board-first output follows the reconciled advisory policy, while home-delete, near-turn-cap, task-output, and peer-target safety guards retain their final executor identity rules. Every generated hook file exists at its current path.
 
 ### Other runtime paths
 
@@ -291,9 +300,9 @@ The implementation wave follows this order:
 4. Add targeted database queries and direct project resolution while the profiling fixtures can compare old and new paths.
 5. Move server, MCP, CLI, process, and filesystem boundaries to the async contract. Keep database critical sections synchronous.
 6. Move hooks last, one event at a time. Preserve output budgets, bundle boundaries, fail-soft behavior, and fresh-process measurements on each slice.
-7. Run typecheck, build drift check, all 36 behavioral suites, installed-copy smoke tests, schema compatibility fixtures, CLI/MCP golden checks, and the dedicated Windows hook profile.
+7. Run typecheck, build drift check, every maintained behavioral suite, installed-copy smoke tests, schema compatibility fixtures, CLI/MCP golden checks, and the dedicated Windows hook profile.
 
-The rewrite is accepted only when all generated artifacts are committed, a clean checkout needs no runtime install, the exact Windows full-suite command passes, the configured entrypoints work from a copied installed plugin, schema remains v4, compatibility fixtures are unchanged, and hook latency stays inside the ceilings above.
+The rewrite is accepted only when all generated artifacts are committed, a clean checkout needs no runtime install, the exact Windows full-suite command passes, the configured entrypoints work from a copied installed plugin, schema-v4 data migrates to schema 6, the final CLI/MCP fixtures match, and hook latency stays inside the ceilings above.
 
 ## 9. Deferred work
 
@@ -303,8 +312,7 @@ The following work stays outside this rewrite:
 - A Node floor above 22.5.
 - Native execution of `.ts` files in the marketplace cache.
 - A database worker thread or async SQLite replacement.
-- Schema version 5 or new indexes.
-- CLI, MCP, hook, or server API redesign.
+- Schema version 7 or unrelated new indexes.
 - Dashboard component and visual architecture, which has its own rewrite contract.
 - New runtime dependencies.
 

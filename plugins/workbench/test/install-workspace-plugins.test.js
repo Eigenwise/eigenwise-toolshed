@@ -102,17 +102,37 @@ test('does no mutations when every selected plugin is enabled at the planned sco
   assert.deepEqual(result.plugins.map((plugin) => plugin.status), ['skipped']);
 }));
 
-test('reports a same-id plugin at a different project or scope without moving it', () => withWorkspace((projectDir) => {
+test('installs a selected plugin for this project when it is enabled for another project', () => withWorkspace((projectDir) => {
   const runner = inventoryRunner({
     marketplaces: [{ name: 'eigenwise-toolshed', source: 'github', repo: 'Eigenwise/eigenwise-toolshed' }],
     plugins: [{ id: 'codebase-mapper@eigenwise-toolshed', scope: 'project', enabled: true, projectPath: path.join(projectDir, 'other') }],
   });
-  const projectMismatch = runInstall({ plan: planFor(projectDir), run: runner.run });
-  assert.equal(projectMismatch.ok, false);
-  assert.equal(projectMismatch.plugins[0].status, 'scope-mismatch');
-  assert.equal(runner.calls.length, 2);
+  const result = runInstall({ plan: planFor(projectDir), run: runner.run });
 
-  const scopeDelta = computeDelta(planFor(projectDir), runner.state.marketplaces, [{ id: 'codebase-mapper@eigenwise-toolshed', scope: 'local', enabled: true, projectPath: projectDir }]);
+  assert.equal(result.ok, true);
+  assert.equal(result.plugins[0].status, 'install-elsewhere');
+  assert.equal(runner.calls.filter((call) => call.args[1] === 'install').length, 1);
+  assert.equal(runner.state.plugins.some((plugin) => plugin.id === 'codebase-mapper@eigenwise-toolshed'
+    && plugin.scope === 'project' && plugin.projectPath === projectDir), true);
+}));
+
+test('treats an enabled user-scope plugin as covering a project plan', () => withWorkspace((projectDir) => {
+  const runner = inventoryRunner({
+    marketplaces: [{ name: 'eigenwise-toolshed', source: 'github', repo: 'Eigenwise/eigenwise-toolshed' }],
+    plugins: [{ id: 'codebase-mapper@eigenwise-toolshed', scope: 'user', enabled: true }],
+  });
+  const result = runInstall({ plan: planFor(projectDir), run: runner.run });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.plugins[0].status, 'already-covered');
+  assert.equal(runner.calls.filter((call) => call.args[1] === 'install').length, 0);
+}));
+
+test('reports a same-id plugin at this project with the wrong scope', () => withWorkspace((projectDir) => {
+  const scopeDelta = computeDelta(planFor(projectDir), [{ name: 'eigenwise-toolshed', source: 'github', repo: 'Eigenwise/eigenwise-toolshed' }], [
+    { id: 'codebase-mapper@eigenwise-toolshed', scope: 'local', enabled: true, projectPath: projectDir },
+  ]);
+
   assert.equal(scopeDelta.plugins[0].status, 'scope-mismatch');
 }));
 

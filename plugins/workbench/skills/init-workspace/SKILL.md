@@ -29,20 +29,75 @@ choices come from `references/stack-plugins.md` (which plugins) and `references/
 ## The shape of the job
 
 There is one hard constraint that dictates everything: plugins must be installed before any workspace
-artifact relies on them, and installed plugins take effect only after Claude reloads them. So the flow
-splits at a reload boundary:
+artifact relies on them, and installed plugins take effect only after Claude reloads them. Ask for
+telemetry consent before inspecting the project, then learn the project's intent before recommending
+any Toolshed plugins. Split the project setup at its reload boundary:
 
-1. **Assess** the project (Phase 0).
-2. **Interview and select plugins** (Phase 1).
-3. **Install selected plugins, then write pre-reload artifacts** (Phase 2).
-4. **Reload boundary** — stop, ask the user for one reload, and wait (Phase 3).
-5. **Post-reload** — build the map, bring up the board, and verify every selected plugin is loaded and
+1. **Telemetry consent** — ask first, then stop for a restart only when the user opts in.
+2. **Project intent** — ask what the project is for, with any useful clues from a non-empty repo.
+3. **Plugin picker** — offer the current marketplace catalog with recommendations based on that intent.
+4. **Assess** the project (Phase 0).
+5. **Interview and select project details** (Phase 1).
+6. **Install selected plugins, then write pre-reload artifacts** (Phase 2).
+7. **Reload boundary** — stop, ask the user for one reload, and wait (Phase 3).
+8. **Post-reload** — build the map, bring up the board, and verify every selected plugin is loaded and
    usable (Phase 4).
-6. **Wrap up** — commit reminder and what they got (Phase 5).
+9. **Wrap up** — commit reminder and what they got (Phase 5).
 
-Read `references/stack-plugins.md` and `references/rule-templates.md` before Phase 1; read
-`references/self-improvement.md` and `references/structure-notes.md` when you reach those steps. Read
-`references/observability.md` when the user chooses local telemetry.
+Read `references/stack-plugins.md` before the plugin picker and `references/rule-templates.md` before
+Phase 1; read `references/self-improvement.md` and `references/structure-notes.md` when you reach those
+steps. The `enable-project-telemetry` skill owns telemetry mechanics and verification.
+
+## Before Phase 0 — Toolshed setup
+
+### Telemetry consent
+
+This is the first question in the whole flow. Before inspecting the directory, asking about the stack, or
+asking any project question, check whether this project already has enabled and verified telemetry. Detect
+that from the project-local telemetry settings and the result of the telemetry skill's verification command.
+When it is already enabled, say so briefly and skip this question on re-entry.
+
+When telemetry is not enabled, use one `AskUserQuestion` with this plain explanation: **"Enable local
+project telemetry? Each project must opt in: this writes only its `.claude/settings.local.json` and sends usage
+metadata through the local Collector to local Grafana. You can see API-equivalent cost; input, output, and cache
+token totals; tool-call names and counts; plus model, session, agent, and activity information. It never records
+prompt or response text, code or file contents, tool inputs or results, credentials, or environment values."**
+
+- **Yes:** hand off to `/workbench:enable-project-telemetry`; it owns consent confirmation, setup, and
+  verification. After it finishes, stop. Tell the user to restart Claude Code because its OTEL settings only
+  apply to a new session, then re-run `/workbench:init-workspace`. Do not assess the project or ask the
+  plugin question first.
+- **No:** continue immediately to the project-intent question. Do not ask again during this run.
+
+A telemetry restart also satisfies a pending plugin reload boundary. On re-entry, detect the completed
+telemetry setup and continue with the project-intent question, picker, or later phase without repeating
+answered setup questions.
+
+### Project intent
+
+Ask this plain-text question before listing any plugin options: **"What is this project for, and who is
+it for? One or two lines is plenty."** For a non-empty repo, first inspect only enough of the visible
+project signals to pair the question with a useful inference, such as "I see a Rust audio-plugin project;
+what does it make and who uses it?" Keep that inference tentative and let the user correct it.
+
+Keep the answer in the session/bootstrap plan. On re-entry, use a previously captured answer rather than
+asking again. A telemetry restart does not create an answer because this question happens after the restart.
+
+### Plugin picker
+
+Ask this third, before Phase 0. Read the current Toolshed marketplace manifest and
+`references/stack-plugins.md`, then offer the available plugins with a one-line plain-language description
+and a recommendation grounded in the stated project purpose and any visible stack signals. Say why when
+a plugin fits (for example, "recommended for this project because ...") and say "probably not needed
+here" when it does not. Do not fall back to generic core/extra tiers. Do not maintain a hard-coded plugin
+list in this skill: the current marketplace/catalog is the source of truth. Include the already-installed
+state in the options, so a re-entry does not ask the user to install a plugin that is already present. Use
+`AskUserQuestion` with multi-select when the current catalog fits its option limit; otherwise present
+grouped choices and collect the selection before moving on.
+
+The picker is a broad Toolshed choice informed by the project purpose, not a substitute for the later
+assessment. Keep the selected set for the installer plan; Phase 1 may recommend only missing, relevant
+stack extras rather than re-asking for the whole set.
 
 ## Phase 0 — Assess
 
@@ -71,34 +126,41 @@ Also check what's already there:
 Before the normal interview, inspect the machine-local Codex gateway mode with `codex-gateway env --show-mode`. When no mode is saved, ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the choice with `codex-gateway env --mode global` or `codex-gateway env --mode local`; do not ask again once a mode exists, and later setup flows honor it silently. Do not ask during non-interactive setup: default to local and say `wiring mode defaulted to per-project; run codex-gateway env --mode global to change`.
 
 Keep it short and propose defaults from what you detected, so the user confirms rather than types
-essays. Ask what you genuinely can't infer. A good compact set (adapt, don't recite):
+essays. The project-intent answer was collected before the picker; use it to seed the map and structure
+notes, and do not ask it again. Ask what you genuinely can't infer. A good compact set (adapt, don't
+recite):
 
-1. **What is this project and who is it for?** One line. (Grounds the map seed and structure notes.
-   For a greenfield repo this is the most important answer.)
-2. **Stack** — confirm what you detected, and anything not yet visible (intended stack for
+1. **Stack** — confirm what you detected, and anything not yet visible (intended stack for
    greenfield; test framework; deploy target like Cloudflare/Vercel/AWS).
-3. **Codebase or not?** Confirm your Phase 0 read ("this looks like a docs wiki, so I'll skip the
+2. **Codebase or not?** Confirm your Phase 0 read ("this looks like a docs wiki, so I'll skip the
    codebase map, sound right?").
-4. **Team or solo, and any existing conventions** worth encoding as rules (commit style, a
+3. **Team or solo, and any existing conventions** worth encoding as rules (commit style, a
    `CONTRIBUTING` or style doc to point a rule at, house preferences).
-5. **Plugins** — propose the core set from the catalog, then only the stack extras that fit. Let the
-   user accept, drop, or add to that compact list. Explain install scopes only if the user asks; the
-   default is project scope, local is only for an explicitly personal-per-repo choice, and user is
-   only for an explicitly cross-project choice.
-6. **CLAUDE.md?** Do they want one seeded (you'll delegate to `/init`), or skip it?
-7. **Usage observability?** Offer the per-project metadata-only opt-in through `/enable-project-telemetry`.
-   Say it writes this project's `settings.local.json`, prepares the loopback Collector and observer, and
-   can use the local dashboard when configured. Do not turn it on during workspace setup: leave the user
-   with the explicit opt-in step after reload.
+4. **Stack extras** — recommend only missing catalog plugins that fit the confirmed project. Keep the
+   picker selection unless the user changes it; do not repeat the broad Toolshed plugin question.
+5. **CLAUDE.md?** Recommend a lightweight static one seeded through `/init`; they can skip it for now if they prefer. Either answer keeps the live-rules plan. CLAUDE.md holds always-loaded project context; live rules handle conditional behavioral enforcement.
 
-Use the `AskUserQuestion` tool for the choices with clear options (plugins, codebase-or-not,
+Use the `AskUserQuestion` tool for the choices with clear options (stack extras, codebase-or-not,
 `CLAUDE.md` yes/no); ask the open ones (what is this, conventions) in plain text. If the user said
-"just set it up, use good defaults", select the proposed core and obviously useful stack extras and
-tell them what you picked.
+"just set it up, use good defaults", keep their picker selection and add only obviously useful missing
+stack extras.
 
 Before creating an LSP plugin plan, run its required binary check from the catalog. Report a missing
 binary and its exact install hint, but never run a package manager yourself. Let the user either install
 it, continue knowing code intelligence stays unavailable until they do, or drop that plugin.
+
+### Git setup for non-repos
+
+If Phase 0 found that the project directory is not a git repo, ask once with `AskUserQuestion` after
+the user has confirmed their intended stack and before any pre-reload artifact is written. Recommend
+`git init` with this short reason: it preserves the workspace setup and lets future sessions share it.
+
+- On yes, run `git init` in the project root, then write or merge a stack-appropriate `.gitignore`
+  derived from the detected or confirmed stack. Never overwrite an existing `.gitignore`.
+- On no, respect it without asking again. Record that the user declined so Phase 5 can give the one
+  relevant reminder.
+- Never auto-commit. Git initialization and `.gitignore` are the only changes in this step; the user
+  still owns the first commit.
 
 ## Phase 2 — Install, then pre-reload writes
 
@@ -142,11 +204,11 @@ a reload, or claim the workspace setup completed after a partial install. After 
 merge the plan's non-plugin settings without replacing existing values, then continue with the other
 pre-reload artifacts.
 
-### 2b. Optional local telemetry
+### 2b. Telemetry and reload handling
 
-Do not enable telemetry as part of `init-workspace`. If the user chose it in the interview, leave them a
-post-reload pointer to `/enable-project-telemetry`; that skill owns the explicit per-project consent, runtime
-preparation, settings merge, registry entry, and reload boundary.
+Telemetry is never enabled in this phase. When the user enabled it before Phase 0, the required session
+restart happens before this phase and satisfies this reload boundary too. Otherwise, request the single
+plugin reload in Phase 3.
 
 ### 2c. Atomic live rules
 
@@ -182,16 +244,22 @@ codebase this is light (the map will cover structure); for greenfield it's a rea
 
 ### 2e. `CLAUDE.md` (optional)
 
-If the user wanted one, **delegate to the built-in `/init`** rather than hand-rolling it. Note the
+Recommend a lightweight `CLAUDE.md` alongside live rules. They have separate jobs: `CLAUDE.md` is the
+always-loaded, static project context — what the project is, its stack, and its build and test commands.
+Live rules are conditional, targeted behavioral enforcement that gets injected when applicable. One does
+not replace the other; together they are the default setup.
+
+If the user wants `CLAUDE.md`, **delegate to the built-in `/init`** rather than hand-rolling it. Note the
 deliberate exception: every other toolshed plugin says never touch `CLAUDE.md`, because their hooks
 handle injection. `init-workspace` is the one-time static setup, so seeding `CLAUDE.md` here is correct,
-and the self-improvement loop is explicitly allowed to update it later. Say this out loud so it
-doesn't read as breaking the house rule.
+and the self-improvement loop is explicitly allowed to update it later. Say this out loud so it doesn't
+read as breaking the house rule.
 
 ## Phase 3 — Reload boundary
 
-All pre-reload writes and the complete installation must succeed before this boundary. Then request
-one reload and wait:
+All pre-reload writes and the complete installation must succeed before this boundary. A Claude Code restart
+that completed the telemetry flow counts as this boundary when it happened after the selected plugins were
+installed. Otherwise request one reload and wait:
 
 > The selected plugins are installed and the workspace files are ready. Run **`/reload-plugins`**, then
 tell me to continue. If Claude Code refuses because the reload changes MCP or LSP servers, run
@@ -207,7 +275,8 @@ installed, enabled, and at its requested scope. Then do the work that needed the
 empirically — this is the part that separates "wrote some files" from "set up a working workspace."
 
 1. **Codebase map** (skip for a not-a-codebase project). Invoke `map-codebase`. For a big repo it
-   fans out; for greenfield it seeds a lean map from the intent you captured. Confirm
+   fans out; with a ready Sidequest it can hand off an existing-code map and resume on the writer's
+   completion. Wait for that completion before Phase 4 continues, then confirm
    `.claude/.codebase-info/INDEX.md` exists.
 2. **live-rules is injecting.** On this turn, confirm the live-rules content is actually in your
    context (the plugin injects a recognizable rules block on SessionStart and every prompt). If you
@@ -229,8 +298,10 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 
 - Tell the user **exactly what they got**: which plugins are enabled, which rules are live (and that
   editing them takes effect next prompt), whether a map was built, and where the board is.
-- **Commit reminder.** In a git repo, tell them to commit `.claude/` so the team and every future
-  session share the setup. Offer to do it (ship-by-default if that's their preference).
+- **Commit reminder.** If the project is a git repo, tell them to commit `.claude/` so the team and
+  every future session share the setup. Offer to do it (ship-by-default if that's their preference). If
+  they declined Git setup, say once that the workspace is uncommitted and that they can run `git init`,
+  add a stack-appropriate `.gitignore`, then commit `.claude/` when they want to back it up.
 - **Point at the self-improvement loop.** Remind them the workspace now nudges itself to improve after
   work, and that `retro` runs a deeper reflection pass on demand.
 
@@ -251,8 +322,12 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 ## Success criteria
 
 - [ ] Workbench is installed at user scope
+- [ ] Telemetry consent was the first question; a yes completed the telemetry flow and restarted Claude Code
+      before resuming
+- [ ] Project intent was asked before the picker; current marketplace catalog plugin picker came third with
+      intent-grounded recommendations, before Phase 0
 - [ ] Phase 0 assessment done (new/existing, codebase/not, existing `.claude/` read and merged)
-- [ ] Stack and compact selected-plugin interview complete; LSP binary prerequisites checked
+- [ ] Stack and compact project-detail interview complete; LSP binary prerequisites checked
 - [ ] Bootstrap plan created in the session scratchpad; helper check and install both succeeded
 - [ ] CLI-owned `enabledPlugins` left to `claude plugin install`; only non-plugin settings and portable
       marketplace declarations merged

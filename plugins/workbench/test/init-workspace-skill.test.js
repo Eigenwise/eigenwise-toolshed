@@ -32,11 +32,65 @@ test('init-workspace keeps a single failure-safe reload boundary', () => {
   assert.match(skill, /confirm every selected plugin is\ninstalled, enabled, and at its requested scope/);
 });
 
+test('init-workspace offers Git before writing greenfield workspace artifacts', () => {
+  const stack = skill.indexOf('Stack** — confirm what you detected');
+  const gitSetup = skill.indexOf('### Git setup for non-repos');
+  const phaseTwo = skill.indexOf('## Phase 2 — Install, then pre-reload writes');
+
+  assert.ok(stack >= 0 && stack < gitSetup && gitSetup < phaseTwo);
+  assert.match(skill, /not a git repo, ask once with `AskUserQuestion`/);
+  assert.match(skill, /before any pre-reload artifact is written/);
+  assert.match(skill, /preserves the workspace setup and lets future sessions share it/);
+  assert.match(skill, /On yes, run `git init` in the project root/);
+  assert.match(skill, /stack-appropriate `\.gitignore`/);
+  assert.match(skill, /Never overwrite an existing `\.gitignore`/);
+  assert.match(skill, /On no, respect it without asking again/);
+  assert.match(skill, /Never auto-commit/);
+  assert.match(skill, /they declined Git setup, say once that the workspace is uncommitted/);
+});
+
 test('init-workspace asks for wiring mode only on an unset machine', () => {
   assert.match(skill, /Global \(all projects wired automatically via user settings\) or per-project \(each project opts in via its private settings\.local\.json — recommended\)\?/);
   assert.match(skill, /Persist the choice with `codex-gateway env --mode global` or `codex-gateway env --mode local`/);
   assert.match(skill, /do not ask again once a mode exists/);
   assert.match(skill, /wiring mode defaulted to per-project; run codex-gateway env --mode global to change/);
+});
+
+test('init-workspace starts with telemetry consent, project intent, then the live plugin picker', () => {
+  const telemetry = skill.indexOf('### Telemetry consent');
+  const intent = skill.indexOf('### Project intent');
+  const picker = skill.indexOf('### Plugin picker');
+  const assessment = skill.indexOf('## Phase 0 — Assess');
+
+  assert.ok(telemetry >= 0 && telemetry < intent && intent < picker && picker < assessment);
+  assert.match(skill, /This is the first question in the whole flow/);
+  assert.match(skill, /Each project must opt in: this writes only its `\.claude\/settings\.local\.json`/);
+  assert.match(skill, /local Collector to local Grafana/);
+  assert.match(skill, /API-equivalent cost; input, output, and cache\ntoken totals; tool-call names and counts; plus model, session, agent, and activity information/);
+  assert.match(skill, /never records\nprompt or response text, code or file contents, tool inputs or results, credentials, or environment values/);
+  assert.match(skill, /restart Claude Code.*re-run `\/workbench:init-workspace`/s);
+  assert.match(skill, /What is this project for, and who is\nit for\? One or two lines is plenty\./);
+  assert.match(skill, /Keep the answer in the session\/bootstrap plan/);
+  assert.match(skill, /Read the current Toolshed marketplace manifest and\n`references\/stack-plugins\.md`/);
+  assert.match(skill, /recommendation grounded in the stated project purpose and any visible stack signals/);
+  assert.match(skill, /recommended for this project because \.\.\./);
+  assert.match(skill, /probably not needed\nhere/);
+  assert.match(skill, /Do not fall back to generic core\/extra tiers/);
+  assert.match(skill, /Do not maintain a hard-coded plugin\s+list in this skill/);
+  assert.match(skill, /already-installed\s+state/);
+  assert.match(skill, /The project-intent answer was collected before the picker/);
+  assert.doesNotMatch(skill, /1\. \*\*What is this project and who is it for\?\*\*/);
+});
+
+test('init-workspace keeps CLAUDE.md and live rules as complementary defaults', () => {
+  assert.match(skill, /Recommend a lightweight static one seeded through `\/init`/);
+  assert.match(skill, /Either answer keeps the live-rules plan/);
+  assert.match(skill, /CLAUDE\.md holds always-loaded project context;\s+live rules handle conditional behavioral enforcement/);
+  assert.match(skill, /Recommend a lightweight `CLAUDE\.md` alongside live rules/);
+  assert.match(skill, /They have separate jobs: `CLAUDE\.md` is the\nalways-loaded, static project context/);
+  assert.match(skill, /Live rules are conditional, targeted behavioral enforcement that gets injected when applicable/);
+  assert.match(skill, /One does\nnot replace the other; together they are the default setup/);
+  assert.doesNotMatch(skill, /rely on live rules instead/i);
 });
 
 test('catalog has reproducible current plugin sources and LSP checks', () => {

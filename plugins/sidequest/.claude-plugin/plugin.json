@@ -1,7 +1,7 @@
 {
   "name": "sidequest",
-  "version": "2.55.0",
-  "description": "A Trello-light quest log for Claude Code. The side issues you mention mid-task (\"oh, and the contact form doesn't send\") get captured as tickets on the spot, with any pasted images attached, and managed on a live, self-hosted Kanban dashboard that spans every project you work in.",
+  "version": "2.63.0",
+  "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
   "author": {
     "name": "Eigenwise",
     "email": "kenny@eigenwise.io"

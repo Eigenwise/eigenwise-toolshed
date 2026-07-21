@@ -308,7 +308,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     assert.equal(row.collapsed, false);
   }
   for (const title of [
-    'Tokens over time, by type', 'Cost over time, by token type', 'Tokens over time, by model', 'Models in use', 'Token volume by backend',
+    'Tokens over time, by type', 'Cost allocation, by token type (USD)', 'Tokens over time, by model', 'Models in use', 'Token volume by backend',
     'Tool activity by name', 'MCP activity by server / tool', 'MCP definition footprint by server',
     'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
@@ -319,21 +319,23 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
 
   for (const title of [
     'Fresh input (uncached)', 'Cache reads (billed at 10%)',
-    'Output (priced about 5× input)', 'Cost (USD, burn proxy)',
+    'Output tokens (raw)', 'Cost (USD estimate)',
   ]) assert.equal(byTitle.get(title)?.type, 'stat', `missing explanatory stat: ${title}`);
   const tokenModel = byTitle.get('How tokens become cost');
   assert.equal(tokenModel?.type, 'text');
   assert.match(tokenModel.options.content, /Context volume = fresh input \+ cache reads \+ cache creation/);
   assert.match(tokenModel.options.content, /cache reads × 0\.1/);
   const tokenByType = byTitle.get('Tokens over time, by type');
-  const costByType = byTitle.get('Cost over time, by token type');
+  const costByType = byTitle.get('Cost allocation, by token type (USD)');
   assert.equal(costByType.fieldConfig.defaults.unit, 'currencyUSD');
   assert.equal(costByType.gridPos.y, tokenByType.gridPos.y);
   assert.equal(costByType.gridPos.x, tokenByType.gridPos.x + tokenByType.gridPos.w);
   assert.equal(costByType.gridPos.h, tokenByType.gridPos.h);
-  assert.match(costByType.description, /Approximate cost allocation/);
+  assert.match(costByType.description, /four legend Totals add up to that card within rounding/);
   assert.deepEqual(costByType.targets.map(({ legendFormat }) => legendFormat), ['fresh input', 'cache reads', 'cache creation', 'output']);
   for (const target of costByType.targets) {
+    assert.equal(target.instant, true);
+    assert.match(target.expr, /\[\$__range\]/);
     assert.match(target.expr, /or vector\(0\)/);
     assert.match(target.expr, /claude_code_cost_usage_USD_total/);
   }
