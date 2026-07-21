@@ -44,6 +44,12 @@ function stringField(input, ...names) {
   }
   return "";
 }
+function isSubagent(input) {
+  return ["agent_id", "agentId", "agent_type", "agentType"].some((name) => {
+    const identity = String(input[name] || "").trim().toLowerCase();
+    return identity && identity !== "main" && identity !== "main-thread";
+  });
+}
 
 // src/hooks/shared/output.ts
 function writeJson(value) {
@@ -94,7 +100,7 @@ function boardFor(input) {
 }
 function main() {
   const input = readStdin();
-  if (!input || input.agent_id || input.agentId) return;
+  if (!input || isSubagent(input)) return;
   const id = stringField(input, "session_id", "sessionId").trim();
   const prompt = stringField(input, "prompt").trim();
   if (!id || !prompt || AUTOMATION_TAG.test(prompt)) return;
@@ -103,7 +109,7 @@ function main() {
   if (state.reminded || !boardFor(input)) return;
   state.reminded = true;
   writeSessionState(file, state);
-  writeContext("UserPromptSubmit", "sidequest: substantive work goes through the board. File ticket(s) and dispatch, or claim --direct for deliberate inline work; trivial lookups are exempt.");
+  writeContext("UserPromptSubmit", "sidequest: gather enough read-only evidence or use Explore, then write precise tickets and route implementation by default. Use informed inline judgment when it fits.");
 }
 try {
   main();

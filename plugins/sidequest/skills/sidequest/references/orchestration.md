@@ -1,8 +1,8 @@
 # Orchestration: fan-out and agent teams
 
 Read this when you're about to run more than a couple of executors at once or when agent teams is on. The baseline
-delegation rule (route execution down to each ticket's stamped cheap model as short bounded runs,
-batch small same-model tickets, fan out over independent waves, inline only trivial one-steps) lives
+delegation rule (gather enough evidence with read-only tools or native `Explore`, write precise tickets,
+route implementation by default, batch small same-model tickets, and fan out over independent waves) lives
 in the main skill — this file is the detail on the bigger shapes.
 
 ## Decomposition in depth
@@ -189,13 +189,12 @@ reflexively go synchronous to save money, and do not answer the wakeup cost by w
 
 ## Discovery and research
 
-Default to fanning understanding out, not reading it serially on the lead. A single named file or a
-one-step lookup stays inline (`Read`, `Glob`, `Grep`, `WebFetch`), and a codebase you already know needs no
-ticket. But once understanding a subsystem would take roughly four or more file reads or a broad grep across
-it, that serial reading is spending orchestrator context on discovery a cheap executor should do — file a
-`codebase-exploration` spike, dispatch it, and let its comment hand the findings back. Any delegated
-exploration, research, review, or domain analysis requires that ticket first; route and dispatch it, then
-spawn the returned executor, and its concise findings inform the next ticket boundaries. Workflow agents
+Default to fanning understanding out when it will help, while using read-only tools or native `Explore` to
+gather enough evidence for precise ticket boundaries. A known file or one-step lookup can stay inline, and
+an unfamiliar subsystem can become a `codebase-exploration` spike when that gives the implementation wave
+a better brief. `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities that may
+run without a prepared Sidequest dispatch. Other delegated implementation, research, review, or domain
+analysis needs a ticketed route; its concise findings inform the next ticket boundaries. Workflow agents
 remain governed by their Workflow contract.
 
 ## Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)

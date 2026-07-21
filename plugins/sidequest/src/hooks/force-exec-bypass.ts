@@ -2,6 +2,8 @@ import { isRecord, readStdin, stringField, type HookInput } from './shared/input
 import { writeDeny, writeJson } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
+const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statusline-setup']);
+
 type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
 interface ExecutorClassification {
   kind: ExecutorKind;
@@ -222,6 +224,7 @@ function main(): void {
   const toolInput = toolInputOf(input);
   if (!toolInput) return;
   const type = String(toolInput.subagent_type || '');
+  if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
   const classification = classifyExecutor(type);
   if (!isCurrentExecutor(classification)) {
     writeDeny('PreToolUse', agentDenyReason(type));

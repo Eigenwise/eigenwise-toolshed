@@ -1,4 +1,4 @@
-import { readStdin, stringField, type HookInput } from './shared/input.js';
+import { isSubagent, readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeContext } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 import { readSessionState, sessionStateFile, writeSessionState } from './shared/session-state.js';
@@ -21,7 +21,7 @@ function boardFor(input: HookInput): string | null {
 
 function main(): void {
   const input = readStdin();
-  if (!input || input.agent_id || input.agentId) return;
+  if (!input || isSubagent(input)) return;
 
   const id = stringField(input, 'session_id', 'sessionId').trim();
   const prompt = stringField(input, 'prompt').trim();
@@ -33,7 +33,7 @@ function main(): void {
   state.reminded = true;
   writeSessionState(file, state);
 
-  writeContext('UserPromptSubmit', 'sidequest: substantive work goes through the board. File ticket(s) and dispatch, or claim --direct for deliberate inline work; trivial lookups are exempt.');
+  writeContext('UserPromptSubmit', 'sidequest: gather enough read-only evidence or use Explore, then write precise tickets and route implementation by default. Use informed inline judgment when it fits.');
 }
 
 try {

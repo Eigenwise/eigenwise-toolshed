@@ -81,7 +81,6 @@ function terminalDispatchTarget(agentName) {
 function main() {
   const input = readStdin();
   if (!input || stringField(input, "tool_name") !== "SendMessage" || !isRecord(input.tool_input)) return;
-  const agentType = stringField(input, "agent_type", "agentType");
   const toRaw = input.tool_input.to;
   const to = String(toRaw == null ? "" : toRaw).trim();
   const terminal = terminalDispatchTarget(to);
@@ -92,11 +91,6 @@ function main() {
     );
     return;
   }
-  if (!agentType.startsWith("sidequest-") || to.toLowerCase() === "main") return;
-  writeDeny(
-    "PreToolUse",
-    `sidequest: an executor (${agentType}) may not message another agent` + (to ? ` ("${to}")` : "") + ". Executors report UP — put it in your final message to the orchestrator, or a comment on your own ticket, and let the orchestrator route anything another ticket's owner needs. Do not nudge peers."
-  );
 }
 try {
   main();

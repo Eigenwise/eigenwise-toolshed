@@ -45,6 +45,12 @@ function stringField(input, ...names) {
   }
   return "";
 }
+function isSubagent(input) {
+  return ["agent_id", "agentId", "agent_type", "agentType"].some((name) => {
+    const identity = String(input[name] || "").trim().toLowerCase();
+    return identity && identity !== "main" && identity !== "main-thread";
+  });
+}
 
 // src/hooks/shared/output.ts
 function writeJson(value) {
@@ -98,7 +104,7 @@ function sidequestTaskId(value, dispatchedIds) {
 }
 function main() {
   const data = readStdin();
-  if (!data || data.tool_name !== "TaskOutput" || !isRecord(data.tool_input)) return;
+  if (!data || isSubagent(data) || data.tool_name !== "TaskOutput" || !isRecord(data.tool_input)) return;
   const sessionId = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
   const dispatchedIds = sessionDispatchIds(sessionId);
   if (sidequestTaskId(data.tool_input.task_id, dispatchedIds) || sidequestTaskId(data.tool_input.id, dispatchedIds)) {

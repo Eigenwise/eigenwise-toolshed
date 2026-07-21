@@ -69,6 +69,7 @@ function runtimeModule(name) {
 }
 
 // src/hooks/force-exec-bypass.ts
+var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
 function fallbackClassify(type) {
   const dispatch = /^sidequest-exec-dispatch-(low|medium|high|xhigh|max)$/.exec(type);
   if (dispatch) return { kind: "codex_dispatch", effort: dispatch[1] || null };
@@ -240,6 +241,7 @@ function main() {
   const toolInput = toolInputOf(input);
   if (!toolInput) return;
   const type = String(toolInput.subagent_type || "");
+  if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
   const classification = classifyExecutor(type);
   if (!isCurrentExecutor(classification)) {
     writeDeny("PreToolUse", agentDenyReason(type));

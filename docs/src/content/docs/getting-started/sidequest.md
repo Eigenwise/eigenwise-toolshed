@@ -15,11 +15,11 @@ Reload Claude Code, then open the board with `/sidequest:board`. The dashboard s
 
 Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. **Default settings** are shared by every board. **Board settings** fork a category for one board, and the dashboard marks each category as inherited or customized. Resetting a customized category relinks it to the defaults.
 
-Keep trivial lookups inline: a couple `Read`, `Glob`, `Grep`, or `WebFetch` calls that answer one question. Tracing a code path across files is a spike ticket. Every delegated task goes through a ticket and routed dispatch, including an investigation: file a spike (usually `codebase-exploration`), dispatch it, then spawn the returned executor. Routing selects the model, so Sidequest has no unrouted delegation path.
+Use read-only tools or native `Explore` to gather enough evidence for precise tickets, then route implementation by default. Use informed inline judgment when it fits. Routed implementation work goes through a ticket and dispatch. `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities; other delegated implementation, investigation, research, review, or domain analysis needs a ticketed route.
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
 
-On the first prompt in each session, an active routed board adds one reminder: substantive work goes through a ticket and dispatch, or a `--direct` claim for deliberate inline work. Trivial lookups are exempt. Later, Sidequest adds one substantive-work reminder after five main-thread actions, and one read-spiral reminder after twelve `Read`, `Grep`, `Glob`, or pure-read Bash actions with no board interaction. Both skip subagents, automation prompts, and boards with routing disabled.
+On the first prompt in each session, an active routed board adds one advisory reminder: gather enough read-only evidence or use `Explore`, then write precise tickets and route implementation by default. It leaves informed inline judgment to the orchestrator. The inline hook records activity counters without blocking or injecting repeat reminders. Both skip subagents, automation prompts, and boards with routing disabled.
 
 ## Work a ticket
 

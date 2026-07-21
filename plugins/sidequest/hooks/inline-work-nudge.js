@@ -44,13 +44,11 @@ function stringField(input, ...names) {
   }
   return "";
 }
-
-// src/hooks/shared/output.ts
-function writeJson(value) {
-  process.stdout.write(JSON.stringify(value));
-}
-function writeContext(hookEventName, additionalContext) {
-  writeJson({ hookSpecificOutput: { hookEventName, additionalContext } });
+function isSubagent(input) {
+  return ["agent_id", "agentId", "agent_type", "agentType"].some((name) => {
+    const identity = String(input[name] || "").trim().toLowerCase();
+    return identity && identity !== "main" && identity !== "main-thread";
+  });
 }
 
 // src/hooks/shared/paths.ts
@@ -84,8 +82,6 @@ function writeSessionState(file, state) {
 }
 
 // src/hooks/inline-work-nudge.ts
-var THRESHOLD = 5;
-var READ_THRESHOLD = 12;
 var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
 function boardFor(input) {
   const store = require(runtimeModule("store"));
@@ -117,40 +113,22 @@ function isReadClass(toolName, command) {
 }
 function main() {
   const input = readStdin();
-  if (!input || input.agent_id || input.agentId) return;
+  if (!input || isSubagent(input)) return;
   const id = stringField(input, "session_id", "sessionId").trim();
   const toolName = stringField(input, "tool_name", "toolName");
   const command = shellCommand(input);
   const prompt = stringField(input, "prompt").trim();
-  if (!id || !toolName || AUTOMATION_TAG.test(prompt)) return;
+  if (!id || !toolName || AUTOMATION_TAG.test(prompt) || !boardFor(input)) return;
   const file = sessionStateFile("inline-work", id);
   const state = readSessionState(file);
-  if (state.boardInteraction) return;
-  if (!boardFor(input)) return;
   if (isBoardInteraction(toolName, command)) {
     state.boardInteraction = true;
-    writeSessionState(file, state);
-    return;
-  }
-  let additionalContext = "";
-  if (isSubstantive(toolName, command)) {
-    const substantiveActions = (Number(state.substantiveActions) || 0) + 1;
-    state.substantiveActions = substantiveActions;
-    if (!state.nudged && substantiveActions >= THRESHOLD) {
-      state.nudged = true;
-      additionalContext = "sidequest: this session looks like it is doing substantive work inline. File it as a ticket and either dispatch it or claim it --direct if inline is deliberate; trivial one-liners are fine without.";
-    }
-  }
-  if (isReadClass(toolName, command)) {
-    const readActions = (Number(state.readActions) || 0) + 1;
-    state.readActions = readActions;
-    if (!state.readSpiralNudged && readActions >= READ_THRESHOLD) {
-      state.readSpiralNudged = true;
-      additionalContext = "sidequest: this session is tracing across files. A multi-file investigation is a spike ticket (usually codebase-exploration): file and dispatch it, or claim --direct if inline is deliberate.";
-    }
+  } else if (isSubstantive(toolName, command)) {
+    state.substantiveActions = (Number(state.substantiveActions) || 0) + 1;
+  } else if (isReadClass(toolName, command)) {
+    state.readActions = (Number(state.readActions) || 0) + 1;
   }
   writeSessionState(file, state);
-  if (additionalContext) writeContext("PreToolUse", additionalContext);
 }
 try {
   main();

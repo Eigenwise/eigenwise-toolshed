@@ -24,3 +24,11 @@ export function stringField(input: HookInput, ...names: string[]): string {
   }
   return '';
 }
+
+export function isSubagent(input: HookInput): boolean {
+  return ['agent_id', 'agentId', 'agent_type', 'agentType']
+    .some((name) => {
+      const identity = String(input[name] || '').trim().toLowerCase();
+      return identity && identity !== 'main' && identity !== 'main-thread';
+    });
+}

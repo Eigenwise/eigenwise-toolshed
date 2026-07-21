@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { isRecord, readStdin, stringField } from './shared/input.js';
+import { isRecord, isSubagent, readStdin, stringField } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
@@ -42,7 +42,7 @@ function sidequestTaskId(value: unknown, dispatchedIds: Set<string>): boolean {
 
 function main(): void {
   const data = readStdin();
-  if (!data || data.tool_name !== 'TaskOutput' || !isRecord(data.tool_input)) return;
+  if (!data || isSubagent(data) || data.tool_name !== 'TaskOutput' || !isRecord(data.tool_input)) return;
   const sessionId = stringField(data, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
   const dispatchedIds = sessionDispatchIds(sessionId);
   if (sidequestTaskId(data.tool_input.task_id, dispatchedIds) || sidequestTaskId(data.tool_input.id, dispatchedIds)) {

@@ -98,11 +98,19 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
 });
 
-test('pre-tool hook: generic agents are denied and directed to ticketed spikes', () => {
+test('pre-tool hook: native Explore and approved harness utilities pass through unchanged', () => {
+  for (const subagent_type of ['Explore', 'claude-code-guide', 'statusline-setup']) {
+    assert.equal(runHookOutput(FORCE_BYPASS, {
+      tool_name: 'Agent',
+      tool_input: { subagent_type, isolation: 'worktree', prompt: 'Read-only reconnaissance.' },
+    }), null, subagent_type);
+  }
+});
+
+test('pre-tool hook: arbitrary implementation agents are denied and directed to ticketed routes', () => {
   for (const [subagent_type, prompt] of [
-    ['Explore', 'Locate the current hook contract.'],
-    ['claude-code-guide', 'Check the current Agent-tool documentation.'],
     ['web-researcher', 'Research the latest routing guidance.'],
+    ['implementation-agent', 'Implement the new flow.'],
   ]) {
     const out = runHookOutput(FORCE_BYPASS, {
       tool_name: 'Agent',
@@ -129,13 +137,13 @@ test('pre-tool hook: generic agents are denied and directed to ticketed spikes',
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
-test('pre-tool hook: a marked generic agent is still denied', () => {
+test('pre-tool hook: a marked arbitrary agent is still denied', () => {
   const marked = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
-      subagent_type: 'Explore',
+      subagent_type: 'implementation-agent',
       isolation: 'worktree',
-      prompt: ` \n\t[${RETIRED_SCOUT}]\nQuick read-only lookup.`,
+      prompt: ` \n\t[${RETIRED_SCOUT}]\nImplement the change.`,
     },
   });
   const reason = marked.hookSpecificOutput.permissionDecisionReason;
@@ -221,6 +229,16 @@ test('task-output guard: leaves background task IDs and malformed unrelated inpu
   }
 });
 
+test('task-output guard: executor identity variants bypass the main-thread guard', () => {
+  for (const identity of [
+    { agent_id: 'executor' }, { agentId: 'executor' }, { agent_type: 'sidequest-exec-high' }, { agentType: 'sidequest-exec-high' },
+  ]) {
+    assert.strictEqual(runHookOutput(GUARD_TASK_OUTPUT, {
+      tool_name: 'TaskOutput', ...identity, tool_input: { task_id: 'sidequest-exec-dispatch-high@session-abc' },
+    }), null);
+  }
+});
+
 test('pre-tool hook warns a sidequest executor once near its turn backstop', () => {
   const agentId = `near-cap-${Date.now()}`;
   const payload = { tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: agentId, effort: 'high' };
@@ -239,42 +257,13 @@ test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', 
   assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_type: 'explore', agent_id: 'other-agent' }), null);
 });
 
-test('pre-tool inline-work nudge fires once after five substantive main-thread actions', () => {
-  const session_id = `inline-nudge-${Date.now()}`;
-  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
-  for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  const nudge = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.match(nudge.hookSpecificOutput.additionalContext, /substantive work inline/);
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-});
-
-test('pre-tool inline-work nudge detects a read spiral after twelve main-thread reads', () => {
-  const session_id = `inline-read-${Date.now()}`;
-  const reads = [
-    { tool_name: 'Read', tool_input: {} },
-    { tool_name: 'Grep', tool_input: {} },
-    { tool_name: 'Glob', tool_input: {} },
-    { tool_name: 'Bash', tool_input: { command: 'git diff --stat' } },
-  ];
-  for (let i = 0; i < 11; i += 1) {
-    assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[i % reads.length] }), null);
+test('pre-tool inline-work hook records activity without injecting repeat reminders', () => {
+  const session_id = `inline-advisory-${Date.now()}`;
+  for (let i = 0; i < 20; i += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id, cwd: BOARD_PATH, tool_name: i % 2 ? 'Read' : 'Write', tool_input: {},
+    }), null);
   }
-  const nudge = runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[3] });
-  assert.match(nudge.hookSpecificOutput.additionalContext, /tracing across files/);
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, ...reads[0] }), null);
-});
-
-test('pre-tool inline-work nudge lets both reminders fire once in one session', () => {
-  const session_id = `inline-both-${Date.now()}`;
-  const write = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
-  for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).hookSpecificOutput.additionalContext, /substantive work inline/);
-
-  const read = { session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
-  for (let i = 0; i < 11; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, read), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, read).hookSpecificOutput.additionalContext, /tracing across files/);
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null);
-  assert.equal(runHookOutput(INLINE_WORK_NUDGE, read), null);
 });
 
 test('pre-tool inline-work nudge stays quiet after a board interaction', () => {
@@ -299,9 +288,13 @@ test('pre-tool inline-work nudge stays quiet after a board interaction', () => {
   }
 });
 
-test('pre-tool inline-work nudge ignores subagents and routing-disabled boards', () => {
-  const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', tool_name: 'Read', tool_input: {} };
-  for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
+test('pre-tool inline-work nudge ignores subagent identity variants and routing-disabled boards', () => {
+  for (const identity of [
+    { agent_id: 'executor' }, { agentId: 'executor' }, { agent_type: 'sidequest-exec-high' }, { agentType: 'sidequest-exec-high' },
+  ]) {
+    const subagent = { session_id: `inline-subagent-${Date.now()}`, cwd: BOARD_PATH, ...identity, tool_name: 'Read', tool_input: {} };
+    for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, subagent), null);
+  }
 
   store.setProjectRouting(slug, 'disabled');
   try {
@@ -324,7 +317,7 @@ test('user-prompt reminder fires once for the first human prompt', () => {
   const payload = { session_id: `board-first-${Date.now()}`, cwd: BOARD_PATH, prompt: 'Fix the board hook.' };
   const reminder = runHookOutput(BOARD_FIRST_REMINDER, payload);
   assert.equal(reminder.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
-  assert.match(reminder.hookSpecificOutput.additionalContext, /substantive work goes through the board/);
+  assert.match(reminder.hookSpecificOutput.additionalContext, /gather enough read-only evidence or use Explore/);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, payload), null);
 });
 
@@ -334,12 +327,16 @@ test('user-prompt reminder ignores automation without consuming the session flag
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<agent-message>Worker needs input.</agent-message>' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command>Command output.</local-command>' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command-caveat>Command output.</local-command-caveat>' }), null);
-  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /claim --direct/);
+  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /Use informed inline judgment/);
 });
 
-test('user-prompt reminder ignores subagents and routing-disabled boards', () => {
-  const subagent = { session_id: `board-subagent-${Date.now()}`, cwd: BOARD_PATH, agent_id: 'executor', prompt: 'Implement the ticket.' };
-  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, subagent), null);
+test('user-prompt reminder ignores subagent identity variants and routing-disabled boards', () => {
+  for (const identity of [
+    { agent_id: 'executor' }, { agentId: 'executor' }, { agent_type: 'sidequest-exec-high' }, { agentType: 'sidequest-exec-high' },
+  ]) {
+    const subagent = { session_id: `board-subagent-${Date.now()}`, cwd: BOARD_PATH, ...identity, prompt: 'Implement the ticket.' };
+    assert.equal(runHookOutput(BOARD_FIRST_REMINDER, subagent), null);
+  }
 
   store.setProjectRouting(slug, 'disabled');
   try {
@@ -504,16 +501,10 @@ function runGuardPeer(payload?: any) {
   return out.trim() ? JSON.parse(out) : null;
 }
 
-test('peer-guard: an executor messaging a peer is denied', () => {
-  const out = runGuardPeer({ agent_type: 'sidequest-exec-high', tool_input: { to: 'reviewer', message: 'look at SQ-70' } });
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /report UP/i);
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /reviewer/);
-});
-
-test('peer-guard: a Codex executor messaging a peer is denied', () => {
-  const out = runGuardPeer({ agent_type: 'sidequest-exec-codex-gpt-5-6-luna-medium', tool_input: { to: 'other-worker', message: 'hi' } });
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+test('peer-guard: executor and Codex executor peer messages are allowed', () => {
+  for (const agent_type of ['sidequest-exec-high', 'sidequest-exec-codex-gpt-5-6-luna-medium']) {
+    assert.strictEqual(runGuardPeer({ agent_type, tool_input: { to: 'reviewer', message: 'look at SQ-70' } }), null);
+  }
 });
 
 test('peer-guard: an executor reporting to main is allowed', () => {
@@ -583,6 +574,14 @@ test('home-delete guard: blocks a recursive delete using $home', () => {
   const out = runHomeDeleteGuard('PowerShell', 'Remove-Item -Recurse -Force $home');
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /user profile or \.claude root/);
+});
+
+test('home-delete guard: applies to executors too', () => {
+  const out = runHookOutput(GUARD_HOME_DELETE, {
+    tool_name: 'PowerShell', agent_type: 'sidequest-exec-high', agent_id: 'executor',
+    tool_input: { command: 'Remove-Item -Recurse -Force $home' },
+  });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
 });
 
 test('home-delete guard: blocks profile and .claude roots', () => {
@@ -662,54 +661,31 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
   assert.equal(store.getTicket(slug, fresh.ref).claim.by, 'fresh-session');
 });
 
-test('session-start: carries the route-down + tight-loop doctrine', () => {
+test('session-start: carries evidence-first advisory routing guidance', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.match(ctx, /sidequest \(active\)/);
   assert.ok(ctx.includes('ATOMIC'), 'must demand atomic tickets (stuck executors come from oversized scope)');
   assert.match(ctx, /independently checkable/, 'must split independently checkable pieces');
   assert.match(ctx, /investigation, spike, or review/, 'a ticket can be investigation, not only a code change');
-  assert.match(ctx, /Split for parallelism/, 'must frame splitting as parallel fan-out, not only cheap execution');
-  assert.match(ctx, /tightly coupled work together/, 'must keep coupled work in one ticket');
-  for (const field of ['exact anchors', 'contract', 'bounds/non-goals', 'dependencies/decisions']) {
-    assert.ok(ctx.includes(field), `must require ${field} in the ticket spec`);
-  }
-  assert.match(ctx, /verify command, or the artifact\/answer/, 'done is a verify command for a change or an artifact/answer for an investigation');
-  assert.ok(ctx.includes('DOWN'), 'must say execution routes down to the routed model');
-  assert.match(ctx, /substantive investigations and changes are board tickets/, 'must preserve ticket-first substantive work');
-  assert.match(ctx, /Every Agent launch uses that executor/, 'must require every Agent launch to use a dispatched executor');
-  assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/, 'must give tiny lookups direct tools');
-  assert.match(ctx, /Any delegated work, including a quick investigation, is a spike ticket/, 'must make every investigation ticketed');
-  assert.match(ctx, /usually `codebase-exploration`/, 'must name the usual investigation category');
-  assert.ok(ctx.includes('fresh `dispatch`'), 'must require a fresh dispatch result');
-  assert.ok(ctx.includes('exact stable executor, spawn, and token'), 'must use the exact instant dispatch result');
-  assert.match(ctx, /Dispatch is instant: no registration\/watcher wait/, 'must replace the registration wait flow');
-  assert.ok(ctx.includes('do not use `native_agent`'), 'must reject temporary native dispatch for normal execution');
-  assert.ok(ctx.includes('bypassPermissions'), 'must require unattended executors to launch in bypass');
-  assert.ok(ctx.includes('Native results: never TaskOutput.'), 'must ban invalid native Agent TaskOutput polling');
-  assert.ok(ctx.includes('pulse ref / changes --since; TaskStop only after terminal board evidence'), 'must give the board-based liveness and stop rule');
-  assert.ok(ctx.includes('Never proxy-wait'), 'must ban proxy waiters (side-channel Bash/Monitor/cron waits + blocking TaskOutput on a proxy)');
+  assert.match(ctx, /gather enough evidence with read-only tools or Explore/);
+  assert.match(ctx, /Use informed inline judgment/);
+  assert.match(ctx, /Any implementation agent still needs a ticketed route/);
+  assert.match(ctx, /Native results: never TaskOutput/);
+  assert.match(ctx, /pulse ref \/ changes --since; TaskStop only after terminal board evidence/);
   assert.match(ctx, /ONE diagnose-first retry/);
   assert.match(ctx, /never blind respawn/);
   assert.match(ctx, /Two failures: comment evidence \+ surface user/);
   assert.match(ctx, /one background timer, never foreground sleep loop/);
-  assert.ok(ctx.includes('SHORT'), 'must demand short, bounded executor runs');
-  assert.ok(ctx.includes('bounce back'), 'must tell executors to bounce back, not wander');
-  assert.ok(ctx.includes('ONE executor'), 'must carry the batch-small-tickets rule');
-  assert.ok(ctx.includes('trivial one-step'), 'inline is only for trivial one-steps');
-  assert.ok(
-    ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'),
-    'must push the MCP tools as the first-choice board interface (models default to the CLI out of habit)'
-  );
+  assert.ok(ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'));
 });
 
-test('session-start: teaches ticketed investigation spikes from turn zero', () => {
+test('session-start: keeps Explore narrow while rejecting generic implementation agents', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /Any delegated work, including a quick investigation, is a spike ticket/);
-  assert.match(ctx, /usually `codebase-exploration`/);
+  assert.match(ctx, /Explore and approved harness utilities are the narrow reconnaissance exceptions/);
   const pluginRoot = path.join(__dirname, '..');
-  const deny = fs.readFileSync(path.join(HOOKS, 'force-exec-bypass.js'), 'utf8');
+  const forceBypass = fs.readFileSync(path.join(HOOKS, 'force-exec-bypass.js'), 'utf8');
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
-  for (const surface of [deny, skill, ctx]) {
+  for (const surface of [forceBypass, skill, ctx]) {
     assert.doesNotMatch(surface, new RegExp(RETIRED_SCOUT), 'published guidance must not carry the retired bypass');
   }
 });
@@ -801,20 +777,18 @@ test('session-start: category-route sync ignores retired prefs data', () => {
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
 });
-test('session-start: compact and resume preserve the minimum ticket and executor policy', () => {
+test('session-start: compact and resume preserve evidence-first routing guidance', () => {
   for (const source of ['compact', 'resume']) {
     const ctx = runHook(SESSION, { session_id: 't', source });
     assert.match(ctx, /sidequest \(active — context restored\)/);
     assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
-    assert.match(ctx, /Substantive work needs a board ticket/, `${source} must preserve ticket-first work`);
-    assert.match(ctx, /fresh dispatch's exact token-gated executor and spawn/, `${source} must preserve exact dispatch execution`);
-    assert.match(ctx, /Every Agent launch must use that executor/, `${source} must require dispatch for every Agent launch`);
-    assert.match(ctx, /Read, Glob, Grep, or WebFetch inline/, `${source} must name direct lookup tools`);
-    assert.match(ctx, /tracing code across files needs a spike ticket/, `${source} must route multi-file investigation through the board`);
-    assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'), `${source} must prefer the MCP doing-list read`);
+    assert.match(ctx, /Gather enough evidence with Read, Glob, Grep, WebFetch, or Explore/);
+    assert.match(ctx, /Use informed inline judgment/);
+    assert.match(ctx, /Routed ticket execution uses fresh dispatch's exact token-gated executor and spawn/);
+    assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'));
     assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
     assert.ok(ctx.includes('never TaskOutput'), `${source} must ban native Agent TaskOutput polling`);
-    assert.ok(ctx.includes('changes --since; TaskStop only after terminal board evidence'), `${source} must retain the board-based liveness and stop rule`);
+    assert.ok(ctx.includes('changes --since; TaskStop only after terminal board evidence'));
     assert.match(ctx, /ONE diagnose-first retry/);
     assert.match(ctx, /never blind respawn/);
     assert.match(ctx, /Two failures: comment evidence \+ surface user/);
@@ -883,11 +857,11 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(readme, /marker-triggered capture/);
   assert.doesNotMatch(readme, /native_agent/);
   assert.match(readme, /exact stable executor/);
-  assert.match(readme, /no unrouted delegation/);
-  assert.match(readme, /codebase-exploration/);
+  assert.match(readme, /Native `Explore`/);
+  assert.match(readme, /Other generic\/custom implementation Agent launches are denied/);
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
-  assert.match(skill, /spike ticket/);
-  assert.match(skill, /codebase-exploration/);
+  assert.match(skill, /native `Explore`/);
+  assert.match(skill, /ticketed route/);
   for (const file of [
     path.join(pluginRoot, 'README.md'),
     path.join(HOOKS, 'force-exec-bypass.js'),
