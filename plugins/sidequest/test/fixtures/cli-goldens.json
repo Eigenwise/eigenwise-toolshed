@@ -2,8 +2,8 @@
   "help": {
     "args": ["--help"],
     "status": 0,
-    "stdoutBytes": 10398,
-    "stdoutSha256": "c68d368f0bcee5ab2baee9ef7e41805f21206335000cc2ae5810d329126ea1cf",
+    "stdoutBytes": 10469,
+    "stdoutSha256": "8438962c150d88b9ad3b43b93b01e7de31a21c3651503426793c825dd4d581c2",
     "stderr": ""
   },
   "unknown": {

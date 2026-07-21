@@ -723,11 +723,11 @@ async function cmdClaim(opts: any, positional: any) {
     }
     return;
   }
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts) });
   const warnings = res.ok ? claimPlanningWarnings(res.ticket, meta.path) : [];
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });
-    if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.claim);
+    if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim);
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
     return;
@@ -1074,7 +1074,8 @@ async function cmdNext(opts: any) {
   const { slug, meta } = await resolveProject(opts);
   if (!validateModelFilter('next', opts)) return;
   const by = workerId(opts);
-  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, direct: !!opts.direct, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, direct: !!opts.direct, reason: opts.reason, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  if (!res.ok && res.reason) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || 'next ticket', res.ticket || res.claim);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -2032,8 +2033,8 @@ Usage:
 
 Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
-  sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level] [--direct]   atomically take a ticket (category-routed executor claims require a prepared nonce and exact executor; --direct records an intentional inline bypass)
-  sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
+  sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level] [--direct --reason "why no executor can do this"]   atomically take a ticket (category-routed executor claims require a prepared nonce and exact executor; direct is a justified inline exception)
+  sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why no executor can do this"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   mark it done (stamp who/what worked it)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged

@@ -124,7 +124,7 @@ is unavailable), attaching any pasted image path.
 The board may be shared: a ticket must be **claimed** before you touch it, and claiming is
 **atomic**. **Never work a ticket you haven't successfully claimed**, even one you just filed.
 Lifecycle (executors use the matching MCP tools; CLI forms for inline/admin work):
-`next`/`claim SQ-3 --by <you> --direct` (intentional inline bypass only) → `commit` (declared
+`next`/`claim SQ-3 --by <you> --direct --reason "why no executor can do this"` (user-labeled `direct-ok` exception only) → `commit` (declared
 ticket paths only) → `submit --commit <hash> --verify "<cmd>"` (parks the verified LOCAL commit)
 or `done --model <model> --effort <level>` (inline/non-repo only) or `release` (drop unfinished,
 optionally `--status todo`).
@@ -163,9 +163,9 @@ through the publish transaction first.
 ## Route execution down; keep the loop tight
 
 The orchestrator is usually the most expensive model. Gather enough evidence with direct read-only tools or
-native `Explore`, then write precise tickets and route implementation by default. Use informed inline
-judgment when it fits. A claim without its prepared token is refused, and `--direct` is the auditable
-inline path. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
+native `Explore`, then write precise tickets and route implementation by default. A routed direct claim needs a
+user-granted `direct-ok` label and a meaningful reason (20+ characters), and cannot retroactively legitimize
+prior inline investigation. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
 as comments, not transcripts. Routed implementation agents use a freshly dispatched Sidequest executor.
 `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities; other
 delegated implementation or investigation work needs a ticketed route.

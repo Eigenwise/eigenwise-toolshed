@@ -1957,8 +1957,16 @@ function reconcileLaunchedDispatches(sessionId, opts) {
   }
   return { ok: true, reconciled };
 }
+const DIRECT_REASON_MIN_LENGTH = 20;
 function isRoutedTicket(ticket) {
   return Boolean(ticket && ticket.model && ticket.effort && ticket.exec);
+}
+function directReason(reason) {
+  const value = String(reason || "").trim();
+  return value.length >= DIRECT_REASON_MIN_LENGTH ? value : null;
+}
+function hasDirectPermission(ticket) {
+  return Array.isArray(ticket?.labels) && ticket.labels.some((label) => String(label).toLowerCase() === "direct-ok");
 }
 function claimTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
@@ -1970,6 +1978,8 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (!t2) return { ok: false, reason: "not_found" };
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
+    if (opts.direct && isRoutedTicket(t2) && (opts.source === "cli" || opts.source === "mcp") && !hasDirectPermission(t2)) return { ok: false, reason: "direct_not_allowed", ticket: t2 };
+    if (opts.direct && isRoutedTicket(t2) && (opts.source === "cli" || opts.source === "mcp") && !directReason(opts.reason)) return { ok: false, reason: "direct_reason_required", ticket: t2 };
     if (opts.direct && t2.dispatchNonce) return { ok: false, reason: "direct_conflict", ticket: t2 };
     if (!opts.direct && t2.dispatchNonce && opts.token !== t2.dispatchNonce) return { ok: false, reason: "token", ticket: t2 };
     if (!opts.direct && t2.dispatchNonce && opts.executor !== t2.dispatchExecutor) return { ok: false, reason: "executor_mismatch", ticket: t2, expectedExecutor: t2.dispatchExecutor };
@@ -1989,7 +1999,8 @@ function claimTicket(slug, idOrRef, by, opts) {
         model: t2.model,
         effort: t2.effort,
         executor: opts.executor ? String(opts.executor) : null,
-        source: opts.source ? String(opts.source) : "store"
+        source: opts.source ? String(opts.source) : "store",
+        reason: directReason(opts.reason)
       };
     }
     const state = dispatchState(t2);
@@ -2324,8 +2335,8 @@ function claimNext(slug, by, opts) {
     return String(a.createdAt).localeCompare(String(b.createdAt));
   });
   for (const cand of candidates) {
-    const res = claimTicket(slug, cand.id, by, { direct: !!opts.direct, source: opts.source, sessionId: opts.sessionId });
-    if (res.ok) return res;
+    const res = claimTicket(slug, cand.id, by, { direct: !!opts.direct, reason: opts.reason, source: opts.source, sessionId: opts.sessionId });
+    if (res.ok || res.reason === "direct_not_allowed" || res.reason === "direct_reason_required") return res;
   }
   return { ok: false, reason: "empty" };
 }

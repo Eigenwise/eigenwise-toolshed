@@ -31,8 +31,9 @@ const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 
 const BUDGET = {
-  session: 2850,
-  compact: 1000,
+  session: 4700,
+  compact: 2900,
+  workforce: 1800,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
 
@@ -667,9 +668,9 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.ok(ctx.includes('ATOMIC'), 'must demand atomic tickets (stuck executors come from oversized scope)');
   assert.match(ctx, /independently checkable/, 'must split independently checkable pieces');
   assert.match(ctx, /investigation, spike, or review/, 'a ticket can be investigation, not only a code change');
-  assert.match(ctx, /gather enough evidence with read-only tools or Explore/);
-  assert.match(ctx, /Use informed inline judgment/);
-  assert.match(ctx, /Any implementation agent still needs a ticketed route/);
+  assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
+  assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/);
+  assert.match(ctx, /Ticket \+ dispatch MUST precede multi-file exploration/);
   assert.match(ctx, /Native results: never TaskOutput/);
   assert.match(ctx, /pulse ref \/ changes --since; TaskStop only after terminal board evidence/);
   assert.match(ctx, /ONE diagnose-first retry/);
@@ -681,7 +682,7 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
 
 test('session-start: keeps Explore narrow while rejecting generic implementation agents', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /Explore and approved harness utilities are the narrow reconnaissance exceptions/);
+  assert.match(ctx, /`Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities/);
   const pluginRoot = path.join(__dirname, '..');
   const forceBypass = fs.readFileSync(path.join(HOOKS, 'force-exec-bypass.js'), 'utf8');
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
@@ -709,6 +710,19 @@ test('session-start: says sidequest coexists with an external tracker (Jira)', (
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.ok(ctx.includes('external tracker'), 'must address the external-tracker case');
   assert.ok(ctx.includes('Jira'), 'must name Jira so the "already tracked" reflex is countered');
+});
+
+test('session-start: shows the live investigation workforce within its cap', () => {
+  for (const source of ['', 'compact', 'resume']) {
+    const ctx = runHook(SESSION, { session_id: `workforce-${source || 'startup'}`, source });
+    const start = ctx.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:');
+    assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
+    const workforce = ctx.slice(start);
+    assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `${source || 'startup'} workforce is ${Buffer.byteLength(workforce)} bytes`);
+    for (const id of ['codebase-exploration', 'debugging', 'spike-investigation', 'deep-research', 'web-research']) {
+      assert.match(workforce, new RegExp(`${id} — .+ \\(.+·.+\\)`), id);
+    }
+  }
 });
 
 test('session-start: stays inside its byte budget and off the retired doctrine', () => {
@@ -782,9 +796,10 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     const ctx = runHook(SESSION, { session_id: 't', source });
     assert.match(ctx, /sidequest \(active — context restored\)/);
     assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
-    assert.match(ctx, /Gather enough evidence with Read, Glob, Grep, WebFetch, or Explore/);
-    assert.match(ctx, /Use informed inline judgment/);
-    assert.match(ctx, /Routed ticket execution uses fresh dispatch's exact token-gated executor and spawn/);
+    assert.match(ctx, /ROLE: ORCHESTRATOR/);
+    assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/);
+    assert.match(ctx, /Ticket \+ dispatch BEFORE multi-file exploration/);
+    assert.match(ctx, /Routed direct:true needs `direct-ok` \+ a reason/);
     assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'));
     assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
     assert.ok(ctx.includes('never TaskOutput'), `${source} must ban native Agent TaskOutput polling`);

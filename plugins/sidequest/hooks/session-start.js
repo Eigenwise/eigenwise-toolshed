@@ -64,30 +64,47 @@ function runtimeModule(name) {
 }
 
 // src/hooks/session-start.ts
-var MAX_TAXONOMY_BYTES = 400;
-var MAX_TAXONOMY_IDS = 10;
-function taxonomyIds(ids) {
-  const shown = ids.slice(0, MAX_TAXONOMY_IDS);
-  return shown.join(", ") + (shown.length < ids.length ? `, +${ids.length - shown.length} more` : "");
+var MAX_WORKFORCE_BYTES = 1800;
+var MAX_WORKFORCE_DESCRIPTION = 90;
+function truncateText(value, max) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)).trimEnd() + "…";
 }
-function taxonomyLine() {
+function workforceSection() {
   try {
     const store = require(runtimeModule("store"));
     const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     const found = store.findProject(store.nearestRepoRoot(start));
     const project = found.ok && found.slug ? found.slug : "";
-    const globalIds = store.getCategories({ includeDisabled: false }).map((category) => category.id);
-    const effectiveIds = new Set(store.getCategories({ project, includeDisabled: false }).map((category) => category.id));
-    const projectIds = project ? store.getProjectCategories(project).rows.filter((row) => row.kind === "ADD" && effectiveIds.has(row.id)).map((row) => row.id) : [];
-    const line = "taxonomy (" + globalIds.length + "): " + taxonomyIds(globalIds) + (projectIds.length ? " | project: " + taxonomyIds(projectIds) : "");
-    return Buffer.byteLength(line) <= MAX_TAXONOMY_BYTES ? line : "";
+    const header = "YOUR EXECUTORS — delegate work AND investigation to them:";
+    const entries = store.getCategories({ project, includeDisabled: false }).map((category) => {
+      const route = store.resolveCategoryRoute(category);
+      return {
+        id: String(category.id || "").trim(),
+        route: `(${route.model}·${route.effort})`,
+        description: truncateText(category.description, MAX_WORKFORCE_DESCRIPTION)
+      };
+    });
+    const bytesFor = (lines) => Buffer.byteLength([header, ...lines].join("\n"));
+    const base = entries.map((entry) => `${entry.id} — ${entry.route}`);
+    if (bytesFor(base) > MAX_WORKFORCE_BYTES) return [header, ...base].join("\n");
+    const priority = /* @__PURE__ */ new Set(["codebase-exploration", "debugging", "spike-investigation", "deep-research", "web-research"]);
+    const preferred = [...entries.filter((entry) => priority.has(entry.id)), ...entries.filter((entry) => !priority.has(entry.id))];
+    const descriptions = /* @__PURE__ */ new Map();
+    for (const entry of preferred) {
+      if (!entry.description) continue;
+      descriptions.set(entry.id, entry.description);
+      const lines = entries.map((candidate) => `${candidate.id} — ${descriptions.get(candidate.id) ? descriptions.get(candidate.id) + " " : ""}${candidate.route}`);
+      if (bytesFor(lines) > MAX_WORKFORCE_BYTES) descriptions.delete(entry.id);
+    }
+    return [header, ...entries.map((entry) => `${entry.id} — ${descriptions.get(entry.id) ? descriptions.get(entry.id) + " " : ""}${entry.route}`)].join("\n");
   } catch (_) {
     return "";
   }
 }
-function withTaxonomy(context) {
-  const line = taxonomyLine();
-  return line ? context + "\n" + line : context;
+function withWorkforce(context) {
+  const section = workforceSection();
+  return section ? context + "\n" + section : context;
 }
 function provisionExecAgents() {
   try {
@@ -116,7 +133,7 @@ function nudgeOff() {
 }
 function emit(context, notice) {
   const output = notice ? context + "\n" + notice : context;
-  writeContext("SessionStart", withTaxonomy(output));
+  writeContext("SessionStart", withWorkforce(output));
 }
 function main() {
   const data = readStdin();
@@ -132,13 +149,13 @@ function main() {
   const source = stringField(data, "source");
   if (source === "compact" || source === "resume") {
     emit(
-      "=== sidequest (active — context restored) ===\nReload Sidequest. Gather enough evidence with Read, Glob, Grep, WebFetch, or Explore, then write precise tickets and route implementation by default. Use informed inline judgment. Routed ticket execution uses fresh dispatch's exact token-gated executor and spawn. Use mcp__plugin_sidequest_board__list with status=doing FIRST; CLI fallback: `" + cli + " list --status doing`.\nNative results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Denied/unclaimed: pulse + deny verbatim, ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Ack launch: confirm holder/token.\n",
+      '=== sidequest (active — context restored) ===\nROLE: ORCHESTRATOR. Reload Sidequest. REQUIRED: Substantive work needs a board ticket; fresh dispatch\'s exact token-gated executor and spawn. Every Agent launch must use that executor. Ticket + dispatch BEFORE multi-file exploration: the second file you open to answer one question is the boundary. Tiny lookup: Read, Glob, Grep, or WebFetch inline; tracing code across files needs a spike ticket. Routed direct:true needs `direct-ok` + a reason; invalid: "the context is already loaded in this session", "it\'s a small patch", "a fresh executor would need context transfer / handoff costs more". Direct never retroactively legitimizes inline investigation. Use mcp__plugin_sidequest_board__list with status=doing FIRST; CLI fallback: `' + cli + " list --status doing`.\nNative results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. one background timer, never foreground sleep loop.\n",
       restartNotice
     );
     return;
   }
   emit(
-    "=== sidequest (active) ===\nReload the Sidequest skill before acting. Plan multi-part requests as independently checkable ATOMIC tickets. Atomic = one change, investigation, spike, or review a single agent finishes and checks. Split for parallelism: independent tickets fan out; keep tightly coupled work together. Specs need exact anchors, contract, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. One ticket owning several deliverables (CLI + wiring + tests) is a smell: use a ticketed planning investigation that pins the shared contract, then a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest locally.\nExecution economy — expensive orchestrator, cheap executors:\n• Route execution DOWN: gather enough evidence with read-only tools or Explore, then write precise tickets and route implementation by default. Use informed inline judgment. Fresh `dispatch` returns the exact stable executor, spawn, and token for routed ticket execution. Any implementation agent still needs a ticketed route; Explore and approved harness utilities are the narrow reconnaissance exceptions. Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Never proxy-wait: no Bash/PowerShell/Monitor/cron executor/report poll or blocking TaskOutput on a proxy. Denied/unclaimed: pulse + deny reason verbatim; ONE diagnose-first retry only, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Claude passes `model: exec.model`; Codex omits it. Use `bypassPermissions`; do not use `native_agent`.\n• SHORT: categories by description, not name; ticket description is executor brief; bounce back.\n• Batch small SAME-model tickets into ONE executor; parallelize only independent tickets.\n• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\n• File side issues with mcp__plugin_sidequest_board__add (or the CLI fallback), then keep working. Filing never asks you to work it.\nBoard actions go through the mcp__plugin_sidequest_board__* MCP tools whenever available — reach for them FIRST; Bash+CLI is the fallback. Open the board: `" + cli + " dashboard`.",
+    '=== sidequest (active) ===\nROLE: you are this project\'s ORCHESTRATOR, the most expensive model here. Executors execute/investigate and are cheaper: offload them; read only to write tickets.\nReload the Sidequest skill before acting. Plan multi-part: independently checkable ATOMIC tickets. Atomic = one change, investigation, spike, or review one agent checks. Split for parallelism; keep tightly coupled work together. Specs need exact anchors, contract, bounds/non-goals, dependencies/decisions, and a verify command, or the artifact/answer. several deliverables on one ticket is a smell: use a ticketed planning investigation that pins the shared contract, a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest locally.\nExecution economy:\n• REQUIRED: Route execution DOWN: substantive changes and investigations are tickets; fresh `dispatch` returns executor, spawn, and token. Every Agent launch uses it. Tiny lookup: Read, Glob, Grep, or WebFetch inline. Ticket + dispatch MUST precede multi-file exploration: the second file is the boundary, never a ten-read retrospective. Any delegated work, including a quick investigation, is a spike ticket (usually `codebase-exploration`): file it, then route and dispatch. `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities; other delegated implementation or investigation work needs a ticketed route. Routed direct:true needs user `direct-ok` + a reason; invalid: "the context is already loaded in this session", "it\'s a small patch", "a fresh executor would need context transfer / handoff costs more". Direct never retroactively legitimizes inline investigation. Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Never proxy-wait: no Bash/PowerShell/Monitor/cron executor/report poll or blocking TaskOutput. Denied: pulse + deny, ONE diagnose-first retry only, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Inline: trivial one-step work; beyond allowance, substantive actions are BLOCKED until a claim. Use `bypassPermissions`; do not use `native_agent`.\n• SHORT: category description; ticket description is executor brief; bounce back.\n• Batch small SAME-model tickets into ONE executor; parallelize only independent tickets.\n• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\n• File issues with mcp__plugin_sidequest_board__add, continue.\nBoard actions go through the mcp__plugin_sidequest_board__* MCP tools whenever available — reach for them FIRST; Bash+CLI is the fallback. Open the board: `' + cli + " dashboard`.",
     restartNotice
   );
 }

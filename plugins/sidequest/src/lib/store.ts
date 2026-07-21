@@ -2382,8 +2382,19 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
 // Atomically claim a ticket for worker `by`. Refuses (ok:false) if the ticket is
 // gone, already done, or actively claimed by someone else, unless that claim is
 // stale or opts.force; on success it moves the ticket to "doing" unless opts.status is false.
+const DIRECT_REASON_MIN_LENGTH = 20;
+
 function isRoutedTicket(ticket?: any) {
   return Boolean(ticket && ticket.model && ticket.effort && ticket.exec);
+}
+
+function directReason(reason?: any) {
+  const value = String(reason || '').trim();
+  return value.length >= DIRECT_REASON_MIN_LENGTH ? value : null;
+}
+
+function hasDirectPermission(ticket?: any) {
+  return Array.isArray(ticket?.labels) && ticket.labels.some((label?: any) => String(label).toLowerCase() === 'direct-ok');
 }
 
 function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -2396,6 +2407,8 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (!t) return { ok: false, reason: 'not_found' };
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
+    if (opts.direct && isRoutedTicket(t) && (opts.source === 'cli' || opts.source === 'mcp') && !hasDirectPermission(t)) return { ok: false, reason: 'direct_not_allowed', ticket: t };
+    if (opts.direct && isRoutedTicket(t) && (opts.source === 'cli' || opts.source === 'mcp') && !directReason(opts.reason)) return { ok: false, reason: 'direct_reason_required', ticket: t };
     if (opts.direct && t.dispatchNonce) return { ok: false, reason: 'direct_conflict', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
@@ -2419,6 +2432,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         effort: t.effort,
         executor: opts.executor ? String(opts.executor) : null,
         source: opts.source ? String(opts.source) : 'store',
+        reason: directReason(opts.reason),
       };
     }
     const state = dispatchState(t);
@@ -2864,8 +2878,8 @@ function claimNext(slug?: any, by?: any, opts?: any) {
       return String(a.createdAt).localeCompare(String(b.createdAt));
     });
   for (const cand of candidates) {
-    const res = claimTicket(slug, cand.id, by, { direct: !!opts.direct, source: opts.source, sessionId: opts.sessionId });
-    if (res.ok) return res;
+    const res = claimTicket(slug, cand.id, by, { direct: !!opts.direct, reason: opts.reason, source: opts.source, sessionId: opts.sessionId });
+    if (res.ok || res.reason === 'direct_not_allowed' || res.reason === 'direct_reason_required') return res;
     // Lost the race or it changed under us — try the next candidate.
   }
   return { ok: false, reason: 'empty' };

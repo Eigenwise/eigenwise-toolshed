@@ -49,6 +49,7 @@ async function addTicket(index?: any) {
     '-t', `parallel ticket ${index}`,
     '--complexity', '1',
     '--why', 'concurrent subprocess fixture for SQLite writer safety',
+    '--label', 'direct-ok',
     '--json',
   ]);
   assert.strictEqual(result.status, 0, `add ${index} failed\n${result.stderr}\n${result.stdout}`);
@@ -56,7 +57,7 @@ async function addTicket(index?: any) {
 }
 
 async function claimTicket(ref?: any, by?: any, extraEnv?: any) {
-  const result = await runCli(['claim', ref, '--by', by, '--direct', '--json'], extraEnv);
+  const result = await runCli(['claim', ref, '--by', by, '--direct', '--reason', 'The concurrency fixture requires parallel local claims.', '--json'], extraEnv);
   return { result, payload: parseJson(result, `claim ${by}`) };
 }
 
