@@ -1092,6 +1092,9 @@ function dispatchRequestIdentity(req, payload) {
   const parentAgentId = safeMetadataId(requestHeader(req, 'x-claude-code-parent-agent-id'));
   return {
     key: !agentId && parentAgentId ? null : JSON.stringify([sessionId, agentId]),
+    parentKey: agentId && parentAgentId && agentId !== parentAgentId
+      ? JSON.stringify([sessionId, parentAgentId])
+      : null,
     sessionId,
     agentId,
     parentAgentId,
@@ -1547,7 +1550,7 @@ function runShim() {
   // auth, and arbitrary headers are all excluded. Keep only Claude Code's safe
   // session/agent correlation values and whether the session came from its
   // canonical header or metadata fallback.
-  function requestRouteLog(req, backend, model, pathOnly, via = null, effort = null, identity = null, markersLength = null) {
+  function requestRouteLog(req, backend, model, pathOnly, via = null, effort = null, identity = null, markersLength = null, inheritedFromAgentId = null) {
     if (!REQUEST_ROUTE_LOG) return;
     const sessionId = identity?.sessionId || requestSessionId(req);
     const entry = {
@@ -1560,6 +1563,7 @@ function runShim() {
       ...(sessionId ? { sessionId } : {}),
       ...(identity?.agentId ? { agentId: identity.agentId } : {}),
       ...(identity?.parentAgentId ? { parentAgentId: identity.parentAgentId } : {}),
+      ...(inheritedFromAgentId ? { inheritedFromAgentId } : {}),
       ...(identity?.sessionSource ? { sessionSource: identity.sessionSource } : {}),
       ...(Number.isInteger(markersLength) ? { markersLength } : {}),
     };
@@ -2149,6 +2153,7 @@ function runShim() {
             let dispatchVia = null;
             let dispatchIdentity = null;
             let dispatchMarkersLength = null;
+            let dispatchInheritedFromAgentId = null;
             if (requestedBase === 'auto') {
               const markers = dispatchRouteMarkersFromMessages(parsed.messages);
               dispatchMarkersLength = markers.length;
@@ -2159,7 +2164,16 @@ function runShim() {
                 dispatchVia = 'dispatch';
               } else if (markers.length === 0) {
                 dispatchRoute = dispatchRoutes.get(dispatchIdentity?.key);
-                if (dispatchRoute) dispatchVia = 'dispatch-cached';
+                if (dispatchRoute) {
+                  dispatchVia = 'dispatch-cached';
+                } else {
+                  dispatchRoute = dispatchRoutes.get(dispatchIdentity?.parentKey);
+                  if (dispatchRoute) {
+                    dispatchRoutes.set(dispatchIdentity?.key, dispatchRoute);
+                    dispatchInheritedFromAgentId = dispatchIdentity.parentAgentId;
+                    dispatchVia = 'dispatch-inherited';
+                  }
+                }
               }
               if (!dispatchRoute) {
                 const body = JSON.stringify({
@@ -2201,7 +2215,8 @@ function runShim() {
             }
             counters.codex++;
             const effectiveEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : requestedEffort;
-            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, effectiveEffort, dispatchIdentity, dispatchMarkersLength);
+            requestRouteLog(req, 'codex', parsed.model, pathOnly, dispatchVia, effectiveEffort,
+              dispatchIdentity, dispatchMarkersLength, dispatchInheritedFromAgentId);
             routeTelemetry.setRoute({
               selectedModel: advertisedModel,
               effectiveModel: parsed.model,

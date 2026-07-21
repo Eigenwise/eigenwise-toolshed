@@ -464,3 +464,149 @@ test('route log identifies parent-only Agent dispatch cache misses', async (t) =
     },
   ]);
 });
+
+test('markerless child agents inherit only their trusted parent route', async (t) => {
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-child-route-'));
+  const routeLog = path.join(logDir, 'routes.jsonl');
+  const forwarded = [];
+  let nativeClaudeBody = null;
+  const anthropic = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      nativeClaudeBody = Buffer.concat(chunks).toString();
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ type: 'message', model: 'claude-sonnet-5', content: [] }));
+    });
+  });
+  const anthropicPort = await new Promise((resolve) => anthropic.listen(0, '127.0.0.1', () => resolve(anthropic.address().port)));
+  t.after(() => anthropic.close());
+  const proxy = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (req.url === '/v1/models') {
+        res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }, { id: 'gpt-5.6-terra' }] }));
+        return;
+      }
+      const payload = JSON.parse(Buffer.concat(chunks).toString());
+      forwarded.push(payload);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ type: 'message', model: payload.model, content: [] }));
+    });
+  });
+  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  t.after(() => proxy.close());
+
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
+      CODEX_GATEWAY_REQUEST_LOG_PATH: routeLog,
+      CODEX_GATEWAY_SENTRY: '0',
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForHealthz(shimPort);
+
+  const parent = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('[sidequest-route model=gpt-5.6-sol effort=xhigh] routed parent'),
+    'family-session',
+    { 'x-claude-code-agent-id': 'parent-agent' },
+  );
+  const childRoute = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('markerless child'),
+    'family-session',
+    {
+      'x-claude-code-agent-id': 'child-agent',
+      'x-claude-code-parent-agent-id': 'parent-agent',
+    },
+  );
+  const nestedRoute = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('markerless grandchild'),
+    'family-session',
+    {
+      'x-claude-code-agent-id': 'grandchild-agent',
+      'x-claude-code-parent-agent-id': 'child-agent',
+    },
+  );
+  const unrelated = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('markerless unrelated child'),
+    'family-session',
+    { 'x-claude-code-agent-id': 'unrelated-agent' },
+  );
+  const otherSession = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('cross-session child'),
+    'other-session',
+    {
+      'x-claude-code-agent-id': 'other-child-agent',
+      'x-claude-code-parent-agent-id': 'parent-agent',
+    },
+  );
+  const explicitConflict = await request(
+    shimPort,
+    '/v1/messages',
+    dispatchBody('[sidequest-route model=gpt-5.6-terra effort=high] explicit child route'),
+    'family-session',
+    {
+      'x-claude-code-agent-id': 'conflicting-child-agent',
+      'x-claude-code-parent-agent-id': 'parent-agent',
+    },
+  );
+  const nativeClaude = await request(
+    shimPort,
+    '/v1/messages',
+    JSON.stringify({ model: 'claude-sonnet-5', messages: [{ role: 'user', content: 'native route' }] }),
+    'family-session',
+    {
+      'x-claude-code-agent-id': 'native-child-agent',
+      'x-claude-code-parent-agent-id': 'parent-agent',
+    },
+  );
+
+  assert.equal(parent.status, 200);
+  assert.equal(childRoute.status, 200);
+  assert.equal(nestedRoute.status, 200);
+  assert.equal(unrelated.status, 400);
+  assert.equal(otherSession.status, 400);
+  assert.equal(explicitConflict.status, 200);
+  assert.equal(nativeClaude.status, 200);
+  assert.deepEqual(JSON.parse(nativeClaudeBody), {
+    model: 'claude-sonnet-5',
+    messages: [{ role: 'user', content: 'native route' }],
+  });
+  assert.deepEqual(forwarded.map(({ model, output_config: outputConfig }) => ({ model, outputConfig })), [
+    { model: 'gpt-5.6-sol', outputConfig: { effort: 'xhigh' } },
+    { model: 'gpt-5.6-sol', outputConfig: { effort: 'xhigh' } },
+    { model: 'gpt-5.6-sol', outputConfig: { effort: 'xhigh' } },
+    { model: 'gpt-5.6-terra', outputConfig: { effort: 'high' } },
+  ]);
+
+  const routes = fs.readFileSync(routeLog, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(routes.map(({ model, via, parentAgentId, inheritedFromAgentId }) => ({
+    model, via, parentAgentId, inheritedFromAgentId,
+  })), [
+    { model: 'gpt-5.6-sol', via: 'dispatch', parentAgentId: undefined, inheritedFromAgentId: undefined },
+    { model: 'gpt-5.6-sol', via: 'dispatch-inherited', parentAgentId: 'parent-agent', inheritedFromAgentId: 'parent-agent' },
+    { model: 'gpt-5.6-sol', via: 'dispatch-inherited', parentAgentId: 'child-agent', inheritedFromAgentId: 'child-agent' },
+    { model: 'claude-codex-auto', via: 'dispatch-unbound', parentAgentId: undefined, inheritedFromAgentId: undefined },
+    { model: 'claude-codex-auto', via: 'dispatch-unbound', parentAgentId: 'parent-agent', inheritedFromAgentId: undefined },
+    { model: 'gpt-5.6-terra', via: 'dispatch', parentAgentId: 'parent-agent', inheritedFromAgentId: undefined },
+    { model: 'claude-sonnet-5', via: undefined, parentAgentId: undefined, inheritedFromAgentId: undefined },
+  ]);
+});
