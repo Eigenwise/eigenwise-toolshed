@@ -857,8 +857,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(readme, /marker-triggered capture/);
   assert.doesNotMatch(readme, /native_agent/);
   assert.match(readme, /exact stable executor/);
-  assert.match(readme, /no unrouted delegation/);
-  assert.match(readme, /codebase-exploration/);
+  assert.match(readme, /Native `Explore`/);
+  assert.match(readme, /Other generic\/custom implementation Agent launches are denied/);
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
   assert.match(skill, /native `Explore`/);
   assert.match(skill, /ticketed route/);

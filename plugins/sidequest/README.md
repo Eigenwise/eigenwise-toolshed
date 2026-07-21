@@ -310,10 +310,10 @@ then invoke that exact spawn spec with Agent. Pass `spawn.prompt` unchanged, inc
 route marker when present. The executor must claim with that token, exact executor, and stamped effort.
 `sidequest work`/`drain` cannot invoke the current conversation's Agent tool.
 
-Generic/custom Agent launches are denied. Keep a tiny lookup inline with `Read`, `Glob`, `Grep`, or `WebFetch`.
-Any delegated work goes through a ticket and fresh dispatch, including a quick investigation: file it as a spike
-(usually `codebase-exploration`), route it, dispatch it, and spawn the returned executor. Routing controls the
-model, so there is no unrouted delegation.
+Native `Explore` and the approved `claude-code-guide` and `statusline-setup` harness utilities may run without
+a prepared Sidequest dispatch. Use them or read-only tools to gather enough evidence for precise tickets, then
+route implementation by default. Other generic/custom implementation Agent launches are denied. Informed inline
+judgment remains available; routed implementation work uses a ticket and fresh dispatch.
 
 ## Comments
 
