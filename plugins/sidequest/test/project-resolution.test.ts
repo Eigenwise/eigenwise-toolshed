@@ -175,7 +175,7 @@ test('CLI: unknown-name error lists the known project names', () => {
 test('CLI: name resolves to the right board (with real tickets), case-insensitively, through list/claim/release', () => {
   const projAbs = path.join(FAKE_ROOT, 'RoundTrip-Project');
   const added = cliJson(
-    ['add', '-t', 'round trip ticket', '--complexity', '2', '--why', 'ticket used to prove --project name resolution round-trips cleanly'],
+    ['add', '-t', 'round trip ticket', '--complexity', '2', '--why', 'ticket used to prove --project name resolution round-trips cleanly', '--label', 'direct-ok'],
     { cwd: projAbs }
   );
   const ref = added.ticket.ref;
@@ -191,7 +191,7 @@ test('CLI: name resolves to the right board (with real tickets), case-insensitiv
   assert.strictEqual(listByCase.project, realSlug);
 
   // claim/release round-trip through the name form.
-  const claim = cliJson(['claim', ref, '--by', 'sq86-test-worker', '--direct', '--project', 'ROUNDTRIP-PROJECT']);
+  const claim = cliJson(['claim', ref, '--by', 'sq86-test-worker', '--direct', '--reason', 'The resolution fixture requires a local direct claim.', '--project', 'ROUNDTRIP-PROJECT']);
   assert.strictEqual(claim.ok, true);
   assert.strictEqual(claim.project, realSlug);
   assert.strictEqual(claim.ticket.status, 'doing');

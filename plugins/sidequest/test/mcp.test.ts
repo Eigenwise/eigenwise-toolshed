@@ -214,10 +214,11 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   const project = store.ensureProject(worktree).slug;
   const ticket = store.createTicket(project, {
     title: 'MCP terminal lifecycle', files: ['lib/allowed.js'], complexity: 3,
+    labels: ['direct-ok'],
     complexityWhy: 'exercise the MCP commit and submit terminal worktree lifecycle',
   });
   const by = 'mcp-worktree-worker';
-  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true })).ok, true);
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The MCP worktree fixture requires a local direct claim.' })).ok, true);
 
   fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(worktree, 'lib', 'allowed.js'), 'allowed\n');
@@ -245,9 +246,10 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
 
   const malformed = store.createTicket(project, {
     title: 'MCP malformed submission', files: ['lib/other.js'], complexity: 3,
+    labels: ['direct-ok'],
     complexityWhy: 'confirm malformed MCP submission input preserves the ticket claim',
   });
-  assert.equal((await callTool('claim', { project, ref: malformed.ref, by: 'mcp-bad-worker', direct: true })).ok, true);
+  assert.equal((await callTool('claim', { project, ref: malformed.ref, by: 'mcp-bad-worker', direct: true, reason: 'The malformed submission fixture requires a direct claim.' })).ok, true);
   const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
@@ -258,10 +260,11 @@ test('MCP submit refuses out-of-scope committed ranges', async () => {
   const project = store.ensureProject(worktree).slug;
   const ticket = store.createTicket(project, {
     title: 'MCP range scope refusal', files: ['lib/allowed.js'], complexity: 3,
+    labels: ['direct-ok'],
     complexityWhy: 'confirm MCP submit refuses a committed range outside the declared scope',
   });
   const by = 'mcp-range-worker';
-  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true })).ok, true);
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The MCP worktree fixture requires a local direct claim.' })).ok, true);
   fs.writeFileSync(path.join(worktree, 'foreign.js'), 'foreign\n');
   gitAt(worktree, ['add', 'foreign.js']);
   gitAt(worktree, ['commit', '-m', 'foreign work']);
@@ -686,11 +689,11 @@ test('MCP admin/config tools share CLI state transitions', async () => {
 
 
 test('claim -> comment -> done return compact acknowledgements', async () => {
-  const added = await callTool('add', { title: 'work me', complexity: 2, why: 'a mechanical change to exercise the claim/done path over MCP' });
+  const added = await callTool('add', { title: 'work me', complexity: 2, why: 'a mechanical change to exercise the claim/done path over MCP', labels: ['direct-ok'] });
   const ref = added.ref;
   const ticket = store.getTicket(added.project, ref);
 
-  const claim = await callTool('claim', { ref, by: 'mcp-worker-1', direct: true });
+  const claim = await callTool('claim', { ref, by: 'mcp-worker-1', direct: true, reason: 'The compact acknowledgement fixture needs a direct claim.' });
   assert.deepStrictEqual(Object.keys(claim).sort(), ['claim', 'ok', 'project', 'ref', 'status']);
   assert.strictEqual(claim.status, 'doing');
 
@@ -769,7 +772,7 @@ test('MCP claim passes prepared dispatch token and executor through to the store
 });
 
 test('MCP blocks no-dispatch routed claims and records an explicit direct research bypass', async () => {
-  const added = await callTool('add', { title: 'no-file research', category: 'mechanical' });
+  const added = await callTool('add', { title: 'no-file research', category: 'mechanical', labels: ['direct-ok'] });
   const ticket = store.getTicket(added.project, added.ref);
   assert.deepStrictEqual(ticket.files, []);
   const refused = await callTool('claim', { ref: added.ref, by: 'mcp-routed', effort: ticket.effort, executor: ticket.exec.agent });
@@ -777,7 +780,7 @@ test('MCP blocks no-dispatch routed claims and records an explicit direct resear
   assert.strictEqual(refused.reason, 'dispatch_required');
   assert.match(refused.message, /dispatch/i);
   assert.match(refused.message, /direct:true/i);
-  const direct = await callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true });
+  const direct = await callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true, reason: 'The MCP research fixture requires a local direct claim.' });
   assert.strictEqual(direct.ok, true);
   const pulse = await callTool('pulse', { ref: added.ref });
   assert.strictEqual(pulse.direct.by, 'mcp-inline');

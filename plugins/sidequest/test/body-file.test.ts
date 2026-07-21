@@ -19,7 +19,7 @@ function bodyFile(name?: any, body?: any) {
 }
 
 function ticket(title?: any) {
-  return cliJson(['add', '--title', title, '--complexity', '2', '--why', 'a small CLI fixture for body-file round-trip coverage', '--json']).ticket.ref;
+  return cliJson(['add', '--title', title, '--complexity', '2', '--why', 'a small CLI fixture for body-file round-trip coverage', '--label', 'direct-ok', '--json']).ticket.ref;
 }
 
 test('comment reads markdown unchanged from --body-file', () => {
@@ -43,7 +43,7 @@ test('comment body-file stores a 5,481-character handoff whole', () => {
 
 test('done reads --body-file into its closing comment before completing', () => {
   const ref = ticket('done body-file fixture');
-  cliJson(['claim', ref, '--by', 'body-file-worker', '--direct', '--json']);
+  cliJson(['claim', ref, '--by', 'body-file-worker', '--direct', '--reason', 'The body-file fixture needs a local direct claim.', '--json']);
   const body = 'Shipped `abc1234` (all checks passed).';
   const done = cliJson(['done', ref, '--by', 'body-file-worker', '--body-file', bodyFile('done.md', body), '--json']);
   assert.strictEqual(done.ticket.status, 'done');
@@ -57,7 +57,7 @@ test('done retry after a lost response returns the existing completion without d
   const ref = ticket('done idempotency retry fixture');
   const by = 'done-retry-worker';
   const body = 'Verified `node --test` after the completion retry.';
-  cliJson(['claim', ref, '--by', by, '--direct', '--json']);
+  cliJson(['claim', ref, '--by', by, '--direct', '--reason', 'The completion retry fixture needs a local direct claim.', '--json']);
 
   const first = cliJson(['done', ref, '--by', by, '--body-file', bodyFile('done-retry.md', body), '--json']);
   const retry = cliJson(['done', ref, '--by', by, '--body-file', bodyFile('done-retry.md', body), '--json']);
