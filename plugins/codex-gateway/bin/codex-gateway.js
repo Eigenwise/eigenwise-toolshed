@@ -1157,10 +1157,17 @@ const CATALOG_STALE_MS = 5 * 60 * 1000;
 const CATALOG_SCHEMA_VERSION = 3;
 
 // The catalog is what Switchboard reads to offer concrete Codex models. It
-// carries the GPT-5.6 family only — the three flagship models a user actually
-// maps onto a route. The /model picker (fed by the shim's /v1/models) still
-// sees all of DEFAULT_MODELS; this narrowing is catalog-only.
-const CATALOG_FAMILY = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+// carries the six GPT-5.6 routeable variants. The /model picker (fed by the
+// shim's /v1/models) still sees all of DEFAULT_MODELS; this narrowing is
+// catalog-only.
+const CATALOG_FAMILY = new Set([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.6-sol-fast',
+  'gpt-5.6-terra-fast',
+  'gpt-5.6-luna-fast',
+]);
 
 function baseFromId(id) {
   return id.slice(PREFIX.length).replace(/\[1m\]$/, '');

@@ -301,14 +301,49 @@ test('dispatch route ignores markers echoed through tool_result blocks end-to-en
 });
 
 test('buildCatalog publishes the v3 concrete-model contract without routing policy', () => {
-  const catalog = gw.buildCatalog(['claude-codex-auto', 'claude-codex-gpt-5.6-terra']);
+  const catalog = gw.buildCatalog([
+    'claude-codex-auto',
+    'claude-codex-gpt-5.6-sol',
+    'claude-codex-gpt-5.6-terra',
+    'claude-codex-gpt-5.6-luna',
+    'claude-codex-gpt-5.6-sol-fast',
+    'claude-codex-gpt-5.6-terra-fast',
+    'claude-codex-gpt-5.6-luna-fast',
+  ]);
   assert.equal(catalog.schemaVersion, 3);
   assert.equal(catalog.source, 'codex-gateway');
-  assert.deepEqual(catalog.models, [{
-    slug: 'codex-gpt-5-6-terra',
-    id: 'claude-codex-gpt-5.6-terra',
-    label: 'GPT-5.6 Terra',
-  }]);
+  assert.deepEqual(catalog.models, [
+    {
+      slug: 'codex-gpt-5-6-sol',
+      id: 'claude-codex-gpt-5.6-sol',
+      label: 'GPT-5.6 Sol',
+    },
+    {
+      slug: 'codex-gpt-5-6-terra',
+      id: 'claude-codex-gpt-5.6-terra',
+      label: 'GPT-5.6 Terra',
+    },
+    {
+      slug: 'codex-gpt-5-6-luna',
+      id: 'claude-codex-gpt-5.6-luna',
+      label: 'GPT-5.6 Luna',
+    },
+    {
+      slug: 'codex-gpt-5-6-sol-fast',
+      id: 'claude-codex-gpt-5.6-sol-fast',
+      label: 'GPT-5.6 Sol Fast',
+    },
+    {
+      slug: 'codex-gpt-5-6-terra-fast',
+      id: 'claude-codex-gpt-5.6-terra-fast',
+      label: 'GPT-5.6 Terra Fast',
+    },
+    {
+      slug: 'codex-gpt-5-6-luna-fast',
+      id: 'claude-codex-gpt-5.6-luna-fast',
+      label: 'GPT-5.6 Luna Fast',
+    },
+  ]);
 });
 
 test('writeCatalogFile refuses to replace a future schema', () => {
