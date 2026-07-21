@@ -71,7 +71,7 @@ test('submit requires a held claim, records the submission, and releases the cla
   assert.strictEqual(unclaimed.ok, false);
   assert.strictEqual(unclaimed.reason, 'not_claimed');
 
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
 
   // Another worker can't submit over worker-a's claim.
   const stranger = store.submitTicket(slug, t.ref, 'worker-b', { commit: COMMIT });
@@ -96,7 +96,7 @@ test('submit requires a held claim, records the submission, and releases the cla
 
 test('an invalid commit hash is rejected before anything is written', () => {
   const t = addTicket('bad hash');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
   for (const bad of [null, '', 'not-a-hash', 'abc123', 'g'.repeat(10)]) {
     assert.throws(() => store.submitTicket(slug, t.ref, 'worker-a', { commit: bad }), /invalid commit/);
   }
@@ -105,13 +105,13 @@ test('an invalid commit hash is rejected before anything is written', () => {
 
 test('submitted tickets leave the ready pool and refuse claims until cleared', () => {
   const t = addTicket('submitted leaves ready');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
 
   const readyRefs = store.readyTickets(slug, {}).map((x?: any) => x.ref);
   assert.ok(!readyRefs.includes(t.ref), 'a submitted ticket is not re-dispatchable');
 
-  const reclaim = store.claimTicket(slug, t.ref, 'worker-b', { direct: true });
+  const reclaim = store.claimTicket(slug, t.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' });
   assert.strictEqual(reclaim.ok, false);
   assert.strictEqual(reclaim.reason, 'submitted');
 
@@ -125,13 +125,13 @@ test('submitted tickets leave the ready pool and refuse claims until cleared', (
   const after = store.getTicket(slug, t.ref);
   assert.strictEqual(after.submission, null);
   assert.strictEqual(after.status, 'todo');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-b', { direct: true }).ok, true, 'claimable again once cleared');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true, 'claimable again once cleared');
   assert.strictEqual(store.clearSubmission(slug, t.ref, {}).reason, 'no_submission');
 });
 
 test('done consumes the submission: integratedAt is stamped and the queue drains', () => {
   const t = addTicket('done consumes submission');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
 
   // The publish transaction completes the ticket after pushing.
@@ -145,7 +145,7 @@ test('done consumes the submission: integratedAt is stamped and the queue drains
 
 test('brief and pulse surface a pending submission', () => {
   const t = addTicket('surfaced submission');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
 
   const brief = store.briefTicket(slug, store.getTicket(slug, t.ref));

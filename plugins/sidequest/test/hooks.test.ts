@@ -649,8 +649,11 @@ test('home-delete guard: blocks deletes wrapped in blocks, pipelines, and aliase
 test('session-start sweep is fail-soft and releases only claims past the TTL', () => {
   const stale = addTicket('session-start stale claim');
   const fresh = addTicket('session-start fresh claim');
-  assert.equal(store.claimTicket(slug, stale.ref, 'stale-session', { direct: true }).ok, true);
-  assert.equal(store.claimTicket(slug, fresh.ref, 'fresh-session', { direct: true }).ok, true);
+  store.updateTicket(slug, stale.ref, { labels: ['direct-ok'] });
+  store.updateTicket(slug, fresh.ref, { labels: ['direct-ok'] });
+  const reason = 'The stale-claim fixture needs local direct claims.';
+  assert.equal(store.claimTicket(slug, stale.ref, 'stale-session', { direct: true, reason }).ok, true);
+  assert.equal(store.claimTicket(slug, fresh.ref, 'fresh-session', { direct: true, reason }).ok, true);
   const staleTicket = store.getTicket(slug, stale.ref);
   staleTicket.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
   db.putRow(database, 'tickets', {
@@ -723,6 +726,22 @@ test('session-start: shows the live investigation workforce within its cap', () 
       assert.match(workforce, new RegExp(`${id} — .+ \\(.+·.+\\)`), id);
     }
   }
+});
+
+test('session-start: bounds oversized workforces and reports omitted categories', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-workforce-cap-'));
+  for (let index = 0; index < 80; index += 1) {
+    writeCategory(home, {
+      id: `oversized-category-${String(index).padStart(2, '0')}`,
+      name: `Oversized category ${index}`,
+      route: { model: 'sonnet', effort: 'medium' },
+      enabled: true,
+    });
+  }
+  const output = JSON.parse(runSessionWithHome(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project') }));
+  const workforce = output.hookSpecificOutput.additionalContext.slice(output.hookSpecificOutput.additionalContext.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:'));
+  assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `oversized workforce is ${Buffer.byteLength(workforce)} bytes`);
+  assert.match(workforce, /… \d+ more enabled categories\./);
 });
 
 test('session-start: stays inside its byte budget and off the retired doctrine', () => {
@@ -993,7 +1012,8 @@ test('subagent-stop: a held claim is classified regardless of claimed effort', (
 test('subagent-stop: stop_hook_active suppresses the note (no self-continuation loop)', () => {
   const sess = `sess-active-${++sqSeq}`;
   const t = addTicket('over-threshold ticket, but re-entrant fire');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-active', { direct: true, sessionId: sess }).ok, true);
+  store.updateTicket(slug, t.ref, { labels: ['direct-ok'] });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-active', { direct: true, reason: 'The re-entrant hook fixture needs a direct claim.', sessionId: sess }).ok, true);
   backdateSessionClaims(sess, 28);
   assert.strictEqual(
     runHook(SUBAGENT_STOP, { session_id: sess, stop_hook_active: true }),
@@ -1070,7 +1090,8 @@ test('subagent-stop: a prior owner is silent after another worker reclaims the t
   const stop = claimStopTicket(t, sess, 'worker-prior');
   backdateSessionClaims(sess, 28);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-prior', {}).ok, true);
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-current', { direct: true, sessionId: `sess-current-${sqSeq}` }).ok, true);
+  store.updateTicket(slug, t.ref, { labels: ['direct-ok'] });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-current', { direct: true, reason: 'The prior-owner fixture needs a direct reclaim.', sessionId: `sess-current-${sqSeq}` }).ok, true);
 
   assert.strictEqual(runHook(SUBAGENT_STOP, stop), '', 'a prior owner must not be warned about another worker\'s live claim');
 });

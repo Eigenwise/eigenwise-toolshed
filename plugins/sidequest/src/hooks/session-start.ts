@@ -55,7 +55,15 @@ function workforceSection(): string {
     });
     const bytesFor = (lines: string[]) => Buffer.byteLength([header, ...lines].join('\n'));
     const base = entries.map((entry) => `${entry.id} — ${entry.route}`);
-    if (bytesFor(base) > MAX_WORKFORCE_BYTES) return [header, ...base].join('\n');
+    if (bytesFor(base) > MAX_WORKFORCE_BYTES) {
+      const bounded: string[] = [];
+      for (let index = 0; index < base.length; index += 1) {
+        const line = base[index] || '';
+        const truncation = `… ${base.length - index} more enabled categories.`;
+        if (bytesFor([...bounded, line, truncation]) > MAX_WORKFORCE_BYTES) return [header, ...bounded, truncation].join('\n');
+        bounded.push(line);
+      }
+    }
     const priority = new Set(['codebase-exploration', 'debugging', 'spike-investigation', 'deep-research', 'web-research']);
     const preferred = [...entries.filter((entry) => priority.has(entry.id)), ...entries.filter((entry) => !priority.has(entry.id))];
     const descriptions = new Map<string, string>();

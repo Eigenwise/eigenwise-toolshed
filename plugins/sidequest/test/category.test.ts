@@ -71,11 +71,11 @@ test('fallback chain resolves primary, category fallback, global fallback, and s
 
 test('routing-disabled board rejects dispatch but preserves direct claims and old metadata defaults', () => {
   const { store, slug } = freshStore();
-  const ticket = store.createTicket(slug, { title: 'direct only', category: 'coding.easy' });
+  const ticket = store.createTicket(slug, { title: 'direct only', category: 'coding.easy', labels: ['direct-ok'] });
   assert.equal(store.listProjects().find((project?: any) => project.slug === slug).routing, 'enabled');
   assert.equal(store.setProjectRouting(slug, 'disabled').routing, 'disabled');
   assert.throws(() => store.prepareDispatch(slug, ticket.ref), /sidequest routing enabled/);
-  const claim = store.claimTicket(slug, ticket.ref, 'inline-worker', { direct: true });
+  const claim = store.claimTicket(slug, ticket.ref, 'inline-worker', { direct: true, reason: 'The routing-disabled fixture needs a direct claim.' });
   assert.equal(claim.ok, true);
 });
 

@@ -164,6 +164,35 @@ test('CLI requires direct-ok for routed direct claims and records approved bypas
   assert.equal(brief.direct.reason, reason);
 });
 
+test('CLI --source cannot bypass direct authority and next preserves its refusal guidance', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-direct-authority-'));
+  const slug = store.ensureProject(project).slug;
+  const created = store.createTicket(slug, { title: 'authority fixture', category: 'guard.claude' });
+  const reason = 'The authority guard fixture needs an approved direct claim.';
+  const bypass = runCli(['claim', created.ref, '--by', 'source-bypass', '--direct', '--reason', reason, '--source', 'store', '--project', project, '--json']);
+  assert.equal(bypass.status, 1);
+  assert.equal(JSON.parse(bypass.stdout).reason, 'direct_not_allowed');
+
+  const direct = store.claimTicket(slug, created.ref, 'store-bypass', { direct: true, reason, source: 'store' });
+  assert.equal(direct.ok, false);
+  assert.equal(direct.reason, 'direct_not_allowed');
+
+  const next = store.claimNext(slug, 'next-bypass', { direct: true, reason, source: 'store' });
+  assert.equal(next.ok, false);
+  assert.equal(next.reason, 'direct_not_allowed');
+  assert.equal(next.ticket.ref, created.ref);
+
+  const nextCli = runCli(['next', '--by', 'next-bypass', '--direct', '--reason', reason, '--project', project]);
+  assert.equal(nextCli.status, 1);
+  assert.match(nextCli.stdout, /user-granted `direct-ok` label/);
+  assert.doesNotMatch(nextCli.stdout, /No available tickets/);
+
+  store.updateTicket(slug, created.ref, { labels: ['DIRECT-OK'] });
+  const missingReason = store.claimTicket(slug, created.ref, 'store-bypass', { direct: true, source: 'store' });
+  assert.equal(missingReason.ok, false);
+  assert.equal(missingReason.reason, 'direct_reason_required');
+});
+
 test('instant dispatch targets the stable executor, gates the claim, and clears on done and release without deleting the stable def', () => {
   const slug = store.ensureProject(PROJ).slug;
   const agents = path.join(SIDEQUEST_HOME, 'agents');

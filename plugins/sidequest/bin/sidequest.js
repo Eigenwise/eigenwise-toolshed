@@ -954,7 +954,7 @@ async function cmdNext(opts) {
     if (t.description) console.log(`  ${t.description}`);
   } else {
     process.exitCode = 1;
-    console.log(`No available tickets to claim in ${meta.name}.`);
+    console.log(res.message || `No available tickets to claim in ${meta.name}.`);
   }
 }
 async function cmdWork(opts) {

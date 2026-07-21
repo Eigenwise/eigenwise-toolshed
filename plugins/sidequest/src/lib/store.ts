@@ -2407,8 +2407,8 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (!t) return { ok: false, reason: 'not_found' };
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
-    if (opts.direct && isRoutedTicket(t) && (opts.source === 'cli' || opts.source === 'mcp') && !hasDirectPermission(t)) return { ok: false, reason: 'direct_not_allowed', ticket: t };
-    if (opts.direct && isRoutedTicket(t) && (opts.source === 'cli' || opts.source === 'mcp') && !directReason(opts.reason)) return { ok: false, reason: 'direct_reason_required', ticket: t };
+    if (opts.direct && isRoutedTicket(t) && !hasDirectPermission(t)) return { ok: false, reason: 'direct_not_allowed', ticket: t };
+    if (opts.direct && isRoutedTicket(t) && !directReason(opts.reason)) return { ok: false, reason: 'direct_reason_required', ticket: t };
     if (opts.direct && t.dispatchNonce) return { ok: false, reason: 'direct_conflict', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };

@@ -24,15 +24,15 @@ const store = require('../lib/store.js');
 const { slug } = store.ensureProject(path.join(os.tmpdir(), 'sq-reconcile-fixtures', 'board'));
 
 function addTicket(title?: any) {
-  return store.createTicket(slug, { title, complexity: 3, complexityWhy: 'fixture for reconcile tests, single mechanical change', source: 'cli' });
+  return store.createTicket(slug, { title, complexity: 3, complexityWhy: 'fixture for reconcile tests, single mechanical change', labels: ['direct-ok'], source: 'cli' });
 }
 
 test('reconcileSession releases only the ending session\'s claims, and moves them back to todo', () => {
   const a = addTicket('session A ticket');
   const b = addTicket('session B ticket');
 
-  const ra = store.claimTicket(slug, a.ref, 'worker-a', { direct: true, sessionId: 'sess-A' });
-  const rb = store.claimTicket(slug, b.ref, 'worker-b', { direct: true, sessionId: 'sess-B' });
+  const ra = store.claimTicket(slug, a.ref, 'worker-a', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-A' });
+  const rb = store.claimTicket(slug, b.ref, 'worker-b', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-B' });
   assert.strictEqual(ra.ok, true);
   assert.strictEqual(rb.ok, true);
   assert.strictEqual(store.getTicket(slug, a.ref).status, 'doing');
@@ -53,7 +53,7 @@ test('reconcileSession releases only the ending session\'s claims, and moves the
 
 test('reconcileSession leaves a note comment on each released ticket', () => {
   const a = addTicket('to be auto-released');
-  store.claimTicket(slug, a.ref, 'worker-x', { direct: true, sessionId: 'sess-note' });
+  store.claimTicket(slug, a.ref, 'worker-x', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-note' });
   store.reconcileSession('sess-note', { reason: 'subagent stopped' });
   const t = store.getTicket(slug, a.ref);
   const last = t.comments[t.comments.length - 1];
@@ -64,7 +64,7 @@ test('reconcileSession leaves a note comment on each released ticket', () => {
 
 test('a completed ticket is never auto-released, even if still registered', () => {
   const a = addTicket('finished before reconcile');
-  store.claimTicket(slug, a.ref, 'worker-done', { direct: true, sessionId: 'sess-done' });
+  store.claimTicket(slug, a.ref, 'worker-done', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-done' });
   // Finish WITHOUT passing the sessionId (simulates a done that forgot to thread
   // it) so the registry entry lingers — reconcile must still skip the done ticket.
   store.completeTicket(slug, a.ref, 'worker-done', { model: 'sonnet', effort: 'high' });
@@ -77,7 +77,7 @@ test('a completed ticket is never auto-released, even if still registered', () =
 
 test('reconcileSession is idempotent — a second call releases nothing', () => {
   const a = addTicket('idempotency check');
-  store.claimTicket(slug, a.ref, 'worker-i', { direct: true, sessionId: 'sess-idem' });
+  store.claimTicket(slug, a.ref, 'worker-i', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-idem' });
   const first = store.reconcileSession('sess-idem', { reason: 'ended' });
   assert.deepStrictEqual(first.released, [a.ref]);
   const second = store.reconcileSession('sess-idem', { reason: 'ended' });
@@ -86,10 +86,10 @@ test('reconcileSession is idempotent — a second call releases nothing', () => 
 
 test('a claim re-taken by another session since is NOT released by the first session\'s reconcile', () => {
   const a = addTicket('re-claimed in the interim');
-  store.claimTicket(slug, a.ref, 'worker-1', { direct: true, sessionId: 'sess-1' });
+  store.claimTicket(slug, a.ref, 'worker-1', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-1' });
   // Session 2 force-steals it (as if the TTL lapsed or --force was used) and
   // registers under its own session.
-  store.claimTicket(slug, a.ref, 'worker-2', { direct: true, sessionId: 'sess-2', force: true });
+  store.claimTicket(slug, a.ref, 'worker-2', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-2', force: true });
   assert.strictEqual(store.getTicket(slug, a.ref).claim.by, 'worker-2');
 
   const res = store.reconcileSession('sess-1', { reason: 'session 1 ended' });
@@ -99,7 +99,7 @@ test('a claim re-taken by another session since is NOT released by the first ses
 
 test('unregisterClaim drops a claim so a later reconcile ignores it', () => {
   const a = addTicket('unregistered before reconcile');
-  store.claimTicket(slug, a.ref, 'worker-u', { direct: true, sessionId: 'sess-unreg' });
+  store.claimTicket(slug, a.ref, 'worker-u', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-unreg' });
   store.unregisterClaim('sess-unreg', slug, a.id);
   // The ticket is still 'doing' (unregister doesn't touch the ticket), but the
   // registry no longer attributes it to the session, so reconcile is a no-op.
@@ -120,7 +120,7 @@ test('reconciling an unknown session is a harmless no-op', () => {
 // without this guard the empty-claim ownership check would pass vacuously.
 test('releaseTicket refuses a done ticket — a reconcile cannot un-complete finished work', () => {
   const a = addTicket('finished, then a stale release arrives');
-  store.claimTicket(slug, a.ref, 'worker-r', { direct: true, sessionId: 'sess-race' });
+  store.claimTicket(slug, a.ref, 'worker-r', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-race' });
   store.completeTicket(slug, a.ref, 'worker-r', { model: 'sonnet', effort: 'high' });
   assert.strictEqual(store.getTicket(slug, a.ref).status, 'done');
 

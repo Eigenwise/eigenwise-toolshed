@@ -49,12 +49,13 @@ function ticket(title: any) {
     complexity: 3,
     complexityWhy: 'fixture ticket for stale executor worktree cleanup coverage',
     files: ['lib/fixture.js'],
+    labels: ['direct-ok'],
     source: 'cli',
   });
 }
 
 function complete(t: any) {
-  assert.equal(store.claimTicket(slug, t.ref, 'worker', { direct: true }).ok, true);
+  assert.equal(store.claimTicket(slug, t.ref, 'worker', { direct: true, reason: 'The worktree fixture needs a local direct claim.' }).ok, true);
   assert.equal(store.completeTicket(slug, t.ref, 'worker', {}).ok, true);
 }
 
@@ -65,7 +66,7 @@ test('worktrees sweep classifies done, integrated, dirty, and ahead agent worktr
 
   const integrated = ticket('integrated worktree');
   const integratedPath = agentWorktree(integrated.ref);
-  assert.equal(store.claimTicket(slug, integrated.ref, 'worker', { direct: true }).ok, true);
+  assert.equal(store.claimTicket(slug, integrated.ref, 'worker', { direct: true, reason: 'The worktree fixture needs a local direct claim.' }).ok, true);
   assert.equal(store.submitTicket(slug, integrated.ref, 'worker', {
     commit: 'abc1234def5678abc1234def5678abc1234def56',
     worktree: integratedPath,
