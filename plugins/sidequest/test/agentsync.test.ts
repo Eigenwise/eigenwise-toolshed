@@ -36,20 +36,30 @@ function configure(store?: any, id?: any, route?: any, fallback?: any) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
-test('SQ-677: briefing comments preserve the full chronological durable thread', () => {
+test('SQ-677: briefing comments preserve the full chronological durable thread byte-for-byte', () => {
   const comments = [
-    { by: 'investigator', kind: 'comment', at: '2026-07-20T00:00:00.000Z', body: `Decision:\n${'x'.repeat(5481)}` },
-    { by: 'reviewer', kind: 'warning', at: '2026-07-20T00:01:00.000Z', body: 'Integration risk: inspect every attachment.' },
-    { by: 'worker', kind: 'comment', at: '2026-07-20T00:02:00.000Z', body: 'Verification: node --test plugins/sidequest/test/*.test.js passed.' },
+    {
+      by: 'investigator', kind: 'comment', at: '2026-07-20T00:00:00.000Z',
+      body: 'Decision:\n\n- keep the **markdown**\n- preserve the blank line\n\nUnicode: 測試 🧪',
+    },
+    {
+      by: 'reviewer', kind: 'warning', at: '2026-07-20T00:01:00.000Z',
+      body: 'Integration risk:\ninspect every attachment before implementation.',
+    },
+    {
+      by: 'worker', kind: 'comment', at: '2026-07-20T00:02:00.000Z',
+      body: 'Verification:\n`node --test plugins/sidequest/test/*.test.js` passed.',
+    },
   ];
-  const packet = agentsync.ticketCommentsPacket(comments);
-  assert.ok(packet.includes(comments[0]!.body));
-  assert.ok(packet.includes(comments[1]!.body));
-  assert.ok(packet.includes(comments[2]!.body));
-  assert.ok(packet.indexOf(comments[0]!.body) < packet.indexOf(comments[1]!.body));
-  assert.ok(packet.indexOf(comments[1]!.body) < packet.indexOf(comments[2]!.body));
-  assert.match(packet, /Author: reviewer/);
-  assert.match(packet, /Kind: warning/);
+  const expected = comments.map((comment, index) => [
+    `### Comment ${index + 1}`,
+    `Author: ${comment.by}`,
+    `Kind: ${comment.kind}`,
+    `Recorded: ${comment.at}`,
+    'Body:',
+    comment.body,
+  ].join('\n')).join('\n\n');
+  assert.strictEqual(agentsync.ticketCommentsPacket(comments), expected);
 });
 
 test('generation-two marker cannot be mistaken for the legacy marker', () => {
@@ -280,15 +290,15 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   const slug = 'briefing-測試';
   const ticket = {
     id: 'briefing-assets', ref: 'SQ-334', title: 'Instant dispatch',
-    description: 'First paragraph.\n\n- markdown keeps its exact shape\n- and blank lines',
+    description: 'First paragraph.\n\n- markdown keeps its **exact** shape\n- blank lines stay blank\n\nUnicode survives: 測試 🧪',
     model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-exec-dispatch-high',
     executorAnchors: 'lib/store.js prepareDispatch', executorVerify: 'node --test plugins/sidequest/test/agentsync.test.js',
     files: ['plugins/sidequest/src/lib/agentsync.ts', 'docs/briefing notes.md'],
     labels: ['dispatch', 'unicode'], priority: 'urgent', storyId: 'US-99', status: 'todo',
     links: [{ type: 'blocked-by', ref: 'SQ-12' }, { type: 'related', ref: 'SQ-33' }],
     comments: [
-      { by: 'scout', kind: 'comment', at: '2026-07-20T00:00:00.000Z', body: 'First durable comment.\n\nKeep this spacing.' },
-      { by: 'reviewer', kind: 'warning', at: '2026-07-20T00:01:00.000Z', body: 'Second durable comment, added before redispatch.' },
+      { by: 'scout', kind: 'comment', at: '2026-07-20T00:00:00.000Z', body: 'First durable comment.\n\nKeep **this** spacing and Unicode: λ測試.' },
+      { by: 'reviewer', kind: 'warning', at: '2026-07-20T00:01:00.000Z', body: 'Second durable comment, added before redispatch.\n\nDo not flatten this paragraph.' },
     ],
     assets: ['space file.png', '画像.png', 'missing file.png'],
     category: { id: 'briefing.contract', route: { model: TERRA.slug, effort: 'high' }, contract: 'Plan against the durable packet, then verify end to end.' },
@@ -299,6 +309,12 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   fs.writeFileSync(path.join(assetDir, ticket.assets[1]!), 'second');
 
   const briefing = agentsync.renderTicketBriefing(ticket, 'instant-token-334', slug);
+  const descriptionPacket = briefing.match(/Description:\n([\s\S]*?)\n\nCategory contract:/);
+  assert.ok(descriptionPacket);
+  assert.strictEqual(descriptionPacket![1], ticket.description);
+  const commentsPacket = briefing.match(/Complete comment thread \(chronological, inspect every entry before implementation\):\n([\s\S]*?)\n\nAttachments/);
+  assert.ok(commentsPacket);
+  assert.strictEqual(commentsPacket![1], agentsync.ticketCommentsPacket(ticket.comments));
   const stub = agentsync.renderDispatchStub(Object.assign({}, ticket, { description: 'y'.repeat(100000), comments: [{ body: 'z'.repeat(100000) }] }), 'instant-token-334', 'C:\\dev\\fixture');
   assert.doesNotMatch(briefing, /^---$/m);
   assert.match(briefing, /## This ticket/);
@@ -323,6 +339,33 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.doesNotMatch(stub, /y{1000}/);
   assert.doesNotMatch(stub, /z{1000}/);
   assert.doesNotMatch(stub, /## This ticket/);
+});
+
+test('SQ-677: malformed and foreign asset names stay bounded and inaccessible', () => {
+  const slug = 'briefing-assets-測試';
+  const ticket = {
+    id: 'asset-boundary',
+    assets: [
+      '../escape.png',
+      '../../foreign-project/outside.png',
+      'C:\\foreign\\secret.png',
+      '/var/tmp/elsewhere.png',
+    ],
+  };
+  const packet = agentsync.ticketAssetsPacket(ticket, slug);
+  const lines = packet.split('\n');
+  assert.equal(lines.length, ticket.assets.length);
+  assert.equal(lines.filter((line: string) => line.includes('WARNING:')).length, ticket.assets.length);
+  for (const line of lines) {
+    assert.ok(Buffer.byteLength(line) < 1024, `asset warning is ${Buffer.byteLength(line)} bytes`);
+    assert.match(line, /missing or unreadable/);
+    assert.doesNotMatch(line, /\.\.[\\/]/);
+    assert.doesNotMatch(line, /foreign-project/);
+  }
+  assert.match(packet, /escape\.png/);
+  assert.match(packet, /outside\.png/);
+  assert.match(packet, /secret\.png/);
+  assert.match(packet, /elsewhere\.png/);
 });
 
 test('artifact lifecycle marker appears only for a validated shared-tree artifact dispatch', () => {

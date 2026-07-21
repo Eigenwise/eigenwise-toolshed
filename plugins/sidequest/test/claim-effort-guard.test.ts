@@ -298,6 +298,94 @@ test('fresh redispatch briefing includes every comment added after preparation a
   assert.notEqual(foreign.status, 0);
   assert.match(foreign.stdout + foreign.stderr, /no ticket/i);
 });
+test('briefing rejects invalid, terminal, and prior-dispatch tokens without leaking ticket content', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  const assertRefused = (ref: string, token: string, secret: string) => {
+    const result = runCli(['briefing', ref, '--token', token]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout + result.stderr, /dispatch token was refused/);
+    assert.doesNotMatch(result.stdout + result.stderr, new RegExp(secret));
+  };
+
+  const invalid = store.createTicket(slug, {
+    title: 'Invalid token packet',
+    description: 'invalid-token-secret-測試',
+    category: 'guard.codex',
+  });
+  const invalidDispatch = store.prepareDispatch(slug, invalid.ref);
+  assertRefused(invalid.ref, 'definitely-invalid-token', 'invalid-token-secret-測試');
+
+  const terminal = store.createTicket(slug, {
+    title: 'Terminal token packet',
+    description: 'terminal-token-secret-測試',
+    category: 'guard.codex',
+  });
+  const terminalDispatch = store.prepareDispatch(slug, terminal.ref);
+  assert.equal(store.claimTicket(slug, terminal.ref, 'terminal-worker', {
+    token: terminalDispatch.token,
+    executor: terminalDispatch.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, terminal.ref, 'terminal-worker', { status: 'todo' }).ok, true);
+  assertRefused(terminal.ref, terminalDispatch.token, 'terminal-token-secret-測試');
+
+  const prior = store.createTicket(slug, {
+    title: 'Prior token packet',
+    description: 'prior-token-secret-測試',
+    category: 'guard.codex',
+  });
+  const first = store.prepareDispatch(slug, prior.ref);
+  const second = store.prepareDispatch(slug, prior.ref);
+  assert.notEqual(first.token, second.token);
+  assertRefused(prior.ref, first.token, 'prior-token-secret-測試');
+  const current = runCli(['briefing', prior.ref, '--token', second.token]);
+  assert.equal(current.status, 0, current.stderr);
+  assert.match(current.stdout, /prior-token-secret-測試/);
+});
+
+test('serialized dispatch spawn stays below the launch ceiling while briefing keeps a huge packet', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  const hugeDescription = [
+    '# Durable packet fixture',
+    '',
+    '- markdown must remain in the fetched briefing',
+    '- Unicode: 測試 🧪 λ',
+    '',
+    'description-marker-',
+    'd'.repeat(500000),
+  ].join('\n');
+  const imageData = Array.from({ length: 120 }, (_value, index) => ({
+    name: `asset-${index}-${'x'.repeat(80)}.png`,
+    base64: 'eA==',
+  }));
+  const created = store.createTicket(slug, {
+    title: 'Huge briefing packet',
+    description: hugeDescription,
+    category: 'guard.codex',
+    imagesData: imageData,
+  });
+  const comments = [
+    `First comment marker:\n\n**markdown** and Unicode 測試 🧪\n${'a'.repeat(15000)}`,
+    `Second comment marker:\n\nKeep this blank line.\n${'b'.repeat(15000)}`,
+  ];
+  for (const body of comments) assert.equal(store.addComment(slug, created.ref, { by: 'packet-worker', body }).ok, true);
+
+  const dispatched = cliJson(['dispatch', created.ref]);
+  const serializedSpawn = JSON.stringify(dispatched.spawn);
+  const spawnBytes = Buffer.byteLength(serializedSpawn, 'utf8');
+  const launchPayloadCeiling = 32 * 1024 * 1024;
+  assert.ok(spawnBytes < launchPayloadCeiling, `serialized dispatched.spawn is ${spawnBytes} bytes`);
+  assert.ok(spawnBytes < 2000, `briefing fetch keeps dispatched.spawn at ${spawnBytes} bytes`);
+  assert.doesNotMatch(serializedSpawn, /description-marker-|First comment marker|asset-0-/);
+
+  const briefing = runCli(['briefing', created.ref, '--token', dispatched.token]);
+  assert.equal(briefing.status, 0, briefing.stderr);
+  assert.match(briefing.stdout, /description-marker-/);
+  assert.ok(briefing.stdout.includes(hugeDescription));
+  for (const body of comments) assert.ok(briefing.stdout.includes(body));
+  assert.match(briefing.stdout, /asset-0-/);
+  assert.match(briefing.stdout, /asset-119-/);
+});
+
 test('instant dispatch returns a stable executor, fetch stub, and token', () => {
   const ref = seed('guard.codex');
   const dispatched = cliJson(['dispatch', ref]);
