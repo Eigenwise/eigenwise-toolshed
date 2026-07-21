@@ -57,6 +57,21 @@ function writeProjectFile(relativePath: string, body: string) {
   fs.writeFileSync(output, body);
 }
 
+function preparedArtifact(title: string, by: string) {
+  const created = ticket(title, store.SHARED_TREE_ARTIFACT_MARKER);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(claim(prepared, by).ok, true);
+  return created;
+}
+
+function assertArtifactPathRejected(created: any, by: string, relativePath: string) {
+  const done = store.completeTicket(slug, created.ref, by, { source: 'mcp' });
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'artifact_scope_violation');
+  assert.deepStrictEqual(done.unscopedPaths, [relativePath]);
+  assert.match(done.message, new RegExp(relativePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+}
+
 test('an explicitly marked shared-tree artifact ticket may close with done after writing its scope', () => {
   writeProjectFile('pre-existing-local.txt', 'caller dirt\n');
   const created = ticket('write a codebase map', [
@@ -69,7 +84,7 @@ test('an explicitly marked shared-tree artifact ticket may close with done after
   assert.strictEqual(prepared.ticket.dispatch.artifactRoot, '.claude/.codebase-info');
   assert.strictEqual(prepared.ticket.dispatch.artifactScope, '.claude/.codebase-info');
   assert.deepStrictEqual(prepared.ticket.dispatch.declaredFiles, ['.claude/.codebase-info']);
-  assert.ok(prepared.ticket.dispatch.artifactDirtyBaseline.includes('pre-existing-local.txt'));
+  assert.ok(prepared.ticket.dispatch.artifactDirtyBaseline.some((entry: any) => entry.path === 'pre-existing-local.txt' && /^[a-f0-9]{64}$/.test(entry.identity)));
   assert.strictEqual(claim(prepared, 'artifact-worker').ok, true);
 
   writeProjectFile('.claude/.codebase-info/INDEX.md', '# Codebase map\n');
@@ -78,6 +93,56 @@ test('an explicitly marked shared-tree artifact ticket may close with done after
   assert.strictEqual(done.ok, true);
   assert.strictEqual(done.ticket.status, 'done');
   assert.strictEqual(done.ticket.submission == null, true);
+});
+
+test('artifact completion permits untouched pre-existing dirt', () => {
+  const relativePath = 'untouched-caller-dirt.txt';
+  writeProjectFile(relativePath, 'untouched caller dirt\n');
+  const created = preparedArtifact('preserve untouched caller dirt', 'untouched-dirt-worker');
+  writeProjectFile('.claude/.codebase-info/untouched.md', '# Generated map\n');
+
+  const done = store.completeTicket(slug, created.ref, 'untouched-dirt-worker', { source: 'mcp' });
+  assert.strictEqual(done.ok, true);
+});
+
+test('artifact completion refuses modified pre-existing dirt', () => {
+  const relativePath = 'modified-caller-dirt.txt';
+  writeProjectFile(relativePath, 'before dispatch\n');
+  const created = preparedArtifact('detect modified caller dirt', 'modified-dirt-worker');
+  writeProjectFile(relativePath, 'after dispatch\n');
+
+  assertArtifactPathRejected(created, 'modified-dirt-worker', relativePath);
+});
+
+test('artifact completion refuses deleted pre-existing dirt', () => {
+  const relativePath = 'deleted-caller-dirt.txt';
+  writeProjectFile(relativePath, 'before dispatch\n');
+  const created = preparedArtifact('detect deleted caller dirt', 'deleted-dirt-worker');
+  fs.unlinkSync(path.join(PROJECT, relativePath));
+
+  assertArtifactPathRejected(created, 'deleted-dirt-worker', relativePath);
+});
+
+test('artifact completion refuses replaced pre-existing dirt', () => {
+  const relativePath = 'replaced-caller-dirt.txt';
+  const absolutePath = path.join(PROJECT, relativePath);
+  writeProjectFile(relativePath, 'before dispatch\n');
+  const created = preparedArtifact('detect replaced caller dirt', 'replaced-dirt-worker');
+  fs.unlinkSync(absolutePath);
+  writeProjectFile(relativePath, 'replacement\n');
+
+  assertArtifactPathRejected(created, 'replaced-dirt-worker', relativePath);
+});
+
+test('artifact completion refuses restaged pre-existing dirt', () => {
+  const relativePath = 'restaged-caller-dirt.txt';
+  writeProjectFile(relativePath, 'staged before dispatch\n');
+  execFileSync('git', ['add', '--', relativePath], { cwd: PROJECT, windowsHide: true });
+  const created = preparedArtifact('detect restaged caller dirt', 'restaged-dirt-worker');
+  writeProjectFile(relativePath, 'staged after dispatch\n');
+  execFileSync('git', ['add', '--', relativePath], { cwd: PROJECT, windowsHide: true });
+
+  assertArtifactPathRejected(created, 'restaged-dirt-worker', relativePath);
 });
 
 test('ordinary scoped tickets still require commit and submit even in the shared tree', () => {
@@ -184,14 +249,16 @@ test('released routed work refuses executor completion and allows explicit contr
     assert.strictEqual(attempt.ok, false);
     assert.strictEqual(attempt.reason, 'submission_required');
   }
-  const groomed = store.completeTicketAsControlPlane(slug, created.ref, {
-    purpose: 'grooming',
+  const groomed = store.closeTicketForGrooming(slug, created.ref, {
     by: 'board-groomer',
-    body: 'Verified obsolete against the integrated implementation.',
+    reason: 'Verified obsolete against the integrated implementation.',
   });
   assert.strictEqual(groomed.ok, true);
   assert.strictEqual(groomed.ticket.status, 'done');
   assert.strictEqual(groomed.ticket.completion.by, 'board-groomer');
+  assert.strictEqual(groomed.ticket.completion.authority, 'control-plane');
+  assert.strictEqual(groomed.ticket.completion.purpose, 'grooming');
+  assert.strictEqual(groomed.ticket.completion.reason, 'Verified obsolete against the integrated implementation.');
   assert.ok(groomed.ticket.completion.at);
 });
 
@@ -206,9 +273,20 @@ test('released routed work refuses CLI update status done', () => {
   assert.match(updated.output, /routed dispatch history.*control-plane grooming closure/);
   assert.strictEqual(store.getTicket(slug, created.ref).status, 'todo');
 
-  const groomed = runCli(['done', created.ref, '--groom', '--body', 'Verified as already shipped during board grooming.']);
+  const spoofed = runCli(['done', created.ref, '--groom', 'true', '--body', 'Worker tried the old generic completion flag.']);
+  assert.notStrictEqual(spoofed.status, 0);
+  assert.strictEqual(store.getTicket(slug, created.ref).status, 'todo');
+
+  const missingReason = runCli(['groom-close', created.ref]);
+  assert.notStrictEqual(missingReason.status, 0);
+  assert.match(missingReason.output, /pass --reason/);
+
+  const groomed = runCli(['groom-close', created.ref, '--reason', 'Verified as already shipped during board grooming.', '--by', 'cli-board-groomer']);
   assert.strictEqual(groomed.status, 0, groomed.output);
-  assert.strictEqual(store.getTicket(slug, created.ref).status, 'done');
+  const closed = store.getTicket(slug, created.ref);
+  assert.strictEqual(closed.status, 'done');
+  assert.strictEqual(closed.completion.by, 'cli-board-groomer');
+  assert.strictEqual(closed.completion.reason, 'Verified as already shipped during board grooming.');
 });
 
 test('update status done still closes a plain unclaimed and undispatched ticket', () => {

@@ -140,6 +140,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   claim: "Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.",
   dispatch: "Prepare a ticket executor through its stable route.",
   done: "Finish a claimed ticket and release its claim. Stamp the actual model and effort.",
+  groomClose: "Grooming closure.",
   native_agent: "Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.",
   archive: "Archive one ticket, or every done ticket.",
   archive_board: "Archive an explicitly named board.",
@@ -615,6 +616,30 @@ const TOOLS = [
       const res = store.completeTicket(slug, args.ref, by, { source: "mcp", model: args.model, effort: args.effort, sessionId: sessionOf(args) });
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res, res.ok ? { workedBy: res.ticket.workedBy } : null);
+    }
+  },
+  {
+    name: "groomClose",
+    description: "Administrative board-grooming closure for inactive tickets. Requires an evidence reason and records control-plane provenance.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        project: PROJECT_PROP,
+        by: { type: "string" },
+        reason: { type: "string" }
+      },
+      required: ["ref", "by", "reason"]
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      const by = requireBy(args, "groomClose");
+      const reason = String(args.reason || "").trim();
+      if (!reason) throw new Error("groomClose: reason is required.");
+      const ticket = store.getTicket(slug, args.ref);
+      const res = store.closeTicketForGrooming(slug, args.ref, { by, reason });
+      if (res.ok) closeDispatchExecutor(ticket);
+      return mutationAck(slug, res, res.ok ? { completion: res.ticket.completion } : null);
     }
   },
   {
@@ -1196,6 +1221,7 @@ const MUTATING_TOOLS = /* @__PURE__ */ new Set([
   "sweepClaims",
   "next",
   "done",
+  "groomClose",
   "release",
   "commit",
   "submit",

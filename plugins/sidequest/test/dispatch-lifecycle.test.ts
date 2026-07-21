@@ -139,7 +139,7 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
   assert.equal(store.completeTicketAsControlPlane(slug, ticket.ref, {
     purpose: 'grooming',
     by: 'board-groomer',
-    body: 'Verified the lifecycle fixture as complete.',
+    reason: 'Verified the lifecycle fixture as complete.',
   }).ok, true);
   pulse = store.pulsePayload(slug, ticket.ref);
   assert.equal(pulse.dispatch.state, 'done');
@@ -278,7 +278,8 @@ test('re-dispatch supersedes stale tokens and terminal cleanup removes active cr
   assert.equal(store.releaseTicket(slug, ticket.ref, 'current-worker', { status: 'todo', source: 'test' }).ok, true);
   assert.equal(store.completeTicketAsControlPlane(slug, ticket.ref, {
     purpose: 'grooming',
-    body: 'Verified the superseded-token lifecycle fixture.',
+    by: 'board-groomer',
+    reason: 'Verified the superseded-token lifecycle fixture.',
   }).ok, true);
   const after = store.getTicket(slug, ticket.ref);
   assert.equal(after.dispatchNonce, null);

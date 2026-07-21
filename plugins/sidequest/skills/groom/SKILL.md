@@ -27,7 +27,7 @@ silently dropped.
 
 ## Guardrails (non-negotiable)
 
-- **Never `sidequest rm` a ticket.** Closing means an evidence-bearing `sidequest done <ref> --groom`, not deletion. This control-plane CLI path is for board grooming only; routed executors cannot reproduce it through MCP `done` or `update` by changing `by` or `source`.
+- **Never `sidequest rm` a ticket.** Closing means an evidence-bearing `sidequest groom-close <ref> --reason <evidence>`, not deletion. This explicit control-plane operation is for board grooming only; routed executor `done` cannot close released repository work.
   If a ticket is genuinely bogus (duplicate, never should have existed), close it with a comment
   explaining why — the record stays, just off the active board.
 - **Never touch a claim held by an active agent.** Only release a claim that is actually stale: `doing`,
@@ -96,13 +96,13 @@ Everything in (a)–(e) gets acted on now, each with a real command and, for clo
 # (a) done but open — close with the evidence
 sidequest comment SQ-12 -m "Already shipped: see commit a1b2c3d (2026-07-05), which added the retry
 path this ticket asked for. Closing as done."
-sidequest done SQ-12 --groom -m "Grooming closure; see the preceding evidence comment."
+sidequest groom-close SQ-12 --reason "Already shipped in commit a1b2c3d; see the preceding evidence comment."
 
 # (b) superseded — close, point at what replaced it
 sidequest comment SQ-9 -m "Superseded by SQ-40's design: the plan changed from per-request retries to
 a single backoff queue (see SQ-40 comment thread, 2026-07-06). This ticket's original approach won't be
 built."
-sidequest done SQ-9 --groom -m "Grooming closure; see the preceding evidence comment."
+sidequest groom-close SQ-9 --reason "Superseded by SQ-40's design; see the preceding evidence comment."
 
 # (c) stale claim — release, don't force, only past TTL
 sidequest release SQ-21 --by <you> --status todo
@@ -112,7 +112,7 @@ no matching commit or comment since. Released back to todo."
 # (d) duplicate — close the newer/thinner one, point at the survivor
 sidequest comment SQ-33 -m "Duplicate of SQ-31 (same ask: retry queue for the ingest worker, filed a day
 earlier). Closing this one; work continues on SQ-31."
-sidequest done SQ-33 --groom -m "Grooming closure; see the preceding evidence comment."
+sidequest groom-close SQ-33 --reason "Duplicate of SQ-31; see the preceding evidence comment."
 
 # (e) missing ticket — file it, with complexity + why, link it if it depends on something
 sidequest add -t "Backfill retry metrics dashboard" --complexity 5 \
@@ -150,7 +150,7 @@ user's answer *is* the evidence now, so cite it:
 ```bash
 sidequest comment SQ-17 -m "Per grooming pass 2026-07-07: user confirmed this is superseded by the new
 plan (dropped in favor of X). Closing."
-sidequest done SQ-17 --groom -m "Grooming closure; see the preceding evidence comment."
+sidequest groom-close SQ-17 --reason "User confirmed this is superseded by the new plan; see the preceding comment."
 ```
 
 If the answer is "keep", leave the ticket untouched but note in the report that it was reviewed and

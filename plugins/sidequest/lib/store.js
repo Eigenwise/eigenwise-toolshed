@@ -12,6 +12,7 @@ const { discoverExternalModels } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
 const { routingDisabledMessage } = require("./refusal-guidance.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
+const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const SHARED_TREE_ARTIFACT_MARKER = "Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.";
 const CONTROL_PLANE_COMPLETION = /* @__PURE__ */ Symbol("sidequest.control-plane-completion");
 function spawnDescription(ticket, resolved) {
@@ -1653,10 +1654,66 @@ function dirtyPathKey(file) {
   const normalized = String(file || "").replace(/\\/g, "/");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
-function artifactWorkingPaths(slug) {
+function artifactPathIdentity(root, file) {
+  const absolute = path.resolve(root, file);
+  let stat;
+  try {
+    stat = fs.lstatSync(absolute, { bigint: true });
+  } catch (error) {
+    if (error && error.code === "ENOENT") return "missing";
+    throw error;
+  }
+  let kind = "other";
+  if (stat.isFile()) kind = "file";
+  else if (stat.isSymbolicLink()) kind = "symlink";
+  else if (stat.isDirectory()) kind = "directory";
+  let content = null;
+  if (kind === "file" || kind === "symlink") {
+    content = execFileSync("git", ["hash-object", "--no-filters", "--", file], {
+      cwd: root,
+      encoding: "utf8",
+      windowsHide: true
+    }).trim();
+  }
+  return [kind, stat.mode, stat.size, stat.dev, stat.ino, content].map((value) => String(value == null ? "" : value)).join(":");
+}
+function artifactWorkingState(slug) {
   const meta = readMeta(slug);
   if (!meta || !meta.path) throw new Error("the board project path is unavailable");
-  return commitScope.workingPaths(meta.path).map((file) => String(file).replace(/\\/g, "/")).sort();
+  const output = execFileSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+    cwd: meta.path,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  const raw = output.split("\0");
+  const states = [];
+  for (let index = 0; index < raw.length; index++) {
+    const entry = raw[index];
+    if (!entry) continue;
+    const status = entry.slice(0, 2);
+    const file = entry.slice(3).replace(/\\/g, "/");
+    if (file) states.push({ file, status });
+    if (status.includes("R") || status.includes("C")) {
+      const previous = raw[++index];
+      if (previous) states.push({ file: previous.replace(/\\/g, "/"), status: `${status}:source` });
+    }
+  }
+  if (states.length > ARTIFACT_BASELINE_MAX_PATHS) {
+    throw new Error(`artifact dirty baseline exceeds ${ARTIFACT_BASELINE_MAX_PATHS} paths`);
+  }
+  return states.map((entry) => {
+    const indexState = execFileSync("git", ["ls-files", "--stage", "-z", "--", entry.file], {
+      cwd: meta.path,
+      encoding: "utf8",
+      windowsHide: true
+    });
+    const identity = crypto.createHash("sha256").update(JSON.stringify({
+      status: entry.status,
+      index: indexState,
+      worktree: artifactPathIdentity(meta.path, entry.file)
+    })).digest("hex");
+    return { path: entry.file, identity };
+  }).sort((left, right) => left.path.localeCompare(right.path));
 }
 function captureArtifactBaseline(slug, scope) {
   const meta = readMeta(slug);
@@ -1667,17 +1724,18 @@ function captureArtifactBaseline(slug, scope) {
     throw new Error(`prepare dispatch: artifact scope must be a direct path inside the board project: ${rejected}`);
   }
   try {
-    return artifactWorkingPaths(slug);
-  } catch (_) {
-    throw new Error("prepare dispatch: shared-tree artifact mode requires a readable Git working tree.");
+    return artifactWorkingState(slug);
+  } catch (error) {
+    const detail = error && error.message ? ` ${error.message}` : "";
+    throw new Error(`prepare dispatch: shared-tree artifact mode requires a readable Git working tree.${detail}`);
   }
 }
 function artifactScopeCheck(slug, ticket, state) {
-  if (!Array.isArray(state.artifactDirtyBaseline)) {
+  if (!Array.isArray(state.artifactDirtyBaseline) || state.artifactDirtyBaseline.some((entry) => !entry || typeof entry.path !== "string" || typeof entry.identity !== "string")) {
     return {
       ok: false,
       reason: "artifact_baseline_missing",
-      message: `${ticket.ref} has no dispatch-time dirty-path baseline. Release it and dispatch again before closing the artifact.`
+      message: `${ticket.ref} has no content-aware dispatch-time dirty baseline. Release it and dispatch again before closing the artifact.`
     };
   }
   const approvedRoot = categoryArtifactRoot({ artifactRoots: [state.artifactRoot] }, state.artifactScope);
@@ -1701,7 +1759,7 @@ function artifactScopeCheck(slug, ticket, state) {
   }
   let current;
   try {
-    current = artifactWorkingPaths(slug);
+    current = artifactWorkingState(slug);
   } catch (_) {
     return {
       ok: false,
@@ -1709,9 +1767,18 @@ function artifactScopeCheck(slug, ticket, state) {
       message: `${ticket.ref} cannot verify the shared-tree artifact scope. Release it and dispatch again from a readable Git working tree.`
     };
   }
-  const baseline = new Set(state.artifactDirtyBaseline.map(dirtyPathKey));
-  const newlyChanged = current.filter((file) => !baseline.has(dirtyPathKey(file)));
-  const outside = newlyChanged.filter((file) => !commitScope.isInScope(file, [state.artifactScope]));
+  const baseline = new Map(state.artifactDirtyBaseline.map((entry) => [dirtyPathKey(entry.path), entry]));
+  const currentByPath = new Map(current.map((entry) => [dirtyPathKey(entry.path), entry]));
+  const changed = /* @__PURE__ */ new Set();
+  for (const entry of state.artifactDirtyBaseline) {
+    if (commitScope.isInScope(entry.path, [state.artifactScope])) continue;
+    const now = currentByPath.get(dirtyPathKey(entry.path));
+    if (!now || now.identity !== entry.identity) changed.add(entry.path);
+  }
+  for (const entry of current) {
+    if (!baseline.has(dirtyPathKey(entry.path)) && !commitScope.isInScope(entry.path, [state.artifactScope])) changed.add(entry.path);
+  }
+  const outside = Array.from(changed).sort();
   if (!outside.length) return { ok: true };
   return {
     ok: false,
@@ -2240,7 +2307,8 @@ function releaseTicket(slug, idOrRef, by, opts) {
         state: "done",
         claimAt: held && held.at ? held.at : null,
         at: now,
-        commentId: null
+        commentId: null,
+        ...opts.completionProvenance || {}
       };
       if (opts.completionComment) {
         if (!Array.isArray(t.comments)) t.comments = [];
@@ -2316,16 +2384,23 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       return { ok: false, reason: "active_dispatch", ticket };
     }
     if (pendingSubmission(ticket)) return { ok: false, reason: "pending_submission", ticket };
-    if (opts.body == null || !String(opts.body).trim()) return { ok: false, reason: "evidence_required", ticket };
   }
   if (purpose === "integration" && !pendingSubmission(ticket)) {
     return { ok: false, reason: "submission_required", ticket };
   }
-  const by = String(opts.by || `control-plane-${purpose}`);
+  const reason = String(opts.reason || "").trim();
+  if (!reason) return { ok: false, reason: "evidence_required", ticket };
+  const by = String(opts.by || "").trim();
+  if (!by) return { ok: false, reason: "identity_required", ticket };
   return completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
+    body: reason,
     source: `control-plane-${purpose}`,
-    completionAuthority: CONTROL_PLANE_COMPLETION
+    completionAuthority: CONTROL_PLANE_COMPLETION,
+    completionProvenance: { authority: "control-plane", purpose, reason }
   }));
+}
+function closeTicketForGrooming(slug, idOrRef, opts) {
+  return completeTicketAsControlPlane(slug, idOrRef, Object.assign({}, opts, { purpose: "grooming" }));
 }
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 const SUBMISSION_GITREF_MAX = 200;
@@ -3474,6 +3549,7 @@ module.exports = {
   releaseTicket,
   completeTicket,
   completeTicketAsControlPlane,
+  closeTicketForGrooming,
   makeWorkedBy,
   submitTicket,
   clearSubmission,

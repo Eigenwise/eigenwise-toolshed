@@ -1061,7 +1061,7 @@ test('subagent-stop: a completed executor reports a clean stop from its done com
   const stop = claimStopTicket(t, sess, 'worker-completed');
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-completed', kind: 'comment', body: 'Shipped abc1234.', source: 'cli' }).ok, true);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-completed', { status: 'todo' }).ok, true);
-  assert.strictEqual(store.completeTicketAsControlPlane(slug, t.ref, { purpose: 'grooming', body: 'Shipped abc1234.' }).ok, true);
+  assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Shipped abc1234.' }).ok, true);
   assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec stopped clean: ${t.ref} done (abc1234); verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
@@ -1071,7 +1071,7 @@ test('subagent-stop: a completed file ticket without a hash is flagged', () => {
   const stop = claimStopTicket(t, sess, 'worker-no-hash');
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-no-hash', kind: 'comment', body: 'Done and verified.', source: 'cli' }).ok, true);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-no-hash', { status: 'todo' }).ok, true);
-  assert.strictEqual(store.completeTicketAsControlPlane(slug, t.ref, { purpose: 'grooming', body: 'Done and verified.' }).ok, true);
+  assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Done and verified.' }).ok, true);
   assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec stopped clean: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
 });
 

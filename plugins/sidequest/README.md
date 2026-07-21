@@ -306,10 +306,15 @@ A bounded documentation artifact can remain in the shared working tree for the c
 must grant structured `artifactRoots`, the ticket must declare exactly one path under an approved root and carry
 the artifact lifecycle sentence, and dispatch must use `--shared-tree` (MCP `sharedTree:true`). The shipped
 `codebase-exploration` category approves `.claude/.codebase-info`. Dispatch pins the authority, root, scope, and
-existing dirty paths. `done` rechecks direct real paths, rejects symlinks/junctions/reparse indirection and newly
-dirty paths outside scope, and leaves pre-existing caller dirt alone. Marker or contract text alone grants
-nothing. Other routed repository work commits and submits. Released work can only close through the
-control-plane `done --groom` path with evidence; executor MCP `done` and `update` cannot spoof that authority.
+a bounded content-aware fingerprint for each existing dirty path, including Git status, index identity, file type,
+and worktree content identity. `done` rechecks direct real paths, rejects symlinks/junctions/reparse indirection,
+and lists newly changed or modified pre-existing paths outside scope while leaving untouched caller dirt alone.
+Marker or contract text alone grants nothing. Other routed repository work commits and submits. Released work can
+only close through `groom-close --reason <evidence>` (MCP `groomClose`), which records its administrative purpose,
+actor, reason, and timestamp; executor `done` and `update` cannot spoof that authority.
+
+These scope checks are lifecycle guardrails on a trusted local machine, not filesystem sandboxing. A transient hard
+link or junction created after dispatch and removed before completion is outside the Sidequest 3.0 guarantee.
 
 ## Native routed execution
 

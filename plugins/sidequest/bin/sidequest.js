@@ -45,7 +45,7 @@ function parseArgs(argv) {
         opts.open = false;
         continue;
       }
-      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "groom"]);
+      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes"]);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -680,7 +680,7 @@ async function cmdDone(opts, positional) {
   const ticket = store.getTicket(slug, idOrRef);
   let res;
   try {
-    res = opts.groom ? store.completeTicketAsControlPlane(slug, idOrRef, { purpose: "grooming", by, body }) : store.completeTicket(slug, idOrRef, by, {
+    res = store.completeTicket(slug, idOrRef, by, {
       force: !!opts.force,
       source: opts.source || "cli",
       model: opts.model,
@@ -701,6 +701,24 @@ async function cmdDone(opts, positional) {
   }
   if (res.ok) console.log(`✓ ${res.ticket.ref} done  — ${meta.name}`);
   else reportClaimFailure("complete", idOrRef, res, meta);
+}
+async function cmdGroomClose(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('groom-close: pass a ticket id or ref, e.g. sidequest groom-close SQ-3 --reason "Already shipped in abc1234."');
+  const reason = String(opts.reason || "").trim();
+  if (!reason) fail("groom-close: pass --reason with the evidence for this administrative closure.");
+  const { slug, meta } = await resolveProject(opts);
+  const by = workerId(opts);
+  const ticket = store.getTicket(slug, idOrRef);
+  const res = store.closeTicketForGrooming(slug, idOrRef, { by, reason });
+  if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) console.log(`✓ ${res.ticket.ref} closed by board grooming  — ${meta.name}`);
+  else reportClaimFailure("groom-close", idOrRef, res, meta);
 }
 async function cmdCommit(opts, positional) {
   const idOrRef = positional[0];
@@ -1770,7 +1788,7 @@ Working the board safely (multi-agent):
   sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level] [--direct --reason "why no executor can do this"]   atomically take a ticket (category-routed executor claims require a prepared nonce and exact executor; direct is a justified inline exception)
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why no executor can do this"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
-                           --groom --body-file <evidence>   control-plane closure for released routed work (never executor use)
+  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who]   administrative board-grooming closure with durable provenance
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
@@ -1933,6 +1951,9 @@ async function main() {
     case "work":
     case "drain":
       await cmdWork(opts);
+      break;
+    case "groom-close":
+      await cmdGroomClose(opts, positional);
       break;
     case "done":
     case "complete":
