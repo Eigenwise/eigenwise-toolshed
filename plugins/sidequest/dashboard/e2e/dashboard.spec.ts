@@ -88,6 +88,23 @@ test('covers archive, notification, settings, create, and keyboard paths', async
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('renders board routing previews and the profile library', async ({ page, dashboard }) => {
+  await openBoard(page, dashboard);
+  await page.locator('.rail').getByRole('button', { name: /Alpha board/ }).click();
+  await page.getByRole('button', { name: 'Settings' }).click();
+
+  await expect(page.getByText('Availability fallback', { exact: true })).toBeVisible();
+  await expect(page.getByText('Board routing', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Profile library' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Routing profile' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Profile library' })).toBeVisible();
+
+  await page.getByRole('combobox', { name: 'Routing profile' }).click();
+  await page.getByRole('option', { name: /Research/ }).click();
+  await expect(page.getByText('Repoint preview', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Use this profile' })).toBeVisible();
+});
+
 test('keeps the layout usable at all parity breakpoints and honors reduced motion', async ({ page, dashboard }) => {
   await openBoard(page, dashboard);
   for (const width of [1024, 880, 820, 720, 700, 480]) {

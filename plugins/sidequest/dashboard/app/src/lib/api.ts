@@ -1,4 +1,4 @@
-import type { Category, Health, JsonRecord, NotificationPayload, Project, RoutingCatalog, Story, Ticket } from './types';
+import type { Category, Health, JsonRecord, NotificationPayload, Project, RoutingCatalog, RoutingPreview, RoutingProfile, Story, Ticket } from './types';
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -37,19 +37,29 @@ export class ApiClient {
   deleteProject(slug: string) { return this.request<JsonRecord>('DELETE', `/api/projects/${path(slug)}`); }
   setProjectRouting(slug: string, routing: 'enabled' | 'disabled') { return this.request<JsonRecord>('PUT', `/api/projects/${path(slug)}/routing`, { routing }); }
   setProjectNotify(slug: string, on: boolean) { return this.request<JsonRecord>('PUT', `/api/projects/${path(slug)}/notify`, { on }); }
+  projectRoutingProfile(slug: string) { return this.request<{ project: string; profile: RoutingProfile }>('GET', `/api/projects/${path(slug)}/routing-profile`); }
+  setProjectRoutingProfile(slug: string, profileId: string) { return this.request<{ profile: RoutingProfile }>('PUT', `/api/projects/${path(slug)}/routing-profile`, { profileId }); }
+  routingPreview(slug: string, profileId: string) { return this.request<RoutingPreview>('GET', `/api/projects/${path(slug)}/routing-profile/preview${query({ profile: profileId })}`); }
+  routingProfiles(retired = false) { return this.request<{ profiles: RoutingProfile[]; newBoardProfile: string }>('GET', `/api/routing-profiles${query({ retired: retired || undefined })}`); }
+  routingProfile(id: string) { return this.request<{ profile: RoutingProfile; boardCount: number }>('GET', `/api/routing-profiles/${path(id)}`); }
+  createRoutingProfile(body: JsonRecord) { return this.request<{ profile: RoutingProfile }>('POST', '/api/routing-profiles', body); }
+  updateRoutingProfile(id: string, body: JsonRecord) { return this.request<{ profile: RoutingProfile }>('PATCH', `/api/routing-profiles/${path(id)}`, body); }
+  retireRoutingProfile(id: string) { return this.request<JsonRecord>('DELETE', `/api/routing-profiles/${path(id)}`); }
+  repointRoutingProfiles(body: JsonRecord) { return this.request<JsonRecord>('POST', '/api/routing-profiles/repoint', body); }
+  promoteRoutingProfile(body: JsonRecord) { return this.request<JsonRecord>('POST', '/api/routing-profiles/promote', body); }
 
   stories(project: string = 'all') { return this.request<{ project: string; stories: Story[] }>('GET', `/api/stories${query({ project })}`); }
   createStory(body: JsonRecord) { return this.request<{ story: Story }>('POST', '/api/stories', { ...body, source: 'dashboard' }); }
   updateStory(id: string, project: string, body: JsonRecord) { return this.request<{ story: Story }>('PATCH', `/api/stories/${path(id)}${query({ project })}`, { ...body, source: 'dashboard' }); }
   deleteStory(id: string, project: string) { return this.request<JsonRecord>('DELETE', `/api/stories/${path(id)}${query({ project })}`); }
 
-  categories(project: string = 'all') { return this.request<{ project: string; categories: Category[]; warnings: unknown[] }>('GET', `/api/categories${query({ project })}`); }
+  categories(project: string = 'all', profile?: string) { return this.request<{ project: string; profile?: RoutingProfile; localChangeCount?: number; categories: Category[]; warnings: unknown[] }>('GET', `/api/categories${query({ project, profile })}`); }
   draftCategory(sentence: string, project?: string) { return this.request<{ draft: JsonRecord }>('POST', '/api/categories/draft', { sentence, project }); }
   createCategory(body: JsonRecord) { return this.request<{ category: Category }>('POST', '/api/categories', { ...body, source: 'dashboard' }); }
-  detachCategory(id: string, project: string) { return this.request<JsonRecord>('POST', `/api/categories/${path(id)}/detach`, { project, source: 'dashboard' }); }
+  detachCategory(id: string, project: string) { return this.request<JsonRecord>('POST', `/api/categories/${path(id)}/pin`, { project, source: 'dashboard' }); }
   relinkCategory(id: string, project: string) { return this.request<JsonRecord>('POST', `/api/categories/${path(id)}/relink`, { project, source: 'dashboard' }); }
-  updateCategory(id: string, project: string | undefined, body: JsonRecord) { return this.request<{ category: Category }>('PATCH', `/api/categories/${path(id)}${query({ project })}`, { ...body, source: 'dashboard' }); }
-  deleteCategory(id: string, project?: string) { return this.request<JsonRecord>('DELETE', `/api/categories/${path(id)}${query({ project })}`); }
+  updateCategory(id: string, project: string | undefined, body: JsonRecord, profile?: string) { return this.request<{ category: Category }>('PATCH', `/api/categories/${path(id)}${query({ project, profile })}`, { ...body, source: 'dashboard' }); }
+  deleteCategory(id: string, project?: string, profile?: string) { return this.request<JsonRecord>('DELETE', `/api/categories/${path(id)}${query({ project, profile })}`); }
   routingFallback() { return this.request<{ fallback: JsonRecord; catalog: RoutingCatalog }>('GET', '/api/routing-fallback'); }
   setRoutingFallback(fallback: JsonRecord) { return this.request<{ fallback: JsonRecord; catalog: RoutingCatalog }>('PUT', '/api/routing-fallback', { fallback }); }
   routingModels(project?: string) { return this.request<RoutingCatalog>('GET', `/api/routing-models${query({ project })}`); }

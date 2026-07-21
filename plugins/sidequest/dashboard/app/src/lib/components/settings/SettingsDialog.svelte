@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Category, JsonRecord, Project } from '../../types';
+  import type { Category, JsonRecord, Project, RoutingPreview, RoutingProfile } from '../../types';
   import type { BoardState } from '../../state/board.svelte';
   import Select, { type SelectOption } from '../ui/Select.svelte';
 
   let { state: board }: { state: BoardState } = $props();
 
-  type CategoryScope = 'default' | 'board';
+  type CategoryScope = 'profile' | 'board';
   type CategoryDraft = {
     id: string;
     name: string;
@@ -19,7 +19,15 @@
     enabled: boolean;
   };
 
-  let categoryScope = $state<CategoryScope>('default');
+  let categoryScope = $state<CategoryScope>('profile');
+  let selectedProfileId = $state('');
+  let profileInfo = $state<RoutingProfile | null>(null);
+  let profileCategories = $state.raw<Category[]>([]);
+  let profileBoardCount = $state(0);
+  let boardProfile = $state<RoutingProfile | null>(null);
+  let repointTarget = $state('');
+  let routingPreview = $state<RoutingPreview | null>(null);
+  let previewLoading = $state(false);
   let editingCategory = $state<Category | null>(null);
   let categoryDraft = $state<CategoryDraft>(emptyCategoryDraft());
   let draftSentence = $state('');
@@ -41,7 +49,8 @@
   let selectedProject = $derived(board.currentProject);
   let boardScopeAvailable = $derived(board.selectedProject !== 'all');
   let categoryProject = $derived(categoryScope === 'board' && boardScopeAvailable ? board.selectedProject : undefined);
-  let categories = $derived((board.raw?.categories ?? []).filter((category) => categoryScope === 'default' || !category.dangling));
+  let categories = $derived(categoryScope === 'profile' ? profileCategories : (board.raw?.categories ?? []).filter((category) => !category.dangling));
+  let profileOptions = $derived<SelectOption[]>(board.routingProfiles.map((profile) => ({ value: profile.id, label: `${profile.name} · r${profile.revision}` })));
   let models = $derived(modelOptions());
   let efforts = $derived(effortOptions());
   let modelSelectOptions = $derived<SelectOption[]>(models.map((value) => ({ value, label: value })));
@@ -114,9 +123,17 @@
     }
     saving = true;
     try {
-      if (editingCategory) await board.updateCategory(editingCategory, body, categoryProject);
-      else await board.createCategory(body);
-      board.toast(`Category ${editingCategory ? 'saved' : 'added'}.`);
+      if (categoryScope === 'profile') {
+        if (!selectedProfileId) throw new Error('Choose a routing profile first.');
+        if (editingCategory) await board.updateProfileCategory(selectedProfileId, editingCategory, body);
+        else await board.createProfileCategory(selectedProfileId, body);
+        await loadProfile(selectedProfileId);
+        board.toast(`Saved profile changes for ${profileBoardCount} board${profileBoardCount === 1 ? '' : 's'}.`);
+      } else {
+        if (editingCategory) await board.updateCategory(editingCategory, body, categoryProject);
+        else await board.createCategory(body);
+        board.toast(`Category ${editingCategory ? 'saved' : 'added'}.`);
+      }
       editingCategory = null;
       categoryEditorOpen = false;
     } finally {
@@ -150,6 +167,61 @@
   async function updateFallbackEffort(value: string) {
     await board.setGlobalFallback({ model: text(globalFallback.model, 'sonnet'), effort: value });
     board.toast('Global fallback saved.');
+  }
+
+  async function loadProfile(id: string) {
+    if (!id) return;
+    const [detail, categories] = await Promise.all([board.api.routingProfile(id), board.api.categories('all', id)]);
+    selectedProfileId = id;
+    profileInfo = detail.profile;
+    profileBoardCount = detail.boardCount;
+    profileCategories = categories.categories;
+  }
+
+  async function loadBoardRouting() {
+    if (!boardScopeAvailable) { boardProfile = null; routingPreview = null; return; }
+    const selected = await board.api.projectRoutingProfile(board.selectedProject);
+    boardProfile = selected.profile;
+    repointTarget = selected.profile.id;
+    await previewRepoint(selected.profile.id);
+  }
+
+  async function previewRepoint(profileId: string) {
+    repointTarget = profileId;
+    if (!boardScopeAvailable || !profileId) return;
+    previewLoading = true;
+    try { routingPreview = await board.routingPreview(board.selectedProject, profileId); }
+    catch (error) { board.toast(error instanceof Error ? error.message : 'Unable to preview this profile.'); }
+    finally { previewLoading = false; }
+  }
+
+  async function applyRepoint() {
+    if (!boardScopeAvailable || !repointTarget || repointTarget === boardProfile?.id) return;
+    await board.setProjectRoutingProfile(board.selectedProject, repointTarget);
+    await loadBoardRouting();
+    board.toast('Board routing profile updated.');
+  }
+
+  async function openSettings() {
+    board.popover = 'settings';
+    try {
+      await board.loadRoutingProfiles();
+      const first = board.routingProfiles.find((profile) => profile.id === selectedProfileId) || board.routingProfiles[0];
+      if (first) await loadProfile(first.id);
+      await loadBoardRouting();
+    } catch (error) { board.toast(error instanceof Error ? error.message : 'Unable to load routing settings.'); }
+  }
+
+  function rowBadge(category: Category) {
+    if (category.disabled || category.origin === 'disabled') return 'Disabled';
+    if (category.layer?.kind === 'ADD' || category.origin === 'added') return 'Board-only';
+    if (category.layer?.kind === 'DETACH' || category.origin === 'detached') return 'Pinned';
+    if (category.layer?.kind === 'OVERRIDE' || category.origin === 'override') return 'Override';
+    return 'Profile';
+  }
+
+  function foreignBase(category: Category) {
+    return (Array.isArray(category.warnings) ? category.warnings : []).find((warning) => record(warning).kind === 'foreign-base') as JsonRecord | undefined;
   }
 
   async function requestDesktopNotifications() {
@@ -205,7 +277,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<button class="settings-trigger" aria-expanded={board.popover === 'settings'} onclick={() => board.popover = board.popover === 'settings' ? null : 'settings'}>Settings</button>
+<button class="settings-trigger" aria-expanded={board.popover === 'settings'} onclick={() => board.popover === 'settings' ? board.popover = null : void openSettings()}>Settings</button>
 
 {#if board.popover === 'settings'}
   <div class="backdrop" role="presentation" onclick={() => board.popover = null}>
@@ -217,48 +289,55 @@
       <div class="settings-grid">
         <section class="routing-section">
           <p class="eyebrow">Execution</p>
-          <h3>Board routing</h3>
-          {#if selectedProject}
-            <label class="switch"><input type="checkbox" checked={selectedProject.routing !== 'disabled'} onchange={(event) => board.setProjectRouting(selectedProject as Project, checkboxValue(event) ? 'enabled' : 'disabled')} /><span><strong>Routing enabled</strong><small>Direct claims still work when routing is off.</small></span></label>
-          {:else}
-            <p class="hint">Open a board to change its routing.</p>
-          {/if}
-          {#if selectedProject?.routing !== 'disabled'}
-            <label class="field"><span>Global fallback model</span><Select label="Global fallback model" value={text(globalFallback.model, 'sonnet')} options={modelSelectOptions} onchange={updateFallback} /></label>
-            <label class="field"><span>Global fallback effort</span><Select label="Global fallback effort" value={text(globalFallback.effort, 'high')} options={effortSelectOptions} onchange={updateFallbackEffort} /></label>
-          {/if}
+          <h3>Availability fallback</h3>
+          <p class="hint">Used after a category route and category fallback are unavailable.</p>
+          <label class="field"><span>Global fallback model</span><Select label="Global fallback model" value={text(globalFallback.model, 'sonnet')} options={modelSelectOptions} onchange={updateFallback} /></label>
+          <label class="field"><span>Global fallback effort</span><Select label="Global fallback effort" value={text(globalFallback.effort, 'high')} options={effortSelectOptions} onchange={updateFallbackEffort} /></label>
 
-          <div class="category-heading"><div><h3>Categories</h3><p class="hint">Routes for ticket work.</p></div><button onclick={() => startCategoryEdit()}>Add category</button></div>
-          <div class="scope-tabs" role="tablist" aria-label="Category scope">
-            <button class:active={categoryScope === 'default'} onclick={() => categoryScope = 'default'}>Default settings</button>
-            <button class:active={categoryScope === 'board'} disabled={!boardScopeAvailable} title={boardScopeAvailable ? '' : 'Open a board to edit local categories'} onclick={() => categoryScope = 'board'}>Board settings</button>
+          <div class="routing-panel">
+            <div class="category-heading"><div><p class="eyebrow">Board routing</p><h3>{selectedProject?.name ?? 'Choose a board'}</h3><p class="hint">A board follows one routing profile, then applies its own local changes.</p></div>{#if board.raw?.categories.some((category) => category.layer)}<span class="change-badge">{board.raw?.categories.filter((category) => category.layer).length} local changes</span>{/if}</div>
+            {#if selectedProject}
+              <label class="switch"><input type="checkbox" checked={selectedProject.routing !== 'disabled'} onchange={(event) => void board.setProjectRouting(selectedProject as Project, checkboxValue(event) ? 'enabled' : 'disabled')} /><span><strong>Routing enabled</strong><small>Direct claims still work when routing is off.</small></span></label>
+              <label class="field"><span>Routing profile</span><Select label="Routing profile" value={repointTarget} options={profileOptions} onchange={(value) => void previewRepoint(value)} /></label>
+              {#if boardProfile}<p class="routing-note">Following <strong>{boardProfile.name}</strong> · revision {boardProfile.revision} · {boardProfile.entryCount} categories</p>{/if}
+              {#if routingPreview && routingPreview.to.id !== routingPreview.from.id}
+                <div class="preview" aria-live="polite"><strong>Repoint preview</strong><span>{routingPreview.drift.changed.length} changed · {routingPreview.drift.missing.length} missing · {routingPreview.drift.added.length} added</span>{#if routingPreview.addCollisions.length}<small>ADD collisions: {routingPreview.addCollisions.join(', ')}</small>{/if}{#if routingPreview.foreignBase.length}<small>Foreign-base rows: {routingPreview.foreignBase.map((row) => row.id).join(', ')}</small>{/if}{#if routingPreview.preparedDispatches.length}<small>{routingPreview.preparedDispatches.length} prepared dispatches will be superseded.</small>{/if}<button class="primary" disabled={previewLoading} onclick={() => void applyRepoint()}>Use this profile</button></div>
+              {/if}
+            {:else}<p class="hint">Open a board to preview or change its routing profile.</p>{/if}
           </div>
-          {#if categoryEditorOpen}
-            <form class="category-form" onsubmit={(event) => { event.preventDefault(); void saveCategory(); }}>
-              <h4>{editingCategory ? `Edit ${editingCategory.name}` : `Add ${categoryScope === 'board' ? 'board' : 'default'} category`}</h4>
-              {#if board.routingCatalog.categoryDraftAvailable}<label class="field"><span>Describe a category</span><div class="draft-row"><input value={draftSentence} oninput={(event) => draftSentence = inputValue(event)} placeholder="One sentence is enough" /><button type="button" onclick={() => void createDraft()}>Draft</button></div></label>{/if}
-              <label class="field"><span>Category ID</span><input required disabled={Boolean(editingCategory)} value={categoryDraft.id} oninput={(event) => categoryDraft.id = inputValue(event)} /></label>
-              <label class="field"><span>Name</span><input required value={categoryDraft.name} oninput={(event) => categoryDraft.name = inputValue(event)} /></label>
-              <label class="field"><span>Classifier description</span><textarea value={categoryDraft.description} oninput={(event) => categoryDraft.description = inputValue(event)}></textarea></label>
-              <div class="route-fields"><label class="field"><span>Primary model</span><Select label="Primary model" value={categoryDraft.model} options={modelSelectOptions} onchange={(value) => { categoryDraft.model = value; }} /></label><label class="field"><span>Effort</span><Select label="Effort" value={categoryDraft.effort} options={effortSelectOptions} onchange={(value) => { categoryDraft.effort = value; }} /></label></div>
-              <div class="route-fields"><label class="field"><span>Fallback model</span><Select label="Fallback model" value={categoryDraft.fallbackModel} options={[{ value: '', label: 'Use global fallback' }, ...modelSelectOptions]} onchange={(value) => { categoryDraft.fallbackModel = value; }} /></label><label class="field"><span>Fallback effort</span><Select label="Fallback effort" value={categoryDraft.fallbackEffort} options={effortSelectOptions} disabled={!categoryDraft.fallbackModel} onchange={(value) => { categoryDraft.fallbackEffort = value; }} /></label></div>
-              <label class="field"><span>Executor instructions</span><textarea value={categoryDraft.contract} oninput={(event) => categoryDraft.contract = inputValue(event)}></textarea></label>
-              {#if categoryScope === 'default'}<label class="switch"><input type="checkbox" checked={categoryDraft.enabled} onchange={(event) => categoryDraft.enabled = checkboxValue(event)} /><span><strong>Enabled</strong><small>Available for ticket routing.</small></span></label>{/if}
-              <div class="form-actions"><button type="button" onclick={() => categoryEditorOpen = false}>Cancel</button><button class="primary" disabled={saving} type="submit">{saving ? 'Saving…' : 'Save category'}</button></div>
-            </form>
-          {:else}
-            <div class="category-list">
-              {#each categories as category (category.id)}
-                <article class:disabled={category.disabled || category.enabled === false} class="category-row">
-                  <div><strong>{category.name}</strong><code>{category.id}</code><small>{text(category.description, 'No classifier description')}</small></div>
-                  <div class="category-meta"><span>{text(record(category.resolved).model, text(record(category.route).model, 'default'))} · {text(record(category.resolved).effort, text(record(category.route).effort, 'high'))}</span><span>{text(category.usageCount, '0')} tickets</span></div>
-                  <div class="category-actions"><button onclick={() => startCategoryEdit(category)}>Edit</button>{#if categoryScope === 'board'}{#if category.disabled}<button onclick={() => void board.deleteCategory(category, categoryProject)}>Re-enable</button>{:else}<button onclick={() => void board.detachCategory(category, board.selectedProject)}>Detach</button><button onclick={() => void board.disableCategory(category, board.selectedProject)}>Disable</button>{#if category.layer}<button onclick={() => void board.relinkCategory(category, board.selectedProject)}>Reset</button>{/if}{/if}{/if}{#if category.id !== 'general'}<button class="danger" onclick={() => void board.deleteCategory(category, categoryProject)}>Delete</button>{/if}</div>
-                </article>
-              {:else}
-                <p class="hint">No categories in this scope.</p>
-              {/each}
+
+          <div class="profile-library">
+            <div class="category-heading"><div><p class="eyebrow">Profile library</p><h3>{profileInfo?.name ?? 'Routing profiles'}</h3><p class="hint">Saving profile changes updates {profileBoardCount} board{profileBoardCount === 1 ? '' : 's'}.</p></div><button onclick={() => startCategoryEdit()}>Add category</button></div>
+            <label class="field"><span>Profile</span><Select label="Profile library" value={selectedProfileId} options={profileOptions} onchange={(value) => void loadProfile(value)} /></label>
+            <div class="scope-tabs" role="tablist" aria-label="Routing category view">
+              <button class:active={categoryScope === 'profile'} onclick={() => categoryScope = 'profile'}>Profile library</button>
+              <button class:active={categoryScope === 'board'} disabled={!boardScopeAvailable} title={boardScopeAvailable ? '' : 'Open a board to inspect local categories'} onclick={() => categoryScope = 'board'}>Board changes</button>
             </div>
-          {/if}
+            {#if categoryEditorOpen}
+              <form class="category-form" onsubmit={(event) => { event.preventDefault(); void saveCategory(); }}>
+                <h4>{editingCategory ? `Edit ${editingCategory.name}` : `Add ${categoryScope === 'board' ? 'board-only' : profileInfo?.name ?? 'profile'} category`}</h4>
+                {#if board.routingCatalog.categoryDraftAvailable}<label class="field"><span>Describe a category</span><div class="draft-row"><input value={draftSentence} oninput={(event) => draftSentence = inputValue(event)} placeholder="One sentence is enough" /><button type="button" onclick={() => void createDraft()}>Draft</button></div></label>{/if}
+                <label class="field"><span>Category ID</span><input required disabled={Boolean(editingCategory)} value={categoryDraft.id} oninput={(event) => categoryDraft.id = inputValue(event)} /></label>
+                <label class="field"><span>Name</span><input required value={categoryDraft.name} oninput={(event) => categoryDraft.name = inputValue(event)} /></label>
+                <label class="field"><span>Classifier description</span><textarea value={categoryDraft.description} oninput={(event) => categoryDraft.description = inputValue(event)}></textarea></label>
+                <div class="route-fields"><label class="field"><span>Primary model</span><Select label="Primary model" value={categoryDraft.model} options={modelSelectOptions} onchange={(value) => { categoryDraft.model = value; }} /></label><label class="field"><span>Effort</span><Select label="Effort" value={categoryDraft.effort} options={effortSelectOptions} onchange={(value) => { categoryDraft.effort = value; }} /></label></div>
+                <div class="route-fields"><label class="field"><span>Fallback model</span><Select label="Fallback model" value={categoryDraft.fallbackModel} options={[{ value: '', label: 'Use global fallback' }, ...modelSelectOptions]} onchange={(value) => { categoryDraft.fallbackModel = value; }} /></label><label class="field"><span>Fallback effort</span><Select label="Fallback effort" value={categoryDraft.fallbackEffort} options={effortSelectOptions} disabled={!categoryDraft.fallbackModel} onchange={(value) => { categoryDraft.fallbackEffort = value; }} /></label></div>
+                <label class="field"><span>Executor instructions</span><textarea value={categoryDraft.contract} oninput={(event) => categoryDraft.contract = inputValue(event)}></textarea></label>
+                <label class="switch"><input type="checkbox" checked={categoryDraft.enabled} onchange={(event) => categoryDraft.enabled = checkboxValue(event)} /><span><strong>Enabled</strong><small>Available for ticket routing.</small></span></label>
+                <div class="form-actions"><button type="button" onclick={() => categoryEditorOpen = false}>Cancel</button><button class="primary" disabled={saving} type="submit">{saving ? 'Saving…' : `Save, updates ${profileBoardCount} board${profileBoardCount === 1 ? '' : 's'}`}</button></div>
+              </form>
+            {:else}
+              <div class="category-list">
+                {#each categories as category (category.id)}
+                  <article class:disabled={category.disabled || category.enabled === false} class="category-row">
+                    <div><strong>{category.name}</strong><span class="row-badge">{rowBadge(category)}</span><code>{category.id}</code><small>{text(category.description, 'No classifier description')}</small>{#if foreignBase(category)}<small class="foreign">Based on {text(foreignBase(category)?.baseProfileId)}, board now uses {text(foreignBase(category)?.profileId)}.</small>{/if}</div>
+                    <div class="category-meta"><span>{text(record(category.resolved).model, text(record(category.route).model, 'default'))} · {text(record(category.resolved).effort, text(record(category.route).effort, 'high'))}</span><span>{text(category.usageCount, '0')} tickets</span></div>
+                    <div class="category-actions"><button onclick={() => startCategoryEdit(category)}>Edit</button>{#if categoryScope === 'board'}{#if category.disabled}<button onclick={() => void board.relinkCategory(category, board.selectedProject)}>Re-enable</button>{:else}{#if rowBadge(category) === 'Pinned'}<button disabled>Pinned</button>{:else}<button onclick={() => void board.detachCategory(category, board.selectedProject)}>Keep pinned</button>{/if}<button onclick={() => void board.relinkCategory(category, board.selectedProject)}>Relink</button><button onclick={() => void board.disableCategory(category, board.selectedProject)}>Disable</button>{/if}{:else}{#if category.id !== 'general'}<button class="danger" onclick={() => void board.deleteProfileCategory(selectedProfileId, category)}>Delete</button>{/if}{/if}</div>
+                  </article>
+                {:else}<p class="hint">No categories in this view.</p>{/each}
+              </div>
+            {/if}
+          </div>
         </section>
 
         <section class="notifications-section">
@@ -310,6 +389,12 @@
   .switch span { display: grid; gap: .08rem; }
   .switch small, .hint, .shortcut-hint { color: var(--text-muted); line-height: 1.4; }
   .scope-tabs { display: flex; gap: .35rem; margin: .8rem 0; }
+  .routing-panel, .profile-library { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 1rem; }
+  .routing-note { color: var(--text-muted); font-size: .82rem; }
+  .change-badge, .row-badge { display: inline-flex; align-items: center; width: fit-content; border: 1px solid var(--border-strong); background: var(--accent-soft); color: var(--accent); font-size: .7rem; font-weight: 700; letter-spacing: .04em; padding: .1rem .3rem; text-transform: uppercase; }
+  .preview { display: grid; gap: .35rem; margin-top: .8rem; padding: .7rem; border: 1px solid var(--border-strong); background: var(--surface-muted); font-size: .82rem; }
+  .preview small, .foreign { color: var(--text-muted); }
+  .foreign { color: var(--accent); }
   .scope-tabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
   .category-list { display: grid; gap: .55rem; }
   .category-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem; }

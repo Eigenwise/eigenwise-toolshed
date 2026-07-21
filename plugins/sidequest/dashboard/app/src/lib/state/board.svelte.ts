@@ -1,5 +1,5 @@
 import { SvelteSet } from 'svelte/reactivity';
-import type { Snapshot, Ticket, Project, Story, Category, Notification, Scope, Status, JsonRecord, RoutingCatalog } from '../types';
+import type { Snapshot, Ticket, Project, Story, Category, Notification, Scope, Status, JsonRecord, RoutingCatalog, RoutingPreview, RoutingProfile } from '../types';
 import { ApiClient } from '../api';
 import type { PollingController } from './polling';
 
@@ -25,6 +25,7 @@ export class BoardState {
   archivedProjects = $state.raw<Project[]>([]);
   archivedTickets = $state.raw<Ticket[]>([]);
   routingCatalog = $state.raw<RoutingCatalog>({});
+  routingProfiles = $state.raw<RoutingProfile[]>([]);
   notifyPreferences = $state.raw<JsonRecord>({});
 
   selectedProject = $state<Scope>('all');
@@ -140,6 +141,15 @@ export class BoardState {
   async restoreProject(project: Project | string) { await this.mutate(() => this.api.unarchiveProject(this.projectSlug(project))); }
   async deleteProject(project: Project | string) { await this.mutate(() => this.api.deleteProject(this.projectSlug(project))); }
   async setProjectRouting(project: Project | string, routing: 'enabled' | 'disabled') { await this.mutate(() => this.api.setProjectRouting(this.projectSlug(project), routing)); }
+  async loadRoutingProfiles(retired = false) { const result = await this.api.routingProfiles(retired); this.routingProfiles = result.profiles; return result.profiles; }
+  async setProjectRoutingProfile(project: Project | string, profileId: string) { return this.mutate(() => this.api.setProjectRoutingProfile(this.projectSlug(project), profileId)); }
+  async routingPreview(project: Project | string, profileId: string): Promise<RoutingPreview> { return this.api.routingPreview(this.projectSlug(project), profileId); }
+  async createRoutingProfile(body: JsonRecord) { const result = await this.mutate(() => this.api.createRoutingProfile(body)); await this.loadRoutingProfiles(); return result.profile; }
+  async updateRoutingProfile(id: string, body: JsonRecord) { const result = await this.mutate(() => this.api.updateRoutingProfile(id, body)); await this.loadRoutingProfiles(); return result.profile; }
+  async retireRoutingProfile(id: string) { await this.mutate(() => this.api.retireRoutingProfile(id)); await this.loadRoutingProfiles(); }
+  async createProfileCategory(profileId: string, body: JsonRecord) { const result = await this.mutate(() => this.api.createCategory({ ...body, profile: profileId })); return result.category; }
+  async updateProfileCategory(profileId: string, category: Category, body: JsonRecord) { const result = await this.mutate(() => this.api.updateCategory(category.id, undefined, body, profileId)); return result.category; }
+  async deleteProfileCategory(profileId: string, category: Category) { await this.mutate(() => this.api.deleteCategory(category.id, undefined, profileId)); }
   async setProjectMuted(project: Project | string, muted: boolean) { await this.mutate(() => this.api.setProjectNotify(this.projectSlug(project), !muted)); }
   async setNotifyPreferences(prefs: JsonRecord) { const result = await this.mutate(() => this.api.setNotifyPrefs(prefs)); this.notifyPreferences = result.prefs; return result; }
 

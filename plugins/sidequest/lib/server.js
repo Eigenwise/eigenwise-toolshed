@@ -216,39 +216,67 @@ function categoryUsageCounts(project) {
   }
   return counts;
 }
-function categoriesPayload(project) {
+function categoriesPayload(project, profileId) {
+  const profileScope = profileId ? store.routingProfileDetails(profileId) : null;
+  if (profileId && !profileScope) throw new Error(`routing profile "${profileId}" not found`);
+  const selected = !profileScope && project && project !== "all" ? store.projectRoutingProfile(project) : null;
+  const profile = profileScope || (selected ? store.routingProfileDetails(selected.profile.id) : store.routingProfileDetails(store.routingProfileSettings().newProjectProfileId));
   const usage = categoryUsageCounts(project);
-  const global = store.getCategories();
-  const globalById = new Map(global.map((category) => [category.id, category]));
-  const local = project && project !== "all" ? store.getProjectCategories(project) : { rows: [], warnings: [] };
+  const local = selected ? store.getProjectCategories(project) : { rows: [], warnings: [] };
   const localById = new Map(local.rows.map((row) => [row.id, row]));
-  const effectiveById = new Map((project && project !== "all" ? store.getCategories({ project, withState: true }) : global).map((category) => [category.id, category]));
-  const ids = /* @__PURE__ */ new Set([...globalById.keys(), ...localById.keys()]);
-  const danglingOverrides = local.warnings.filter((warning) => warning.kind === "dangling-override");
+  const baseById = new Map((profile?.categories || []).map((category) => [category.id, category]));
+  const effectiveById = new Map((selected ? store.getCategories({ project, withState: true }) : profile?.categories || []).map((category) => [category.id, category]));
+  const ids = /* @__PURE__ */ new Set([...baseById.keys(), ...localById.keys(), ...effectiveById.keys()]);
   return {
+    profile: profile && { id: profile.id, name: profile.name, revision: profile.revision, entryCount: profile.entryCount },
+    localChangeCount: local.rows.length,
     warnings: local.warnings,
     categories: [...ids].map((id) => {
-      const base = globalById.get(id) || null;
+      const base = baseById.get(id) || null;
       const layer = localById.get(id) || null;
       const category = effectiveById.get(id) || base || (layer && (layer.kind === "ADD" || layer.kind === "DETACH") ? layer.data : null);
       if (!category) return null;
       const resolved = store.resolveCategoryRoute(category);
+      const disabled = Boolean(layer && layer.kind === "DISABLE");
       return Object.assign({}, category, {
+        origin: disabled ? "disabled" : category.origin || "profile",
         usageCount: usage[id] || 0,
         resolved: { model: resolved.model, effort: resolved.effort },
         warnings: resolved.warnings.concat(local.warnings.filter((warning) => warning.id === id)),
         layer: layer && { kind: layer.kind, data: layer.data, base },
-        disabled: Boolean(layer && layer.kind === "DISABLE")
+        disabled
       });
-    }).filter(Boolean).concat(danglingOverrides.map((warning) => ({
-      id: warning.id,
-      name: warning.id,
-      linkState: "dangling-override",
-      usageCount: usage[warning.id] || 0,
-      warnings: [warning],
-      layer: localById.get(warning.id) && { kind: localById.get(warning.id).kind, data: localById.get(warning.id).data, base: null },
-      dangling: true
-    }))).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+  };
+}
+function routingPreview(project, profileId) {
+  const selected = store.projectRoutingProfile(project);
+  const target = store.routingProfileDetails(profileId);
+  if (!selected || !target) throw new Error("A board and target routing profile are required.");
+  const current = new Map(store.getCategories({ project, withState: true }).map((category) => [category.id, category]));
+  const next = new Map(target.categories.map((category) => [category.id, category]));
+  const local = store.getProjectCategories(project);
+  const addCollisions = [];
+  const foreignBase = [];
+  for (const row of local.rows) {
+    if (row.kind === "ADD" && next.has(row.id)) addCollisions.push(row.id);
+    if (row.baseProfileId && row.baseProfileId !== target.id) foreignBase.push({ id: row.id, baseProfileId: row.baseProfileId, profileId: target.id, kind: row.kind });
+    if (row.kind === "ADD" || row.kind === "DETACH") next.set(row.id, row.data);
+    else if (row.kind === "OVERRIDE") next.set(row.id, Object.assign({}, next.get(row.id) || row.baseData || {}, row.data, { id: row.id }));
+    else if (row.kind === "DISABLE") next.delete(row.id);
+  }
+  const currentIds = new Set(current.keys());
+  const nextIds = new Set(next.keys());
+  const changed = [...nextIds].filter((id) => currentIds.has(id) && JSON.stringify(current.get(id)) !== JSON.stringify(next.get(id)));
+  const preparedDispatches = store.listTickets(project).filter((ticket) => ticket.dispatch?.outcome === "prepared" && ticket.dispatchNonce && !ticket.dispatch?.terminalAt && !ticket.dispatch?.launchedAt && !ticket.dispatch?.boundAt && !ticket.dispatch?.claimedAt).map((ticket) => ({ id: ticket.id, ref: ticket.ref, title: ticket.title }));
+  return {
+    project,
+    from: { id: selected.profile.id, name: selected.profile.name, revision: selected.profile.revision },
+    to: { id: target.id, name: target.name, revision: target.revision },
+    drift: { changed, missing: [...currentIds].filter((id) => !nextIds.has(id)), added: [...nextIds].filter((id) => !currentIds.has(id)) },
+    addCollisions,
+    foreignBase,
+    preparedDispatches
   };
 }
 function storiesWithCounts(slug) {
@@ -308,6 +336,104 @@ async function handle(req, res) {
     const result = store.setProjectRouting(pr[1], body.routing);
     sendJson(res, result.ok ? 200 : 404, result);
     return;
+  }
+  const projectProfile = /^\/api\/projects\/([^/]+)\/routing-profile$/.exec(pathname);
+  if (projectProfile) {
+    const project = projectProfile[1];
+    if (!store.readMeta(project)) {
+      sendJson(res, 404, { error: "unknown project" });
+      return;
+    }
+    if (req.method === "GET") {
+      const selected = store.projectRoutingProfile(project);
+      sendJson(res, 200, { project, profile: store.routingProfileDetails(selected.profile.id), warnings: selected.warnings });
+      return;
+    }
+    if (req.method === "PUT" || req.method === "PATCH") {
+      try {
+        const body = await readJsonBody(req);
+        const result = store.setProjectRoutingProfile(project, body.profileId || body.profile, "dashboard");
+        sendJson(res, 200, { result, profile: store.routingProfileDetails(result.profileId), preview: routingPreview(project, result.profileId) });
+      } catch (error) {
+        sendJson(res, 400, { error: error.message });
+      }
+      return;
+    }
+  }
+  const projectProfilePreview = /^\/api\/projects\/([^/]+)\/routing-profile\/preview$/.exec(pathname);
+  if (req.method === "GET" && projectProfilePreview) {
+    try {
+      const profileId = String(q.profile || "");
+      sendJson(res, 200, routingPreview(projectProfilePreview[1], profileId));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+  if (req.method === "GET" && pathname === "/api/routing-profiles") {
+    const profiles = store.listRoutingProfiles({ retired: q.retired === "true" });
+    sendJson(res, 200, { profiles, newBoardProfile: store.routingProfileSettings().newProjectProfileId });
+    return;
+  }
+  if (req.method === "POST" && pathname === "/api/routing-profiles") {
+    try {
+      const body = await readJsonBody(req);
+      const result = store.createRoutingProfile(body.id, body);
+      sendJson(res, 201, { result, profile: store.routingProfileDetails(result.id) });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+  if (req.method === "POST" && pathname === "/api/routing-profiles/repoint") {
+    try {
+      const body = await readJsonBody(req);
+      sendJson(res, 200, { result: store.repointRoutingProfiles(body.from, body.to, { dryRun: body.dryRun === true, assignedBy: "dashboard" }) });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+  if (req.method === "POST" && pathname === "/api/routing-profiles/promote") {
+    try {
+      const body = await readJsonBody(req);
+      const result = store.promoteRoutingProfile(body.id, body.fromProject, body.projects, { name: body.name, description: body.description, assignedBy: "dashboard" });
+      sendJson(res, 201, { result, profile: store.routingProfileDetails(result.id) });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+  const routingProfile = /^\/api\/routing-profiles\/([^/]+)$/.exec(pathname);
+  if (routingProfile) {
+    const id = routingProfile[1];
+    if (req.method === "GET") {
+      const profile = store.routingProfileDetails(id);
+      if (!profile) {
+        sendJson(res, 404, { error: "routing profile not found" });
+        return;
+      }
+      const boards = [...store.listProjects(), ...store.listProjects({ archived: true })].filter((project) => store.projectRoutingProfile(project.slug)?.profile.id === profile.id);
+      sendJson(res, 200, { profile, boards, boardCount: boards.length });
+      return;
+    }
+    if (req.method === "PATCH" || req.method === "PUT") {
+      try {
+        const result = store.editRoutingProfile(id, await readJsonBody(req));
+        sendJson(res, 200, { result, profile: store.routingProfileDetails(id) });
+      } catch (error) {
+        sendJson(res, 400, { error: error.message });
+      }
+      return;
+    }
+    if (req.method === "DELETE") {
+      try {
+        sendJson(res, 200, { result: store.retireRoutingProfile(id) });
+      } catch (error) {
+        sendJson(res, 400, { error: error.message });
+      }
+      return;
+    }
   }
   const pn = /^\/api\/projects\/([^/]+)\/notify$/.exec(pathname);
   if ((req.method === "POST" || req.method === "PUT") && pn) {
@@ -393,12 +519,17 @@ async function handle(req, res) {
   }
   if (req.method === "GET" && pathname === "/api/categories") {
     const project = q.project ? String(q.project) : "all";
+    const profile = q.profile ? String(q.profile) : null;
     if (project !== "all" && !store.readMeta(project)) {
       sendJson(res, 404, { error: "unknown project" });
       return;
     }
-    const payload = categoriesPayload(project);
-    sendJson(res, 200, { project, categories: payload.categories, warnings: payload.warnings });
+    try {
+      const payload = categoriesPayload(project, profile);
+      sendJson(res, 200, { project, profile: payload.profile, localChangeCount: payload.localChangeCount, categories: payload.categories, warnings: payload.warnings });
+    } catch (error) {
+      sendJson(res, 404, { error: error.message });
+    }
     return;
   }
   if (req.method === "POST" && pathname === "/api/categories/draft") {
@@ -439,14 +570,35 @@ async function handle(req, res) {
       return;
     }
     const project = body.project ? String(body.project) : null;
+    const profile = body.profile ? String(body.profile) : null;
+    if (project && profile) {
+      sendJson(res, 400, { error: "choose a board or routing profile, not both" });
+      return;
+    }
     if (project && !store.readMeta(project)) {
       sendJson(res, 404, { error: "unknown project" });
       return;
     }
     try {
+      if (profile) {
+        const category2 = store.setRoutingProfileCategory(profile, {
+          id: body.id,
+          name: body.name,
+          description: body.description,
+          route: body.route,
+          fallback: body.fallback,
+          contract: body.contract,
+          artifactRoots: body.artifactRoots,
+          enabled: body.enabled
+        });
+        const payload = categoriesPayload("all", profile);
+        sendJson(res, 201, { category: payload.categories.find((entry) => entry.id === category2.id), profile: payload.profile });
+        return;
+      }
       if (project) {
         const id = String(body.id || "").trim().toLowerCase();
-        const global = store.getCategory(id);
+        const selected = store.projectRoutingProfile(project);
+        const base = store.routingProfileCategory(selected.profile.id, id);
         const data = {
           id,
           name: body.name,
@@ -457,9 +609,9 @@ async function handle(req, res) {
           artifactRoots: body.artifactRoots,
           enabled: body.enabled !== false
         };
-        store.setProjectCategory(project, id, global ? "DETACH" : "ADD", data);
+        store.setProjectCategory(project, id, base ? "DETACH" : "ADD", data);
         const payload = categoriesPayload(project);
-        sendJson(res, 201, { category: payload.categories.find((category2) => category2.id === id), warnings: payload.warnings });
+        sendJson(res, 201, { category: payload.categories.find((category2) => category2.id === id), profile: payload.profile, warnings: payload.warnings });
         return;
       }
       const category = store.setCategory({
@@ -478,7 +630,7 @@ async function handle(req, res) {
     }
     return;
   }
-  const categoryActionMatch = /^\/api\/categories\/([^/]+)\/(detach|relink)$/.exec(pathname);
+  const categoryActionMatch = /^\/api\/categories\/([^/]+)\/(pin|detach|relink)$/.exec(pathname);
   if (categoryActionMatch && req.method === "POST") {
     const id = categoryActionMatch[1];
     const action = categoryActionMatch[2];
@@ -495,10 +647,10 @@ async function handle(req, res) {
       return;
     }
     try {
-      if (action === "detach") store.detachCategory(project, id);
+      if (action === "detach" || action === "pin") store.detachCategory(project, id);
       else {
         const row = store.getProjectCategories(project).rows.find((entry) => entry.id === id);
-        if (!row || !["OVERRIDE", "DETACH"].includes(row.kind)) throw new Error(`Category "${id}" has no local override or detach.`);
+        if (!row) throw new Error(`Category "${id}" has no local change.`);
         store.removeProjectCategory(project, id);
       }
       const payload = categoriesPayload(project);
@@ -520,21 +672,35 @@ async function handle(req, res) {
         return;
       }
       const project = q.project ? String(q.project) : null;
+      const profile = q.profile ? String(q.profile) : null;
+      if (project && profile) {
+        sendJson(res, 400, { error: "choose a board or routing profile, not both" });
+        return;
+      }
       if (project && !store.readMeta(project)) {
         sendJson(res, 404, { error: "unknown project" });
         return;
       }
       try {
+        if (profile) {
+          const patch2 = Object.assign({}, body);
+          delete patch2.id;
+          const category2 = store.setRoutingProfileCategory(profile, id, patch2);
+          const payload = categoriesPayload("all", profile);
+          sendJson(res, 200, { category: payload.categories.find((entry) => entry.id === category2.id), profile: payload.profile });
+          return;
+        }
         if (project) {
           if (body.disable === true) {
             store.setProjectCategory(project, id, "DISABLE", {});
           } else {
-            const global = store.getCategory(id);
+            const selected = store.projectRoutingProfile(project);
+            const base = store.routingProfileCategory(selected.profile.id, id);
             const current = store.getCategory(id, { project });
             const data = Object.assign({}, current || {}, body, { id, enabled: body.enabled !== false });
             delete data.project;
             delete data.disable;
-            store.setProjectCategory(project, id, global ? "DETACH" : "ADD", data);
+            store.setProjectCategory(project, id, base ? "DETACH" : "ADD", data);
           }
           const payload = categoriesPayload(project);
           sendJson(res, 200, { category: payload.categories.find((category2) => category2.id === id), warnings: payload.warnings });
@@ -555,11 +721,21 @@ async function handle(req, res) {
     }
     if (req.method === "DELETE") {
       const project = q.project ? String(q.project) : null;
+      const profile = q.profile ? String(q.profile) : null;
+      if (project && profile) {
+        sendJson(res, 400, { error: "choose a board or routing profile, not both" });
+        return;
+      }
       if (project && !store.readMeta(project)) {
         sendJson(res, 404, { error: "unknown project" });
         return;
       }
       try {
+        if (profile) {
+          const existed2 = store.removeRoutingProfileCategory(profile, id);
+          sendJson(res, existed2 ? 200 : 404, { ok: existed2 });
+          return;
+        }
         if (project) {
           const existed2 = store.removeProjectCategory(project, id);
           sendJson(res, existed2 ? 200 : 404, { ok: existed2 });

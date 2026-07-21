@@ -183,15 +183,16 @@ test('stable cwd lets a detached child outlive a removed worktree-like cwd', { t
   assert.strictEqual(fs.readFileSync(marker, 'utf8'), 'ready');
 });
 
-test('dashboard exposes default and board settings with a routing opt-out', () => {
+test('dashboard exposes routing profiles, board previews, and profile settings', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
   const bundle = fs.readdirSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets'))
     .map((name: string) => fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets', name), 'utf8')).join('\n');
-  assert.match(server, /projects.*routing/s);
-  assert.match(server, /setProjectRouting/);
-  assert.match(bundle, /Default settings/);
-  assert.match(bundle, /Board settings/);
-  assert.match(bundle, /routing/);
+  assert.match(server, /routing-profiles/);
+  assert.match(server, /routing-profile.*preview/s);
+  assert.match(server, /setProjectRoutingProfile/);
+  assert.match(bundle, /Board routing/);
+  assert.match(bundle, /Profile library/);
+  assert.match(bundle, /Availability fallback/);
 });
 
 test('dashboard exposes board archive routes and guarded project controls', () => {
@@ -278,6 +279,30 @@ test('category endpoints project scope preserves global taxonomy and reports loc
   const relinked = await requestJson(started.port, 'POST', '/api/categories/coding/relink', { project: one });
   assert.strictEqual(relinked.status, 200);
   assert.strictEqual(relinked.body.category.linkState, 'linked');
+});
+
+test('routing profile REST exposes profile categories, previews, and board pointers', { concurrency: false }, async (t?: any) => {
+  const project = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'profile-rest')).slug;
+  const started = await start(45000 + Math.floor(Math.random() * 1000));
+  t.after(() => started.server.close());
+
+  const listed = await fetchJson(started.port, '/api/routing-profiles');
+  assert.ok(listed.profiles.some((profile?: any) => profile.id === 'coding'));
+  const created = await requestJson(started.port, 'POST', '/api/routing-profiles', { id: 'server-rest-profile', from: 'coding', name: 'Server REST profile' });
+  assert.strictEqual(created.status, 201);
+  const profileCategories = await fetchJson(started.port, '/api/categories?profile=server-rest-profile');
+  assert.strictEqual(profileCategories.profile.id, 'server-rest-profile');
+  const added = await requestJson(started.port, 'POST', '/api/categories', { profile: 'server-rest-profile', id: 'server-rest', name: 'Server REST', description: 'Server endpoint coverage.', contract: '', route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
+  assert.strictEqual(added.status, 201);
+  const preview = await fetchJson(started.port, `/api/projects/${project}/routing-profile/preview?profile=server-rest-profile`);
+  assert.strictEqual(preview.to.id, 'server-rest-profile');
+  const assigned = await requestJson(started.port, 'PUT', `/api/projects/${project}/routing-profile`, { profileId: 'server-rest-profile' });
+  assert.strictEqual(assigned.status, 200);
+  const pointer = await fetchJson(started.port, `/api/projects/${project}/routing-profile`);
+  assert.strictEqual(pointer.profile.id, 'server-rest-profile');
+  const repoint = await requestJson(started.port, 'POST', '/api/routing-profiles/repoint', { from: 'server-rest-profile', to: 'coding', dryRun: true });
+  assert.strictEqual(repoint.status, 200);
+  assert.ok(repoint.body.result.boards.some((board?: any) => board.project === project));
 });
 
 function copyPlugin(from?: any, to?: any, version?: any) {
