@@ -403,7 +403,7 @@
   .scope-tabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
   .category-list { display: grid; gap: .55rem; }
   .category-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem 1rem; border: 1px solid var(--border); border-radius: 3px; padding: .6rem .7rem; background: var(--surface-muted); }
-  .category-row.disabled { opacity: .62; }
+  .category-row.disabled { border-color: var(--border-strong); border-style: dashed; box-shadow: inset .22rem 0 0 var(--border-strong); }
   .category-row code, .category-row small, .category-meta { display: block; color: var(--text-muted); font-size: .78rem; margin-top: .16rem; }
   .category-row small { display: -webkit-box; overflow: hidden; line-height: 1.35; line-clamp: 2; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .category-meta { align-self: start; min-inline-size: 9rem; text-align: right; font-family: var(--font-mono); }

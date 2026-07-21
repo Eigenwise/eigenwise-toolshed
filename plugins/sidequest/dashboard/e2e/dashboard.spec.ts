@@ -39,6 +39,29 @@ async function questlineColor(card: Locator) {
   return card.locator('.questline').evaluate((element) => getComputedStyle(element).backgroundColor);
 }
 
+async function renderedCompactTextColors(row: Locator, selector: string) {
+  return row.locator(selector).evaluate((element) => {
+    const categoryRow = element.closest('.category-row');
+    if (!categoryRow) throw new Error('Expected compact text inside a category row.');
+    return {
+      foreground: getComputedStyle(element).color,
+      background: getComputedStyle(categoryRow).backgroundColor,
+      opacity: getComputedStyle(categoryRow).opacity
+    };
+  });
+}
+
+async function cssColor(page: Page, color: string) {
+  return page.evaluate((value) => {
+    const sample = document.createElement('span');
+    sample.style.backgroundColor = value;
+    document.body.append(sample);
+    const resolved = getComputedStyle(sample).backgroundColor;
+    sample.remove();
+    return resolved;
+  }, color);
+}
+
 async function assertDialogGeometry(dialog: Locator) {
   const box = await dialog.boundingBox();
   expect(box).not.toBeNull();
@@ -166,7 +189,8 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
   const doingCard = await cardFor(page, 'Investigate stale agent claim');
   const doneCard = await cardFor(page, 'Completed seeded work');
   await expect(storyCard.locator('.claim-node')).toHaveCount(1);
-  expect(await questlineColor(storyCard)).not.toBe(await questlineColor(todoCard));
+  await expect(todoCard.locator('.claim-node')).toHaveCount(0);
+  expect(await questlineColor(storyCard)).toBe(await cssColor(page, '#8c6cff'));
   expect(await questlineColor(todoCard)).toBe(await tokenColor(page, '--status-todo'));
   expect(await questlineColor(doingCard)).toBe(await tokenColor(page, '--status-doing'));
   expect(await questlineColor(doneCard)).toBe(await tokenColor(page, '--status-done'));
@@ -189,10 +213,27 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
     const settingsTrigger = page.getByRole('button', { name: /Settings/ });
     await settingsTrigger.focus();
     await expect(settingsTrigger).toHaveCSS('box-shadow', /rgb/);
+    await page.locator('.rail').getByRole('button', { name: /Alpha board/ }).click();
     await settingsTrigger.click();
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toBeVisible();
     await assertDialogGeometry(settings);
+    await page.getByRole('button', { name: 'Board settings' }).click();
+    const fixtureCategoryId = page.locator('code', { hasText: /^fixture-category-1$/ });
+    const categoryRow = page.locator('.category-row').filter({ has: fixtureCategoryId });
+    await expect(categoryRow).toBeVisible();
+    const disableCategory = categoryRow.getByRole('button', { name: 'Disable' });
+    if (await disableCategory.count()) await disableCategory.click();
+    const disabledCategory = page.locator('.category-row.disabled').filter({ has: fixtureCategoryId });
+    await expect(disabledCategory).toBeVisible();
+    await expect(disabledCategory.getByRole('button', { name: 'Edit' })).toBeEnabled();
+    await expect(disabledCategory.getByRole('button', { name: 'Re-enable' })).toBeEnabled();
+    await expect(disabledCategory.getByRole('button', { name: 'Delete' })).toBeEnabled();
+    for (const selector of ['code', 'small', '.category-meta']) {
+      const colors = await renderedCompactTextColors(disabledCategory, selector);
+      expect(colors.opacity).toBe('1');
+      expect(contrast(colors.foreground, colors.background)).toBeGreaterThanOrEqual(4.5);
+    }
     expect(await page.locator('.settings-body').evaluate((element) => element.scrollHeight > element.clientHeight)).toBeTruthy();
     await page.mouse.click(4, 4);
     await expect(settings).toHaveCount(0);
