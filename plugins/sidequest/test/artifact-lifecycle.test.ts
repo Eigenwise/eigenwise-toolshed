@@ -66,6 +66,7 @@ test('an explicitly marked shared-tree artifact ticket may close with done after
   const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
   assert.strictEqual(prepared.ticket.dispatch.sharedTree, true);
   assert.strictEqual(prepared.ticket.dispatch.artifactMode, true);
+  assert.strictEqual(prepared.ticket.dispatch.artifactRoot, '.claude/.codebase-info');
   assert.strictEqual(prepared.ticket.dispatch.artifactScope, '.claude/.codebase-info');
   assert.deepStrictEqual(prepared.ticket.dispatch.declaredFiles, ['.claude/.codebase-info']);
   assert.ok(prepared.ticket.dispatch.artifactDirtyBaseline.includes('pre-existing-local.txt'));
@@ -90,7 +91,7 @@ test('ordinary scoped tickets still require commit and submit even in the shared
 
   assert.strictEqual(done.ok, false);
   assert.strictEqual(done.reason, 'submission_required');
-  assert.match(done.message, /Commit and submit verified changes/);
+  assert.match(done.message, /commit and submit verified changes/i);
   assert.strictEqual(store.getTicket(slug, created.ref).claim.by, 'ordinary-worker');
 });
 
@@ -103,6 +104,32 @@ test('the artifact marker alone does not bypass submit from an isolated dispatch
   const done = store.completeTicket(slug, created.ref, 'isolated-worker', { source: 'mcp' });
   assert.strictEqual(done.ok, false);
   assert.strictEqual(done.reason, 'submission_required');
+});
+
+test('marker text cannot grant artifact authority to a category or scope', () => {
+  store.setCategory({
+    id: 'review-audit-artifact-attempt',
+    name: 'Review audit artifact attempt',
+    route: { model: 'sonnet', effort: 'medium' },
+    artifactRoots: [],
+  });
+  const arbitraryCategory = store.createTicket(slug, {
+    title: 'arbitrary category artifact attempt',
+    description: store.SHARED_TREE_ARTIFACT_MARKER,
+    category: 'review-audit-artifact-attempt',
+    files: ['.claude/.codebase-info'],
+    source: 'mcp',
+  });
+  const categoryDispatch = store.prepareDispatch(slug, arbitraryCategory.ref, { sharedTree: true });
+  assert.strictEqual(categoryDispatch.ticket.dispatch.artifactMode, false);
+  assert.strictEqual(claim(categoryDispatch, 'arbitrary-category-worker').ok, true);
+  assert.strictEqual(store.completeTicket(slug, arbitraryCategory.ref, 'spoofed-groomer', { source: 'control-plane-grooming' }).reason, 'submission_required');
+
+  const arbitraryScope = ticket('arbitrary scope artifact attempt', store.SHARED_TREE_ARTIFACT_MARKER, ['src']);
+  const scopeDispatch = store.prepareDispatch(slug, arbitraryScope.ref, { sharedTree: true });
+  assert.strictEqual(scopeDispatch.ticket.dispatch.artifactMode, false);
+  assert.strictEqual(claim(scopeDispatch, 'arbitrary-scope-worker').ok, true);
+  assert.strictEqual(store.completeTicket(slug, arbitraryScope.ref, 'arbitrary-scope-worker', { source: 'mcp' }).reason, 'submission_required');
 });
 
 test('update status done cannot bypass claimed, dispatched, or submitted lifecycle state', () => {
@@ -134,7 +161,7 @@ test('update status done cannot bypass claimed, dispatched, or submitted lifecyc
   );
 });
 
-test('released routed work refuses store status closure and allows provenance-stamped grooming closure', () => {
+test('released routed work refuses executor completion and allows explicit control-plane grooming', () => {
   const created = ticket('released scoped work', 'Released routed work keeps its lifecycle authority.');
   const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
   assert.strictEqual(claim(prepared, 'released-worker').ok, true);
@@ -146,10 +173,22 @@ test('released routed work refuses store status closure and allows provenance-st
   assert.strictEqual(released.ticket.dispatchNonce, null);
   assert.throws(
     () => store.updateTicket(slug, created.ref, { status: 'done' }),
-    /routed dispatch history.*done\/completeTicket.*grooming closure/
+    /routed dispatch history.*control-plane grooming closure/
   );
 
-  const groomed = store.completeTicket(slug, created.ref, 'board-groomer', { source: 'mcp' });
+  for (const attempt of [
+    store.completeTicket(slug, created.ref, 'released-worker', { source: 'mcp' }),
+    store.completeTicket(slug, created.ref, 'board-groomer', { source: 'mcp' }),
+    store.completeTicket(slug, created.ref, 'board-groomer', { source: 'control-plane-grooming' }),
+  ]) {
+    assert.strictEqual(attempt.ok, false);
+    assert.strictEqual(attempt.reason, 'submission_required');
+  }
+  const groomed = store.completeTicketAsControlPlane(slug, created.ref, {
+    purpose: 'grooming',
+    by: 'board-groomer',
+    body: 'Verified obsolete against the integrated implementation.',
+  });
   assert.strictEqual(groomed.ok, true);
   assert.strictEqual(groomed.ticket.status, 'done');
   assert.strictEqual(groomed.ticket.completion.by, 'board-groomer');
@@ -164,8 +203,12 @@ test('released routed work refuses CLI update status done', () => {
 
   const updated = runCli(['update', created.ref, '--status', 'done']);
   assert.notStrictEqual(updated.status, 0);
-  assert.match(updated.output, /routed dispatch history.*done\/completeTicket.*grooming closure/);
+  assert.match(updated.output, /routed dispatch history.*control-plane grooming closure/);
   assert.strictEqual(store.getTicket(slug, created.ref).status, 'todo');
+
+  const groomed = runCli(['done', created.ref, '--groom', '--body', 'Verified as already shipped during board grooming.']);
+  assert.strictEqual(groomed.status, 0, groomed.output);
+  assert.strictEqual(store.getTicket(slug, created.ref).status, 'done');
 });
 
 test('update status done still closes a plain unclaimed and undispatched ticket', () => {
@@ -213,6 +256,28 @@ test('description and files mutations after dispatch do not flip pinned artifact
   const mutatedArtifact = store.getTicket(slug, artifact.ref);
   assert.strictEqual(store.sharedTreeArtifactMode(mutatedArtifact), true);
   assert.strictEqual(store.completeTicket(slug, artifact.ref, 'artifact-mutation-worker', { source: 'mcp' }).ok, true);
+});
+
+test('artifact completion refuses filesystem indirection created after dispatch', () => {
+  const scope = '.claude/.codebase-info/post-dispatch-link';
+  const created = ticket('post-dispatch junction artifact', store.SHARED_TREE_ARTIFACT_MARKER, [scope]);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(prepared.ticket.dispatch.artifactMode, true);
+  assert.strictEqual(claim(prepared, 'junction-worker').ok, true);
+
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-outside-'));
+  const link = path.join(PROJECT, ...scope.split('/'));
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+  fs.writeFileSync(path.join(link, 'escaped.txt'), 'outside project\n');
+
+  const done = store.completeTicket(slug, created.ref, 'junction-worker', { source: 'mcp' });
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'artifact_scope_indirection');
+  assert.deepStrictEqual(done.indirectPaths, [scope]);
+  assert.strictEqual(fs.readFileSync(path.join(outside, 'escaped.txt'), 'utf8'), 'outside project\n');
+  assert.strictEqual(store.getTicket(slug, created.ref).status, 'doing');
+  fs.unlinkSync(link);
 });
 
 test('artifact completion refuses a newly dirty path outside the dispatch scope', () => {

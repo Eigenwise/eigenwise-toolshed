@@ -594,7 +594,7 @@ const TOOLS = [
   },
   {
     name: "done",
-    description: "Finish claimed non-repo or active artifact work; scoped repo work must submit. Stamp the actual model and effort.",
+    description: "Finish claimed non-repo or active authorized artifact work; repo work submits, released work uses control-plane grooming. Stamp actual model and effort.",
     inputSchema: {
       type: "object",
       properties: {
@@ -965,6 +965,7 @@ const TOOLS = [
         name: { type: "string" },
         description: { type: "string" },
         contract: { type: "string" },
+        artifactRoots: { type: "array", items: { type: "string" }, description: "Shared-tree artifact roots. Empty disables." },
         routeModel: { type: "string" },
         routeEffort: { type: "string", enum: store.VALID_EFFORTS },
         fallbackModel: { type: "string" },
@@ -981,6 +982,7 @@ const TOOLS = [
         name: args.name,
         description: args.description || "",
         contract: args.contract || "",
+        artifactRoots: args.artifactRoots || [],
         route: { model: args.routeModel, effort: args.routeEffort },
         fallback: args.fallbackModel == null && args.fallbackEffort == null ? null : { model: args.fallbackModel, effort: args.fallbackEffort },
         enabled: args.enabled !== false
@@ -1003,6 +1005,7 @@ const TOOLS = [
         name: { type: "string" },
         description: { type: "string" },
         contract: { type: "string" },
+        artifactRoots: { type: "array", items: { type: "string" }, description: "Replace shared-tree artifact roots. Empty disables." },
         routeModel: { type: "string" },
         routeEffort: { type: "string", enum: store.VALID_EFFORTS },
         fallbackModel: { type: "string" },
@@ -1027,7 +1030,7 @@ const TOOLS = [
       const existing = store.getCategory(id, args.project != null ? { project: slug } : void 0);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch = {};
-      for (const key of ["name", "description", "contract"]) if (args[key] !== void 0) patch[key] = args[key];
+      for (const key of ["name", "description", "contract", "artifactRoots"]) if (args[key] !== void 0) patch[key] = args[key];
       if (args.routeModel !== void 0 || args.routeEffort !== void 0) patch.route = { model: args.routeModel === void 0 ? existing.route.model : args.routeModel, effort: args.routeEffort === void 0 ? existing.route.effort : args.routeEffort };
       if (args.fallbackModel !== void 0 || args.fallbackEffort !== void 0) patch.fallback = { model: args.fallbackModel === void 0 ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === void 0 ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
       if (args.project != null) {

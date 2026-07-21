@@ -13,6 +13,7 @@ const telemetry = require("./telemetry.js");
 const { routingDisabledMessage } = require("./refusal-guidance.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
 const SHARED_TREE_ARTIFACT_MARKER = "Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.";
+const CONTROL_PLANE_COMPLETION = /* @__PURE__ */ Symbol("sidequest.control-plane-completion");
 function spawnDescription(ticket, resolved) {
   const title = String(ticket && ticket.title || "Sidequest ticket").replace(/\s+/g, " ").trim();
   const route = resolved && resolved.backend === "codex" ? String(resolved.runsLabel || resolved.runsModel || "").replace(/\s+/g, " ").trim() : "";
@@ -461,6 +462,19 @@ function getCategory(id, opts) {
   const normalizedId = normalizeCategoryId(id);
   return getCategories(opts).find((category) => category.id === normalizedId) || null;
 }
+function normalizeArtifactRoots(value) {
+  if (!Array.isArray(value)) return [];
+  const roots = commitScope.scopedPaths(value);
+  return commitScope.validateRelativeScopes(roots).ok ? roots : [];
+}
+function requireArtifactRoots(value) {
+  if (value == null) return;
+  if (!Array.isArray(value)) throw new Error("Category artifactRoots must be an array of repository-relative paths.");
+  const validation = commitScope.validateRelativeScopes(value);
+  if (value.length && !validation.ok) {
+    throw new Error(`Category artifactRoots must be repository-relative paths without traversal: ${validation.outside.join(", ")}`);
+  }
+}
 function normalizeCategory(raw) {
   if (!raw || typeof raw !== "object") return null;
   const id = normalizeCategoryId(raw.id);
@@ -474,6 +488,7 @@ function normalizeCategory(raw) {
     route,
     fallback,
     contract: String(raw.contract || "").trim(),
+    artifactRoots: normalizeArtifactRoots(raw.artifactRoots),
     enabled: raw.enabled !== false
   };
 }
@@ -481,6 +496,7 @@ function setCategory(categoryOrId, patch) {
   const requested = typeof categoryOrId === "string" ? Object.assign({}, getCategory(categoryOrId), patch || {}, { id: normalizeCategoryId(categoryOrId) }) : categoryOrId;
   const normalized = normalizeCategory(requested);
   if (!normalized) throw new Error("Category id is required.");
+  requireArtifactRoots(requested && requested.artifactRoots);
   if (!normalizeRoute(requested && requested.route)) throw new Error("Category route requires a valid model and effort.");
   if (requested && requested.fallback != null && !normalizeRoute(requested.fallback)) throw new Error("Category fallback requires a valid model and effort.");
   if (normalized.id === "general" && !normalized.enabled) throw new Error('Category "general" cannot be disabled.');
@@ -513,6 +529,7 @@ function normalizeFullProjectCategory(id, kind, data) {
   if (!data || typeof data !== "object" || Array.isArray(data) || required.some((key) => !Object.hasOwn(data, key))) {
     throw new Error(`Project category ${kind} requires a complete category row.`);
   }
+  requireArtifactRoots(data.artifactRoots);
   const normalized = normalizeCategory(Object.assign({}, data, { id }));
   if (!normalized || !normalizeRoute(data.route)) throw new Error(`Project category ${kind} requires a valid full category route.`);
   if (data.fallback != null && !normalizeRoute(data.fallback)) throw new Error(`Project category ${kind} fallback requires a valid model and effort.`);
@@ -534,8 +551,9 @@ function setProjectCategory(project, id, kind, data) {
   } else if (normalizedKind === "OVERRIDE") {
     if (!global) throw new Error(`Project category OVERRIDE "${normalizedId}" requires a global category.`);
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Project category OVERRIDE requires a patch object.");
-    const allowed = /* @__PURE__ */ new Set(["name", "description", "contract", "route", "fallback"]);
+    const allowed = /* @__PURE__ */ new Set(["name", "description", "contract", "artifactRoots", "route", "fallback"]);
     for (const key of Object.keys(data)) if (!allowed.has(key)) throw new Error(`Project category OVERRIDE cannot patch "${key}".`);
+    requireArtifactRoots(data.artifactRoots);
     if (data.route != null && !normalizeRoute(data.route)) throw new Error("Project category OVERRIDE route requires a valid model and effort.");
     if (data.fallback != null && !normalizeRoute(data.fallback)) throw new Error("Project category OVERRIDE fallback requires a valid model and effort.");
     normalizedData = Object.assign({}, data);
@@ -1377,7 +1395,7 @@ function updateDoneRefusal(ticket) {
     return `${ticket.ref} has an active dispatch. Its executor must use done/completeTicket or commit and submit; update --status done cannot bypass that lifecycle.`;
   }
   if (state) {
-    return `${ticket.ref} has routed dispatch history. Use done/completeTicket to record a grooming closure; scoped repository work must commit and submit.`;
+    return `${ticket.ref} has routed dispatch history. Executors cannot close released repository work; use the control-plane grooming closure with evidence.`;
   }
   return null;
 }
@@ -1621,9 +1639,15 @@ function dispatchState(ticket) {
 function sharedTreeArtifactRequested(ticket) {
   return String(ticket && ticket.description || "").split(/\r?\n/).some((line) => line.trim() === SHARED_TREE_ARTIFACT_MARKER);
 }
+function categoryArtifactRoot(category, scope) {
+  const normalizedScope = commitScope.scopedPaths([scope]);
+  if (normalizedScope.length !== 1 || !commitScope.validateRelativeScopes(normalizedScope).ok) return null;
+  const roots = normalizeArtifactRoots(category && category.artifactRoots);
+  return roots.find((root) => commitScope.isInScope(normalizedScope[0], [root])) || null;
+}
 function sharedTreeArtifactMode(ticket) {
   const state = dispatchState(ticket);
-  return Boolean(state && state.sharedTree === true && state.artifactMode === true && typeof state.artifactScope === "string" && state.artifactScope);
+  return Boolean(state && state.sharedTree === true && state.artifactMode === true && typeof state.artifactRoot === "string" && state.artifactRoot && typeof state.artifactScope === "string" && state.artifactScope);
 }
 function dirtyPathKey(file) {
   const normalized = String(file || "").replace(/\\/g, "/");
@@ -1637,9 +1661,10 @@ function artifactWorkingPaths(slug) {
 function captureArtifactBaseline(slug, scope) {
   const meta = readMeta(slug);
   if (!meta || !meta.path) throw new Error("prepare dispatch: shared-tree artifact mode requires a board project path.");
-  const resolution = commitScope.validateScopeResolution(meta.path, [scope]);
+  const resolution = commitScope.validateScopeResolution(meta.path, [scope], { inspectDescendants: true });
   if (!resolution.ok) {
-    throw new Error(`prepare dispatch: artifact scope must stay inside the board project: ${resolution.outside.join(", ")}`);
+    const rejected = (resolution.indirect && resolution.indirect.length ? resolution.indirect : resolution.outside).join(", ");
+    throw new Error(`prepare dispatch: artifact scope must be a direct path inside the board project: ${rejected}`);
   }
   try {
     return artifactWorkingPaths(slug);
@@ -1653,6 +1678,25 @@ function artifactScopeCheck(slug, ticket, state) {
       ok: false,
       reason: "artifact_baseline_missing",
       message: `${ticket.ref} has no dispatch-time dirty-path baseline. Release it and dispatch again before closing the artifact.`
+    };
+  }
+  const approvedRoot = categoryArtifactRoot({ artifactRoots: [state.artifactRoot] }, state.artifactScope);
+  if (!approvedRoot) {
+    return {
+      ok: false,
+      reason: "artifact_scope_violation",
+      message: `${ticket.ref} artifact scope is outside its dispatch-time approved root. Release it and dispatch again.`
+    };
+  }
+  const meta = readMeta(slug);
+  const resolution = meta && meta.path ? commitScope.validateScopeResolution(meta.path, [state.artifactScope], { inspectDescendants: true }) : { ok: false, reason: "scope_unavailable", indirect: [] };
+  if (!resolution.ok) {
+    const indirection = resolution.reason === "filesystem_indirection";
+    return {
+      ok: false,
+      reason: indirection ? "artifact_scope_indirection" : "artifact_scope_unavailable",
+      message: indirection ? `${ticket.ref} artifact scope contains filesystem indirection: ${resolution.indirect.join(", ")}. Replace it with direct in-project paths or release the ticket.` : `${ticket.ref} cannot resolve the shared-tree artifact scope directly inside the project. Release it and dispatch again.`,
+      ...indirection ? { indirectPaths: resolution.indirect } : {}
     };
   }
   let current;
@@ -1811,7 +1855,9 @@ function prepareDispatch(slug, idOrRef, opts) {
     t.dispatchExecutor = stableExecutorName(t);
     const sharedTree = Object.hasOwn(opts, "sharedTree") ? opts.sharedTree === true : Boolean(current && current.sharedTree);
     const declaredFiles = normalizeFiles(t.files);
-    const artifactMode = sharedTree && declaredFiles.length === 1 && sharedTreeArtifactRequested(t);
+    const category = getCategory(ticketCategory(t), { project: slug });
+    const artifactRoot = sharedTree && declaredFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, declaredFiles[0]) : null;
+    const artifactMode = Boolean(artifactRoot);
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
     t.dispatch = {
@@ -1819,6 +1865,7 @@ function prepareDispatch(slug, idOrRef, opts) {
       sharedTree,
       declaredFiles,
       artifactMode,
+      artifactRoot,
       artifactScope,
       ...artifactMode ? { artifactDirtyBaseline } : {},
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
@@ -1926,6 +1973,7 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
       sharedTree: state.sharedTree === true,
       declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : normalizeFiles(t.files),
       artifactMode: state.artifactMode === true,
+      artifactRoot: state.artifactRoot || null,
       artifactScope: state.artifactScope || null,
       ...Array.isArray(state.artifactDirtyBaseline) ? { artifactDirtyBaseline: state.artifactDirtyBaseline.slice() } : {},
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
@@ -2143,22 +2191,24 @@ function releaseTicket(slug, idOrRef, by, opts) {
       }
       return { ok: false, reason: "done", ticket: t };
     }
-    const executorDone = opts.status === "done" && (opts.source === "cli" || opts.source === "mcp");
+    const controlPlaneDone = opts.status === "done" && opts.completionAuthority === CONTROL_PLANE_COMPLETION;
+    const executorDone = opts.status === "done" && !controlPlaneDone;
     const dispatch = dispatchState(t);
     const artifactDispatch = sharedTreeArtifactMode(t);
     const declaredFiles = dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : normalizeFiles(t.files);
     const held = t.claim;
     const liveClaim = held && held.by && !isClaimStale(held);
     const activeDispatch = Boolean(t.dispatchNonce || dispatch && !dispatch.terminalAt);
-    if (executorDone && artifactDispatch) {
+    const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
+    if (executorDone && activeArtifactDispatch) {
       const scopeCheck = artifactScopeCheck(slug, t, dispatch);
       if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
     }
-    if (executorDone && declaredFiles.length && !artifactDispatch && (liveClaim || activeDispatch || pendingSubmission(t))) {
+    if (executorDone && dispatch && declaredFiles.length && !activeArtifactDispatch) {
       return {
         ok: false,
         reason: "submission_required",
-        message: `${t.ref} has declared repository write scope. Commit and submit verified changes; done is reserved for non-repo work, an active shared-tree artifact dispatch, or a grooming closure after release.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes; released work can only be closed through the control-plane grooming path.`,
         ticket: t
       };
     }
@@ -2250,6 +2300,31 @@ function completeTicket(slug, idOrRef, by, opts) {
     status: "done",
     workedBy,
     completionComment
+  }));
+}
+function completeTicketAsControlPlane(slug, idOrRef, opts) {
+  opts = opts || {};
+  const purpose = String(opts.purpose || "").trim();
+  if (!["grooming", "integration"].includes(purpose)) {
+    throw new Error('control-plane completion requires purpose "grooming" or "integration".');
+  }
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket) return { ok: false, reason: "not_found" };
+  const state = dispatchState(ticket);
+  if (purpose === "grooming") {
+    if (ticket.claim && ticket.claim.by && !isClaimStale(ticket.claim) || ticket.dispatchNonce || state && !state.terminalAt) {
+      return { ok: false, reason: "active_dispatch", ticket };
+    }
+    if (pendingSubmission(ticket)) return { ok: false, reason: "pending_submission", ticket };
+    if (opts.body == null || !String(opts.body).trim()) return { ok: false, reason: "evidence_required", ticket };
+  }
+  if (purpose === "integration" && !pendingSubmission(ticket)) {
+    return { ok: false, reason: "submission_required", ticket };
+  }
+  const by = String(opts.by || `control-plane-${purpose}`);
+  return completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
+    source: `control-plane-${purpose}`,
+    completionAuthority: CONTROL_PLANE_COMPLETION
   }));
 }
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -3339,6 +3414,7 @@ module.exports = {
   spawnDescription,
   SHARED_TREE_ARTIFACT_MARKER,
   sharedTreeArtifactRequested,
+  categoryArtifactRoot,
   sharedTreeArtifactMode,
   resolveCategoryRoute,
   claudeQuotaFailure,
@@ -3397,6 +3473,7 @@ module.exports = {
   claimTicket,
   releaseTicket,
   completeTicket,
+  completeTicketAsControlPlane,
   makeWorkedBy,
   submitTicket,
   clearSubmission,

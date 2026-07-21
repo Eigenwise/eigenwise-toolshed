@@ -23,7 +23,10 @@
       "effort": "medium"
     },
     "fallback": null,
-    "contract": "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact directory as its only write scope.",
+    "contract": "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact path under .claude/.codebase-info as its only write scope.",
+    "artifactRoots": [
+      ".claude/.codebase-info"
+    ],
     "enabled": true
   },
   {

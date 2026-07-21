@@ -85,11 +85,13 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
 - Worktree isolation: tickets with declared files carry `isolation: "worktree"` in `spawn`; pass it
   unchanged. `--shared-tree` / `{sharedTree:true}` is an escape hatch only for a task that depends
   on uncommitted local state, and its reason belongs in a ticket comment before spawning. A bounded
-  documentation artifact may close with `done` only when it declares its artifact directory as file scope,
-  was dispatched with shared-tree enabled, and includes this exact line:
+  documentation artifact may close with `done` only when its category has a structured `artifactRoots`
+  capability, its one declared scope is under an approved root, it was dispatched with shared-tree enabled,
+  and it includes this exact line:
   `Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.`
-  Dispatch pins the artifact authority, scope, and existing dirty paths. `done` refuses any newly dirty
-  path outside that scope, so revert it or release the ticket. Every other scoped ticket commits and submits.
+  Dispatch pins the artifact authority, approved root, scope, and existing dirty paths. Completion rechecks
+  direct real paths and rejects symlinks, junctions, reparse indirection, or newly dirty paths outside scope.
+  Marker or contract text alone grants nothing. Every other scoped ticket commits and submits.
 
 ## Re-scoring
 

@@ -513,6 +513,7 @@ async function handle(req?: any, res?: any) {
           route: body.route,
           fallback: body.fallback,
           contract: body.contract,
+          artifactRoots: body.artifactRoots,
           enabled: body.enabled !== false,
         };
         // A board category is always a full, independent copy: editing it never
@@ -530,6 +531,7 @@ async function handle(req?: any, res?: any) {
         route: body.route,
         fallback: body.fallback,
         contract: body.contract,
+        artifactRoots: body.artifactRoots,
         enabled: body.enabled,
       });
       sendJson(res, 201, { category: Object.assign({}, category, { usageCount: categoryUsageCounts('all')[category.id] || 0 }) });

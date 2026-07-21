@@ -20,12 +20,16 @@ try {
   process.emitWarning = originalEmitWarning;
 }
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 // Pre-v5 default text; the v5 migration only refreshes rows the user never customized.
 const OLD_CODEBASE_EXPLORATION = {
   description: 'Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.',
   contract: 'Read before concluding; cite files and symbols, with no edits.',
+} as const;
+const V5_CODEBASE_EXPLORATION = {
+  description: OLD_CODEBASE_EXPLORATION.description,
+  contract: 'Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact directory as its only write scope.',
 } as const;
 
 const LEGACY_RUNTIME: Readonly<Record<string, string>> = {
@@ -361,6 +365,32 @@ export function openDb(homeRoot: string): SidequestDatabase {
       prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(5));
     });
     schemaVersion = 5;
+  }
+  if (schemaVersion < 6) {
+    txn(database, () => {
+      const row = prepareCached(database, "SELECT data FROM categories WHERE id = 'codebase-exploration'").get();
+      let category: Record<string, unknown> | null = null;
+      try {
+        const parsed = row ? JSON.parse(row.data as string) as unknown : null;
+        category = isRecord(parsed) ? parsed : null;
+      } catch {
+        category = null;
+      }
+      if (category
+        && category.description === V5_CODEBASE_EXPLORATION.description
+        && (category.contract === V5_CODEBASE_EXPLORATION.contract
+          || category.contract === DEFAULT_CATEGORIES.find((entry) => entry.id === 'codebase-exploration')?.contract)
+        && !Object.hasOwn(category, 'artifactRoots')) {
+        const next = DEFAULT_CATEGORIES.find((entry) => entry.id === 'codebase-exploration');
+        if (next) {
+          category.contract = next.contract;
+          category.artifactRoots = 'artifactRoots' in next ? next.artifactRoots : [];
+          prepareCached(database, "UPDATE categories SET data = ? WHERE id = 'codebase-exploration'").run(JSON.stringify(category));
+        }
+      }
+      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(6));
+    });
+    schemaVersion = 6;
   }
   const sidequestDatabase = database as SidequestDatabase;
   sidequestDatabase.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;

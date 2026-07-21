@@ -61,10 +61,14 @@ try {
 } finally {
   process.emitWarning = originalEmitWarning;
 }
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 const OLD_CODEBASE_EXPLORATION = {
   description: "Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.",
   contract: "Read before concluding; cite files and symbols, with no edits."
+};
+const V5_CODEBASE_EXPLORATION = {
+  description: OLD_CODEBASE_EXPLORATION.description,
+  contract: "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact directory as its only write scope."
 };
 const LEGACY_RUNTIME = {
   "grade-1": "haiku",
@@ -289,6 +293,28 @@ function openDb(homeRoot) {
       prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(5));
     });
     schemaVersion = 5;
+  }
+  if (schemaVersion < 6) {
+    txn(database, () => {
+      const row = prepareCached(database, "SELECT data FROM categories WHERE id = 'codebase-exploration'").get();
+      let category = null;
+      try {
+        const parsed = row ? JSON.parse(row.data) : null;
+        category = isRecord(parsed) ? parsed : null;
+      } catch {
+        category = null;
+      }
+      if (category && category.description === V5_CODEBASE_EXPLORATION.description && (category.contract === V5_CODEBASE_EXPLORATION.contract || category.contract === import_category_defaults.DEFAULT_CATEGORIES.find((entry) => entry.id === "codebase-exploration")?.contract) && !Object.hasOwn(category, "artifactRoots")) {
+        const next = import_category_defaults.DEFAULT_CATEGORIES.find((entry) => entry.id === "codebase-exploration");
+        if (next) {
+          category.contract = next.contract;
+          category.artifactRoots = "artifactRoots" in next ? next.artifactRoots : [];
+          prepareCached(database, "UPDATE categories SET data = ? WHERE id = 'codebase-exploration'").run(JSON.stringify(category));
+        }
+      }
+      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(6));
+    });
+    schemaVersion = 6;
   }
   const sidequestDatabase = database;
   sidequestDatabase.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;

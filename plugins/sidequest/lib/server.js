@@ -454,6 +454,7 @@ async function handle(req, res) {
           route: body.route,
           fallback: body.fallback,
           contract: body.contract,
+          artifactRoots: body.artifactRoots,
           enabled: body.enabled !== false
         };
         store.setProjectCategory(project, id, global ? "DETACH" : "ADD", data);
@@ -468,6 +469,7 @@ async function handle(req, res) {
         route: body.route,
         fallback: body.fallback,
         contract: body.contract,
+        artifactRoots: body.artifactRoots,
         enabled: body.enabled
       });
       sendJson(res, 201, { category: Object.assign({}, category, { usageCount: categoryUsageCounts("all")[category.id] || 0 }) });

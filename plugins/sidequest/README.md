@@ -302,12 +302,14 @@ loses a race it just moves on, so two agents never collide. Only **independent**
 anything that shares files or has a `depends-on` link stays sequential (blocked tickets aren't even in
 `ready`). The bundled hook and skill make this the default behavior, not an afterthought.
 
-A bounded documentation artifact can remain in the shared working tree for the caller to review. That
-exception needs an explicit artifact lifecycle sentence in the ticket, one declared artifact directory,
-and `--shared-tree` (MCP `sharedTree:true`). Dispatch pins that mode and scope, plus the shared tree's
-existing dirty paths. `done` then permits changes inside the artifact scope and refuses newly dirty paths
-outside it; pre-existing caller dirt is left alone. Other tickets with declared file scope still require
-commit and submit, and `update --status done` cannot bypass an active claim, dispatch, or submission.
+A bounded documentation artifact can remain in the shared working tree for the caller to review. Its category
+must grant structured `artifactRoots`, the ticket must declare exactly one path under an approved root and carry
+the artifact lifecycle sentence, and dispatch must use `--shared-tree` (MCP `sharedTree:true`). The shipped
+`codebase-exploration` category approves `.claude/.codebase-info`. Dispatch pins the authority, root, scope, and
+existing dirty paths. `done` rechecks direct real paths, rejects symlinks/junctions/reparse indirection and newly
+dirty paths outside scope, and leaves pre-existing caller dirt alone. Marker or contract text alone grants
+nothing. Other routed repository work commits and submits. Released work can only close through the
+control-plane `done --groom` path with evidence; executor MCP `done` and `update` cannot spoof that authority.
 
 ## Native routed execution
 

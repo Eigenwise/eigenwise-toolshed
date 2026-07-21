@@ -696,7 +696,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'done',
-    description: 'Finish claimed non-repo or active artifact work; scoped repo work must submit. Stamp the actual model and effort.',
+    description: 'Finish claimed non-repo or active authorized artifact work; repo work submits, released work uses control-plane grooming. Stamp actual model and effort.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1079,6 +1079,7 @@ const TOOLS: ToolDefinition[] = [
       properties: {
         project: PROJECT_PROP,
         id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
+        artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
         fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
       },
@@ -1089,6 +1090,7 @@ const TOOLS: ToolDefinition[] = [
       const id = String(args.id || '').trim().toLowerCase();
       const category = {
         id, name: args.name, description: args.description || '', contract: args.contract || '',
+        artifactRoots: args.artifactRoots || [],
         route: { model: args.routeModel, effort: args.routeEffort },
         fallback: args.fallbackModel == null && args.fallbackEffort == null ? null : { model: args.fallbackModel, effort: args.fallbackEffort },
         enabled: args.enabled !== false,
@@ -1107,6 +1109,7 @@ const TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: {
         project: PROJECT_PROP, id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
+        artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Replace shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
         fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
       },
@@ -1128,7 +1131,7 @@ const TOOLS: ToolDefinition[] = [
       const existing: any = store.getCategory(id, args.project != null ? { project: slug } : undefined);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch: any = {};
-      for (const key of ['name', 'description', 'contract']) if (args[key] !== undefined) patch[key] = args[key];
+      for (const key of ['name', 'description', 'contract', 'artifactRoots']) if (args[key] !== undefined) patch[key] = args[key];
       if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
       if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
       if (args.project != null) {

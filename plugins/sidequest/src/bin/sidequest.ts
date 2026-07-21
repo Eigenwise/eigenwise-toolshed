@@ -72,7 +72,7 @@ function parseArgs(argv: any) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'groom']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -380,6 +380,10 @@ async function cmdCategory(opts: any, positional: any) {
   const output = (result: any) => {
     if (opts.json) process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, result), null, 2) + '\n');
   };
+  const artifactRootsOption = () => {
+    if (opts['artifact-roots'] == null || opts['artifact-roots'] === 'none') return [];
+    return String(opts['artifact-roots']).split(',').map((entry) => entry.trim()).filter(Boolean);
+  };
   const categoryInput = () => ({
     id,
     name: opts.name || opts.title || id,
@@ -391,6 +395,7 @@ async function cmdCategory(opts: any, positional: any) {
         ? { model: opts['fallback-model'], effort: opts['fallback-effort'] }
         : null,
     contract: opts.contract || '',
+    artifactRoots: artifactRootsOption(),
     enabled: !opts.disabled,
   });
   const patchFor = (existing: any) => {
@@ -409,6 +414,7 @@ async function cmdCategory(opts: any, positional: any) {
     if (opts.name != null || opts.title != null) patch.name = opts.name != null ? opts.name : opts.title;
     if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
     if (opts.contract != null) patch.contract = opts.contract;
+    if (opts['artifact-roots'] != null) patch.artifactRoots = artifactRootsOption();
     return patch;
   };
 
@@ -788,14 +794,16 @@ async function cmdDone(opts: any, positional: any) {
   const ticket = store.getTicket(slug, idOrRef);
   let res;
   try {
-    res = store.completeTicket(slug, idOrRef, by, {
-      force: !!opts.force,
-      source: opts.source || 'cli',
-      model: opts.model,
-      effort: opts.effort,
-      body,
-      sessionId: sessionId(opts),
-    });
+    res = opts.groom
+      ? store.completeTicketAsControlPlane(slug, idOrRef, { purpose: 'grooming', by, body })
+      : store.completeTicket(slug, idOrRef, by, {
+        force: !!opts.force,
+        source: opts.source || 'cli',
+        model: opts.model,
+        effort: opts.effort,
+        body,
+        sessionId: sessionId(opts),
+      });
   } catch (e: any) {
     fail(`done: ${(e && e.message) || e}`);
   }
@@ -2035,7 +2043,8 @@ Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level] [--direct --reason "why no executor can do this"]   atomically take a ticket (category-routed executor claims require a prepared nonce and exact executor; direct is a justified inline exception)
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why no executor can do this"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
-  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active shared-tree artifact work
+  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
+                           --groom --body-file <evidence>   control-plane closure for released routed work (never executor use)
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]

@@ -117,7 +117,7 @@ test('schema v4 migration adds an empty project category layer to a v3 database'
   assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
 
   const database = db.openDb(homeRoot);
-  assert.equal(db.getRow(database, 'meta', 'schema_version'), 5);
+  assert.equal(db.getRow(database, 'meta', 'schema_version'), 6);
   assert.deepEqual(db.getRow<{ id: string }>(database, 'categories', 'fixture')?.id, 'fixture');
   assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_categories'").get()?.name, 'project_categories');
   assert.deepEqual(db.listRows(database, 'project_categories', { project: 'missing' }), []);
@@ -143,13 +143,14 @@ test('schema v5 migration refreshes only an uncustomized codebase-exploration ca
     assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
 
     const database = db.openDb(homeRoot);
-    assert.equal(db.getRow(database, 'meta', 'schema_version'), 5);
-    const category = db.getRow<{ contract: string }>(database, 'categories', 'codebase-exploration');
+    assert.equal(db.getRow(database, 'meta', 'schema_version'), 6);
+    const category = db.getRow<{ contract: string; artifactRoots?: string[] }>(database, 'categories', 'codebase-exploration');
     if (customized) {
       assert.equal(category?.contract, 'My hand-tuned contract.');
     } else {
       assert.notEqual(category?.contract, oldText.contract);
-      assert.match(category?.contract ?? '', /bounded documentation artifact directory/);
+      assert.match(category?.contract ?? '', /under \.claude\/\.codebase-info/);
+      assert.deepEqual(category?.artifactRoots, ['.claude/.codebase-info']);
     }
     database.close();
   }

@@ -20,6 +20,8 @@ const commitScope = require('../lib/commit-scope.js') as {
   commitScoped(cwd: string, message: string, files: string[]): ScopeResult;
   commitPaths(cwd: string, commit: string): string[];
   validateCommitScope(cwd: string, commit: string, files: string[]): ScopeResult;
+  validateScopeResolution(cwd: string, files: string[], opts?: { inspectDescendants?: boolean }): { ok: boolean; reason: string | null; outside: string[]; indirect: string[] };
+  isInScope(file: string, files: string[]): boolean;
 };
 
 function git(repo: string, args: string[]): string {
@@ -98,4 +100,30 @@ test('out-of-scope commits are refused before submission', () => {
   assert.equal(verdict.ok, false);
   assert.equal(verdict.reason, 'outside_scope');
   assert.deepEqual(verdict.outside, ['plugins/other-plugin/worker-b.js']);
+});
+
+test('scope resolution rejects absolute and traversal forms without prefix confusion', () => {
+  const root = repo();
+  for (const scope of [path.resolve(root, '..', 'outside'), 'C:\\outside', '../outside', 'plugins/sidequest/../other-plugin']) {
+    const verdict = commitScope.validateScopeResolution(root, [scope]);
+    assert.equal(verdict.ok, false, scope);
+    assert.equal(verdict.reason, 'outside_scope', scope);
+  }
+  assert.equal(commitScope.validateScopeResolution(root, ['plugins\\sidequest\\new-artifact'], { inspectDescendants: true }).ok, true);
+  assert.equal(commitScope.isInScope('plugins/sidequest-map', ['plugins/sidequest']), false);
+  assert.equal(commitScope.isInScope('plugins/sidequest/map', ['plugins/sidequest']), true);
+  assert.equal(commitScope.isInScope('PLUGINS/SIDEQUEST/map', ['plugins/sidequest']), process.platform === 'win32');
+});
+
+test('descendant inspection rejects a junction or symlink while allowing a new directory', () => {
+  const root = repo();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scope-outside-'));
+  const scope = path.join(root, 'plugins', 'sidequest', 'artifact-link');
+  assert.equal(commitScope.validateScopeResolution(root, ['plugins/sidequest/new-artifact'], { inspectDescendants: true }).ok, true);
+  fs.symlinkSync(outside, scope, process.platform === 'win32' ? 'junction' : 'dir');
+  const verdict = commitScope.validateScopeResolution(root, ['plugins/sidequest'], { inspectDescendants: true });
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'filesystem_indirection');
+  assert.deepEqual(verdict.indirect, ['plugins/sidequest/artifact-link']);
+  fs.unlinkSync(scope);
 });

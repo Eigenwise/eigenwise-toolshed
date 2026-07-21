@@ -120,7 +120,7 @@ test('schema v2 migration materializes configured backends, fallbacks, and globa
   process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
   const db = require('../lib/db.js');
   const handle = db.openDb(home);
-  assert.equal(db.getRow(handle, 'meta', 'schema_version'), 5);
+  assert.equal(db.getRow(handle, 'meta', 'schema_version'), 6);
   assert.deepEqual(db.getRow(handle, 'categories', 'fixture').route, { model: 'codex-gpt-test', effort: 'high' });
   assert.deepEqual(db.getRow(handle, 'categories', 'fixture').fallback, { model: 'opus', effort: 'high' });
   assert.deepEqual(db.getRow(handle, 'globals', 'routing-fallback'), { model: 'sonnet', effort: 'high' });

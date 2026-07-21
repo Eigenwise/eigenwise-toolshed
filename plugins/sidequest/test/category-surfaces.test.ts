@@ -32,10 +32,11 @@ async function call(mcp?: any, name?: any, args?: any) {
 }
 
 test('CLI category CRUD reports usage and category ticket stamping', () => {
-  let run = cli('category', 'add', 'release-check', '--name', 'Release checks', '--description', 'A focused release task', '--contract', 'Run the release check.', '--route-model', 'sonnet', '--route-effort', 'medium', '--fallback-model', 'opus', '--fallback-effort', 'high');
+  let run = cli('category', 'add', 'release-check', '--name', 'Release checks', '--description', 'A focused release task', '--contract', 'Run the release check.', '--artifact-roots', 'reports/maps,reports/index', '--route-model', 'sonnet', '--route-effort', 'medium', '--fallback-model', 'opus', '--fallback-effort', 'high');
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.category.id, 'release-check');
   assert.deepEqual(run.body.category.fallback, { model: 'opus', effort: 'high' });
+  assert.deepEqual(run.body.category.artifactRoots, ['reports/maps', 'reports/index']);
 
   run = cli('add', '--title', 'Run release checks', '--category', 'release-check');
   assert.equal(run.result.status, 0, run.result.stderr);

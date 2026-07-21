@@ -447,7 +447,7 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
 });
 
 test('MCP shared-tree dispatch activates the bounded artifact lifecycle', async () => {
-  store.setCategory({ id: 'dispatch-artifact', name: 'Dispatch Artifact', route: { model: 'sonnet', effort: 'medium' } });
+  store.setCategory({ id: 'dispatch-artifact', name: 'Dispatch Artifact', route: { model: 'sonnet', effort: 'medium' }, artifactRoots: ['.claude/.codebase-info'] });
   const added = await callTool('add', {
     title: 'shared-tree artifact',
     description: `Write only the declared documentation artifact.\n${store.SHARED_TREE_ARTIFACT_MARKER}`,

@@ -113,14 +113,106 @@ export function unscopedWorkingPaths(cwd: string, files: unknown): string[] {
   return workingPaths(cwd).filter((file) => !isInScope(file, files));
 }
 
-export function validateScopeResolution(root: string, files: unknown) {
+function pathKey(value: string): string {
+  const normalized = path.normalize(value);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function relativeScopeOutside(scope: string): boolean {
+  const raw = String(scope || '').trim();
+  const parts = raw.replace(/\\/g, '/').split('/');
+  return path.isAbsolute(raw)
+    || path.win32.isAbsolute(raw)
+    || path.posix.isAbsolute(raw)
+    || /^[a-z]:/i.test(raw)
+    || parts.includes('..');
+}
+
+function repoRelativePath(root: string, target: string): string {
+  return path.relative(root, target).replace(/\\/g, '/') || '.';
+}
+
+function inspectExistingPath(root: string, realRoot: string, target: string, inspectDescendants: boolean) {
+  const relative = path.relative(root, target);
+  const parts = relative ? relative.split(path.sep) : [];
+  let current = root;
+  for (let index = 0; index < parts.length; index++) {
+    current = path.join(current, parts[index]!);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error: any) {
+      if (error && error.code === 'ENOENT') return { ok: true, indirect: [] as string[] };
+      return { ok: false, reason: 'scope_unavailable', indirect: [repoRelativePath(root, current)] };
+    }
+    if (stat.isSymbolicLink()) {
+      return { ok: false, reason: 'filesystem_indirection', indirect: [repoRelativePath(root, current)] };
+    }
+    try {
+      const expected = path.join(realRoot, ...parts.slice(0, index + 1));
+      if (pathKey(fs.realpathSync.native(current)) !== pathKey(expected)) {
+        return { ok: false, reason: 'filesystem_indirection', indirect: [repoRelativePath(root, current)] };
+      }
+    } catch {
+      return { ok: false, reason: 'scope_unavailable', indirect: [repoRelativePath(root, current)] };
+    }
+  }
+
+  if (!inspectDescendants || !fs.existsSync(target)) return { ok: true, indirect: [] as string[] };
+  const pending = [target];
+  while (pending.length) {
+    const currentPath = pending.pop()!;
+    let stat;
+    try {
+      stat = fs.lstatSync(currentPath);
+      const expected = path.join(realRoot, path.relative(root, currentPath));
+      if (stat.isSymbolicLink() || pathKey(fs.realpathSync.native(currentPath)) !== pathKey(expected)) {
+        return { ok: false, reason: 'filesystem_indirection', indirect: [repoRelativePath(root, currentPath)] };
+      }
+      if (stat.isDirectory()) {
+        for (const entry of fs.readdirSync(currentPath)) pending.push(path.join(currentPath, entry));
+      }
+    } catch {
+      return { ok: false, reason: 'scope_unavailable', indirect: [repoRelativePath(root, currentPath)] };
+    }
+  }
+  return { ok: true, indirect: [] as string[] };
+}
+
+export function validateRelativeScopes(files: unknown) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: 'missing_scope', outside: [] as string[] };
+  const outside = scopes.filter(relativeScopeOutside);
+  return { ok: outside.length === 0, reason: outside.length ? 'outside_scope' : null, outside };
+}
+
+export function validateScopeResolution(root: string, files: unknown, opts?: { inspectDescendants?: boolean }) {
+  const relativeValidation = validateRelativeScopes(files);
+  const scopes = scopedPaths(files);
+  if (!relativeValidation.ok) {
+    return { ...relativeValidation, indirect: [] as string[] };
+  }
+  const resolvedRoot = path.resolve(root);
   const outside = scopes.filter((scope) => {
-    const relative = path.relative(root, path.resolve(root, scope));
+    const relative = path.relative(resolvedRoot, path.resolve(resolvedRoot, ...scope.split('/')));
     return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
   });
-  return { ok: outside.length === 0, reason: outside.length ? 'outside_scope' : null, outside };
+  if (outside.length) return { ok: false, reason: 'outside_scope', outside, indirect: [] as string[] };
+
+  let realRoot;
+  try {
+    realRoot = fs.realpathSync.native(resolvedRoot);
+  } catch {
+    return { ok: false, reason: 'scope_unavailable', outside: scopes, indirect: [] as string[] };
+  }
+  for (const scope of scopes) {
+    const target = path.resolve(resolvedRoot, ...scope.split('/'));
+    const inspected = inspectExistingPath(resolvedRoot, realRoot, target, opts?.inspectDescendants === true);
+    if (!inspected.ok) {
+      return { ok: false, reason: inspected.reason, outside: [] as string[], indirect: inspected.indirect };
+    }
+  }
+  return { ok: true, reason: null, outside: [] as string[], indirect: [] as string[] };
 }
 
 export function commitPaths(cwd: string, commit: string): string[] {

@@ -312,7 +312,7 @@ test('artifact lifecycle marker appears only for a validated shared-tree artifac
     category: {},
   };
   const active = agentsync.renderTicketBriefing(Object.assign({}, base, {
-    dispatch: { sharedTree: true, artifactMode: true, artifactScope: '.claude/.codebase-info' },
+    dispatch: { sharedTree: true, artifactMode: true, artifactRoot: '.claude/.codebase-info', artifactScope: '.claude/.codebase-info' },
   }), 'artifact-token');
   assert.ok(active.includes(agentsync.ARTIFACT_LIFECYCLE_MARKER));
   assert.match(active, /Do not commit or submit it/);

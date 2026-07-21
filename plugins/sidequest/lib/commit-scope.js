@@ -38,6 +38,7 @@ __export(commit_scope_exports, {
   unscopedWorkingPaths: () => unscopedWorkingPaths,
   validateCommitRangeScope: () => validateCommitRangeScope,
   validateCommitScope: () => validateCommitScope,
+  validateRelativeScopes: () => validateRelativeScopes,
   validateScopeResolution: () => validateScopeResolution,
   validateStoredSubmissionRange: () => validateStoredSubmissionRange,
   workingPaths: () => workingPaths
@@ -131,14 +132,95 @@ function workingPaths(cwd) {
 function unscopedWorkingPaths(cwd, files) {
   return workingPaths(cwd).filter((file) => !isInScope(file, files));
 }
-function validateScopeResolution(root, files) {
+function pathKey(value) {
+  const normalized = import_node_path.default.normalize(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+function relativeScopeOutside(scope) {
+  const raw = String(scope || "").trim();
+  const parts = raw.replace(/\\/g, "/").split("/");
+  return import_node_path.default.isAbsolute(raw) || import_node_path.default.win32.isAbsolute(raw) || import_node_path.default.posix.isAbsolute(raw) || /^[a-z]:/i.test(raw) || parts.includes("..");
+}
+function repoRelativePath(root, target) {
+  return import_node_path.default.relative(root, target).replace(/\\/g, "/") || ".";
+}
+function inspectExistingPath(root, realRoot, target, inspectDescendants) {
+  const relative = import_node_path.default.relative(root, target);
+  const parts = relative ? relative.split(import_node_path.default.sep) : [];
+  let current = root;
+  for (let index = 0; index < parts.length; index++) {
+    current = import_node_path.default.join(current, parts[index]);
+    let stat;
+    try {
+      stat = import_node_fs.default.lstatSync(current);
+    } catch (error) {
+      if (error && error.code === "ENOENT") return { ok: true, indirect: [] };
+      return { ok: false, reason: "scope_unavailable", indirect: [repoRelativePath(root, current)] };
+    }
+    if (stat.isSymbolicLink()) {
+      return { ok: false, reason: "filesystem_indirection", indirect: [repoRelativePath(root, current)] };
+    }
+    try {
+      const expected = import_node_path.default.join(realRoot, ...parts.slice(0, index + 1));
+      if (pathKey(import_node_fs.default.realpathSync.native(current)) !== pathKey(expected)) {
+        return { ok: false, reason: "filesystem_indirection", indirect: [repoRelativePath(root, current)] };
+      }
+    } catch {
+      return { ok: false, reason: "scope_unavailable", indirect: [repoRelativePath(root, current)] };
+    }
+  }
+  if (!inspectDescendants || !import_node_fs.default.existsSync(target)) return { ok: true, indirect: [] };
+  const pending = [target];
+  while (pending.length) {
+    const currentPath = pending.pop();
+    let stat;
+    try {
+      stat = import_node_fs.default.lstatSync(currentPath);
+      const expected = import_node_path.default.join(realRoot, import_node_path.default.relative(root, currentPath));
+      if (stat.isSymbolicLink() || pathKey(import_node_fs.default.realpathSync.native(currentPath)) !== pathKey(expected)) {
+        return { ok: false, reason: "filesystem_indirection", indirect: [repoRelativePath(root, currentPath)] };
+      }
+      if (stat.isDirectory()) {
+        for (const entry of import_node_fs.default.readdirSync(currentPath)) pending.push(import_node_path.default.join(currentPath, entry));
+      }
+    } catch {
+      return { ok: false, reason: "scope_unavailable", indirect: [repoRelativePath(root, currentPath)] };
+    }
+  }
+  return { ok: true, indirect: [] };
+}
+function validateRelativeScopes(files) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: "missing_scope", outside: [] };
+  const outside = scopes.filter(relativeScopeOutside);
+  return { ok: outside.length === 0, reason: outside.length ? "outside_scope" : null, outside };
+}
+function validateScopeResolution(root, files, opts) {
+  const relativeValidation = validateRelativeScopes(files);
+  const scopes = scopedPaths(files);
+  if (!relativeValidation.ok) {
+    return { ...relativeValidation, indirect: [] };
+  }
+  const resolvedRoot = import_node_path.default.resolve(root);
   const outside = scopes.filter((scope) => {
-    const relative = import_node_path.default.relative(root, import_node_path.default.resolve(root, scope));
+    const relative = import_node_path.default.relative(resolvedRoot, import_node_path.default.resolve(resolvedRoot, ...scope.split("/")));
     return relative === ".." || relative.startsWith(`..${import_node_path.default.sep}`) || import_node_path.default.isAbsolute(relative);
   });
-  return { ok: outside.length === 0, reason: outside.length ? "outside_scope" : null, outside };
+  if (outside.length) return { ok: false, reason: "outside_scope", outside, indirect: [] };
+  let realRoot;
+  try {
+    realRoot = import_node_fs.default.realpathSync.native(resolvedRoot);
+  } catch {
+    return { ok: false, reason: "scope_unavailable", outside: scopes, indirect: [] };
+  }
+  for (const scope of scopes) {
+    const target = import_node_path.default.resolve(resolvedRoot, ...scope.split("/"));
+    const inspected = inspectExistingPath(resolvedRoot, realRoot, target, opts?.inspectDescendants === true);
+    if (!inspected.ok) {
+      return { ok: false, reason: inspected.reason, outside: [], indirect: inspected.indirect };
+    }
+  }
+  return { ok: true, reason: null, outside: [], indirect: [] };
 }
 function commitPaths(cwd, commit) {
   return git(cwd, ["diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z", commit]).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
@@ -293,6 +375,7 @@ function commitScoped(cwd, message, files) {
   unscopedWorkingPaths,
   validateCommitRangeScope,
   validateCommitScope,
+  validateRelativeScopes,
   validateScopeResolution,
   validateStoredSubmissionRange,
   workingPaths
