@@ -65,11 +65,26 @@ export function repoRoot(cwd: string): string {
   return git(cwd, ['rev-parse', '--show-toplevel']).trim();
 }
 
-function trackedPaths(cwd: string): string[] {
+function indexedPaths(cwd: string): string[] {
   return git(cwd, ['ls-files', '--full-name', '-z'])
     .split('\0')
     .filter(Boolean)
     .map((file) => file.replace(/\\/g, '/'));
+}
+
+function trackedPaths(cwd: string): string[] {
+  const paths = indexedPaths(cwd);
+  const head = gitResult(cwd, ['ls-tree', '-r', '--name-only', '-z', 'HEAD']);
+  if (!head.ok) return paths;
+
+  const seen = new Set(paths.map(scopeKey));
+  for (const file of head.value.split('\0').filter(Boolean).map((entry) => entry.replace(/\\/g, '/'))) {
+    if (!seen.has(scopeKey(file))) {
+      seen.add(scopeKey(file));
+      paths.push(file);
+    }
+  }
+  return paths;
 }
 
 function canonicalScope(scope: string, paths: readonly string[]): string {
@@ -92,6 +107,14 @@ function commitScopedPaths(root: string, scopes: readonly string[]): string[] {
   return scopes.filter((scope) => (
     fs.existsSync(path.resolve(root, scope))
     || tracked.some((file) => isInScope(file, [scope]))
+  ));
+}
+
+function stageableScopedPaths(root: string, scopes: readonly string[]): string[] {
+  const indexed = indexedPaths(root);
+  return scopes.filter((scope) => (
+    fs.existsSync(path.resolve(root, scope))
+    || indexed.some((file) => isInScope(file, [scope]))
   ));
 }
 
@@ -370,7 +393,8 @@ export function commitScoped(cwd: string, message: unknown, files: unknown) {
     if (!commitScopes.length) {
       return { ok: false, reason: 'no_existing_scope', missingScopes, unscopedPaths };
     }
-    git(root, ['add', '--all', '--', ...commitScopes]);
+    const stageableScopes = stageableScopedPaths(root, commitScopes);
+    if (stageableScopes.length) git(root, ['add', '--all', '--', ...stageableScopes]);
     git(root, ['commit', '--only', '-m', String(message || ''), '--', ...commitScopes]);
     const commit = git(root, ['rev-parse', 'HEAD']).trim();
     const validation = validateCommitScope(root, commit, scopes);

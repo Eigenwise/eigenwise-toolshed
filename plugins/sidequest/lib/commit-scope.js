@@ -93,8 +93,21 @@ function gitResult(cwd, args) {
 function repoRoot(cwd) {
   return git(cwd, ["rev-parse", "--show-toplevel"]).trim();
 }
-function trackedPaths(cwd) {
+function indexedPaths(cwd) {
   return git(cwd, ["ls-files", "--full-name", "-z"]).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
+}
+function trackedPaths(cwd) {
+  const paths = indexedPaths(cwd);
+  const head = gitResult(cwd, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]);
+  if (!head.ok) return paths;
+  const seen = new Set(paths.map(scopeKey));
+  for (const file of head.value.split("\0").filter(Boolean).map((entry) => entry.replace(/\\/g, "/"))) {
+    if (!seen.has(scopeKey(file))) {
+      seen.add(scopeKey(file));
+      paths.push(file);
+    }
+  }
+  return paths;
 }
 function canonicalScope(scope, paths) {
   const normalized = normalizeScope(scope);
@@ -112,6 +125,10 @@ function canonicalScopedPaths(cwd, files) {
 function commitScopedPaths(root, scopes) {
   const tracked = trackedPaths(root);
   return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || tracked.some((file) => isInScope(file, [scope])));
+}
+function stageableScopedPaths(root, scopes) {
+  const indexed = indexedPaths(root);
+  return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || indexed.some((file) => isInScope(file, [scope])));
 }
 function workingPaths(cwd) {
   const status = git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
@@ -356,7 +373,8 @@ function commitScoped(cwd, message, files) {
     if (!commitScopes.length) {
       return { ok: false, reason: "no_existing_scope", missingScopes, unscopedPaths };
     }
-    git(root, ["add", "--all", "--", ...commitScopes]);
+    const stageableScopes = stageableScopedPaths(root, commitScopes);
+    if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
     git(root, ["commit", "--only", "-m", String(message || ""), "--", ...commitScopes]);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();
     const validation = validateCommitScope(root, commit, scopes);

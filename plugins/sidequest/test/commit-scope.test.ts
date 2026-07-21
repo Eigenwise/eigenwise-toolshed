@@ -77,6 +77,38 @@ test('exact declared paths commit tracked deletions', () => {
 });
 
 
+test('exact declared paths commit staged deletions', () => {
+  const root = repo();
+  const worker = path.join(root, 'plugins', 'sidequest', 'worker-a.js');
+  fs.writeFileSync(worker, 'a\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'add worker']);
+  git(root, ['rm', 'plugins/sidequest/worker-a.js']);
+
+  const committed = commitScope.commitScoped(root, 'remove worker', ['plugins/sidequest/worker-a.js']);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
+  assert.deepEqual(committed.missingScopes, []);
+  assert.equal(git(root, ['diff', '--cached', '--name-only']), '');
+  assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
+});
+
+test('exact declared rename paths commit staged renames atomically', () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'old.txt'), 'old\n');
+  git(root, ['add', 'old.txt']);
+  git(root, ['commit', '-m', 'add old']);
+  git(root, ['mv', 'old.txt', 'new.txt']);
+
+  const committed = commitScope.commitScoped(root, 'rename', ['old.txt', 'new.txt']);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(committed.missingScopes, []);
+  assert.deepEqual(committed.paths.sort(), ['new.txt', 'old.txt']);
+  assert.equal(git(root, ['diff', '--cached', '--name-only']), '');
+  assert.deepEqual(commitScope.commitPaths(root, committed.commit).sort(), ['new.txt', 'old.txt']);
+});
+
+
 test('scoped commit leaves another executor’s staged file in the shared index', () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
