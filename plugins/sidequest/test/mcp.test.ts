@@ -167,6 +167,10 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
+  const comments = tools.find((tool: any) => tool.name === 'comments');
+  assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref']);
+  assert.equal(comments.inputSchema.properties.full.type, 'boolean');
+  assert.equal(Object.hasOwn(tools.find((tool: any) => tool.name === 'unarchive').inputSchema.properties, 'full'), false);
 });
 
 test('board_config defaults docs to always-in-scope', async () => {
@@ -229,7 +233,8 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   const categories = await callToolRaw('category_list', { project });
   assert.ok(Buffer.byteLength(categories.content[0].text) <= 13000, `category_list is ${Buffer.byteLength(categories.content[0].text)} bytes`);
   const categoryPayload = JSON.parse(categories.content[0].text);
-  assert.ok(categoryPayload.categories.length >= 18);
+  assert.ok(categoryPayload.total >= 18);
+  assert.equal(categoryPayload.returned, categoryPayload.categories.length);
   const localCategory = categoryPayload.categories.find((category: any) => category.id === 'payload-0');
   assert.equal(localCategory.localRow, undefined);
   assert.equal(localCategory.route, undefined);
@@ -256,6 +261,145 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(pulsePayload.submission, undefined);
   assert.equal(pulsePayload.git, undefined);
   assert.equal(pulsePayload.dispatch.tokenPrefix, undefined);
+});
+
+test('compact category pages stay bounded and recover complete taxonomy rows', async (t: any) => {
+  const root = path.join(os.tmpdir(), 'sq-mcp-category-pages');
+  const project = store.ensureProject(root, 'SQ category pages').slug;
+  const expectedDescriptions = new Map();
+  for (let index = 0; index < 21; index += 1) {
+    const id = `bounded-${String(index).padStart(2, '0')}`;
+    const prefix = `Classification contract ${index}: `;
+    const description = prefix + String(index % 10).repeat(16000 - prefix.length);
+    expectedDescriptions.set(id, description);
+    store.setProjectCategory(project, id, 'ADD', {
+      id,
+      name: `Bounded category ${String(index).padStart(2, '0')}`,
+      description,
+      contract: `Executor contract ${index}`,
+      route: { model: 'sonnet', effort: 'low' },
+      fallback: null,
+      enabled: true,
+    });
+  }
+
+  const compactIds: string[] = [];
+  const pageBytes: number[] = [];
+  let cursor: string | undefined;
+  let compactPages = 0;
+  do {
+    const raw = await callToolRaw('category_list', { project, ...(cursor ? { cursor } : {}) });
+    const bytes = Buffer.byteLength(raw.content[0].text);
+    pageBytes.push(bytes);
+    assert.ok(bytes <= 13000, `compact category page is ${bytes} bytes`);
+    const page = JSON.parse(raw.content[0].text);
+    assert.equal(page.returned, page.categories.length);
+    for (const category of page.categories) {
+      compactIds.push(category.id);
+      if (expectedDescriptions.has(category.id)) {
+        assert.equal(category.descriptionLength, 16000);
+        assert.equal(category.descriptionTruncated, true);
+        assert.match(category.description, /use full:true/);
+      }
+    }
+    cursor = page.nextCursor || undefined;
+    compactPages += 1;
+  } while (cursor);
+  assert.ok(compactPages > 1);
+  assert.equal(new Set(compactIds).size, compactIds.length);
+  assert.deepEqual([...expectedDescriptions.keys()].filter((id) => !compactIds.includes(id)), []);
+  t.diagnostic(`category_list: ${compactIds.length} rows across ${compactPages} pages, max ${Math.max(...pageBytes)} bytes`);
+
+  const recovered = new Map();
+  cursor = undefined;
+  do {
+    const page = await callTool('category_list', { project, full: true, limit: 4, ...(cursor ? { cursor } : {}) });
+    for (const category of page.categories) {
+      if (expectedDescriptions.has(category.id)) recovered.set(category.id, category.description);
+    }
+    cursor = page.nextCursor || undefined;
+  } while (cursor);
+  assert.deepEqual(recovered, expectedDescriptions);
+
+  const legacyFull = await callTool('category_list', { project, full: true });
+  assert.equal(Object.hasOwn(legacyFull, 'nextCursor'), false);
+  assert.equal(legacyFull.categories.find((category: any) => category.id === 'bounded-00').description, expectedDescriptions.get('bounded-00'));
+  const cliCategories = runCli(['category', 'list', '--project', project, '--json']);
+  assert.deepEqual(Object.keys(cliCategories).sort(), ['categories', 'project', 'projectName', 'warnings']);
+  assert.equal(cliCategories.categories.find((category: any) => category.id === 'bounded-00').description, expectedDescriptions.get('bounded-00'));
+
+  for (const args of [{ cursor: 'bad' }, { cursor: '-1' }, { limit: 0 }, { limit: 101 }]) {
+    const invalid = await callToolRaw('category_list', { project, ...args });
+    assert.equal(invalid.isError, true);
+  }
+  const pastEnd = await callToolRaw('category_list', { project, cursor: '9999' });
+  assert.equal(pastEnd.isError, true);
+});
+
+test('compact comment pages are latest-first and full pages reconstruct exact chronological bodies', async (t: any) => {
+  const root = path.join(os.tmpdir(), 'sq-mcp-comment-pages');
+  const project = store.ensureProject(root, 'SQ comment pages').slug;
+  const ticket = store.createTicket(project, {
+    title: 'bounded comments',
+    description: DISPATCH_DESCRIPTION,
+    complexity: 2,
+    complexityWhy: 'exercise bounded comment reads and complete executor briefing recovery',
+  });
+
+  const empty = await callTool('comments', { project, ref: ticket.ref });
+  assert.deepEqual(empty.comments, []);
+  assert.deepEqual({ total: empty.total, returned: empty.returned, nextCursor: empty.nextCursor }, { total: 0, returned: 0, nextCursor: null });
+
+  const bodies: string[] = [];
+  for (let index = 0; index < 8; index += 1) {
+    const prefix = `comment-${index}:`;
+    const body = prefix + String(index).repeat(16000 - prefix.length);
+    bodies.push(body);
+    assert.equal(store.addComment(project, ticket.ref, { body, by: `worker-${index}`, kind: 'comment', source: 'mcp' }).ok, true);
+  }
+
+  const compactRaw = await callToolRaw('comments', { project, ref: ticket.ref });
+  const compactBytes = Buffer.byteLength(compactRaw.content[0].text);
+  assert.ok(compactBytes <= 13000, `compact comments are ${compactBytes} bytes`);
+  const compact = JSON.parse(compactRaw.content[0].text);
+  assert.equal(compact.total, 8);
+  assert.equal(compact.returned, compact.comments.length);
+  assert.equal(compact.order, 'latest-first');
+  assert.equal(compact.comments[0].bodyLength, 16000);
+  assert.equal(compact.comments[0].bodyTruncated, true);
+  assert.match(compact.comments[0].body, /^comment-7:/);
+  t.diagnostic(`comments: ${compact.returned}/${compact.total} rows in ${compactBytes} bytes`);
+
+  const recovered: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await callTool('comments', { project, ref: ticket.ref, full: true, limit: 2, ...(cursor ? { cursor } : {}) });
+    assert.equal(page.order, 'chronological');
+    recovered.push(...page.comments.map((comment: any) => comment.body));
+    cursor = page.nextCursor || undefined;
+  } while (cursor);
+  assert.deepEqual(recovered, bodies);
+
+  const legacyFull = await callTool('comments', { project, ref: ticket.ref, full: true });
+  assert.equal(Object.hasOwn(legacyFull, 'nextCursor'), false);
+  assert.deepEqual(legacyFull.comments.map((comment: any) => comment.body), bodies);
+  assert.equal(legacyFull.comments[0].source, 'mcp');
+  const cliComments = runCli(['comments', ticket.ref, '--project', project, '--json']);
+  assert.deepEqual(Object.keys(cliComments).sort(), ['comments', 'project', 'ticket']);
+  assert.deepEqual(cliComments.comments.map((comment: any) => comment.body), bodies);
+
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'complete-comment-briefing' });
+  const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
+  const completePacket = agentsync.ticketCommentsPacket(store.getTicket(project, ticket.ref).comments);
+  assert.ok(briefing.includes(completePacket));
+  for (const body of bodies) assert.ok(briefing.includes(body));
+
+  for (const args of [{ cursor: 'bad' }, { cursor: '-1' }, { limit: 0 }, { limit: 101 }]) {
+    const invalid = await callToolRaw('comments', { project, ref: ticket.ref, ...args });
+    assert.equal(invalid.isError, true);
+  }
+  const pastEnd = await callToolRaw('comments', { project, ref: ticket.ref, cursor: '9' });
+  assert.equal(pastEnd.isError, true);
 });
 
 test('MCP commit and submit finish an isolated worktree without a PATH command', async () => {
@@ -805,7 +949,7 @@ test('SQ-404: long handoff comments are stored whole and still have a clear cap'
   const handoff = 'x'.repeat(5481);
   const stored = await callTool('comment', { ref, body: handoff });
   assert.strictEqual(stored.ok, true, 'a useful long handoff stores whole');
-  assert.strictEqual((await callTool('comments', { ref })).comments[0].body.length, 5481);
+  assert.strictEqual((await callTool('comments', { ref, full: true })).comments[0].body.length, 5481);
 
   const tooLong = 'x'.repeat(16001);
   const rejected = await callTool('comment', { ref, body: tooLong });

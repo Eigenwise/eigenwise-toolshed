@@ -187,21 +187,45 @@ function mutationAck(project, result, changed) {
   }
   return Object.assign(out, changed || {});
 }
+const COMPACT_RESULT_MAX_BYTES = 13e3;
+const COMPACT_BODY_MAX_CHARS = 1200;
+const PAGED_FULL_DEFAULT_LIMIT = 10;
+const PAGE_LIMIT_MAX = 100;
+function boundedExcerpt(value, maxChars = COMPACT_BODY_MAX_CHARS) {
+  const text = String(value || "");
+  if (text.length <= maxChars) return { text, length: text.length, truncated: false };
+  const tailLength = Math.min(240, Math.floor(maxChars / 4));
+  const marker = `
+[… ${text.length - maxChars} more chars; use full:true …]
+`;
+  const headLength = maxChars - tailLength - marker.length;
+  return {
+    text: `${text.slice(0, headLength)}${marker}${text.slice(-tailLength)}`,
+    length: text.length,
+    truncated: true
+  };
+}
 function compactComment(comment) {
+  const body = boundedExcerpt(comment.body);
   return {
     id: comment.id,
     at: comment.at,
     by: comment.by,
     kind: comment.kind,
-    body: comment.body
+    body: body.text,
+    bodyLength: body.length,
+    bodyTruncated: body.truncated
   };
 }
 function categoryListEntry(category, localRow, ticketCount, full) {
   if (!full) {
+    const description = boundedExcerpt(category.description);
     return {
       id: category.id,
       name: category.name,
-      description: category.description,
+      description: description.text,
+      descriptionLength: description.length,
+      descriptionTruncated: description.truncated,
       enabled: category.enabled
     };
   }
@@ -210,6 +234,49 @@ function categoryListEntry(category, localRow, ticketCount, full) {
     localRow: localRow ? { id: localRow.id, kind: localRow.kind } : null,
     ticketCount
   });
+}
+function pageArguments(args, action) {
+  let cursor = 0;
+  if (args.cursor != null) {
+    const raw = String(args.cursor);
+    if (!/^(0|[1-9]\d*)$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+      throw new Error(`${action}: cursor must be a non-negative integer string.`);
+    }
+    cursor = Number(raw);
+  }
+  let limit = null;
+  if (args.limit != null) {
+    limit = Number(args.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > PAGE_LIMIT_MAX) {
+      throw new Error(`${action}: limit must be an integer from 1 to ${PAGE_LIMIT_MAX}.`);
+    }
+  }
+  return { cursor, limit };
+}
+function pageRows(rows, args, action, buildPayload, maxBytes) {
+  const { cursor, limit } = pageArguments(args, action);
+  if (cursor > rows.length) throw new Error(`${action}: cursor ${cursor} is past the ${rows.length}-row result.`);
+  const maxEnd = Math.min(rows.length, cursor + (limit || rows.length));
+  let end = cursor;
+  while (end < maxEnd) {
+    const candidateEnd = end + 1;
+    const candidate = rows.slice(cursor, candidateEnd);
+    const nextCursor = candidateEnd < rows.length ? String(candidateEnd) : null;
+    const payload = buildPayload(candidate, rows.length, nextCursor);
+    if (maxBytes && Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") > maxBytes) break;
+    end = candidateEnd;
+  }
+  if (end === cursor && cursor < rows.length) {
+    throw new Error(`${action}: one compact row exceeds the ${maxBytes}-byte result ceiling; use full:true.`);
+  }
+  const page = rows.slice(cursor, end);
+  return buildPayload(page, rows.length, end < rows.length ? String(end) : null);
+}
+function pagedPayload(rows, args, action, buildPayload, full) {
+  const explicitlyPaged = args.cursor != null || args.limit != null;
+  if (full && !explicitlyPaged) return null;
+  const pagingArgs = full && args.limit == null ? Object.assign({}, args, { limit: PAGED_FULL_DEFAULT_LIMIT }) : args;
+  return pageRows(rows, pagingArgs, action, buildPayload, full ? null : COMPACT_RESULT_MAX_BYTES);
 }
 function compactPulse(pulse) {
   return {
@@ -528,7 +595,7 @@ const TOOLS = [
     description: "Restore an archived ticket by ref.",
     inputSchema: {
       type: "object",
-      properties: { ref: { type: "string" }, project: PROJECT_PROP, full: { type: "boolean", description: "Include source metadata for diagnostics." } },
+      properties: { ref: { type: "string" }, project: PROJECT_PROP },
       required: ["ref"]
     },
     handler(args) {
@@ -799,17 +866,34 @@ const TOOLS = [
   },
   {
     name: "comments",
-    description: "Read a ticket's full comment thread BEFORE working it.",
+    description: "Read ticket comments before work; compact pages are latest-first. Follow nextCursor; full:true is chronological and exact.",
     inputSchema: {
       type: "object",
-      properties: { ref: { type: "string" }, project: PROJECT_PROP },
+      properties: {
+        ref: { type: "string" },
+        project: PROJECT_PROP,
+        full: { type: "boolean" },
+        cursor: { type: "string", pattern: "^(0|[1-9]\\d*)$" },
+        limit: { type: "integer", minimum: 1, maximum: PAGE_LIMIT_MAX }
+      },
       required: ["ref"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug } = resolveProject(args.project);
       const t = store.getTicket(slug, args.ref);
       if (!t) throw new Error(`comments: no ticket "${args.ref}".`);
-      const comments = args.full ? t.comments || [] : (t.comments || []).map(compactComment);
+      const full = !!args.full;
+      const comments = full ? t.comments || [] : (t.comments || []).map(compactComment).reverse();
+      const buildPayload = (page, total, nextCursor) => ({
+        ref: t.ref,
+        comments: page,
+        total,
+        returned: page.length,
+        nextCursor,
+        order: full ? "chronological" : "latest-first"
+      });
+      const paged = pagedPayload(comments, args, "comments", buildPayload, full);
+      if (paged) return paged;
       return { ref: t.ref, comments };
     }
   },
@@ -984,24 +1068,37 @@ const TOOLS = [
   },
   {
     name: "category_list",
-    description: "List the project's ticket categories with their shared/forked/pinned/disabled provenance.",
-    inputSchema: { type: "object", properties: { project: PROJECT_PROP, global: { type: "boolean", description: "Show global-only policy instead of the resolved project taxonomy." }, full: { type: "boolean", description: "Include routing, contract, and project provenance." } } },
+    description: "List project taxonomy; compact descriptions are explicit excerpts. Follow nextCursor; full:true is complete.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: PROJECT_PROP,
+        global: { type: "boolean", description: "Show global-only policy instead of the resolved project taxonomy." },
+        full: { type: "boolean" },
+        cursor: { type: "string", pattern: "^(0|[1-9]\\d*)$" },
+        limit: { type: "integer", minimum: 1, maximum: PAGE_LIMIT_MAX }
+      }
+    },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const projectScope = !args.global;
+      const full = !!args.full;
       const usage = (id) => store.listTickets(slug).filter((ticket) => (ticket.categoryId || ticket.category && ticket.category.id) === id).length;
       const layer = projectScope ? store.getProjectCategories(slug) : { rows: [], warnings: [] };
       const categories = store.getCategories(projectScope ? { project: slug, withState: true } : void 0).map((category) => {
         const localRow = layer.rows.find((row) => row.id === category.id) || null;
-        return categoryListEntry(category, localRow, usage(category.id), !!args.full);
+        return categoryListEntry(category, localRow, usage(category.id), full);
       });
-      if (args.full) {
+      if (full) {
         for (const localRow of layer.rows.filter((row) => row.kind === "DISABLE")) {
           categories.push({ id: localRow.id, origin: "disabled", localRow: { id: localRow.id, kind: localRow.kind }, effective: null, ticketCount: usage(localRow.id) });
         }
       }
       categoryListServed = true;
-      return args.full ? { project: slug, projectName: meta.name, categories, warnings: layer.warnings } : { categories };
+      const buildPayload = (page, total, nextCursor) => full ? { project: slug, projectName: meta.name, categories: page, warnings: layer.warnings, total, returned: page.length, nextCursor } : { categories: page, total, returned: page.length, nextCursor };
+      const paged = pagedPayload(categories, args, "category_list", buildPayload, full);
+      if (paged) return paged;
+      return { project: slug, projectName: meta.name, categories, warnings: layer.warnings };
     }
   },
   {
