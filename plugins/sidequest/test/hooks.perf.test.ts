@@ -10,6 +10,7 @@ const { performance } = require('node:perf_hooks');
 
 const RUNS = 20;
 const WARMUPS = 3;
+const PROCESS_SAMPLE_TIMEOUT_MS = 5_000;
 const CONTROL_MULTIPLIERS = {
   sessionStart: { median: 10, p95: 15 },
   boardFirst: { median: 3, p95: 4 },
@@ -117,8 +118,9 @@ function runProcess(args: string[], payload: unknown): void {
     input: JSON.stringify(payload),
     encoding: 'utf8',
     env,
+    timeout: PROCESS_SAMPLE_TIMEOUT_MS,
   });
-  assert.equal(result.status, 0, `${args[0]}: ${result.stderr}`);
+  assert.equal(result.status, 0, `${args[0]}: ${result.error?.message ?? result.stderr}`);
 }
 
 function runHook(script: string, payload: unknown): void {
