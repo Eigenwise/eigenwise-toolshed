@@ -77,6 +77,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Executor prompts stay lean and cannot narrow the ticket**: add only the ref, worker id, claim/done commands, stamped effort/model, and logistics the ticket does not carry. The ticket contract is authoritative and must travel in full, unchanged scope. If the plan changed, update the ticket before dispatching. **Anti-pattern: dispatch narrower than ticket.** In Cantizans SQ-87, the ticket required extracting the done block across every lesson route and two commits, while the dispatch limited work to intervals as a reference. The executor bounced correctly, then the orchestrator had to re-plan. Never create that contradiction.
 - **Record wave links from board results.** Never write an `SQ-n` ref you did not read back from a board response. File related tickets first, collect their returned refs, then use `update` or, preferably, `link` (`blocks`, `depends-on`, or `related`) to record relationships. Links are board data, so they stay correct without prose cross-references.
 - **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state. Until `pulse` is available, read claim age, comments, and `git log`. If several tickets need checking, use `changes --since <iso>` for the `{tickets:[...]}` delta, sorted oldest first.
+- **Recover one dormant completion (SQ-715 findings comment).** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent once to continue, keeping its claim and token. A second silent stop means dead: salvage, release, fresh-dispatch, then spawn one new executor. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
 - **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
   replacing it. Preserve a verified commit, or recover the declared-scope diff, then read the ticket and
   its thread again before deciding whether a replacement is needed. Never overwrite stranded work by
@@ -88,10 +89,11 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   spawn the returned fallback spec unchanged. Do not edit or detach the category: the recovered route is
   ticket-local, survives a session restart, and normal category policy resumes when that dispatch ends.
   Treat any other model-access or API error as generic. Surface it without guessing a fallback or retrying
-  the route. Never both message the old executor and spawn a replacement for one ticket. Two failures on one
+  the route. Never message a dormant executor and spawn its replacement together: after its second silent stop,
+  release first. Two failures on one
   dispatch are a user-visible failure: comment the ticket with the verbatim denial/terminal evidence, surface
-  it, do not try a third spawn, and do not pull substantial work inline by default. `SendMessage` is for new
-  information such as a scope change or unblock, never a "wake up" poke.
+  it, do not try a third spawn, and do not pull substantial work inline by default. Other `SendMessage` calls
+  carry new information such as a scope change or unblock, never a "wake up" poke.
 - **A 32 MB launch failure is not a retry.** When a dispatched native Agent dies before its first model
   turn with `Request too large (max 32MB)`, it is a non-retryable 413 from the orchestrator's accumulated
   images or attachments, not the ticket or briefing. Do not blindly redispatch or resume it: a fresh Agent

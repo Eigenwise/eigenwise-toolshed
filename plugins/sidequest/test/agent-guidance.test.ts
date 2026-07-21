@@ -49,6 +49,14 @@ test('dispatch guidance requires board confirmation after an Agent launch', () =
   assert.match(orchestration, /denied or missing claim gets one diagnose-first retry/);
 });
 
+test('dormant executors resume once before replacement', () => {
+  assert.match(orchestration, /SQ-715 findings comment/);
+  assert.match(orchestration, /task-completed notification with no submission or terminal board state/);
+  assert.match(orchestration, /if dispatch is still claimed and fresh, `SendMessage` the same named agent once/);
+  assert.match(orchestration, /A second silent stop means dead: salvage, release, fresh-dispatch, then spawn one new executor/);
+  assert.match(orchestration, /Never respawn beside a live claim or `TaskStop` without terminal board evidence/);
+});
+
 test('post-wave seam review stays scoped and event-driven', () => {
   assert.match(orchestration, /Review seams once after a wave closes/);
   assert.match(orchestration, /next natural wakeup, inspect one combined diff\/stat/);
