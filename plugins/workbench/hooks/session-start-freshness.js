@@ -251,8 +251,9 @@ function audit(options = {}) {
   ];
   const projectInstances = currentProjectInstances(instances, options.currentProject);
   const projectBoards = boards.filter((board) => isCurrentProjectPath(board.path, options.currentProject));
+  const projectUpdates = [];
   const projectProblems = options.currentProject ? [
-    ...installedFreshness(projectInstances, marketplaces, now, manifestFor, gitFreshness),
+    ...installedFreshness(projectInstances, marketplaces, now, manifestFor, gitFreshness, projectUpdates),
     ...gatewayFreshness(projectInstances, checkGateway),
     ...boardMappings(projectBoards, instances).problems,
   ] : [];
@@ -261,7 +262,9 @@ function audit(options = {}) {
     mappings: mappings.mappings,
     instances,
     updates,
+    projectInstances,
     projectProblems: [...new Set(projectProblems)].sort(),
+    projectUpdates,
   };
 }
 
@@ -313,7 +316,9 @@ function systemMessage(result, loadedVersion) {
 }
 
 function projectWarning(problems) {
-  return problems.length ? `Toolshed project health: ${problems.join('; ')}.` : '';
+  const shown = problems.slice(0, 3);
+  const extra = problems.length > shown.length ? `; +${problems.length - shown.length} more` : '';
+  return shown.length ? `Toolshed project health: ${shown.join('; ')}${extra}.` : '';
 }
 
 function sessionInput() {
@@ -329,7 +334,10 @@ function main() {
     const input = sessionInput();
     const result = audit({ currentProject: input.cwd });
     const context = projectWarning(result.projectProblems);
-    const notice = systemMessage(result, loadedPluginVersion());
+    const notice = systemMessage({
+      instances: result.projectInstances,
+      updates: result.projectUpdates,
+    }, loadedPluginVersion());
     if (context || notice) {
       const output = {};
       if (context) output.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: context };

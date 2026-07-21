@@ -280,23 +280,27 @@ function hookFixture(plugins, versions) {
   };
 }
 
-test('writes a reload notice to SessionStart hook stdout for a stale session', () => {
+test('writes a reload notice to SessionStart hook stdout for the current project', () => {
   const output = hookOutput({
-    ...hookFixture({ 'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.49.0' }] }, { workbench: '0.49.0' }),
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
+    }, { workbench: '0.49.0' }),
     loadedVersion: '0.48.0',
+    input: { cwd: 'C:/work/current' },
   });
 
   assert.equal(output.systemMessage, 'Toolshed: workbench 0.48.0 loaded, 0.49.0 installed — /reload-plugins to pick it up.');
   assert.equal(output.hookSpecificOutput, undefined);
 });
 
-test('writes cached update availability to SessionStart hook stdout', () => {
+test('writes cached update availability to SessionStart hook stdout for the current project', () => {
   const output = hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.49.0' }],
-      'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '2.41.0' }],
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
+      'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '2.41.0' }],
     }, { workbench: '0.50.0', sidequest: '2.42.0' }),
     loadedVersion: '0.49.0',
+    input: { cwd: 'C:/work/current' },
   });
 
   assert.equal(output.systemMessage, 'Toolshed update available (cached): sidequest 2.41.0 → 2.42.0 — /update-toolshed, then /reload-plugins.');
@@ -318,6 +322,42 @@ test('keeps third-party freshness and other projects out of SessionStart output'
       },
     },
     input: { cwd: 'C:/work/current' },
+  });
+
+  assert.equal(output, null);
+});
+
+test('keeps another project cached update out of every SessionStart output', () => {
+  const output = hookOutput({
+    ...hookFixture({
+      'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/other', version: '1.0.0' }],
+    }, { sidequest: '1.1.0' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: 'C:/work/current' },
+  });
+
+  assert.equal(output, null);
+});
+
+test('keeps another project reload notice out of every SessionStart output', () => {
+  const output = hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/other', version: '0.50.0' }],
+    }, { workbench: '0.50.0' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: 'C:/work/current' },
+  });
+
+  assert.equal(output, null);
+});
+
+test('emits no SessionStart output without a usable current project', () => {
+  const output = hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.50.0' }],
+      'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '1.0.0' }],
+    }, { workbench: '0.50.0', sidequest: '1.1.0' }),
+    loadedVersion: '0.49.0',
   });
 
   assert.equal(output, null);
@@ -358,12 +398,13 @@ test('fails open without a SessionStart message for malformed local state', () =
 test('limits update notices to one plugin', () => {
   const output = hookOutput({
     ...hookFixture({
-      'alpha@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
-      'beta@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
-      'gamma@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
-      'omega@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
+      'alpha@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '1.0.0' }],
+      'beta@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '1.0.0' }],
+      'gamma@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '1.0.0' }],
+      'omega@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '1.0.0' }],
     }, { alpha: '1.1.0', beta: '1.1.0', gamma: '1.1.0', omega: '1.1.0' }),
     loadedVersion: '0.49.0',
+    input: { cwd: 'C:/work/current' },
   });
 
   assert.equal(output.systemMessage, 'Toolshed update available (cached): alpha 1.0.0 → 1.1.0 — /update-toolshed, then /reload-plugins.');
