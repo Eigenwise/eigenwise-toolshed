@@ -1,1 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#132531"/><path d="M17 17h30v10H27v10h16v10H17z" fill="#74d8d6"/><circle cx="47" cy="42" r="5" fill="#e5b55f"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1216 1216" role="img" aria-label="Eigenwise">
+  <defs>
+    <linearGradient id="indigoGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#17162c"/>
+      <stop offset="55%" stop-color="#222141"/>
+      <stop offset="100%" stop-color="#2c2b50"/>
+    </linearGradient>
+  </defs>
+  <rect width="1216" height="1216" rx="180" fill="var(--bg, #f4efe4)"/>
+  <g transform="translate(234,194) scale(0.815)">
+    <path fill="url(#indigoGradient)" d="M 12 1 H 886 C 893 1 898 6 898 13 V 205 C 898 212 893 217 886 217 H 770 C 763 217 758 212 758 205 V 143 C 758 136 753 132 747 132 H 410 C 403 132 399 136 399 143 V 392 C 399 399 403 403 410 403 H 704 C 710 403 713 399 713 392 V 345 C 713 337 722 333 728 339 L 912 501 C 916 505 916 511 912 515 L 728 681 C 722 687 713 683 713 675 V 614 C 713 607 709 603 702 603 H 410 C 403 603 399 607 399 614 V 867 C 399 874 403 878 410 878 H 747 C 753 878 758 874 758 867 V 809 C 758 802 763 797 770 797 H 886 C 893 797 898 802 898 809 V 1002 C 898 1009 893 1014 886 1014 H 12 C 5 1014 1 1009 1 1002 V 889 C 1 882 5 878 12 878 H 105 C 124 878 135 867 135 851 V 159 C 135 143 124 132 105 132 H 12 C 5 132 1 127 1 120 V 13 C 1 6 5 1 12 1 Z"/>
+  </g>
+</svg>

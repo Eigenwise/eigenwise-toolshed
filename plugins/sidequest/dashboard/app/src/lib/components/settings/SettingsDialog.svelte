@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { Category, JsonRecord, Project } from '../../types';
   import type { BoardState } from '../../state/board.svelte';
   import Select, { type SelectOption } from '../ui/Select.svelte';
@@ -24,6 +25,18 @@
   let draftSentence = $state('');
   let saving = $state(false);
   let categoryEditorOpen = $state(false);
+  let theme = $state<'light' | 'dark'>('light');
+
+  function setTheme(value: 'light' | 'dark') {
+    theme = value;
+    document.documentElement.dataset.theme = value;
+    localStorage.setItem('sq_theme', value);
+  }
+
+  onMount(() => {
+    const storedTheme = localStorage.getItem('sq_theme');
+    setTheme(storedTheme === 'dark' ? 'dark' : 'light');
+  });
 
   let selectedProject = $derived(board.currentProject);
   let boardScopeAvailable = $derived(board.selectedProject !== 'all');
@@ -249,6 +262,9 @@
         </section>
 
         <section class="notifications-section">
+          <p class="eyebrow">Appearance</p>
+          <h3>Theme</h3>
+          <label class="switch"><input type="checkbox" checked={theme === 'dark'} onchange={(event) => setTheme(checkboxValue(event) ? 'dark' : 'light')} /><span><strong>Dark theme</strong><small>Use the Eigenwise dark palette.</small></span></label>
           <p class="eyebrow">Notifications</p>
           <h3>Keep the signal useful</h3>
           <button class="permission" onclick={() => void requestDesktopNotifications()}><strong>Desktop notifications</strong><span>{board.desktopNotificationPermission === 'granted' ? 'Enabled' : board.desktopNotificationPermission === 'unsupported' ? 'Unsupported here' : 'Click to enable'}</span></button>
@@ -273,7 +289,7 @@
 <style>
   button, input, textarea { font: inherit; }
   button { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: .42rem .6rem; }
-  button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--text-on-accent); border-color: var(--accent); }
   button.danger { color: var(--danger); }
   button:disabled { cursor: not-allowed; opacity: .55; }
   .settings-trigger { padding: .5rem .65rem; }

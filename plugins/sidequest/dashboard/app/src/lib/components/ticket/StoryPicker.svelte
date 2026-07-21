@@ -4,7 +4,15 @@
 	import Button from '../ui/Button.svelte';
 	import Select, { type SelectOption } from '../ui/Select.svelte';
 
-	const colors = ['#d86b5b', '#d49a4a', '#789d49', '#4f9f9a', '#5d8fc7', '#836bc0', '#b66aa1', '#7c7c7c'];
+	const colors = [
+		{ value: 'terracotta', swatch: 'var(--danger)' },
+		{ value: 'amber', swatch: 'var(--warning)' },
+		{ value: 'green', swatch: 'var(--success)' },
+		{ value: 'violet', swatch: 'var(--accent)' },
+		{ value: 'rose', swatch: 'var(--accent-strong)' },
+		{ value: 'olive', swatch: 'var(--border-strong)' },
+		{ value: 'steel', swatch: 'var(--text-muted)' }
+	];
 	let { board, project, value = '', onchange }: { board: BoardState; project: string | null; value?: string; onchange: (storyId: string) => Promise<void> | void; } = $props();
 	let creating = $state(false);
 	let title = $state('');
@@ -35,8 +43,8 @@
 	<div class="new-story">
 		<input aria-label="New story title" bind:value={title} placeholder="Story title" />
 		<div class="colors" aria-label="Story color">
-			{#each colors as choice (choice)}
-				<button type="button" class:chosen={color === choice} style:background={choice} aria-label={`Use ${choice}`} onclick={() => color = choice}></button>
+			{#each colors as choice (choice.value)}
+				<button type="button" class:chosen={color === choice.value} style:background={choice.swatch} aria-label={`Use ${choice.value}`} onclick={() => color = choice.value}></button>
 			{/each}
 		</div>
 		<div class="actions"><Button variant="primary" onclick={create}>Create story</Button><Button onclick={() => creating = false}>Cancel</Button></div>

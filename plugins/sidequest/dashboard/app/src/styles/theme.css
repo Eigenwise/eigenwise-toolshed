@@ -1,35 +1,68 @@
 @import "tailwindcss";
 
-:root {
-  color-scheme: dark;
-  --brand-hue: 202;
-  --font-sans: "IBM Plex Sans", "Segoe UI", sans-serif;
-  --font-serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --font-sans: "Karla Variable", "Segoe UI", sans-serif;
+  --font-serif: "Newsreader Variable", Georgia, serif;
   --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
-  --page: oklch(0.17 0.025 236);
-  --surface-0: oklch(0.17 0.025 236);
-  --surface-1: oklch(0.205 0.028 236);
-  --surface: oklch(0.23 0.03 236);
-  --surface-card: oklch(0.245 0.032 236);
-  --surface-muted: oklch(0.195 0.025 236);
-  --text: oklch(0.93 0.018 210);
-  --text-muted: oklch(0.72 0.03 218);
-  --border: oklch(0.38 0.035 224 / 0.82);
-  --accent: oklch(0.76 0.13 196);
-  --accent-strong: oklch(0.67 0.15 196);
-  --accent-soft: oklch(0.35 0.07 208 / 0.42);
-  --danger: oklch(0.69 0.18 25);
-  --warning: oklch(0.78 0.14 77);
-  --success: oklch(0.74 0.13 155);
-  --shadow: 0 18px 45px oklch(0.08 0.02 240 / 0.42), inset 0 1px 0 oklch(1 0 0 / 0.045);
-  --radius: 0.7rem;
-  --focus-ring: 0 0 0 3px oklch(0.76 0.13 196 / 0.42);
-  --motion-fast: 160ms cubic-bezier(.2,.8,.2,1);
+  --bg: oklch(0.965 0.012 85);
+  --bg-deep: oklch(0.93 0.018 85);
+  --text: oklch(0.24 0.025 277);
+  --text-muted: oklch(0.45 0.02 277);
+  --accent: oklch(0.42 0.1 277);
+  --accent-strong: oklch(0.33 0.09 277);
+  --accent-wash: oklch(0.92 0.025 277);
+  --text-on-accent: oklch(0.965 0.012 85);
+  --border: oklch(0.84 0.02 85);
+  --border-strong: oklch(0.55 0.02 277);
+  --danger: oklch(0.58 0.16 25);
+  --warning: oklch(0.63 0.14 80);
+  --success: oklch(0.58 0.13 145);
+  --page: var(--bg);
+  --surface-0: var(--bg);
+  --surface-1: var(--bg);
+  --surface: var(--bg);
+  --surface-card: var(--bg);
+  --surface-muted: var(--bg-deep);
+  --accent-soft: var(--accent-wash);
+  --shadow: 0 18px 45px oklch(0.24 0.025 277 / 0.12), inset 0 1px 0 oklch(1 0 0 / 0.36);
+  --radius: 2px;
+  --focus-ring: 0 0 0 3px oklch(0.42 0.1 277 / 0.3);
+  --motion-fast: 160ms cubic-bezier(.2, .8, .2, 1);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: oklch(0.2 0.02 277);
+  --bg-deep: oklch(0.16 0.018 277);
+  --text: oklch(0.93 0.015 85);
+  --text-muted: oklch(0.68 0.02 85);
+  --accent: oklch(0.72 0.1 277);
+  --accent-strong: oklch(0.8 0.09 277);
+  --accent-wash: oklch(0.28 0.04 277);
+  --text-on-accent: oklch(0.16 0.02 277);
+  --border: oklch(0.32 0.02 277);
+  --border-strong: oklch(0.55 0.03 277);
+  --danger: oklch(0.74 0.16 25);
+  --warning: oklch(0.78 0.14 80);
+  --success: oklch(0.72 0.13 145);
+  --page: var(--bg);
+  --surface-0: var(--bg);
+  --surface-1: var(--bg);
+  --surface: var(--bg);
+  --surface-card: var(--bg);
+  --surface-muted: var(--bg-deep);
+  --accent-soft: var(--accent-wash);
+  --shadow: 0 18px 45px oklch(0.08 0.015 277 / 0.42), inset 0 1px 0 oklch(1 0 0 / 0.045);
+  --radius: 2px;
+  --focus-ring: 0 0 0 3px oklch(0.72 0.1 277 / 0.42);
+  --motion-fast: 160ms cubic-bezier(.2, .8, .2, 1);
 }
 
 :focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 @media (prefers-reduced-motion: reduce) {
-  :root { --motion-fast: calc(0 * 1ms); }
+  :root[data-theme] { --motion-fast: calc(0 * 1ms); }
   *, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; scroll-behavior: auto !important; }
 }

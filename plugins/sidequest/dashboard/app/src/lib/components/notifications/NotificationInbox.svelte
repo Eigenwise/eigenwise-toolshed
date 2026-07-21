@@ -68,11 +68,12 @@
     canvas.height = 64;
     const context = canvas.getContext('2d');
     if (!context) return '';
-    context.fillStyle = '#266c5b';
+    const styles = getComputedStyle(document.documentElement);
+    context.fillStyle = styles.getPropertyValue('--accent').trim();
     context.beginPath();
     context.arc(32, 32, 28, 0, Math.PI * 2);
     context.fill();
-    context.fillStyle = '#ffffff';
+    context.fillStyle = styles.getPropertyValue('--text-on-accent').trim();
     context.font = 'bold 36px system-ui';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
@@ -162,7 +163,7 @@
 <style>
   .bell, .quiet, .tabs button, .notification { border: 0; font: inherit; }
   .bell { border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: .5rem .65rem; border-radius: var(--radius); display: inline-flex; align-items: center; gap: .4rem; }
-  .badge { min-width: 1.35rem; padding: .08rem .3rem; border-radius: 999px; background: var(--accent); color: white; font-size: .72rem; font-weight: 700; }
+  .badge { min-width: 1.35rem; padding: .08rem .3rem; border-radius: 999px; background: var(--accent); color: var(--text-on-accent); font-size: .72rem; font-weight: 700; }
   .inbox { position: absolute; z-index: 20; right: 1rem; top: 4.25rem; width: min(25rem, calc(100vw - 2rem)); padding: 1rem; box-shadow: var(--shadow); }
   header { display: flex; justify-content: space-between; gap: .75rem; align-items: start; }
   h2, p { margin: 0; }

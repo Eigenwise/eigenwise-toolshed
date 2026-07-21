@@ -11,6 +11,8 @@
     "e2e": "playwright test"
   },
   "devDependencies": {
+    "@fontsource-variable/karla": "^5.2.8",
+    "@fontsource-variable/newsreader": "^5.2.10",
     "@playwright/test": "^1.61.1",
     "@sveltejs/vite-plugin-svelte": "^6.1.0",
     "@tailwindcss/vite": "^4.3.3",
