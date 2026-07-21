@@ -1,22 +1,25 @@
 # Routing details: category routes and fallback resolution
 
 Read this when you need to explain or debug routing. Category routing is primary: `list` and `ready`
-return the live taxonomy plus each ticket's category projection, route, and resolved `exec` object.
-Classify from the returned taxonomy, stamp the category before claim, then trust the resolved route.
+return the selected profile's effective taxonomy plus each ticket's category projection, route, and resolved `exec` object.
+Classify from the returned effective taxonomy, stamp the category before claim, then trust the resolved route.
 Complexity-only tickets map to fixed category bands at read time. For model and effort guidance when
 classification is genuinely ambiguous, see [routing-guide.md](routing-guide.md).
 
-## Category routing
+## Routing profiles and category resolution
 
-Categories are global board data. Each enabled row has a classifier description, default route, and
-executor contract. Use the classifier description to select the narrowest matching category, not a
-ticket title, urgency, requested model, or a copied local table. The route is live: changing a category
-re-routes its open tickets on their next read.
+A routing profile is a complete category set with classifier descriptions, routes, fallbacks, contracts, and enabled state. Profiles are independent. Each board points to one profile, and board-local rows apply on top:
 
-A present valid category takes precedence over a stored complexity score. A missing category preserves
-legacy complexity routing. An invalid, deleted, or disabled category resolves through the returned
-general fallback projection with a warning, without rewriting the ticket. A ticket missing both fields
-must be explicitly classified and updated before claim or dispatch.
+- `ADD` adds a full board-only row. If the selected profile already has that ID, the board row wins and emits an `add-collision` warning.
+- `OVERRIDE` patches the selected profile row and keeps its base snapshot for safe recovery.
+- `DETACH` pins a full effective row to the board.
+- `DISABLE` removes a category for that board, including a future profile addition of the same ID.
+
+Effective categories include provenance such as profile, override, detached, or added. A row based on another profile emits a `foreign-base` warning. Profile edits propagate to boards that point at the profile; local rows remain local. Repointing a board changes its pointer and reports drift. The model-availability fallback is global and remains after category route and category fallback resolution.
+
+Categories are selected from the effective board taxonomy. Use the classifier description to select the narrowest matching category, not a ticket title, urgency, requested model, or copied category table. The route is live: changing a profile or local category re-routes open tickets on their next read.
+
+A present valid category takes precedence over a stored complexity score. A missing category preserves legacy complexity routing. An invalid, deleted, or disabled category resolves through the effective `general` fallback projection with a warning, without rewriting the ticket. A ticket missing both fields must be explicitly classified and updated before claim or dispatch.
 
 The category projection includes its contract text. Inject that text verbatim into the executor prompt
 with the ticket contract. The `exec` object remains the dispatch authority. Resolve the category route

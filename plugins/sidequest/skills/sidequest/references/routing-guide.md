@@ -1,9 +1,6 @@
 # Routing guide: category-first task matching and legacy complexity grounding
 
-Category routing is the normal path. Read the live taxonomy from the board, match the work against its
-classifier descriptions, stamp the narrowest category, and trust the returned route and `exec` object.
-This guide helps choose among live categories when their descriptions leave genuine ambiguity. It also
-documents the fixed read-time mapping for tickets that still have only a legacy complexity score.
+Category routing is the normal path. Read the board's selected routing profile and its effective category rows, match the work against classifier descriptions, stamp the narrowest category, and trust the returned route and `exec` object. Profiles are independent complete category sets. A board pointer selects one profile, then board-local ADD, OVERRIDE, DETACH, or DISABLE rows apply on top. This guide helps choose among effective categories when their descriptions leave genuine ambiguity. It also documents the fixed read-time mapping for tickets that still have only a legacy complexity score.
 
 ## Model and effort guidance
 

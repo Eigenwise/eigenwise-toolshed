@@ -20,6 +20,8 @@ With Workbench installed, run the workspace setup skill from the project you wan
 /workbench:init-workspace
 ```
 
-It walks through project-side configuration, then writes the `.claude/` files the project selected. Install `codebase-mapper` when you want a maintained map of the codebase, and `live-rules` when rules should be injected as prompts and edits happen. When Sidequest is also installed and ready for bounded map artifacts, codebase-mapper tracks existing-project mapping there and leaves the generated map in the working tree for review.
+It walks through project-side configuration, then writes the `.claude/` files the project selected. The setup interview also proposes a Sidequest routing profile after the repository scan. Codebases usually start with `coding`, docs and content with `writing`, source-heavy work with `research`, and audio or music projects with `creative-music`. Accept the proposal, choose another starter, or create a project-specific profile by cloning the closest starter and adjusting it. Setup never edits a shared starter profile.
+
+Install `codebase-mapper` when you want a maintained map of the codebase, and `live-rules` when rules should be injected as prompts and edits happen. When Sidequest is also installed and ready for bounded map artifacts, codebase-mapper tracks existing-project mapping there and leaves the generated map in the working tree for review.
 
 For local usage data, opt in separately with `/workbench:enable-project-telemetry`. See [observability](./observability/) before enabling it.

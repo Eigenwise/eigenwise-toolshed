@@ -13,7 +13,29 @@ Reload Claude Code, then open the board with `/sidequest:board`. The dashboard s
 
 ## Categories and dispatch
 
-Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. **Default settings** are shared by every board. **Board settings** fork a category for one board, and the dashboard marks each category as inherited or customized. Resetting a customized category relinks it to the defaults.
+Routing profiles hold a complete category set and keep each board's policy independent. Every board points at one profile, then applies its own local rows as overrides, additions, pins, or disabled entries. A profile edit propagates to every board pointing at it; local changes stay local and the dashboard shows their provenance.
+
+Starter profiles include `coding`, `creative-music`, `research`, and `writing`. The init-workspace interview proposes one after scanning the repository. Accept it, pick another, or create a project profile from a starter. Shared starters are never changed by setup.
+
+Manage profiles with the CLI:
+
+```text
+sidequest profile list [--retired] [--json]
+sidequest profile show <profile> [--json]
+sidequest profile create <profile> [--from <profile>] [--name ...] [--description ...]
+sidequest profile edit <profile> [--name ...] [--description ...]
+sidequest profile retire <profile>
+sidequest profile use <profile> --project <board>
+sidequest profile repoint <from> <to> [--dry-run] [--json]
+sidequest profile promote <new> --from-project <board> --project <board>...
+sidequest profile new-board [<profile>] [--json]
+```
+
+`repoint --dry-run` previews changed, added, and missing categories plus local drift. `promote` copies a board's effective taxonomy into a new profile and repoints the selected boards when their taxonomies match. `new-board` reads or sets the profile used for future boards. Profiles can also be managed through the matching Sidequest MCP tools.
+
+Category commands require an explicit scope. Use `--profile <profile>` for profile entries and `--project <board>` for board-local changes. A mutation with neither scope fails. `global-fallback` remains the availability fallback used after category routes and category fallbacks.
+
+Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. The board applies local overrides on top of the selected profile, and the dashboard marks each row as profile, override, pinned, board-only, or disabled.
 
 Compact MCP reads for `category_list` and `comments` return `total`, `returned`, and `nextCursor`. Follow `nextCursor` until it is null. Compact category descriptions and comment bodies mark excerpts explicitly; `full:true` returns exact text. Compact comments are newest-first for orchestration, while full comments stay chronological. `full:true` without a cursor or limit keeps the one-call complete response. The CLI JSON shapes do not use this pagination and remain unchanged.
 

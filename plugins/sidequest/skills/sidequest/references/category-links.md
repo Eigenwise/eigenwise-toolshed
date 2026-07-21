@@ -1,60 +1,41 @@
-# Category links: shared defaults, board forks, and warnings
+# Category links: profile entries, board rows, and warnings
 
-Read this when managing or explaining board-scoped category policy. Categories live in a **shared default**
-policy (the global taxonomy). Every board inherits the shared defaults until it customizes a category, which
-**forks** it into that board's own independent copy. In the UI these scopes read as **Shared defaults** and
-the board's name.
+Routing profiles own complete, independent category sets. Each board points to one profile, then applies local rows on top. Profile edits propagate to boards that point at the profile. Board rows preserve their base profile and provenance.
 
-## Link states
+## Row states
 
-A category read with `withState: true` (or a board-scoped category list) reports one of these states. The
-internal kind is in parentheses; the second name is the word the dashboard and CLI show:
+A category read with `withState: true` (or a board-scoped category list) reports its source and internal kind:
 
-- `linked` — inherited: the board uses the shared default unchanged. No badge.
-- `added` (`ADD`) — added here: a board-only category that does not exist in the shared defaults.
-- `detached` (`DETACH`) — customized: the board's own forked copy. It holds a full snapshot and no longer
-  follows the shared default at all; later shared-default edits, renames, or deletion don't touch it.
-- `overridden` (`OVERRIDE`) — legacy: a partial patch that still inherited untouched fields. No surface
-  creates these anymore (editing forks instead), but old rows still resolve.
+- `profile` — the board uses the selected profile entry unchanged.
+- `added` (`ADD`) — a board-only full category row. If the selected profile has the same ID, the board row wins and emits `add-collision`.
+- `detached` (`DETACH`) — a pinned full snapshot. Later profile edits do not touch it.
+- `overridden` (`OVERRIDE`) — a patch over the selected profile row. The base snapshot remains available if that ID later disappears.
+- `disabled` (`DISABLE`) — the board removes the category and keeps it disabled if a future profile adds the same ID.
 
-Without `withState: true`, category reads keep their base shape and do not expose these annotations.
+Rows based on another profile emit a `foreign-base` warning. Full category output includes provenance, base profile, changed fields, and warnings. Compact output includes the selected profile and local-row count.
 
-## Editing forks; reset un-forks
+## Profile and board scope
 
-- **Edit** a category with a board scope (`--project`, or the board scope in the dashboard) and it forks into
-  that board's own copy (`DETACH`) — a full, independent snapshot that stops following the shared default.
-  Editing with no board scope rewrites the **shared default** for every board that hasn't forked it.
-- **Reset** removes the board's copy so the category follows the shared default again.
+Use profile scope to edit a profile entry and project scope to change one board's local policy. Mutations require exactly one scope:
 
 ```bash
-sidequest category edit <id>  --project <path-or-slug> [--route-model ... --route-effort ...]  # fork for this board
-sidequest category reset <id> --project <path-or-slug>   # alias: relink — drop the fork, follow the shared default
+sidequest category edit <id> --profile <profile> [--route-model ... --route-effort ...]
+sidequest category edit <id> --project <path-or-slug> [--route-model ... --route-effort ...]
+sidequest category pin <id> --project <path-or-slug>
+sidequest category reset <id> --project <path-or-slug>
 ```
 
-Editing merges the current effective category with your changes and stores the full result as a `DETACH`. A
-board-only category (no shared default) stays an `ADD`. `general` can be forked like any other category — a
-forked `general` still always resolves.
+Profile lifecycle commands cover list, show, create, edit, retire, use, repoint, promote, and new-board selection. `repoint --dry-run` reports drift before changing board pointers. `promote` creates a profile from a board's effective taxonomy and repoints selected boards only when their normalized taxonomies match. Reset removes the board row so the category follows the selected profile again.
 
-MCP exposes `category_edit` (blast radius depends on whether `project` is passed — with `project` it forks),
-and `category_relink` (reset). `category_detach` still exists but is rarely needed: editing already forks on
-any change; use detach only to fork a category as-is with no edits. The dashboard drives the same
-`/api/categories/:id/relink` endpoint and a board-scoped `DELETE` for reset.
-
-## Deleting a shared default
-
-A board that forked a category (a `DETACH`) already holds a full copy, so deleting the shared default leaves
-it working and untouched. As a defensive path for legacy `OVERRIDE` rows (partial patches that predate the
-fork model), `removeCategory` converts any such override into a full `DETACH` snapshot before removing the
-shared default, so nothing is left dangling.
+`general` must remain enabled in every profile and always resolves when a ticket category is missing or disabled. `global-fallback` is the model-availability fallback after category route and category fallback resolution, not a profile or category layer.
 
 ## Warnings
 
 Board category reads expose `warnings` as objects. Do not treat them as strings:
 
-- `{ kind: 'dangling-override', id, project }` — a legacy state: an `OVERRIDE` whose shared default is gone.
-  Editing now forks (no new overrides), and deletion auto-converts overrides to full copies, so this only
-  survives in data created before the fork model. A forked `DETACH` coexisting with a live shared default is
-  the normal customized state and is **not** a warning.
+- `{ kind: 'foreign-base', id, project, baseProfileId }` means a local row was created from another profile.
+- `{ kind: 'add-collision', id, project }` means a board ADD wins over a profile entry with the same ID.
+- `{ kind: 'override-using-snapshot', id, project }` means an OVERRIDE used its stored base because the selected profile lacks that ID.
+- `{ kind: 'redundant-disable', id, project }` means a DISABLE currently has no matching profile entry but remains active for future additions.
 
-This warning object is available through JSON CLI output, MCP responses, and the dashboard/server payloads.
-The plain CLI category list renders a human-readable message for it.
+These warnings are available through JSON CLI output, MCP responses, and dashboard/server payloads. The plain CLI category list renders human-readable messages where supported.
