@@ -214,7 +214,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   claim: 'Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.',
   dispatch: 'Prepare a ticket executor through its stable route.',
   done: 'Finish a claimed ticket and release its claim. Stamp the actual model and effort.',
-  groomClose: 'Grooming closure.',
+  groomClose: 'Grooming closure; pass integration:true after a submission is integrated.',
   native_agent: 'Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.',
   archive: 'Archive one ticket, or every done ticket.',
   archive_board: 'Archive an explicitly named board.',
@@ -807,7 +807,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'groomClose',
-    description: 'Administrative board-grooming closure for inactive tickets. Requires an evidence reason and records control-plane provenance.',
+    description: 'Close an inactive ticket through grooming, or close an integrated submission with integration:true. Requires an evidence reason and records control-plane provenance.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -815,6 +815,7 @@ const TOOLS: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         reason: { type: 'string' },
+        integration: { type: 'boolean' },
       },
       required: ['ref', 'by', 'reason'],
     },
@@ -824,7 +825,8 @@ const TOOLS: ToolDefinition[] = [
       const reason = String(args.reason || '').trim();
       if (!reason) throw new Error('groomClose: reason is required.');
       const ticket = store.getTicket(slug, args.ref);
-      const res = store.closeTicketForGrooming(slug, args.ref, { by, reason });
+      const purpose = args.integration ? 'integration' : 'grooming';
+      const res = store.completeTicketAsControlPlane(slug, args.ref, { by, reason, purpose });
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res, res.ok ? { completion: res.ticket.completion } : null);
     },
