@@ -5,14 +5,14 @@
   let { state }: { state: BoardState } = $props();
 </script>
 
-{#if state.lightbox}
-  <Dialog open={true} label={`Image ${state.lightbox.filename}`} onclose={() => state.closeLightbox()}>
+<Dialog open={Boolean(state.lightbox)} label={`Image ${state.lightbox?.filename ?? ''}`} onclose={() => state.closeLightbox()}>
+  {#if state.lightbox}
     <div class="lightbox">
       <img src={state.lightbox.src} alt={state.lightbox.filename} />
       <footer><span>{state.lightbox.filename}</span><button onclick={() => state.closeLightbox()}>Close</button></footer>
     </div>
-  </Dialog>
-{/if}
+  {/if}
+</Dialog>
 
 <style>
   .lightbox { display: grid; gap: .6rem; padding: .75rem; background: var(--bg-deep); }

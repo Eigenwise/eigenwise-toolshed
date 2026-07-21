@@ -1,6 +1,6 @@
 body { position: relative; background: var(--bg); color: var(--text); }
-.card, [class*="card"], [class*="Card"] { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius); transition: border-color var(--motion-fast), background var(--motion-fast); }
-.card:hover, [class*="card"]:hover, [class*="Card"]:hover { border-color: var(--border-strong); }
+.card { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius); transition: border-color var(--motion-fast), background var(--motion-fast); }
+.card:hover { border-color: var(--border-strong); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 .app-shell { display: grid; grid-template-columns: 272px minmax(0, 1fr); min-height: 100vh; background: var(--bg); }

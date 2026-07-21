@@ -11,7 +11,7 @@
   --surface-card: #faf9f5;
   --surface-muted: #e2e0d8;
   --text: #202329;
-  --text-muted: #666b70;
+  --text-muted: #5a6067;
   --accent: #46528e;
   --accent-strong: #323f76;
   --accent-wash: #e5e7ef;
@@ -31,7 +31,7 @@
   --accent-soft: var(--accent-wash);
   --radius: 3px;
   --control-height: 2.125rem;
-  --focus-ring: 0 0 0 3px rgb(70 82 142 / .35);
+  --focus-ring: 0 0 0 3px var(--accent-strong);
   --motion-fast: 100ms cubic-bezier(.2, .8, .2, 1);
 }
 
@@ -62,7 +62,7 @@
   --accent-soft: var(--accent-wash);
   --radius: 3px;
   --control-height: 2.125rem;
-  --focus-ring: 0 0 0 3px rgb(158 170 255 / .48);
+  --focus-ring: 0 0 0 3px var(--accent-strong);
   --motion-fast: 100ms cubic-bezier(.2, .8, .2, 1);
 }
 

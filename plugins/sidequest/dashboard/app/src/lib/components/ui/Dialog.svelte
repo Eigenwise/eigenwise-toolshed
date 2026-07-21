@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
 
   let { open = false, children, label, wide = false, onclose }: { open?: boolean; children: Snippet; label: string; wide?: boolean; onclose?: () => void } = $props();
@@ -16,19 +15,20 @@
     if (event.target === dialog) close();
   }
 
-  onMount(() => {
-    if (dialog && open && !dialog.open) dialog.showModal();
+  $effect(() => {
+    const element = dialog;
+    if (!element) return;
+    if (open && !element.open) element.showModal();
+    if (!open && element.open) element.close();
     return () => {
-      if (dialog?.open) dialog.close();
+      if (element.open) element.close();
     };
   });
 </script>
 
-{#if open}
-  <dialog bind:this={dialog} class:wide aria-label={label} oncancel={handleCancel} onclick={handleClick}>
-    {@render children()}
-  </dialog>
-{/if}
+<dialog bind:this={dialog} class:wide aria-label={label} oncancel={handleCancel} onclick={handleClick}>
+  {@render children()}
+</dialog>
 
 <style>
   dialog {

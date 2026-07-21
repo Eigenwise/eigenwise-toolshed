@@ -1,4 +1,4 @@
-import { expect, test as base } from '@playwright/test';
+import { expect, test as base, type Locator, type Page } from '@playwright/test';
 import { startFixture } from './fixtures/sidequest-fixture.mjs';
 
 const test = base.extend<{ dashboard: Awaited<ReturnType<typeof startFixture>> }>({
@@ -9,19 +9,71 @@ const test = base.extend<{ dashboard: Awaited<ReturnType<typeof startFixture>> }
   }, { scope: 'worker' }]
 });
 
-async function openBoard(page: import('@playwright/test').Page, dashboard: Awaited<ReturnType<typeof startFixture>>) {
+function channel(value: number) {
+  const normalized = value / 255;
+  return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+function contrast(first: string, second: string) {
+  const luminance = (color: string) => {
+    const channels = (color.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+    if (channels.length !== 3) throw new Error(`Expected an RGB color, received ${color}`);
+    return 0.2126 * channel(channels[0]) + 0.7152 * channel(channels[1]) + 0.0722 * channel(channels[2]);
+  };
+  const [light, dark] = [luminance(first), luminance(second)].sort((a, b) => b - a);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+async function tokenColor(page: Page, token: string) {
+  return page.evaluate((name) => {
+    const sample = document.createElement('span');
+    sample.style.color = `var(${name})`;
+    document.body.append(sample);
+    const color = getComputedStyle(sample).color;
+    sample.remove();
+    return color;
+  }, token);
+}
+
+async function questlineColor(card: Locator) {
+  return card.locator('.questline').evaluate((element) => getComputedStyle(element).backgroundColor);
+}
+
+async function assertDialogGeometry(dialog: Locator) {
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(16);
+  expect(box!.y).toBeGreaterThanOrEqual(16);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(1424);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(884);
+  expect(Math.abs((box!.x + box!.width / 2) - 720)).toBeLessThanOrEqual(1);
+  expect(Math.abs((box!.y + box!.height / 2) - 450)).toBeLessThanOrEqual(1);
+}
+
+async function openBoard(page: Page, dashboard: Awaited<ReturnType<typeof startFixture>>) {
   await page.goto(dashboard.baseURL);
   await expect(page.getByRole('heading', { name: 'All boards' })).toBeVisible();
   await expect(page.getByText('Ship the dashboard parity suite')).toBeVisible();
   await expect(page.getByText('live', { exact: true })).toBeVisible();
 }
 
+async function cardFor(page: Page, title: string) {
+  return page.getByRole('button', { name: new RegExp(title) }).locator('xpath=..');
+}
+
 test('serves the committed production app and covers the seeded board surface', async ({ page, dashboard }) => {
   const shell = await page.request.get(`${dashboard.baseURL}/`);
   expect(shell.ok()).toBeTruthy();
-  expect(await shell.text()).toContain('/assets/');
-  const asset = await page.request.get(`${dashboard.baseURL}/assets/index-s0ptgiwV.js`);
-  expect([200, 404]).toContain(asset.status());
+  const html = await shell.text();
+  const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?]+)"/g)].map((match) => match[1]);
+  expect(assets.length).toBeGreaterThan(0);
+  const bundle = (await Promise.all(assets.map(async (asset) => {
+    const response = await page.request.get(`${dashboard.baseURL}${asset}`);
+    expect(response.ok()).toBeTruthy();
+    return response.text();
+  }))).join('\n');
+  expect(bundle).toContain('questline');
+  expect(bundle).toContain('#f4f2ec');
 
   await openBoard(page, dashboard);
   await expect(page.getByText('Alpha board').first()).toBeVisible();
@@ -105,29 +157,68 @@ test('renders board routing previews and the profile library', async ({ page, da
   await expect(page.getByRole('button', { name: 'Use this profile' })).toBeVisible();
 });
 
-test('keeps desktop dialogs centered and questlines stateful in both themes', async ({ page, dashboard }) => {
+test('keeps Questline state, accessible tokens, cards, and dialogs correct in both themes', async ({ page, dashboard }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openBoard(page, dashboard);
-  await expect(page.locator('.questline')).not.toHaveCount(0);
 
+  const storyCard = await cardFor(page, 'Ship the dashboard parity suite');
+  const todoCard = await cardFor(page, 'Beta board ticket');
+  const doingCard = await cardFor(page, 'Investigate stale agent claim');
+  const doneCard = await cardFor(page, 'Completed seeded work');
+  await expect(storyCard.locator('.claim-node')).toHaveCount(1);
+  expect(await questlineColor(storyCard)).not.toBe(await questlineColor(todoCard));
+  expect(await questlineColor(todoCard)).toBe(await tokenColor(page, '--status-todo'));
+  expect(await questlineColor(doingCard)).toBe(await tokenColor(page, '--status-doing'));
+  expect(await questlineColor(doneCard)).toBe(await tokenColor(page, '--status-done'));
+  await expect(page.locator('.cards').first()).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(storyCard.locator('.card-main')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(storyCard).toHaveCSS('background-color', await tokenColor(page, '--surface-card'));
+
+  const lightbox = page.locator('dialog');
+  await expect(lightbox).toHaveCount(1);
+  await expect(lightbox).not.toHaveAttribute('open', '');
+
+  const tokenSets: string[][] = [];
   for (const theme of ['light', 'dark']) {
     await page.locator('html').evaluate((element, value) => element.dataset.theme = value, theme);
-    await page.getByRole('button', { name: /Settings/ }).click();
+    const colors = await Promise.all(['--text-muted', '--surface-muted', '--accent-strong', '--surface-card'].map((token) => tokenColor(page, token)));
+    tokenSets.push(colors);
+    expect(contrast(colors[0], colors[1])).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(colors[2], colors[3])).toBeGreaterThanOrEqual(3);
+
+    const settingsTrigger = page.getByRole('button', { name: /Settings/ });
+    await settingsTrigger.focus();
+    await expect(settingsTrigger).toHaveCSS('box-shadow', /rgb/);
+    await settingsTrigger.click();
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toBeVisible();
-    const settingsBox = await settings.boundingBox();
-    expect(settingsBox).not.toBeNull();
-    expect(Math.abs((settingsBox!.x + settingsBox!.width / 2) - 720)).toBeLessThanOrEqual(1);
-    expect(settingsBox!.x).toBeGreaterThanOrEqual(16);
-    await page.keyboard.press('Escape');
+    await assertDialogGeometry(settings);
+    expect(await page.locator('.settings-body').evaluate((element) => element.scrollHeight > element.clientHeight)).toBeTruthy();
+    await page.mouse.click(4, 4);
+    await expect(settings).toHaveCount(0);
 
     await page.getByRole('button', { name: /Ship the dashboard parity suite/ }).click();
-    const ticket = page.getByRole('dialog');
-    const ticketBox = await ticket.boundingBox();
-    expect(ticketBox).not.toBeNull();
-    expect(Math.abs((ticketBox!.x + ticketBox!.width / 2) - 720)).toBeLessThanOrEqual(1);
+    const ticket = page.getByRole('dialog', { name: /Edit SQ-/ });
+    await expect(ticket).toBeVisible();
+    await assertDialogGeometry(ticket);
+    expect(await page.locator('.main-grid').evaluate((element) => ({ scrollable: element.scrollHeight > element.clientHeight, overflow: getComputedStyle(element).overflowY }))).toMatchObject({ scrollable: true, overflow: 'auto' });
     await page.keyboard.press('Escape');
+
+    await page.getByRole('button', { name: 'Open fixture.png' }).click();
+    await expect(lightbox).toBeVisible();
+    await assertDialogGeometry(lightbox);
+    await expect(lightbox.locator('img')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(lightbox).not.toHaveAttribute('open', '');
   }
+  expect(tokenSets[0]).not.toEqual(tokenSets[1]);
+
+  await page.getByRole('button', { name: 'Open fixture.png' }).click();
+  await expect(lightbox).toHaveAttribute('open', '');
+  await page.keyboard.press('Escape');
+  await expect(lightbox).not.toHaveAttribute('open', '');
+  await page.getByRole('button', { name: 'Open fixture.png' }).click();
+  await expect(lightbox).toHaveAttribute('open', '');
 });
 
 test('keeps the layout usable at all parity breakpoints and honors reduced motion', async ({ page, dashboard }) => {
