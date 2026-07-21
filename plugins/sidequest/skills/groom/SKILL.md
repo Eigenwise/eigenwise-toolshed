@@ -51,6 +51,7 @@ Pull the full board and the recent project history in parallel:
 sidequest list --json                      # every open ticket, this project
 sidequest list --status doing --json       # claims in flight, with claim.by / claim.at
 sidequest list --archived --json           # already-archived, for duplicate-checking only
+sidequest profile hygiene --json           # deterministic profile promotion, drift, and retirement proposals
 git log --oneline -30                      # what actually landed recently
 ```
 
@@ -87,6 +88,11 @@ Sort every ticket (and every untracked chunk of repo work you found) into one bu
   "evidence" you found is circumstantial rather than solid.
 
 Keep a running list per bucket as you go — you'll need it for both the act step and the report.
+
+Keep the profile hygiene result as a separate proposal list. The command already did the detection in plain
+code: identical canonical local rows become promotion candidates; large or foreign-base local layers become
+repoint or fork/promotion candidates; unreferenced user or migrated profiles become retirement candidates.
+Don't reproduce those checks with an LLM and don't auto-apply any of them.
 
 ## Step 3 — Act on the safe ones
 
@@ -126,17 +132,26 @@ know (e.g. a "todo/low" ticket for something that turned out urgent, or vice ver
 evidence you already gathered supports the change; don't relitigate priority calls that aren't part of
 what you found.
 
-## Step 4 — Batch the unclear ones interactively
+## Step 4 — Batch the unclear ones and profile proposals interactively
 
-Don't guess on bucket (f). Group the unclear tickets into a small number of `AskUserQuestion` rounds (2-4
-questions per round is plenty) — one question per unclear ticket or tightly related cluster, each with a
-short context summary and options like `keep` / `close` / `re-scope`:
+Don't guess on bucket (f), and don't apply a profile hygiene proposal without approval. Group both into a
+small number of `AskUserQuestion` rounds (2-4 questions per round is plenty). Use one question per unclear
+ticket, tightly related cluster, or profile proposal. Profile questions name every affected board/profile,
+the local-row count and ratio, foreign-base count, and the proposed promotion, repoint, fork, or retirement.
+If a promotion group has more than one taxonomy fingerprint, say it needs separate profiles because the
+existing promotion command will reject unlike effective taxonomies.
+
+Ticket questions use options like `keep` / `close` / `re-scope`:
 
 - Question text: `"SQ-17 — is this still relevant?"`
 - Context: 1-3 sentences on what the ticket asks, what you found that made it unclear, and why you
   didn't just decide yourself.
 - Options: `keep as-is`, `close (superseded/done/dropped)`, `re-scope (needs new complexity/description)`,
   plus a free-text option if the tool supports one.
+
+Profile questions use `apply proposal` / `keep local` / `choose another profile or name`. A repoint question
+must mention that accepted cleanup removes the listed local rows after selecting the matching profile. A
+retirement question names the profile source and confirms that active and archived boards have zero pointers.
 
 Present real findings, not a vague "not sure about this one" — the point of asking is that you already
 did the legwork and the last mile is a judgment call only the user can make (priorities, whether a
@@ -152,6 +167,21 @@ sidequest comment SQ-17 -m "Per grooming pass 2026-07-07: user confirmed this is
 plan (dropped in favor of X). Closing."
 sidequest groom-close SQ-17 --reason "User confirmed this is superseded by the new plan; see the preceding comment."
 ```
+
+Apply accepted profile proposals with the existing lifecycle commands. Pick the profile id/name from the
+user's answer, preview repoints, and pass every board from the proposal to promotion:
+
+```bash
+sidequest profile promote <new-profile> --from-project <source> --project <board-a> --project <board-b>
+sidequest profile repoint <from-profile> <to-profile> --dry-run --json
+sidequest profile repoint <from-profile> <to-profile>
+sidequest profile retire <profile>
+```
+
+Only use bulk `repoint` when every board in its preview was part of the accepted proposal. For one-board
+cleanup, select the profile with `profile use`, then reset each `localRowId` listed by the proposal. Re-run
+`sidequest profile hygiene --json` after applying the accepted profile choices and report any remaining
+proposal. This is a single verification read, not a polling loop.
 
 If the answer is "keep", leave the ticket untouched but note in the report that it was reviewed and
 confirmed. If "re-scope", update the description/complexity per what the user said and say so in a

@@ -285,6 +285,21 @@ async function cmdProfile(opts, positional) {
   const id = positional[1];
   const print = (value) => process.stdout.write(JSON.stringify(value, null, 2) + "\n");
   const resolveBoard = async (value) => (await resolveProject({ project: value })).slug;
+  if (action === "hygiene") {
+    const result = store.routingProfileHygiene();
+    if (opts.json) return print(result);
+    if (!result.proposals.length) {
+      console.log("No routing profile hygiene proposals.");
+      return;
+    }
+    for (const proposal of result.promotions) console.log(`promote  ${proposal.projects.join(", ")}  (${proposal.localRowCount} identical local rows)`);
+    for (const proposal of result.drift) {
+      const target = proposal.targetProfileId ? `repoint to ${proposal.targetProfileId}` : "fork or promote";
+      console.log(`${target}  ${proposal.project}  (${proposal.localRowCount}/${proposal.effectiveCategoryCount} local rows, ${proposal.foreignBaseCount} foreign-base)`);
+    }
+    for (const proposal of result.retirements) console.log(`retire  ${proposal.profileId}  (no board pointers)`);
+    return;
+  }
   if (action === "list" || action === "ls") {
     const profiles = store.listRoutingProfiles({ retired: !!opts.retired });
     if (opts.json) return print({ profiles });
@@ -360,7 +375,7 @@ async function cmdProfile(opts, positional) {
     console.log(`New boards use ${profile.id}  ${profile.name}`);
     return;
   }
-  fail(`profile: unknown action "${action}". Use list | show | create | edit | retire | use | repoint | promote | new-board.`);
+  fail(`profile: unknown action "${action}". Use hygiene | list | show | create | edit | retire | use | repoint | promote | new-board.`);
 }
 async function cmdCategory(opts, positional) {
   const action = String(positional[0] || "").toLowerCase();
@@ -1863,7 +1878,7 @@ Usage:
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
-  sidequest profile list|show|create|edit|retire|use|repoint|promote|new-board ... [--json]
+  sidequest profile hygiene|list|show|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n> [--force]

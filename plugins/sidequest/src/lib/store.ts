@@ -1169,9 +1169,91 @@ function normalizedTaxonomy(project?: any) {
   return getCategories({ project }).map((category?: any) => normalizeCategory(category)).filter(Boolean).sort((a?: any, b?: any) => a.id.localeCompare(b.id));
 }
 
+function canonicalLocalRows(rows?: any[]) {
+  return (rows || []).map((row?: any) => canonicalRoutingValue({
+    id: row.id,
+    kind: row.kind,
+    baseProfileId: row.baseProfileId ?? row.base_profile_id ?? null,
+    baseData: row.baseData ?? row.base_data ?? null,
+    data: row.data,
+  })).sort((a?: any, b?: any) => a.id.localeCompare(b.id));
+}
+
 function localRowsFingerprint(project?: any) {
-  const rows = projectCategoryRows(project).map((row?: any) => canonicalRoutingValue(row)).sort((a?: any, b?: any) => a.id.localeCompare(b.id));
-  return routingFingerprint(rows);
+  return routingFingerprint(canonicalLocalRows(projectCategoryRows(project)));
+}
+
+function routingProfileHygiene() {
+  const projects = listProjects({ all: true }).map((project?: any) => project.slug).sort();
+  const profiles = listRoutingProfiles().filter((profile?: any) => !profile.retiredAt);
+  const profileTaxonomies = new Map<string, string>();
+  for (const profile of profiles) {
+    const taxonomy = routingProfileEntries(profile.id)
+      .map((entry?: any) => normalizeCategory(entry.data))
+      .filter(Boolean)
+      .sort((a?: any, b?: any) => a.id.localeCompare(b.id));
+    profileTaxonomies.set(profile.id, routingFingerprint(taxonomy));
+  }
+
+  const promotionGroups = new Map<string, any[]>();
+  const drift: any[] = [];
+  for (const project of projects) {
+    const rows = projectCategoryRows(project);
+    if (!rows.length) continue;
+    const rowFingerprint = routingFingerprint(canonicalLocalRows(rows));
+    const group = promotionGroups.get(rowFingerprint) || [];
+    group.push({ project, taxonomyFingerprint: routingFingerprint(normalizedTaxonomy(project)) });
+    promotionGroups.set(rowFingerprint, group);
+
+    const resolved = resolvedProfileCategories({ project });
+    const foreignBaseCount = resolved.warnings.filter((warning?: any) => warning.kind === 'foreign-base').length;
+    const effectiveCategoryCount = resolved.categories.length;
+    const localRatio = effectiveCategoryCount ? rows.length / effectiveCategoryCount : 0;
+    if (rows.length < 3 && localRatio < 0.25 && foreignBaseCount === 0) continue;
+
+    const taxonomyFingerprint = routingFingerprint(normalizedTaxonomy(project));
+    const matchingProfiles = profiles
+      .filter((profile?: any) => profileTaxonomies.get(profile.id) === taxonomyFingerprint)
+      .map((profile?: any) => profile.id);
+    const targetProfileId = matchingProfiles.find((profileId?: any) => profileId !== resolved.profile.id) || matchingProfiles[0] || null;
+    drift.push({
+      kind: targetProfileId ? 'repoint' : 'fork-promote',
+      project,
+      profileId: resolved.profile.id,
+      targetProfileId,
+      localRowCount: rows.length,
+      effectiveCategoryCount,
+      localRatio,
+      foreignBaseCount,
+      localRowIds: rows.map((row?: any) => row.id),
+      taxonomyFingerprint,
+    });
+  }
+
+  const promotions = [...promotionGroups.entries()]
+    .filter(([, boards]: any) => boards.length >= 2)
+    .map(([fingerprint, boards]: any) => ({
+      kind: 'promote',
+      sourceProject: boards[0].project,
+      projects: boards.map((board?: any) => board.project),
+      localRowCount: projectCategoryRows(boards[0].project).length,
+      localRowsFingerprint: fingerprint,
+      taxonomyFingerprints: [...new Set(boards.map((board?: any) => board.taxonomyFingerprint))],
+    }));
+
+  const pointerCounts = new Map(database().prepare(`
+    SELECT profile_id, COUNT(*) AS count FROM project_routing_profiles GROUP BY profile_id
+  `).all().map((row?: any) => [row.profile_id, Number(row.count)]));
+  const retirements = profiles
+    .filter((profile?: any) => (profile.source === 'user' || profile.source === 'migrated') && !pointerCounts.get(profile.id))
+    .map((profile?: any) => ({ kind: 'retire', profileId: profile.id, name: profile.name, source: profile.source }));
+
+  return {
+    promotions,
+    drift,
+    retirements,
+    proposals: [...promotions, ...drift, ...retirements],
+  };
 }
 
 function hypotheticalTaxonomy(project?: any, profileId?: any) {
@@ -5032,6 +5114,7 @@ module.exports = {
   createRoutingProfile,
   editRoutingProfile,
   retireRoutingProfile,
+  routingProfileHygiene,
   repointRoutingProfiles,
   promoteRoutingProfile,
   getRoutingProfile,
