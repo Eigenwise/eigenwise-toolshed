@@ -105,6 +105,31 @@ test('renders board routing previews and the profile library', async ({ page, da
   await expect(page.getByRole('button', { name: 'Use this profile' })).toBeVisible();
 });
 
+test('keeps desktop dialogs centered and questlines stateful in both themes', async ({ page, dashboard }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openBoard(page, dashboard);
+  await expect(page.locator('.questline')).not.toHaveCount(0);
+
+  for (const theme of ['light', 'dark']) {
+    await page.locator('html').evaluate((element, value) => element.dataset.theme = value, theme);
+    await page.getByRole('button', { name: /Settings/ }).click();
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    await expect(settings).toBeVisible();
+    const settingsBox = await settings.boundingBox();
+    expect(settingsBox).not.toBeNull();
+    expect(Math.abs((settingsBox!.x + settingsBox!.width / 2) - 720)).toBeLessThanOrEqual(1);
+    expect(settingsBox!.x).toBeGreaterThanOrEqual(16);
+    await page.keyboard.press('Escape');
+
+    await page.getByRole('button', { name: /Ship the dashboard parity suite/ }).click();
+    const ticket = page.getByRole('dialog');
+    const ticketBox = await ticket.boundingBox();
+    expect(ticketBox).not.toBeNull();
+    expect(Math.abs((ticketBox!.x + ticketBox!.width / 2) - 720)).toBeLessThanOrEqual(1);
+    await page.keyboard.press('Escape');
+  }
+});
+
 test('keeps the layout usable at all parity breakpoints and honors reduced motion', async ({ page, dashboard }) => {
   await openBoard(page, dashboard);
   for (const width of [1024, 880, 820, 720, 700, 480]) {

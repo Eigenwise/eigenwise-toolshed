@@ -1,15 +1,15 @@
 body { position: relative; background: var(--bg); color: var(--text); }
-.card, [class*="card"], [class*="Card"] { background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius); transition: border-color var(--motion-fast), background var(--motion-fast); }
+.card, [class*="card"], [class*="Card"] { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius); transition: border-color var(--motion-fast), background var(--motion-fast); }
 .card:hover, [class*="card"]:hover, [class*="Card"]:hover { border-color: var(--border-strong); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 .app-shell { display: grid; grid-template-columns: 272px minmax(0, 1fr); min-height: 100vh; background: var(--bg); }
 .workspace { min-width: 0; padding: clamp(1rem, 2vw, 2rem); }
-.board { display: grid; grid-template-columns: repeat(3, minmax(17rem, 1fr)); gap: 1rem; align-items: start; }
+.board { display: grid; grid-template-columns: repeat(3, minmax(17rem, 1fr)); gap: .75rem; align-items: start; }
 .panel { background: var(--bg-deep); border: 1px solid var(--border-strong); border-radius: var(--radius); }
-.overlay { position: fixed; inset: 0; display: grid; place-items: center; background: oklch(0.24 0.025 277 / .72); backdrop-filter: blur(10px); }
+.overlay { position: fixed; inset: 0; display: grid; place-items: center; background: color-mix(in oklch, var(--bg-deep), transparent 18%); backdrop-filter: blur(4px); }
 button, input, textarea, select { accent-color: var(--accent); }
-button { min-height: 2.25rem; transition: transform var(--motion-fast), border-color var(--motion-fast), background var(--motion-fast), color var(--motion-fast); }
+button { min-height: var(--control-height); transition: border-color var(--motion-fast), background var(--motion-fast), color var(--motion-fast); }
 input, textarea, select { outline-color: var(--accent); }
 
 @media (max-width: 880px) { .settings-grid { grid-template-columns: 1fr; } }

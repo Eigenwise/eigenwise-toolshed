@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { Category, JsonRecord, Project, RoutingPreview, RoutingProfile } from '../../types';
   import type { BoardState } from '../../state/board.svelte';
+  import Dialog from '../ui/Dialog.svelte';
   import Select, { type SelectOption } from '../ui/Select.svelte';
 
   let { state: board }: { state: BoardState } = $props();
@@ -280,12 +281,13 @@
 <button class="settings-trigger" aria-expanded={board.popover === 'settings'} onclick={() => board.popover === 'settings' ? board.popover = null : void openSettings()}>Settings</button>
 
 {#if board.popover === 'settings'}
-  <div class="backdrop" role="presentation" onclick={() => board.popover = null}>
-    <dialog class="settings panel" open aria-label="Settings" onclick={(event) => event.stopPropagation()}>
+  <Dialog open={true} wide label="Settings" onclose={() => board.popover = null}>
+    <div class="settings-frame">
       <header>
         <div><p class="eyebrow">Sidequest</p><h2>Settings</h2></div>
         <button class="close" aria-label="Close settings" onclick={() => board.popover = null}>Close</button>
       </header>
+      <div class="settings-body">
       <div class="settings-grid">
         <section class="routing-section">
           <p class="eyebrow">Execution</p>
@@ -361,8 +363,9 @@
           <p class="shortcut-hint"><kbd>N</kbd> creates a ticket. <kbd>Ctrl</kbd> or <kbd>⌘</kbd> + <kbd>Enter</kbd> saves the current dialog. <kbd>Esc</kbd> closes the topmost panel.</p>
         </section>
       </div>
-    </dialog>
-  </div>
+      </div>
+    </div>
+  </Dialog>
 {/if}
 
 <style>
@@ -372,8 +375,10 @@
   button.danger { color: var(--danger); }
   button:disabled { cursor: not-allowed; opacity: .55; }
   .settings-trigger { box-sizing: border-box; height: var(--control-height); min-height: var(--control-height); padding: .5rem .65rem; }
-  .backdrop { position: fixed; z-index: 30; inset: 0; display: grid; place-items: start center; padding: 3rem 1rem; background: rgb(31 41 51 / .18); overflow: auto; }
-  .settings { width: min(66rem, 100%); padding: 1.25rem; background: var(--bg-deep); border-color: var(--border-strong); }
+  .settings-frame { display: grid; grid-template-rows: auto minmax(0, 1fr); max-block-size: inherit; padding: 1.25rem 1.25rem 0; }
+  .settings-body { min-block-size: 0; overflow: auto; padding: 1.25rem .15rem 1.25rem 0; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  .settings-body::-webkit-scrollbar { width: .55rem; }
+  .settings-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
   header, .category-heading, .form-actions { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
   .eyebrow { color: var(--text-muted); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; margin: 0; }
   h2, h3, h4, p { margin-top: 0; } h2 { margin-bottom: 0; } h3 { margin-bottom: .35rem; } h4 { margin-bottom: .65rem; }
@@ -397,10 +402,11 @@
   .foreign { color: var(--accent); }
   .scope-tabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
   .category-list { display: grid; gap: .55rem; }
-  .category-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); padding: .7rem; }
+  .category-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem 1rem; border: 1px solid var(--border); border-radius: 3px; padding: .6rem .7rem; background: var(--surface-muted); }
   .category-row.disabled { opacity: .62; }
   .category-row code, .category-row small, .category-meta { display: block; color: var(--text-muted); font-size: .78rem; margin-top: .16rem; }
-  .category-meta { text-align: right; }
+  .category-row small { display: -webkit-box; overflow: hidden; line-height: 1.35; line-clamp: 2; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .category-meta { align-self: start; min-inline-size: 9rem; text-align: right; font-family: var(--font-mono); }
   .category-actions { grid-column: 1 / -1; display: flex; gap: .35rem; flex-wrap: wrap; }
   .category-form { border: 1px solid var(--border); border-radius: var(--radius); padding: .8rem; background: var(--surface-muted); }
   .route-fields, .draft-row { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
@@ -411,5 +417,5 @@
   .shortcut-hint { font-size: .8rem; border-top: 1px solid var(--border); padding-top: .8rem; }
   kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: var(--radius); background: var(--surface-muted); padding: .05rem .22rem; font-family: var(--font-mono); }
   @media (max-width: 880px) { .settings-grid { grid-template-columns: 1fr; } .notifications-section { border-left: 0; border-top: 1px solid var(--border); padding: 1.25rem 0 0; } }
-  @media (max-width: 560px) { .backdrop { padding: 0; } .settings { border-radius: var(--radius); min-height: 100%; } .category-row { grid-template-columns: 1fr; } .category-meta { text-align: left; } .route-fields { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) { .settings-frame { padding: 1rem 1rem 0; } .category-row { grid-template-columns: 1fr; } .category-meta { min-inline-size: 0; text-align: left; } .route-fields { grid-template-columns: 1fr; } }
 </style>
