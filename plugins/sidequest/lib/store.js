@@ -2304,6 +2304,19 @@ function activeDispatchRoute(ticket) {
   if (!state || state.terminalAt || !ticket.dispatchNonce) return null;
   return normalizeRoute(state.route);
 }
+function rederiveUnlaunchedPreparedRoute(ticket, project) {
+  const state = dispatchState(ticket);
+  if (!state || state.recovery || state.terminalAt || state.outcome !== "prepared" || state.launchedAt || state.boundAt || state.claimedAt || !ticket.dispatchNonce) return;
+  let requestedCategory = ticketCategory(ticket);
+  if (requestedCategory == null && ticket.complexity != null) requestedCategory = legacyCategoryForComplexity(ticket.complexity);
+  let category = requestedCategory == null ? null : getCategory(requestedCategory, { project });
+  if (!category || !category.enabled) category = getCategory("general", { project });
+  if (!category) return;
+  const resolved = resolveCategoryRoute(category);
+  ticket.model = resolved.model;
+  ticket.effort = resolved.effort;
+  ticket.exec = execProjection(resolved.exec);
+}
 function stampDispatchEvent(ticket, source, now) {
   ticket.lastEventType = "dispatch";
   ticket.lastEventSource = source || "store";
@@ -2455,6 +2468,7 @@ function prepareDispatch(slug, idOrRef, opts) {
       throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it before dispatching again.`);
     }
     const current = dispatchState(t);
+    rederiveUnlaunchedPreparedRoute(t, slug);
     const currentRoute = activeDispatchRoute(t);
     const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
     if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && t.dispatchExecutor && currentExec && currentExec.agent === t.dispatchExecutor) {
