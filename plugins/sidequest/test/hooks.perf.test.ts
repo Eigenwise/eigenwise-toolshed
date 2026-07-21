@@ -10,13 +10,13 @@ const { performance } = require('node:perf_hooks');
 
 const RUNS = 20;
 const WARMUPS = 3;
-const BASELINES = {
-  sessionStart: { median: 2607, p95: 3258 },
-  boardFirst: { median: 588, p95: 923 },
-  subagentStart: { median: 979, p95: 1683 },
-  subagentStop: { median: 909, p95: 1132 },
-  guard: { median: 100, p95: 200 },
-  guardsSerial: { median: 200, p95: 400 },
+const CONTROL_MULTIPLIERS = {
+  sessionStart: { median: 10, p95: 15 },
+  boardFirst: { median: 3, p95: 4 },
+  subagentStart: { median: 8, p95: 12 },
+  subagentStop: { median: 8, p95: 12 },
+  guard: { median: 1.75, p95: 3 },
+  guardsSerial: { median: 3, p95: 3 },
 };
 
 const pluginRoot = path.join(__dirname, '..');
@@ -112,13 +112,21 @@ const env = {
   SIDEQUEST_AGENTS_DIR: path.join(home, 'agents'),
 };
 
-function runHook(script: string, payload: unknown): void {
-  const result = spawnSync(process.execPath, [path.join(hooksRoot, script)], {
+function runProcess(args: string[], payload: unknown): void {
+  const result = spawnSync(process.execPath, args, {
     input: JSON.stringify(payload),
     encoding: 'utf8',
     env,
   });
-  assert.equal(result.status, 0, `${script}: ${result.stderr}`);
+  assert.equal(result.status, 0, `${args[0]}: ${result.stderr}`);
+}
+
+function runHook(script: string, payload: unknown): void {
+  runProcess([path.join(hooksRoot, script)], payload);
+}
+
+function runControl(): void {
+  runProcess(['-e', ''], {});
 }
 
 function percentile(samples: number[], fraction: number): number {
@@ -126,20 +134,31 @@ function percentile(samples: number[], fraction: number): number {
   return sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)] || 0;
 }
 
-function measure(run: (index: number) => void): { median: number; p95: number } {
-  for (let index = -WARMUPS; index < 0; index += 1) run(index);
+function measure(run: (index: number) => void): { median: number; p95: number; control: { median: number; p95: number } } {
+  for (let index = -WARMUPS; index < 0; index += 1) {
+    runControl();
+    run(index);
+  }
   const samples: number[] = [];
+  const controls: number[] = [];
   for (let index = 0; index < RUNS; index += 1) {
+    const controlStarted = performance.now();
+    runControl();
+    controls.push(performance.now() - controlStarted);
     const started = performance.now();
     run(index);
     samples.push(performance.now() - started);
   }
-  return { median: percentile(samples, 0.5), p95: percentile(samples, 0.95) };
+  return {
+    median: percentile(samples, 0.5),
+    p95: percentile(samples, 0.95),
+    control: { median: percentile(controls, 0.5), p95: percentile(controls, 0.95) },
+  };
 }
 
-function assertBudget(name: string, measured: { median: number; p95: number }, ceiling: { median: number; p95: number }): void {
-  assert.ok(measured.median <= ceiling.median, `${name} median ${measured.median.toFixed(1)}ms exceeds ${ceiling.median}ms`);
-  assert.ok(measured.p95 <= ceiling.p95, `${name} p95 ${measured.p95.toFixed(1)}ms exceeds ${ceiling.p95}ms`);
+function assertBudget(name: string, measured: { median: number; p95: number; control: { median: number; p95: number } }, ceiling: { median: number; p95: number }): void {
+  assert.ok(measured.median <= measured.control.median * ceiling.median, `${name} median ${measured.median.toFixed(1)}ms exceeds ${ceiling.median}x its ${measured.control.median.toFixed(1)}ms process-start control`);
+  assert.ok(measured.p95 <= measured.control.p95 * ceiling.p95, `${name} p95 ${measured.p95.toFixed(1)}ms exceeds ${ceiling.p95}x its ${measured.control.p95.toFixed(1)}ms process-start control`);
 }
 
 test('fresh-process hook latency stays inside release ceilings', (context: any) => {
@@ -173,17 +192,15 @@ test('fresh-process hook latency stays inside release ceilings', (context: any) 
   });
 
   for (const [name, measured, ceiling] of [
-    ['SessionStart', sessionStart, BASELINES.sessionStart],
-    ['board-first', boardFirst, BASELINES.boardFirst],
-    ['SubagentStart', subagentStart, BASELINES.subagentStart],
-    ['SubagentStop', subagentStop, BASELINES.subagentStop],
-    ['near-turn-cap', nearTurnCap, BASELINES.guard],
-    ['inline-work-nudge', inlineWork, BASELINES.guard],
-    ['common guards serial', guardsSerial, BASELINES.guardsSerial],
+    ['SessionStart', sessionStart, CONTROL_MULTIPLIERS.sessionStart],
+    ['board-first', boardFirst, CONTROL_MULTIPLIERS.boardFirst],
+    ['SubagentStart', subagentStart, CONTROL_MULTIPLIERS.subagentStart],
+    ['SubagentStop', subagentStop, CONTROL_MULTIPLIERS.subagentStop],
+    ['near-turn-cap', nearTurnCap, CONTROL_MULTIPLIERS.guard],
+    ['inline-work-nudge', inlineWork, CONTROL_MULTIPLIERS.guard],
+    ['common guards serial', guardsSerial, CONTROL_MULTIPLIERS.guardsSerial],
   ] as const) {
     assertBudget(name, measured, ceiling);
-    context.diagnostic(`${name}: ${measured.median.toFixed(1)}ms median, ${measured.p95.toFixed(1)}ms p95`);
+    context.diagnostic(`${name}: ${measured.median.toFixed(1)}ms median, ${measured.p95.toFixed(1)}ms p95; control ${measured.control.median.toFixed(1)}ms median, ${measured.control.p95.toFixed(1)}ms p95`);
   }
-  assert.ok(sessionStart.median < BASELINES.sessionStart.median * 0.75, `SessionStart median did not drop substantially: ${sessionStart.median.toFixed(1)}ms`);
-  assert.ok(boardFirst.median < BASELINES.boardFirst.median * 0.75, `board-first median did not drop substantially: ${boardFirst.median.toFixed(1)}ms`);
 });

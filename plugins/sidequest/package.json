@@ -11,7 +11,7 @@
     "build:check": "npm run build && git diff --exit-code -- bin lib hooks",
     "drift": "npm run build && node scripts/drift.mjs",
     "test:files": "node --import tsx --test",
-    "test:full": "npm run typecheck && npm run build:check && node --import tsx --test test/*.test.ts",
+    "test:full": "npm run typecheck && npm run build:check && node scripts/test-full.mjs",
     "test:perf": "node --import tsx --test test/*.perf.test.ts"
   },
   "devDependencies": {
