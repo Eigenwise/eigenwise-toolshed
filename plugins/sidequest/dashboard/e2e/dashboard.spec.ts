@@ -131,6 +131,41 @@ async function assertBoardCardGeometry(page: Page) {
   expect(geometry.pageOverflows).toBeFalsy();
 }
 
+async function assertToolbarGeometry(page: Page) {
+  const geometry = await page.locator('.toolbar').evaluate((toolbar) => {
+    const rect = (element: Element) => element.getBoundingClientRect();
+    const scope = toolbar.querySelector('.scope');
+    const controls = toolbar.querySelector('.controls');
+    const workspace = toolbar.closest('.workspace');
+    if (!scope || !controls || !workspace) throw new Error('Expected the toolbar, title block, controls, and workspace.');
+    const header = rect(toolbar);
+    const title = rect(scope);
+    const actions = rect(controls);
+    const container = rect(workspace);
+    const workspaceStyle = getComputedStyle(workspace);
+    return {
+      verticalCenterDifference: Math.abs((title.top + title.height / 2) - (actions.top + actions.height / 2)),
+      headerTopInset: header.top - container.top,
+      topPadding: Number.parseFloat(workspaceStyle.paddingTop),
+      leftInset: header.left - container.left,
+      rightInset: container.right - header.right,
+      sidePadding: Number.parseFloat(workspaceStyle.paddingLeft),
+      titleStartsAtHeader: Math.abs(title.left - header.left),
+      controlsEndAtHeader: Math.abs(header.right - actions.right),
+      controlsInsideHeader: actions.left >= header.left && actions.right <= header.right && actions.top >= header.top && actions.bottom <= header.bottom,
+      pageOverflows: document.documentElement.scrollWidth > document.documentElement.clientWidth
+    };
+  });
+  expect(geometry.verticalCenterDifference).toBeLessThanOrEqual(4);
+  expect(geometry.headerTopInset).toBeCloseTo(geometry.topPadding, 1);
+  expect(geometry.leftInset).toBeCloseTo(geometry.sidePadding, 1);
+  expect(geometry.rightInset).toBeCloseTo(geometry.sidePadding, 1);
+  expect(geometry.titleStartsAtHeader).toBeLessThanOrEqual(1);
+  expect(geometry.controlsEndAtHeader).toBeLessThanOrEqual(1);
+  expect(geometry.controlsInsideHeader).toBeTruthy();
+  expect(geometry.pageOverflows).toBeFalsy();
+}
+
 async function assertDialogTreatment(dialog: Locator, content: Locator, scrollBody: Locator) {
   const geometry = await dialog.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -312,6 +347,7 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
   await expect(page.locator('.cards').first()).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(storyCard.locator('.card-main')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(storyCard).toHaveCSS('background-color', await tokenColor(page, '--surface-card'));
+  await assertToolbarGeometry(page);
   await assertBoardCardGeometry(page);
 
   const lightbox = page.locator('dialog[aria-label^="Image"]');
