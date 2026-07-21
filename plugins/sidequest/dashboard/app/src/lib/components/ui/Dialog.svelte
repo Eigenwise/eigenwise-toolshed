@@ -32,17 +32,20 @@
 
 <style>
   dialog {
-    --dialog-gutter: 1rem;
+    --dialog-gutter: 1.5rem;
     position: fixed;
     inset: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
     box-sizing: border-box;
     inline-size: min(44rem, calc(100vw - 2 * var(--dialog-gutter)));
+    block-size: min(46rem, calc(100dvh - 2 * var(--dialog-gutter)));
     max-inline-size: calc(100vw - 2 * var(--dialog-gutter));
     max-block-size: calc(100vh - 2 * var(--dialog-gutter));
     max-block-size: calc(100dvh - 2 * var(--dialog-gutter));
     margin: auto;
     padding: 0;
-    overflow: visible;
+    overflow: hidden;
     border: 1px solid var(--border-strong);
     border-radius: 6px;
     background: var(--surface-card);
@@ -50,10 +53,12 @@
     box-shadow: 0 18px 56px rgb(12 16 22 / .28), 0 2px 8px rgb(12 16 22 / .16);
   }
 
+  dialog:not([open]) { display: none; }
+
   dialog.wide { inline-size: min(70rem, calc(100vw - 2 * var(--dialog-gutter))); }
   dialog::backdrop { background: color-mix(in oklch, var(--bg-deep), transparent 22%); backdrop-filter: blur(4px); }
 
   @media (max-width: 560px) {
-    dialog { --dialog-gutter: .5rem; }
+    dialog { --dialog-gutter: .75rem; block-size: calc(100dvh - 2 * var(--dialog-gutter)); }
   }
 </style>

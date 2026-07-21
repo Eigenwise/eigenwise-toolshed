@@ -1,11 +1,11 @@
 body { position: relative; background: var(--bg); color: var(--text); }
-.card { background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius); transition: border-color var(--motion-fast), background var(--motion-fast); }
-.card:hover { border-color: var(--border-strong); }
+.card { background: var(--surface-card); border: 1px solid var(--card-border); border-radius: 4px; box-shadow: 0 1px 2px rgb(24 28 34 / .06); transition: border-color var(--motion-fast), background var(--motion-fast), box-shadow var(--motion-fast); }
+.card:hover { border-color: var(--border-strong); box-shadow: 0 2px 4px rgb(24 28 34 / .09); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 .app-shell { display: grid; grid-template-columns: 272px minmax(0, 1fr); min-height: 100vh; background: var(--bg); }
 .workspace { min-width: 0; padding: clamp(1rem, 2vw, 2rem); }
-.board { display: grid; grid-template-columns: repeat(3, minmax(17rem, 1fr)); gap: .75rem; align-items: start; }
+.board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; align-items: start; }
 .panel { background: var(--bg-deep); border: 1px solid var(--border-strong); border-radius: var(--radius); }
 .overlay { position: fixed; inset: 0; display: grid; place-items: center; background: color-mix(in oklch, var(--bg-deep), transparent 18%); backdrop-filter: blur(4px); }
 button, input, textarea, select { accent-color: var(--accent); }

@@ -8,8 +8,10 @@
   --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
   --bg: #f4f2ec;
   --bg-deep: #eae8e1;
-  --surface-card: #faf9f5;
+  --surface-card: #fffefa;
   --surface-muted: #e2e0d8;
+  --surface-column: #eceae3;
+  --card-border: #d9d6cd;
   --text: #202329;
   --text-muted: #5a6067;
   --accent: #46528e;
@@ -41,6 +43,8 @@
   --bg-deep: #1d2227;
   --surface-card: #242a30;
   --surface-muted: #14181c;
+  --surface-column: #1d2227;
+  --card-border: #3c444c;
   --text: #ece9e0;
   --text-muted: #a8aca9;
   --accent: #9eaaFF;

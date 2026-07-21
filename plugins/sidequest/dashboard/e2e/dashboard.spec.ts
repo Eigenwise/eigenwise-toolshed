@@ -82,10 +82,10 @@ async function cssColor(page: Page, color: string) {
 async function assertDialogGeometry(dialog: Locator) {
   const box = await dialog.boundingBox();
   expect(box).not.toBeNull();
-  expect(box!.x).toBeGreaterThanOrEqual(16);
-  expect(box!.y).toBeGreaterThanOrEqual(16);
-  expect(box!.x + box!.width).toBeLessThanOrEqual(1424);
-  expect(box!.y + box!.height).toBeLessThanOrEqual(884);
+  expect(box!.x).toBeGreaterThanOrEqual(24);
+  expect(box!.y).toBeGreaterThanOrEqual(24);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(1416);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(876);
   expect(Math.abs((box!.x + box!.width / 2) - 720)).toBeLessThanOrEqual(1);
   expect(Math.abs((box!.y + box!.height / 2) - 450)).toBeLessThanOrEqual(1);
 }
@@ -99,6 +99,67 @@ async function openBoard(page: Page, dashboard: Awaited<ReturnType<typeof startF
 
 async function cardFor(page: Page, title: string) {
   return page.locator('.card').filter({ hasText: title });
+}
+
+async function assertBoardCardGeometry(page: Page) {
+  const geometry = await page.locator('.board').evaluate((board) => {
+    const rect = (element: Element) => element.getBoundingClientRect();
+    const columns = [...board.querySelectorAll('.column')];
+    const cards = [...board.querySelectorAll('.column:first-child .card')];
+    const firstCard = cards[0];
+    const secondCard = cards[1];
+    if (!columns.length || !firstCard || !secondCard) throw new Error('Expected two cards in the first board column.');
+    const column = rect(columns[0]);
+    const first = rect(firstCard);
+    const second = rect(secondCard);
+    const content = rect(firstCard.querySelector('.card-main')!);
+    const cardStyle = getComputedStyle(firstCard);
+    return {
+      columnInset: first.left - column.left,
+      cardGap: second.top - first.bottom,
+      contentInset: Math.min(content.left - first.left, first.right - content.right, content.top - first.top),
+      cardBorder: cardStyle.borderTopWidth,
+      cardShadow: cardStyle.boxShadow,
+      pageOverflows: document.documentElement.scrollWidth > document.documentElement.clientWidth
+    };
+  });
+  expect(geometry.columnInset).toBeGreaterThanOrEqual(12);
+  expect(geometry.cardGap).toBeGreaterThanOrEqual(8);
+  expect(geometry.contentInset).toBeGreaterThanOrEqual(10);
+  expect(geometry.cardBorder).toBe('1px');
+  expect(geometry.cardShadow).not.toBe('none');
+  expect(geometry.pageOverflows).toBeFalsy();
+}
+
+async function assertDialogTreatment(dialog: Locator, content: Locator, scrollBody: Locator) {
+  const geometry = await dialog.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: window.innerWidth - rect.right,
+      top: rect.top,
+      bottom: window.innerHeight - rect.bottom,
+      overflow: getComputedStyle(element).overflow
+    };
+  });
+  expect(geometry.left).toBeGreaterThanOrEqual(24);
+  expect(geometry.right).toBeGreaterThanOrEqual(24);
+  expect(geometry.top).toBeGreaterThanOrEqual(24);
+  expect(geometry.bottom).toBeGreaterThanOrEqual(24);
+  expect(Math.abs(geometry.left - geometry.right)).toBeLessThanOrEqual(2);
+  expect(geometry.overflow).toBe('hidden');
+
+  const chrome = await content.evaluate((element) => {
+    const contentRect = element.getBoundingClientRect();
+    const dialogRect = element.closest('dialog')?.getBoundingClientRect();
+    if (!dialogRect) throw new Error('Expected dialog content inside a dialog.');
+    return { left: contentRect.left - dialogRect.left, top: contentRect.top - dialogRect.top };
+  });
+  expect(chrome.left).toBeGreaterThanOrEqual(20);
+  expect(chrome.top).toBeGreaterThanOrEqual(20);
+
+  const scroll = await scrollBody.evaluate((element) => ({ overflow: getComputedStyle(element).overflowY, scrollable: element.scrollHeight > element.clientHeight }));
+  expect(scroll).toEqual({ overflow: 'auto', scrollable: true });
 }
 
 test('serves the committed production app and covers the seeded board surface', async ({ page, dashboard }) => {
@@ -251,6 +312,7 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
   await expect(page.locator('.cards').first()).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(storyCard.locator('.card-main')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(storyCard).toHaveCSS('background-color', await tokenColor(page, '--surface-card'));
+  await assertBoardCardGeometry(page);
 
   const lightbox = page.locator('dialog[aria-label^="Image"]');
   await expect(lightbox).toHaveCount(1);
@@ -280,6 +342,22 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
     const settings = page.locator('dialog[aria-label="Settings"]');
     await expect(settings).toBeVisible();
     await assertDialogGeometry(settings);
+    await assertDialogTreatment(settings, settings.locator('header h2'), settings.locator('.settings-body'));
+    const profileRow = page.locator('.category-row').filter({ hasText: 'Fixture category 1' }).first();
+    const profileBadge = profileRow.locator('.row-badge');
+    await expect(profileBadge).toBeVisible();
+    if (theme === 'light') await expect(profileBadge).toHaveText('Profile');
+    const badgeStyle = await profileBadge.evaluate((element) => {
+      const name = element.parentElement?.querySelector('strong');
+      if (!name) throw new Error('Expected category name.');
+      const badge = element.getBoundingClientRect();
+      const title = name.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return { gap: badge.left - title.right, border: style.borderTopWidth, background: style.backgroundColor };
+    });
+    expect(badgeStyle.gap).toBeGreaterThanOrEqual(8);
+    expect(badgeStyle.border).toBe('0px');
+    expect(badgeStyle.background).not.toBe('rgba(0, 0, 0, 0)');
     await page.getByRole('button', { name: 'Board changes' }).click();
     const fixtureCategoryId = page.locator('code', { hasText: /^fixture-category-1$/ });
     const categoryRow = page.locator('.category-row').filter({ has: fixtureCategoryId });
@@ -303,7 +381,9 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
     const ticket = page.locator('dialog.ticket-dialog');
     await expect(ticket).toBeVisible();
     await assertDialogGeometry(ticket);
-    expect(await page.locator('.main-grid').evaluate((element) => ({ scrollable: element.scrollHeight > element.clientHeight, overflow: getComputedStyle(element).overflowY }))).toMatchObject({ scrollable: true, overflow: 'auto' });
+    await assertDialogTreatment(ticket, ticket.locator('.dialog-header h2'), page.locator('.main-grid'));
+    expect(await page.locator('.main-grid').evaluate((element) => element.scrollHeight > element.clientHeight)).toBeTruthy();
+    expect(await page.locator('.main-grid').evaluate((element) => getComputedStyle(element).overflowY)).toBe('auto');
     await page.keyboard.press('Escape');
 
     await page.getByRole('button', { name: 'Open fixture.png' }).click();
