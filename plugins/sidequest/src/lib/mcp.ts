@@ -109,7 +109,12 @@ function workflowRecipe(slug?: any, categoryId?: any) {
   }
   const resolved = store.resolveCategoryRoute(category);
   if (!resolved || !resolved.exec) throw new Error(`route_recipe: category "${category.id}" has no available route.`);
-  return agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
+  const recipe = agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
+  const selected = store.projectRoutingProfile(slug);
+  return Object.assign({}, recipe, {
+    profile: { id: selected.profile.id, revision: selected.profile.revision },
+    categorySource: { kind: category.origin || 'profile', baseProfileId: category.baseProfileId || null },
+  });
 }
 
 // A worker identity is required for claim/next/done/release — a generic shared
@@ -225,6 +230,15 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   category_relink: 'Reset a board category to the shared policy.',
   category_rm: 'Remove a global or project category policy.',
   global_fallback: 'Read or set the global routing fallback.',
+  profile_list: 'List profiles.',
+  profile_get: 'Read a profile.',
+  profile_create: 'Create a profile.',
+  profile_edit: 'Edit a profile.',
+  profile_retire: 'Retire a profile.',
+  profile_use: 'Assign a profile.',
+  profile_repoint: 'Repoint profile boards.',
+  profile_promote: 'Promote board routing.',
+  new_board_profile: 'Read or set the new-board profile.',
   models: 'Read models and category routes.',
   projects: 'List registered boards.',
   remove: 'Permanently delete a ticket. Live claims require force:true.',
@@ -243,7 +257,7 @@ function compactSchema(schema?: any): any {
   if (!schema || typeof schema !== 'object') return schema;
   const compact: any = {};
   for (const [key, value] of Object.entries(schema)) {
-    compact[key] = key === 'description' ? conciseDescription(value) : compactSchema(value);
+    if (key !== 'description') compact[key] = compactSchema(value);
   }
   return compact;
 }
@@ -1182,6 +1196,92 @@ const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'profile_list',
+    description: 'List routing profiles.',
+    inputSchema: { type: 'object', properties: { retired: { type: 'boolean' } } },
+    handler(args) {
+      return { profiles: store.listRoutingProfiles({ retired: !!args.retired }), newBoardProfile: store.routingProfileSettings().newProjectProfileId };
+    },
+  },
+  {
+    name: 'profile_get',
+    description: 'Read one routing profile and its categories.',
+    inputSchema: { type: 'object', properties: { profile: { type: 'string' } }, required: ['profile'] },
+    handler(args) {
+      const profile = store.routingProfileDetails(args.profile);
+      if (!profile) throw new Error(`profile_get: no profile "${args.profile}".`);
+      return { profile };
+    },
+  },
+  {
+    name: 'profile_create',
+    description: 'Create a routing profile by cloning another profile.',
+    inputSchema: { type: 'object', properties: { profile: { type: 'string' }, from: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' } }, required: ['profile'] },
+    handler(args) {
+      const result = store.createRoutingProfile(args.profile, args);
+      return { ok: true, result, profile: store.routingProfileDetails(result.id) };
+    },
+  },
+  {
+    name: 'profile_edit',
+    description: 'Edit routing profile metadata.',
+    inputSchema: { type: 'object', properties: { profile: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' } }, required: ['profile'] },
+    handler(args) {
+      if (args.name == null && args.description == null) throw new Error('profile_edit: pass name or description.');
+      const result = store.editRoutingProfile(args.profile, args);
+      return { ok: true, result, profile: store.routingProfileDetails(result.id) };
+    },
+  },
+  {
+    name: 'profile_retire',
+    description: 'Retire an unused routing profile.',
+    inputSchema: { type: 'object', properties: { profile: { type: 'string' } }, required: ['profile'] },
+    handler(args) {
+      return { ok: true, profile: store.retireRoutingProfile(args.profile) };
+    },
+  },
+  {
+    name: 'profile_use',
+    description: 'Assign one routing profile to one board.',
+    inputSchema: { type: 'object', properties: { profile: { type: 'string' }, project: PROJECT_PROP, by: { type: 'string' } }, required: ['profile', 'project'] },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      return { ok: true, assignment: store.setProjectRoutingProfile(slug, args.profile, args.by || 'mcp') };
+    },
+  },
+  {
+    name: 'profile_repoint',
+    description: 'Preview or atomically repoint every board from one profile to another.',
+    inputSchema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, dryRun: { type: 'boolean' }, by: { type: 'string' } }, required: ['from', 'to'] },
+    handler(args) {
+      return store.repointRoutingProfiles(args.from, args.to, { dryRun: !!args.dryRun, assignedBy: args.by || 'mcp-repoint' });
+    },
+  },
+  {
+    name: 'profile_promote',
+    description: 'Materialize one board taxonomy as a profile and atomically repoint matching boards.',
+    inputSchema: {
+      type: 'object',
+      properties: { profile: { type: 'string' }, fromProject: PROJECT_PROP, projects: { type: 'array', items: PROJECT_PROP, minItems: 1 }, name: { type: 'string' }, description: { type: 'string' }, by: { type: 'string' } },
+      required: ['profile', 'fromProject', 'projects'],
+    },
+    handler(args) {
+      const source = resolveProject(args.fromProject).slug;
+      const projects = args.projects.map((project: any) => resolveProject(project).slug);
+      return { ok: true, promotion: store.promoteRoutingProfile(args.profile, source, projects, { name: args.name, description: args.description, assignedBy: args.by || 'mcp-promote' }) };
+    },
+  },
+  {
+    name: 'new_board_profile',
+    description: 'Read or set the routing profile assigned to new boards.',
+    inputSchema: { type: 'object', properties: { profile: { type: 'string' } } },
+    handler(args) {
+      if (args.profile != null) store.setNewProjectRoutingProfile(args.profile);
+      const profile = store.routingProfileDetails(store.routingProfileSettings().newProjectProfileId);
+      return { ok: true, profile };
+    },
+  },
+  {
     name: 'route_recipe',
     description: 'Resolve a category into a live Workflow agent recipe. Fetch it when starting work so route edits and warnings stay current.',
     inputSchema: {
@@ -1201,19 +1301,32 @@ const TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: {
         project: PROJECT_PROP,
-        global: { type: 'boolean', description: 'Show global-only policy instead of the resolved project taxonomy.' },
+        profile: { type: 'string' },
         full: { type: 'boolean' },
         cursor: { type: 'string', pattern: '^(0|[1-9]\\d*)$' },
         limit: { type: 'integer', minimum: 1, maximum: PAGE_LIMIT_MAX },
       },
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      const projectScope = !args.global;
+      if (args.project != null && args.profile != null) throw new Error('category_list: pass at most one of profile or project.');
       const full = !!args.full;
-      const usage = (id: any) => store.listTickets(slug).filter((ticket: any) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length;
-      const layer = projectScope ? store.getProjectCategories(slug) : { rows: [], warnings: [] };
-      const categories = store.getCategories(projectScope ? { project: slug, withState: true } : undefined).map((category: any) => {
+      let slug: any = null;
+      let meta: any = null;
+      let profile: any;
+      let layer: any = { rows: [], warnings: [] };
+      let source: any[];
+      if (args.profile != null) {
+        profile = store.routingProfileDetails(args.profile);
+        if (!profile) throw new Error(`category_list: no profile "${args.profile}".`);
+        source = profile.categories.map((category: any) => Object.assign({}, category, { origin: 'profile', profileId: profile.id, baseProfileId: profile.id, changedFields: [], warnings: [] }));
+      } else {
+        ({ slug, meta } = resolveProject(args.project));
+        profile = store.projectRoutingProfile(slug).profile;
+        layer = store.getProjectCategories(slug);
+        source = store.getCategories({ project: slug, withState: true });
+      }
+      const usage = (id: any) => slug ? store.listTickets(slug).filter((ticket: any) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length : 0;
+      const categories = source.map((category: any) => {
         const localRow = layer.rows.find((row: any) => row.id === category.id) || null;
         return categoryListEntry(category, localRow, usage(category.id), full);
       });
@@ -1223,12 +1336,17 @@ const TOOLS: ToolDefinition[] = [
         }
       }
       categoryListServed = true;
+      const identity = { id: profile.id, name: profile.name, revision: profile.revision };
       const buildPayload = (page: any[], total: number, nextCursor: string | null) => full
-        ? { project: slug, projectName: meta.name, categories: page, warnings: layer.warnings, total, returned: page.length, nextCursor }
-        : { categories: page, total, returned: page.length, nextCursor };
+        ? Object.assign(args.profile != null ? { profile: identity } : { project: slug, projectName: meta.name, profile: identity }, { localRowCount: layer.rows.length, categories: page, warnings: layer.warnings, total, returned: page.length, nextCursor })
+        : { profile: identity, localRowCount: layer.rows.length, categories: page, total, returned: page.length, nextCursor };
       const paged = pagedPayload(categories, args, 'category_list', buildPayload, full);
       if (paged) return paged;
-      return { project: slug, projectName: meta.name, categories, warnings: layer.warnings };
+      const complete: any = buildPayload(categories, categories.length, null);
+      delete complete.total;
+      delete complete.returned;
+      delete complete.nextCursor;
+      return complete;
     },
   },
   {
@@ -1238,6 +1356,7 @@ const TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: {
         project: PROJECT_PROP,
+        profile: { type: 'string' },
         id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
@@ -1246,7 +1365,8 @@ const TOOLS: ToolDefinition[] = [
       required: ['id', 'name', 'routeModel', 'routeEffort'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      if ((args.project == null) === (args.profile == null)) throw new Error('category_add: pass exactly one of profile or project.');
+      const target = args.project != null ? resolveProject(args.project) : null;
       const id = String(args.id || '').trim().toLowerCase();
       const category = {
         id, name: args.name, description: args.description || '', contract: args.contract || '',
@@ -1255,11 +1375,11 @@ const TOOLS: ToolDefinition[] = [
         fallback: args.fallbackModel == null && args.fallbackEffort == null ? null : { model: args.fallbackModel, effort: args.fallbackEffort },
         enabled: args.enabled !== false,
       };
-      if (args.project != null) {
-        const localRow = store.setProjectCategory(slug, id, 'ADD', category);
-        return { ok: true, project: slug, projectName: meta.name, localRow, effective: store.getCategory(id, { project: slug }), warnings: store.getProjectCategories(slug).warnings };
+      if (target) {
+        const localRow = store.setProjectCategory(target.slug, id, 'ADD', category);
+        return { ok: true, project: target.slug, projectName: target.meta.name, localRow, effective: store.getCategory(id, { project: target.slug }), warnings: store.getProjectCategories(target.slug).warnings };
       }
-      return { ok: true, project: slug, projectName: meta.name, category: store.setCategory(category) };
+      return { ok: true, profile: args.profile, category: store.setRoutingProfileCategory(args.profile, category) };
     },
   },
   {
@@ -1268,7 +1388,7 @@ const TOOLS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        project: PROJECT_PROP, id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
+        project: PROJECT_PROP, profile: { type: 'string' }, id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Replace shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
         fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
@@ -1276,7 +1396,9 @@ const TOOLS: ToolDefinition[] = [
       required: ['id'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      if ((args.project == null) === (args.profile == null)) throw new Error('category_edit: pass exactly one of profile or project.');
+      const target = args.project != null ? resolveProject(args.project) : null;
+      const slug = target && target.slug;
       const id = String(args.id || '').trim().toLowerCase();
       const layer = () => store.getProjectCategories(slug);
       const localRow = () => layer().rows.find((row: any) => row.id === id) || null;
@@ -1288,7 +1410,7 @@ const TOOLS: ToolDefinition[] = [
         store.removeProjectCategory(slug, id);
         return { ok: true, project: slug, id, localRow: null };
       }
-      const existing: any = store.getCategory(id, args.project != null ? { project: slug } : undefined);
+      const existing: any = args.project != null ? store.getCategory(id, { project: slug }) : store.routingProfileCategory(args.profile, id);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch: any = {};
       for (const key of ['name', 'description', 'contract', 'artifactRoots']) if (args[key] !== undefined) patch[key] = args[key];
@@ -1303,8 +1425,8 @@ const TOOLS: ToolDefinition[] = [
         return { ok: true, project: slug, id, localRow: { id: row.id, kind: row.kind } };
       }
       if (args.enabled !== undefined) patch.enabled = args.enabled;
-      const category = store.setCategory(existing.id, patch);
-      return { ok: true, project: slug, id: category.id, changed: Object.keys(patch) };
+      const category = store.setRoutingProfileCategory(args.profile, existing.id, patch);
+      return { ok: true, profile: args.profile, id: category.id, changed: Object.keys(patch) };
     },
   },
   {
@@ -1363,18 +1485,21 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'category_rm',
     description: 'Remove global policy by default. With project, removes that local row or disables an effective global category locally. general cannot be removed or disabled.',
-    inputSchema: { type: 'object', properties: { project: PROJECT_PROP, id: { type: 'string' } }, required: ['id'] },
+    inputSchema: { type: 'object', properties: { project: PROJECT_PROP, profile: { type: 'string' }, id: { type: 'string' } }, required: ['id'] },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      if ((args.project == null) === (args.profile == null)) throw new Error('category_rm: pass exactly one of profile or project.');
+      const target = args.project != null ? resolveProject(args.project) : null;
+      const slug = target && target.slug;
+      const meta = target && target.meta;
       const id = String(args.id || '').trim().toLowerCase();
-      const ticketCount = store.listTickets(slug).filter((ticket: any) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length;
+      const ticketCount = target ? store.listTickets(slug).filter((ticket: any) => (ticket.categoryId || (ticket.category && ticket.category.id)) === id).length : 0;
       if (args.project != null) {
         const row = store.getProjectCategories(slug).rows.find((entry: any) => entry.id === id);
         const localRow = row ? (store.removeProjectCategory(slug, id), null) : store.setProjectCategory(slug, id, 'DISABLE', {});
         return { ok: true, project: slug, projectName: meta.name, id, ticketCount, localRow, effective: store.getCategory(id, { project: slug }), warnings: store.getProjectCategories(slug).warnings };
       }
-      if (!store.removeCategory(id)) throw new Error(`category_rm: no category "${args.id}".`);
-      return { ok: true, project: slug, projectName: meta.name, id, ticketCount };
+      if (!store.removeRoutingProfileCategory(args.profile, id)) throw new Error(`category_rm: no category "${args.id}" in profile "${args.profile}".`);
+      return { ok: true, profile: args.profile, id, ticketCount };
     },
   },
   {
@@ -1393,7 +1518,7 @@ const TOOLS: ToolDefinition[] = [
         ? { ok: true, config: store.boardConfig(slug) }
         : store.setBoardConfig(slug, { alwaysInScope: args.alwaysInScope });
       if (!result.ok) throw new Error(`board_config: no board "${meta.name}".`);
-      return { ok: true, project: slug, projectName: meta.name, alwaysInScope: result.config.alwaysInScope };
+      return Object.assign({ ok: true, project: slug, projectName: meta.name }, result.config);
     },
   },
   {
@@ -1459,19 +1584,22 @@ const MUTATING_TOOLS = new Set([
   'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next',
   'done', 'groomClose', 'release', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch',
   'category_add', 'category_edit', 'category_detach', 'category_relink', 'category_rm',
+  'profile_create', 'profile_edit', 'profile_retire', 'profile_use', 'profile_repoint', 'profile_promote',
   'archive_board', 'unarchive_board',
 ]);
-const GLOBAL_MUTATION_TOOLS = new Set(['category_add', 'category_edit', 'category_rm', 'global_fallback']);
+const GLOBAL_MUTATION_TOOLS = new Set(['category_add', 'category_edit', 'category_rm', 'global_fallback', 'profile_create', 'profile_edit', 'profile_retire', 'profile_repoint', 'profile_promote']);
 const mutationTails = new Map<string, Promise<void>>();
 
 function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
+  if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
   if (name === 'board_config') return args.alwaysInScope != null;
   return false;
 }
 
 function mutationQueueKey(name?: any, args?: any) {
+  if (name === 'new_board_profile') return '<global>';
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return '<global>';
   return resolveProject(args.project).slug;
 }

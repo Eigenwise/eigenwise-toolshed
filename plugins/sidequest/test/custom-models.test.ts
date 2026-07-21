@@ -54,7 +54,7 @@ test('models payload contains resolved category policy without grade vocabulary'
   seedCatalog([{ slug: 'codex-gpt-5-6-luna', id: 'claude-codex-luna', label: 'Luna' }]);
   const payload = store.modelsPayload();
   assert.ok(payload.categories.length);
-  assert.deepEqual(payload.globalFallback, { model: 'sonnet', effort: 'high' });
+  assert.deepEqual(payload.globalFallback, { label: 'availability fallback', model: 'sonnet', effort: 'high' });
   assert.doesNotMatch(JSON.stringify(payload), /grade-[1-4]|tierBackend|routingLadder|routingBias|profiles/);
   assert.ok(payload.categories.every((category?: any) => category.resolved && category.resolved.model));
 });

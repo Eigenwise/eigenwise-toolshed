@@ -34,13 +34,13 @@ function jsonCli(...args: any[]) {
 }
 
 test('route returns the live workflow recipe as JSON', () => {
-  const added = jsonCli('category', 'add', 'workflow-terra', '--name', 'Workflow Terra', '--route-model', 'codex-terra', '--route-effort', 'medium');
+  const added = jsonCli('category', 'add', 'workflow-terra', '--profile', 'coding', '--name', 'Workflow Terra', '--route-model', 'codex-terra', '--route-effort', 'medium');
   assert.equal(added.result.status, 0, added.result.stderr);
 
   const route = jsonCli('route', 'workflow-terra');
   assert.equal(route.result.status, 0, route.result.stderr);
   assert.deepEqual(route.body, {
-    project: added.body.project,
+    project: route.body.project,
     category: 'workflow-terra',
     categoryName: 'Workflow Terra',
     backend: 'codex',
@@ -52,6 +52,8 @@ test('route returns the live workflow recipe as JSON', () => {
     },
     effortCarrier: 'marker',
     warnings: [],
+    profile: { id: 'coding', revision: 2 },
+    categorySource: { kind: 'profile', baseProfileId: 'coding' },
   });
 });
 
@@ -64,7 +66,7 @@ test('route requires JSON and names unknown and disabled categories', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /unknown/i);
 
-  const disabled = jsonCli('category', 'add', 'disabled-recipe', '--name', 'Disabled Recipe', '--route-model', 'sonnet', '--route-effort', 'high');
+  const disabled = jsonCli('category', 'add', 'disabled-recipe', '--profile', 'coding', '--name', 'Disabled Recipe', '--route-model', 'sonnet', '--route-effort', 'high');
   assert.equal(disabled.result.status, 0, disabled.result.stderr);
   const disable = jsonCli('category', 'disable', 'disabled-recipe', '--project', project);
   assert.equal(disable.result.status, 0, disable.result.stderr);

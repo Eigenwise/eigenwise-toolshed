@@ -11,6 +11,7 @@ const ROOT = path.join(__dirname, '..');
 const BIN = path.join(ROOT, 'bin', 'sidequest.js');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-surface-'));
 const project = path.join(home, 'project');
+fs.mkdirSync(project, { recursive: true });
 const env = Object.assign({}, process.env, { SIDEQUEST_HOME: home, CLAUDE_PROJECT_DIR: project });
 
 function cli(...args: any[]) {
@@ -32,11 +33,11 @@ async function call(mcp?: any, name?: any, args?: any) {
 }
 
 test('CLI category CRUD reports usage and category ticket stamping', () => {
-  let run = cli('category', 'add', 'release-check', '--name', 'Release checks', '--description', 'A focused release task', '--contract', 'Run the release check.', '--artifact-roots', 'reports/maps,reports/index', '--route-model', 'sonnet', '--route-effort', 'medium', '--fallback-model', 'opus', '--fallback-effort', 'high');
+  let run = cli('category', 'add', 'release-check', '--project', project, '--name', 'Release checks', '--description', 'A focused release task', '--contract', 'Run the release check.', '--artifact-roots', 'reports/maps,reports/index', '--route-model', 'sonnet', '--route-effort', 'medium', '--fallback-model', 'opus', '--fallback-effort', 'high');
   assert.equal(run.result.status, 0, run.result.stderr);
-  assert.equal(run.body.category.id, 'release-check');
-  assert.deepEqual(run.body.category.fallback, { model: 'opus', effort: 'high' });
-  assert.deepEqual(run.body.category.artifactRoots, ['reports/maps', 'reports/index']);
+  assert.equal(run.body.effective.id, 'release-check');
+  assert.deepEqual(run.body.effective.fallback, { model: 'opus', effort: 'high' });
+  assert.deepEqual(run.body.effective.artifactRoots, ['reports/maps', 'reports/index']);
 
   run = cli('add', '--title', 'Run release checks', '--category', 'release-check');
   assert.equal(run.result.status, 0, run.result.stderr);
@@ -46,18 +47,18 @@ test('CLI category CRUD reports usage and category ticket stamping', () => {
   const category = run.body.categories.find((entry?: any) => entry.id === 'release-check');
   assert.equal(category.ticketCount, 1);
 
-  run = cli('category', 'edit', 'release-check', '--name', 'Release verification', '--no-fallback');
+  run = cli('category', 'edit', 'release-check', '--project', project, '--name', 'Release verification', '--no-fallback');
   assert.equal(run.result.status, 0, run.result.stderr);
-  assert.equal(run.body.category.name, 'Release verification');
-  assert.equal(run.body.category.fallback, null);
+  assert.equal(run.body.effective.name, 'Release verification');
+  assert.equal(run.body.effective.fallback, null);
 
-  run = cli('category', 'rm', 'release-check');
+  run = cli('category', 'rm', 'release-check', '--project', project);
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.ticketCount, 1);
 
-  run = cli('category', 'rm', 'general');
+  run = cli('category', 'rm', 'general', '--project', project);
   assert.notEqual(run.result.status, 0);
-  assert.match(run.result.stderr, /cannot be removed/i);
+  assert.match(run.result.stderr, /cannot be (removed|disabled)/i);
 });
 
 test('CLI rejects unknown category ids with valid choices', () => {
@@ -78,7 +79,7 @@ test('CLI global fallback reads and updates routing policy', () => {
 
   run = cli('models');
   assert.equal(run.result.status, 0, run.result.stderr);
-  assert.deepEqual(run.body.globalFallback, { model: 'opus', effort: 'xhigh' });
+  assert.deepEqual(run.body.globalFallback, { label: 'availability fallback', model: 'opus', effort: 'xhigh' });
   assert.ok(!JSON.stringify(run.body).includes('grade-'));
 });
 
@@ -113,7 +114,7 @@ test('CLI project category layers stay isolated and expose effective origins', (
 
   run = cli('category', 'list', '--project', project);
   assert.equal(run.result.status, 0, run.result.stderr);
-  assert.equal(run.body.categories.find((entry?: any) => entry.id === 'project-only').origin, 'project');
+  assert.equal(run.body.categories.find((entry?: any) => entry.id === 'project-only').origin, 'added');
   assert.equal(run.body.categories.find((entry?: any) => entry.id === 'general').origin, 'detached');
   assert.equal(run.body.categories.find((entry?: any) => entry.id === 'coding.easy').origin, 'disabled');
 
@@ -139,14 +140,14 @@ test('CLI category list defaults to the current project taxonomy and supports gl
   const current = spawnSync(process.execPath, [BIN, 'category', 'list', '--json'], { encoding: 'utf8', env: currentEnv });
   assert.equal(current.status, 0, current.stderr);
   const currentBody = JSON.parse(current.stdout);
-  assert.ok(currentBody.categories.some((entry?: any) => entry.id === 'project-only-list' && entry.origin === 'project'));
+  assert.ok(currentBody.categories.some((entry?: any) => entry.id === 'project-only-list' && entry.origin === 'added'));
   assert.ok(currentBody.categories.some((entry?: any) => entry.id === 'coding.easy' && entry.origin === 'disabled'));
 
-  const global = spawnSync(process.execPath, [BIN, 'category', 'list', '--global', '--json'], { encoding: 'utf8', env: currentEnv });
+  const global = spawnSync(process.execPath, [BIN, 'category', 'list', '--profile', 'coding', '--json'], { encoding: 'utf8', env: currentEnv });
   assert.equal(global.status, 0, global.stderr);
   const globalBody = JSON.parse(global.stdout);
   assert.ok(!globalBody.categories.some((entry?: any) => entry.id === 'project-only-list'));
-  assert.ok(globalBody.categories.some((entry?: any) => entry.id === 'coding.easy' && entry.origin === 'global'));
+  assert.ok(globalBody.categories.some((entry?: any) => entry.id === 'coding.easy' && entry.origin === 'profile'));
 });
 
 test('CLI category edit forks a board category, and reset returns it to the shared default', () => {

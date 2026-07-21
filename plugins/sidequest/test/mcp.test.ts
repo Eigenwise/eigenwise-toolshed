@@ -325,7 +325,7 @@ test('compact category pages stay bounded and recover complete taxonomy rows', a
   assert.equal(Object.hasOwn(legacyFull, 'nextCursor'), false);
   assert.equal(legacyFull.categories.find((category: any) => category.id === 'bounded-00').description, expectedDescriptions.get('bounded-00'));
   const cliCategories = runCli(['category', 'list', '--project', project, '--json']);
-  assert.deepEqual(Object.keys(cliCategories).sort(), ['categories', 'project', 'projectName', 'warnings']);
+  assert.deepEqual(Object.keys(cliCategories).sort(), ['categories', 'localRowCount', 'profile', 'project', 'projectName', 'warnings']);
   assert.equal(cliCategories.categories.find((category: any) => category.id === 'bounded-00').description, expectedDescriptions.get('bounded-00'));
 
   for (const args of [{ cursor: 'bad' }, { cursor: '-1' }, { limit: 0 }, { limit: 101 }]) {
@@ -859,7 +859,7 @@ test('MCP admin/config tools share CLI state transitions', async () => {
   const categoryId = `mcp-admin-${process.pid}`;
   const fallback = store.getRoutingFallback();
   try {
-    const cliCategory = runCli(['category', 'add', categoryId, '--name', 'MCP admin category', '--route-model', 'sonnet', '--route-effort', 'low', '--json']);
+    const cliCategory = runCli(['category', 'add', categoryId, '--profile', 'coding', '--name', 'MCP admin category', '--route-model', 'sonnet', '--route-effort', 'low', '--json']);
     assert.equal(cliCategory.ok, true);
     assert.equal((await callTool('category_detach', { project, id: categoryId })).localRow.kind, 'DETACH');
     const relinked = runCli(['category', 'relink', categoryId, '--project', project, '--json']);
@@ -880,14 +880,14 @@ test('MCP admin/config tools share CLI state transitions', async () => {
 
     assert.deepEqual(await callTool('models', { project }), runCli(['models', '--project', project, '--json']));
     assert.deepEqual(await callTool('projects', {}), runCli(['projects', '--json']));
-    assert.equal((await callTool('category_rm', { id: categoryId })).ok, true);
+    assert.equal((await callTool('category_rm', { profile: 'coding', id: categoryId })).ok, true);
 
     const mcpCategoryId = `${categoryId}-mcp`;
     assert.equal((await callTool('category_add', {
-      id: mcpCategoryId, name: 'MCP-created admin category', routeModel: 'sonnet', routeEffort: 'low',
+      profile: 'coding', id: mcpCategoryId, name: 'MCP-created admin category', routeModel: 'sonnet', routeEffort: 'low',
     })).ok, true);
     assert.ok(runCli(['category', 'list', '--json']).categories.some((category: any) => category.id === mcpCategoryId));
-    assert.equal(runCli(['category', 'rm', mcpCategoryId, '--json']).ok, true);
+    assert.equal(runCli(['category', 'rm', mcpCategoryId, '--profile', 'coding', '--json']).ok, true);
   } finally {
     if (fallback) store.setRoutingFallback(fallback);
   }

@@ -81,7 +81,9 @@ function parseArgs(argv: any) {
         val = argv[i + 1];
         i++;
       }
-      if (ARRAY_FLAGS.has(key)) {
+      if (key === 'project' && opts.project !== undefined) {
+        opts.project = Array.isArray(opts.project) ? opts.project.concat(val) : [opts.project, val];
+      } else if (ARRAY_FLAGS.has(key)) {
         (opts[key] = opts[key] || []).push(val);
       } else {
         opts[key] = val;
@@ -364,21 +366,107 @@ async function cmdUpdate(opts: any, positional: any) {
   for (const warning of warnings) console.log(`  ! ${warning}`);
 }
 
+async function cmdProfile(opts: any, positional: any) {
+  const action = String(positional[0] || '').toLowerCase();
+  const id = positional[1];
+  const print = (value: any) => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
+  const resolveBoard = async (value: any) => (await resolveProject({ project: value })).slug;
+
+  if (action === 'list' || action === 'ls') {
+    const profiles = store.listRoutingProfiles({ retired: !!opts.retired });
+    if (opts.json) return print({ profiles });
+    for (const profile of profiles) console.log(`${profile.id}  ${profile.name}  r${profile.revision}  (${profile.entryCount} categories)${profile.retiredAt ? '  retired' : ''}`);
+    return;
+  }
+  if (action === 'show') {
+    if (!id) fail('profile show: pass a profile id.');
+    const profile = store.routingProfileDetails(id);
+    if (!profile) fail(`profile show: no profile "${id}".`);
+    if (opts.json) return print({ profile });
+    console.log(`${profile.id}  ${profile.name}  r${profile.revision}`);
+    if (profile.description) console.log(profile.description);
+    for (const category of profile.categories) console.log(`  ${category.id}  ${category.name}  → ${category.route.model}·${category.route.effort}`);
+    return;
+  }
+  if (action === 'create') {
+    if (!id) fail('profile create: pass a profile id.');
+    const result = store.createRoutingProfile(id, { from: opts.from, name: opts.name, description: opts.description || opts.desc });
+    if (opts.json) return print({ ok: true, profile: store.routingProfileDetails(result.id) });
+    console.log(`✓ created profile ${result.id} from ${result.from}`);
+    return;
+  }
+  if (action === 'edit') {
+    if (!id) fail('profile edit: pass a profile id.');
+    if (opts.name == null && opts.description == null && opts.desc == null) fail('profile edit: pass --name or --description.');
+    const result = store.editRoutingProfile(id, { name: opts.name, description: opts.description == null ? opts.desc : opts.description });
+    if (opts.json) return print({ ok: true, profile: store.routingProfileDetails(result.id) });
+    console.log(`✓ updated profile ${result.id}`);
+    return;
+  }
+  if (action === 'retire') {
+    if (!id) fail('profile retire: pass a profile id.');
+    const result = store.retireRoutingProfile(id);
+    if (opts.json) return print({ ok: true, profile: result });
+    console.log(`✓ retired profile ${result.id}`);
+    return;
+  }
+  if (action === 'use') {
+    if (!id || opts.project == null || Array.isArray(opts.project)) fail('profile use: pass one profile and exactly one --project.');
+    const project = await resolveBoard(opts.project);
+    const result = store.setProjectRoutingProfile(project, id, opts.by || 'cli');
+    if (opts.json) return print({ ok: true, assignment: result, config: store.boardConfig(project) });
+    console.log(`✓ ${project} now uses profile ${id}`);
+    return;
+  }
+  if (action === 'repoint') {
+    const to = positional[2];
+    if (!id || !to) fail('profile repoint: pass <from> <to>.');
+    const result = store.repointRoutingProfiles(id, to, { dryRun: !!opts['dry-run'], assignedBy: opts.by || 'cli-repoint' });
+    if (opts.json) return print(result);
+    console.log(`${result.dryRun ? 'Preview' : 'Repointed'} ${result.boards.length} board${result.boards.length === 1 ? '' : 's'} from ${id} to ${to}`);
+    for (const board of result.boards) console.log(`  ${board.project}  ${board.drift.hasDrift ? `drift: ${board.drift.changed.length} changed, ${board.drift.added.length} added, ${board.drift.missing.length} missing` : 'no drift'}`);
+    return;
+  }
+  if (action === 'promote') {
+    if (!id || !opts['from-project']) fail('profile promote: pass <new> --from-project <board> --project <board>...');
+    const requested = opts.project == null ? [] : Array.isArray(opts.project) ? opts.project : [opts.project];
+    if (!requested.length) fail('profile promote: pass at least one --project target.');
+    const sourceProject = await resolveBoard(opts['from-project']);
+    const projects = [];
+    for (const project of requested) projects.push(await resolveBoard(project));
+    const result = store.promoteRoutingProfile(id, sourceProject, projects, { name: opts.name, description: opts.description || opts.desc, assignedBy: opts.by || 'cli-promote' });
+    if (opts.json) return print({ ok: true, promotion: result, profile: store.routingProfileDetails(id) });
+    console.log(`✓ promoted ${sourceProject} to profile ${id} and repointed ${projects.length} board${projects.length === 1 ? '' : 's'}`);
+    return;
+  }
+  if (action === 'new-board' || action === 'new_board') {
+    if (id) store.setNewProjectRoutingProfile(id);
+    const settings = store.routingProfileSettings();
+    const profile = store.routingProfileDetails(settings.newProjectProfileId);
+    if (opts.json) return print({ ok: true, newBoardProfile: profile });
+    console.log(`New boards use ${profile.id}  ${profile.name}`);
+    return;
+  }
+  fail(`profile: unknown action "${action}". Use list | show | create | edit | retire | use | repoint | promote | new-board.`);
+}
+
 async function cmdCategory(opts: any, positional: any) {
   const action = String(positional[0] || '').toLowerCase();
   const id = positional[1];
   const { slug, meta } = await resolveProject(opts);
   const projectScope = opts.project != null;
-  const usage = (categoryId: any) => store.listTickets(slug).filter((ticket: any) => (ticket.categoryId || (ticket.category && ticket.category.id)) === categoryId).length;
+  const profileScope = opts.profile != null;
+  if (projectScope && profileScope) fail(`category ${action || '<action>'}: pass exactly one of --profile or --project.`);
+  const usage = (categoryId: any) => profileScope ? 0 : store.listTickets(slug).filter((ticket: any) => (ticket.categoryId || (ticket.category && ticket.category.id)) === categoryId).length;
   const projectLayer = () => store.getProjectCategories(slug);
   const localRow = (categoryId: any) => projectLayer().rows.find((row: any) => row.id === String(categoryId).trim().toLowerCase()) || null;
   const details = (categoryId: any) => ({
     localRow: projectScope ? localRow(categoryId) : null,
-    effective: store.getCategory(categoryId, projectScope ? { project: slug } : undefined),
+    effective: profileScope ? store.routingProfileCategory(opts.profile, categoryId) : store.getCategory(categoryId, { project: slug }),
     warnings: projectScope ? projectLayer().warnings : [],
   });
   const output = (result: any) => {
-    if (opts.json) process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, result), null, 2) + '\n');
+    if (opts.json) process.stdout.write(JSON.stringify(Object.assign(profileScope ? { profile: String(opts.profile).toLowerCase() } : { project: slug, projectName: meta.name }, result), null, 2) + '\n');
   };
   const artifactRootsOption = () => {
     if (opts['artifact-roots'] == null || opts['artifact-roots'] === 'none') return [];
@@ -419,24 +507,28 @@ async function cmdCategory(opts: any, positional: any) {
   };
 
   if (action === 'list' || action === 'ls') {
-    const listProjectScope = !opts.global;
-    const layer = listProjectScope ? projectLayer() : { rows: [], warnings: [] };
+    const layer = profileScope ? { rows: [], warnings: [] } : projectLayer();
     const rows = layer.rows;
-    const categories = store.getCategories(listProjectScope ? { project: slug, withState: true } : undefined).map((category: any) => {
+    const source = profileScope
+      ? store.routingProfileEntries(opts.profile).map((entry: any) => Object.assign({}, entry.data, { origin: 'profile', profileId: String(opts.profile).toLowerCase(), baseProfileId: String(opts.profile).toLowerCase(), changedFields: [] }))
+      : store.getCategories({ project: slug, withState: true });
+    const categories = source.map((category: any) => {
       const row = rows.find((entry: any) => entry.id === category.id);
       const resolved = store.resolveCategoryRoute(category);
       return Object.assign({}, category, {
-        origin: row ? (row.kind === 'ADD' ? 'project' : category.linkState) : 'global',
         localRow: row || null,
         ticketCount: usage(category.id),
         resolved: { model: resolved.model, effort: resolved.effort, exec: resolved.exec },
-        warnings: resolved.warnings,
+        warnings: [...(category.warnings || []), ...resolved.warnings],
       });
     });
     for (const row of rows.filter((entry: any) => entry.kind === 'DISABLE')) {
       categories.push({ id: row.id, origin: 'disabled', localRow: row, effective: null, ticketCount: usage(row.id), warnings: [] });
     }
-    if (opts.json) return output({ categories, warnings: layer.warnings });
+    if (opts.json) {
+      const profile = profileScope ? store.routingProfileDetails(opts.profile) : store.projectRoutingProfile(slug).profile;
+      return output({ profile: { id: profile.id, name: profile.name, revision: profile.revision }, localRowCount: rows.length, categories, warnings: layer.warnings });
+    }
     for (const category of categories) {
       if (category.origin === 'disabled') {
         console.log(`${category.id}  disabled here  (${category.ticketCount} ticket${category.ticketCount === 1 ? '' : 's'})`);
@@ -452,12 +544,13 @@ async function cmdCategory(opts: any, positional: any) {
     }
     return;
   }
+  if (!projectScope && !profileScope) fail(`category ${action || '<action>'}: pass exactly one of --profile or --project.`);
   if (!id) fail(`category ${action || '<action>'}: pass a category id`);
   if (action === 'add' || action === 'new' || action === 'create') {
     try {
       const category = categoryInput();
       if (projectScope) store.setProjectCategory(slug, id, 'ADD', category);
-      else store.setCategory(category);
+      else store.setRoutingProfileCategory(opts.profile, category);
     } catch (error: any) { fail(`category add: ${error.message}`); }
     const saved = details(id);
     if (opts.json) return output(projectScope ? Object.assign({ ok: true }, saved) : { ok: true, category: saved.effective });
@@ -514,11 +607,11 @@ async function cmdCategory(opts: any, positional: any) {
         store.setProjectCategory(slug, id, kind, Object.assign({}, existing, patch, { id }));
       } catch (error: any) { fail(`category edit: ${error.message}`); }
     } else {
-      const existing = store.getCategory(id);
-      if (!existing) fail(`category edit: no category "${id}"`);
+      const existing = store.routingProfileCategory(opts.profile, id);
+      if (!existing) fail(`category edit: no category "${id}" in profile "${opts.profile}"`);
       const patch = patchFor(existing);
       if (opts.enabled || opts.disabled) patch.enabled = !!opts.enabled;
-      try { store.setCategory(id, patch); } catch (error: any) { fail(`category edit: ${error.message}`); }
+      try { store.setRoutingProfileCategory(opts.profile, id, patch); } catch (error: any) { fail(`category edit: ${error.message}`); }
     }
     const saved = details(id);
     if (opts.json) return output(projectScope ? Object.assign({ ok: true }, saved) : { ok: true, category: saved.effective });
@@ -531,8 +624,8 @@ async function cmdCategory(opts: any, positional: any) {
       if (projectScope) {
         if (localRow(id)) store.removeProjectCategory(slug, id);
         else store.setProjectCategory(slug, id, 'DISABLE', {});
-      } else if (!store.removeCategory(id)) {
-        fail(`category rm: no category "${id}"`);
+      } else if (!store.removeRoutingProfileCategory(opts.profile, id)) {
+        fail(`category rm: no category "${id}" in profile "${opts.profile}"`);
       }
     } catch (error: any) { fail(`category rm: ${error.message}`); }
     if (opts.json) return output(Object.assign({ ok: true, id: String(id).toLowerCase(), ticketCount }, projectScope ? details(id) : {}));
@@ -550,7 +643,7 @@ async function cmdGlobalFallback(opts: any) {
       process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, fallback }, null, 2) + '\n');
       return;
     }
-    console.log(`Global fallback: ${fallback ? `${fallback.model}·${fallback.effort}` : 'missing or invalid'}`);
+    console.log(`Availability fallback: ${fallback ? `${fallback.model}·${fallback.effort}` : 'missing or invalid'}`);
     return;
   }
   try {
@@ -1540,7 +1633,11 @@ async function cmdRoute(opts: any, positional: any) {
   const resolved = store.resolveCategoryRoute(category);
   if (!resolved || !resolved.exec) fail(`route: category "${category.id}" has no available route.`);
   const recipe = agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
-  process.stdout.write(JSON.stringify(recipe, null, 2) + '\n');
+  const selected = store.projectRoutingProfile(slug);
+  process.stdout.write(JSON.stringify(Object.assign({}, recipe, {
+    profile: { id: selected.profile.id, revision: selected.profile.revision },
+    categorySource: { kind: category.origin || 'profile', baseProfileId: category.baseProfileId || null },
+  }), null, 2) + '\n');
 }
 
 async function cmdBoardConfig(opts: any) {
@@ -1549,7 +1646,7 @@ async function cmdBoardConfig(opts: any) {
     ? { ok: true, config: store.boardConfig(slug) }
     : store.setBoardConfig(slug, { alwaysInScope: opts['always-in-scope'] });
   if (!result.ok) fail(`board-config: no board "${meta.name}".`);
-  const payload: any = { project: slug, projectName: meta.name, alwaysInScope: result.config.alwaysInScope };
+  const payload: any = Object.assign({ project: slug, projectName: meta.name }, result.config);
   if (opts.json) {
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return;
@@ -2043,7 +2140,8 @@ Usage:
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
-  sidequest category list|add|edit|rm|disable|enable|pin|reset <id> [--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
+  sidequest profile list|show|create|edit|retire|use|repoint|promote|new-board ... [--json]
+  sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n> [--force]
   sidequest projects [--archived] [--json]
@@ -2200,6 +2298,10 @@ async function main() {
     case 'remove':
     case 'delete':
       await cmdRm(opts, positional);
+      break;
+    case 'profile':
+    case 'profiles':
+      await cmdProfile(opts, positional);
       break;
     case 'category':
     case 'categories':

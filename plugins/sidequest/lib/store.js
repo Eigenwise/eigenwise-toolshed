@@ -349,14 +349,19 @@ function modelsPayload(opts) {
   opts = opts || {};
   const catalog = routingModels();
   const projectCategories = getProjectCategories(opts.project);
+  const selected = opts.project ? projectRoutingProfile(opts.project) : null;
+  const profile = selected ? selected.profile : getRoutingProfile(defaultRoutingProfileId());
   return {
     models: catalog.models,
     efforts: catalog.efforts,
     discovered: catalog.discovered,
-    globalFallback: getRoutingFallback(),
+    globalFallback: Object.assign({ label: "availability fallback" }, getRoutingFallback()),
+    newBoardProfile: routingProfileDetails(defaultRoutingProfileId()),
+    profile: profile ? { id: profile.id, name: profile.name, revision: profile.revision, entryCount: routingProfileEntries(profile.id).length } : null,
     categories: getCategories({ project: opts.project }).map((category) => {
       const resolved = resolveCategoryRoute(category);
       return Object.assign({}, category, {
+        configured: { route: category.route, fallback: category.fallback },
         resolved: { model: resolved.model, effort: resolved.effort, exec: execProjection(resolved.exec) },
         warnings: resolved.warnings
       });
@@ -844,7 +849,9 @@ function setProjectRoutingProfile(project, profileId, assignedBy) {
   const normalizedProfileId = String(profileId || "").trim().toLowerCase();
   if (!normalizedProject || !normalizedProfileId) throw new Error("Project and routing profile id are required.");
   if (!readMeta(normalizedProject)) throw new Error(`Project "${normalizedProject}" does not exist.`);
-  if (!getRoutingProfile(normalizedProfileId)) throw new Error(`Routing profile "${normalizedProfileId}" does not exist.`);
+  const profile = getRoutingProfile(normalizedProfileId);
+  if (!profile) throw new Error(`Routing profile "${normalizedProfileId}" does not exist.`);
+  if (profile.retiredAt) throw new Error(`Routing profile "${normalizedProfileId}" is retired.`);
   return mutateRoutingPolicy({ projects: [normalizedProject] }, (handle) => {
     const assignedAt = (/* @__PURE__ */ new Date()).toISOString();
     handle.prepare(`
@@ -860,7 +867,9 @@ function setProjectRoutingProfile(project, profileId, assignedBy) {
 }
 function setNewProjectRoutingProfile(profileId) {
   const normalizedProfileId = String(profileId || "").trim().toLowerCase();
-  if (!getRoutingProfile(normalizedProfileId)) throw new Error(`Routing profile "${normalizedProfileId}" does not exist.`);
+  const profile = getRoutingProfile(normalizedProfileId);
+  if (!profile) throw new Error(`Routing profile "${normalizedProfileId}" does not exist.`);
+  if (profile.retiredAt) throw new Error(`Routing profile "${normalizedProfileId}" is retired.`);
   return mutateRoutingPolicy({}, (handle) => {
     handle.prepare(`
       INSERT INTO routing_profile_settings (singleton, new_project_profile_id) VALUES (1, ?)
@@ -878,6 +887,166 @@ function listRoutingProfiles(opts) {
   return database().prepare(sql).all().map((row) => Object.assign({}, getRoutingProfile(row.id), {
     entryCount: Number(database().prepare("SELECT COUNT(*) AS count FROM routing_profile_entries WHERE profile_id = ?").get(row.id)?.count ?? 0)
   }));
+}
+function normalizeRoutingProfileId(profileId) {
+  const id = String(profileId || "").trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) throw new Error("Routing profile id must use lowercase letters, numbers, dots, underscores, or hyphens.");
+  return id;
+}
+function routingProfileDetails(profileId) {
+  const profile = getRoutingProfile(profileId);
+  if (!profile) return null;
+  const entries = routingProfileEntries(profile.id).map((entry) => entry.data);
+  return Object.assign({}, profile, { entryCount: entries.length, categories: entries });
+}
+function createRoutingProfile(profileId, opts) {
+  opts = opts || {};
+  const id = normalizeRoutingProfileId(profileId);
+  const fromId = String(opts.from || defaultRoutingProfileId()).trim().toLowerCase();
+  const source = getRoutingProfile(fromId);
+  if (!source) throw new Error(`Routing profile "${fromId}" does not exist.`);
+  const entries = routingProfileEntries(fromId);
+  const name = String(opts.name || id).trim();
+  if (!name) throw new Error("Routing profile name is required.");
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  return mutateRoutingPolicy({}, (handle) => {
+    if (handle.prepare("SELECT 1 FROM routing_profiles WHERE id = ?").get(id)) throw new Error(`Routing profile "${id}" already exists.`);
+    if (handle.prepare("SELECT 1 FROM routing_profiles WHERE lower(name) = lower(?)").get(name)) throw new Error(`Routing profile name "${name}" already exists.`);
+    handle.prepare(`
+      INSERT INTO routing_profiles (id, name, description, source, seed_key, seed_revision, revision, created_at, updated_at, retired_at)
+      VALUES (?, ?, ?, 'user', NULL, NULL, 1, ?, ?, NULL)
+    `).run(id, name, String(opts.description || "").trim(), now, now);
+    const insert = handle.prepare("INSERT INTO routing_profile_entries (profile_id, category_id, data, position, updated_at) VALUES (?, ?, ?, ?, ?)");
+    for (const entry of entries) insert.run(id, entry.categoryId, JSON.stringify(entry.data), entry.position, now);
+    return { id, from: fromId, entryCount: entries.length };
+  }).result;
+}
+function editRoutingProfile(profileId, patch) {
+  const id = normalizeRoutingProfileId(profileId);
+  const profile = getRoutingProfile(id);
+  if (!profile) throw new Error(`Routing profile "${id}" does not exist.`);
+  patch = patch || {};
+  const name = patch.name == null ? profile.name : String(patch.name).trim();
+  const description = patch.description == null ? profile.description : String(patch.description).trim();
+  if (!name) throw new Error("Routing profile name is required.");
+  return mutateRoutingPolicy({ profileIds: [id] }, (handle) => {
+    const collision = handle.prepare("SELECT id FROM routing_profiles WHERE lower(name) = lower(?) AND id <> ?").get(name, id);
+    if (collision) throw new Error(`Routing profile name "${name}" already exists.`);
+    handle.prepare("UPDATE routing_profiles SET name = ?, description = ?, updated_at = ? WHERE id = ?").run(name, description, (/* @__PURE__ */ new Date()).toISOString(), id);
+    return { id, name, description };
+  }).result;
+}
+function retireRoutingProfile(profileId) {
+  const id = normalizeRoutingProfileId(profileId);
+  const profile = getRoutingProfile(id);
+  if (!profile) throw new Error(`Routing profile "${id}" does not exist.`);
+  if (profile.retiredAt) return profile;
+  const settings = routingProfileSettings();
+  if (settings?.newProjectProfileId === id) throw new Error(`Routing profile "${id}" is the new-board profile and cannot be retired.`);
+  const count = Number(database().prepare("SELECT COUNT(*) AS count FROM project_routing_profiles WHERE profile_id = ?").get(id)?.count ?? 0);
+  if (count) throw new Error(`Routing profile "${id}" is used by ${count} board${count === 1 ? "" : "s"} and cannot be retired.`);
+  return mutateRoutingPolicy({}, (handle) => {
+    const retiredAt = (/* @__PURE__ */ new Date()).toISOString();
+    handle.prepare("UPDATE routing_profiles SET retired_at = ?, updated_at = ? WHERE id = ?").run(retiredAt, retiredAt, id);
+    return { id, retiredAt };
+  }).result;
+}
+function canonicalRoutingValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalRoutingValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalRoutingValue(value[key])]));
+}
+function routingFingerprint(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(canonicalRoutingValue(value))).digest("hex");
+}
+function normalizedTaxonomy(project) {
+  return getCategories({ project }).map((category) => normalizeCategory(category)).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id));
+}
+function localRowsFingerprint(project) {
+  const rows = projectCategoryRows(project).map((row) => canonicalRoutingValue(row)).sort((a, b) => a.id.localeCompare(b.id));
+  return routingFingerprint(rows);
+}
+function hypotheticalTaxonomy(project, profileId) {
+  const categories = /* @__PURE__ */ new Map();
+  for (const entry of routingProfileEntries(profileId)) {
+    const category = normalizeCategory(entry.data);
+    if (category) categories.set(category.id, category);
+  }
+  for (const row of projectCategoryRows(project)) {
+    const base = categories.get(row.id);
+    if (row.kind === "ADD" || row.kind === "DETACH") {
+      const category = normalizeCategory(row.data);
+      if (category) categories.set(row.id, category);
+    } else if (row.kind === "OVERRIDE") {
+      const category = normalizeCategory(Object.assign({}, base || row.baseData, row.data, { id: row.id }));
+      if (category) categories.set(row.id, category);
+    } else if (row.kind === "DISABLE") {
+      categories.delete(row.id);
+    }
+  }
+  return [...categories.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+function taxonomyDrift(before = [], after = []) {
+  const previous = new Map(before.map((category) => [category.id, category]));
+  const next = new Map(after.map((category) => [category.id, category]));
+  const added = [...next.keys()].filter((id) => !previous.has(id));
+  const missing = [...previous.keys()].filter((id) => !next.has(id));
+  const changed = [...next.keys()].filter((id) => previous.has(id) && routingFingerprint(previous.get(id)) !== routingFingerprint(next.get(id)));
+  return { added, missing, changed, hasDrift: added.length + missing.length + changed.length > 0 };
+}
+function repointRoutingProfiles(fromProfileId, toProfileId, opts) {
+  opts = opts || {};
+  const from = normalizeRoutingProfileId(fromProfileId);
+  const to = normalizeRoutingProfileId(toProfileId);
+  if (!getRoutingProfile(from)) throw new Error(`Routing profile "${from}" does not exist.`);
+  const target = getRoutingProfile(to);
+  if (!target) throw new Error(`Routing profile "${to}" does not exist.`);
+  if (target.retiredAt) throw new Error(`Routing profile "${to}" is retired.`);
+  const projects = database().prepare("SELECT project FROM project_routing_profiles WHERE profile_id = ? ORDER BY project").all(from).map((row) => row.project);
+  const boards = projects.map((project) => ({ project, drift: taxonomyDrift(normalizedTaxonomy(project), hypotheticalTaxonomy(project, to)) }));
+  if (opts.dryRun) return { from, to, dryRun: true, boards };
+  return mutateRoutingPolicy({ projects }, (handle) => {
+    const assignedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const update = handle.prepare("UPDATE project_routing_profiles SET profile_id = ?, assigned_at = ?, assigned_by = ? WHERE project = ? AND profile_id = ?");
+    for (const project of projects) update.run(to, assignedAt, opts.assignedBy == null ? null : String(opts.assignedBy), project, from);
+    return { from, to, dryRun: false, boards };
+  }).result;
+}
+function promoteRoutingProfile(profileId, sourceProject, projects, opts) {
+  opts = opts || {};
+  const id = normalizeRoutingProfileId(profileId);
+  const source = String(sourceProject || "").trim();
+  const selected = [...new Set((projects || []).map((project) => String(project || "").trim()).filter(Boolean))];
+  if (!readMeta(source)) throw new Error(`Project "${source}" does not exist.`);
+  if (!selected.length) throw new Error("Profile promotion requires at least one target board.");
+  const taxonomy = normalizedTaxonomy(source);
+  const taxonomyHash = routingFingerprint(taxonomy);
+  const rowHash = localRowsFingerprint(source);
+  for (const project of selected) {
+    if (!readMeta(project)) throw new Error(`Project "${project}" does not exist.`);
+    if (routingFingerprint(normalizedTaxonomy(project)) !== taxonomyHash || localRowsFingerprint(project) !== rowHash) {
+      throw new Error(`Project "${project}" does not match the source taxonomy and local-row fingerprint.`);
+    }
+  }
+  const name = String(opts.name || id).trim();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  return mutateRoutingPolicy({ projects: selected }, (handle) => {
+    if (handle.prepare("SELECT 1 FROM routing_profiles WHERE id = ?").get(id)) throw new Error(`Routing profile "${id}" already exists.`);
+    if (handle.prepare("SELECT 1 FROM routing_profiles WHERE lower(name) = lower(?)").get(name)) throw new Error(`Routing profile name "${name}" already exists.`);
+    handle.prepare(`
+      INSERT INTO routing_profiles (id, name, description, source, seed_key, seed_revision, revision, created_at, updated_at, retired_at)
+      VALUES (?, ?, ?, 'user', NULL, NULL, 1, ?, ?, NULL)
+    `).run(id, name, String(opts.description || "").trim(), now, now);
+    const insert = handle.prepare("INSERT INTO routing_profile_entries (profile_id, category_id, data, position, updated_at) VALUES (?, ?, ?, ?, ?)");
+    taxonomy.forEach((category, position) => insert.run(id, category.id, JSON.stringify(category), position, now));
+    const repoint = handle.prepare("UPDATE project_routing_profiles SET profile_id = ?, assigned_at = ?, assigned_by = ? WHERE project = ?");
+    const clear = handle.prepare("DELETE FROM project_categories WHERE project = ?");
+    for (const project of selected) {
+      repoint.run(id, now, opts.assignedBy == null ? null : String(opts.assignedBy), project);
+      clear.run(project);
+    }
+    return { id, sourceProject: source, projects: selected, entryCount: taxonomy.length, taxonomyFingerprint: taxonomyHash, localRowsFingerprint: rowHash };
+  }).result;
 }
 function removeProjectCategory(project, id) {
   const normalizedProject = String(project || "").trim();
@@ -1043,7 +1212,26 @@ function defaultAlwaysInScope(absPath) {
 function boardConfig(slug) {
   const meta = readMeta(slug);
   if (!meta) return null;
-  return { alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path) };
+  const selected = projectRoutingProfile(slug);
+  if (!selected) throw new Error(`Project "${slug}" does not have a routing profile.`);
+  const layer = getProjectCategories(slug);
+  const byKind = Object.fromEntries(["ADD", "OVERRIDE", "DETACH", "DISABLE"].map((kind) => [kind, layer.rows.filter((row) => row.kind === kind).length]));
+  return {
+    alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
+    profile: {
+      id: selected.profile.id,
+      name: selected.profile.name,
+      revision: selected.profile.revision,
+      entryCount: routingProfileEntries(selected.profile.id).length
+    },
+    overrides: {
+      count: layer.rows.length,
+      byKind,
+      foreignBaseCount: layer.rows.filter((row) => row.baseProfileId && row.baseProfileId !== selected.profile.id).length,
+      items: layer.rows
+    },
+    warnings: [...selected.warnings, ...layer.warnings]
+  };
 }
 function setBoardConfig(slug, patch) {
   return withMetaLock(slug, () => {
@@ -3889,6 +4077,12 @@ module.exports = {
   mutateRoutingPolicy,
   routingProfileSettings,
   listRoutingProfiles,
+  routingProfileDetails,
+  createRoutingProfile,
+  editRoutingProfile,
+  retireRoutingProfile,
+  repointRoutingProfiles,
+  promoteRoutingProfile,
   getRoutingProfile,
   projectRoutingProfile,
   setProjectRoutingProfile,
