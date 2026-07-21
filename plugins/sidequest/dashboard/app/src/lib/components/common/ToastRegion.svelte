@@ -12,6 +12,6 @@
 
 <style>
   .toasts { position: fixed; right: 1rem; bottom: 1rem; z-index: 50; display: grid; gap: .5rem; width: min(24rem, calc(100vw - 2rem)); }
-  button { display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: 100%; border: 0; border-radius: var(--radius); background: var(--text); color: white; padding: .72rem .8rem; box-shadow: var(--shadow); font: inherit; text-align: left; }
-  span { color: rgb(255 255 255 / .7); font-size: 1.1rem; }
+  button { display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: 100%; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-deep); color: var(--text); padding: .72rem .8rem; font: inherit; text-align: left; }
+  span { color: var(--text-muted); font-size: 1.1rem; }
 </style>
