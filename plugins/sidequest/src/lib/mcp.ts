@@ -696,7 +696,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'done',
-    description: 'Mark a claimed ticket done and release the claim. Stamp model + effort you actually ran as (provenance). by should match the claim.',
+    description: 'Finish claimed non-repo or active artifact work; scoped repo work must submit. Stamp the actual model and effort.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -954,7 +954,7 @@ const TOOLS: ToolDefinition[] = [
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        sharedTree: { type: 'boolean', description: 'Run in the shared tree instead of an isolated worktree.' },
+        sharedTree: { type: 'boolean', description: 'Use shared state or leave an explicitly marked artifact.' },
       },
       required: ['ref'],
     },
@@ -962,7 +962,7 @@ const TOOLS: ToolDefinition[] = [
       const { slug, meta } = resolveProject(args.project);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
-      const prepared = store.prepareDispatch(slug, args.ref, { sessionId: requireDispatchSession() });
+      const prepared = store.prepareDispatch(slug, args.ref, { sessionId: requireDispatchSession(), sharedTree: !!args.sharedTree });
       const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
@@ -996,7 +996,7 @@ const TOOLS: ToolDefinition[] = [
         project: PROJECT_PROP,
         prompt: { type: 'string', description: 'The bounded ticket-execution prompt augmented with stored anchors and verify command.' },
         session: { type: 'string' },
-        sharedTree: { type: 'boolean', description: 'Run in the shared tree instead of an isolated worktree.' },
+        sharedTree: { type: 'boolean', description: 'Use shared state or leave an explicitly marked artifact.' },
       },
       required: ['ref', 'prompt'],
     },

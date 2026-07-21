@@ -6,11 +6,13 @@ const { stableClaudeName, stableDispatchName } = require("./exec-names.js");
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const db = require("./db.js");
+const commitScope = require("./commit-scope.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { discoverExternalModels } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
 const { routingDisabledMessage } = require("./refusal-guidance.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
+const SHARED_TREE_ARTIFACT_MARKER = "Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.";
 function spawnDescription(ticket, resolved) {
   const title = String(ticket && ticket.title || "Sidequest ticket").replace(/\s+/g, " ").trim();
   const route = resolved && resolved.backend === "codex" ? String(resolved.runsLabel || resolved.runsModel || "").replace(/\s+/g, " ").trim() : "";
@@ -1363,15 +1365,31 @@ function normalizeAssignee(v) {
   const s = String(v).trim().slice(0, 60);
   return s || null;
 }
+function updateDoneRefusal(ticket) {
+  if (ticket.claim && ticket.claim.by && !isClaimStale(ticket.claim)) {
+    return `${ticket.ref} is claimed. Use done/completeTicket for eligible non-repo or artifact work; scoped repository work must commit and submit.`;
+  }
+  if (pendingSubmission(ticket)) {
+    return `${ticket.ref} has a pending submission. Complete it through the integration lifecycle; update --status done cannot consume submitted work.`;
+  }
+  const state = dispatchState(ticket);
+  if (ticket.dispatchNonce || state && !state.terminalAt) {
+    return `${ticket.ref} has an active dispatch. Its executor must use done/completeTicket or commit and submit; update --status done cannot bypass that lifecycle.`;
+  }
+  return null;
+}
 function updateTicket(slug, idOrRef, patch) {
   const found = getTicket(slug, idOrRef);
   if (!found) return null;
   patch = patch || {};
   const apply = (t) => {
+    const nextStatus = patch.status == null ? null : requireStatus(patch.status);
+    const doneRefusal = nextStatus === "done" ? updateDoneRefusal(t) : null;
+    if (doneRefusal) throw new Error(doneRefusal);
     const prevStatus = t.status;
     if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
     if (patch.description != null) t.description = String(patch.description).trim();
-    if (patch.status != null) t.status = requireStatus(patch.status);
+    if (patch.status != null) t.status = nextStatus;
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
     if (patch.storyId !== void 0) t.storyId = coerceStoryId(slug, patch.storyId);
@@ -1597,6 +1615,64 @@ function dispatchTokenPrefix(token) {
 function dispatchState(ticket) {
   return ticket && ticket.dispatch && typeof ticket.dispatch === "object" ? ticket.dispatch : null;
 }
+function sharedTreeArtifactRequested(ticket) {
+  return String(ticket && ticket.description || "").split(/\r?\n/).some((line) => line.trim() === SHARED_TREE_ARTIFACT_MARKER);
+}
+function sharedTreeArtifactMode(ticket) {
+  const state = dispatchState(ticket);
+  return Boolean(state && state.sharedTree === true && state.artifactMode === true && typeof state.artifactScope === "string" && state.artifactScope);
+}
+function dirtyPathKey(file) {
+  const normalized = String(file || "").replace(/\\/g, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+function artifactWorkingPaths(slug) {
+  const meta = readMeta(slug);
+  if (!meta || !meta.path) throw new Error("the board project path is unavailable");
+  return commitScope.workingPaths(meta.path).map((file) => String(file).replace(/\\/g, "/")).sort();
+}
+function captureArtifactBaseline(slug, scope) {
+  const meta = readMeta(slug);
+  if (!meta || !meta.path) throw new Error("prepare dispatch: shared-tree artifact mode requires a board project path.");
+  const resolution = commitScope.validateScopeResolution(meta.path, [scope]);
+  if (!resolution.ok) {
+    throw new Error(`prepare dispatch: artifact scope must stay inside the board project: ${resolution.outside.join(", ")}`);
+  }
+  try {
+    return artifactWorkingPaths(slug);
+  } catch (_) {
+    throw new Error("prepare dispatch: shared-tree artifact mode requires a readable Git working tree.");
+  }
+}
+function artifactScopeCheck(slug, ticket, state) {
+  if (!Array.isArray(state.artifactDirtyBaseline)) {
+    return {
+      ok: false,
+      reason: "artifact_baseline_missing",
+      message: `${ticket.ref} has no dispatch-time dirty-path baseline. Release it and dispatch again before closing the artifact.`
+    };
+  }
+  let current;
+  try {
+    current = artifactWorkingPaths(slug);
+  } catch (_) {
+    return {
+      ok: false,
+      reason: "artifact_scope_unavailable",
+      message: `${ticket.ref} cannot verify the shared-tree artifact scope. Release it and dispatch again from a readable Git working tree.`
+    };
+  }
+  const baseline = new Set(state.artifactDirtyBaseline.map(dirtyPathKey));
+  const newlyChanged = current.filter((file) => !baseline.has(dirtyPathKey(file)));
+  const outside = newlyChanged.filter((file) => !commitScope.isInScope(file, [state.artifactScope]));
+  if (!outside.length) return { ok: true };
+  return {
+    ok: false,
+    reason: "artifact_scope_violation",
+    message: `${ticket.ref} changed paths outside artifact scope ${state.artifactScope}: ${outside.join(", ")}. Revert those changes or release the ticket instead of closing it.`,
+    unscopedPaths: outside
+  };
+}
 function activeDispatchRoute(ticket) {
   const state = dispatchState(ticket);
   if (!state || state.terminalAt || !ticket.dispatchNonce) return null;
@@ -1683,6 +1759,9 @@ function prepareDispatch(slug, idOrRef, opts) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+    if (t.claim && t.claim.by && !isClaimStale(t.claim)) {
+      throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it before dispatching again.`);
+    }
     const current = dispatchState(t);
     const currentRoute = activeDispatchRoute(t);
     const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
@@ -1727,8 +1806,18 @@ function prepareDispatch(slug, idOrRef, opts) {
     }
     t.dispatchNonce = crypto.randomBytes(24).toString("base64url");
     t.dispatchExecutor = stableExecutorName(t);
+    const sharedTree = Object.hasOwn(opts, "sharedTree") ? opts.sharedTree === true : Boolean(current && current.sharedTree);
+    const declaredFiles = normalizeFiles(t.files);
+    const artifactMode = sharedTree && declaredFiles.length === 1 && sharedTreeArtifactRequested(t);
+    const artifactScope = artifactMode ? declaredFiles[0] : null;
+    const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
+      sharedTree,
+      declaredFiles,
+      artifactMode,
+      artifactScope,
+      ...artifactMode ? { artifactDirtyBaseline } : {},
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, resolveExec(t.model, t.effort)),
@@ -1831,6 +1920,11 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
     t.dispatchExecutor = fallback.exec.agent;
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
+      sharedTree: state.sharedTree === true,
+      declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : normalizeFiles(t.files),
+      artifactMode: state.artifactMode === true,
+      artifactScope: state.artifactScope || null,
+      ...Array.isArray(state.artifactDirtyBaseline) ? { artifactDirtyBaseline: state.artifactDirtyBaseline.slice() } : {},
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, resolveExec(t.model, t.effort)),
@@ -2046,6 +2140,22 @@ function releaseTicket(slug, idOrRef, by, opts) {
       }
       return { ok: false, reason: "done", ticket: t };
     }
+    const executorDone = opts.status === "done" && (opts.source === "cli" || opts.source === "mcp");
+    const dispatch = dispatchState(t);
+    const artifactDispatch = sharedTreeArtifactMode(t);
+    const declaredFiles = dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : normalizeFiles(t.files);
+    if (executorDone && artifactDispatch) {
+      const scopeCheck = artifactScopeCheck(slug, t, dispatch);
+      if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
+    }
+    if (executorDone && declaredFiles.length && !artifactDispatch) {
+      return {
+        ok: false,
+        reason: "submission_required",
+        message: `${t.ref} has declared repository write scope. Commit and submit verified changes; done is reserved for non-repo work or an active shared-tree artifact dispatch.`,
+        ticket: t
+      };
+    }
     const held = t.claim;
     if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
       return { ok: false, reason: "not_owner", ticket: t, claim: held };
@@ -2053,7 +2163,6 @@ function releaseTicket(slug, idOrRef, by, opts) {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const previousStatus = t.status;
     let comment = null;
-    const dispatch = dispatchState(t);
     t.claim = null;
     setDispatchTerminal(t, opts.status === "done" ? "done" : "released", opts.source || "cli");
     t.dispatchNonce = null;
@@ -3223,6 +3332,9 @@ module.exports = {
   resolveModelId,
   resolveExec,
   spawnDescription,
+  SHARED_TREE_ARTIFACT_MARKER,
+  sharedTreeArtifactRequested,
+  sharedTreeArtifactMode,
   resolveCategoryRoute,
   claudeQuotaFailure,
   classifyModelFilter,

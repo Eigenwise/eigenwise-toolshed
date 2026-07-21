@@ -21,6 +21,8 @@ const { spawnSync, execFileSync } = require('child_process');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const PROJ = path.join(os.tmpdir(), 'sq-mcp-fixtures', 'board');
+fs.mkdirSync(PROJ, { recursive: true });
+execFileSync('git', ['init', '--quiet'], { cwd: PROJ, windowsHide: true });
 process.env.CLAUDE_PROJECT_DIR = PROJ;
 const MCP_SESSION_ID = `mcp-test-session-${process.pid}`;
 process.env.CLAUDE_CODE_SESSION_ID = MCP_SESSION_ID;
@@ -442,6 +444,23 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
   assert.doesNotMatch(prompt, /You are a sidequest ticket executor/);
   assert.equal(dispatched.effort, 'xhigh');
   assert.equal(dispatched.projectPath, PROJ);
+});
+
+test('MCP shared-tree dispatch activates the bounded artifact lifecycle', async () => {
+  store.setCategory({ id: 'dispatch-artifact', name: 'Dispatch Artifact', route: { model: 'sonnet', effort: 'medium' } });
+  const added = await callTool('add', {
+    title: 'shared-tree artifact',
+    description: `Write only the declared documentation artifact.\n${store.SHARED_TREE_ARTIFACT_MARKER}`,
+    category: 'dispatch-artifact',
+    files: ['.claude/.codebase-info/'],
+  });
+  const dispatched = await callTool('dispatch', { ref: added.ref, sharedTree: true });
+  const stored = store.getTicket(added.project, added.ref);
+
+  assert.strictEqual(dispatched.spawn.isolation, undefined);
+  assert.strictEqual(stored.dispatch.sharedTree, true);
+  assert.strictEqual(stored.dispatch.artifactMode, true);
+  assert.match(agentsync.renderTicketBriefing(stored, dispatched.token), /\[sidequest-artifact-mode\]/);
 });
 
 test('native_agent carries ticket anchors and verify command through its stable fallback', async () => {

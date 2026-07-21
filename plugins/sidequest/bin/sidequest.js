@@ -1222,7 +1222,7 @@ async function cmdDispatch(opts, positional) {
   const sessionId2 = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   let prepared;
   try {
-    prepared = store.prepareDispatch(slug, idOrRef, { sessionId: sessionId2 });
+    prepared = store.prepareDispatch(slug, idOrRef, { sessionId: sessionId2, sharedTree: !!opts["shared-tree"] });
   } catch (err) {
     fail(`dispatch: ${err && err.message || err}`);
   }
@@ -1763,7 +1763,7 @@ Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level] [--direct --reason "why no executor can do this"]   atomically take a ticket (category-routed executor claims require a prepared nonce and exact executor; direct is a justified inline exception)
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why no executor can do this"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
-  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   mark it done (stamp who/what worked it)
+  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active shared-tree artifact work
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
@@ -1793,7 +1793,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: declared-file tickets run in worktrees by default; --shared-tree is only for uncommitted-state dependencies
+  sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: declared-file tickets use worktrees unless shared state or bounded artifact output is explicit
   sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]  print the current token-gated executor briefing
   sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]  return an already-registered native Agent spawn spec + bounded prompt
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition

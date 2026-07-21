@@ -299,6 +299,33 @@ test('renderTicketBriefing contains only ticket-specific dispatch context', () =
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
 });
 
+test('artifact lifecycle marker appears only for a validated shared-tree artifact dispatch', () => {
+  clearCatalog();
+  const store = require('../lib/store.js');
+  const base = {
+    ref: 'SQ-646',
+    title: 'Write a bounded artifact',
+    description: store.SHARED_TREE_ARTIFACT_MARKER,
+    model: 'opus',
+    effort: 'high',
+    files: ['.claude/.codebase-info'],
+    category: {},
+  };
+  const active = agentsync.renderTicketBriefing(Object.assign({}, base, {
+    dispatch: { sharedTree: true, artifactMode: true, artifactScope: '.claude/.codebase-info' },
+  }), 'artifact-token');
+  assert.ok(active.includes(agentsync.ARTIFACT_LIFECYCLE_MARKER));
+  assert.match(active, /Do not commit or submit it/);
+
+  for (const dispatch of [
+    { sharedTree: true, artifactMode: false },
+    { sharedTree: false, artifactMode: false },
+  ]) {
+    const ordinary = agentsync.renderTicketBriefing(Object.assign({}, base, { dispatch }), 'ordinary-token');
+    assert.doesNotMatch(ordinary, /\[sidequest-artifact-mode\]/);
+  }
+});
+
 test('renderTicketBriefing embeds no route marker for a Claude-backed route', () => {
   clearCatalog();
   const briefing = agentsync.renderTicketBriefing({
