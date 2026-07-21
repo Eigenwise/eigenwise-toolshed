@@ -31,6 +31,11 @@
 		trigger?.focus();
 	}
 
+	function selectOption(event: MouseEvent, value: string) {
+		event.stopPropagation();
+		void choose(value);
+	}
+
 	function keydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') open = false;
 		if ((event.key === 'Enter' || event.key === ' ') && !disabled) {
@@ -47,7 +52,7 @@
 	{#if open}
 		<div class="options" id={`${label}-options`} role="listbox" aria-label={label}>
 			{#each options as option (option.value)}
-				<button class:selected={option.value === value} type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onclick={() => choose(option.value)}>{option.label}</button>
+				<button class:selected={option.value === value} type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onclick={(event) => selectOption(event, option.value)}>{option.label}</button>
 			{/each}
 		</div>
 	{/if}

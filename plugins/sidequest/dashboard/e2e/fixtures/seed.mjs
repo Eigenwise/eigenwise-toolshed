@@ -13,6 +13,7 @@ const second = store.ensureProject(join(projectRoot, 'beta'), 'Beta board');
 const archived = store.ensureProject(join(projectRoot, 'retired'), 'Retired board');
 store.setProjectNotify(second.slug, false);
 store.setProjectRouting(first.slug, 'enabled');
+store.createRoutingProfile('research-fixture', { name: 'Research fixture' });
 for (let index = 1; index <= 18; index += 1) {
   store.setCategory({ id: `fixture-category-${index}`, name: `Fixture category ${index}`, description: 'Synthetic settings overflow fixture.', route: { model: 'sonnet', effort: 'high' }, fallback: null, contract: '', enabled: true });
 }

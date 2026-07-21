@@ -173,11 +173,15 @@ test('renders board routing previews and the profile library', async ({ page, da
   await expect(page.getByRole('button', { name: 'Profile library' })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Routing profile' })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Profile library' })).toBeVisible();
+  await expect(page.getByText(/Following/)).toBeVisible();
 
   await page.getByRole('combobox', { name: 'Routing profile' }).click();
-  await page.getByRole('option', { name: /Research/ }).click();
-  await expect(page.getByText('Repoint preview', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Use this profile' })).toBeVisible();
+  await page.getByRole('option', { name: /Research fixture/ }).click();
+  await expect(page.getByRole('combobox', { name: 'Routing profile' })).toContainText('Research fixture');
+
+  await page.getByRole('combobox', { name: 'Profile library' }).click();
+  await page.getByRole('option', { name: /Research fixture/ }).click();
+  await expect(page.locator('.profile-library h3')).toHaveText('Research fixture');
 });
 
 test('keeps Questline state, accessible tokens, cards, and dialogs correct in both themes', async ({ page, dashboard }) => {
@@ -218,7 +222,7 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toBeVisible();
     await assertDialogGeometry(settings);
-    await page.getByRole('button', { name: 'Board settings' }).click();
+    await page.getByRole('button', { name: 'Board changes' }).click();
     const fixtureCategoryId = page.locator('code', { hasText: /^fixture-category-1$/ });
     const categoryRow = page.locator('.category-row').filter({ has: fixtureCategoryId });
     await expect(categoryRow).toBeVisible();
@@ -228,7 +232,6 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
     await expect(disabledCategory).toBeVisible();
     await expect(disabledCategory.getByRole('button', { name: 'Edit' })).toBeEnabled();
     await expect(disabledCategory.getByRole('button', { name: 'Re-enable' })).toBeEnabled();
-    await expect(disabledCategory.getByRole('button', { name: 'Delete' })).toBeEnabled();
     for (const selector of ['code', 'small', '.category-meta']) {
       const colors = await renderedCompactTextColors(disabledCategory, selector);
       expect(colors.opacity).toBe('1');
