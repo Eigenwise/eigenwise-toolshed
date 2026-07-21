@@ -27,6 +27,7 @@
   --surface-muted: var(--bg-deep);
   --accent-soft: var(--accent-wash);
   --radius: 2px;
+  --control-height: 2.4rem;
   --focus-ring: 0 0 0 3px oklch(0.42 0.1 277 / 0.3);
   --motion-fast: 160ms cubic-bezier(.2, .8, .2, 1);
 }
@@ -54,6 +55,7 @@
   --surface-muted: var(--bg-deep);
   --accent-soft: var(--accent-wash);
   --radius: 2px;
+  --control-height: 2.4rem;
   --focus-ring: 0 0 0 3px oklch(0.72 0.1 277 / 0.42);
   --motion-fast: 160ms cubic-bezier(.2, .8, .2, 1);
 }

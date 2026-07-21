@@ -292,7 +292,7 @@
   button.primary { background: var(--accent); color: var(--text-on-accent); border-color: var(--accent); }
   button.danger { color: var(--danger); }
   button:disabled { cursor: not-allowed; opacity: .55; }
-  .settings-trigger { padding: .5rem .65rem; }
+  .settings-trigger { box-sizing: border-box; height: var(--control-height); min-height: var(--control-height); padding: .5rem .65rem; }
   .backdrop { position: fixed; z-index: 30; inset: 0; display: grid; place-items: start center; padding: 3rem 1rem; background: rgb(31 41 51 / .18); overflow: auto; }
   .settings { width: min(66rem, 100%); padding: 1.25rem; background: var(--bg-deep); border-color: var(--border-strong); }
   header, .category-heading, .form-actions { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }

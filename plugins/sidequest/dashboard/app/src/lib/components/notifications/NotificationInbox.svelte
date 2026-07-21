@@ -162,7 +162,7 @@
 
 <style>
   .bell, .quiet, .tabs button, .notification { border: 0; font: inherit; }
-  .bell { border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: .5rem .65rem; border-radius: var(--radius); display: inline-flex; align-items: center; gap: .4rem; }
+  .bell { box-sizing: border-box; height: var(--control-height); min-height: var(--control-height); border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: .5rem .65rem; border-radius: var(--radius); display: inline-flex; align-items: center; gap: .4rem; }
   .badge { min-width: 1.35rem; padding: .08rem .3rem; border-radius: var(--radius); background: var(--accent); color: var(--text-on-accent); font-size: .72rem; font-weight: 700; }
   .inbox { position: absolute; z-index: 20; right: 1rem; top: 4.25rem; width: min(25rem, calc(100vw - 2rem)); padding: 1rem; background: var(--bg-deep); border-color: var(--border-strong); }
   header { display: flex; justify-content: space-between; gap: .75rem; align-items: start; }
