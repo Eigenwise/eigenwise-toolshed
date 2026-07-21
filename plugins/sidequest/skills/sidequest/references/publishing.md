@@ -79,12 +79,12 @@ board (submissions stay parked — fail closed).
    confirm every range commit is reachable:
    `git merge-base --is-ancestor <commit> origin/main` (after a fresh fetch).
 12. **Mark done + clean up**, only after every range commit is reachable: for each shipped ticket
-   `sidequest done <ref> --by <session-worker-id> --model <its stamped model> --effort <its effort>`
-   with a closing comment naming the pushed commit (done consumes the submission — the ticket
-   leaves the integration queue). Then delete its durable ref (`git update-ref -d
-   refs/sidequest/<SQ-n>`), remove the integration worktree (`git worktree remove <scratch>/sq-integrate`),
-   and `sidequest publish unlock --by <session-worker-id>`. Unlock happens LAST, in a step that runs
-   even when earlier cleanup partially fails.
+   `sidequest groom-close <ref> --by <session-worker-id> --integration --reason "Integrated <commit> into origin/main."`
+   (the control-plane integration closure consumes the submission, records the pushed commit as
+   evidence, and removes the ticket from the integration queue). Then delete its durable ref (`git
+   update-ref -d refs/sidequest/<SQ-n>`), remove the integration worktree (`git worktree remove
+   <scratch>/sq-integrate`), and `sidequest publish unlock --by <session-worker-id>`. Unlock happens
+   LAST, in a step that runs even when earlier cleanup partially fails.
 
 ## Integration failures fail closed
 

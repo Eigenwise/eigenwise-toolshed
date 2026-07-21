@@ -47,6 +47,8 @@ function pin(ticket?: any, commit?: any) {
   git(['update-ref', `refs/sidequest/${ticket.ref}`, commit]);
 }
 const { slug } = store.ensureProject(PROJECT_DIR);
+const exploration = store.getCategory('codebase-exploration');
+store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR }, { cwd: PROJECT_DIR });
 
@@ -129,16 +131,23 @@ test('submitted tickets leave the ready pool and refuse claims until cleared', (
   assert.strictEqual(store.clearSubmission(slug, t.ref, {}).reason, 'no_submission');
 });
 
-test('done consumes the submission: integratedAt is stamped and the queue drains', () => {
-  const t = addTicket('done consumes submission');
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+test('integration closure consumes a routed submission with control-plane provenance', () => {
+  const t = addTicket('integration consumes submission', { category: 'codebase-exploration' });
+  const prepared = store.prepareDispatch(slug, t.ref, { sharedTree: false });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    source: 'mcp',
+  }).ok, true);
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
 
-  // The publish transaction completes the ticket after pushing.
-  assert.strictEqual(store.completeTicket(slug, t.ref, 'orchestrator', {}).ok, true);
+  const completed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${COMMIT} into main.`]);
+  assert.strictEqual(completed.status, 0, completed.stderr + completed.stdout);
   const after = store.getTicket(slug, t.ref);
   assert.strictEqual(after.status, 'done');
-  assert.ok(after.submission.integratedAt, 'done stamps the submission integrated');
+  assert.strictEqual(after.completion.authority, 'control-plane');
+  assert.strictEqual(after.completion.purpose, 'integration');
+  assert.ok(after.submission.integratedAt, 'integration closure stamps the submission integrated');
   assert.strictEqual(store.pendingSubmission(after), false);
   assert.ok(!store.submissionsPayload(slug).tickets.some((x?: any) => x.ref === t.ref));
 });

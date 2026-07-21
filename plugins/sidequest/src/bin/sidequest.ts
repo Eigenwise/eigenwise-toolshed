@@ -72,7 +72,7 @@ function parseArgs(argv: any) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -825,14 +825,15 @@ async function cmdGroomClose(opts: any, positional: any) {
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
-  const res = store.closeTicketForGrooming(slug, idOrRef, { by, reason });
+  const purpose = opts.integration ? 'integration' : 'grooming';
+  const res = store.completeTicketAsControlPlane(slug, idOrRef, { by, reason, purpose });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
     return;
   }
-  if (res.ok) console.log(`✓ ${res.ticket.ref} closed by board grooming  — ${meta.name}`);
+  if (res.ok) console.log(`✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
   else reportClaimFailure('groom-close', idOrRef, res, meta);
 }
 
@@ -2061,7 +2062,7 @@ Working the board safely (multi-agent):
   sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level] [--direct --reason "why no executor can do this"]   atomically take a ticket (category-routed executor claims require a prepared nonce and exact executor; direct is a justified inline exception)
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why no executor can do this"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
-  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who]   administrative board-grooming closure with durable provenance
+  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]   control-plane closure; --integration consumes a submitted ticket after publish
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
