@@ -200,6 +200,34 @@ test('schema v7 migrates local category kinds with profile provenance and snapsh
   database.close();
 });
 
+test('schema v7 drops orphan project category rows left behind by deleted boards', () => {
+  const homeRoot = makeHome();
+  const dbPath = path.join(homeRoot, 'sidequest.db');
+  const general = { id: 'general', name: 'General', description: '', route: { model: 'sonnet', effort: 'medium' }, fallback: null, contract: '', artifactRoots: [], enabled: true };
+  const local = { id: 'board-only', name: 'Board only', description: '', route: { model: 'fable', effort: 'medium' }, fallback: null, contract: '', artifactRoots: [], enabled: true };
+  const seed = String.raw`
+    const { DatabaseSync } = require('node:sqlite');
+    const database = new DatabaseSync(${JSON.stringify(dbPath)});
+    database.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE projects (slug TEXT PRIMARY KEY, data TEXT); CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT); CREATE TABLE project_categories (project TEXT, id TEXT, kind TEXT, data TEXT, PRIMARY KEY (project, id)); INSERT INTO meta VALUES ('schema_version', '6');");
+    database.prepare('INSERT INTO projects VALUES (?, ?)').run('board', JSON.stringify({ path: 'C:/work/board', name: 'Board' }));
+    database.prepare('INSERT INTO categories VALUES (?, ?)').run('general', ${JSON.stringify(JSON.stringify(general))});
+    database.prepare('INSERT INTO project_categories VALUES (?, ?, ?, ?)').run('board', 'board-only', 'ADD', ${JSON.stringify(JSON.stringify(local))});
+    database.prepare('INSERT INTO project_categories VALUES (?, ?, ?, ?)').run('deleted-board', 'music-analysis', 'ADD', ${JSON.stringify(JSON.stringify(local))});
+    database.prepare('INSERT INTO project_categories VALUES (?, ?, ?, ?)').run('deleted-board', 'general', 'DISABLE', '{}');
+    database.close();
+  `;
+  assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
+
+  const database = db.openDb(homeRoot);
+  assert.equal(db.getRow(database, 'meta', 'schema_version'), 7);
+  assert.deepEqual(
+    database.prepare('SELECT project, id FROM project_categories ORDER BY project, id').all().map((row) => [row.project, row.id]),
+    [['board', 'board-only']],
+  );
+  assert.equal(database.prepare("SELECT profile_id FROM project_routing_profiles WHERE project = 'board'").get()?.profile_id, 'coding');
+  database.close();
+});
+
 test('a schema-v6 session refuses writes after a schema-v7 process migrates the database', () => {
   const homeRoot = makeHome();
   db.openDb(homeRoot).close();

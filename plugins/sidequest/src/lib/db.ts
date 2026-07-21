@@ -538,7 +538,21 @@ export function openDb(homeRoot: string): SidequestDatabase {
       const migratedAt = new Date().toISOString();
       const legacyCategories = categoryRows(database);
       validateGeneral('coding', legacyCategories);
-      const legacyProjectRows = prepareCached(database, 'SELECT project, id, kind, data FROM project_categories ORDER BY project, id').all()
+      // Deleted boards can leave orphan layer rows behind; v7's FK to projects
+      // rejects them, so migrate only rows whose board still exists.
+      const orphanRowCount = Number(prepareCached(database, `
+        SELECT COUNT(*) AS count FROM project_categories pc
+        LEFT JOIN projects p ON p.slug = pc.project
+        WHERE p.slug IS NULL
+      `).get()?.count ?? 0);
+      if (orphanRowCount > 0) {
+        console.warn(`sidequest: schema v7 migration dropping ${orphanRowCount} category row(s) left behind by deleted boards`);
+      }
+      const legacyProjectRows = prepareCached(database, `
+        SELECT pc.project, pc.id, pc.kind, pc.data FROM project_categories pc
+        JOIN projects p ON p.slug = pc.project
+        ORDER BY pc.project, pc.id
+      `).all()
         .map((row) => {
           let data: Record<string, unknown> = {};
           try {

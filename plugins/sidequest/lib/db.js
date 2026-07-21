@@ -399,7 +399,19 @@ function openDb(homeRoot) {
       const migratedAt = (/* @__PURE__ */ new Date()).toISOString();
       const legacyCategories = categoryRows(database);
       validateGeneral("coding", legacyCategories);
-      const legacyProjectRows = prepareCached(database, "SELECT project, id, kind, data FROM project_categories ORDER BY project, id").all().map((row) => {
+      const orphanRowCount = Number(prepareCached(database, `
+        SELECT COUNT(*) AS count FROM project_categories pc
+        LEFT JOIN projects p ON p.slug = pc.project
+        WHERE p.slug IS NULL
+      `).get()?.count ?? 0);
+      if (orphanRowCount > 0) {
+        console.warn(`sidequest: schema v7 migration dropping ${orphanRowCount} category row(s) left behind by deleted boards`);
+      }
+      const legacyProjectRows = prepareCached(database, `
+        SELECT pc.project, pc.id, pc.kind, pc.data FROM project_categories pc
+        JOIN projects p ON p.slug = pc.project
+        ORDER BY pc.project, pc.id
+      `).all().map((row) => {
         let data = {};
         try {
           const parsed = JSON.parse(row.data);
