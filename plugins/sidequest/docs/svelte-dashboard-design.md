@@ -63,7 +63,7 @@ The rewrite should follow those runes and component-boundary habits. It should k
   - Priority: urgent through low, then manual order.
   - Latest: newest `updatedAt`, then manual order.
   - Newest: newest `createdAt`, then manual order.
-- Sort mode persists in `localStorage`. Priority, assignee, story, search, inbox tab, selected project, and archive view are session-only.
+- Sort mode persists in `localStorage`. Priority, assignee, story, search, selected project, and archive view are session-only.
 - Story, assignee, sort, notification, and settings popovers are mutually exclusive. Clicking outside closes them. The settings backdrop also closes settings.
 - `New ticket` opens the create dialog.
 
@@ -125,11 +125,10 @@ The rewrite should follow those runes and component-boundary habits. It should k
 - A created story is inserted into client state, selected, and immediately attached to an edited ticket.
 - The current UI has no story rename, recolor, description edit, or delete controls, though the server exposes update and delete routes.
 
-### Comments, questions, links, and blockers
+### Comments, links, and blockers
 
 - Existing tickets have a chronological comment thread with author, relative timestamp, kind, and rendered markdown.
-- The composer can post a regular comment or a question. Dashboard-authored entries use `by: "you"` and source `dashboard` so they do not notify the same user.
-- A pending question produces a card-level `needs reply` chip and drives the urgent notification badge.
+- The composer posts a regular comment. Dashboard-authored entries use `by: "you"` and source `dashboard` so they do not notify the same user.
 - Ticket links support `blocks`, `depends on`, and `related to`. The server stores reciprocal link types.
 - Link targets are other tickets from the same project. Linked done tickets get a check mark.
 - Links can be removed from the dialog. Open blocking links produce the card's blocked chip.
@@ -139,7 +138,7 @@ The rewrite should follow those runes and component-boundary habits. It should k
 - Existing tickets can schedule reminders in one hour, three hours, tomorrow at 09:00 local time, or at a custom future date and time.
 - Empty, invalid, and past custom times are rejected in the client.
 - The active reminder appears in the dialog and on the card and can be cancelled.
-- Due reminders enter the persistent notification queue and the `Needs you` inbox bucket.
+- Due reminders enter the persistent notification queue.
 - The server has its own 15-second due-reminder sweep, so reminders can fire while no dashboard is polling.
 
 ### Attachments and lightbox
@@ -152,17 +151,15 @@ The rewrite should follow those runes and component-boundary habits. It should k
 - Dialog thumbnails and card thumbnails open a full-screen lightbox. Clicking the lightbox or pressing Escape closes it.
 - JSON request bodies currently have a 25 MiB server limit, which includes base64 image overhead.
 
-### Notification inbox and desktop notifications
+### Notification queue and desktop notifications
 
-- The bell opens a persistent inbox, not the browser permission prompt.
-- The client loads the newest 50 notifications globally. The server also returns unbounded unread totals so older unread questions still affect badges.
-- Inbox tabs are All, Needs you, and Activity. Needs you contains questions and reminders. Activity contains routine comments, creates, and status changes.
-- Empty copy changes by tab. Unread rows have a dot. Questions and reminders have stronger treatment.
-- The bell badge caps at `99+`. Any unread question changes the badge to its urgent style and adds an awaiting-reply title.
+- The bell opens a persistent notification queue.
+- The client loads the newest 50 notifications globally and tracks unread totals.
+- Notifications cover comments, reminders, and status changes. Each row links to its ticket.
 - Users can mark one notification read by opening it or mark all read.
 - Opening a notification opens the referenced active ticket. If the ticket is no longer active, the client looks in that project's archive.
 - Notification dismissal exists in the API but has no current UI.
-- Desktop notifications distinguish question, comment, created, and status events. They include the project when more than one project exists.
+- Desktop notifications distinguish comment, reminder, and status events. They include the project when more than one project exists.
 - Desktop notifications are suppressed while the dashboard has focus and for any change whose source is `dashboard`.
 - A notification click focuses the window and selects the ticket's project. Notification tags deduplicate across multiple dashboard tabs.
 - The page generates its favicon and desktop notification icon on a canvas at runtime.
@@ -171,7 +168,7 @@ The rewrite should follow those runes and component-boundary habits. It should k
 
 - Settings is a modal-sized popover with execution settings on the left and notification settings on the right.
 - Desktop notification permission states are unsupported, default, granted, and denied. The current client makes a best-effort permission request at boot and again on the first user click, then allows an explicit click or keyboard activation on the settings row.
-- Notification-kind toggles cover question, comment, created, and status. Defaults are enabled.
+- Notification-kind toggles cover comment, reminder, and status. Defaults are enabled.
 - Preferences persist both in `localStorage` and on the server. The server wins during startup so background queueing follows the same policy with no tab open.
 - Per-project notification toggles are optimistic. A muted project queues no notification kind and shows a muted icon in the rail.
 - A selected board has a routing enabled or disabled control. All-boards scope asks the user to open a board first.
@@ -211,7 +208,7 @@ The rewrite should follow those runes and component-boundary habits. It should k
 3. Load server notification preferences and the routing model catalog independently.
 4. Fetch active projects, all active tickets, global notifications, all stories, and categories in parallel.
 5. Establish the initial desktop-notification baseline so existing tickets do not notify.
-6. Render the rail, board, filters, inbox badge, and settings data.
+6. Render the rail, board, filters, notification badge, and settings data.
 7. Select the only project when exactly one exists.
 8. Start the 2.5-second poll.
 
@@ -280,7 +277,7 @@ All endpoints are same-origin. JSON routes return `{ error }` on failure. Ticket
 | POST | `/api/tickets/:id/archive?project=slug` | Archive a ticket. |
 | POST | `/api/tickets/:id/unarchive?project=slug` | Restore a ticket. |
 | POST | `/api/archive-done?project=slug|all` | Archive every done ticket in scope. |
-| GET | `/api/notifications?project=&unread=&kind=&includePending=&limit=` | List notifications plus server-wide unread, question, and needs-you totals. |
+| GET | `/api/notifications?project=&unread=&kind=&includePending=&limit=` | List notifications plus unread totals. |
 | POST | `/api/notifications/read` | Mark `{ id }` or `{ all: true }` read. |
 | DELETE | `/api/notifications/:id` | Dismiss a notification. No current UI. |
 | GET | `/api/notify-prefs` | Server-side event-kind preferences. |
@@ -411,7 +408,7 @@ Use `$state.raw` for server snapshots because polling replaces them wholesale:
 Use `$state` for interaction state:
 
 - current project and board/archive view;
-- priority, assignee, story, search, sort, and inbox filters;
+- priority, assignee, story, search, and sort filters;
 - editor and attachment draft;
 - open popover or dialog;
 - drag state;
@@ -431,9 +428,9 @@ Compute these with `$derived` or `$derived.by`:
 - todo, doing, and done groups with their selected sort;
 - project and archive totals;
 - story options and ticket counts;
-- unread inbox buckets;
+- unread notification totals;
 - active category scope, groups, and route labels;
-- card blocker, response, claim, story, and route presentation.
+- card blocker, claim, story, and route presentation.
 
 Do not mirror derived arrays into writable state. Do not use `$effect` to recalculate filters, columns, counts, or form values.
 
@@ -551,9 +548,9 @@ Minimum browser scenarios:
 - create-ticket validation, board choice, category or unclassified choice, story choice, labels, files, and pending images;
 - edit autosave on blur, immediate segment/category/story saves, close-time blur commit, Ctrl/Command+Enter, delete, archive, and restore;
 - markdown rendering and unsafe-link rejection;
-- comment, question, response cue, links, blockers, reminder presets, custom reminder validation, and cancel;
+- comment, links, blockers, reminder presets, custom reminder validation, and cancel;
 - paste and drag/drop images, immediate edit upload/removal, and asset display;
-- notification tabs, server-wide counts, urgent question badge, opening active and archived targets, mark one read, and mark all read;
+- notification queue, unread counts, opening active and archived targets, mark one read, and mark all read;
 - desktop permission states, background-only toast behavior, event-kind preferences, and project mute;
 - routing enable/disable, global fallback, category default and board scopes, add/edit/draft/fallback, disable/re-enable, reset, warnings, and unavailable model display;
 - archive-all behavior in a single project and all boards;

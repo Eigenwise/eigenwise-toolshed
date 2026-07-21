@@ -269,8 +269,7 @@ Routed executors use MCP, not shell commands, for the lifecycle:
   executor uses the exact dispatch executor and unchanged `spawn.prompt`. The token and claim guard prove the
   resolved route; the executor never pushes or assigns release versions. `submit` parks the verified local
   commit for the orchestrator's serialized publish transaction.
-- **Direct claim/done is narrow.** Use `next --direct` or `claim --direct`, followed by `done`, only for
-  intentional inline work or non-repository work. Routed repository work ends with `submit`.
+- **Direct claim/done is narrow.** For deliberate inline work on a routed ticket, the user must first apply the `direct-ok` label, then use `sidequest claim SQ-3 --by <worker> --direct --reason "No routed executor is available for this user-approved inline review"`, followed by `done`. The reason must be at least 20 characters. Use direct work only for intentional inline work or non-repository work. Routed repository work ends with `submit`.
 - **Claim before work, always.** The claim is the atomic check that the ticket is still free. If it fails,
   don't work the ticket.
 - **`--by`** is a unique worker id. Concurrent workers must use distinct ids.
@@ -469,8 +468,9 @@ node <plugin>/bin/sidequest.js next --category coding.normal --by <you>  # claim
 node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
 node <plugin>/bin/sidequest.js dispatch SQ-3                 # stable routed executor, spawn, token
 node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
-node <plugin>/bin/sidequest.js claim SQ-3 --by <worker> --direct # intentional inline or non-repo work
-node <plugin>/bin/sidequest.js commit SQ-3 --by <worker> --message "scoped change"
+node <plugin>/bin/sidequest.js update SQ-3 -l direct-ok         # user grants the deliberate inline exception
+node <plugin>/bin/sidequest.js claim SQ-3 --by <worker> --direct --reason "No routed executor is available for this user-approved inline review"
+node <plugin>/bin/sidequest.js done SQ-3 --by <worker>                    # direct inline or non-repo work
 node <plugin>/bin/sidequest.js submit SQ-3 --by <worker> --commit <hash> --verify "<exact command>"
 node <plugin>/bin/sidequest.js done SQ-3 --by <worker>       # direct inline or non-repo work only
 node <plugin>/bin/sidequest.js link SQ-4 depends-on SQ-3      # dependencies (blocks | depends-on | related)
