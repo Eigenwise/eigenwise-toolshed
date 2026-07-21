@@ -206,6 +206,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
     const mcpDispatch = await callTool('dispatch', {
       project: PROJECT,
       ref: ticket.ref,
+      full: true,
     });
     assert.equal(mcpDispatch.token, cliDispatch.token);
     assert.equal(mcpDispatch.recovery.model, 'codex-gpt-5-6-sol');

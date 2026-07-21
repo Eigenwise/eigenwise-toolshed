@@ -211,6 +211,53 @@ test('write acks and pulse stay lean: no body echoes, no lifecycle noise by defa
   assert.ok('preparedAt' in detailed.dispatch, 'detail:true restores the full dispatch lifecycle');
 });
 
+test('MCP defaults cap category, dispatch, and pulse result payloads', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-payload-budget-')).slug;
+  for (let index = 0; index < 18; index += 1) {
+    const id = `payload-${index}`;
+    store.setProjectCategory(project, id, 'ADD', {
+      id,
+      name: `Payload category ${index}`,
+      description: `Classify work that changes the payload fixture ${index}. `.repeat(3),
+      contract: `Full contract ${index}. `.repeat(10),
+      route: { model: 'sonnet', effort: 'low' },
+      fallback: null,
+      enabled: true,
+    });
+  }
+
+  const categories = await callToolRaw('category_list', { project });
+  assert.ok(Buffer.byteLength(categories.content[0].text) <= 13000, `category_list is ${Buffer.byteLength(categories.content[0].text)} bytes`);
+  const categoryPayload = JSON.parse(categories.content[0].text);
+  assert.ok(categoryPayload.categories.length >= 18);
+  const localCategory = categoryPayload.categories.find((category: any) => category.id === 'payload-0');
+  assert.equal(localCategory.localRow, undefined);
+  assert.equal(localCategory.route, undefined);
+  const fullCategories = await callTool('category_list', { project, full: true });
+  assert.equal(fullCategories.categories.find((category: any) => category.id === 'payload-0').localRow.data, undefined);
+
+  const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
+  const dispatched = await callToolRaw('dispatch', { project, ref: ticket.ref });
+  assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1200, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
+  const dispatchPayload = JSON.parse(dispatched.content[0].text);
+  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn']);
+  assert.equal(dispatchPayload.token, undefined);
+  assert.equal(dispatchPayload.agent, undefined);
+  assert.equal(dispatchPayload.guidance, undefined);
+
+  const warningTicket = await callTool('add', { project, title: 'payload warning', description: DISPATCH_DESCRIPTION, category: 'debugging' });
+  const warningDispatch = await callToolRaw('dispatch', { project, ref: warningTicket.ref });
+  assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1200, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
+  assert.deepStrictEqual(JSON.parse(warningDispatch.content[0].text).warnings, ['Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.']);
+
+  const pulse = await callToolRaw('pulse', { project, ref: ticket.ref });
+  assert.ok(Buffer.byteLength(pulse.content[0].text) <= 1200, `pulse is ${Buffer.byteLength(pulse.content[0].text)} bytes`);
+  const pulsePayload = JSON.parse(pulse.content[0].text);
+  assert.equal(pulsePayload.submission, undefined);
+  assert.equal(pulsePayload.git, undefined);
+  assert.equal(pulsePayload.dispatch.tokenPrefix, undefined);
+});
+
 test('MCP commit and submit finish an isolated worktree without a PATH command', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
@@ -231,7 +278,7 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
     project, ref: ticket.ref, by, message: 'MCP scoped commit', worktree: explicitPath,
   });
   assert.ok(committed.commit, 'commit returns the local hash');
-  assert.deepEqual(committed.paths, ['lib/allowed.js']);
+  assert.equal(committed.paths, undefined, 'commit acknowledgement omits echoed paths');
   assert.equal(gitAt(worktree, ['diff', '--cached', '--name-only']), 'foreign.js', 'foreign staging remains intact');
   gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
 
@@ -241,7 +288,8 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
     body: 'MCP terminal evidence',
   });
   assert.equal(submitted.ok, true);
-  assert.equal(submitted.submission.commit, committed.commit);
+  assert.equal(submitted.submission, undefined, 'submit acknowledgement omits stored submission details');
+  assert.equal(store.getTicket(project, ticket.ref).submission.commit, committed.commit);
   const after = store.getTicket(project, ticket.ref);
   assert.equal(after.claim, null, 'submit releases the claim');
   assert.ok(after.comments.some((comment: any) => comment.body === 'MCP terminal evidence'));
@@ -317,7 +365,7 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['project', 'ref', 'sharedTree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['full', 'project', 'ref', 'sharedTree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
@@ -325,7 +373,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   const slug = store.ensureProject(PROJ).slug;
 
   const addedInstant = await callTool('add', { title: 'instant dispatch', description: DISPATCH_DESCRIPTION, category: 'dispatch-codex' });
-  const instant = await callTool('dispatch', { ref: addedInstant.ref, session: 'mcp-dispatch-session' });
+  const instant = await callTool('dispatch', { ref: addedInstant.ref, session: 'mcp-dispatch-session', full: true });
   assert.equal(instant.mode, 'instant');
   assert.deepEqual(instant.exec, {
     agent: 'sidequest-exec-dispatch-high', model: null, backend: 'codex',
@@ -357,7 +405,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.match(instant.guidance, /executor/);
   assert.equal(store.getTicket(slug, addedInstant.ref).dispatchExecutor, instant.agent);
 
-  const adopted = await callTool('dispatch', { ref: addedInstant.ref, session: 'adopting-session' });
+  const adopted = await callTool('dispatch', { ref: addedInstant.ref, session: 'adopting-session', full: true });
   assert.equal(adopted.mode, 'instant');
   assert.equal(adopted.agent, instant.agent);
   assert.notEqual(adopted.token, instant.token);
@@ -379,7 +427,7 @@ test('MCP dispatch records the runtime session and the Agent lifecycle binds it'
   const omitted = await callTool('add', { title: 'omitted dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
   const real = await callTool('add', { title: 'runtime dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
 
-  const friendlyDispatch = await callTool('dispatch', { ref: friendly.ref, session: 'hh6-quant' });
+  const friendlyDispatch = await callTool('dispatch', { ref: friendly.ref, session: 'hh6-quant', full: true });
   await callTool('dispatch', { ref: omitted.ref });
   await callTool('dispatch', { ref: real.ref, session: MCP_SESSION_ID });
 
@@ -394,13 +442,13 @@ test('MCP dispatch records the runtime session and the Agent lifecycle binds it'
     tool_input: friendlyDispatch.spawn,
   });
   const agentName = launched.hookSpecificOutput.updatedInput.name;
-  let pulse = await callTool('pulse', { ref: friendly.ref, detail: true });
+  let pulse = await callTool('pulse', { ref: friendly.ref, full: true });
   assert.equal(pulse.dispatch.state, 'launched');
   assert.equal(pulse.dispatch.sessionId, MCP_SESSION_ID);
   assert.ok(pulse.dispatch.launchedAt);
 
   assert.equal(store.bindDispatchAgent(MCP_SESSION_ID, friendlyDispatch.agent, 'native-mcp-session-agent', agentName).ok, true);
-  pulse = await callTool('pulse', { ref: friendly.ref, detail: true });
+  pulse = await callTool('pulse', { ref: friendly.ref, full: true });
   assert.equal(pulse.dispatch.state, 'bound');
   assert.equal(pulse.dispatch.agentId, 'native-mcp-session-agent');
 });
@@ -427,7 +475,7 @@ test('MCP dispatch refuses a caller session label without runtime identity', asy
 test('dispatch returns a complete Claude worktree spawn spec', async () => {
   store.setCategory({ id: 'dispatch-fable', name: 'Dispatch Fable', route: { model: 'fable', effort: 'xhigh' } });
   const added = await callTool('add', { title: 'complete instant spawn', description: DISPATCH_DESCRIPTION, category: 'dispatch-fable', files: ['plugins/sidequest'] });
-  const dispatched = await callTool('dispatch', { ref: added.ref });
+  const dispatched = await callTool('dispatch', { ref: added.ref, full: true });
 
   const { prompt, ...spawn } = dispatched.spawn;
   assert.deepStrictEqual(spawn, {
@@ -454,7 +502,7 @@ test('MCP shared-tree dispatch activates the bounded artifact lifecycle', async 
     category: 'dispatch-artifact',
     files: ['.claude/.codebase-info/'],
   });
-  const dispatched = await callTool('dispatch', { ref: added.ref, sharedTree: true });
+  const dispatched = await callTool('dispatch', { ref: added.ref, sharedTree: true, full: true });
   const stored = store.getTicket(added.project, added.ref);
 
   assert.strictEqual(dispatched.spawn.isolation, undefined);
@@ -530,14 +578,11 @@ test('add rejects incomplete routing inputs', async () => {
   assert.ok((await callToolRaw('add', { title: 'bad', complexity: 3, why: 'too short' })).isError, 'a thin why errors');
   assert.ok((await callToolRaw('add', { title: 'direct', complexity: 3, why: 'x'.repeat(25), model: 'grade-3' })).isError, 'a direct model errors');
 });
-test('add returns a compact category acknowledgement', async () => {
+test('add returns a compact acknowledgement', async () => {
   const out = await callTool('add', { title: 'MCP add works', complexity: 3, why: 'a real motivation referencing the actual single-file change' });
-  assert.deepStrictEqual(Object.keys(out).sort(), ['category', 'ok', 'project', 'ref', 'status', 'title']);
+  assert.deepStrictEqual(Object.keys(out).sort(), ['ok', 'project', 'ref', 'status']);
   assert.match(out.ref, /^SQ-\d+$/);
   assert.strictEqual(out.status, 'todo');
-  assert.equal(typeof out.category.name, 'string');
-  assert.equal(typeof out.category.description, 'string');
-  assert.equal(typeof out.category.route.model, 'string');
 });
 
 test('category stamps warn until category_list is served by the MCP session', async () => {
@@ -565,21 +610,19 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
   assert.match(refused.content[0].text, /executor's entire brief is this ticket/);
 
   await callTool('update', { ref: added.ref, description: DISPATCH_DESCRIPTION });
-  const dispatched = await callTool('dispatch', { ref: added.ref });
+  const dispatched = await callTool('dispatch', { ref: added.ref, full: true });
   assert.match(dispatched.warnings[0], /no verify command/);
 
   const research = await callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'deep-research' });
-  assert.deepEqual((await callTool('dispatch', { ref: research.ref })).warnings, []);
+  assert.deepEqual((await callTool('dispatch', { ref: research.ref, full: true })).warnings, []);
 });
 
-test('update returns only its changed fields', async () => {
+test('update returns a compact acknowledgement', async () => {
   store.setCategory({ id: 'mcp-update-echo', name: 'MCP update echo', route: { model: 'opus', effort: 'high' } });
   const added = await callTool('add', { title: 'MCP update echo', category: 'mechanical' });
   const updated = await callTool('update', { ref: added.ref, category: 'mcp-update-echo' });
-  assert.deepStrictEqual(Object.keys(updated).sort(), ['category', 'categoryId', 'ok', 'project', 'ref', 'status']);
-  assert.strictEqual(updated.categoryId, 'mcp-update-echo');
-  assert.equal(updated.category.name, 'MCP update echo');
-  assert.equal(updated.category.route.model, 'opus');
+  assert.deepStrictEqual(Object.keys(updated).sort(), ['ok', 'project', 'ref', 'status']);
+  assert.equal(store.getTicket(added.project, added.ref).categoryId, 'mcp-update-echo');
 });
 
 test('add and update attach unknown ticket-ref warnings to compact acknowledgements', async () => {
@@ -713,7 +756,7 @@ test('claim -> comment -> done return compact acknowledgements', async () => {
   const ticket = store.getTicket(added.project, ref);
 
   const claim = await callTool('claim', { ref, by: 'mcp-worker-1', direct: true, reason: 'The compact acknowledgement fixture needs a direct claim.' });
-  assert.deepStrictEqual(Object.keys(claim).sort(), ['claim', 'ok', 'project', 'ref', 'status']);
+  assert.deepStrictEqual(Object.keys(claim).sort(), ['ok', 'project', 'ref', 'status']);
   assert.strictEqual(claim.status, 'doing');
 
   const note = await callTool('comment', { ref, body: 'progress note from an MCP tool call' });
@@ -722,7 +765,7 @@ test('claim -> comment -> done return compact acknowledgements', async () => {
   assert.strictEqual(stored.source, 'mcp', 'MCP actions are tagged as background (not dashboard)');
 
   const done = await callTool('done', { ref, by: 'mcp-worker-1', model: ticket.model, effort: ticket.effort });
-  assert.deepStrictEqual(Object.keys(done).sort(), ['ok', 'project', 'ref', 'status', 'workedBy']);
+  assert.deepStrictEqual(Object.keys(done).sort(), ['ok', 'project', 'ref', 'status']);
   assert.strictEqual(done.status, 'done');
 });
 
@@ -733,6 +776,8 @@ test('SQ-174: a spaced comment round-trips with spaces intact and no NUL bytes',
   const posted = await callTool('comment', { ref, body });
   assert.strictEqual(posted.ok, true);
   const back = await callTool('comments', { ref });
+  assert.ok(back.comments[back.comments.length - 1].id, 'comments retain ids for replies and references');
+  assert.equal(back.comments[back.comments.length - 1].source, undefined, 'comments omit storage-only source metadata');
   const stored = back.comments[back.comments.length - 1].body;
   assert.strictEqual(stored, body, 'the stored body equals the posted body verbatim');
   assert.ok(!stored.includes('\u0000'), 'no NUL byte anywhere in the stored body');
@@ -801,7 +846,7 @@ test('MCP blocks no-dispatch routed claims and records an explicit direct resear
   assert.match(refused.message, /direct:true/i);
   const direct = await callTool('claim', { ref: added.ref, by: 'mcp-inline', direct: true, reason: 'The MCP research fixture requires a local direct claim.' });
   assert.strictEqual(direct.ok, true);
-  const pulse = await callTool('pulse', { ref: added.ref });
+  const pulse = await callTool('pulse', { ref: added.ref, full: true });
   assert.strictEqual(pulse.direct.by, 'mcp-inline');
   assert.strictEqual(pulse.direct.model, ticket.model);
 });
@@ -999,7 +1044,7 @@ test('done stamps workedBy with a discovered Codex slug', async () => {
     await callTool('claim', { ref, by: 'mcp-w-codex' });
     const done = await callTool('done', { ref, by: 'mcp-w-codex', model: 'codex-terra', effort: 'high' });
     assert.strictEqual(done.ok, true);
-    assert.strictEqual(done.workedBy.model, 'codex-terra');
+    assert.strictEqual(store.getTicket(added.project, ref).workedBy.model, 'codex-terra');
   } finally {
     clearCatalog();
   }

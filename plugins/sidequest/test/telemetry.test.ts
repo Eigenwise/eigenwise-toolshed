@@ -73,7 +73,7 @@ test('CLI and MCP pulse return the compact liveness shape with git activity', as
   assert.deepStrictEqual(pulse.lastComment, { at: pulse.lastComment.at, by: 'telemetry-worker', kind: 'comment', body: 'a recent telemetry note' });
   assert.match(pulse.git.commit.hash, /^[0-9a-f]{40}$/);
   assert.strictEqual(pulse.git.dirty, false);
-  const viaMcp = await callTool<Pulse>('pulse', { ref });
+  const viaMcp = await callTool<Pulse>('pulse', { ref, full: true });
   assert.strictEqual(viaMcp.ref, ref);
   assert.strictEqual(viaMcp.git.commit.hash, pulse.git.commit.hash);
 });

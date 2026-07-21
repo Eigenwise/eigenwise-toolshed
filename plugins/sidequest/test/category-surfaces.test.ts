@@ -87,7 +87,7 @@ test('MCP category tools stamp tickets and reject unknown categories', async () 
   const added = await call(mcp, 'add', { title: 'Categorized MCP ticket', category: 'mechanical' });
   assert.match(added.ref, /^SQ-\d+$/);
 
-  const listed = await call(mcp, 'category_list', {});
+  const listed = await call(mcp, 'category_list', { full: true });
   assert.ok(listed.categories.some((category?: any) => category.id === 'mechanical' && category.ticketCount === 1));
 
   const raw = await mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ref, category: 'missing' } } });
@@ -183,7 +183,7 @@ test('MCP category edit forks a board category; category_relink resets it to the
   assert.deepEqual(Object.keys(result).sort(), ['id', 'localRow', 'ok', 'project']);
   assert.equal(result.localRow.kind, 'DETACH');
 
-  result = await call(mcp, 'category_list', { project: scoped });
+  result = await call(mcp, 'category_list', { project: scoped, full: true });
   const category = result.categories.find((entry?: any) => entry.id === 'mechanical');
   assert.equal(category.linkState, 'detached');
   assert.equal(category.origin, 'detached');
