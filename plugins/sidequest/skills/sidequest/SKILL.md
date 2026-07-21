@@ -17,7 +17,7 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 - `references/orchestration.md` — decomposition depth, fan-out waves, checkpoints, background
   execution, cost levers, agent teams.
 - `references/publishing.md` — the serialized publish transaction.
-- `references/routing-details.md` — profiles, board-local rows, routes, fallbacks, and spawn parameters.
+- `references/routing-details.md` — profiles, board rows, routes, fallbacks, spawn parameters.
 - `references/routing-guide.md` — profile-aware classification; workflow recipe wiring.
 - `references/external-trackers.md`, `references/board-features.md`,
   `references/category-links.md` — external trackers; stories, reminders, assignment,
@@ -84,12 +84,10 @@ the installed plugin; SQLite data at `~/.claude/sidequest/sidequest.db` (overrid
 
 ## Routing profiles
 
-A routing profile owns a complete, independent category set. Each board points to one profile, then applies board-local `ADD`, `OVERRIDE`, `DETACH`, or `DISABLE` rows. Profile edits propagate to pointing boards. Local rows keep provenance and can warn when they are based on another profile.
+A board points at one profile (its full category set) plus local ADD/OVERRIDE/DETACH/DISABLE
+rows. Mutations take exactly one of `--profile`/`--project`; see `references/routing-details.md`.
 
-The CLI and matching MCP tools support the full lifecycle: `profile list`, `show`, `create`, `edit`, `retire`, `use`, `repoint`, `promote`, and `new-board`. Use `repoint --dry-run` to inspect board drift before a bulk move. `promote` materializes a board's effective taxonomy into a new profile and repoints selected boards only when their normalized taxonomies match. `new-board` reads or sets the profile used for future boards. Starter profiles are `coding`, `creative-music`, `research`, and `writing`.
-
-Category reads and writes are explicitly scoped. Use `--profile <profile>` for profile entries and `--project <board>` for board-local rows. Category mutations require exactly one of those scopes. `global-fallback` is the model-availability fallback, not a global category layer.
-
+## Open the dashboard
 
 `sidequest dashboard` — idempotent; starts the server, opens the browser, prints the URL —
 **report it**. Binds to `127.0.0.1` only. Verify server changes on a test instance with a
