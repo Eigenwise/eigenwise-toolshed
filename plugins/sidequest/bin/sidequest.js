@@ -1278,7 +1278,7 @@ async function cmdBriefing(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const result = store.readDispatchBriefing(slug, idOrRef, opts.token);
   if (!result.ok) fail(`briefing: ${result.reason === "not_found" ? `no ticket "${idOrRef}".` : "dispatch token was refused; re-run dispatch for a current spawn."}`);
-  process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token), meta.path));
+  process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token, slug), meta.path));
 }
 async function cmdNativeAgent(opts, positional) {
   const action = String(positional[0] || "").toLowerCase();
