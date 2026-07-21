@@ -51,6 +51,23 @@ async function renderedCompactTextColors(row: Locator, selector: string) {
   });
 }
 
+async function renderedCardTextColors(chip: Locator) {
+  return chip.evaluate((element) => {
+    const rgb = (color: string) => {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Expected a canvas context.');
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+      if (alpha !== 255) throw new Error(`Expected an opaque chip color, received ${color}.`);
+      return `rgb(${red}, ${green}, ${blue})`;
+    };
+    const style = getComputedStyle(element);
+    return { foreground: rgb(style.color), background: rgb(style.backgroundColor) };
+  });
+}
+
 async function cssColor(page: Page, color: string) {
   return page.evaluate((value) => {
     const sample = document.createElement('span');
@@ -81,7 +98,7 @@ async function openBoard(page: Page, dashboard: Awaited<ReturnType<typeof startF
 }
 
 async function cardFor(page: Page, title: string) {
-  return page.getByRole('button', { name: new RegExp(title) }).locator('xpath=..');
+  return page.locator('.card').filter({ hasText: title });
 }
 
 test('serves the committed production app and covers the seeded board surface', async ({ page, dashboard }) => {
@@ -163,6 +180,39 @@ test('covers archive, notification, settings, create, and keyboard paths', async
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('returns focus to Settings and Ticket invokers for every close path', async ({ page, dashboard }) => {
+  await openBoard(page, dashboard);
+
+  const settingsTrigger = page.getByRole('button', { name: 'Settings' });
+  const settings = page.locator('dialog[aria-label="Settings"]');
+  for (const closeSettings of [
+    async () => page.keyboard.press('Escape'),
+    async () => page.getByRole('button', { name: 'Close settings' }).click(),
+    async () => page.mouse.click(4, 4)
+  ]) {
+    await settingsTrigger.click();
+    await expect(settings).toBeVisible();
+    await closeSettings();
+    await expect(settings).not.toHaveAttribute('open', '');
+    await expect(settingsTrigger).toBeFocused();
+  }
+
+  const ticketTrigger = page.getByRole('button', { name: /Ship the dashboard parity suite/ });
+  const ticket = page.locator('dialog.ticket-dialog');
+  for (const closeTicket of [
+    async () => page.keyboard.press('Escape'),
+    async () => page.getByRole('button', { name: 'Close' }).click(),
+    async () => page.mouse.click(4, 4),
+    async () => page.getByRole('textbox', { name: 'Title' }).press('Control+Enter')
+  ]) {
+    await ticketTrigger.click();
+    await expect(ticket).toBeVisible();
+    await closeTicket();
+    await expect(ticket).not.toHaveAttribute('open', '');
+    await expect(ticketTrigger).toBeFocused();
+  }
+});
+
 test('renders board routing previews and the profile library', async ({ page, dashboard }) => {
   await openBoard(page, dashboard);
   await page.locator('.rail').getByRole('button', { name: /Alpha board/ }).click();
@@ -202,11 +252,19 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
   await expect(storyCard.locator('.card-main')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(storyCard).toHaveCSS('background-color', await tokenColor(page, '--surface-card'));
 
-  const lightbox = page.locator('dialog');
+  const lightbox = page.locator('dialog[aria-label^="Image"]');
   await expect(lightbox).toHaveCount(1);
   await expect(lightbox).not.toHaveAttribute('open', '');
 
   const tokenSets: string[][] = [];
+  for (const theme of ['light', 'dark']) {
+    await page.locator('html').evaluate((element, value) => element.dataset.theme = value, theme);
+    for (const chip of [storyCard.locator('.story'), storyCard.locator('.priority.urgent'), doingCard.locator('.priority.high'), doingCard.locator('.chip.blocked'), storyCard.locator('.chip.reminder')]) {
+      const rendered = await renderedCardTextColors(chip);
+      expect(contrast(rendered.foreground, rendered.background)).toBeGreaterThanOrEqual(4.5);
+    }
+  }
+
   for (const theme of ['light', 'dark']) {
     await page.locator('html').evaluate((element, value) => element.dataset.theme = value, theme);
     const colors = await Promise.all(['--text-muted', '--surface-muted', '--accent-strong', '--surface-card'].map((token) => tokenColor(page, token)));
@@ -219,7 +277,7 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
     await expect(settingsTrigger).toHaveCSS('box-shadow', /rgb/);
     await page.locator('.rail').getByRole('button', { name: /Alpha board/ }).click();
     await settingsTrigger.click();
-    const settings = page.getByRole('dialog', { name: 'Settings' });
+    const settings = page.locator('dialog[aria-label="Settings"]');
     await expect(settings).toBeVisible();
     await assertDialogGeometry(settings);
     await page.getByRole('button', { name: 'Board changes' }).click();
@@ -239,10 +297,10 @@ test('keeps Questline state, accessible tokens, cards, and dialogs correct in bo
     }
     expect(await page.locator('.settings-body').evaluate((element) => element.scrollHeight > element.clientHeight)).toBeTruthy();
     await page.mouse.click(4, 4);
-    await expect(settings).toHaveCount(0);
+    await expect(settings).not.toHaveAttribute('open', '');
 
     await page.getByRole('button', { name: /Ship the dashboard parity suite/ }).click();
-    const ticket = page.getByRole('dialog', { name: /Edit SQ-/ });
+    const ticket = page.locator('dialog.ticket-dialog');
     await expect(ticket).toBeVisible();
     await assertDialogGeometry(ticket);
     expect(await page.locator('.main-grid').evaluate((element) => ({ scrollable: element.scrollHeight > element.clientHeight, overflow: getComputedStyle(element).overflowY }))).toMatchObject({ scrollable: true, overflow: 'auto' });

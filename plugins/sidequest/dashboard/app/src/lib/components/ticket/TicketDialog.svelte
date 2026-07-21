@@ -45,7 +45,6 @@
 	let categoryOptions = $derived([{ value: '', label: 'Choose a category' }, ...categories.map((item) => ({ value: item.id, label: item.name }))]);
 
 	function close() {
-		(document.activeElement as HTMLElement | null)?.blur();
 		detailsEditing = false;
 		board.openDialog = null;
 	}
@@ -108,8 +107,8 @@
 	});
 </script>
 
-{#if board.openDialog === 'create' || editingTicket}
-	<Dialog open={true} wide label={editingTicket ? `Edit ${editingTicket.ref}` : 'New ticket'} onclose={close}>
+<Dialog class="ticket-dialog" open={board.openDialog === 'create' || Boolean(editingTicket)} wide label={editingTicket ? `Edit ${editingTicket.ref}` : 'New ticket'} onclose={close}>
+	{#if board.openDialog === 'create' || editingTicket}
 		<div class="dialog-content">
 			<header class="dialog-header"><div><h2>{editingTicket ? editingTicket.ref : 'New ticket'}</h2><small>{saving ? 'Saving…' : editingTicket?.updatedAt ? `Updated ${new Date(editingTicket.updatedAt).toLocaleString()}` : 'Fill in the ticket details.'}</small></div><Button variant="quiet" onclick={close}>Close</Button></header>
 			<div class="main-grid">
@@ -129,8 +128,8 @@
 			</div>
 			{#if editingTicket}<footer class="editor-actions"><Button variant="danger" onclick={() => { board.deleteTicket(editingTicket); close(); }}>Delete ticket</Button><Button onclick={() => { board.archiveTicket(editingTicket); close(); }}>Archive ticket</Button></footer>{:else}<footer><Button onclick={close}>Cancel</Button><Button variant="primary" disabled={saving} onclick={create}>Create ticket</Button></footer>{/if}
 		</div>
-	</Dialog>
-{/if}
+	{/if}
+</Dialog>
 
 <style>
 	.dialog-content { display:grid; grid-template-rows:auto minmax(0, 1fr) auto; max-block-size:inherit; overflow:hidden; } .dialog-header { display:flex; justify-content:space-between; gap:1rem; align-items:start; padding:1rem; border-bottom:1px solid var(--border); } h2 { margin:0; font-family:var(--font-serif); font-size:1.25rem; line-height:1.1; } small { color:var(--text-muted); } .main-grid { display:grid; grid-template-columns:minmax(0, 1fr) minmax(18rem, .7fr); gap:1.25rem; min-block-size:0; overflow:auto; margin:0; padding:1rem; scrollbar-width:thin; scrollbar-color:var(--border-strong) transparent; } .fields { display:grid; gap:.75rem; } label { display:grid; gap:.3rem; } input, textarea { box-sizing:border-box; width:100%; padding:.55rem; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface-muted); color:var(--text); } textarea { min-height:10rem; resize:vertical; } .description { min-height:6rem; padding:.6rem; border:1px solid var(--border); border-radius:var(--radius); text-align:left; color:var(--text); background:var(--surface-muted); } .description span { color:var(--text-muted); } .three { display:grid; grid-template-columns:repeat(3, 1fr); gap:.5rem; } .check { display:flex; align-items:center; gap:.5rem; } .check input { width:auto; } aside { display:grid; align-content:start; gap:.75rem; min-width:0; } aside :global(section) { padding:.8rem; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface-muted); } footer { display:flex; justify-content:end; gap:.5rem; margin:0; padding:1rem; border-top:1px solid var(--border); background:var(--surface-card); } footer.editor-actions { justify-content:space-between; } .markdown :global(p) { margin:.3rem 0; } @media (max-width:720px) { .main-grid, .three { grid-template-columns:1fr; } }

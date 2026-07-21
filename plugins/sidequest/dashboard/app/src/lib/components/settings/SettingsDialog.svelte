@@ -280,8 +280,7 @@
 
 <button class="settings-trigger" aria-expanded={board.popover === 'settings'} onclick={() => board.popover === 'settings' ? board.popover = null : void openSettings()}>Settings</button>
 
-{#if board.popover === 'settings'}
-  <Dialog open={true} wide label="Settings" onclose={() => board.popover = null}>
+<Dialog open={board.popover === 'settings'} wide label="Settings" onclose={() => board.popover = null}>
     <div class="settings-frame">
       <header>
         <div><p class="eyebrow">Sidequest</p><h2>Settings</h2></div>
@@ -366,7 +365,6 @@
       </div>
     </div>
   </Dialog>
-{/if}
 
 <style>
   button, input, textarea { font: inherit; }

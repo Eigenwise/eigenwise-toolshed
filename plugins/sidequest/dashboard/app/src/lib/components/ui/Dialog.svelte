@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  let { open = false, children, label, wide = false, onclose }: { open?: boolean; children: Snippet; label: string; wide?: boolean; onclose?: () => void } = $props();
+  let { open = false, children, label, wide = false, onclose, class: className = '' }: { open?: boolean; children: Snippet; label: string; wide?: boolean; onclose?: () => void; class?: string } = $props();
   let dialog = $state<HTMLDialogElement>();
 
   function close() { onclose?.(); }
@@ -26,7 +26,7 @@
   });
 </script>
 
-<dialog bind:this={dialog} class:wide aria-label={label} oncancel={handleCancel} onclick={handleClick}>
+<dialog bind:this={dialog} class={className} class:wide aria-label={label} oncancel={handleCancel} onclick={handleClick}>
   {@render children()}
 </dialog>
 
