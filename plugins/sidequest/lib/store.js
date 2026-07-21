@@ -6,6 +6,7 @@ const { stableClaudeName, stableDispatchName } = require("./exec-names.js");
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const db = require("./db.js");
+const { ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { discoverExternalModels } = require("./discovery.js");
@@ -117,7 +118,11 @@ function newStoreCache(dataVersion) {
     dataVersion,
     metadata: /* @__PURE__ */ new Map(),
     projectCategories: /* @__PURE__ */ new Map(),
-    globalCategories: null,
+    routingProfiles: /* @__PURE__ */ new Map(),
+    routingProfileEntries: /* @__PURE__ */ new Map(),
+    projectRoutingProfiles: /* @__PURE__ */ new Map(),
+    routingProfileSettings: void 0,
+    routingFallback: void 0,
     snapshots: /* @__PURE__ */ new Map()
   };
 }
@@ -151,12 +156,45 @@ function cloneCached(value) {
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
+function refreshRoutingProfileSeeds(handle) {
+  const pending = [];
+  for (const seed of STARTER_ROUTING_PROFILES) {
+    const profile = handle.prepare(`
+      SELECT id, seed_revision FROM routing_profiles WHERE source = 'seed' AND seed_key = ?
+    `).get(seed.id);
+    if (!profile || profile.seed_revision == null || Number(profile.seed_revision) >= ROUTING_PROFILE_SEED_REVISION) continue;
+    pending.push({ seed, profileId: profile.id });
+  }
+  if (!pending.length) return;
+  db.txn(handle, () => {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const affected = /* @__PURE__ */ new Set();
+    for (const { seed, profileId } of pending) {
+      handle.prepare("DELETE FROM routing_profile_entries WHERE profile_id = ?").run(profileId);
+      seed.categories.forEach((category, position) => {
+        handle.prepare(`
+          INSERT INTO routing_profile_entries (profile_id, category_id, data, position, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(profileId, category.id, JSON.stringify(category), position, now);
+      });
+      handle.prepare(`
+        UPDATE routing_profiles SET name = ?, description = ?, seed_revision = ?, revision = revision + 1, updated_at = ?
+        WHERE id = ?
+      `).run(seed.name, seed.description, ROUTING_PROFILE_SEED_REVISION, now, profileId);
+      for (const row of handle.prepare("SELECT project FROM project_routing_profiles WHERE profile_id = ?").all(profileId)) {
+        affected.add(String(row.project));
+      }
+    }
+    refreshPreparedDispatches(handle, [...affected], null);
+  });
+}
 function database() {
   const root = homeRoot();
   let handle = dbByHome.get(root);
   if (!handle) {
     handle = db.openDb(root);
     migrateIfNeeded(handle, root);
+    refreshRoutingProfileSeeds(handle);
     dbByHome.set(root, handle);
   }
   return handle;
@@ -174,7 +212,7 @@ function transaction(fn) {
 function putProject(slug, meta) {
   putCachedRow(database(), "projects", { slug, data: meta });
 }
-function putTicket(slug, ticket) {
+function ticketStorageRow(slug, ticket) {
   const stored = Object.assign({}, ticket);
   if (stored.category && typeof stored.category === "object") stored.category = stored.categoryId || stored.category.id;
   delete stored.categoryId;
@@ -182,7 +220,7 @@ function putTicket(slug, ticket) {
   delete stored.exec;
   delete stored.model;
   delete stored.effort;
-  putCachedRow(database(), "tickets", {
+  return {
     id: stored.id,
     project: slug,
     ref: stored.ref || null,
@@ -191,7 +229,10 @@ function putTicket(slug, ticket) {
     ord: Number(stored.order) || 0,
     claim_by: stored.claim && stored.claim.by ? stored.claim.by : null,
     data: stored
-  });
+  };
+}
+function putTicket(slug, ticket) {
+  putCachedRow(database(), "tickets", ticketStorageRow(slug, ticket));
   const project = readMeta(slug);
   telemetry.emitTicket({ slug, path: project && project.path }, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
 }
@@ -348,23 +389,155 @@ function claudeQuotaFailure(error) {
   return CLAUDE_QUOTA_FAILURES.find((failure) => text.includes(failure.signature)) || null;
 }
 function getRoutingFallback() {
-  const stored = readGlobal("routing-fallback", null);
-  return normalizeRoute(stored);
+  const cache = residentCache();
+  if (cache.routingFallback !== void 0) return cloneCached(cache.routingFallback);
+  cache.routingFallback = normalizeRoute(readGlobal("routing-fallback", null));
+  return cloneCached(cache.routingFallback);
 }
 function setRoutingFallback(route) {
   const normalized = normalizeRoute(route);
   if (!normalized) throw new Error("Routing fallback requires a valid model and effort.");
-  writeGlobal("routing-fallback", normalized);
-  return normalized;
+  return mutateRoutingPolicy({ allProjects: true }, (handle) => {
+    db.putRow(handle, "globals", { key: "routing-fallback", data: normalized });
+    return normalized;
+  }).result;
+}
+function routingProfileSettings() {
+  const cache = residentCache();
+  if (cache.routingProfileSettings !== void 0) return cloneCached(cache.routingProfileSettings);
+  const row = database().prepare("SELECT singleton, new_project_profile_id FROM routing_profile_settings WHERE singleton = 1").get();
+  cache.routingProfileSettings = row ? { singleton: Number(row.singleton), newProjectProfileId: row.new_project_profile_id } : null;
+  return cloneCached(cache.routingProfileSettings);
+}
+function getRoutingProfile(profileId) {
+  const id = String(profileId || "").trim().toLowerCase();
+  if (!id) return null;
+  const cache = residentCache();
+  if (cache.routingProfiles.has(id)) return cloneCached(cache.routingProfiles.get(id));
+  const row = database().prepare(`
+    SELECT id, name, description, source, seed_key, seed_revision, revision, created_at, updated_at, retired_at
+    FROM routing_profiles WHERE id = ?
+  `).get(id);
+  const profile = row ? {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    source: row.source,
+    seedKey: row.seed_key,
+    seedRevision: row.seed_revision == null ? null : Number(row.seed_revision),
+    revision: Number(row.revision),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    retiredAt: row.retired_at
+  } : null;
+  cache.routingProfiles.set(id, profile);
+  return cloneCached(profile);
+}
+function routingProfileEntries(profileId) {
+  const id = String(profileId || "").trim().toLowerCase();
+  const cache = residentCache();
+  if (cache.routingProfileEntries.has(id)) return cloneCached(cache.routingProfileEntries.get(id));
+  const entries = database().prepare(`
+    SELECT category_id, data, position, updated_at
+    FROM routing_profile_entries WHERE profile_id = ? ORDER BY position, category_id
+  `).all(id).map((row) => {
+    try {
+      return { categoryId: row.category_id, data: JSON.parse(row.data), position: Number(row.position), updatedAt: row.updated_at };
+    } catch (_) {
+      return null;
+    }
+  }).filter(Boolean);
+  cache.routingProfileEntries.set(id, entries);
+  return cloneCached(entries);
+}
+function defaultRoutingProfileId() {
+  const settings = routingProfileSettings();
+  if (!settings || !settings.newProjectProfileId) throw new Error("The new-board routing profile is not configured.");
+  return settings.newProjectProfileId;
+}
+function projectRoutingProfile(project, repair = true) {
+  const normalizedProject = String(project || "").trim();
+  if (!normalizedProject) return null;
+  const cache = residentCache();
+  let pointer = cache.projectRoutingProfiles.get(normalizedProject);
+  if (pointer === void 0) {
+    const row = database().prepare(`
+      SELECT project, profile_id, assigned_at, assigned_by FROM project_routing_profiles WHERE project = ?
+    `).get(normalizedProject);
+    pointer = row ? {
+      project: row.project,
+      profileId: row.profile_id,
+      assignedAt: row.assigned_at,
+      assignedBy: row.assigned_by
+    } : null;
+    cache.projectRoutingProfiles.set(normalizedProject, pointer);
+  }
+  let repaired = false;
+  if (!pointer && repair) {
+    const profileId = defaultRoutingProfileId();
+    const assignedAt = (/* @__PURE__ */ new Date()).toISOString();
+    transaction(() => {
+      db.putRow(database(), "project_routing_profiles", {
+        project: normalizedProject,
+        profile_id: profileId,
+        assigned_at: assignedAt,
+        assigned_by: "invariant-repair"
+      });
+    });
+    invalidateStoreCaches();
+    pointer = { project: normalizedProject, profileId, assignedAt, assignedBy: "invariant-repair" };
+    repaired = true;
+  }
+  if (!pointer) return null;
+  const profile = getRoutingProfile(pointer.profileId);
+  if (!profile) throw new Error(`Routing profile "${pointer.profileId}" for ${normalizedProject} does not exist.`);
+  return {
+    pointer,
+    profile,
+    warnings: repaired ? [{ kind: "missing-profile-pointer", project: normalizedProject, repairedTo: profile.id }] : []
+  };
+}
+function policyMutationProjects(handle, scope) {
+  const projects = new Set((scope.projects || []).map((project) => String(project || "").trim()).filter(Boolean));
+  if (scope.allProjects) {
+    for (const row of handle.prepare("SELECT slug FROM projects").all()) projects.add(String(row.slug));
+  }
+  for (const profileId of scope.profileIds || []) {
+    for (const row of handle.prepare("SELECT project FROM project_routing_profiles WHERE profile_id = ?").all(String(profileId))) {
+      projects.add(String(row.project));
+    }
+  }
+  return projects;
+}
+function mutateRoutingPolicy(scope, mutation) {
+  if (typeof mutation !== "function") throw new TypeError("mutateRoutingPolicy requires a synchronous mutation callback.");
+  scope = scope || {};
+  const handle = database();
+  let result;
+  let refresh;
+  transaction(() => {
+    const projects = policyMutationProjects(handle, scope);
+    result = mutation(handle);
+    for (const project of policyMutationProjects(handle, scope)) projects.add(project);
+    refresh = refreshPreparedDispatches(handle, [...projects], scope.categoryIds || null);
+  });
+  invalidateStoreCaches();
+  return { result, refresh };
 }
 function projectCategoryRows(project) {
   if (!project) return [];
   const cache = residentCache();
   const cached = cache.projectCategories.get(project);
   if (cached) return cloneCached(cached);
-  const rows = database().prepare("SELECT id, kind, data FROM project_categories WHERE project = ? ORDER BY id").all(project).map((row) => {
+  const rows = database().prepare("SELECT id, kind, base_profile_id, base_data, data FROM project_categories WHERE project = ? ORDER BY id").all(project).map((row) => {
     try {
-      return { id: row.id, kind: row.kind, data: JSON.parse(row.data) };
+      return {
+        id: row.id,
+        kind: row.kind,
+        baseProfileId: row.base_profile_id || null,
+        baseData: row.base_data == null ? null : JSON.parse(row.base_data),
+        data: JSON.parse(row.data)
+      };
     } catch (_) {
       return null;
     }
@@ -372,15 +545,98 @@ function projectCategoryRows(project) {
   cache.projectCategories.set(project, rows);
   return cloneCached(rows);
 }
-function projectCategoryWarnings(project) {
-  const globalIds = new Set(db.listRows(database(), "categories").map((category) => String(category && category.id || "").trim().toLowerCase()));
-  const warnings = [];
-  for (const row of projectCategoryRows(project)) {
-    if (row.kind === "OVERRIDE" && !globalIds.has(row.id)) {
-      warnings.push({ kind: "dangling-override", id: row.id, project });
-    }
+function routingContext(project) {
+  const selected = project ? projectRoutingProfile(project) : null;
+  const profileId = selected ? selected.profile.id : defaultRoutingProfileId();
+  const profile = selected ? selected.profile : getRoutingProfile(profileId);
+  if (!profile) throw new Error(`Routing profile "${profileId}" does not exist.`);
+  const entries = routingProfileEntries(profile.id);
+  const general = entries.find((entry) => entry.categoryId === "general");
+  if (!general || !normalizeCategory(general.data)?.enabled) {
+    throw new Error(`Routing profile "${profile.id}" requires an enabled general category.`);
   }
-  return warnings;
+  return { profile, entries, warnings: selected ? selected.warnings : [] };
+}
+function resolvedProfileCategories(opts) {
+  opts = opts || {};
+  const cache = residentCache();
+  const cacheKey = `routing-categories:${opts.project || "@default"}:${opts.includeDisabled === false ? "enabled" : "all"}:${opts.withState === true ? "state" : "plain"}`;
+  if (cache.snapshots.has(cacheKey)) return cloneCached(cache.snapshots.get(cacheKey));
+  const context = routingContext(opts.project);
+  const categories = /* @__PURE__ */ new Map();
+  const warnings = context.warnings.slice();
+  for (const entry of context.entries) {
+    const category = normalizeCategory(entry.data);
+    if (!category) continue;
+    categories.set(category.id, Object.assign({}, category, {
+      origin: "profile",
+      profileId: context.profile.id,
+      baseProfileId: context.profile.id,
+      changedFields: [],
+      warnings: [],
+      ...opts.withState ? { linkState: "linked" } : {}
+    }));
+  }
+  for (const row of projectCategoryRows(opts.project)) {
+    const base = categories.get(row.id);
+    const rowWarnings = [];
+    if (row.baseProfileId && row.baseProfileId !== context.profile.id) {
+      rowWarnings.push({ kind: "foreign-base", id: row.id, baseProfileId: row.baseProfileId, profileId: context.profile.id });
+    }
+    if (row.kind === "ADD") {
+      if (base) rowWarnings.push({ kind: "add-collision", id: row.id, profileId: context.profile.id });
+      const category = normalizeCategory(row.data);
+      if (category) categories.set(category.id, Object.assign({}, category, {
+        origin: "added",
+        profileId: context.profile.id,
+        baseProfileId: null,
+        changedFields: [],
+        warnings: rowWarnings,
+        ...opts.withState ? { linkState: "added" } : {}
+      }));
+    } else if (row.kind === "OVERRIDE") {
+      let source = base;
+      if (!source) {
+        source = normalizeCategory(row.baseData);
+        rowWarnings.push({ kind: "override-using-snapshot", id: row.id, baseProfileId: row.baseProfileId });
+      }
+      const category = source && normalizeCategory(Object.assign({}, source, row.data, { id: row.id }));
+      if (category) categories.set(category.id, Object.assign({}, category, {
+        origin: "override",
+        profileId: context.profile.id,
+        baseProfileId: row.baseProfileId,
+        changedFields: Object.keys(row.data).sort(),
+        warnings: rowWarnings,
+        ...opts.withState ? { linkState: "overridden" } : {}
+      }));
+    } else if (row.kind === "DETACH") {
+      const category = normalizeCategory(row.data);
+      if (category) categories.set(category.id, Object.assign({}, category, {
+        origin: "detached",
+        profileId: context.profile.id,
+        baseProfileId: row.baseProfileId,
+        changedFields: [],
+        warnings: rowWarnings,
+        ...opts.withState ? { linkState: "detached" } : {}
+      }));
+    } else if (row.kind === "DISABLE") {
+      if (!base) rowWarnings.push({ kind: "redundant-disable", id: row.id, profileId: context.profile.id });
+      categories.delete(row.id);
+    }
+    warnings.push(...rowWarnings.map((warning) => Object.assign({ project: opts.project }, warning)));
+  }
+  const general = categories.get("general");
+  if (!general || !general.enabled) throw new Error(`Routing profile "${context.profile.id}" must resolve an enabled general category.`);
+  const result = {
+    profile: context.profile,
+    categories: [...categories.values()].filter((category) => opts.includeDisabled !== false || category.enabled).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+    warnings
+  };
+  cache.snapshots.set(cacheKey, result);
+  return cloneCached(result);
+}
+function projectCategoryWarnings(project) {
+  return resolvedProfileCategories({ project }).warnings;
 }
 function getCategoryRoutePairs() {
   const pairs = [];
@@ -395,30 +651,14 @@ function getCategoryRoutePairs() {
     seen.add(key);
     pairs.push({ route, fallback });
   };
-  for (const category of getCategories()) add(category);
-  const globals = new Map(getCategories().map((category) => [category.id, category]));
-  let rows = [];
-  try {
-    rows = database().prepare("SELECT id, kind, data FROM project_categories ORDER BY project, id").all();
-  } catch (_) {
-    rows = [];
-  }
-  for (const row of rows) {
-    if (row.kind === "DISABLE") continue;
-    let data;
+  for (const row of database().prepare("SELECT data FROM routing_profile_entries ORDER BY profile_id, position, category_id").all()) {
     try {
-      data = JSON.parse(row.data);
+      add(normalizeCategory(JSON.parse(row.data)));
     } catch (_) {
-      continue;
     }
-    if (row.kind === "ADD" || row.kind === "DETACH") {
-      add(normalizeCategory(data));
-      continue;
-    }
-    if (row.kind === "OVERRIDE") {
-      const base = globals.get(String(row.id || "").trim().toLowerCase());
-      if (base) add(normalizeCategory(Object.assign({}, base, data)));
-    }
+  }
+  for (const row of database().prepare("SELECT slug FROM projects ORDER BY slug").all()) {
+    for (const category of getCategories({ project: row.slug })) add(category);
   }
   return pairs;
 }
@@ -426,42 +666,20 @@ function getProjectCategories(project) {
   return { rows: projectCategoryRows(project), warnings: projectCategoryWarnings(project) };
 }
 function getCategories(opts) {
-  opts = opts || {};
-  const includeDisabled = opts.includeDisabled !== false;
-  const withState = opts.withState === true;
-  const cache = residentCache();
-  if (!cache.globalCategories) {
-    cache.globalCategories = db.listRows(database(), "categories").map((raw) => normalizeCategory(raw)).filter(Boolean);
-  }
-  const categories = /* @__PURE__ */ new Map();
-  for (const category of cache.globalCategories || []) {
-    categories.set(category.id, withState ? Object.assign({}, category, { linkState: "linked" }) : category);
-  }
-  for (const row of projectCategoryRows(opts.project)) {
-    const base = categories.get(row.id);
-    if (row.kind === "ADD" && !base) {
-      const category = normalizeCategory(row.data);
-      if (category) categories.set(category.id, withState ? Object.assign({}, category, { linkState: "added" }) : category);
-    } else if (row.kind === "DETACH") {
-      const category = normalizeCategory(row.data);
-      if (category) categories.set(category.id, withState ? Object.assign({}, category, { linkState: "detached" }) : category);
-    } else if (row.kind === "OVERRIDE" && base) {
-      const category = normalizeCategory(Object.assign({}, base, row.data));
-      if (category) {
-        categories.set(category.id, withState ? Object.assign({}, category, { linkState: "overridden", changedFields: Object.keys(row.data).sort() }) : category);
-      }
-    } else if (row.kind === "DISABLE" && row.id !== "general" && base) {
-      categories.delete(row.id);
-    }
-  }
-  return cloneCached([...categories.values()].filter((category) => includeDisabled || category.enabled).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)));
+  return cloneCached(resolvedProfileCategories(opts).categories);
 }
 function normalizeCategoryId(id) {
   return String(id || "").trim().toLowerCase();
 }
 function getCategory(id, opts) {
   const normalizedId = normalizeCategoryId(id);
-  return getCategories(opts).find((category) => category.id === normalizedId) || null;
+  opts = opts || {};
+  const cache = residentCache();
+  const cacheKey = `routing-category:${opts.project || "@default"}:${normalizedId}:${opts.includeDisabled === false ? "enabled" : "all"}:${opts.withState === true ? "state" : "plain"}`;
+  if (cache.snapshots.has(cacheKey)) return cloneCached(cache.snapshots.get(cacheKey));
+  const category = resolvedProfileCategories(opts).categories.find((candidate) => candidate.id === normalizedId) || null;
+  cache.snapshots.set(cacheKey, category);
+  return cloneCached(category);
 }
 function normalizeArtifactRoots(value) {
   if (!Array.isArray(value)) return [];
@@ -493,37 +711,59 @@ function normalizeCategory(raw) {
     enabled: raw.enabled !== false
   };
 }
-function setCategory(categoryOrId, patch) {
-  const requested = typeof categoryOrId === "string" ? Object.assign({}, getCategory(categoryOrId), patch || {}, { id: normalizeCategoryId(categoryOrId) }) : categoryOrId;
+function routingProfileCategory(profileId, id) {
+  const normalizedId = normalizeCategoryId(id);
+  const entry = routingProfileEntries(profileId).find((candidate) => candidate.categoryId === normalizedId);
+  return entry ? normalizeCategory(entry.data) : null;
+}
+function setRoutingProfileCategory(profileId, categoryOrId, patch) {
+  const normalizedProfileId = String(profileId || "").trim().toLowerCase();
+  const profile = getRoutingProfile(normalizedProfileId);
+  if (!profile) throw new Error(`Routing profile "${normalizedProfileId}" does not exist.`);
+  const requested = typeof categoryOrId === "string" ? Object.assign({}, routingProfileCategory(normalizedProfileId, categoryOrId), patch || {}, { id: normalizeCategoryId(categoryOrId) }) : categoryOrId;
   const normalized = normalizeCategory(requested);
   if (!normalized) throw new Error("Category id is required.");
   requireArtifactRoots(requested && requested.artifactRoots);
   if (!normalizeRoute(requested && requested.route)) throw new Error("Category route requires a valid model and effort.");
   if (requested && requested.fallback != null && !normalizeRoute(requested.fallback)) throw new Error("Category fallback requires a valid model and effort.");
   if (normalized.id === "general" && !normalized.enabled) throw new Error('Category "general" cannot be disabled.');
-  putCachedRow(database(), "categories", { id: normalized.id, data: normalized });
-  return normalized;
+  const outcome = mutateRoutingPolicy({ profileIds: [normalizedProfileId], categoryIds: [normalized.id] }, (handle) => {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const position = handle.prepare(`
+      SELECT COALESCE((SELECT position FROM routing_profile_entries WHERE profile_id = ? AND category_id = ?),
+        (SELECT COALESCE(MAX(position), -1) + 1 FROM routing_profile_entries WHERE profile_id = ?)) AS position
+    `).get(normalizedProfileId, normalized.id, normalizedProfileId);
+    handle.prepare(`
+      INSERT INTO routing_profile_entries (profile_id, category_id, data, position, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(profile_id, category_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+    `).run(normalizedProfileId, normalized.id, JSON.stringify(normalized), Number(position?.position ?? 0), now);
+    handle.prepare(`
+      UPDATE routing_profiles SET revision = revision + 1, seed_revision = NULL, updated_at = ? WHERE id = ?
+    `).run(now, normalizedProfileId);
+    return normalized;
+  });
+  return outcome.result;
 }
-function removeCategory(id) {
+function setCategory(categoryOrId, patch) {
+  return setRoutingProfileCategory(defaultRoutingProfileId(), categoryOrId, patch);
+}
+function removeRoutingProfileCategory(profileId, id) {
+  const normalizedProfileId = String(profileId || "").trim().toLowerCase();
   const normalizedId = normalizeCategoryId(id);
   if (normalizedId === "general") throw new Error('Category "general" cannot be removed.');
-  return transaction(() => {
-    const base = getCategory(normalizedId);
-    if (base) {
-      const overrides = database().prepare("SELECT project, data FROM project_categories WHERE id = ? AND kind = 'OVERRIDE'").all(normalizedId);
-      for (const row of overrides) {
-        let patch;
-        try {
-          patch = JSON.parse(row.data);
-        } catch (_) {
-          patch = {};
-        }
-        const pinned = normalizeCategory(Object.assign({}, base, patch, { id: normalizedId }));
-        if (pinned) putCachedRow(database(), "project_categories", { project: row.project, id: normalizedId, kind: "DETACH", data: pinned });
-      }
+  if (!getRoutingProfile(normalizedProfileId)) throw new Error(`Routing profile "${normalizedProfileId}" does not exist.`);
+  const outcome = mutateRoutingPolicy({ profileIds: [normalizedProfileId], categoryIds: [normalizedId] }, (handle) => {
+    const deleted = handle.prepare("DELETE FROM routing_profile_entries WHERE profile_id = ? AND category_id = ?").run(normalizedProfileId, normalizedId).changes !== 0;
+    if (deleted) {
+      handle.prepare("UPDATE routing_profiles SET revision = revision + 1, seed_revision = NULL, updated_at = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), normalizedProfileId);
     }
-    return deleteCachedRow(database(), "categories", normalizedId);
+    return deleted;
   });
+  return outcome.result;
+}
+function removeCategory(id) {
+  return removeRoutingProfileCategory(defaultRoutingProfileId(), id);
 }
 function normalizeFullProjectCategory(id, kind, data) {
   const required = ["name", "description", "contract", "route", "fallback", "enabled"];
@@ -542,15 +782,18 @@ function setProjectCategory(project, id, kind, data) {
   const normalizedKind = String(kind || "").trim().toUpperCase();
   if (!normalizedProject || !normalizedId) throw new Error("Project and category id are required.");
   if (!["ADD", "OVERRIDE", "DETACH", "DISABLE"].includes(normalizedKind)) throw new Error("Project category kind must be ADD, OVERRIDE, DETACH, or DISABLE.");
-  const global = getCategory(normalizedId);
+  const selected = projectRoutingProfile(normalizedProject);
+  if (!selected) throw new Error(`Project "${normalizedProject}" does not have a routing profile.`);
+  const base = routingProfileCategory(selected.profile.id, normalizedId);
   let normalizedData;
   if (normalizedKind === "ADD") {
-    if (global) throw new Error(`Project category ADD "${normalizedId}" collides with a global category.`);
+    if (base) throw new Error(`Project category ADD "${normalizedId}" collides with profile "${selected.profile.id}".`);
     normalizedData = normalizeFullProjectCategory(normalizedId, normalizedKind, data);
   } else if (normalizedKind === "DETACH") {
     normalizedData = normalizeFullProjectCategory(normalizedId, normalizedKind, data);
+    if (normalizedId === "general" && !normalizedData.enabled) throw new Error('Category "general" cannot be disabled.');
   } else if (normalizedKind === "OVERRIDE") {
-    if (!global) throw new Error(`Project category OVERRIDE "${normalizedId}" requires a global category.`);
+    if (!base) throw new Error(`Project category OVERRIDE "${normalizedId}" requires a profile category.`);
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Project category OVERRIDE requires a patch object.");
     const allowed = /* @__PURE__ */ new Set(["name", "description", "contract", "artifactRoots", "route", "fallback"]);
     for (const key of Object.keys(data)) if (!allowed.has(key)) throw new Error(`Project category OVERRIDE cannot patch "${key}".`);
@@ -560,11 +803,31 @@ function setProjectCategory(project, id, kind, data) {
     normalizedData = Object.assign({}, data);
   } else {
     if (normalizedId === "general") throw new Error('Category "general" cannot be disabled.');
-    if (!global) throw new Error(`Project category DISABLE "${normalizedId}" requires a global category.`);
+    if (!base) throw new Error(`Project category DISABLE "${normalizedId}" requires a profile category.`);
     normalizedData = {};
   }
-  putCachedRow(database(), "project_categories", { project: normalizedProject, id: normalizedId, kind: normalizedKind, data: normalizedData });
-  return { project: normalizedProject, id: normalizedId, kind: normalizedKind, data: normalizedData };
+  const baseProfileId = normalizedKind === "ADD" ? null : selected.profile.id;
+  const baseData = normalizedKind === "OVERRIDE" ? base : null;
+  const outcome = mutateRoutingPolicy({ projects: [normalizedProject], categoryIds: [normalizedId] }, (handle) => {
+    handle.prepare(`
+      INSERT INTO project_categories (project, id, kind, base_profile_id, base_data, data)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project, id) DO UPDATE SET
+        kind = excluded.kind,
+        base_profile_id = excluded.base_profile_id,
+        base_data = excluded.base_data,
+        data = excluded.data
+    `).run(
+      normalizedProject,
+      normalizedId,
+      normalizedKind,
+      baseProfileId,
+      baseData ? JSON.stringify(baseData) : null,
+      JSON.stringify(normalizedData)
+    );
+    return { project: normalizedProject, id: normalizedId, kind: normalizedKind, baseProfileId, baseData, data: normalizedData };
+  });
+  return outcome.result;
 }
 function detachCategory(project, id) {
   const normalizedProject = String(project || "").trim();
@@ -576,11 +839,51 @@ function detachCategory(project, id) {
   if (!category) throw new Error(`Project category "${normalizedId}" does not resolve to a category.`);
   return setProjectCategory(normalizedProject, normalizedId, "DETACH", category);
 }
+function setProjectRoutingProfile(project, profileId, assignedBy) {
+  const normalizedProject = String(project || "").trim();
+  const normalizedProfileId = String(profileId || "").trim().toLowerCase();
+  if (!normalizedProject || !normalizedProfileId) throw new Error("Project and routing profile id are required.");
+  if (!readMeta(normalizedProject)) throw new Error(`Project "${normalizedProject}" does not exist.`);
+  if (!getRoutingProfile(normalizedProfileId)) throw new Error(`Routing profile "${normalizedProfileId}" does not exist.`);
+  return mutateRoutingPolicy({ projects: [normalizedProject] }, (handle) => {
+    const assignedAt = (/* @__PURE__ */ new Date()).toISOString();
+    handle.prepare(`
+      INSERT INTO project_routing_profiles (project, profile_id, assigned_at, assigned_by)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(project) DO UPDATE SET
+        profile_id = excluded.profile_id,
+        assigned_at = excluded.assigned_at,
+        assigned_by = excluded.assigned_by
+    `).run(normalizedProject, normalizedProfileId, assignedAt, assignedBy == null ? null : String(assignedBy));
+    return { project: normalizedProject, profileId: normalizedProfileId, assignedAt, assignedBy: assignedBy == null ? null : String(assignedBy) };
+  }).result;
+}
+function setNewProjectRoutingProfile(profileId) {
+  const normalizedProfileId = String(profileId || "").trim().toLowerCase();
+  if (!getRoutingProfile(normalizedProfileId)) throw new Error(`Routing profile "${normalizedProfileId}" does not exist.`);
+  return mutateRoutingPolicy({}, (handle) => {
+    handle.prepare(`
+      INSERT INTO routing_profile_settings (singleton, new_project_profile_id) VALUES (1, ?)
+      ON CONFLICT(singleton) DO UPDATE SET new_project_profile_id = excluded.new_project_profile_id
+    `).run(normalizedProfileId);
+    return { newProjectProfileId: normalizedProfileId };
+  }).result;
+}
+function listRoutingProfiles(opts) {
+  const includeRetired = opts && opts.retired === true;
+  const sql = `
+    SELECT id, name, description, source, seed_key, seed_revision, revision, created_at, updated_at, retired_at
+    FROM routing_profiles ${includeRetired ? "" : "WHERE retired_at IS NULL"} ORDER BY lower(name), id
+  `;
+  return database().prepare(sql).all().map((row) => Object.assign({}, getRoutingProfile(row.id), {
+    entryCount: Number(database().prepare("SELECT COUNT(*) AS count FROM routing_profile_entries WHERE profile_id = ?").get(row.id)?.count ?? 0)
+  }));
+}
 function removeProjectCategory(project, id) {
   const normalizedProject = String(project || "").trim();
   const normalizedId = normalizeCategoryId(id);
   if (!normalizedProject || !normalizedId) throw new Error("Project and category id are required.");
-  return deleteCachedRow(database(), "project_categories", { project: normalizedProject, id: normalizedId });
+  return mutateRoutingPolicy({ projects: [normalizedProject], categoryIds: [normalizedId] }, (handle) => handle.prepare("DELETE FROM project_categories WHERE project = ? AND id = ?").run(normalizedProject, normalizedId).changes !== 0).result;
 }
 function classifierCategories(opts) {
   return getCategories(Object.assign({}, opts, { includeDisabled: false })).map(({ id, name, description, route, fallback, contract }) => ({ id, name, description, route, fallback, contract }));
@@ -672,6 +975,9 @@ function applyDerivedRouting(t, opts) {
       if (state && state.recovery) {
         warnings.push(`This dispatch is temporarily using ${t.model} at ${t.effort} after ${state.recovery.failedModel} quota exhaustion; category policy is unchanged.`);
       }
+      if (state && state.policyChangedAt) {
+        warnings.push(`This active dispatch was prepared before routing policy changed at ${state.policyChangedAt}; its prepared route remains in force for this attempt.`);
+      }
     }
   }
   delete t.profile;
@@ -760,41 +1066,59 @@ function ensureProject(absPath, name) {
   const slug = slugify(resolved);
   const dir = projectDir(slug);
   ensureDir(ticketsDir(slug));
-  let meta = readMeta(slug);
-  if (!meta || typeof meta !== "object") {
-    meta = {
-      path: resolved,
-      name: name || defaultProjectName(resolved),
-      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-      seq: 0,
-      storySeq: 0,
-      alwaysInScope: defaultAlwaysInScope(resolved)
-    };
-    putProject(slug, meta);
-  } else {
-    let dirty = false;
-    if (meta.path !== resolved) {
-      meta.path = resolved;
-      dirty = true;
+  let meta;
+  let changed = false;
+  transaction(() => {
+    const handle = database();
+    meta = db.getRow(handle, "projects", slug);
+    if (!meta || typeof meta !== "object") {
+      meta = {
+        path: resolved,
+        name: name || defaultProjectName(resolved),
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        seq: 0,
+        storySeq: 0,
+        alwaysInScope: defaultAlwaysInScope(resolved)
+      };
+      db.putRow(handle, "projects", { slug, data: meta });
+      changed = true;
+    } else {
+      if (meta.path !== resolved) {
+        meta.path = resolved;
+        changed = true;
+      }
+      if (name && meta.name !== name) {
+        meta.name = name;
+        changed = true;
+      }
+      if (!meta.name) {
+        meta.name = defaultProjectName(resolved);
+        changed = true;
+      }
+      if (typeof meta.seq !== "number") {
+        meta.seq = 0;
+        changed = true;
+      }
+      if (typeof meta.storySeq !== "number") {
+        meta.storySeq = 0;
+        changed = true;
+      }
+      if (changed) db.putRow(handle, "projects", { slug, data: meta });
     }
-    if (name && meta.name !== name) {
-      meta.name = name;
-      dirty = true;
+    const pointer = handle.prepare("SELECT project FROM project_routing_profiles WHERE project = ?").get(slug);
+    if (!pointer) {
+      const settings = handle.prepare("SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1").get();
+      if (!settings?.new_project_profile_id) throw new Error("The new-board routing profile is not configured.");
+      db.putRow(handle, "project_routing_profiles", {
+        project: slug,
+        profile_id: settings.new_project_profile_id,
+        assigned_at: (/* @__PURE__ */ new Date()).toISOString(),
+        assigned_by: "ensure-project"
+      });
+      changed = true;
     }
-    if (!meta.name) {
-      meta.name = defaultProjectName(resolved);
-      dirty = true;
-    }
-    if (typeof meta.seq !== "number") {
-      meta.seq = 0;
-      dirty = true;
-    }
-    if (typeof meta.storySeq !== "number") {
-      meta.storySeq = 0;
-      dirty = true;
-    }
-    if (dirty) putProject(slug, meta);
-  }
+  });
+  if (changed) invalidateStoreCaches();
   return { slug, dir, meta };
 }
 function readMeta(slug) {
@@ -1859,6 +2183,72 @@ function isSupersededDispatchToken(ticket, token) {
   const state = dispatchState(ticket);
   if (!state || !token || token === ticket.dispatchNonce) return false;
   return Array.isArray(state.supersededTokens) && state.supersededTokens.some((entry) => entry.digest === dispatchTokenDigest(token));
+}
+function routingPolicyAffectsTicket(ticket, categoryIds) {
+  if (!Array.isArray(categoryIds) || !categoryIds.length) return true;
+  const affected = new Set(categoryIds.map(normalizeCategoryId));
+  if (affected.has("general")) return true;
+  let category = ticketCategory(ticket);
+  if (category == null && ticket && ticket.complexity != null) category = legacyCategoryForComplexity(ticket.complexity);
+  return category != null && affected.has(normalizeCategoryId(category));
+}
+function refreshPreparedDispatches(handle, projects, categoryIds) {
+  const projectList = Array.from(new Set((projects || []).filter(Boolean)));
+  const refreshed = { superseded: 0, stamped: 0 };
+  if (!projectList.length) return refreshed;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  for (const project of projectList) {
+    for (const row of handle.prepare("SELECT data FROM tickets WHERE project = ?").all(project)) {
+      let ticket;
+      try {
+        ticket = JSON.parse(row.data);
+      } catch (_) {
+        continue;
+      }
+      if (!routingPolicyAffectsTicket(ticket, categoryIds)) continue;
+      const state = dispatchState(ticket);
+      if (!state || state.terminalAt || !ticket.dispatchNonce) continue;
+      const active = Boolean(state.launchedAt || state.boundAt || state.claimedAt || ticket.claim && ticket.claim.by);
+      if (active) {
+        state.policyChangedAt = now;
+        stampDispatchEvent(ticket, "routing-policy", now);
+        db.putRow(handle, "tickets", ticketStorageRow(project, ticket));
+        refreshed.stamped += 1;
+        continue;
+      }
+      if (state.outcome !== "prepared") continue;
+      const supersededTokens = Array.isArray(state.supersededTokens) ? state.supersededTokens.slice() : [];
+      supersededTokens.push({
+        digest: dispatchTokenDigest(ticket.dispatchNonce),
+        tokenPrefix: dispatchTokenPrefix(ticket.dispatchNonce),
+        at: now
+      });
+      state.supersededTokens = supersededTokens.slice(-8);
+      const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
+      attempts.push({
+        route: normalizeRoute(state.route),
+        executor: state.executor || ticket.dispatchExecutor,
+        tokenPrefix: state.tokenPrefix || dispatchTokenPrefix(ticket.dispatchNonce),
+        preparedAt: state.preparedAt || null,
+        launchedAt: null,
+        outcome: "policy-changed",
+        terminalAt: now,
+        terminalSource: "routing-policy"
+      });
+      state.attempts = attempts.slice(-8);
+      state.outcome = "policy-changed";
+      state.terminalAt = now;
+      state.terminalSource = "routing-policy";
+      state.policyChangedAt = now;
+      delete state.executor;
+      delete ticket.dispatchNonce;
+      delete ticket.dispatchExecutor;
+      stampDispatchEvent(ticket, "routing-policy", now);
+      db.putRow(handle, "tickets", ticketStorageRow(project, ticket));
+      refreshed.superseded += 1;
+    }
+  }
+  return refreshed;
 }
 function expiredPreparedDispatch(state, now) {
   if (!state || state.outcome !== "prepared" || state.terminalAt || state.launchedAt || state.boundAt || state.claimedAt) return false;
@@ -3496,6 +3886,17 @@ module.exports = {
   classifyModelFilter,
   getRoutingFallback,
   setRoutingFallback,
+  mutateRoutingPolicy,
+  routingProfileSettings,
+  listRoutingProfiles,
+  getRoutingProfile,
+  projectRoutingProfile,
+  setProjectRoutingProfile,
+  setNewProjectRoutingProfile,
+  routingProfileEntries,
+  routingProfileCategory,
+  setRoutingProfileCategory,
+  removeRoutingProfileCategory,
   getCategories,
   getCategoryRoutePairs,
   getCategory,

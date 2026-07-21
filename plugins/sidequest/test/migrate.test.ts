@@ -104,21 +104,24 @@ function rowCounts(database: DatabaseSync): Record<'projects' | 'tickets' | 'sto
   };
 }
 
-test('schema v4 migration adds an empty project category layer to a v3 database', () => {
+test('schema v7 migrates a v3 category table into a profile', () => {
   const homeRoot = makeHome();
   const dbPath = path.join(homeRoot, 'sidequest.db');
   const seed = String.raw`
     const { DatabaseSync } = require('node:sqlite');
     const database = new DatabaseSync(${JSON.stringify(dbPath)});
     database.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT); INSERT INTO meta VALUES ('schema_version', '3');");
-    database.prepare('INSERT INTO categories VALUES (?, ?)').run('fixture', JSON.stringify({ id: 'fixture', name: 'Fixture', route: { model: 'opus', effort: 'high' } }));
+    database.prepare('INSERT INTO categories VALUES (?, ?)').run('fixture', JSON.stringify({ id: 'fixture', name: 'Fixture', route: { model: 'opus', effort: 'high' }, enabled: true }));
+    database.prepare('INSERT INTO categories VALUES (?, ?)').run('general', JSON.stringify({ id: 'general', name: 'General', route: { model: 'sonnet', effort: 'medium' }, enabled: true }));
     database.close();
   `;
   assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
 
   const database = db.openDb(homeRoot);
-  assert.equal(db.getRow(database, 'meta', 'schema_version'), 6);
+  assert.equal(db.getRow(database, 'meta', 'schema_version'), 7);
   assert.deepEqual(db.getRow<{ id: string }>(database, 'categories', 'fixture')?.id, 'fixture');
+  assert.equal(database.prepare("SELECT source FROM routing_profiles WHERE id = 'coding'").get()?.source, 'migrated');
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM routing_profiles").get()?.count, 4);
   assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_categories'").get()?.name, 'project_categories');
   assert.deepEqual(db.listRows(database, 'project_categories', { project: 'missing' }), []);
   database.close();
@@ -137,13 +140,14 @@ test('schema v5 migration refreshes only an uncustomized codebase-exploration ca
       const { DatabaseSync } = require('node:sqlite');
       const database = new DatabaseSync(${JSON.stringify(dbPath)});
       database.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT); CREATE TABLE project_categories (project TEXT, id TEXT, kind TEXT, data TEXT, PRIMARY KEY (project, id)); INSERT INTO meta VALUES ('schema_version', '4');");
-      database.prepare('INSERT INTO categories VALUES (?, ?)').run('codebase-exploration', JSON.stringify({ id: 'codebase-exploration', name: 'Codebase exploration', description: ${JSON.stringify(oldText.description)}, contract: ${JSON.stringify(contract)}, route: { model: 'codex-gpt-5-6-luna', effort: 'medium' } }));
+      database.prepare('INSERT INTO categories VALUES (?, ?)').run('codebase-exploration', JSON.stringify({ id: 'codebase-exploration', name: 'Codebase exploration', description: ${JSON.stringify(oldText.description)}, contract: ${JSON.stringify(contract)}, route: { model: 'codex-gpt-5-6-luna', effort: 'medium' }, enabled: true }));
+      database.prepare('INSERT INTO categories VALUES (?, ?)').run('general', JSON.stringify({ id: 'general', name: 'General', route: { model: 'sonnet', effort: 'medium' }, enabled: true }));
       database.close();
     `;
     assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
 
     const database = db.openDb(homeRoot);
-    assert.equal(db.getRow(database, 'meta', 'schema_version'), 6);
+    assert.equal(db.getRow(database, 'meta', 'schema_version'), 7);
     const category = db.getRow<{ contract: string; artifactRoots?: string[] }>(database, 'categories', 'codebase-exploration');
     if (customized) {
       assert.equal(category?.contract, 'My hand-tuned contract.');
@@ -154,6 +158,76 @@ test('schema v5 migration refreshes only an uncustomized codebase-exploration ca
     }
     database.close();
   }
+});
+
+test('schema v7 migrates local category kinds with profile provenance and snapshots', () => {
+  const homeRoot = makeHome();
+  const dbPath = path.join(homeRoot, 'sidequest.db');
+  const general = { id: 'general', name: 'General', description: '', route: { model: 'sonnet', effort: 'medium' }, fallback: null, contract: '', artifactRoots: [], enabled: true };
+  const normal = { id: 'coding.normal', name: 'Normal', description: '', route: { model: 'opus', effort: 'medium' }, fallback: null, contract: '', artifactRoots: [], enabled: true };
+  const easy = { id: 'coding.easy', name: 'Easy', description: '', route: { model: 'sonnet', effort: 'medium' }, fallback: null, contract: '', artifactRoots: [], enabled: true };
+  const debugging = { id: 'debugging', name: 'Debugging', description: '', route: { model: 'sonnet', effort: 'high' }, fallback: null, contract: '', artifactRoots: [], enabled: true };
+  const local = { id: 'board-only', name: 'Board only', description: '', route: { model: 'fable', effort: 'medium' }, fallback: null, contract: '', artifactRoots: [], enabled: true };
+  const detached = { ...debugging, name: 'Pinned debugging' };
+  const seed = String.raw`
+    const { DatabaseSync } = require('node:sqlite');
+    const database = new DatabaseSync(${JSON.stringify(dbPath)});
+    database.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE projects (slug TEXT PRIMARY KEY, data TEXT); CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT); CREATE TABLE project_categories (project TEXT, id TEXT, kind TEXT, data TEXT, PRIMARY KEY (project, id)); INSERT INTO meta VALUES ('schema_version', '6');");
+    database.prepare('INSERT INTO projects VALUES (?, ?)').run('board', JSON.stringify({ path: 'C:/work/board', name: 'Board' }));
+    for (const category of ${JSON.stringify([general, normal, easy, debugging])}) database.prepare('INSERT INTO categories VALUES (?, ?)').run(category.id, JSON.stringify(category));
+    database.prepare('INSERT INTO project_categories VALUES (?, ?, ?, ?)').run('board', 'board-only', 'ADD', ${JSON.stringify(JSON.stringify(local))});
+    database.prepare('INSERT INTO project_categories VALUES (?, ?, ?, ?)').run('board', 'coding.normal', 'OVERRIDE', JSON.stringify({ name: 'Board normal' }));
+    database.prepare('INSERT INTO project_categories VALUES (?, ?, ?, ?)').run('board', 'debugging', 'DETACH', ${JSON.stringify(JSON.stringify(detached))});
+    database.prepare('INSERT INTO project_categories VALUES (?, ?, ?, ?)').run('board', 'coding.easy', 'DISABLE', '{}');
+    database.close();
+  `;
+  assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
+
+  const database = db.openDb(homeRoot);
+  assert.equal(db.getRow(database, 'meta', 'schema_version'), 7);
+  assert.equal(database.prepare("SELECT profile_id FROM project_routing_profiles WHERE project = 'board'").get()?.profile_id, 'coding');
+  assert.equal(database.prepare('SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1').get()?.new_project_profile_id, 'coding');
+  const rows = database.prepare('SELECT id, kind, base_profile_id, base_data FROM project_categories WHERE project = ? ORDER BY id').all('board');
+  assert.deepEqual(rows.map((row) => [row.id, row.kind, row.base_profile_id]), [
+    ['board-only', 'ADD', null],
+    ['coding.easy', 'DISABLE', 'coding'],
+    ['coding.normal', 'OVERRIDE', 'coding'],
+    ['debugging', 'DETACH', 'coding'],
+  ]);
+  assert.deepEqual(JSON.parse(String(rows.find((row) => row.id === 'coding.normal')?.base_data)), normal);
+  assert.equal(rows.find((row) => row.id === 'board-only')?.base_data, null);
+  assert.throws(() => database.prepare('DELETE FROM categories').run(), /read-only legacy snapshot/);
+  database.close();
+});
+
+test('a schema-v6 session refuses writes after a schema-v7 process migrates the database', () => {
+  const homeRoot = makeHome();
+  db.openDb(homeRoot).close();
+  const dbModule = path.join(__dirname, '..', 'lib', 'db.js');
+  const script = String.raw`
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const Module = require('node:module');
+    const { DatabaseSync } = require('node:sqlite');
+    const filename = ${JSON.stringify(dbModule)};
+    const source = fs.readFileSync(filename, 'utf8').replace('const CURRENT_SCHEMA_VERSION = 7;', 'const CURRENT_SCHEMA_VERSION = 6;');
+    const legacy = new Module(filename);
+    legacy.filename = filename;
+    legacy.paths = Module._nodeModulePaths(path.dirname(filename));
+    legacy._compile(source, filename);
+    const database = new DatabaseSync(${JSON.stringify(path.join(homeRoot, 'sidequest.db'))});
+    try {
+      legacy.exports.putRow(database, 'globals', { key: 'legacy-write', data: true });
+      process.exitCode = 2;
+    } catch (error) {
+      process.stdout.write(String(error.message));
+    } finally {
+      database.close();
+    }
+  `;
+  const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /schema 7 is newer than supported schema 6; refusing write/);
 });
 
 test('migrates a JSON tree into SQLite without deleting its rollback copy', () => {

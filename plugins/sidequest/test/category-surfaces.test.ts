@@ -84,11 +84,11 @@ test('CLI global fallback reads and updates routing policy', () => {
 
 test('MCP category tools stamp tickets and reject unknown categories', async () => {
   const mcp = freshMcp();
-  const added = await call(mcp, 'add', { title: 'Categorized MCP ticket', category: 'mechanical' });
+  const added = await call(mcp, 'add', { title: 'Categorized MCP ticket', category: 'coding.easy' });
   assert.match(added.ref, /^SQ-\d+$/);
 
   const listed = await call(mcp, 'category_list', { full: true });
-  assert.ok(listed.categories.some((category?: any) => category.id === 'mechanical' && category.ticketCount === 1));
+  assert.ok(listed.categories.some((category?: any) => category.id === 'coding.easy' && category.ticketCount === 1));
 
   const raw = await mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ref, category: 'missing' } } });
   assert.ok(raw.result.isError);
@@ -107,7 +107,7 @@ test('CLI project category layers stay isolated and expose effective origins', (
   assert.equal(run.body.localRow.kind, 'DETACH');
   assert.equal(run.body.effective.name, 'Local general');
 
-  run = cli('category', 'disable', 'mechanical', '--project', project);
+  run = cli('category', 'disable', 'coding.easy', '--project', project);
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.localRow.kind, 'DISABLE');
 
@@ -115,7 +115,7 @@ test('CLI project category layers stay isolated and expose effective origins', (
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.categories.find((entry?: any) => entry.id === 'project-only').origin, 'project');
   assert.equal(run.body.categories.find((entry?: any) => entry.id === 'general').origin, 'detached');
-  assert.equal(run.body.categories.find((entry?: any) => entry.id === 'mechanical').origin, 'disabled');
+  assert.equal(run.body.categories.find((entry?: any) => entry.id === 'coding.easy').origin, 'disabled');
 
   run = cli('category', 'list', '--project', second);
   assert.equal(run.result.status, 0, run.result.stderr);
@@ -132,7 +132,7 @@ test('CLI category list defaults to the current project taxonomy and supports gl
   fs.mkdirSync(projectOnly, { recursive: true });
   let run = cli('category', 'add', 'project-only-list', '--project', projectOnly, '--name', 'Project only list', '--route-model', 'sonnet', '--route-effort', 'medium');
   assert.equal(run.result.status, 0, run.result.stderr);
-  run = cli('category', 'disable', 'mechanical', '--project', projectOnly);
+  run = cli('category', 'disable', 'coding.easy', '--project', projectOnly);
   assert.equal(run.result.status, 0, run.result.stderr);
 
   const currentEnv = Object.assign({}, env, { CLAUDE_PROJECT_DIR: projectOnly });
@@ -140,38 +140,38 @@ test('CLI category list defaults to the current project taxonomy and supports gl
   assert.equal(current.status, 0, current.stderr);
   const currentBody = JSON.parse(current.stdout);
   assert.ok(currentBody.categories.some((entry?: any) => entry.id === 'project-only-list' && entry.origin === 'project'));
-  assert.ok(currentBody.categories.some((entry?: any) => entry.id === 'mechanical' && entry.origin === 'disabled'));
+  assert.ok(currentBody.categories.some((entry?: any) => entry.id === 'coding.easy' && entry.origin === 'disabled'));
 
   const global = spawnSync(process.execPath, [BIN, 'category', 'list', '--global', '--json'], { encoding: 'utf8', env: currentEnv });
   assert.equal(global.status, 0, global.stderr);
   const globalBody = JSON.parse(global.stdout);
   assert.ok(!globalBody.categories.some((entry?: any) => entry.id === 'project-only-list'));
-  assert.ok(globalBody.categories.some((entry?: any) => entry.id === 'mechanical' && entry.origin === 'global'));
+  assert.ok(globalBody.categories.some((entry?: any) => entry.id === 'coding.easy' && entry.origin === 'global'));
 });
 
 test('CLI category edit forks a board category, and reset returns it to the shared default', () => {
   const scoped = path.join(home, 'fork-project');
   fs.mkdirSync(scoped, { recursive: true });
 
-  let run = cli('category', 'edit', 'mechanical', '--project', scoped, '--name', 'Local mechanical');
+  let run = cli('category', 'edit', 'coding.easy', '--project', scoped, '--name', 'Local coding.easy');
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.localRow.kind, 'DETACH');
 
   run = cli('category', 'list', '--project', scoped);
   assert.equal(run.result.status, 0, run.result.stderr);
-  const category = run.body.categories.find((entry?: any) => entry.id === 'mechanical');
+  const category = run.body.categories.find((entry?: any) => entry.id === 'coding.easy');
   assert.equal(category.linkState, 'detached');
-  assert.equal(category.name, 'Local mechanical');
+  assert.equal(category.name, 'Local coding.easy');
   assert.deepEqual(run.body.warnings, []); // a forked board copy is normal, not a warning
 
   const plain = spawnSync(process.execPath, [BIN, 'category', 'list', '--project', scoped], { encoding: 'utf8', env });
   assert.equal(plain.status, 0, plain.stderr);
   assert.match(plain.stdout, /customized/);
 
-  run = cli('category', 'reset', 'mechanical', '--project', scoped);
+  run = cli('category', 'reset', 'coding.easy', '--project', scoped);
   assert.equal(run.result.status, 0, run.result.stderr);
   assert.equal(run.body.localRow, null);
-  assert.equal(run.body.effective.name, 'Mechanical change');
+  assert.equal(run.body.effective.name, 'Straightforward change');
 });
 
 test('MCP category edit forks a board category; category_relink resets it to the shared default', async () => {
@@ -179,18 +179,18 @@ test('MCP category edit forks a board category; category_relink resets it to the
   const scoped = process.env.CLAUDE_PROJECT_DIR;
   fs.mkdirSync(scoped, { recursive: true });
 
-  let result = await call(mcp, 'category_edit', { project: scoped, id: 'mechanical', name: 'Local mechanical' });
+  let result = await call(mcp, 'category_edit', { project: scoped, id: 'coding.easy', name: 'Local coding.easy' });
   assert.deepEqual(Object.keys(result).sort(), ['id', 'localRow', 'ok', 'project']);
   assert.equal(result.localRow.kind, 'DETACH');
 
   result = await call(mcp, 'category_list', { project: scoped, full: true });
-  const category = result.categories.find((entry?: any) => entry.id === 'mechanical');
+  const category = result.categories.find((entry?: any) => entry.id === 'coding.easy');
   assert.equal(category.linkState, 'detached');
   assert.equal(category.origin, 'detached');
   assert.deepEqual(result.warnings, []);
 
-  result = await call(mcp, 'category_relink', { project: scoped, id: 'mechanical' });
-  assert.deepEqual(result, { ok: true, project: result.project, id: 'mechanical', localRow: null });
+  result = await call(mcp, 'category_relink', { project: scoped, id: 'coding.easy' });
+  assert.deepEqual(result, { ok: true, project: result.project, id: 'coding.easy', localRow: null });
 });
 
 export {};

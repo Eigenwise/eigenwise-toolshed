@@ -732,15 +732,15 @@ test('add returns a compact acknowledgement', async () => {
 test('category stamps warn until category_list is served by the MCP session', async () => {
   const session = freshMcpServer();
   const slug = store.ensureProject(PROJ).slug;
-  const existing = store.createTicket(slug, { title: 'update without category', category: 'mechanical' });
+  const existing = store.createTicket(slug, { title: 'update without category', category: 'coding.easy' });
   const unchangedCategory = await callToolOn(session, 'update', { ref: existing.ref, title: 'update without a category stamp' });
   assert.equal(unchangedCategory.warnings, undefined);
 
-  const warned = await callToolOn(session, 'add', { title: 'category stamped before read', category: 'mechanical' });
+  const warned = await callToolOn(session, 'add', { title: 'category stamped before read', category: 'coding.easy' });
   assert.deepEqual(warned.warnings, ['Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.']);
 
   await callToolOn(session, 'category_list', {});
-  const acknowledged = await callToolOn(session, 'add', { title: 'category stamped after read', category: 'mechanical' });
+  const acknowledged = await callToolOn(session, 'add', { title: 'category stamped after read', category: 'coding.easy' });
   assert.equal(acknowledged.warnings, undefined);
 
   await callTool('category_list', {});
@@ -757,13 +757,13 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
   const dispatched = await callTool('dispatch', { ref: added.ref, full: true });
   assert.match(dispatched.warnings[0], /no verify command/);
 
-  const research = await callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'deep-research' });
+  const research = await callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'research' });
   assert.deepEqual((await callTool('dispatch', { ref: research.ref, full: true })).warnings, []);
 });
 
 test('update returns a compact acknowledgement', async () => {
   store.setCategory({ id: 'mcp-update-echo', name: 'MCP update echo', route: { model: 'opus', effort: 'high' } });
-  const added = await callTool('add', { title: 'MCP update echo', category: 'mechanical' });
+  const added = await callTool('add', { title: 'MCP update echo', category: 'coding.easy' });
   const updated = await callTool('update', { ref: added.ref, category: 'mcp-update-echo' });
   assert.deepStrictEqual(Object.keys(updated).sort(), ['ok', 'project', 'ref', 'status']);
   assert.equal(store.getTicket(added.project, added.ref).categoryId, 'mcp-update-echo');
@@ -895,7 +895,7 @@ test('MCP admin/config tools share CLI state transitions', async () => {
 
 
 test('claim -> comment -> done return compact acknowledgements', async () => {
-  const added = await callTool('add', { title: 'work me', complexity: 2, why: 'a mechanical change to exercise the claim/done path over MCP', labels: ['direct-ok'] });
+  const added = await callTool('add', { title: 'work me', complexity: 2, why: 'a straightforward change to exercise the claim/done path over MCP', labels: ['direct-ok'] });
   const ref = added.ref;
   const ticket = store.getTicket(added.project, ref);
 
@@ -980,7 +980,7 @@ test('MCP claim passes prepared dispatch token and executor through to the store
 });
 
 test('MCP blocks no-dispatch routed claims and records an explicit direct research bypass', async () => {
-  const added = await callTool('add', { title: 'no-file research', category: 'mechanical', labels: ['direct-ok'] });
+  const added = await callTool('add', { title: 'no-file research', category: 'coding.easy', labels: ['direct-ok'] });
   const ticket = store.getTicket(added.project, added.ref);
   assert.deepStrictEqual(ticket.files, []);
   const refused = await callTool('claim', { ref: added.ref, by: 'mcp-routed', effort: ticket.effort, executor: ticket.exec.agent });
@@ -1011,7 +1011,7 @@ test('MCP claim rejects a generic executor for a Codex route', async () => {
 });
 
 test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', async () => {
-  const added = await callTool('add', { title: 'effort guard', category: 'mechanical' });
+  const added = await callTool('add', { title: 'effort guard', category: 'coding.easy' });
   const ref = added.ref;
   const derived = store.getTicket(added.project, added.ref).effort;
   assert.ok(derived, 'routing on -> a derived effort');
@@ -1028,7 +1028,7 @@ test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', 
 });
 
 test('MCP board reads omit category taxonomy while preserving claim TTL and category rows', async () => {
-  const added = await callTool('add', { title: 'trimmed taxonomy response', category: 'mechanical' });
+  const added = await callTool('add', { title: 'trimmed taxonomy response', category: 'coding.easy' });
   const list = await callTool('list', {});
   const ready = await callTool('ready', { brief: true });
   const changes = await callTool('changes', {});
@@ -1040,13 +1040,13 @@ test('MCP board reads omit category taxonomy while preserving claim TTL and cate
   assert.equal(pulse.categories, undefined);
   assert.equal(typeof list.claimTtlMs, 'number');
   assert.equal(typeof ready.claimTtlMs, 'number');
-  assert.equal(list.tickets.find((ticket: any) => ticket.ref === added.ref).categoryId, 'mechanical');
+  assert.equal(list.tickets.find((ticket: any) => ticket.ref === added.ref).categoryId, 'coding.easy');
   assert.equal(typeof ready.tickets.find((ticket: any) => ticket.ref === added.ref).categoryName, 'string');
 });
 
 test('MCP brief ready response stays under 2 KB', async () => {
   const small = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-trimmed-ready'), 'SQ trimmed ready');
-  store.createTicket(small.slug, { title: 'the only ticket', category: 'mechanical' });
+  store.createTicket(small.slug, { title: 'the only ticket', category: 'coding.easy' });
   const out = await callToolRaw('ready', { project: small.slug, brief: true });
   assert.ok(out.content[0].text.length < 2048, `brief ready response is ${out.content[0].text.length} bytes`);
 });

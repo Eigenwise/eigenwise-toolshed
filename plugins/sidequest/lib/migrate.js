@@ -100,7 +100,18 @@ function migrateIfNeeded(database, homeRoot) {
   if ((0, import_db.getRow)(database, "meta", "json_migrated") === "1") return;
   const rows = collectMigration(homeRoot);
   (0, import_db.txn)(database, () => {
-    for (const row of rows.projects) (0, import_db.putRow)(database, "projects", row);
+    const settings = (0, import_db.getRow)(database, "routing_profile_settings", 1);
+    if (!settings) throw new Error("The new-board routing profile is not configured.");
+    const assignedAt = (/* @__PURE__ */ new Date()).toISOString();
+    for (const row of rows.projects) {
+      (0, import_db.putRow)(database, "projects", row);
+      (0, import_db.putRow)(database, "project_routing_profiles", {
+        project: row.slug,
+        profile_id: settings.new_project_profile_id,
+        assigned_at: assignedAt,
+        assigned_by: "json-migration"
+      });
+    }
     for (const row of rows.tickets) (0, import_db.putRow)(database, "tickets", row);
     for (const row of rows.stories) (0, import_db.putRow)(database, "stories", row);
     for (const row of rows.globals) (0, import_db.putRow)(database, "globals", row);

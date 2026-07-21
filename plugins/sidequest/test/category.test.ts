@@ -110,6 +110,7 @@ test('schema v2 migration materializes configured backends, fallbacks, and globa
     const db = new DatabaseSync(${JSON.stringify(dbPath)});
     db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE categories (id TEXT PRIMARY KEY, data TEXT); CREATE TABLE globals (key TEXT PRIMARY KEY, data TEXT); INSERT INTO meta VALUES ('schema_version', '2');");
     db.prepare('INSERT INTO categories VALUES (?, ?)').run('fixture', JSON.stringify({ id:'fixture', name:'Fixture', route:{model:'g' + 'rade-3',effort:'high'}, enabled:true }));
+    db.prepare('INSERT INTO categories VALUES (?, ?)').run('general', JSON.stringify({ id:'general', name:'General', route:{model:'sonnet',effort:'medium'}, enabled:true }));
     db.prepare('INSERT INTO globals VALUES (?, ?)').run('model-prefs', JSON.stringify({ tierBackend:{['g' + 'rade-3']:'codex-gpt-test'} }));
     db.close();
   `;
@@ -120,7 +121,7 @@ test('schema v2 migration materializes configured backends, fallbacks, and globa
   process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
   const db = require('../lib/db.js');
   const handle = db.openDb(home);
-  assert.equal(db.getRow(handle, 'meta', 'schema_version'), 6);
+  assert.equal(db.getRow(handle, 'meta', 'schema_version'), 7);
   assert.deepEqual(db.getRow(handle, 'categories', 'fixture').route, { model: 'codex-gpt-test', effort: 'high' });
   assert.deepEqual(db.getRow(handle, 'categories', 'fixture').fallback, { model: 'opus', effort: 'high' });
   assert.deepEqual(db.getRow(handle, 'globals', 'routing-fallback'), { model: 'sonnet', effort: 'high' });
@@ -166,11 +167,11 @@ test('project category layer guards reject invalid local changes', () => {
   assert.throws(() => store.setProjectCategory(slug, 'general', 'DISABLE'), /cannot be disabled/);
   assert.throws(() => store.setProjectCategory(slug, 'coding.normal', 'ADD', {
     route: { model: 'opus', effort: 'high' },
-  }), /collides with a global category/);
+  }), /collides with profile/);
   assert.throws(() => store.setProjectCategory(slug, 'coding.normal', 'OVERRIDE', { enabled: false }), /cannot patch/);
 });
 
-test('deleting a global category auto-pins the customizations that depend on it', () => {
+test('deleting a profile category preserves overrides through their base snapshot', () => {
   const { store, slug, home } = freshStore();
   const other = store.ensureProject(path.join(home, 'other-project'), 'Other project').slug;
   const defaultNormalRoute = store.getCategory('coding.normal').route;
@@ -178,15 +179,12 @@ test('deleting a global category auto-pins the customizations that depend on it'
 
   store.removeCategory('coding.normal');
 
-  // The board keeps a working, pinned copy instead of dropping into a broken
-  // "global category missing" state — no dangling override to clean up.
-  const pinned = store.getCategory('coding.normal', { project: slug });
-  assert.equal(pinned.name, 'Local coding');
-  assert.deepEqual(pinned.route, defaultNormalRoute);
-  assert.deepEqual(store.getProjectCategories(slug).warnings, []);
-  assert.equal(store.getCategory('coding.normal', { project: slug, withState: true }).linkState, 'detached');
-
-  // A project that never customized the category simply loses it.
+  const preserved = store.getCategory('coding.normal', { project: slug, withState: true });
+  assert.equal(preserved.name, 'Local coding');
+  assert.deepEqual(preserved.route, defaultNormalRoute);
+  assert.equal(preserved.origin, 'override');
+  assert.equal(preserved.linkState, 'overridden');
+  assert.deepEqual(store.getProjectCategories(slug).warnings.map((warning?: any) => warning.kind), ['override-using-snapshot']);
   assert.equal(store.getCategories({ project: other }).some((category?: any) => category.id === 'coding.normal'), false);
 });
 
@@ -204,6 +202,8 @@ test('detached categories snapshot the merged view, survive deletion, and relink
   assert.deepEqual(store.getProjectCategories(slug).rows, [{
     id: detached.id,
     kind: detached.kind,
+    baseProfileId: 'coding',
+    baseData: null,
     data: detached.data,
   }]);
   // A forked category coexisting with its shared default is the normal state, not a warning.
@@ -250,10 +250,10 @@ test('category link state annotations are opt-in and identify changed override f
       changedFields: category.changedFields,
     }])),
     {
-      'coding.easy': { linkState: 'linked', changedFields: undefined },
-      'coding.hard': { linkState: 'detached', changedFields: undefined },
+      'coding.easy': { linkState: 'linked', changedFields: [] },
+      'coding.hard': { linkState: 'detached', changedFields: [] },
       'coding.normal': { linkState: 'overridden', changedFields: ['name', 'route'] },
-      'music-analysis': { linkState: 'added', changedFields: undefined },
+      'music-analysis': { linkState: 'added', changedFields: [] },
     },
   );
 });

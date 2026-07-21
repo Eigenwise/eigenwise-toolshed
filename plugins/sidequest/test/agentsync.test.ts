@@ -91,15 +91,15 @@ test('sync protects generation-two executors from legacy marker GC and prunes le
   assert.ok(!fs.existsSync(legacy));
 });
 
-test('sync writes the complete stable executor ladder with an empty taxonomy', () => {
+test('sync writes the complete stable executor ladder with the smallest valid taxonomy', () => {
   clearCatalog();
   const store = require('../lib/store.js');
   const db = require('../lib/db.js').openDb(process.env.SIDEQUEST_HOME);
   const categories = store.getCategories({ includeDisabled: true });
-  db.prepare('DELETE FROM categories').run();
+  db.prepare("DELETE FROM routing_profile_entries WHERE profile_id = 'coding' AND category_id <> 'general'").run();
   const dir = tmpDir();
   try {
-    assert.deepStrictEqual(store.getCategories({ includeDisabled: true }), []);
+    assert.deepStrictEqual(store.getCategories({ includeDisabled: true }).map((category?: any) => category.id), ['general']);
     const result = agentsync.syncExecAgents(null, { dir });
     assert.equal(result.written, 10);
     assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
@@ -113,6 +113,7 @@ test('sync writes the complete stable executor ladder with an empty taxonomy', (
     }
   } finally {
     for (const category of categories) store.setCategory(category);
+    db.close();
   }
 });
 

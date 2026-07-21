@@ -66,7 +66,16 @@ function runSessionWithHome(home?: any, envOverrides?: any) {
 
 function writeCategory(home?: any, category?: any) {
   const database = db.openDb(home);
-  db.putRow(database, 'categories', { id: category.id, data: category });
+  const profileId = database.prepare('SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1').get().new_project_profile_id;
+  const position = Number(database.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM routing_profile_entries WHERE profile_id = ?').get(profileId).position);
+  db.putRow(database, 'routing_profile_entries', {
+    profile_id: profileId,
+    category_id: category.id,
+    data: category,
+    position,
+    updated_at: new Date().toISOString(),
+  });
+  database.close();
 }
 
 function writeModelPrefs(home?: any, prefs?: any) {
@@ -722,9 +731,10 @@ test('session-start: shows the live investigation workforce within its cap', () 
     assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
     const workforce = ctx.slice(start);
     assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `${source || 'startup'} workforce is ${Buffer.byteLength(workforce)} bytes`);
-    for (const id of ['codebase-exploration', 'debugging', 'spike-investigation', 'deep-research', 'web-research']) {
+    for (const id of ['codebase-exploration', 'debugging', 'spike-investigation', 'research']) {
       assert.match(workforce, new RegExp(`${id} — .+ \\(.+·.+\\)`), id);
     }
+    assert.match(workforce, /visual-review — (?:.+ )?\(.+·.+\)/, 'visual-review');
   }
 });
 

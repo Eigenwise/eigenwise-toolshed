@@ -60,13 +60,18 @@ function ticket(id: string, project: string, status: string, ord: number): Ticke
   };
 }
 
-test('schema v4 stores project category rows by project and id', () => {
+test('schema v7 stores project category provenance by project and id', () => {
   const { db } = makeDb();
-  putRow(db, 'project_categories', { project: 'one', id: 'local', kind: 'ADD', data: { id: 'local' } });
-  putRow(db, 'project_categories', { project: 'two', id: 'local', kind: 'ADD', data: { id: 'local', name: 'Other' } });
+  putRow(db, 'projects', { slug: 'one', data: { slug: 'one' } });
+  putRow(db, 'projects', { slug: 'two', data: { slug: 'two' } });
+  putRow(db, 'project_categories', { project: 'one', id: 'local', kind: 'ADD', base_profile_id: null, base_data: null, data: { id: 'local' } });
+  putRow(db, 'project_categories', { project: 'two', id: 'local', kind: 'OVERRIDE', base_profile_id: 'coding', base_data: { id: 'local', name: 'Base' }, data: { name: 'Other' } });
 
   assert.deepStrictEqual(getRow(db, 'project_categories', { project: 'one', id: 'local' }), { id: 'local' });
-  assert.deepStrictEqual(listRows(db, 'project_categories', { project: 'two' }), [{ id: 'local', name: 'Other' }]);
+  assert.deepStrictEqual(listRows(db, 'project_categories', { project: 'two' }), [{ name: 'Other' }]);
+  const provenance = db.prepare('SELECT base_profile_id, base_data FROM project_categories WHERE project = ? AND id = ?').get('two', 'local');
+  assert.equal(provenance?.base_profile_id, 'coding');
+  assert.deepEqual(JSON.parse(String(provenance?.base_data)), { id: 'local', name: 'Base' });
   assert.strictEqual(deleteRow(db, 'project_categories', { project: 'one', id: 'local' }), true);
   assert.strictEqual(getRow(db, 'project_categories', { project: 'one', id: 'local' }), null);
   db.close();

@@ -8,6 +8,7 @@ import {
   txn,
   type GlobalRow,
   type ProjectRow,
+  type RoutingProfileSettingsRow,
   type StoryRow,
   type TicketRow,
 } from './db.js';
@@ -99,7 +100,18 @@ export function migrateIfNeeded(database: DatabaseSync, homeRoot: string): void 
 
   const rows = collectMigration(homeRoot);
   txn(database, () => {
-    for (const row of rows.projects) putRow(database, 'projects', row);
+    const settings = getRow<RoutingProfileSettingsRow>(database, 'routing_profile_settings', 1);
+    if (!settings) throw new Error('The new-board routing profile is not configured.');
+    const assignedAt = new Date().toISOString();
+    for (const row of rows.projects) {
+      putRow(database, 'projects', row);
+      putRow(database, 'project_routing_profiles', {
+        project: row.slug,
+        profile_id: settings.new_project_profile_id,
+        assigned_at: assignedAt,
+        assigned_by: 'json-migration',
+      });
+    }
     for (const row of rows.tickets) putRow(database, 'tickets', row);
     for (const row of rows.stories) putRow(database, 'stories', row);
     for (const row of rows.globals) putRow(database, 'globals', row);
