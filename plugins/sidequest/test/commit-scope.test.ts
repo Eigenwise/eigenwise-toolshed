@@ -52,6 +52,30 @@ test('missing declared paths warn while existing declared paths commit', () => {
   assert.deepEqual(committed.missingScopes, ['plugins/sidequest/phantom.js']);
 });
 
+test('exact declared paths commit untracked additions', () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
+
+  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js']);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
+  assert.deepEqual(committed.missingScopes, []);
+});
+
+test('exact declared paths commit tracked deletions', () => {
+  const root = repo();
+  const worker = path.join(root, 'plugins', 'sidequest', 'worker-a.js');
+  fs.writeFileSync(worker, 'a\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'add worker']);
+  fs.unlinkSync(worker);
+
+  const committed = commitScope.commitScoped(root, 'remove worker', ['plugins/sidequest/worker-a.js']);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
+  assert.deepEqual(committed.missingScopes, []);
+});
+
 
 test('scoped commit leaves another executor’s staged file in the shared index', () => {
   const root = repo();

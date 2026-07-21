@@ -109,8 +109,9 @@ function canonicalScopedPaths(cwd, files) {
   const paths = trackedPaths(cwd);
   return scopedPaths(files).map((scope) => canonicalScope(scope, paths));
 }
-function existingScopedPaths(root, files) {
-  return canonicalScopedPaths(root, files).filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)));
+function commitScopedPaths(root, scopes) {
+  const tracked = trackedPaths(root);
+  return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || tracked.some((file) => isInScope(file, [scope])));
 }
 function workingPaths(cwd) {
   const status = git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
@@ -349,12 +350,13 @@ function commitScoped(cwd, message, files) {
     const resolution = validateScopeResolution(root, scopes);
     if (!resolution.ok) return resolution;
     const canonicalScopes = canonicalScopedPaths(root, scopes);
-    const missingScopes = canonicalScopes.filter((scope) => !import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)));
-    const commitScopes = existingScopedPaths(root, scopes);
+    const commitScopes = commitScopedPaths(root, canonicalScopes);
+    const missingScopes = canonicalScopes.filter((scope) => !commitScopes.includes(scope));
     const unscopedPaths = unscopedWorkingPaths(root, scopes);
     if (!commitScopes.length) {
       return { ok: false, reason: "no_existing_scope", missingScopes, unscopedPaths };
     }
+    git(root, ["add", "--all", "--", ...commitScopes]);
     git(root, ["commit", "--only", "-m", String(message || ""), "--", ...commitScopes]);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();
     const validation = validateCommitScope(root, commit, scopes);
