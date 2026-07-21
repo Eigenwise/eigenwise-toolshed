@@ -57,6 +57,31 @@ test('enumerates every board and maps it to its Sidequest project install', () =
   assert.match(result.problems.join('\n'), /Sidequest board Two has no Sidequest install/);
 });
 
+test('keeps other projects out of the SessionStart health context', () => {
+  const result = audit(fixture({
+    currentProject: 'C:/work/one/subdirectory',
+    boards: [
+      { name: 'One', path: 'C:/work/one' },
+      { name: 'Two', path: 'C:/work/two' },
+    ],
+  }));
+
+  assert.deepEqual(result.projectProblems, []);
+  assert.match(result.problems.join('\n'), /Sidequest board Two has no Sidequest install/);
+});
+
+test('reports freshness problems for the current project', () => {
+  const result = audit(fixture({
+    currentProject: 'C:/work/one',
+    manifestFor: (name) => ({
+      plugins: name === 'eigenwise-toolshed'
+        ? [{ name: 'sidequest', version: '1.1.0' }]
+        : [{ name: 'plugin', version: '1.0.0' }],
+    }),
+  }));
+
+  assert.deepEqual(result.projectProblems, ['sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0']);
+});
 test('finds stale versions and marks absent manifest entries as unknown', () => {
   const input = fixture({
     registry: {
@@ -215,7 +240,7 @@ test('debounces the same state but reports a changed state', () => {
 
 const hookPath = path.join(__dirname, '..', 'hooks', 'session-start-freshness.js');
 
-function hookOutput({ registry, manifest, loadedVersion, marketplaces = {} }) {
+function hookOutput({ registry, manifest, loadedVersion, marketplaces = {}, input = {} }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-freshness-'));
   const cache = path.join(home, 'marketplace');
   const pluginRoot = path.join(home, 'workbench');
@@ -237,6 +262,7 @@ function hookOutput({ registry, manifest, loadedVersion, marketplaces = {} }) {
     const output = childProcess.execFileSync(process.execPath, [hookPath], {
       encoding: 'utf8',
       env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: pluginRoot },
+      input: JSON.stringify(input),
       timeout: 10_000,
     });
     return output ? JSON.parse(output) : null;
@@ -273,7 +299,41 @@ test('writes cached update availability to SessionStart hook stdout', () => {
     loadedVersion: '0.49.0',
   });
 
-  assert.equal(output.systemMessage, 'Toolshed updates available (cached): sidequest 2.41.0 → 2.42.0, workbench 0.49.0 → 0.50.0 — /update-toolshed, then /reload-plugins.');
+  assert.equal(output.systemMessage, 'Toolshed update available (cached): sidequest 2.41.0 → 2.42.0 — /update-toolshed, then /reload-plugins.');
+});
+
+test('keeps third-party freshness and other projects out of SessionStart output', () => {
+  const output = hookOutput({
+    registry: JSON.stringify({
+      plugins: {
+        'plugin@other-marketplace': [{ scope: 'user', version: '1.0.0' }],
+      },
+    }),
+    manifest: JSON.stringify({ plugins: [] }),
+    loadedVersion: '0.49.0',
+    marketplaces: {
+      'other-marketplace': {
+        autoUpdate: false,
+        lastUpdated: new Date().toISOString(),
+      },
+    },
+    input: { cwd: 'C:/work/current' },
+  });
+
+  assert.equal(output, null);
+});
+
+test('writes a project-scoped health warning to SessionStart context', () => {
+  const output = hookOutput({
+    ...hookFixture({
+      'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '1.0.0' }],
+    }, { sidequest: '1.1.0' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: 'C:/work/current/subdirectory' },
+  });
+
+  assert.equal(output.hookSpecificOutput.additionalContext, 'Toolshed project health: sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0.');
+  assert.equal(output.systemMessage, 'Toolshed update available (cached): sidequest 1.0.0 → 1.1.0 — /update-toolshed, then /reload-plugins.');
 });
 
 test('emits no SessionStart message when every version is current', () => {
@@ -295,7 +355,7 @@ test('fails open without a SessionStart message for malformed local state', () =
   assert.equal(output, null);
 });
 
-test('limits update notices to three plugins', () => {
+test('limits update notices to one plugin', () => {
   const output = hookOutput({
     ...hookFixture({
       'alpha@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
@@ -306,5 +366,5 @@ test('limits update notices to three plugins', () => {
     loadedVersion: '0.49.0',
   });
 
-  assert.match(output.systemMessage, /alpha 1.0.0 → 1.1.0, beta 1.0.0 → 1.1.0, gamma 1.0.0 → 1.1.0, \+1 more/);
+  assert.equal(output.systemMessage, 'Toolshed update available (cached): alpha 1.0.0 → 1.1.0 — /update-toolshed, then /reload-plugins.');
 });

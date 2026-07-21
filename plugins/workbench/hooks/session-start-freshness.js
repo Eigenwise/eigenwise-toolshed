@@ -163,7 +163,7 @@ function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshn
       const comparison = compareVersions(instance.version, plugin.version);
       if (comparison === -1) {
         problems.push(`${instance.id} ${instance.version} is behind cached ${plugin.version}`);
-        updates.push({ name: parts.name, installed: instance.version, available: plugin.version });
+        updates.push({ name: parts.name, installed: instance.version, available: plugin.version, marketplace: parts.marketplace });
       } else if (comparison === null) problems.push(`${instance.id} freshness is unknown because its version cannot be compared`);
       continue;
     }
@@ -217,6 +217,16 @@ function boardMappings(boards, instances) {
   return { mappings, problems };
 }
 
+function isCurrentProjectPath(projectPath, currentProject) {
+  if (!projectPath || !currentProject) return false;
+  const relative = path.relative(normalizedPath(projectPath), normalizedPath(currentProject));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function currentProjectInstances(instances, currentProject) {
+  return instances.filter((instance) => isCurrentProjectPath(instance.projectPath, currentProject));
+}
+
 function audit(options = {}) {
   const home = options.home || os.homedir();
   const registry = options.registry || readJson(path.join(home, '.claude', 'plugins', 'installed_plugins.json')) || {};
@@ -239,7 +249,20 @@ function audit(options = {}) {
     ...requiredVersions(versions),
     ...mappings.problems,
   ];
-  return { problems: [...new Set(problems)].sort(), mappings: mappings.mappings, instances, updates };
+  const projectInstances = currentProjectInstances(instances, options.currentProject);
+  const projectBoards = boards.filter((board) => isCurrentProjectPath(board.path, options.currentProject));
+  const projectProblems = options.currentProject ? [
+    ...installedFreshness(projectInstances, marketplaces, now, manifestFor, gitFreshness),
+    ...gatewayFreshness(projectInstances, checkGateway),
+    ...boardMappings(projectBoards, instances).problems,
+  ] : [];
+  return {
+    problems: [...new Set(problems)].sort(),
+    mappings: mappings.mappings,
+    instances,
+    updates,
+    projectProblems: [...new Set(projectProblems)].sort(),
+  };
 }
 
 function warning(problems) {
@@ -262,7 +285,10 @@ function loadedPluginVersion(pluginRoot = process.env.CLAUDE_PLUGIN_ROOT) {
 
 function newerWorkbenchVersion(instances, loadedVersion) {
   return instances
-    .filter((instance) => pluginIdParts(instance.id)?.name === 'workbench')
+    .filter((instance) => {
+      const parts = pluginIdParts(instance.id);
+      return parts?.marketplace === 'eigenwise-toolshed' && parts.name === 'workbench';
+    })
     .find((instance) => compareVersions(loadedVersion, instance.version) === -1)?.version || null;
 }
 
@@ -278,18 +304,31 @@ function compressedUpdates(updates) {
 }
 
 function systemMessage(result, loadedVersion) {
-  const messages = [];
   const installedVersion = newerWorkbenchVersion(result.instances, loadedVersion);
-  if (installedVersion) messages.push(`Toolshed: workbench ${loadedVersion} loaded, ${installedVersion} installed — /reload-plugins to pick it up.`);
-  const updates = compressedUpdates(result.updates);
-  if (updates) messages.push(`Toolshed updates available (cached): ${updates} — /update-toolshed, then /reload-plugins.`);
-  return messages.join('\n');
+  if (installedVersion) return `Toolshed: workbench ${loadedVersion} loaded, ${installedVersion} installed — /reload-plugins to pick it up.`;
+  const update = result.updates
+    .filter((candidate) => candidate.marketplace === 'eigenwise-toolshed')
+    .sort((left, right) => left.name.localeCompare(right.name))[0];
+  return update ? `Toolshed update available (cached): ${update.name} ${update.installed} → ${update.available} — /update-toolshed, then /reload-plugins.` : '';
+}
+
+function projectWarning(problems) {
+  return problems.length ? `Toolshed project health: ${problems.join('; ')}.` : '';
+}
+
+function sessionInput() {
+  try {
+    return JSON.parse(fs.readFileSync(0, 'utf8'));
+  } catch (_) {
+    return {};
+  }
 }
 
 function main() {
   try {
-    const result = audit();
-    const context = emitWarning(result.problems);
+    const input = sessionInput();
+    const result = audit({ currentProject: input.cwd });
+    const context = projectWarning(result.projectProblems);
     const notice = systemMessage(result, loadedPluginVersion());
     if (context || notice) {
       const output = {};
