@@ -288,7 +288,7 @@
       </header>
       <div class="settings-body">
       <div class="settings-grid">
-        <section class="routing-section">
+        <section class="settings-main routing-section">
           <p class="eyebrow">Execution</p>
           <h3>Availability fallback</h3>
           <p class="hint">Used after a category route and category fallback are unavailable.</p>
@@ -373,15 +373,16 @@
   button.danger { color: var(--danger); }
   button:disabled { cursor: not-allowed; opacity: .55; }
   .settings-trigger { box-sizing: border-box; height: var(--control-height); min-height: var(--control-height); padding: .5rem .65rem; }
-  .settings-frame { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 1.25rem; min-block-size: 0; max-block-size: inherit; padding: 1.25rem; }
-  .settings-body { min-block-size: 0; overflow: auto; padding: 0; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  .settings-frame { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 1.25rem; min-block-size: 0; max-block-size: inherit; padding: 1.25rem; background: var(--surface-card); color: var(--text); }
+  .settings-body { min-block-size: 0; overflow: auto; padding: 0; background: var(--surface-card); color: var(--text); scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
   .settings-body::-webkit-scrollbar { width: .55rem; }
   .settings-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
   header, .category-heading, .form-actions { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
   .eyebrow { color: var(--text-muted); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; margin: 0; }
   h2, h3, h4, p { margin-top: 0; } h2 { margin-bottom: 0; } h3 { margin-bottom: .35rem; } h4 { margin-bottom: .65rem; }
   .close { border: 0; background: transparent; color: var(--text-muted); }
-  .settings-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(15rem, .8fr); gap: 1.25rem; margin-top: 1.25rem; }
+  .settings-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(15rem, .8fr); gap: 1.25rem; margin-top: 1.25rem; background: var(--surface-card); color: var(--text); }
+  .settings-main, .notifications-section { background: var(--surface-card); color: var(--text); }
   .notifications-section { border-left: 1px solid var(--border); padding-left: 1.25rem; }
   .field { display: grid; gap: .3rem; margin: .65rem 0; font-size: .86rem; }
   .field > span { color: var(--text-muted); font-weight: 600; }

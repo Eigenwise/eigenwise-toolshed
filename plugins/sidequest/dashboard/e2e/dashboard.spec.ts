@@ -197,6 +197,24 @@ async function assertDialogTreatment(dialog: Locator, content: Locator, scrollBo
   expect(scroll).toEqual({ overflow: 'auto', scrollable: true });
 }
 
+async function assertSettingsSurfaces(page: Page) {
+  const expected = {
+    background: await cssColor(page, 'var(--surface-card)'),
+    color: await tokenColor(page, '--text')
+  };
+  const surfaces = await page.locator('.settings-frame, .settings-body, .settings-grid, .settings-main, .notifications-section').evaluateAll((elements) => elements.map((element) => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, color: style.color };
+  }));
+  expect(surfaces).toHaveLength(5);
+  for (const surface of surfaces) {
+    expect(surface.background).toBe(expected.background);
+    expect(surface.background).not.toBe('rgba(0, 0, 0, 0)');
+    expect(surface.color).toBe(expected.color);
+    expect(contrast(surface.color, surface.background)).toBeGreaterThanOrEqual(4.5);
+  }
+}
+
 test('serves the committed production app and covers the seeded board surface', async ({ page, dashboard }) => {
   const shell = await page.request.get(`${dashboard.baseURL}/`);
   expect(shell.ok()).toBeTruthy();
@@ -328,6 +346,31 @@ test('renders board routing previews and the profile library', async ({ page, da
   await page.getByRole('combobox', { name: 'Profile library' }).click();
   await page.getByRole('option', { name: /Research fixture/ }).click();
   await expect(page.locator('.profile-library h3')).toHaveText('Research fixture');
+});
+
+test('paints Settings from explicit theme surfaces after fresh and live changes', async ({ page, dashboard }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript(() => localStorage.setItem('sq_theme', 'dark'));
+  await openBoard(page, dashboard);
+  await page.locator('.rail').getByRole('button', { name: /Alpha board/ }).click();
+  await page.getByRole('button', { name: /Settings/ }).click();
+
+  const settings = page.locator('dialog[aria-label="Settings"]');
+  const darkTheme = settings.getByRole('checkbox', { name: /Dark theme/ });
+  await expect(settings).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await assertSettingsSurfaces(page);
+  await settings.screenshot({ path: testInfo.outputPath('settings-fresh-dark.png') });
+
+  await darkTheme.uncheck();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await assertSettingsSurfaces(page);
+  await settings.screenshot({ path: testInfo.outputPath('settings-light.png') });
+
+  await darkTheme.check();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await assertSettingsSurfaces(page);
+  await settings.screenshot({ path: testInfo.outputPath('settings-toggled-dark.png') });
 });
 
 test('keeps Questline state, accessible tokens, cards, and dialogs correct in both themes', async ({ page, dashboard }) => {
