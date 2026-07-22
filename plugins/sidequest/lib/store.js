@@ -1345,6 +1345,11 @@ function integrationTarget(slug) {
   const mode = configured === "auto" ? hasOriginRemote(meta.path) ? "remote" : "local" : configured;
   return { mode, upstream: mode === "local" ? "main" : "origin/main" };
 }
+function normalizeBoardName(value) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name) throw new Error("Board name cannot be empty.");
+  return name;
+}
 function boardConfig(slug) {
   const meta = readMeta(slug);
   if (!meta) return null;
@@ -1353,6 +1358,7 @@ function boardConfig(slug) {
   const layer = getProjectCategories(slug);
   const byKind = Object.fromEntries(["ADD", "OVERRIDE", "DETACH", "DISABLE"].map((kind) => [kind, layer.rows.filter((row) => row.kind === kind).length]));
   return {
+    name: meta.name,
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
@@ -1376,6 +1382,9 @@ function setBoardConfig(slug, patch) {
     const meta = readMeta(slug);
     if (!meta) return { ok: false, reason: "not_found" };
     if (!patch || typeof patch !== "object") return { ok: true, config: boardConfig(slug) };
+    if (Object.prototype.hasOwnProperty.call(patch, "name")) {
+      meta.name = normalizeBoardName(patch.name);
+    }
     if (Object.prototype.hasOwnProperty.call(patch, "alwaysInScope")) {
       meta.alwaysInScope = normalizeAlwaysInScope(patch.alwaysInScope);
     }

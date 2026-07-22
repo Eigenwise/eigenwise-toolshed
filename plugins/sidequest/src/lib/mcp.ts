@@ -1534,11 +1534,12 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'board_config',
-    description: 'View or update board-level scope, integration mode, and optional worktree setup command.',
+    description: 'View or update a board display name, scope, integration mode, and optional worktree setup command.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
+        name: { type: 'string', minLength: 1, description: 'Display name only. The board slug, path, tickets, claims, and refs stay unchanged.' },
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
         integrationMode: { type: 'string', enum: ['auto', 'local', 'remote'], description: 'auto uses local mode when origin is absent; local integrates against main without a push.' },
         worktreeSetup: { type: ['string', 'null'], maxLength: 1000, pattern: '^[^\\r\\n]*$', description: 'One-line command shown before verify for isolated worktrees; null clears it.' },
@@ -1547,6 +1548,7 @@ const TOOLS: ToolDefinition[] = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const patch: any = {};
+      if (args.name !== undefined) patch.name = args.name;
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
       if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;
@@ -1554,7 +1556,7 @@ const TOOLS: ToolDefinition[] = [
         ? store.setBoardConfig(slug, patch)
         : { ok: true, config: store.boardConfig(slug) };
       if (!result.ok) throw new Error(`board_config: no board "${meta.name}".`);
-      return Object.assign({ ok: true, project: slug, projectName: meta.name }, result.config);
+      return Object.assign({ ok: true, project: slug, projectName: result.config.name }, result.config);
     },
   },
   {
@@ -1630,7 +1632,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.alwaysInScope != null || args.integrationMode != null || args.worktreeSetup !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.integrationMode != null || args.worktreeSetup !== undefined;
   return false;
 }
 

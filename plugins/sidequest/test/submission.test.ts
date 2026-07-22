@@ -373,6 +373,22 @@ test('CLI: board config stores a worktree setup command', () => {
   assert.strictEqual(cliJson(['board-config', '--json']).worktreeSetup, setup);
 });
 
+test('CLI: board config renames only the display name', () => {
+  const ticket = addTicket('rename keeps CLI ticket refs');
+  const before = store.readMeta(slug);
+  const renamed = cliJson(['board-config', '--name', 'CLI renamed board', '--json']);
+
+  assert.strictEqual(renamed.project, slug);
+  assert.strictEqual(renamed.name, 'CLI renamed board');
+  assert.strictEqual(renamed.projectName, 'CLI renamed board');
+  assert.strictEqual(store.readMeta(slug).path, before.path);
+  assert.strictEqual(store.getTicket(slug, ticket.ref).ref, ticket.ref);
+
+  const rejected = runCli(['board-config', '--name', '', '--json']);
+  assert.strictEqual(rejected.status, 1);
+  assert.match(rejected.stderr, /Board name cannot be empty/);
+});
+
 test('CLI: a remote-less board auto-selects local integration and records a main baseline', () => {
   git(['checkout', '-f', 'main']);
   git(['clean', '-fd']);

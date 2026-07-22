@@ -212,6 +212,30 @@ test('board_config reads and replaces always-in-scope paths', async () => {
   assert.deepEqual((await callTool('board_config', { project })).alwaysInScope, ['docs', 'notes']);
 });
 
+test('board_config renames only a board display name', async () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-board-rename-'));
+  const project = store.ensureProject(projectPath, 'Original board').slug;
+  const ticket = store.createTicket(project, {
+    title: 'rename keeps ticket refs', complexity: 2,
+    complexityWhy: 'The display name changes while the stable ticket reference remains intact.',
+  });
+  const before = store.readMeta(project);
+  const renamed = await callTool('board_config', { project, name: 'Renamed board' });
+
+  assert.equal(renamed.name, 'Renamed board');
+  assert.equal(renamed.projectName, 'Renamed board');
+  assert.equal(store.readMeta(project).path, before.path);
+  assert.equal(store.findProject(project).slug, project);
+  assert.equal(store.getTicket(project, ticket.ref).ref, ticket.ref);
+
+  const duplicate = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-duplicate-name-')), 'Renamed board').slug;
+  assert.equal((await callTool('board_config', { project: duplicate, name: 'Renamed board' })).name, 'Renamed board');
+
+  const rejected = await callToolRaw('board_config', { project, name: '   ' });
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.content[0].text, /Board name cannot be empty/);
+});
+
 test('board_config stores and clears a worktree setup command', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-worktree-setup'), 'SQ worktree setup').slug;
   const setup = 'cd plugins/sidequest && npm ci';

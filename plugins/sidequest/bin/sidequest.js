@@ -1501,18 +1501,20 @@ async function cmdRoute(opts, positional) {
   }), null, 2) + "\n");
 }
 async function cmdBoardConfig(opts) {
-  const { slug, meta } = await resolveProject(opts);
+  const { slug, meta } = await resolveProject(Object.assign({}, opts, { name: void 0 }));
   const patch = {};
+  if (opts.name != null) patch.name = opts.name;
   if (opts["always-in-scope"] != null) patch.alwaysInScope = opts["always-in-scope"];
   if (opts["integration-mode"] != null) patch.integrationMode = opts["integration-mode"];
   if (opts["worktree-setup"] != null) patch.worktreeSetup = opts["worktree-setup"];
   const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
   if (!result.ok) fail(`board-config: no board "${meta.name}".`);
-  const payload = Object.assign({ project: slug, projectName: meta.name }, result.config);
+  const payload = Object.assign({ project: slug, projectName: result.config.name }, result.config);
   if (opts.json) {
     process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
     return;
   }
+  console.log(`board name: ${payload.name}`);
   console.log(`always in scope: ${payload.alwaysInScope.length ? payload.alwaysInScope.join(", ") : "(none)"}`);
   console.log(`integration mode: ${payload.integrationMode}`);
   console.log(`worktree setup: ${payload.worktreeSetup || "(none)"}`);
@@ -2028,6 +2030,8 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--integration-mode <auto|local|remote>] [--worktree-setup <command>]
+    View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
     deletes the source). --dry-run prints the ref mapping without touching disk.
