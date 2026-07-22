@@ -150,6 +150,47 @@ test('CLI category list defaults to the current project taxonomy and supports gl
   assert.ok(globalBody.categories.some((entry?: any) => entry.id === 'coding.easy' && entry.origin === 'profile'));
 });
 
+test('CLI profile category operations never resolve the current board', () => {
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-profile-category-scope-'));
+  const currentProject = path.join(isolatedHome, 'current-project');
+  fs.mkdirSync(currentProject, { recursive: true });
+  const isolatedEnv = Object.assign({}, process.env, { SIDEQUEST_HOME: isolatedHome, CLAUDE_PROJECT_DIR: currentProject });
+  const isolatedCli = (...args: any[]) => {
+    const result = spawnSync(process.execPath, [BIN, ...args, '--json'], { encoding: 'utf8', env: isolatedEnv });
+    return { result, body: result.stdout ? JSON.parse(result.stdout) : null };
+  };
+  const noBoardId = `profile-no-board-${process.pid}`;
+  const scopedId = `profile-scoped-${process.pid}`;
+
+  let run = isolatedCli('category', 'add', noBoardId, '--profile', 'coding', '--name', 'Profile without board', '--route-model', 'sonnet', '--route-effort', 'medium');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.deepEqual(isolatedCli('projects').body.projects, []);
+
+  run = isolatedCli('add', '--title', 'Create the current board', '--unclassified');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  const boardSnapshot = () => JSON.stringify(isolatedCli('projects').body.projects);
+
+  const beforeAdd = boardSnapshot();
+  run = isolatedCli('category', 'add', scopedId, '--profile', 'coding', '--name', 'Profile add must not rename board', '--route-model', 'sonnet', '--route-effort', 'medium');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(boardSnapshot(), beforeAdd);
+
+  const beforeEdit = boardSnapshot();
+  run = isolatedCli('category', 'edit', scopedId, '--profile', 'coding', '--name', 'Profile edit must not rename board');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(boardSnapshot(), beforeEdit);
+
+  const beforeList = boardSnapshot();
+  run = isolatedCli('category', 'list', '--profile', 'coding');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(boardSnapshot(), beforeList);
+
+  const beforeRemove = boardSnapshot();
+  run = isolatedCli('category', 'rm', scopedId, '--profile', 'coding');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(boardSnapshot(), beforeRemove);
+});
+
 test('CLI category edit forks a board category, and reset returns it to the shared default', () => {
   const scoped = path.join(home, 'fork-project');
   fs.mkdirSync(scoped, { recursive: true });

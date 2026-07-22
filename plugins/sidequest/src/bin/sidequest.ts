@@ -469,10 +469,13 @@ async function cmdProfile(opts: any, positional: any) {
 async function cmdCategory(opts: any, positional: any) {
   const action = String(positional[0] || '').toLowerCase();
   const id = positional[1];
-  const { slug, meta } = await resolveProject(opts);
   const projectScope = opts.project != null;
   const profileScope = opts.profile != null;
+  const implicitProjectScope = action === 'list' || action === 'ls';
   if (projectScope && profileScope) fail(`category ${action || '<action>'}: pass exactly one of --profile or --project.`);
+  if (!projectScope && !profileScope && !implicitProjectScope) fail(`category ${action || '<action>'}: pass exactly one of --profile or --project.`);
+  const { slug, meta } = profileScope ? { slug: null, meta: null } : await resolveProject(opts);
+  const scopeName = profileScope ? `profile ${opts.profile}` : meta.name;
   const usage = (categoryId: any) => profileScope ? 0 : store.listTickets(slug).filter((ticket: any) => (ticket.categoryId || (ticket.category && ticket.category.id)) === categoryId).length;
   const projectLayer = () => store.getProjectCategories(slug);
   const localRow = (categoryId: any) => projectLayer().rows.find((row: any) => row.id === String(categoryId).trim().toLowerCase()) || null;
@@ -570,7 +573,7 @@ async function cmdCategory(opts: any, positional: any) {
     } catch (error: any) { fail(`category add: ${error.message}`); }
     const saved = details(id);
     if (opts.json) return output(projectScope ? Object.assign({ ok: true }, saved) : { ok: true, category: saved.effective });
-    console.log(`✓ added category ${id}  — ${meta.name}`);
+    console.log(`✓ added category ${id}  — ${scopeName}`);
     return;
   }
   if (action === 'disable') {
@@ -631,7 +634,7 @@ async function cmdCategory(opts: any, positional: any) {
     }
     const saved = details(id);
     if (opts.json) return output(projectScope ? Object.assign({ ok: true }, saved) : { ok: true, category: saved.effective });
-    console.log(`✓ updated category ${id}  — ${meta.name}`);
+    console.log(`✓ updated category ${id}  — ${scopeName}`);
     return;
   }
   if (action === 'rm' || action === 'remove' || action === 'delete') {
@@ -645,7 +648,7 @@ async function cmdCategory(opts: any, positional: any) {
       }
     } catch (error: any) { fail(`category rm: ${error.message}`); }
     if (opts.json) return output(Object.assign({ ok: true, id: String(id).toLowerCase(), ticketCount }, projectScope ? details(id) : {}));
-    console.log(`✓ removed category ${id}  — ${meta.name}`);
+    console.log(`✓ removed category ${id}  — ${scopeName}`);
     return;
   }
   fail(`category: unknown action "${action}". Use list | add | edit | rm | disable | enable | pin | reset.`);
