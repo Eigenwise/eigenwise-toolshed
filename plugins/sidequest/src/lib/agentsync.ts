@@ -61,6 +61,7 @@ const ARTIFACT_LIFECYCLE_MARKER = '[sidequest-artifact-mode]';
 
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
 
 // Effort-scaled hard caps stamped into every executor definition's `maxTurns`
 // frontmatter — the harness's runaway backstop, not a work budget. Legitimately
@@ -154,6 +155,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
     .split('{{EFFORT}}').join(String(effort))
     .split('{{MODEL_FRONTMATTER}}').join(modelId ? `\nmodel: ${modelId}` : '')
     .split('{{MAX_TURNS}}').join(String(execMaxTurns(String(effort))))
+    .split('{{CHECKPOINT_TOOL_ROUNDS}}').join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS))
     .split('{{MARKER}}').join(marker || '')
     .split('{{EXTRA_NOTE}}').join(extraNote || '')
     .split('{{TICKET_BRIEF}}').join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief ? `\n\n${ticketBrief}` : ''}`);
@@ -651,7 +653,7 @@ function stableInstallHash() {
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   const maxTurnsOverride = String(process.env.SIDEQUEST_EXEC_MAX_TURNS || '').trim();
   return crypto.createHash('sha256')
-    .update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, maxTurns: EXEC_MAX_TURNS, maxTurnsOverride }))
+    .update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, maxTurns: EXEC_MAX_TURNS, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, maxTurnsOverride }))
     .digest('hex');
 }
 
@@ -761,6 +763,7 @@ module.exports = {
   RESTART_NOTICE,
   ARTIFACT_LIFECYCLE_MARKER,
   NON_MAX_EFFORTS,
+  EXECUTOR_CHECKPOINT_TOOL_ROUNDS,
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
   execMaxTurns,

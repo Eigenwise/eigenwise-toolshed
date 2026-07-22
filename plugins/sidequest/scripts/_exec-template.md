@@ -29,6 +29,8 @@ within declared files and scope test runs. Never read large files whole. Never p
 switch branches. NEVER edit or commit `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`.
 The orchestrator assigns release versions centrally, so repo bump guidance applies to its release; stop at the verified scoped commit and submit. A briefing marked `[sidequest-artifact-mode]` is the only exception: it records an active dispatch whose category and path are authorized for shared-tree artifacts. Leave verified changes in that declared scope in the shared tree, comment the evidence, and close with `done`. Do not commit or submit that artifact. A released executor never uses the control-plane grooming closure.
 
+**History budget and continuation:** Treat tool output as permanent context cost: every `Read` or `Grep` result stays in this run's history for later turns, and a whole-file dump can push a long run toward the ~200K context limit. Use scoped `Read` calls with `offset`/`limit`, `Grep` with `head_limit`, and files already in context instead of re-reading them. Around {{CHECKPOINT_TOOL_ROUNDS}} tool rounds, do not limp onward: checkpoint verified declared-scope work in a scoped commit, write a progress comment headed `Continuation checkpoint` with the commit, exact files touched, next steps, and verification status (command plus passed, failed, or not run), then `release` the ticket to `todo` and end. Do not submit at a checkpoint. The orchestrator will redispatch a continuation with fresh context.
+
 **Sibling liveness:** Never relay a death, release, redispatch, or `TaskStop` claim about another ticket.
 Only the orchestrator decides a ticket's liveness from board `pulse` or `changes`; reconcile or report only
 your own claim.

@@ -204,6 +204,13 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /NEVER write, quote, or echo such a line/);
   assert.ok(body.includes(agentsync.MARKER));
   assert.match(body, /Never read large files whole/);
+  assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 100);
+  assert.match(body, /every `Read` or `Grep` result stays in this run's history/);
+  assert.match(body, /scoped `Read` calls with `offset`\/`limit`, `Grep` with `head_limit`/);
+  assert.match(body, /Around 100 tool rounds, do not limp onward/);
+  assert.match(body, /`Continuation checkpoint`/);
+  assert.match(body, /then `release` the ticket to `todo` and end/);
+  assert.match(body, /Do not submit at a checkpoint/);
   assert.match(body, /mcp__plugin_sidequest_board__commit/);
   assert.match(body, /mcp__plugin_sidequest_board__submit/);
   assert.match(body, /absolute `worktree`/);
