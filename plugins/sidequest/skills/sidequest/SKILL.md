@@ -141,7 +141,8 @@ optionally `--status todo`).
   changes the spawn — never a blind respawn. Two failures on one dispatch:
   comment the evidence on the ticket and surface the failure to the user. Never both resume a
   prior executor and spawn a fresh one for the same ticket.
-- **Read the thread before working a ticket** (`sidequest comments <ref>`).
+- **Read the thread before working a ticket** (`sidequest comments <ref>`). Threads over 10
+  comments keep every entry but omit the oldest bodies; pass `--full` when those bodies matter.
 - **Stale claims** reclaim after a TTL (`SIDEQUEST_CLAIM_TTL_MIN`); this session's claims
   auto-release at session end. Dead executor past the TTL: salvage its worktree FIRST, then
   `release SQ-3 --by <dead-worker-id> --status todo`, re-read, spawn one replacement.
@@ -152,7 +153,9 @@ optionally `--status todo`).
   executor or polling for its artifact (a one-shot local readiness watch is fine).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at a verified local commit
-and `submit` it (claim released, parked in `doing`, excluded from `ready`). The orchestrator then
+and `submit` it (claim released, parked in `doing`, excluded from `ready`). The submission holds the
+full report; the executor's terminal comment keeps the commit hash + verify evidence and points back
+there instead of repeating the narrative. The orchestrator then
 runs the serialized publish transaction (lock → integrate → central version assignment →
 reverify → diff review → push → reachability → `done`):
 `references/publishing.md`.

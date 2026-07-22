@@ -9,7 +9,7 @@
  *   sidequest update <id|SQ-n> [-t] [-d] [-p] [-s] [-l ...] [-i ...]
  *   sidequest rm <id|SQ-n> [--force]
  *   sidequest comment <id|SQ-n> -m "body" [--by who]
- *   sidequest comments <id|SQ-n> [--json]
+ *   sidequest comments <id|SQ-n> [--json] [--full]
  *   sidequest projects
  *   sidequest dashboard [--port N] [--no-open]      # ensure server + open browser
  *   sidequest serve [--port N]                       # run the server in foreground
@@ -72,7 +72,7 @@ function parseArgs(argv: any) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'contract-waiver']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'contract-waiver', 'full']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -1558,9 +1558,13 @@ async function cmdComments(opts: any, positional: any) {
   const { slug, meta } = await resolveProject(opts);
   const t = store.getTicket(slug, idOrRef);
   if (!t) fail(`comments: no ticket "${idOrRef}" in ${meta.name}`);
-  const comments = Array.isArray(t.comments) ? t.comments : [];
+  const allComments = Array.isArray(t.comments) ? t.comments : [];
+  const history = store.commentHistory(allComments, !!opts.full);
+  const comments = history.comments;
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ project: slug, ticket: t.ref, comments }, null, 2) + '\n');
+    const payload: any = { project: slug, ticket: t.ref, comments };
+    if (history.omittedBodies) Object.assign(payload, { omittedBodies: history.omittedBodies, notice: history.notice });
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return;
   }
   if (!comments.length) {
@@ -1568,8 +1572,10 @@ async function cmdComments(opts: any, positional: any) {
     return;
   }
   console.log(`${t.ref} — ${comments.length} comment(s)`);
+  if (history.notice) console.log(`  ${history.notice}`);
   for (const c of comments) {
-    console.log(`  » [${c.at}] ${c.by}: ${c.body}`);
+    if (c.bodyOmitted) console.log(`  » [${c.at}] ${c.by} (${c.kind || 'comment'}): [body omitted]`);
+    else console.log(`  » [${c.at}] ${c.by}: ${c.body}`);
   }
 }
 
@@ -2391,7 +2397,7 @@ const HELP_COMMANDS: any = {
   remind: 'sidequest remind <id|SQ-n> (--in 1h|3h|tomorrow | --at "date/time")',
   unremind: 'sidequest unremind <id|SQ-n>',
   comment: 'sidequest comment <id|SQ-n> (-m "body" | --body-file path) [--by who]',
-  comments: 'sidequest comments <id|SQ-n> [--json]',
+  comments: 'sidequest comments <id|SQ-n> [--json] [--full]',
   link: 'sidequest link <id|SQ-n> <blocks|depends-on|related> <id|SQ-n>',
   unlink: 'sidequest unlink <id|SQ-n> <id|SQ-n>',
   ready: 'sidequest ready [--model <model>] [--category <id>] [--json] [--brief]',
@@ -2520,7 +2526,7 @@ Reminders (fires into the notification queue/bell inbox when the dashboard serve
 
 Comments:
   sidequest comment <id|SQ-n> (-m "body" | --body-file path) [--by who]   durable cross-actor handoff; keep going
-  sidequest comments <id|SQ-n> [--json]            list a ticket's comment thread
+  sidequest comments <id|SQ-n> [--json] [--full]   list a ticket's comment thread
 
 Links / dependencies:
   sidequest link <id|SQ-n> <blocks|depends-on|related> <id|SQ-n>   relate two tickets (inverse auto-set)

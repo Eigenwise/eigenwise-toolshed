@@ -404,7 +404,9 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.match(briefing, /Category: briefing\.contract/);
   assert.match(briefing, /Configured route: codex-gpt-5-6-terra \/ high/);
   assert.match(briefing, /Dispatch route: codex-gpt-5-6-terra \/ high/);
-  assert.match(briefing, /Closeout: submit for repo work; otherwise done --model codex-gpt-5-6-terra --effort high\. Put the full final report in the terminal board comment, then stop without a routine SendMessage\./);
+  assert.match(briefing, /Closeout: submit for repo work; otherwise done --model codex-gpt-5-6-terra --effort high\./);
+  assert.match(briefing, /keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative/);
+  assert.match(briefing, /Non-repo done comments still carry the full report/);
   assert.match(briefing, /Priority: urgent/);
   assert.match(briefing, /Story: US-99/);
   assert.match(briefing, /blocked-by: SQ-12/);
@@ -506,7 +508,8 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
     dispatchExecutor: 'sidequest-exec-high', category: {},
   }, 'claude-token-347');
   assert.doesNotMatch(briefing, /\[sidequest-route model=/);
-  assert.match(briefing, /Closeout: submit for repo work; otherwise done --model opus --effort high\. Put the full final report in the terminal board comment, then stop without a routine SendMessage\./);
+  assert.match(briefing, /Closeout: submit for repo work; otherwise done --model opus --effort high\./);
+  assert.match(briefing, /reference to the submission instead of repeating its narrative/);
 });
 
 test('renderTicketBriefing omits closeout when the ticket route is unresolved', () => {

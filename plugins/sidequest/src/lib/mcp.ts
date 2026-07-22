@@ -46,8 +46,6 @@ const SERVER_NAME = 'sidequest';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 const CATEGORY_TAXONOMY_WARNING = 'Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.';
 let categoryListServed = false;
-const COMMENT_REPOLL_NUDGE_MS = 5 * 60 * 1000;
-const commentReads = new Map<string, { atMs: number; latestCommentId: string | null; serverTime: string }>();
 
 function serverVersion() {
   try {
@@ -341,16 +339,19 @@ const PAGE_LIMIT_MAX = 100;
 const boundedExcerpt = store.boundedExcerpt;
 
 function compactComment(comment?: any) {
-  const body = boundedExcerpt(comment.body);
-  return {
+  const base: any = {
     id: comment.id,
     at: comment.at,
     by: comment.by,
     kind: comment.kind,
+  };
+  if (comment.bodyOmitted) return Object.assign(base, { bodyOmitted: true });
+  const body = boundedExcerpt(comment.body);
+  return Object.assign(base, {
     body: body.text,
     bodyLength: body.length,
     bodyTruncated: body.truncated,
-  };
+  });
 }
 
 function categoryListEntry(category?: any, localRow?: any, ticketCount?: any, full?: any) {
@@ -418,21 +419,6 @@ function pagedPayload(rows: any[], args: any, action: string, buildPayload: any,
     ? Object.assign({}, args, { limit: PAGED_FULL_DEFAULT_LIMIT })
     : args;
   return pageRows(rows, pagingArgs, action, buildPayload, full ? null : COMPACT_RESULT_MAX_BYTES);
-}
-
-function commentsPayload(slug: string, ticket: any, args: any, payload: any) {
-  if (args.cursor != null) return payload;
-  const now = Date.now();
-  const key = JSON.stringify([slug, ticket.ref]);
-  const latest = Array.isArray(ticket.comments) ? ticket.comments[ticket.comments.length - 1] : null;
-  const latestCommentId = latest ? String(latest.id || latest.at || '') : null;
-  const previous = commentReads.get(key);
-  const serverTime = new Date(now).toISOString();
-  commentReads.set(key, { atMs: now, latestCommentId, serverTime });
-  if (!previous || now - previous.atMs > COMMENT_REPOLL_NUDGE_MS || previous.latestCommentId !== latestCommentId) return payload;
-  return Object.assign({}, payload, {
-    hint: `No new comments since your prior read; poll progress with changes --since ${previous.serverTime}.`,
-  });
 }
 
 function compactPulse(pulse?: any) {
@@ -1151,7 +1137,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'comments',
-    description: 'For liveness/progress polling use changes/pulse, not this. Read ticket comments before work; compact pages are latest-first. Follow nextCursor; full:true is chronological and exact.',
+    description: 'Read ticket comments before work; full history is chronological. Past 10 comments, oldest bodies are omitted unless full:true. Follow nextCursor when paging.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1168,20 +1154,24 @@ const TOOLS: ToolDefinition[] = [
       const t = store.getTicket(slug, args.ref);
       if (!t) throw new Error(`comments: no ticket "${args.ref}".`);
       const full = !!args.full;
-      const comments = full
-        ? (t.comments || [])
-        : (t.comments || []).map(compactComment).reverse();
-      const buildPayload = (page: any[], total: number, nextCursor: string | null) => ({
-        ref: t.ref,
-        comments: page,
-        total,
-        returned: page.length,
-        nextCursor,
-        order: full ? 'chronological' : 'latest-first',
-      });
-      const paged = pagedPayload(comments, args, 'comments', buildPayload, full);
-      const payload = paged || { ref: t.ref, comments };
-      return commentsPayload(slug, t, args, payload);
+      const history = store.commentHistory(t.comments || [], full);
+      const comments = full ? history.comments : history.comments.map(compactComment);
+      const buildPayload = (page: any[], total: number, nextCursor: string | null) => {
+        const payload: any = {
+          ref: t.ref,
+          comments: page,
+          total,
+          returned: page.length,
+          nextCursor,
+          order: 'chronological',
+        };
+        if (history.omittedBodies) Object.assign(payload, { omittedBodies: history.omittedBodies, notice: history.notice });
+        return payload;
+      };
+      const explicitlyPaged = args.cursor != null || args.limit != null;
+      if (explicitlyPaged) return pageRows(comments, args, 'comments', buildPayload, null);
+      if (full) return { ref: t.ref, comments };
+      return buildPayload(comments, comments.length, null);
     },
   },
   {

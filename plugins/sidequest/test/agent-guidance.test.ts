@@ -22,6 +22,7 @@ test('comment guidance makes durable handoffs concise and consumable', () => {
 
 test('executor completion reports land on the board without a routine message', () => {
   assert.match(executorTemplate, /full final report: changed paths, verification evidence, commit hash/);
+  assert.match(executorTemplate, /keep the terminal board comment to the commit\n   hash, verify evidence, and a reference to the submission instead of repeating its narrative/);
   assert.match(executorTemplate, /After a terminal board closeout, stop without a routine `SendMessage` to `main`/);
   assert.match(executorTemplate, /`kind=question` needs, a scope conflict, or a failure the board cannot/);
   assert.match(orchestration, /Read completion from the board/);

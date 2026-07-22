@@ -246,7 +246,7 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /^For liveness\/progress polling use changes\/pulse, not this\./);
-  assert.match(tools.find((tool: any) => tool.name === 'comments').description, /^For liveness\/progress polling use changes\/pulse, not this\./);
+  assert.match(tools.find((tool: any) => tool.name === 'comments').description, /^Read ticket comments before work; full history is chronological/);
   assert.match(tools.find((tool: any) => tool.name === 'changes').description, /^THE polling read/);
   const comments = tools.find((tool: any) => tool.name === 'comments');
   assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref']);
@@ -547,7 +547,7 @@ test('compact category pages stay bounded and recover complete taxonomy rows', a
   assert.equal(pastEnd.isError, true);
 });
 
-test('compact comment pages are latest-first and full pages reconstruct exact chronological bodies', async (t: any) => {
+test('comment reads stay chronological through the ten-comment threshold', async (t: any) => {
   const root = path.join(os.tmpdir(), 'sq-mcp-comment-pages');
   const project = store.ensureProject(root, 'SQ comment pages').slug;
   const ticket = store.createTicket(project, {
@@ -569,17 +569,18 @@ test('compact comment pages are latest-first and full pages reconstruct exact ch
     assert.equal(store.addComment(project, ticket.ref, { body, by: `worker-${index}`, kind: 'comment', source: 'mcp' }).ok, true);
   }
 
-  const compactRaw = await callToolRaw('comments', { project, ref: ticket.ref });
-  const compactBytes = Buffer.byteLength(compactRaw.content[0].text);
-  assert.ok(compactBytes <= 13000, `compact comments are ${compactBytes} bytes`);
-  const compact = JSON.parse(compactRaw.content[0].text);
-  assert.equal(compact.total, 8);
-  assert.equal(compact.returned, compact.comments.length);
-  assert.equal(compact.order, 'latest-first');
-  assert.equal(compact.comments[0].bodyLength, 16000);
-  assert.equal(compact.comments[0].bodyTruncated, true);
-  assert.match(compact.comments[0].body, /^comment-7:/);
-  t.diagnostic(`comments: ${compact.returned}/${compact.total} rows in ${compactBytes} bytes`);
+  const defaultRaw = await callToolRaw('comments', { project, ref: ticket.ref });
+  const defaultBytes = Buffer.byteLength(defaultRaw.content[0].text);
+  const defaultRead = JSON.parse(defaultRaw.content[0].text);
+  assert.equal(defaultRead.total, 8);
+  assert.equal(defaultRead.returned, 8);
+  assert.equal(defaultRead.order, 'chronological');
+  assert.equal(defaultRead.comments[0].bodyLength, 16000);
+  assert.equal(defaultRead.comments[0].bodyTruncated, true);
+  assert.match(defaultRead.comments[0].body, /^comment-0:/);
+  assert.equal(defaultRead.comments[0].source, undefined);
+  assert.equal(Object.hasOwn(defaultRead, 'notice'), false);
+  t.diagnostic(`comments: ${defaultRead.returned}/${defaultRead.total} exact rows in ${defaultBytes} bytes`);
 
   const recovered: string[] = [];
   let cursor: string | undefined;
@@ -618,7 +619,52 @@ test('compact comment pages are latest-first and full pages reconstruct exact ch
   assert.equal(pastEnd.isError, true);
 });
 
-test('MCP polling redirects repeat comment reads and changes includes bounded comment excerpts', async () => {
+test('comment reads elide only oldest bodies past ten and full bypasses elision', async () => {
+  const root = path.join(os.tmpdir(), 'sq-mcp-comment-elision');
+  const project = store.ensureProject(root, 'SQ comment elision').slug;
+  const ticket = store.createTicket(project, { title: 'comment body elision' });
+  const bodies = Array.from({ length: 12 }, (_, index) => `body-${index}`);
+  for (let index = 0; index < bodies.length; index += 1) {
+    assert.equal(store.addComment(project, ticket.ref, {
+      body: bodies[index],
+      by: `worker-${index}`,
+      kind: index === 0 ? 'risk' : 'comment',
+      source: 'mcp',
+    }).ok, true);
+  }
+
+  const defaultRead = await callTool('comments', { project, ref: ticket.ref });
+  assert.equal(defaultRead.order, 'chronological');
+  assert.equal(defaultRead.total, 12);
+  assert.equal(defaultRead.returned, 12);
+  assert.equal(defaultRead.omittedBodies, 2);
+  assert.equal(defaultRead.notice, '2 earlier comment bodies omitted — pass --full to see them.');
+  assert.deepEqual(
+    defaultRead.comments.slice(0, 2).map((comment: any) => ({ by: comment.by, kind: comment.kind, bodyOmitted: comment.bodyOmitted, hasBody: Object.hasOwn(comment, 'body') })),
+    [
+      { by: 'worker-0', kind: 'comment', bodyOmitted: true, hasBody: false },
+      { by: 'worker-1', kind: 'comment', bodyOmitted: true, hasBody: false },
+    ],
+  );
+  assert.ok(defaultRead.comments[0].at);
+  assert.deepEqual(defaultRead.comments.slice(2).map((comment: any) => comment.body), bodies.slice(2));
+
+  const fullRead = await callTool('comments', { project, ref: ticket.ref, full: true });
+  assert.deepEqual(fullRead.comments.map((comment: any) => comment.body), bodies);
+  assert.equal(Object.hasOwn(fullRead, 'notice'), false);
+
+  const cliDefault = runCli(['comments', ticket.ref, '--project', project, '--json']);
+  assert.equal(cliDefault.notice, '2 earlier comment bodies omitted — pass --full to see them.');
+  assert.deepEqual(cliDefault.comments.slice(2).map((comment: any) => comment.body), bodies.slice(2));
+  const cliText = runCli(['comments', ticket.ref, '--project', project]);
+  assert.match(cliText, /2 earlier comment bodies omitted — pass --full to see them\./);
+  assert.match(cliText, /worker-0 \(comment\): \[body omitted\]/);
+  const cliFull = runCli(['comments', ticket.ref, '--project', project, '--json', '--full']);
+  assert.deepEqual(Object.keys(cliFull).sort(), ['comments', 'project', 'ticket']);
+  assert.deepEqual(cliFull.comments.map((comment: any) => comment.body), bodies);
+});
+
+test('MCP comment reads do not track per-session polling state and changes includes bounded excerpts', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-polling-diet-')).slug;
   const ticket = store.createTicket(project, { title: 'polling diet fixture' });
   const body = `latest progress: ${'x'.repeat(500)}`;
@@ -626,9 +672,9 @@ test('MCP polling redirects repeat comment reads and changes includes bounded co
   assert.equal(store.addComment(project, ticket.ref, { body, by: 'polling-worker', kind: 'comment', source: 'mcp' }).ok, true);
 
   const first = await callTool('comments', { project, ref: ticket.ref });
-  assert.equal(first.hint, undefined);
   const second = await callTool('comments', { project, ref: ticket.ref });
-  assert.match(second.hint, /^No new comments since your prior read; poll progress with changes --since \d{4}-\d\d-\d\dT/);
+  assert.deepEqual(second, first);
+  assert.equal(second.hint, undefined);
 
   const changes = await callTool('changes', { project, since });
   const changed = changes.tickets.find((entry: any) => entry.ref === ticket.ref);

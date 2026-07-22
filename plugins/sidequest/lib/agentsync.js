@@ -294,7 +294,7 @@ function ticketRouteMarker(ticket) {
 function ticketCloseout(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const effort = resolved && (resolved.effort || ticket.effort);
-  return resolved && effort ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}. Put the full final report in the terminal board comment, then stop without a routine SendMessage.` : null;
+  return resolved && effort ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}. After submit, keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative. Non-repo done comments still carry the full report. Then stop without a routine SendMessage.` : null;
 }
 function ticketWorktreeSetup(ticket, slug) {
   if (!ticket || !ticket.dispatch || ticketIsolation(ticket, ticket.dispatch.sharedTree) !== "worktree") return null;

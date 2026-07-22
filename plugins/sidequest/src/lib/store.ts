@@ -4947,6 +4947,24 @@ function boundedExcerpt(value?: any, maxChars = 1200) {
   };
 }
 
+const COMMENT_BODY_RETENTION = 10;
+
+function commentHistory(comments?: any, full = false) {
+  const history = Array.isArray(comments) ? comments : [];
+  const omittedBodies = full ? 0 : Math.max(0, history.length - COMMENT_BODY_RETENTION);
+  if (!omittedBodies) return { comments: history, omittedBodies: 0, notice: null };
+  const notice = `${omittedBodies} earlier comment bodies omitted — pass --full to see them.`;
+  return {
+    comments: history.map((comment: any, index: number) => {
+      if (index >= omittedBodies) return comment;
+      const { body: _body, ...metadata } = comment;
+      return Object.assign(metadata, { bodyOmitted: true });
+    }),
+    omittedBodies,
+    notice,
+  };
+}
+
 function lastCommentPulse(ticket?: any) {
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   const comment = comments[comments.length - 1];
@@ -5835,6 +5853,7 @@ module.exports = {
   pulsePayload,
   changesPayload,
   boundedExcerpt,
+  commentHistory,
   archiveTicket,
   unarchiveTicket,
   archiveAllDone,
