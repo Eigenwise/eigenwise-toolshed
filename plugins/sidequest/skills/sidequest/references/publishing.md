@@ -41,8 +41,9 @@ board (submissions stay parked — fail closed).
    ticket, or leave the submission parked. Do not cherry-pick until the thread is understood.
 4. **Create a clean integration worktree** from the current remote main, never from any working
    tree: `git fetch origin` then `git worktree add <scratch>/sq-integrate origin/main --detach`.
-   Never integrate in the shared session tree — pre-staged or dirty files there are exactly the
-   contamination this flow exists to prevent.
+   Install the touched plugin's dependencies before reverifying, for this repo:
+   `cd <worktree>/plugins/<name> && npm ci`. Never integrate in the shared session tree — pre-staged
+   or dirty files there are exactly the contamination this flow exists to prevent.
 5. **Reconstruct and admit each submission before integration**. Resolve its durable ref and require
    it still points to the submitted tip. Require `git merge-base --is-ancestor <base> origin/main`, then
    compare `git rev-list --reverse <base>..<tip>` to the queue's ordered `commits` array exactly. Reject
@@ -76,9 +77,10 @@ board (submissions stay parked — fail closed).
    (see "Integration failures fail closed") — never push code you have only tested and not read.
 11. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
    branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 8-10, push again. Then
-   confirm every range commit is reachable:
-   `git merge-base --is-ancestor <commit> origin/main` (after a fresh fetch).
-12. **Mark done + clean up**, only after every range commit is reachable: for each shipped ticket
+   fetch fresh and confirm the integrated commits (the cherry-picked equivalents, not the submitted
+   range hashes) are covered by `git log origin/main`; step 6's reverse-diff check already proved
+   content completeness.
+12. **Mark done + clean up**, only after every integrated commit is reachable: for each shipped ticket
    `sidequest groom-close <ref> --by <session-worker-id> --integration --reason "Integrated <commit> into origin/main."`
    (the control-plane integration closure consumes the submission, records the pushed commit as
    evidence, and removes the ticket from the integration queue). Then delete its durable ref (`git
