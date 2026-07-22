@@ -15,6 +15,7 @@ const store = require('../lib/store.js');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecycle-project-'));
 execFileSync('git', ['init', '--quiet'], { cwd: PROJECT, windowsHide: true });
+execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], { cwd: PROJECT, windowsHide: true });
 const { slug } = store.ensureProject(PROJECT);
 const exploration = store.getCategory('codebase-exploration');
 store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));

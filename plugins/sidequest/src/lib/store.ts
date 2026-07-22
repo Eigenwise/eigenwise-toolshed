@@ -2257,6 +2257,8 @@ function storyContractDriftWarnings(ticket?: any) {
 
 function dispatchWarnings(ticket?: any, slug?: any) {
   const warnings: any[] = [];
+  const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
+  if (worktreeWarning) warnings.push(worktreeWarning);
   const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
   if (/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || '')) && !String(ticket.executorVerify || '').trim()) {
     warnings.push('Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.');
@@ -3324,6 +3326,41 @@ function expiredPreparedDispatch(state?: any, now?: any) {
   return Number.isFinite(preparedAt) && now - preparedAt > preparedDispatchTtlMs();
 }
 
+function worktreeIsolationWarning(slug?: any) {
+  const meta = readMeta(slug);
+  if (!meta || !meta.path) {
+    return 'Worktree isolation unavailable: board project path is unavailable; spawning in shared tree. Executor must scoped-commit immediately.';
+  }
+  if (!fs.existsSync(meta.path)) {
+    return 'Worktree isolation unavailable: project path does not exist; spawning in shared tree. Executor must scoped-commit immediately.';
+  }
+  try {
+    const inside = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: meta.path,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (inside !== 'true') {
+      return 'Worktree isolation unavailable: project is not a Git work tree; spawning in shared tree. Executor must scoped-commit immediately.';
+    }
+  } catch (error: any) {
+    const reason = error && error.code === 'ENOENT' ? 'Git is not available' : 'project is not a Git work tree';
+    return `Worktree isolation unavailable: ${reason}; spawning in shared tree. Executor must scoped-commit immediately.`;
+  }
+  try {
+    execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
+      cwd: meta.path,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    return null;
+  } catch (_: any) {
+    return 'Worktree isolation unavailable: repo has no commits or HEAD cannot be resolved; spawning in shared tree. Executor must scoped-commit immediately.';
+  }
+}
+
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -3381,8 +3418,10 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
     t.dispatchExecutor = stableExecutorName(t);
-    const sharedTree = Object.hasOwn(opts, 'sharedTree') ? opts.sharedTree === true : Boolean(current && current.sharedTree);
+    let sharedTree = Object.hasOwn(opts, 'sharedTree') ? opts.sharedTree === true : Boolean(current && current.sharedTree);
     const declaredFiles = normalizeFiles(t.files);
+    const worktreeWarning = !sharedTree && declaredFiles.length ? worktreeIsolationWarning(slug) : null;
+    if (worktreeWarning) sharedTree = true;
     const category = getCategory(ticketCategory(t), { project: slug });
     const artifactRoot = sharedTree && declaredFiles.length === 1 && sharedTreeArtifactRequested(t)
       ? categoryArtifactRoot(category, declaredFiles[0])
@@ -3398,6 +3437,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       sharedTree,
+      ...(worktreeWarning ? { worktreeWarning } : {}),
       declaredFiles,
       artifactMode,
       artifactRoot,

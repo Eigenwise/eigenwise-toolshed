@@ -23,6 +23,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const PROJ = path.join(os.tmpdir(), 'sq-mcp-fixtures', 'board');
 fs.mkdirSync(PROJ, { recursive: true });
 execFileSync('git', ['init', '--quiet'], { cwd: PROJ, windowsHide: true });
+execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], { cwd: PROJ, windowsHide: true });
 process.env.CLAUDE_PROJECT_DIR = PROJ;
 const MCP_SESSION_ID = `mcp-test-session-${process.pid}`;
 process.env.CLAUDE_CODE_SESSION_ID = MCP_SESSION_ID;
@@ -52,6 +53,12 @@ function seedCatalog(models?: any) {
 }
 function clearCatalog() {
   process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
+}
+function committedRepo(prefix?: any) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  execFileSync('git', ['init', '--quiet'], { cwd: root, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], { cwd: root, windowsHide: true });
+  return root;
 }
 
 // Call a tool through the JSON-RPC surface and return the parsed result object
@@ -341,7 +348,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
 });
 
 test('dispatch warns about declared scopes held by in-flight tickets', async () => {
-  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-dispatch-overlap-')).slug;
+  const project = store.ensureProject(committedRepo('sq-mcp-dispatch-overlap-')).slug;
   const inFlight = await callTool('add', {
     project,
     title: 'in-flight scope',
@@ -369,7 +376,7 @@ test('dispatch warns about declared scopes held by in-flight tickets', async () 
 });
 
 test('dispatch identifies lockfile-only scope overlaps', async () => {
-  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-lockfile-overlap-')).slug;
+  const project = store.ensureProject(committedRepo('sq-mcp-lockfile-overlap-')).slug;
   const inFlight = await callTool('add', {
     project,
     title: 'in-flight lockfile',
@@ -918,6 +925,27 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
   assert.doesNotMatch(prompt, /You are a sidequest ticket executor/);
   assert.equal(dispatched.effort, 'xhigh');
   assert.equal(dispatched.projectPath, PROJ);
+});
+
+test('MCP dispatch falls back to shared tree when the repo has no commits', async () => {
+  const unborn = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-unborn-'));
+  execFileSync('git', ['init', '--quiet'], { cwd: unborn, windowsHide: true });
+  const added = await callTool('add', {
+    project: unborn,
+    title: 'unborn repo dispatch',
+    description: DISPATCH_DESCRIPTION,
+    category: 'coding.normal',
+    files: ['src/work.ts'],
+    verify: 'node --test test/work.test.ts',
+  });
+
+  const dispatched = await callTool('dispatch', { project: unborn, ref: added.ref, full: true });
+  const stored = store.getTicket(added.project, added.ref);
+
+  assert.strictEqual(dispatched.spawn.isolation, undefined);
+  assert.strictEqual(stored.dispatch.sharedTree, true);
+  assert.match(stored.dispatch.worktreeWarning, /repo has no commits/);
+  assert.match(dispatched.warnings.join('\n'), /spawning in shared tree/);
 });
 
 test('MCP shared-tree dispatch activates the bounded artifact lifecycle', async () => {

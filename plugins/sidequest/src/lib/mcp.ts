@@ -1231,7 +1231,7 @@ const TOOLS: ToolDefinition[] = [
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
       const prepared = store.prepareDispatch(slug, args.ref, { sessionId: requireDispatchSession(), sharedTree: !!args.sharedTree });
-      const isolation = agentsync.ticketIsolation(prepared.ticket, !!args.sharedTree);
+      const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
       const agent = prepared.ticket.dispatchExecutor;
