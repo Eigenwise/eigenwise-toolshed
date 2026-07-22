@@ -90,6 +90,19 @@ test('init-workspace starts with telemetry consent, project intent, then the liv
   assert.doesNotMatch(skill, /1\. \*\*What is this project and who is it for\?\*\*/);
 });
 
+test('init-workspace rechecks pending telemetry once in Phase 4', () => {
+  const phaseFour = skill.indexOf('## Phase 4 — Post-reload: build and verify');
+  const telemetryCheck = skill.indexOf('1. **Telemetry.**', phaseFour);
+
+  assert.ok(phaseFour >= 0 && telemetryCheck > phaseFour);
+  assert.match(skill, /A healthy-observer `not-found` means telemetry is\n\*\*configured, pending first export\*\*, never verified/);
+  assert.match(skill, /schedules exactly one re-check in Phase 4 after real session usage exists/);
+  assert.match(skill, /verify-project-telemetry\.js" --project "<absolute-current-project-dir>"/);
+  assert.match(skill, /Report it as unverified and give the user that exact command to run later/);
+  assert.match(skill, /Do not schedule another re-check/);
+  assert.strictEqual((skill.match(/verify-project-telemetry\.js/g) || []).length, 1);
+});
+
 test('init-workspace keeps CLAUDE.md and live rules as complementary defaults', () => {
   assert.match(skill, /Recommend a lightweight static one seeded through `\/init`/);
   assert.match(skill, /Either answer keeps the live-rules plan/);

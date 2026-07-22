@@ -53,9 +53,10 @@ steps. The `enable-project-telemetry` skill owns telemetry mechanics and verific
 ### Telemetry consent
 
 This is the first question in the whole flow. Before inspecting the directory, asking about the stack, or
-asking any project question, check whether this project already has enabled and verified telemetry. Detect
-that from the project-local telemetry settings and the result of the telemetry skill's verification command.
-When it is already enabled, say so briefly and skip this question on re-entry.
+asking any project question, check the project-local telemetry settings and the result of the telemetry skill's
+verification command. `found` means telemetry is verified. A healthy-observer `not-found` means telemetry is
+**configured, pending first export**, never verified. In either enabled state, say so briefly and skip this
+question on re-entry. A pending result schedules exactly one re-check in Phase 4 after real session usage exists.
 
 When telemetry is not enabled, use one `AskUserQuestion` with this plain explanation: **"Enable local
 project telemetry? Each project must opt in: this writes only its `.claude/settings.local.json` and sends usage
@@ -304,21 +305,29 @@ Now the plugins are live. First run `claude plugin list --json` and confirm ever
 installed, enabled, and at its requested scope. Then do the work that needed them and verify each piece
 empirically — this is the part that separates "wrote some files" from "set up a working workspace."
 
-1. **Codebase map** (skip for a not-a-codebase project). Invoke `map-codebase`. For a big repo it
+1. **Telemetry.** When the project opted in, run:
+
+   ```sh
+   node "${CLAUDE_PLUGIN_ROOT}/bin/verify-project-telemetry.js" --project "<absolute-current-project-dir>"
+   ```
+
+   `found` verifies telemetry. With a healthy observer, `not-found` means **configured, pending first export**.
+   Report it as unverified and give the user that exact command to run later. Do not schedule another re-check.
+2. **Codebase map** (skip for a not-a-codebase project). Invoke `map-codebase`. For a big repo it
    fans out; with a ready Sidequest it can hand off an existing-code map and resume on the writer's
    completion. Wait for that completion before Phase 4 continues, then confirm
    `.claude/.codebase-info/INDEX.md` exists.
-2. **live-rules is injecting.** On this turn, confirm the live-rules content is actually in your
+3. **live-rules is injecting.** On this turn, confirm the live-rules content is actually in your
    context (the plugin injects a recognizable rules block on SessionStart and every prompt). If you
-   can see your starter rules injected, it's wired. If not, the plugin isn't loaded — send the user
+   can see your starter rules injected, it's wired. If not, the plugin isn't loaded, so send the user
    back to reload/restart.
-3. **codebase-mapper is injecting.** Same check: confirm the `INDEX.md` hub is being injected on the
+4. **codebase-mapper is injecting.** Same check: confirm the `INDEX.md` hub is being injected on the
    prompt. Seeing it in context is the proof the hook fired.
-4. **sidequest board.** If selected, bring up the board (`sidequest dashboard`, or ask the board skill), then
+5. **sidequest board.** If selected, bring up the board (`sidequest dashboard`, or ask the board skill), then
    apply the profile recorded after Phase 0 with `sidequest profile use <profile> --project <board>`. For a
    new project profile, create it from its recorded starter and apply only its confirmed delta before using
    it. Report the URL and selected profile, so the user sees the Kanban and its routing policy are live.
-5. **Optional plugins.** Verify each selected extra is usable: an LSP responds and its binary is on
+6. **Optional plugins.** Verify each selected extra is usable: an LSP responds and its binary is on
    `PATH`, a named skill resolves, or its documented integration opens. Keep it quick, but verify every
    selected plugin rather than assuming a loaded entry works.
 
