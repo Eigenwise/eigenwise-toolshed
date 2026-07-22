@@ -337,6 +337,7 @@ ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
     ...worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : [],
     `Declared files:
 ${declaredFiles}`,
+    "Scope expansion: if work needs an undeclared path, call scope-request with that path and pause with your claim held. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues.",
     `Ticket state:
 Status: ${ticket.status || "(Unknown)"}
 Priority: ${ticket.priority || "(Unknown)"}

@@ -91,6 +91,14 @@ holds the claim so the same executor remains addressable. A **Continuation check
 100-tool-round handoff: commit, comment, release to `todo`, then start a fresh executor with a fresh
 dispatch. Only the continuation flow releases during a healthy handoff.
 
+### Scope expansion without a bounce
+
+When an executor needs an undeclared path, it calls `scope-request <ref> --file <path>` and pauses with
+its claim intact. The request records the additions and prints the exact `sidequest update <ref> --files ...`
+command for the orchestrator. Run that one update to approve the merged scope, then resume the same executor.
+Scope lint still rejects out-of-scope commits and submissions, and its refusal output carries the same update
+command. Do not release and redispatch a healthy executor just to add a path.
+
 ## Fan-out mechanics
 
 When several tickets are **ready and independent**, work them in parallel — one executor per ticket,

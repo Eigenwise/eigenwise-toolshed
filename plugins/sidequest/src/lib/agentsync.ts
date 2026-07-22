@@ -465,6 +465,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
     ...(worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : []),
     `Declared files:\n${declaredFiles}`,
+    'Scope expansion: if work needs an undeclared path, call scope-request with that path and pause with your claim held. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues.',
     `Ticket state:\nStatus: ${ticket.status || '(Unknown)'}\nPriority: ${ticket.priority || '(Unknown)'}\nLabels: ${labels}\nStory: ${ticket.storyId || '(No story)'}\nDependencies:\n${links}`,
     `${commentHeading}\n${comments}`,
     `Attachments (inspect every readable attachment before implementation):\n${ticketAssetsPacket(ticket, slug)}`,

@@ -372,7 +372,10 @@ async function cmdUpdate(opts: any, positional: any) {
   if (opts.priority != null) patch.priority = opts.priority;
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
-  if (opts.file != null) patch.files = (opts.file.length === 1 && String(opts.file[0]).toLowerCase() === 'none') ? [] : opts.file;
+  if (opts.file != null || opts.files != null) {
+    const files = opts.file != null ? opts.file : opts.files;
+    patch.files = (Array.isArray(files) && files.length === 1 && String(files[0]).toLowerCase() === 'none') || String(files).toLowerCase() === 'none' ? [] : files;
+  }
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
   if (opts.assignee != null) patch.assignee = opts.assignee;
@@ -1046,6 +1049,31 @@ function outOfScopeComment(paths: any[]) {
   return `${prefix}… +${paths.length} more (run git status in the worktree for the full list)`;
 }
 
+function scopeRemedy(ticket: any, paths: any[]) {
+  return store.scopeExpansionCommand(ticket, paths);
+}
+
+async function cmdScopeRequest(opts: any, positional: any) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.');
+  const files = opts.file != null ? opts.file : opts.files;
+  if (files == null) fail('scope-request: pass one or more requested paths with --file or --files.');
+  const { slug, meta } = await resolveProject(opts);
+  const by = workerId(opts);
+  const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || 'cli', force: !!opts.force });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) {
+    console.log(`✓ ${res.ticket.ref} scope expansion requested; claim remains held — ${meta.name}`);
+    console.log(`  pause for approval: ${res.command}`);
+  } else {
+    reportClaimFailure('scope-request', idOrRef, res, meta);
+  }
+}
+
 async function cmdCommit(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('commit: pass a ticket ref, e.g. sidequest commit SQ-3 --by me --message "fix the thing".');
@@ -1059,7 +1087,9 @@ async function cmdCommit(opts: any, positional: any) {
   const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
     if (result.reason === 'missing_scope') fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
-    if (result.reason === 'outside_scope') fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(', ')}.`);
+    if (result.reason === 'outside_scope') {
+      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(', ')}. Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
+    }
     if (result.reason === 'no_existing_scope') fail(`commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(', ')}.`);
     fail(`commit: git failed: ${result.message || result.reason}`);
   }
@@ -1155,7 +1185,9 @@ async function cmdSubmit(opts: any, positional: any) {
   const scopedRange = commitScope.validateCommitRangeScope(process.cwd(), range.commits, scope);
   if (!scopedRange.ok) {
     if (scopedRange.reason === 'missing_scope') fail(`submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`);
-    if (scopedRange.reason === 'outside_scope') fail(`submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}.`);
+    if (scopedRange.reason === 'outside_scope') {
+      fail(`submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}. Expand scope with: ${scopeRemedy(ticket, scopedRange.outside)}`);
+    }
     fail(`submit: could not inspect ${opts.commit} from this worktree: ${scopedRange.message || scopedRange.reason}`);
   }
   const unscopedPaths = commitScope.unscopedWorkingPaths(process.cwd(), scope);
@@ -2314,6 +2346,7 @@ const HELP_COMMANDS: any = {
   submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo]',
+  'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]',
   assign: 'sidequest assign <id|SQ-n> [--to who=you]',
   unassign: 'sidequest unassign <id|SQ-n>',
   remind: 'sidequest remind <id|SQ-n> (--in 1h|3h|tomorrow | --at "date/time")',
@@ -2345,7 +2378,7 @@ const HELP_COMMANDS: any = {
 const HELP_ALIASES: any = {
   new: 'add', ticket: 'add', ls: 'list', edit: 'update', set: 'update', remove: 'rm', delete: 'rm',
   profiles: 'profile', categories: 'category', global_fallback: 'global-fallback', take: 'claim', grab: 'next',
-  drain: 'work', complete: 'done', finish: 'done', unclaim: 'release', restore: 'unarchive',
+  drain: 'work', complete: 'done', finish: 'done', unclaim: 'release', scope_request: 'scope-request', restore: 'unarchive',
   native_agent: 'native-agent', board_config: 'board-config', boards: 'projects', archive_board: 'archive-board',
   unarchive_board: 'unarchive-board', 'restore-board': 'unarchive-board', open: 'dashboard', board: 'dashboard',
 };
@@ -2392,6 +2425,7 @@ Working the board safely (multi-agent):
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
   sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]   control-plane closure; --integration consumes a submitted ticket after publish
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
+  sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request a scope expansion and pause with the claim held
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
     executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
@@ -2402,7 +2436,7 @@ Working the board safely (multi-agent):
   sidequest publish queue [--json]                 tickets awaiting the publish transaction, oldest first
   A claim guarantees no other worker is on the ticket. Never work a ticket whose claim did not succeed.
   When 2+ ready tickets are independent (no shared files), fan out one subagent per ticket in parallel.
-  sidequest add/update ... --file path [--file path...]   declare the files a ticket will touch — repeat for
+  sidequest add/update ... --file path [--file path...] (or --files "path,...")   declare the files a ticket will touch — repeat for
     several; "none" clears (update only). 'ready' groups tickets into parallel-safe waves by declared file
     scope: tickets in the same wave never touch overlapping files/directories; untagged tickets never conflict.
   sidequest add/update ... --anchors "file:line symbol" --verify "<exact command>"
@@ -2584,6 +2618,10 @@ async function main() {
     case 'complete':
     case 'finish':
       await cmdDone(opts, positional);
+      break;
+    case 'scope-request':
+    case 'scope_request':
+      await cmdScopeRequest(opts, positional);
       break;
     case 'commit':
       await cmdCommit(opts, positional);

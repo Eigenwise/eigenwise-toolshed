@@ -2420,6 +2420,55 @@ function normalizeFiles(files?: any) {
   return out.slice(0, 20);
 }
 
+function scopeExpansionFiles(ticket?: any, additions?: any) {
+  return normalizeFiles([...(Array.isArray(ticket?.files) ? ticket.files : []), ...normalizeFiles(additions)]);
+}
+
+function scopeExpansionCommand(ticket?: any, additions?: any) {
+  const ref = String(ticket?.ref || '').trim();
+  if (!ref) return null;
+  return `sidequest update ${ref} --files ${JSON.stringify(scopeExpansionFiles(ticket, additions).join(','))}`;
+}
+
+function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: any) {
+  opts = opts || {};
+  by = String(by || 'agent');
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    const held = t.claim;
+    if (!held || !held.by || isClaimStale(held)) return { ok: false, reason: 'not_claimed', ticket: t };
+    if (held.by !== by && !opts.force) return { ok: false, reason: 'not_owner', ticket: t, claim: held };
+    const requested = normalizeFiles(files);
+    if (!requested.length) return { ok: false, reason: 'files_required', ticket: t };
+    const validation = commitScope.validateRelativeScopes(requested);
+    if (!validation.ok) return { ok: false, reason: 'invalid_scope', ticket: t, paths: validation.outside };
+    const additions = requested.filter((file?: any) => !commitScope.isInScope(file, effectiveScope(slug, t.files)));
+    if (!additions.length) return { ok: false, reason: 'already_in_scope', ticket: t };
+    const now = new Date().toISOString();
+    const command = scopeExpansionCommand(t, additions);
+    t.scopeRequest = { by, files: additions, at: now };
+    const dispatch = dispatchState(t);
+    if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
+    if (!Array.isArray(t.comments)) t.comments = [];
+    const comment = createComment({
+      by,
+      body: `Scope expansion requested: ${additions.join(', ')}. Approve with \`${command}\`; claim remains held.`,
+      kind: 'comment',
+      source: opts.source || 'cli',
+    }, now);
+    t.comments.push(comment);
+    t.lastEventType = 'scope_request';
+    t.lastEventSource = opts.source || 'cli';
+    t.updatedAt = now;
+    putTicket(slug, t);
+    queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
+    return { ok: true, ticket: t, scopeRequest: t.scopeRequest, command, comment };
+  });
+}
+
 // Do two declared scopes collide? A path conflicts with an equal path or with
 // one that is a directory-prefix of it (case-insensitive, "/"-normalized).
 // Empty scopes never conflict mechanically — "no declaration" means "no
@@ -2512,7 +2561,18 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     // rides along whenever one is provided (the CLI demands one on change).
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
     if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
-    if (patch.files !== undefined) t.files = normalizeFiles(patch.files);
+    if (patch.files !== undefined) {
+      t.files = normalizeFiles(patch.files);
+      const request = t.scopeRequest;
+      if (request && Array.isArray(request.files) && request.files.every((file?: any) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
+        t.scopeRequest = null;
+        const dispatch = dispatchState(t);
+        if (dispatch && !dispatch.terminalAt) {
+          dispatch.declaredFiles = t.files.slice();
+          delete dispatch.scopeRequest;
+        }
+      }
+    }
     if (patch.executorAnchors !== undefined) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors');
     if (patch.executorVerify !== undefined) t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
     // A provenance stamp may ride along a patch (e.g. the dashboard completing a
@@ -5552,6 +5612,9 @@ module.exports = {
   readyWaves,
   scopesOverlap,
   normalizeFiles,
+  scopeExpansionFiles,
+  scopeExpansionCommand,
+  requestScope,
   STORY_PALETTE,
   STORY_COLOR_NAMES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,

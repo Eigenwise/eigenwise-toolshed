@@ -65,6 +65,24 @@ function addTicket(title?: any, extra?: any) {
   }, extra || {}));
 }
 
+test('CLI scope-request keeps the claim while update --files approves the addition', () => {
+  const t = addTicket('CLI scope request');
+  const by = 'cli-scope-request-worker';
+  assert.strictEqual(runCli(['claim', t.ref, '--by', by, '--direct', '--reason', 'The scope request fixture requires a local direct claim.']).status, 0);
+
+  const requested = runCli(['scope-request', t.ref, '--by', by, '--files', 'lib/fixture.js,lib/new.js']);
+  assert.strictEqual(requested.status, 0, requested.stderr + requested.stdout);
+  assert.match(requested.stdout, new RegExp(`sidequest update ${t.ref} --files`));
+  assert.deepStrictEqual(store.getTicket(slug, t.ref).scopeRequest.files, ['lib/new.js']);
+  assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
+
+  assert.strictEqual(runCli(['update', t.ref, '--files', 'lib/fixture.js,lib/new.js']).status, 0);
+  const approved = store.getTicket(slug, t.ref);
+  assert.strictEqual(approved.scopeRequest, null);
+  assert.strictEqual(approved.claim.by, by);
+  assert.strictEqual(runCli(['release', t.ref, '--by', by]).status, 0);
+});
+
 test('submit requires a held claim, records the submission, and releases the claim in doing', () => {
   const t = addTicket('submit happy path');
 
@@ -318,6 +336,7 @@ test('CLI: hidden out-of-scope path in the first range commit is refused', () =>
   const submitted = runCli(['submit', t.ref, '--by', 'scope-worker', '--commit', tip]);
   assert.strictEqual(submitted.status, 1);
   assert.match(submitted.stderr + submitted.stdout, /foreign\.js/);
+  assert.match(submitted.stderr + submitted.stdout, new RegExp(`sidequest update ${t.ref} --files`));
   assert.ok(store.getTicket(slug, t.ref).claim, 'failed range validation keeps the claim');
   assert.strictEqual(runCli(['release', t.ref, '--by', 'scope-worker']).status, 0);
 });

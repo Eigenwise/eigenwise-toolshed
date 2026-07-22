@@ -841,6 +841,26 @@ const TOOLS = [
     }
   },
   {
+    name: "scopeRequest",
+    description: "Request extra declared paths while keeping the executor claim active. The orchestrator approves by updating files, then the same executor continues.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        project: PROJECT_PROP,
+        by: { type: "string" },
+        files: { type: "array", items: { type: "string" }, minItems: 1, description: "Repository-relative paths to add to the ticket scope." }
+      },
+      required: ["ref", "by", "files"]
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      const by = requireBy(args, "scopeRequest");
+      const res = store.requestScope(slug, args.ref, by, args.files, { source: "mcp" });
+      return mutationAck(slug, res, res.ok ? { scopeRequest: res.scopeRequest, command: res.command } : null);
+    }
+  },
+  {
     name: "commit",
     description: "Commit only a claimed ticket’s declared paths in an explicit local git worktree. Returns the commit hash; foreign staged paths stay staged.",
     inputSchema: {
@@ -867,7 +887,7 @@ const TOOLS = [
       const scope = store.effectiveScope(slug, ticket.files);
       const result = commitScope.commitScoped(root, message, scope);
       if (!result.ok) {
-        const message2 = result.reason === "missing_scope" ? `commit: ${ticket.ref} has no declared file scope.` : result.reason === "outside_scope" ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(", ")}.` : result.reason === "no_existing_scope" ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.` : `commit: git failed: ${result.message || result.reason}`;
+        const message2 = result.reason === "missing_scope" ? `commit: ${ticket.ref} has no declared file scope.` : result.reason === "outside_scope" ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(", ")}. Expand scope with: ${store.scopeExpansionCommand(ticket, result.outside)}` : result.reason === "no_existing_scope" ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.` : `commit: git failed: ${result.message || result.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: result.reason, message: message2 });
       }
       const warnings = [];
@@ -925,7 +945,7 @@ const TOOLS = [
       const scope = store.effectiveScope(slug, ticket.files);
       const scopedRange = commitScope.validateCommitRangeScope(root, range.commits, scope);
       if (!scopedRange.ok) {
-        const message = scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : scopedRange.reason === "outside_scope" ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}.` : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
+        const message = scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : scopedRange.reason === "outside_scope" ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Expand scope with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}` : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: scopedRange.reason, message });
       }
       const unscopedPaths = commitScope.unscopedWorkingPaths(root, scope);

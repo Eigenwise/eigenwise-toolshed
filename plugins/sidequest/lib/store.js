@@ -2044,6 +2044,52 @@ function normalizeFiles(files) {
   }
   return out.slice(0, 20);
 }
+function scopeExpansionFiles(ticket, additions) {
+  return normalizeFiles([...Array.isArray(ticket?.files) ? ticket.files : [], ...normalizeFiles(additions)]);
+}
+function scopeExpansionCommand(ticket, additions) {
+  const ref = String(ticket?.ref || "").trim();
+  if (!ref) return null;
+  return `sidequest update ${ref} --files ${JSON.stringify(scopeExpansionFiles(ticket, additions).join(","))}`;
+}
+function requestScope(slug, idOrRef, by, files, opts) {
+  opts = opts || {};
+  by = String(by || "agent");
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: "not_found" };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: "not_found" };
+    const held = t.claim;
+    if (!held || !held.by || isClaimStale(held)) return { ok: false, reason: "not_claimed", ticket: t };
+    if (held.by !== by && !opts.force) return { ok: false, reason: "not_owner", ticket: t, claim: held };
+    const requested = normalizeFiles(files);
+    if (!requested.length) return { ok: false, reason: "files_required", ticket: t };
+    const validation = commitScope.validateRelativeScopes(requested);
+    if (!validation.ok) return { ok: false, reason: "invalid_scope", ticket: t, paths: validation.outside };
+    const additions = requested.filter((file) => !commitScope.isInScope(file, effectiveScope(slug, t.files)));
+    if (!additions.length) return { ok: false, reason: "already_in_scope", ticket: t };
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const command = scopeExpansionCommand(t, additions);
+    t.scopeRequest = { by, files: additions, at: now };
+    const dispatch = dispatchState(t);
+    if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
+    if (!Array.isArray(t.comments)) t.comments = [];
+    const comment = createComment({
+      by,
+      body: `Scope expansion requested: ${additions.join(", ")}. Approve with \`${command}\`; claim remains held.`,
+      kind: "comment",
+      source: opts.source || "cli"
+    }, now);
+    t.comments.push(comment);
+    t.lastEventType = "scope_request";
+    t.lastEventSource = opts.source || "cli";
+    t.updatedAt = now;
+    putTicket(slug, t);
+    queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
+    return { ok: true, ticket: t, scopeRequest: t.scopeRequest, command, comment };
+  });
+}
 function overlappingScopePaths(filesA, filesB) {
   const a = normalizeFiles(filesA);
   const b = normalizeFiles(filesB);
@@ -2119,7 +2165,18 @@ function updateTicket(slug, idOrRef, patch) {
       if (c) t.complexity = c;
     }
     if (patch.complexityWhy !== void 0 && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1e3);
-    if (patch.files !== void 0) t.files = normalizeFiles(patch.files);
+    if (patch.files !== void 0) {
+      t.files = normalizeFiles(patch.files);
+      const request = t.scopeRequest;
+      if (request && Array.isArray(request.files) && request.files.every((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
+        t.scopeRequest = null;
+        const dispatch = dispatchState(t);
+        if (dispatch && !dispatch.terminalAt) {
+          dispatch.declaredFiles = t.files.slice();
+          delete dispatch.scopeRequest;
+        }
+      }
+    }
     if (patch.executorAnchors !== void 0) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors");
     if (patch.executorVerify !== void 0) t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
     if (patch.workedBy !== void 0) {
@@ -4574,6 +4631,9 @@ module.exports = {
   readyWaves,
   scopesOverlap,
   normalizeFiles,
+  scopeExpansionFiles,
+  scopeExpansionCommand,
+  requestScope,
   STORY_PALETTE,
   STORY_COLOR_NAMES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,
