@@ -124,6 +124,52 @@ test('dispatch model resolves canonical and legacy route markers', async (t) => 
   });
 });
 
+test('dispatch model stays routable when omitted from the model listing', async (t) => {
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const forwarded = [];
+  const proxy = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (req.url === '/v1/models') {
+        res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
+        return;
+      }
+      forwarded.push(JSON.parse(Buffer.concat(chunks).toString()));
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-terra', content: [] }));
+    });
+  });
+  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  t.after(() => proxy.close());
+
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_LIST_DISPATCH_MODEL: '0',
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+      CODEX_GATEWAY_SENTRY: '0',
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForHealthz(shimPort);
+
+  const models = JSON.parse((await request(shimPort, '/v1/models')).body).data;
+  assert.ok(models.every((model) => model.id !== 'claude-codex-auto'));
+
+  const response = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-codex-auto',
+    messages: [{ role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=medium] dispatch ticket' }],
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(forwarded[0].model, 'gpt-5.6-terra');
+  assert.deepEqual(forwarded[0].output_config, { effort: 'medium' });
+});
+
 test('dispatch model rejects missing and malformed route markers', async (t) => {
   const shimPort = await freePort();
   const proxyPort = await freePort();

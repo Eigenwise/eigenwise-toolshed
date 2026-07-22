@@ -65,6 +65,7 @@ const ANTHROPIC_UPSTREAM = process.env.CODEX_GATEWAY_ANTHROPIC_UPSTREAM || 'http
 const REQUEST_ROUTE_LOG = process.env.CODEX_GATEWAY_REQUEST_LOG !== '0';
 const REQUEST_ROUTE_LOG_PATH = process.env.CODEX_GATEWAY_REQUEST_LOG_PATH || path.join(LOGS, 'request-routes.jsonl');
 const DISPATCH_ROUTE_CACHE_PATH = process.env.CODEX_GATEWAY_DISPATCH_CACHE_PATH || path.join(STATE, 'dispatch-routes.json');
+const LIST_DISPATCH_MODEL = process.env.CODEX_GATEWAY_LIST_DISPATCH_MODEL !== '0';
 const ROUTE_TELEMETRY_ENABLED = process.env.CLAUDE_CODE_PROPAGATE_TRACEPARENT === '1';
 const ROUTE_TELEMETRY_TIMEOUT_MS = 500;
 const TRACE_HEADERS = ['traceparent', 'tracestate', 'baggage'];
@@ -1521,7 +1522,7 @@ function requestHeader(req, name) {
 function runShim() {
   let modelCache = {
     at: 0,
-    data: [...DEFAULT_MODELS, 'auto'].map(gatewayModel),
+    data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
   };
   const counters = { models: 0, codex: 0, anthropic: 0 };
   const dispatchRoutes = new DispatchSessionRouteCache({ cachePath: DISPATCH_ROUTE_CACHE_PATH });
@@ -1663,7 +1664,7 @@ function runShim() {
     if (!Array.isArray(ids) || !ids.length) ids = DEFAULT_MODELS;
     modelCache = {
       at: Date.now(),
-      data: [...ids.filter((id) => id !== 'auto'), 'auto'].map(gatewayModel),
+      data: [...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
     };
   }
   refreshModels();
