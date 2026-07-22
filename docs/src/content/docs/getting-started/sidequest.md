@@ -53,6 +53,19 @@ For deliberate orchestrator-owned inline work, such as a browser reproduction or
 
 Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when you need board administration. Keep a ticket's file scope accurate so parallel work stays isolated. `docs/` is always in scope on boards whose repo has a root docs directory, so a required prose update ships with the implementation. View or replace that board-level list with `sidequest board-config` or `sidequest board-config --always-in-scope docs/ --always-in-scope <path>` (MCP: `board_config`).
 
+### Board integration and worktree setup
+
+`board-config` also controls how the publish flow integrates submissions and how isolated executor worktrees are prepared:
+
+```text
+sidequest board-config --integration-mode auto|local|remote
+sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
+```
+
+`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against local `main` without a push. `local` forces that same no-push path. `remote` uses the repository's `origin/main` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"` and `worktreeSetup: "<one-line command>" | null`.
+
+`worktreeSetup` is per-project. A nonblank command is retained verbatim and shown in a fresh isolated executor briefing as `Worktree setup (run before verify): ...`; shared-tree dispatches and unset configuration omit it. Sidequest does not execute or shell-escape the command. The value must be one line and no longer than 1000 characters. Pass `null` through MCP to clear it.
+
 A scoped commit commits its declared paths even when another changed file is outside the ticket. Sidequest reports those paths in the commit result, records a ticket comment, and carries them in the submission as `unscopedPaths`; make a second scoped commit after widening scope, or discard them. Missing declared paths are warnings when other declared paths can be committed.
 
 Run `sidequest worktrees --sweep` from a board repo to inspect stale executor worktrees. It only plans removals by default. `--yes` removes finished, integrated, or already-merged clean `agent-*` worktrees, then prunes Git's worktree registry. Dirty, ahead, locked, and current worktrees stay put.
