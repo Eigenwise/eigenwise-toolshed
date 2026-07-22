@@ -385,7 +385,9 @@ function ticketRouteMarker(ticket?: any) {
 function ticketCloseout(ticket?: any) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const effort = resolved && (resolved.effort || ticket.effort);
-  return resolved && effort ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}` : null;
+  return resolved && effort
+    ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}. Put the full final report in the terminal board comment, then stop without a routine SendMessage.`
+    : null;
 }
 
 function ticketWorktreeSetup(ticket?: any, slug?: any) {

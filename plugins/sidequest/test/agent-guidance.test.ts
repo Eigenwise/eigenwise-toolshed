@@ -20,6 +20,14 @@ test('comment guidance makes durable handoffs concise and consumable', () => {
   assert.match(publishing, /Do not cherry-pick until the thread is understood/);
 });
 
+test('executor completion reports land on the board without a routine message', () => {
+  assert.match(executorTemplate, /full final report: changed paths, verification evidence, commit hash/);
+  assert.match(executorTemplate, /After a terminal board closeout, stop without a routine `SendMessage` to `main`/);
+  assert.match(executorTemplate, /`kind=question` needs, a scope conflict, or a failure the board cannot/);
+  assert.match(orchestration, /Read completion from the board/);
+  assert.match(orchestration, /Do not expect or request a routine\n  `SendMessage` report/);
+});
+
 test('planning guidance keeps Sidequest stories optional and distinct from Claude Code', () => {
   assert.match(skill, /Sidequest's own optional\n\s+`US-n` grouping, not a Claude Code feature/);
   assert.match(skill, /shared outcome, dependencies, or waves/);

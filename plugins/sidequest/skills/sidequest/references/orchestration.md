@@ -82,11 +82,11 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   outside the declared scopes. Worktrees isolate files, not those resources. Serialize tickets that
   share one, and name the orchestrator/worker ownership before launch. Spawn wave 1, wait, re-run
   `ready`, repeat.
-- **Workers report operational state.** The orchestrator owns wave admission and shared-resource
-  coordination; each worker owns its ticket. Worker reports must say conflicts found, server lifecycle
-  (started, reused, or stopped), files changed, blockers, cleanup performed, and verification output.
-  Tickets with no declared scope never mechanically conflict, so eyeball whether they'd edit the same
-  files before parallelizing them.
+- **Workers record operational state on the board.** The orchestrator owns wave admission and shared-resource
+  coordination; each worker owns its ticket. Its terminal submit or done comment says conflicts found,
+  server lifecycle (started, reused, or stopped), files changed, blockers, cleanup performed, and
+  verification output. Tickets with no declared scope never mechanically conflict, so eyeball whether
+  they'd edit the same files before parallelizing them.
 - **Review seams once after a wave closes.** At the next natural wakeup, inspect one combined diff/stat
   for the wave and only its cross-ticket seams: overlapping edits, shared interfaces/contracts, duplicate
   implementations, and incompatible assumptions. If none exists, proceed without a broad review. If one
@@ -97,6 +97,11 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Read bounded briefing comments from the newest end.** A brief can carry a compact newest-first comment packet instead of the full thread. Read compact `comments` pages first, following their cursor only when needed. Read the full chronological thread only when the brief flags a decision or constraint in omitted history; otherwise the latest packet and compact pages carry the current handoff.
 - **Record wave links from board results.** Never write an `SQ-n` ref you did not read back from a board response. File related tickets first, collect their returned refs, then use `update` or, preferably, `link` (`blocks`, `depends-on`, or `related`) to record relationships. Links are board data, so they stay correct without prose cross-references.
 - **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state. Until `pulse` is available, read claim age, comments, and `git log`. If several tickets need checking, use `changes --since <iso>` for the `{tickets:[...]}` delta, sorted oldest first.
+- **Read completion from the board.** An executor stop notification wakes the orchestrator; its terminal
+  submit or done state plus closing comment is the completion signal. Do not expect or request a routine
+  `SendMessage` report. Read the board record for what changed, verification evidence, commit hash or
+  close confirmation, and anything deliberately skipped. `SendMessage` remains for blockers,
+  `kind=question` needs, scope conflicts, and failures the board cannot express.
 - **Recover one dormant completion (SQ-715 findings comment).** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent once to continue, keeping its claim and token. A second silent stop means dead: salvage, release, fresh-dispatch, then spawn one new executor. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
 - **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
   replacing it. Preserve a verified commit, or recover the declared-scope diff, then read the ticket and
@@ -140,7 +145,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   server or build is fine; waiting on an executor through a side channel is not.
 - **Clear verified workers.** An executor stop notification is a cleanup trigger: pulse the ticket, verify its done or submission comment, board state, and git result, then call `TaskStop` in one motion. A `READY_FOR_INTEGRATION` verdict additionally queues the ticket for the publish transaction ([publishing.md](publishing.md)) — publish the wave's submissions in one batch; never respawn an executor for a submitted ticket. Executors deliberately kept alive mid-ticket get the same treatment at their next natural wakeup. Sweep ALL finished executors, not just the one that notified, so session exit only stops live work.
 
-- **Reports stay terse:** what changed, files/lines, verification output, and close confirmation. A repo-changing executor reports a SUBMITTED commit, never a push — the orchestrator's publish transaction is what makes it reachable from `origin/main`, and the ticket goes done only after that reachability check passes.
+- **Reports stay terse:** terminal board comments say what changed, files/lines, verification output, and close confirmation. A repo-changing executor records a SUBMITTED commit, never a push — the orchestrator's publish transaction is what makes it reachable from `origin/main`, and the ticket goes done only after that reachability check passes.
 
 - Parallelism costs tokens and orchestration overhead — a couple of parallel investigations or an
   executor wave where sizes justify it, not a swarm for everything.
