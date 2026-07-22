@@ -1,13 +1,8 @@
 ---
 name: map-codebase
 description: >-
-  Generate a structured, self-maintaining codebase map: a set of atomic Markdown docs in
-  .claude/.codebase-info/ that ground every future Claude session in how the project is built.
-  Use when the user asks to "map the codebase", "document the codebase", "create codebase
-  documentation", "generate architecture docs", "onboard me to this project", "what does this
-  codebase do", "bootstrap codebase docs", "set up codebase-mapper", or "analyze the project
-  structure". Works for any language/stack and for both existing projects and brand-new or empty
-  ones. To refresh an existing map after code changes, use update-codebase-map instead.
+  Create a self-maintaining codebase map in .claude/.codebase-info/. Use to map, document, analyze,
+  or onboard a codebase, including a new project.
 ---
 
 # Map Codebase

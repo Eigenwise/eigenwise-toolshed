@@ -1,13 +1,8 @@
 ---
 name: init-workspace
 description: >-
-  Set up a complete Claude Code workspace for a project, new or existing. Runs a short interview, installs
-  the selected project plugins, then writes .claude/ end to end: live rules, a codebase map, and structure
-  notes, wired around the plugin-reload boundary and verified firing. Use for WHOLE-workspace setup: "set up
-  a Claude workspace", "init/bootstrap this project for Claude", "configure Claude Code for this repo",
-  "set up .claude / the toolshed here", "get this project ready for Claude Code". Holistic orchestrator:
-  it sequences codebase-mapper, live-rules, sidequest, skill-creator, and the built-in /init. Prefer it
-  whenever the user wants the whole setup (for only a map use map-codebase; for only one rule use add-rule).
+  Set up a complete Claude Code workspace for a new or existing project. Use for workspace setup,
+  .claude configuration, project bootstrap, or Toolshed installation.
 ---
 
 # Init Workspace

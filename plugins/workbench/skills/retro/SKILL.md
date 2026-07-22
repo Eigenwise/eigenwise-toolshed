@@ -1,14 +1,8 @@
 ---
 name: retro
 description: >-
-  Run a structured retrospective on the current session: review the work for recurring friction, then
-  propose and apply concrete improvements to the workspace so the same friction is cheaper or
-  impossible next time. Use when the user asks to "do a retro", "run a retrospective", "reflect on
-  this session", "what did we learn", "improve the workspace", "what slowed us down", or after a long
-  or painful task when it's worth capturing the lessons. This is the deep, on-demand half of the
-  workspace self-improvement loop (the lightweight always-on half is a live rule installed by
-  init-workspace). Turns friction into durable fixes: live rules, codebase-map updates, CLAUDE.md
-  notes, or new skills via skill-creator.
+  Review this session's recurring friction and apply workspace improvements. Use for a retrospective,
+  reflection, session review, or workspace improvement.
 ---
 
 # Retro

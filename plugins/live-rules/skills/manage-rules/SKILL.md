@@ -1,13 +1,8 @@
 ---
 name: manage-rules
 description: >-
-  Inspect and maintain the live-rules in the project's live-rules file (.claude/live-rules.md by
-  default, or wherever LIVE_RULES_PATH points): list every rule with its scope and status, audit them
-  for problems (broken frontmatter, globs that match nothing, duplicates, oversized bodies,
-  conflicts), enable or disable a rule, or explain which rules are currently active. Use when the user
-  asks to "list my rules", "what rules are active", "show live-rules", "audit my rules", "disable the
-  X rule", "enable the X rule", "turn off that rule", "why did Claude get that instruction", or "clean
-  up my rules". To create or edit a rule, use add-rule instead.
+  Inspect, audit, enable, or disable project live-rules. Use to list rules, check active instructions,
+  explain an injected rule, or clean up rules.
 ---
 
 # Manage Rules

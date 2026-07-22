@@ -1,10 +1,8 @@
 ---
 name: codex-gateway
 description: >-
-  Manage the local gateway that puts ChatGPT/Codex subscription models in Claude Code's /model
-  picker. Use for: "set up codex gateway", "codex models missing from /model", "switch to
-  GPT/codex model isn't working", "codex gateway is down/broken", "stop routing through the
-  gateway", or any setup/login/diagnosis of the Codex-in-Claude-Code integration.
+  Set up, update, or diagnose the local ChatGPT/Codex gateway for Claude Code's /model picker. Use
+  for gateway setup, login, model visibility, routing, or failures.
 ---
 
 # codex-gateway

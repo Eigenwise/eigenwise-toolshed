@@ -1,15 +1,8 @@
 ---
 name: add-rule
 description: >-
-  Create or edit a live-rules rule: a frontmatter-plus-body section in the project's live-rules file
-  (.claude/live-rules.md by default, or wherever LIVE_RULES_PATH points) that gets injected into
-  Claude's context automatically when it applies. Use when the user asks to "add a rule", "create a
-  rule", "make a rule that...", "add a coding guideline/guardrail/convention", "enforce that ...",
-  "always do X", "whenever I edit *.tsx do Y", "when I work in packages/api do Z", "when my prompt
-  mentions 'deploy' remind me to ...", "load my codebase map into every session", "keep file X in
-  front of you", or "set up live-rules". Picks the right scope (global, path/glob, directory, or
-  prompt-keyword) and writes valid frontmatter, including an `include:` payload to inject a live file's
-  contents. To list, audit, enable, or disable existing rules instead, use manage-rules.
+  Create or edit a live-rules instruction in the project's configured rules file. Use to add a rule,
+  coding guideline, guardrail, convention, or automatic reminder.
 ---
 
 # Add Rule

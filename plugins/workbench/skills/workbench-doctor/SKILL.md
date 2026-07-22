@@ -1,9 +1,8 @@
 ---
 name: workbench-doctor
 description: >-
-  Run a read-only health check for the Workbench and installed Toolshed plugins. Use when the user asks to
-  diagnose Toolshed, check workspace health, inspect plugin freshness without updating, or troubleshoot
-  a stale-plugin warning.
+  Run a read-only health check for Workbench and installed Toolshed plugins. Use to diagnose Toolshed,
+  check workspace health, or troubleshoot stale plugins.
 ---
 
 # Workbench Doctor

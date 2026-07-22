@@ -1,11 +1,8 @@
 ---
 name: sidequest
 description: >-
-  Open the sidequest board (a live Kanban of tickets) or manage tickets from the CLI/MCP: file,
-  list, update, move, close, prioritize, label, or delete tickets — "show me the dashboard", "close SQ-3". Use to WORK the board ("grab the next task") — atomically CLAIM
-  first. Use when the user hands you substantial or multi-part work — decompose it
-  into linked tickets BEFORE implementing. Use to comment or relate tickets. Categories drive model/effort routing. For a
-  mid-task side issue, file it with `add` and keep working. Filing never asks you to work it.
+  Open or manage Sidequest tickets and board workflow. Use to show the dashboard, file, update, close,
+  prioritize, link, or claim tickets, or plan substantial work.
 ---
 
 # sidequest

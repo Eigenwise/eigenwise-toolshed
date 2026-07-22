@@ -1,9 +1,8 @@
 ---
 name: enable-project-telemetry
 description: >-
-  Opt this project into local Claude Code usage telemetry. Writes only this project's private settings,
-  prepares Workbench's loopback observer and Collector, records the local project registry, and verifies
-  whether metrics arrive. Use when the user asks to enable, disable, or verify project telemetry.
+  Opt the current project into local Claude Code usage telemetry, or verify its setup. Use to enable,
+  disable, or check project telemetry.
 ---
 
 # Enable Project Telemetry

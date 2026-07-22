@@ -1,12 +1,8 @@
 ---
 name: update-codebase-map
 description: >-
-  Refresh an existing codebase map in .claude/.codebase-info/ so it reflects the current code.
-  Detects what changed since the map was last written, updates only the affected atomic docs, and
-  re-records state. Use when the user asks to "update the codebase map", "refresh codebase docs",
-  "sync documentation", "the docs are stale", "update architecture docs", or after a change that
-  affects architecture, structure, dependencies, the data model, entry points, APIs/events, or
-  conventions. If there's no .claude/.codebase-info/ yet, use map-codebase instead.
+  Refresh an existing .claude/.codebase-info/ map after code changes. Use for stale codebase or
+  architecture docs; use map-codebase to create one.
 ---
 
 # Update Codebase Map

@@ -1,14 +1,8 @@
 ---
 name: groom
 description: >-
-  Run a full board-grooming pass over a sidequest project, like a sprint grooming session: sweep every
-  ticket, cross-check it against reality (git log, docs, recent session work) to find done-but-open
-  tickets, superseded ones, stale claims, duplicates, and missing tickets for work that already exists in
-  the repo, then act on what's clearly safe and batch the unclear ones into a few interactive questions
-  for the user before closing anything ambiguous. Use when the user says "groom the board", "board
-  grooming", "sprint grooming", "clean up the board", "tidy tickets", "audit the tickets", or "is the
-  board still accurate". Never deletes tickets (closes with an evidence-bearing comment instead) and
-  never touches a claim held by an active agent.
+  Audit a Sidequest board for completed, stale, duplicate, or superseded tickets, then safely close
+  clear cases. Use for board grooming, cleanup, or ticket audits.
 ---
 
 # groom

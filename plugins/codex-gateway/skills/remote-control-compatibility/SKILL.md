@@ -1,8 +1,8 @@
 ---
 name: remote-control-compatibility
 description: >-
-  Safely enable, disable, or diagnose codex-gateway Remote Control compatibility when /remote-control
-  is unavailable because ANTHROPIC_BASE_URL points at the local gateway.
+  Enable, disable, or diagnose codex-gateway Remote Control compatibility when /remote-control is
+  unavailable.
 ---
 
 # Remote Control compatibility

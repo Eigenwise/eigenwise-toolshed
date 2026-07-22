@@ -1,10 +1,8 @@
 ---
 name: update-toolshed
 description: >-
-  Update every installed Eigenwise Toolshed plugin across user, project, and local scopes; refresh the
-  marketplace; update codex-gateway's claude-code-proxy through its supported setup command; check
-  gateway health; and say which Claude Code sessions must reload. Use when the user asks to update the
-  toolshed, update all Toolshed plugins, refresh the Eigenwise marketplace, or check Toolshed versions.
+  Update installed Eigenwise Toolshed plugins and codex-gateway, or check their status. Use to update
+  Toolshed, refresh the marketplace, or check versions.
 ---
 
 # Update Toolshed
