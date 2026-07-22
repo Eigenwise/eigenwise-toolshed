@@ -239,6 +239,12 @@ function contractWaiverFromOpts(opts: any) {
   return opts['contract-waiver'] !== false && String(opts['contract-waiver']).toLowerCase() !== 'false';
 }
 
+function readonlyFromOpts(opts: any) {
+  if (opts.readonly === undefined) return undefined;
+  if (String(opts.readonly).toLowerCase() !== 'false') fail('--readonly only accepts false; omit it to use the category default.');
+  return false;
+}
+
 function addPreview(opts: any, category: any, complexity: any) {
   const priority = store.VALID_PRIORITY.includes(String(opts.priority || '').toLowerCase())
     ? String(opts.priority).toLowerCase()
@@ -253,6 +259,7 @@ function addPreview(opts: any, category: any, complexity: any) {
     files: opts.file || [],
     contracts: contractsFromOpts(opts),
     contractWaiver: contractWaiverFromOpts(opts) || false,
+    readonly: readonlyFromOpts(opts),
     executorAnchors: opts.anchors || '',
     executorVerify: opts.verify || '',
     storyId: opts.story || null,
@@ -288,6 +295,7 @@ async function cmdAdd(opts: any) {
     files: opts.file,
     contracts: contractsFromOpts(opts),
     contractWaiver: contractWaiverFromOpts(opts),
+    readonly: readonlyFromOpts(opts),
     executorAnchors: opts.anchors,
     executorVerify: opts.verify,
     storyId: opts.story,
@@ -358,7 +366,8 @@ async function cmdList(opts: any) {
       const lnk = t.links && t.links.length ? `  ⇄${t.links.length}` : '';
       const cmt = t.comments && t.comments.length ? `  \u{1F4AC}${t.comments.length}` : '';
       const files = t.files && t.files.length ? `  \u{1F4C1}${t.files.length}` : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}`);
+      const readonly = t.readonlyOverride === false ? '  readonly:false' : '';
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${readonly}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}`);
     }
   }
 }
@@ -397,6 +406,7 @@ async function cmdUpdate(opts: any, positional: any) {
   }
   if (opts.produces !== undefined || opts.changes !== undefined || opts.consumes !== undefined) patch.contracts = contractsFromOpts(opts, current && current.contracts);
   if (opts['contract-waiver'] !== undefined) patch.contractWaiver = contractWaiverFromOpts(opts);
+  if (opts.readonly !== undefined) patch.readonly = readonlyFromOpts(opts);
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
   if (opts.assignee != null) patch.assignee = opts.assignee;
@@ -2349,11 +2359,11 @@ async function cmdStop() {
  * ------------------------------------------------------------------ */
 
 const HELP_COMMANDS: any = {
-  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
+  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
   list: 'sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
-  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
   rm: 'sidequest rm <id|SQ-n> [--force]',
   profile: 'sidequest profile <hygiene|list|show|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
   category: 'sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--json]',
@@ -2422,11 +2432,11 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [-i image]... [-s todo|doing|done]
+  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
+  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]

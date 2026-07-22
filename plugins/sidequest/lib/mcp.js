@@ -508,6 +508,7 @@ const TOOLS = [
         changes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket changes." },
         consumes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket consumes." },
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
+        readonly: { type: "boolean", description: "Set false for a read-only category when the spike must execute modified code." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
         story: { type: "string", description: "A story ref (US-n) to file this ticket into." },
@@ -540,6 +541,7 @@ const TOOLS = [
         files: args.files,
         contracts: { produces: args.produces, changes: args.changes, consumes: args.consumes },
         contractWaiver: args.contractWaiver,
+        readonly: args.readonly,
         executorAnchors: args.anchors,
         executorVerify: args.verify,
         storyId: args.story,
@@ -572,6 +574,7 @@ const TOOLS = [
         changes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket changes." },
         consumes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket consumes." },
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
+        readonly: { type: "boolean", description: "Set false for a read-only category when the spike must execute modified code." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
         story: { type: "string" },
@@ -600,6 +603,7 @@ const TOOLS = [
         };
       }
       if (args.contractWaiver !== void 0) patch.contractWaiver = args.contractWaiver;
+      if (args.readonly !== void 0) patch.readonly = args.readonly;
       if (args.anchors !== void 0) patch.executorAnchors = args.anchors;
       if (args.verify !== void 0) patch.executorVerify = args.verify;
       if (args.story !== void 0) patch.storyId = args.story;

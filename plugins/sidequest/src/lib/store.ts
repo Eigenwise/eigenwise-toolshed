@@ -2257,6 +2257,7 @@ function storyContractDriftWarnings(ticket?: any) {
 
 function dispatchWarnings(ticket?: any, slug?: any) {
   const warnings: any[] = [];
+  if (readOnlyOverrideActive(ticket)) warnings.push('readonly override active: this read-only category routes through the writing executor.');
   const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
   if (worktreeWarning) warnings.push(worktreeWarning);
   const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
@@ -2312,6 +2313,18 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
   return warnings;
 }
 
+function normalizeReadonlyOverride(value?: any) {
+  return value === false ? false : null;
+}
+
+function requestedReadonlyOverride(fields?: any) {
+  return normalizeReadonlyOverride(fields?.readonlyOverride === undefined ? fields?.readonly : fields.readonlyOverride);
+}
+
+function readOnlyOverrideActive(ticket?: any) {
+  return ticket?.readonlyOverride === false && isReadOnlyCategory(ticketCategory(ticket));
+}
+
 function createTicket(slug?: any, fields?: any) {
   fields = fields || {};
   const status = fields.status === undefined ? 'todo' : requireStatus(fields.status);
@@ -2352,6 +2365,7 @@ function createTicket(slug?: any, fields?: any) {
     files: normalizeFiles(fields.files),          // declared file scope, for parallel-wave planning
     contracts: normalizeContracts(fields.contracts), // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
+    readonlyOverride: requestedReadonlyOverride(fields),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
     executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command'),
     assets,
@@ -2696,6 +2710,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     }
     if (patch.contracts !== undefined) t.contracts = normalizeContracts(patch.contracts);
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;
+    if (patch.readonly !== undefined || patch.readonlyOverride !== undefined) t.readonlyOverride = requestedReadonlyOverride(patch);
     if (patch.executorAnchors !== undefined) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors');
     if (patch.executorVerify !== undefined) t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
     // A provenance stamp may ride along a patch (e.g. the dashboard completing a
@@ -2969,7 +2984,7 @@ function stableExecutorName(ticket?: any) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
-  if (!isReadOnlyCategory(ticketCategory(ticket))) return resolved.agent;
+  if (!isReadOnlyCategory(ticketCategory(ticket)) || readOnlyOverrideActive(ticket)) return resolved.agent;
   return resolved.backend === 'codex'
     ? stableReadOnlyDispatchName(ticket.effort)
     : stableReadOnlyClaudeName(ticket.effort);
@@ -4774,6 +4789,7 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     runsLabel: t.exec ? t.exec.runsLabel : null,
     executor: t.exec ? t.exec.agent : null,
     effort: t.effort || null,
+    readonlyOverride: t.readonlyOverride === false ? false : null,
     direct: t.directClaim || null,
     files: Array.isArray(t.files) ? t.files : [],
     contracts: contractMetadata(t),

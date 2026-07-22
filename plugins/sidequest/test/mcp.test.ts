@@ -1071,6 +1071,22 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
   assert.deepEqual((await callTool('dispatch', { ref: research.ref, full: true })).warnings, []);
 });
 
+test('readonly false keeps experiment-shaped spikes on the writing executor', async () => {
+  const added = await callTool('add', {
+    title: 'mutable spike dispatch fixture',
+    description: DISPATCH_DESCRIPTION,
+    category: 'spike-investigation',
+    readonly: false,
+  });
+  assert.equal(store.getTicket(added.project, added.ref).readonlyOverride, false);
+  const dispatched = await callTool('dispatch', { ref: added.ref, full: true });
+  assert.doesNotMatch(dispatched.agent, /readonly/);
+  assert.match(dispatched.warnings.join('\n'), /readonly override active/);
+
+  await callTool('update', { ref: added.ref, readonly: false });
+  assert.equal(store.getTicket(added.project, added.ref).readonlyOverride, false);
+});
+
 test('update returns a compact acknowledgement', async () => {
   store.setCategory({ id: 'mcp-update-echo', name: 'MCP update echo', route: { model: 'opus', effort: 'high' } });
   const added = await callTool('add', { title: 'MCP update echo', category: 'coding.easy' });

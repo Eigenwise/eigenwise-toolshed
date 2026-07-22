@@ -1890,6 +1890,7 @@ function storyContractDriftWarnings(ticket) {
 }
 function dispatchWarnings(ticket, slug) {
   const warnings = [];
+  if (readOnlyOverrideActive(ticket)) warnings.push("readonly override active: this read-only category routes through the writing executor.");
   const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
   if (worktreeWarning) warnings.push(worktreeWarning);
   const categoryId = ticket && (ticket.categoryId || ticket.category && ticket.category.id);
@@ -1940,6 +1941,15 @@ function ticketPlanningWarnings(ticket, projectPath) {
   if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(", ")}.`);
   return warnings;
 }
+function normalizeReadonlyOverride(value) {
+  return value === false ? false : null;
+}
+function requestedReadonlyOverride(fields) {
+  return normalizeReadonlyOverride(fields?.readonlyOverride === void 0 ? fields?.readonly : fields.readonlyOverride);
+}
+function readOnlyOverrideActive(ticket) {
+  return ticket?.readonlyOverride === false && isReadOnlyCategory(ticketCategory(ticket));
+}
 function createTicket(slug, fields) {
   fields = fields || {};
   const status = fields.status === void 0 ? "todo" : requireStatus(fields.status);
@@ -1981,6 +1991,7 @@ function createTicket(slug, fields) {
     contracts: normalizeContracts(fields.contracts),
     // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
+    readonlyOverride: requestedReadonlyOverride(fields),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors"),
     executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, "executor verify command"),
     assets,
@@ -2291,6 +2302,7 @@ function updateTicket(slug, idOrRef, patch) {
     }
     if (patch.contracts !== void 0) t.contracts = normalizeContracts(patch.contracts);
     if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;
+    if (patch.readonly !== void 0 || patch.readonlyOverride !== void 0) t.readonlyOverride = requestedReadonlyOverride(patch);
     if (patch.executorAnchors !== void 0) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors");
     if (patch.executorVerify !== void 0) t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
     if (patch.workedBy !== void 0) {
@@ -2498,7 +2510,7 @@ function stableExecutorName(ticket) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error("dispatch executor requires a routable ticket.");
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
-  if (!isReadOnlyCategory(ticketCategory(ticket))) return resolved.agent;
+  if (!isReadOnlyCategory(ticketCategory(ticket)) || readOnlyOverrideActive(ticket)) return resolved.agent;
   return resolved.backend === "codex" ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
 }
 function dispatchTokenPrefix(token) {
@@ -4018,6 +4030,7 @@ function briefTicket(slug, t, opts) {
     runsLabel: t.exec ? t.exec.runsLabel : null,
     executor: t.exec ? t.exec.agent : null,
     effort: t.effort || null,
+    readonlyOverride: t.readonlyOverride === false ? false : null,
     direct: t.directClaim || null,
     files: Array.isArray(t.files) ? t.files : [],
     contracts: contractMetadata(t),

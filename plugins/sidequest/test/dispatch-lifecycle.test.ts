@@ -108,15 +108,35 @@ test('read-only category classes dispatch through restricted stable executors', 
     assert.equal(store.releaseTicket(slug, ticket.ref, 'read-only-test-worker', { source: 'test' }).ok, true);
   }
 
-  const mutable = createFixture('mutable fixture');
-  const prepared = store.prepareDispatch(slug, mutable.ref);
-  assert.equal(prepared.ticket.dispatchExecutor, 'sidequest-exec-high');
-  assert.equal(store.claimTicket(slug, mutable.ref, 'mutable-test-worker', {
-    token: prepared.token,
-    executor: prepared.ticket.dispatchExecutor,
+  const override = store.createTicket(slug, {
+    title: 'mutable spike fixture',
+    category: 'spike-investigation',
+    readonly: false,
+    files: ['tracked.js'],
+    source: 'test',
+  });
+  assert.equal(store.getTicket(slug, override.ref).readonlyOverride, false);
+  assert.equal(store.listPayload(slug, { brief: true }).tickets.find((ticket?: any) => ticket.ref === override.ref).readonlyOverride, false);
+  const overridePrepared = store.prepareDispatch(slug, override.ref);
+  assert.equal(overridePrepared.ticket.dispatchExecutor, 'sidequest-exec-high');
+  assert.match(store.dispatchWarnings(overridePrepared.ticket).join('\n'), /readonly override active/);
+  assert.equal(store.claimTicket(slug, override.ref, 'override-test-worker', {
+    token: overridePrepared.token,
+    executor: overridePrepared.ticket.dispatchExecutor,
     source: 'test',
   }).ok, true);
-  assert.equal(store.releaseTicket(slug, mutable.ref, 'mutable-test-worker', { source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, override.ref, 'override-test-worker', { source: 'test' }).ok, true);
+
+  const updatedOverride = createFixture('updated mutable spike fixture', 'spike-investigation');
+  assert.equal(store.updateTicket(slug, updatedOverride.ref, { readonly: false, source: 'test' }).readonlyOverride, false);
+  const updatedPrepared = store.prepareDispatch(slug, updatedOverride.ref);
+  assert.equal(updatedPrepared.ticket.dispatchExecutor, 'sidequest-exec-high');
+  assert.equal(store.claimTicket(slug, updatedOverride.ref, 'updated-override-test-worker', {
+    token: updatedPrepared.token,
+    executor: updatedPrepared.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, updatedOverride.ref, 'updated-override-test-worker', { source: 'test' }).ok, true);
 });
 
 test('pulse reports derived activity and dispatch changes without leaking a nonce', () => {

@@ -53,6 +53,17 @@ test('CLI command help stays focused on the requested command', () => {
   }
 });
 
+test('CLI records readonly false on add and update', () => {
+  const env = isolatedEnv();
+  const added = run(['add', '--title', 'mutable spike', '--unclassified', '--readonly', 'false', '--json'], env);
+  assert.equal(added.status, 0, added.stderr);
+  assert.equal(JSON.parse(added.stdout).ticket.readonlyOverride, false);
+
+  const updated = run(['update', 'SQ-1', '--readonly', 'false', '--json'], env);
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.equal(JSON.parse(updated.stdout).ticket.readonlyOverride, false);
+});
+
 test('add --dry-run validates and previews without writing a board', () => {
   const cleanEnv = isolatedEnv();
   const missingTitle = run(['add', '--unclassified', '--dry-run'], cleanEnv);
