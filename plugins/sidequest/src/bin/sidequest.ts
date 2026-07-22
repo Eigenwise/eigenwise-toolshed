@@ -1977,6 +1977,26 @@ async function cmdStory(opts: any, positional: any) {
       return;
     }
 
+    case 'contract': {
+      if (!idOrRef) fail('story contract: pass a story ref, e.g. sidequest story contract US-1 [--body-file path]');
+      const body = await bodyFromOpts(opts, 'story contract');
+      const story = body === undefined
+        ? store.getStory(slug, idOrRef)
+        : store.updateStory(slug, idOrRef, { executionContract: body });
+      if (!story) fail(`story contract: no story "${idOrRef}" in ${meta.name}`);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, story }, null, 2) + '\n');
+        return;
+      }
+      if (body === undefined) {
+        console.log(`${story.ref} execution contract revision ${story.contractRevision || 0}`);
+        console.log(story.executionContract || '(no execution contract set)');
+        return;
+      }
+      console.log(`✓ ${story.ref} execution contract revision ${story.contractRevision || 0} — ${meta.name}`);
+      return;
+    }
+
     case 'update':
     case 'edit':
     case 'set': {
@@ -2319,7 +2339,7 @@ const HELP_COMMANDS: any = {
   dashboard: 'sidequest dashboard [--port N] [--no-open]',
   serve: 'sidequest serve [--port N]',
   stop: 'sidequest stop',
-  story: 'sidequest story <add|list|show|update|rm> ... [--json]',
+  story: 'sidequest story <add|list|show|contract|update|rm> ... [--json]',
 };
 
 const HELP_ALIASES: any = {
@@ -2443,6 +2463,7 @@ User stories (a lightweight grouping tickets can belong to):
   sidequest story add -t "title" [-d desc] [--color <name|hex>]   create a story (prints its US-n ref)
   sidequest story list                             list stories with their color and ticket count
   sidequest story show US-n                         show a story and the tickets in it
+  sidequest story contract US-n [-m text|--body-file path]  read or set its execution contract
   sidequest story update US-n [-t] [-d] [--color]  edit a story
   sidequest story rm US-n                           delete a story (member tickets are detached)
   sidequest add ... --story <US-n>                 file a ticket straight into a story

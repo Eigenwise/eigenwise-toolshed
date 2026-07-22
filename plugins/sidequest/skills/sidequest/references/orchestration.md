@@ -21,8 +21,12 @@ and resolve together in one ticket.
 pieces (e.g. CLI + wiring + script + state metadata + tests), that enumeration is the tell that
 it's a feature pivoting on one shared contract, not a single atomic change — prefer the story
 shape: file a cheap ticketed planning investigation that pins the shared contract and anchors, then
-an independent wave that fans the deliverables out to parallel sub-agents, each reading that
-investigation's result. Keep them bundled in one ticket only when the pieces genuinely cannot
+an independent wave that fans the deliverables out to parallel sub-agents. Put frozen decisions,
+invariants, acceptance evidence, and durable artifact links in the story execution contract once
+(`story contract US-n --body-file path` or MCP `story_contract`) rather than repeating them in
+steering messages. It is capped at 4 KiB and arrives before ticket scope in every member briefing.
+If it changes after a member is claimed, pulse/changes and the next dispatch warn about the revision
+drift. Keep them bundled in one ticket only when the pieces genuinely cannot
 verify independently. This is also how context-completeness stays cheap: don't pay for it with
 orchestrator tokens by investigating inline on the pricey thread — pay for it with the planning
 investigation whose output the wave consumes, instead of the orchestrator re-deriving it.

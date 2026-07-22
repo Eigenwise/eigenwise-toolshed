@@ -2249,12 +2249,19 @@ function dispatchDescriptionError(ticket?: any) {
   return `dispatch: ${DISPATCH_DESCRIPTION_GUIDANCE}.`;
 }
 
+function storyContractDriftWarnings(ticket?: any) {
+  const contractDrift = ticket && (ticket.storyContractDrift || dispatchState(ticket)?.storyContractDrift);
+  if (!contractDrift) return [];
+  return [`Dispatch warning: ${contractDrift.storyRef || 'story'} execution contract changed from revision ${contractDrift.fromRevision} to ${contractDrift.toRevision} while this ticket was claimed; the next briefing uses revision ${contractDrift.toRevision}.`];
+}
+
 function dispatchWarnings(ticket?: any, slug?: any) {
   const warnings: any[] = [];
   const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
   if (/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || '')) && !String(ticket.executorVerify || '').trim()) {
     warnings.push('Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.');
   }
+  warnings.push(...storyContractDriftWarnings(ticket));
   const declaredFiles = dispatchDeclaredFiles(ticket);
   if (!slug || !declaredFiles.length) return warnings;
   for (const sibling of listTickets(slug)) {
@@ -3203,6 +3210,10 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
     const preparedExec = resolveExec(t.model, t.effort);
+    const story = t.storyId ? getStory(slug, t.storyId) : null;
+    const contract = storyExecutionContract(story);
+    const contractDrift = t.storyContractDrift || null;
+    delete t.storyContractDrift;
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       sharedTree,
@@ -3215,6 +3226,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       executor: t.dispatchExecutor,
       description: spawnDescription(t, preparedExec),
       route: dispatchRouteState(t.model, t.effort, preparedExec),
+      storyContract: contract,
+      ...(contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {}),
       preparedAt: now,
       launchedAt: null,
       boundAt: null,
@@ -3328,6 +3341,8 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       executor: t.dispatchExecutor,
       description: spawnDescription(t, fallback.exec),
       route: dispatchRouteState(fallback.model, fallback.effort, fallback.exec),
+      storyContract: state.storyContract || storyExecutionContract(t.storyId ? getStory(slug, t.storyId) : null),
+      ...(state.storyContractDrift ? { storyContractDrift: state.storyContractDrift } : {}),
       preparedAt: now,
       launchedAt: null,
       boundAt: null,
@@ -4201,20 +4216,59 @@ function coerceStoryId(slug?: any, val?: any) {
   return story ? story.id : null;
 }
 
+const STORY_EXECUTION_CONTRACT_MAX_BYTES = 4 * 1024;
+
+function normalizeStoryExecutionContract(value?: any) {
+  if (value == null) return null;
+  const contract = String(value).trim();
+  if (!contract) return null;
+  const bytes = Buffer.byteLength(contract, 'utf8');
+  if (bytes > STORY_EXECUTION_CONTRACT_MAX_BYTES) {
+    throw new Error(`story execution contract exceeds the ${STORY_EXECUTION_CONTRACT_MAX_BYTES}-byte limit.`);
+  }
+  return contract;
+}
+
+function storyExecutionContract(story?: any) {
+  if (!story || !story.executionContract) return null;
+  return {
+    revision: Number(story.contractRevision) || 1,
+    body: String(story.executionContract),
+  };
+}
+
+function markStoryContractDrift(slug?: any, story?: any, fromRevision?: any, changedAt?: any) {
+  const toRevision = Number(story && story.contractRevision) || 0;
+  for (const ticket of listTickets(slug)) {
+    if (ticket.storyId !== story.id || !ticket.claim || !ticket.claim.by || isClaimStale(ticket.claim)) continue;
+    ticket.storyContractDrift = {
+      storyRef: story.ref,
+      fromRevision: Number(fromRevision) || 0,
+      toRevision,
+      changedAt,
+    };
+    ticket.lastEventType = 'story-contract';
+    ticket.lastEventSource = 'story';
+    ticket.updatedAt = changedAt;
+    putTicket(slug, ticket);
+  }
+}
+
 function createStory(slug?: any, fields?: any) {
   return transaction(() => {
     fields = fields || {};
     const id = newStoryId();
     const seq = nextStorySeq(slug);
     const now = new Date().toISOString();
+    const executionContract = normalizeStoryExecutionContract(fields.executionContract);
     const story = {
       id,
       ref: `US-${seq}`,
       title: String(fields.title || 'Untitled story').trim().slice(0, 200) || 'Untitled story',
       description: String(fields.description || '').trim(),
-      // A requested colour wins if it parses; otherwise cycle the palette by the
-      // sequence number so successive stories stay visually distinct.
       color: parseStoryColor(fields.color) || autoStoryColor(seq - 1),
+      executionContract,
+      contractRevision: executionContract ? 1 : 0,
       createdAt: now,
       updatedAt: now,
       order: Date.now(),
@@ -4224,8 +4278,6 @@ function createStory(slug?: any, fields?: any) {
   });
 }
 
-// Apply a partial update to a story. An unparseable colour is ignored rather
-// than blanking the existing one.
 function updateStory(slug?: any, idOrRef?: any, patch?: any) {
   return transaction(() => {
     const s = getStory(slug, idOrRef);
@@ -4238,8 +4290,17 @@ function updateStory(slug?: any, idOrRef?: any, patch?: any) {
       if (c) s.color = c;
     }
     if (patch.order != null && Number.isFinite(Number(patch.order))) s.order = Number(patch.order);
-    s.updatedAt = new Date().toISOString();
+    const previousRevision = Number(s.contractRevision) || 0;
+    const nextContract = patch.executionContract === undefined ? s.executionContract || null : normalizeStoryExecutionContract(patch.executionContract);
+    const contractChanged = nextContract !== (s.executionContract || null);
+    if (contractChanged) {
+      s.executionContract = nextContract;
+      s.contractRevision = previousRevision + 1;
+    }
+    const now = new Date().toISOString();
+    s.updatedAt = now;
     putStory(slug, s);
+    if (contractChanged) markStoryContractDrift(slug, s, previousRevision, now);
     return s;
   });
 }
@@ -4729,6 +4790,7 @@ function pulsePayload(slug?: any, idOrRef?: any) {
       outcome: dispatch.outcome || null,
     } : null,
     checkpoint: checkpointProjection(ticket),
+    ...(storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {}),
     submission: ticket.submission || null,
     git,
   };
@@ -4758,6 +4820,7 @@ function changesPayload(slug?: any, since?: any) {
       lastComment: latestCommentExcerpt(ticket),
       claim: claimPulse(ticket.claim, nowMs),
       checkpoint: checkpointProjection(ticket, nowMs),
+      ...(storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {}),
       updatedAt: ticket.updatedAt,
     }));
   return { since: after, serverTime, tickets };
@@ -5491,6 +5554,8 @@ module.exports = {
   normalizeFiles,
   STORY_PALETTE,
   STORY_COLOR_NAMES,
+  STORY_EXECUTION_CONTRACT_MAX_BYTES,
+  storyExecutionContract,
   listStories,
   getStory,
   createStory,

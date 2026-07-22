@@ -442,6 +442,7 @@ function compactPulse(pulse?: any) {
     lastActivityAt: pulse.lastActivityAt,
     lastComment,
     checkpoint: pulse.checkpoint,
+    ...(Array.isArray(pulse.warnings) && pulse.warnings.length ? { warnings: pulse.warnings } : {}),
     dispatch: pulse.dispatch && {
       state: pulse.dispatch.state,
       executor: pulse.dispatch.executor,
@@ -562,6 +563,27 @@ const TOOLS: ToolDefinition[] = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(store.changesPayload(slug, args.since)));
+    },
+  },
+  {
+    name: 'story_contract',
+    description: 'Read or set a story execution contract. Set contract once with frozen decisions, invariants, acceptance evidence, and durable artifact links; omit it to read. Contracts are capped at 4096 UTF-8 bytes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP,
+        story: { type: 'string', description: 'Story ref or id.' },
+        contract: { type: 'string', description: 'Execution contract body. An empty string clears it.' },
+      },
+      required: ['story'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const story = args.contract === undefined
+        ? store.getStory(slug, args.story)
+        : store.updateStory(slug, args.story, { executionContract: args.contract });
+      if (!story) throw new Error(`story_contract: no story "${args.story}" in ${meta.name}`);
+      return { ok: true, project: slug, projectName: meta.name, story };
     },
   },
   {

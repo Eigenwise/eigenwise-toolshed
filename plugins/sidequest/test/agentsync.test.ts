@@ -103,6 +103,19 @@ test('SQ-760: oversized briefing packets stay bounded and direct compact comment
   assert.match(briefing, /briefing\.png/);
 });
 
+test('story execution contracts lead member briefings from their dispatch snapshot', () => {
+  const ticket = {
+    ref: 'SQ-750', title: 'Member scope', model: 'opus', effort: 'high', category: {},
+    storyId: 'story-execution-contract',
+    dispatch: { storyContract: { revision: 3, body: 'Frozen decision: keep packet order.\n\nInvariant: do not rebrief claimed work.' } },
+  };
+  const briefing = agentsync.renderTicketBriefing(ticket, 'story-contract-token');
+  assert.match(briefing, /## Story execution contract \(revision 3\)/);
+  assert.match(briefing, /Frozen decision: keep packet order/);
+  assert.ok(briefing.indexOf('## Story execution contract') < briefing.indexOf('## This ticket'));
+  assert.ok(briefing.indexOf('Invariant: do not rebrief claimed work.') < briefing.indexOf('Ref: SQ-750'));
+});
+
 test('generation-two marker cannot be mistaken for the legacy marker', () => {
   assert.ok(!agentsync.MARKER.includes(agentsync.LEGACY_MARKER));
 });

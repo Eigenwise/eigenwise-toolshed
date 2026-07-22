@@ -154,7 +154,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'story_contract', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -163,6 +163,27 @@ test('tools/list advertises the board tools with input schemas', async () => {
   for (const t of resp.result.tools) {
     assert.strictEqual(t.inputSchema.type, 'object', `${t.name} has an object input schema`);
   }
+});
+
+test('story contracts are bounded, revisioned, and warn claimed members about drift', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-contract-'))).slug;
+  const story = store.createStory(project, { title: 'Contract packet' });
+  const ticket = store.createTicket(project, { title: 'Member ticket', storyId: story.ref, source: 'test' });
+  assert.equal(store.claimTicket(project, ticket.ref, 'contract-worker', { direct: true }).ok, true);
+
+  const set = await callTool('story_contract', { project, story: story.ref, contract: 'Decision: preserve briefing order.\nInvariant: no silent rebrief.' });
+  assert.equal(set.story.contractRevision, 1);
+  const read = await callTool('story_contract', { project, story: story.ref });
+  assert.equal(read.story.executionContract, set.story.executionContract);
+  assert.throws(
+    () => store.updateStory(project, story.ref, { executionContract: '測'.repeat(2000) }),
+    /4096-byte limit/,
+  );
+
+  const pulse = await callTool('pulse', { project, ref: ticket.ref });
+  assert.match(pulse.warnings.join('\n'), /execution contract changed from revision 0 to 1/);
+  const changes = await callTool('changes', { project, since: '2000-01-01T00:00:00.000Z' });
+  assert.match(changes.tickets.find((entry: any) => entry.ref === ticket.ref).warnings.join('\n'), /execution contract changed/);
 });
 
 test('tools/list keeps schemas compact without losing claim and dispatch discipline', async () => {

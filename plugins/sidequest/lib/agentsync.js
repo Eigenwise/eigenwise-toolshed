@@ -301,6 +301,12 @@ function ticketWorktreeSetup(ticket, slug) {
   const config = store.boardConfig(slug);
   return config && config.worktreeSetup ? config.worktreeSetup : null;
 }
+function storyContractPacket(ticket, slug) {
+  const snapshot = ticket && ticket.dispatch && ticket.dispatch.storyContract ? ticket.dispatch.storyContract : store.storyExecutionContract(ticket && ticket.storyId ? store.getStory(slug, ticket.storyId) : null);
+  if (!snapshot || !snapshot.body) return null;
+  return `## Story execution contract (revision ${Number(snapshot.revision) || 1})
+${snapshot.body}`;
+}
 function ticketBrief(ticket, nonce, marker, slug) {
   const category = ticket.category || {};
   const comments = ticketCommentsPacket(ticket.comments);
@@ -310,8 +316,10 @@ function ticketBrief(ticket, nonce, marker, slug) {
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "(No labels were recorded.)";
   const closeout = ticketCloseout(ticket);
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
+  const contract = storyContractPacket(ticket, slug);
   const parts = [
     "",
+    ...contract ? [contract] : [],
     "## This ticket",
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || "(Untitled ticket)"}`,
