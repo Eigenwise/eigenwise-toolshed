@@ -11,6 +11,8 @@ const catalog = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'ref
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 const telemetrySkill = fs.readFileSync(path.join(root, 'skills', 'enable-project-telemetry', 'SKILL.md'), 'utf8');
 const observability = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'observability.md'), 'utf8');
+const ruleTemplates = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'rule-templates.md'), 'utf8');
+const selfImprovement = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'self-improvement.md'), 'utf8');
 
 test('init-workspace installs selected plugins before dependent workspace artifacts', () => {
   assert.match(skill, /only prerequisite is \*\*Workbench installed at user scope\*\*/);
@@ -97,6 +99,27 @@ test('init-workspace keeps CLAUDE.md and live rules as complementary defaults', 
   assert.match(skill, /Live rules are conditional, targeted behavioral enforcement that gets injected when applicable/);
   assert.match(skill, /One does\nnot replace the other; together they are the default setup/);
   assert.doesNotMatch(skill, /rely on live rules instead/i);
+});
+
+test('init-workspace writes new live rules as atomic files with a verified manifest', () => {
+  assert.match(skill, /create a new workspace's `\.claude\/live-rules\/` directory directly/);
+  assert.match(skill, /every selected starter rule as one `\.claude\/live-rules\/rules\/<stable-name>\.md`/);
+  assert.match(skill, /SHA-256 hash of\nthe exact UTF-8 rule file contents/);
+  assert.match(skill, /Generate and validate those hashes mechanically, never by hand/);
+  assert.match(skill, /fresh workspace\s+never creates `\.claude\/live-rules\.md`/);
+  assert.match(skill, /migrate its rules into atomic files without deleting the\noriginal/);
+
+  assert.match(ruleTemplates, /individual rule files/);
+  assert.match(ruleTemplates, /never a new `\.claude\/live-rules\.md`/);
+  assert.match(ruleTemplates, /"version": 1/);
+  assert.match(ruleTemplates, /"path": "rules\/atomic-commits\.md"/);
+  assert.match(ruleTemplates, /"hash": "<sha256 of the exact rules\/atomic-commits\.md contents>"/);
+  assert.match(ruleTemplates, /temporary sibling, validate every hash/);
+  assert.doesNotMatch(ruleTemplates, /File header/);
+
+  assert.match(selfImprovement, /`\.claude\/live-rules\/rules\/self-improvement\.md`/);
+  assert.match(selfImprovement, /`\.claude\/live-rules\/manifest\.json`/);
+  assert.doesNotMatch(selfImprovement, /Install this rule into `\.claude\/live-rules\.md`/);
 });
 
 test('catalog has reproducible current plugin sources and LSP checks', () => {

@@ -6,9 +6,11 @@ mechanism is deliberately simple: a global live rule (re-injected every prompt) 
 `retro` skill for a deeper pass. No hook, no background process — it rides the live-rules mechanism
 that's already installed.
 
-## Install this rule into `.claude/live-rules.md`
+## Install this atomic rule
 
-Ship it on every workspace, global scope, `priority: 40`:
+Ship it on every workspace as `.claude/live-rules/rules/self-improvement.md`, global scope,
+`priority: 40`. Include its path, SHA-256 hash, and frontmatter metadata in
+`.claude/live-rules/manifest.json` as described in `rule-templates.md`:
 
 ```markdown
 ---

@@ -240,12 +240,14 @@ plugin reload in Phase 3.
 
 ### 2c. Atomic live rules
 
-After a successful install, write every starter rule as its own `.claude/live-rules/rules/<stable-name>.md`
-file, then atomically write `.claude/live-rules/manifest.json`. Each entry has the relative rule path,
-SHA-256 hash, and applicability metadata (`description`, `globs`, `dirs`, `prompt`, `enabled`). Use
-the starter rules from `references/rule-templates.md`. Include:
+After a successful install, create a new workspace's `.claude/live-rules/` directory directly. Write
+every selected starter rule as one `.claude/live-rules/rules/<stable-name>.md` file, then atomically
+write `.claude/live-rules/manifest.json`. Follow the exact individual-rule and manifest format in
+`references/rule-templates.md`: every manifest entry needs its relative rule path, the SHA-256 hash of
+the exact UTF-8 rule file contents, and copied applicability metadata (`description`, `globs`, `dirs`,
+`prompt`, `enabled`). Generate and validate those hashes mechanically, never by hand. A fresh workspace
+never creates `.claude/live-rules.md`.
 
-- The **terse header** (naming the ~10k-char injection budget) above the first `---` fence.
 - The **craft baseline** (global, `priority` 90–100): atomic commits / two hats, simple design,
   surgical/Karpathy directive, verify-before-done, no-inline-comments/naming. Ship these on every
   workspace.

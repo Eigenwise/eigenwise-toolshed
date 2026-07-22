@@ -1,22 +1,41 @@
-# Starter live-rules templates
+# Starter atomic live-rule templates
 
-Lift-ready rule blocks for `.claude/live-rules.md`. Each is a frontmatter block plus body in the
-live-rules format. Ship the **craft baseline** on every workspace; add the **stack-specific** ones
-that match the detected stack. Keep bodies tight (all rules matching one event share a ~10k-char
-injection budget). Higher `priority` injects first.
+These are lift-ready **individual rule files** for a new workspace. Write each selected block to its
+own `.claude/live-rules/rules/<stable-name>.md` file, with no shared header and exactly one
+frontmatter-plus-body rule per file. Ship the **craft baseline** on every workspace; add the
+**stack-specific** ones that match the detected stack. Keep bodies tight: all rules matching one
+event share a ~10k-character injection budget. Higher `priority` injects first.
 
 **Priority convention (standardized):** 90–100 = global craft baselines · 50–70 = stack/design rules ·
 40–45 = prompt-keyword and self-improvement rules · 10 = narrow domain-file rules.
 
-## File header (put above the first `---` fence)
+## Atomic directory and manifest
 
-```markdown
-# Live rules — <project>
-# Injected automatically by the live-rules plugin. Global rules fire every prompt;
-# scoped rules fire when their files/keywords match. Keep each body tight — all rules
-# matching one event share a ~10k-char budget. Anything above the first `---` fence is ignored.
-# Edit freely; changes take effect on the next prompt. Commit this file so the team shares it.
+A new workspace uses `.claude/live-rules/`, never a new `.claude/live-rules.md`. Give every rule a
+stable kebab-case file name derived from its heading, such as `atomic-commits.md` or
+`svelte-5-components.md`. Then write `.claude/live-rules/manifest.json` from the exact UTF-8 contents
+of the selected rule files. Do not hand-type hashes: SHA-256 each complete rule file, including its
+final newline, and copy scope metadata from its frontmatter. Every manifest entry has this shape:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "path": "rules/atomic-commits.md",
+      "hash": "<sha256 of the exact rules/atomic-commits.md contents>",
+      "description": "Atomic commits & two hats",
+      "globs": [],
+      "dirs": [],
+      "prompt": [],
+      "enabled": true
+    }
+  ]
+}
 ```
+
+Write the complete directory through a temporary sibling, validate every hash against the files, then
+rename it into `.claude/live-rules/`. The manifest's `path` values are relative to that directory.
 
 ---
 
