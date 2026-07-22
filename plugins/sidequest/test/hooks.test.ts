@@ -745,6 +745,10 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
 
 test('session-start: carries evidence-first advisory routing guidance', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
+  const substantiveMandate = 'REQUIRED: Substantive changes/investigations need tickets; fresh `dispatch` returns executor/spawn/token. Every Agent uses it.';
+  assert.ok(ctx.startsWith(`=== sidequest (active) ===\n${substantiveMandate}\n`), 'the unchanged ticket and dispatch mandate must lead');
+  assert.match(ctx, /Operational requests \(run\/build\/test app; start\/stop dev server; open dashboard; answer from visible context\): act inline, without the Sidequest skill, category_list, or board reads\./);
+  assert.match(ctx, /Reload the Sidequest skill before board work/);
   assert.match(ctx, /sidequest \(active\)/);
   assert.ok(ctx.includes('ATOMIC'), 'must demand atomic tickets (stuck executors come from oversized scope)');
   assert.match(ctx, /independently checkable/, 'must split independently checkable pieces');
