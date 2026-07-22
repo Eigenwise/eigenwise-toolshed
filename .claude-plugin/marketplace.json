@@ -31,7 +31,7 @@
       "name": "codex-gateway",
       "source": "./plugins/codex-gateway",
       "description": "Your ChatGPT/Codex subscription models in Claude Code's /model picker. A local gateway routes claude-codex-* models to OpenAI's Codex backend (via claude-code-proxy) and everything else to api.anthropic.com, so you switch between Claude and GPT-5.x mid-session like any other model. No OpenAI API key.",
-      "version": "0.33.2",
+      "version": "0.33.3",
       "author": {
         "name": "Eigenwise"
       },
@@ -54,7 +54,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
-      "version": "3.6.12",
+      "version": "3.6.13",
       "author": {
         "name": "Eigenwise"
       },
