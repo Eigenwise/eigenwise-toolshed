@@ -29,7 +29,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { stableClaudeName, stableDispatchName } = require('./exec-names.js');
+const { isReadOnlyCategory, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const db = require('./db.js');
@@ -2778,7 +2778,10 @@ function stableExecutorName(ticket?: any) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
-  return resolved.agent;
+  if (!isReadOnlyCategory(ticketCategory(ticket))) return resolved.agent;
+  return resolved.backend === 'codex'
+    ? stableReadOnlyDispatchName(ticket.effort)
+    : stableReadOnlyClaudeName(ticket.effort);
 }
 
 // Prepare a ticket for dispatch: persist a fresh claim nonce and the stable
@@ -3148,7 +3151,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const currentRoute = activeDispatchRoute(t);
     const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
     if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor
-      && currentExec && currentExec.agent === t.dispatchExecutor) {
+      && currentExec && stableExecutorName(t) === t.dispatchExecutor) {
       if (opts.sessionId) current.sessionId = String(opts.sessionId);
       putTicket(slug, t);
       return {

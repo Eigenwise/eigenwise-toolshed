@@ -30,10 +30,14 @@ store.setCategory({
   enabled: true,
 });
 
-function createFixture(title?: any) {
+for (const id of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation']) {
+  store.setCategory({ id, name: id, route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
+}
+
+function createFixture(title?: any, category = 'dispatch.lifecycle') {
   return store.createTicket(slug, {
     title,
-    category: 'dispatch.lifecycle',
+    category,
     files: ['tracked.js'],
     source: 'test',
   });
@@ -89,6 +93,30 @@ test('batch launch records every prepared ticket and binds the shared native age
     assert.ok(pulse.dispatch.boundAt);
     assert.equal(pulse.working, false);
   }
+});
+
+test('read-only category classes dispatch through restricted stable executors', () => {
+  for (const category of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation']) {
+    const ticket = createFixture(`${category} fixture`, category);
+    const prepared = store.prepareDispatch(slug, ticket.ref);
+    assert.equal(prepared.ticket.dispatchExecutor, 'sidequest-exec-readonly-high');
+    assert.equal(store.claimTicket(slug, ticket.ref, 'read-only-test-worker', {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      source: 'test',
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'read-only-test-worker', { source: 'test' }).ok, true);
+  }
+
+  const mutable = createFixture('mutable fixture');
+  const prepared = store.prepareDispatch(slug, mutable.ref);
+  assert.equal(prepared.ticket.dispatchExecutor, 'sidequest-exec-high');
+  assert.equal(store.claimTicket(slug, mutable.ref, 'mutable-test-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, mutable.ref, 'mutable-test-worker', { source: 'test' }).ok, true);
 });
 
 test('pulse reports derived activity and dispatch changes without leaking a nonce', () => {

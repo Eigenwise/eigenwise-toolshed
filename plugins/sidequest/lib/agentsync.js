@@ -2,7 +2,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { stableClaudeName, stableDispatchName } = require("./exec-names.js");
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require("./exec-names.js");
 const crypto = require("crypto");
 const store = require("./store.js");
 const { spawnDescription } = store;
@@ -74,10 +74,26 @@ function workflowRecipe(category, resolved) {
   }
   return recipe;
 }
-function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2 }) {
+const READ_ONLY_TOOLS = [
+  "Read",
+  "Glob",
+  "Grep",
+  "WebSearch",
+  "WebFetch",
+  "Bash",
+  "ToolSearch",
+  "SendMessage",
+  "mcp__plugin_sidequest_board__*"
+];
+function readOnlyNote() {
+  return "\n\n**Read-only role:** Your tools cannot change files. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket. Do not try to work around the tool restriction.";
+}
+function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools }) {
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
+  const toolsLine = Array.isArray(tools) && tools.length ? `tools: ${tools.join(", ")}
+` : "";
   return template.split("{{NAME}}").join(String(name)).split("{{EFFORT}}").join(String(effort)).split("{{MODEL_FRONTMATTER}}").join(modelId ? `
-model: ${modelId}` : "").split("{{MAX_TURNS}}").join(String(execMaxTurns(String(effort)))).split("{{CHECKPOINT_TOOL_ROUNDS}}").join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS)).split("{{MARKER}}").join(marker || "").split("{{EXTRA_NOTE}}").join(extraNote || "").split("{{TICKET_BRIEF}}").join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief2 ? `
+model: ${modelId}` : "").split("{{MAX_TURNS}}").join(String(execMaxTurns(String(effort)))).split("{{CHECKPOINT_TOOL_ROUNDS}}").join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS)).split("permissionMode: bypassPermissions").join(`${toolsLine}permissionMode: bypassPermissions`).split("{{MARKER}}").join(marker || "").split("{{EXTRA_NOTE}}").join(extraNote || "").split("{{TICKET_BRIEF}}").join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief2 ? `
 
 ${ticketBrief2}` : ""}`);
 }
@@ -93,6 +109,25 @@ function renderDispatchAgent(effort) {
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: dispatchNote(effort)
+  });
+}
+function renderReadOnlyDispatchAgent(effort) {
+  return renderExecAgent({
+    name: stableReadOnlyDispatchName(effort),
+    effort,
+    modelId: DISPATCH_MODEL_ID,
+    marker: MARKER,
+    extraNote: `${dispatchNote(effort)}${readOnlyNote()}`,
+    tools: READ_ONLY_TOOLS
+  });
+}
+function renderReadOnlyClaudeAgent(effort) {
+  return renderExecAgent({
+    name: stableReadOnlyClaudeName(effort),
+    effort,
+    marker: MARKER,
+    extraNote: readOnlyNote(),
+    tools: READ_ONLY_TOOLS
   });
 }
 function refToken(ref) {
@@ -530,7 +565,7 @@ function stableInstallHash() {
   }
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
   const maxTurnsOverride = String(process.env.SIDEQUEST_EXEC_MAX_TURNS || "").trim();
-  return crypto.createHash("sha256").update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, maxTurns: EXEC_MAX_TURNS, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, maxTurnsOverride })).digest("hex");
+  return crypto.createHash("sha256").update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, maxTurns: EXEC_MAX_TURNS, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, maxTurnsOverride, readOnlyTools: READ_ONLY_TOOLS })).digest("hex");
 }
 function installHashPath(dir) {
   return path.join(dir || defaultAgentsDir(), INSTALL_HASH_FILE);
@@ -565,6 +600,8 @@ function syncExecAgents(_prefs, opts) {
       effort,
       marker: MARKER
     }));
+    wanted.set(`${stableReadOnlyDispatchName(effort)}.md`, renderReadOnlyDispatchAgent(effort));
+    wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort));
   }
   let existing = [];
   try {
@@ -625,12 +662,15 @@ module.exports = {
   EXECUTOR_CHECKPOINT_TOOL_ROUNDS,
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
+  READ_ONLY_TOOLS,
   execMaxTurns,
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,
   workflowRecipe,
   renderDispatchAgent,
+  renderReadOnlyDispatchAgent,
+  renderReadOnlyClaudeAgent,
   renderExecAgent,
   renderTicketBriefing,
   createNativeAgent,

@@ -4,32 +4,60 @@ import assert from 'node:assert';
 const {
   CLAUDE_PREFIX,
   DISPATCH_PREFIX,
+  READ_ONLY_CLAUDE_PREFIX,
+  READ_ONLY_DISPATCH_PREFIX,
+  READ_ONLY_CATEGORY_IDS,
   EFFORTS,
   classify,
   isEffort,
+  isReadOnlyCategory,
   stableClaudeName,
   stableDispatchName,
+  stableReadOnlyClaudeName,
+  stableReadOnlyDispatchName,
 } = require('../lib/exec-names.js') as {
   CLAUDE_PREFIX: string;
   DISPATCH_PREFIX: string;
+  READ_ONLY_CLAUDE_PREFIX: string;
+  READ_ONLY_DISPATCH_PREFIX: string;
+  READ_ONLY_CATEGORY_IDS: readonly string[];
   EFFORTS: readonly string[];
   classify(name: unknown): { kind: string; effort: string | null };
   isEffort(value: unknown): boolean;
+  isReadOnlyCategory(categoryId: unknown): boolean;
   stableClaudeName(effort: string): string;
   stableDispatchName(effort: string): string;
+  stableReadOnlyClaudeName(effort: string): string;
+  stableReadOnlyDispatchName(effort: string): string;
 };
 
 test('builders produce the current public stable names', () => {
   assert.strictEqual(stableClaudeName('high'), 'sidequest-exec-high');
   assert.strictEqual(stableDispatchName('high'), 'sidequest-exec-dispatch-high');
   assert.strictEqual(stableDispatchName('xhigh'), 'sidequest-exec-dispatch-xhigh');
+  assert.strictEqual(stableReadOnlyClaudeName('high'), 'sidequest-exec-readonly-high');
+  assert.strictEqual(stableReadOnlyDispatchName('high'), 'sidequest-exec-dispatch-readonly-high');
 });
 
 test('every stable kind round-trips through classify with its effort', () => {
   for (const effort of EFFORTS) {
     assert.deepStrictEqual(classify(stableClaudeName(effort)), { kind: 'claude_builtin', effort });
     assert.deepStrictEqual(classify(stableDispatchName(effort)), { kind: 'codex_dispatch', effort });
+    assert.deepStrictEqual(classify(stableReadOnlyClaudeName(effort)), { kind: 'read_only_claude_builtin', effort });
+    assert.deepStrictEqual(classify(stableReadOnlyDispatchName(effort)), { kind: 'read_only_codex_dispatch', effort });
   }
+});
+
+test('read-only category selection is explicit and stable', () => {
+  assert.deepStrictEqual(READ_ONLY_CATEGORY_IDS, [
+    'codebase-exploration',
+    'research',
+    'review-audit',
+    'spike-investigation',
+  ]);
+  for (const category of READ_ONLY_CATEGORY_IDS) assert.ok(isReadOnlyCategory(category));
+  assert.ok(!isReadOnlyCategory('coding.normal'));
+  assert.ok(!isReadOnlyCategory('visual-review'));
 });
 
 test('dispatch is classified before the claude prefix it shares', () => {

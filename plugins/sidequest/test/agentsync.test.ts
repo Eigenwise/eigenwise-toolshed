@@ -21,6 +21,8 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const STABLE_EXECUTORS = EFFORTS.flatMap((effort) => [
   `sidequest-exec-dispatch-${effort}.md`,
   `sidequest-exec-${effort}.md`,
+  `sidequest-exec-dispatch-readonly-${effort}.md`,
+  `sidequest-exec-readonly-${effort}.md`,
 ]).sort();
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
@@ -140,7 +142,7 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   try {
     assert.deepStrictEqual(store.getCategories({ includeDisabled: true }).map((category?: any) => category.id), ['general']);
     const result = agentsync.syncExecAgents(null, { dir });
-    assert.equal(result.written, 10);
+    assert.equal(result.written, 20);
     assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
     for (const effort of EFFORTS) {
       const dispatch = fs.readFileSync(path.join(dir, `sidequest-exec-dispatch-${effort}.md`), 'utf8');
@@ -153,6 +155,19 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   } finally {
     for (const category of categories) store.setCategory(category);
     db.close();
+  }
+});
+
+test('read-only stable executors expose only the approved tool allowlist', () => {
+  const dir = tmpDir();
+  agentsync.syncExecAgents(null, { dir });
+
+  for (const file of ['sidequest-exec-dispatch-readonly-high.md', 'sidequest-exec-readonly-high.md']) {
+    const body = fs.readFileSync(path.join(dir, file), 'utf8');
+    assert.match(body, /^tools: Read, Glob, Grep, WebSearch, WebFetch, Bash, ToolSearch, SendMessage, mcp__plugin_sidequest_board__\*$/m);
+    assert.doesNotMatch(body, /^tools:.*\b(?:Edit|Write|NotebookEdit)\b/m);
+    assert.match(body, /Read-only role/);
+    assert.match(body, /board blocker comment/);
   }
 });
 
@@ -196,7 +211,7 @@ test('sync writes route-independent generated executors', () => {
   configure(store, 'sync-terra', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'high' });
   const dir = tmpDir();
   const result = agentsync.syncExecAgents(null, { dir });
-  assert.equal(result.written, 10);
+  assert.equal(result.written, 20);
   assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
   const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch-high.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
@@ -257,7 +272,7 @@ test('unchanged install hash skips the full executor ladder comparison', () => {
   const dir = tmpDir();
   const first = agentsync.syncExecAgentsIfChanged(null, { dir });
   assert.equal(first.skipped, false);
-  assert.equal(first.written, 10);
+  assert.equal(first.written, 20);
   const second = agentsync.syncExecAgentsIfChanged(null, { dir });
   assert.deepStrictEqual(second, {
     written: 0,
@@ -597,7 +612,7 @@ test('every executor name syncExecAgents writes classifies to a stable kind', ()
   for (const name of names) {
     const { kind } = classify(name);
     assert.ok(
-      ['codex_dispatch', 'claude_builtin'].includes(kind),
+      ['codex_dispatch', 'claude_builtin', 'read_only_codex_dispatch', 'read_only_claude_builtin'].includes(kind),
       `${name} did not classify to a stable kind (got ${kind})`,
     );
   }
