@@ -685,7 +685,7 @@ test('env shows the local default until the user saves a wiring mode', () => {
     });
     assert.equal(first.status, 0, first.stderr);
     assert.match(first.stdout, /wiring mode: local \(defaulted to per-project\)/);
-    assert.match(first.stdout, /wiring mode defaulted to per-project; run codex-gateway env --mode global to change/);
+    assert.match(first.stdout, /wiring mode defaulted to per-project; use \/codex-gateway:codex-gateway to run its env --mode global command to change/);
 
     const selected = spawnSync(process.execPath, [CLI, 'env', '--mode', 'global'], {
       env: { ...process.env, HOME: home, USERPROFILE: home },
@@ -704,6 +704,13 @@ test('env shows the local default until the user saves a wiring mode', () => {
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('SessionStart nudges hand off gateway actions to the runnable skill', () => {
+  const source = fs.readFileSync(CLI, 'utf8');
+  assert.match(source, /Run \/codex-gateway:codex-gateway, then use its env --write-project command/);
+  assert.match(source, /run \/codex-gateway:codex-gateway to set it up, or use that skill.*env --remove command/);
+  assert.doesNotMatch(source, /(?:Run|run):? env --/);
 });
 
 test('claude-* passthrough is byte-identical and never subjected to Codex window/error rewriting', async (t) => {

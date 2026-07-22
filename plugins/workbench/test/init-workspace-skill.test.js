@@ -9,6 +9,7 @@ const root = path.join(__dirname, '..');
 const skill = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'SKILL.md'), 'utf8');
 const catalog = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'stack-plugins.md'), 'utf8');
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+const telemetrySkill = fs.readFileSync(path.join(root, 'skills', 'enable-project-telemetry', 'SKILL.md'), 'utf8');
 const observability = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'observability.md'), 'utf8');
 
 test('init-workspace installs selected plugins before dependent workspace artifacts', () => {
@@ -49,11 +50,16 @@ test('init-workspace offers Git before writing greenfield workspace artifacts', 
   assert.match(skill, /they declined Git setup, say once that the workspace is uncommitted/);
 });
 
-test('init-workspace asks for wiring mode only on an unset machine', () => {
+test('Workbench skills hand off gateway mode commands to the installed gateway skill', () => {
+  for (const document of [skill, telemetrySkill]) {
+    assert.match(document, /invoke `\/codex-gateway:codex-gateway` and use its `env --show-mode` command/);
+    assert.match(document, /installed plugin command is not on PATH/);
+    assert.match(document, /through that skill with its `env --mode global` or `env --mode local` command/);
+    assert.doesNotMatch(document, /`codex-gateway env --/);
+  }
   assert.match(skill, /Global \(all projects wired automatically via user settings\) or per-project \(each project opts in via its private settings\.local\.json — recommended\)\?/);
-  assert.match(skill, /Persist the choice with `codex-gateway env --mode global` or `codex-gateway env --mode local`/);
   assert.match(skill, /do not ask again once a mode exists/);
-  assert.match(skill, /wiring mode defaulted to per-project; run codex-gateway env --mode global to change/);
+  assert.match(skill, /wiring mode defaulted to per-project; use \/codex-gateway:codex-gateway to run its env --mode global command to change/);
 });
 
 test('init-workspace starts with telemetry consent, project intent, then the live plugin picker', () => {

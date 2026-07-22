@@ -238,7 +238,7 @@ function wiringMode() {
 }
 
 function wiringModeDefaultNotice() {
-  return 'wiring mode defaulted to per-project; run codex-gateway env --mode global to change';
+  return 'wiring mode defaulted to per-project; use /codex-gateway:codex-gateway to run its env --mode global command to change';
 }
 
 function writeWiringMode(mode) {
@@ -792,14 +792,14 @@ function envCommand() {
   if (!scope) {
     if (requestedMode) {
       log(`wiring mode set to ${requestedMode}. ${requestedMode === 'local'
-        ? 'Run /workbench:update-toolshed to migrate recorded projects from global wiring, or run env --write-project in this project.'
+        ? 'Run /workbench:update-toolshed to migrate recorded projects from global wiring, or use /codex-gateway:codex-gateway to run its env --write-project command in this project.'
         : 'Run /workbench:update-toolshed to write global wiring. Existing project settings.local.json blocks stay in place.'}`);
       log('Settings changes apply to new Claude Code sessions.');
       return;
     }
     log('add this to the "env" block of this project\'s .claude/settings.local.json:');
     log(JSON.stringify({ env: envBlockFor('default') }, null, 2));
-    log('\nor run: env --write-project   (this repo) / env --write-user   (global mode)');
+    log('\nor use /codex-gateway:codex-gateway to run its env --write-project command (this repo), or its env --write-user command (global mode)');
     log(`\n${hasWiringMode() ? `${wiringMode() === 'local' ? 'Local' : 'Global'} wiring is the selected mode.` : wiringModeDefaultNotice()}. It applies to new Claude Code sessions after restart.`);
     log('RC-compatibility mode (restores /remote-control) is opt-in and automatic once you add the');
     log('hosts entry yourself; see the RC-compatibility mode section of the README.');
@@ -901,7 +901,7 @@ async function doctor() {
       log(`${label}: not wired${scope === activeScope ? ' [active]' : ''}`);
     }
   }
-  if (activeMode === 'local') log('Local wiring applies to new Claude Code sessions. Run env --write-project in a new project.');
+  if (activeMode === 'local') log('Local wiring applies to new Claude Code sessions. Use /codex-gateway:codex-gateway to run its env --write-project command in a new project.');
   const scope = installScope();
   if (scope === 'project-only') {
     log('install scope: PROJECT-ONLY — local wiring is supported for this project.');
@@ -2350,7 +2350,7 @@ if (require.main === module) {
       const wired = isWired();
       if (!fs.existsSync(PROXY_BIN)) {
         if (wired) {
-          console.error('codex-gateway: ANTHROPIC_BASE_URL is wired but the proxy binary is missing; run the codex-gateway skill setup, or env --remove to unwire');
+          console.error('codex-gateway: ANTHROPIC_BASE_URL is wired but the proxy binary is missing; run /codex-gateway:codex-gateway to set it up, or use that skill\'s env --remove command to unwire');
           process.exit(1);
         }
         log('codex-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the codex-gateway skill.');
@@ -2364,7 +2364,7 @@ if (require.main === module) {
       if (!wired) {
         if (!hasWiringMode()) log(wiringModeDefaultNotice());
         log(isAuthed()
-          ? 'codex-gateway is running but Claude Code is not wired to it. Run env --write-project to use this project\'s .claude/settings.local.json, then restart.'
+          ? 'codex-gateway is running but Claude Code is not wired to it. Run /codex-gateway:codex-gateway, then use its env --write-project command to write this project\'s .claude/settings.local.json, then restart.'
           : 'codex-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the codex-gateway skill.');
       } else {
         if (installScope() === 'project-only' && wiringMode() === 'global') {
