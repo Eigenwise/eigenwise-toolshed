@@ -170,6 +170,8 @@ test('tools/list advertises the board tools with input schemas', async () => {
   for (const t of resp.result.tools) {
     assert.strictEqual(t.inputSchema.type, 'object', `${t.name} has an object input schema`);
   }
+  const submit = resp.result.tools.find((tool: any) => tool.name === 'submit');
+  assert.ok(submit.inputSchema.properties.base, 'submit exposes an explicit base');
 });
 
 test('story contracts are bounded, revisioned, and warn claimed members about drift', async () => {
@@ -651,6 +653,43 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
+});
+
+test('MCP submit accepts a known submitted commit as an explicit base', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const first = store.createTicket(project, {
+    title: 'MCP explicit base ancestor', files: ['lib/first.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'provide a validated submission boundary for a dependent range',
+  });
+  assert.equal((await callTool('claim', { project, ref: first.ref, by: 'mcp-base-worker', direct: true, reason: 'The MCP explicit-base fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'lib', 'first.js'), 'first\n');
+  gitAt(worktree, ['add', 'lib/first.js']);
+  gitAt(worktree, ['commit', '-m', 'MCP explicit base ancestor']);
+  const firstTip = gitAt(worktree, ['rev-parse', 'HEAD']);
+  gitAt(worktree, ['update-ref', `refs/sidequest/${first.ref}`, firstTip]);
+  assert.equal((await callTool('submit', { project, ref: first.ref, by: 'mcp-base-worker', commit: firstTip, worktree })).ok, true);
+
+  const second = store.createTicket(project, {
+    title: 'MCP explicit dependent range', files: ['lib/second.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'prove the MCP base input isolates the unsubmitted suffix',
+  });
+  assert.equal((await callTool('claim', { project, ref: second.ref, by: 'mcp-dependent-worker', direct: true, reason: 'The MCP explicit-base fixture requires a local direct claim.' })).ok, true);
+  fs.writeFileSync(path.join(worktree, 'lib', 'second.js'), 'second\n');
+  gitAt(worktree, ['add', 'lib/second.js']);
+  gitAt(worktree, ['commit', '-m', 'MCP explicit dependent range']);
+  const secondTip = gitAt(worktree, ['rev-parse', 'HEAD']);
+  gitAt(worktree, ['update-ref', `refs/sidequest/${second.ref}`, secondTip]);
+
+  const submitted = await callTool('submit', {
+    project, ref: second.ref, by: 'mcp-dependent-worker', commit: secondTip, base: firstTip, worktree,
+  });
+  assert.equal(submitted.ok, true);
+  const submission = store.getTicket(project, second.ref).submission;
+  assert.equal(submission.base, firstTip);
+  assert.deepEqual(submission.commits, [secondTip]);
+  assert.deepEqual(submission.changedPaths, ['lib/second.js']);
 });
 
 test('MCP commit truncates out-of-scope comments and retains successful commits on comment failures', async () => {

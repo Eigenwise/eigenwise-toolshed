@@ -360,7 +360,116 @@ test('CLI: unrelated durable-ref history is refused', () => {
   assert.strictEqual(runCli(['release', t.ref, '--by', 'unrelated-worker']).status, 0);
 });
 
-test('CLI: a range containing another queued ticket commit is refused', () => {
+test('CLI: an integrated ancestor is excluded from dependent submission duplicate checks', () => {
+  cleanBranch();
+  const first = addTicket('integrated ancestor', { files: ['lib/first.js'] });
+  assert.strictEqual(runCli(['claim', first.ref, '--by', 'first-integrated-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'first.js'), 'first\n');
+  git(['add', 'lib/first.js']);
+  git(['commit', '-m', 'integrated ancestor']);
+  const firstTip = git(['rev-parse', 'HEAD']);
+  pin(first, firstTip);
+  assert.strictEqual(runCli(['submit', first.ref, '--by', 'first-integrated-worker', '--commit', firstTip]).status, 0);
+  const integrated = runCli(['groom-close', first.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${firstTip} into main.`]);
+  assert.strictEqual(integrated.status, 0, integrated.stderr + integrated.stdout);
+
+  const second = addTicket('dependent submission duplicate check', { files: ['lib'] });
+  assert.strictEqual(runCli(['claim', second.ref, '--by', 'dependent-duplicate-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'second.js'), 'second\n');
+  git(['add', 'lib/second.js']);
+  git(['commit', '-m', 'dependent submission']);
+  const secondTip = git(['rev-parse', 'HEAD']);
+  pin(second, secondTip);
+
+  const submitted = runCli(['submit', second.ref, '--by', 'dependent-duplicate-worker', '--commit', secondTip]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  const submission = store.getTicket(slug, second.ref).submission;
+  assert.strictEqual(submission.base, firstTip);
+  assert.deepStrictEqual(submission.commits, [secondTip]);
+  assert.deepStrictEqual(submission.changedPaths, ['lib/second.js']);
+});
+
+test('CLI: integrated ancestor paths are excluded from dependent submission scope checks', () => {
+  cleanBranch();
+  const first = addTicket('integrated out-of-scope ancestor', { files: ['foreign.js'] });
+  assert.strictEqual(runCli(['claim', first.ref, '--by', 'first-scope-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'foreign\n');
+  git(['add', 'foreign.js']);
+  git(['commit', '-m', 'integrated foreign path']);
+  const firstTip = git(['rev-parse', 'HEAD']);
+  pin(first, firstTip);
+  assert.strictEqual(runCli(['submit', first.ref, '--by', 'first-scope-worker', '--commit', firstTip]).status, 0);
+  const integrated = runCli(['groom-close', first.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${firstTip} into main.`]);
+  assert.strictEqual(integrated.status, 0, integrated.stderr + integrated.stdout);
+
+  const second = addTicket('dependent submission scope check', { files: ['lib/second.js'] });
+  assert.strictEqual(runCli(['claim', second.ref, '--by', 'dependent-scope-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'second.js'), 'second\n');
+  git(['add', 'lib/second.js']);
+  git(['commit', '-m', 'scoped dependent submission']);
+  const secondTip = git(['rev-parse', 'HEAD']);
+  pin(second, secondTip);
+
+  const submitted = runCli(['submit', second.ref, '--by', 'dependent-scope-worker', '--commit', secondTip]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  const submission = store.getTicket(slug, second.ref).submission;
+  assert.strictEqual(submission.base, firstTip);
+  assert.deepStrictEqual(submission.commits, [secondTip]);
+  assert.deepStrictEqual(submission.changedPaths, ['lib/second.js']);
+});
+
+test('CLI: an explicit submitted base isolates a dependent queued range', () => {
+  cleanBranch();
+  const first = addTicket('explicit base ancestor', { files: ['lib/first.js'] });
+  assert.strictEqual(runCli(['claim', first.ref, '--by', 'explicit-base-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'first.js'), 'first\n');
+  git(['add', 'lib/first.js']);
+  git(['commit', '-m', 'explicit base ancestor']);
+  const firstTip = git(['rev-parse', 'HEAD']);
+  pin(first, firstTip);
+  assert.strictEqual(runCli(['submit', first.ref, '--by', 'explicit-base-worker', '--commit', firstTip]).status, 0);
+
+  const second = addTicket('explicit dependent range', { files: ['lib/second.js'] });
+  assert.strictEqual(runCli(['claim', second.ref, '--by', 'explicit-dependent-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'second.js'), 'second\n');
+  git(['add', 'lib/second.js']);
+  git(['commit', '-m', 'explicit dependent range']);
+  const secondTip = git(['rev-parse', 'HEAD']);
+  pin(second, secondTip);
+
+  const submitted = runCli(['submit', second.ref, '--by', 'explicit-dependent-worker', '--commit', secondTip, '--base', firstTip]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  const submission = store.getTicket(slug, second.ref).submission;
+  assert.strictEqual(submission.base, firstTip);
+  assert.deepStrictEqual(submission.commits, [secondTip]);
+  assert.deepStrictEqual(submission.changedPaths, ['lib/second.js']);
+});
+
+test('CLI: an arbitrary explicit base cannot hide an out-of-scope commit', () => {
+  cleanBranch();
+  const ticket = addTicket('unrecognized explicit base', { files: ['lib/allowed.js'] });
+  assert.strictEqual(runCli(['claim', ticket.ref, '--by', 'unrecognized-base-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'foreign\n');
+  git(['add', 'foreign.js']);
+  git(['commit', '-m', 'unrecognized base']);
+  const hiddenCommit = git(['rev-parse', 'HEAD']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'allowed.js'), 'allowed\n');
+  git(['add', 'lib/allowed.js']);
+  git(['commit', '-m', 'allowed tip']);
+  const tip = git(['rev-parse', 'HEAD']);
+  pin(ticket, tip);
+
+  const submitted = runCli(['submit', ticket.ref, '--by', 'unrecognized-base-worker', '--commit', tip, '--base', hiddenCommit]);
+  assert.strictEqual(submitted.status, 1);
+  assert.match(submitted.stderr + submitted.stdout, /unrecognized_base/);
+  assert.ok(store.getTicket(slug, ticket.ref).claim, 'rejected base keeps the claim');
+});
+
+test('CLI: a genuine ownership overlap with another queued submission is refused', () => {
   cleanBranch();
   const first = addTicket('first queued submission', { files: ['lib/first.js'] });
   assert.strictEqual(runCli(['claim', first.ref, '--by', 'first-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);

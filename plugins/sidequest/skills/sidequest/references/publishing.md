@@ -7,6 +7,12 @@ version bumps). Publishing — integrating those commits, assigning versions, re
 pushing main, marking done — is ONE serialized transaction owned by the orchestrator. This file is that
 transaction.
 
+`submit` trims the range through the newest integrated submission commit reachable from the submitted
+tip, so a dependent commit on a shared linear history does not reclaim its integrated ancestor. Pass
+`--base <commit>` (or MCP `base`) when an existing submitted or integrated ticket marks the intended
+boundary but automatic selection cannot identify it. Arbitrary commits are rejected as bases, so the
+remaining range still has to satisfy the current ticket's declared scope and ownership checks.
+
 ## When to run it (event-driven, never polled)
 
 The wakeups you already get are the triggers; never hold a turn open waiting for submissions:
@@ -53,10 +59,13 @@ board (submissions stay parked — fail closed).
    `cd <worktree>/plugins/<name> && npm ci`. Never integrate in the shared session tree — pre-staged
    or dirty files there are exactly the contamination this flow exists to prevent.
 5. **Reconstruct and admit each submission before integration**. Resolve its durable ref and require
-   it still points to the submitted tip. Require `git merge-base --is-ancestor <base> origin/main`, then
-   compare `git rev-list --reverse <base>..<tip>` to the queue's ordered `commits` array exactly. Reject
-   an empty range, merge commit, divergent or unrelated history, a range containing a commit from another
-   queued ticket, or a changed-path union outside the ticket scope. Leave rejected submissions parked.
+   it still points to the submitted tip. Require the recorded upstream commit to remain reachable from
+   current `origin/main`, then require the stored base to lie on the tip's history at or after their
+   merge-base. A prior submission's original commit can be a valid base even when integration
+   cherry-picked it to a new hash. Compare `git rev-list --reverse <base>..<tip>` to the queue's ordered
+   `commits` array exactly. Reject an empty range, merge commit, divergent or unrelated history, a range
+   containing a commit from another queued ticket, or a changed-path union outside the ticket scope.
+   Leave rejected submissions parked.
 6. **Integrate each admitted range**, oldest first: `git cherry-pick <commit-1> ... <commit-n>`. The
    durable tip ref keeps every ancestor in that range reachable. Save `git diff --binary <base> <tip>`
    before cherry-picking, then run `git apply --check --reverse <saved-patch>` in the integration worktree

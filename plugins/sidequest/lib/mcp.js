@@ -931,6 +931,7 @@ const TOOLS = [
         project: PROJECT_PROP,
         by: { type: "string" },
         commit: { type: "string" },
+        base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from this submission range." },
         verify: { type: "string" },
         gitRef: { type: "string" },
         worktree: { type: "string", description: "Absolute path to this executor’s git worktree root. Required for isolated worktrees." },
@@ -954,7 +955,15 @@ const TOOLS = [
       }
       const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
       const target = store.integrationTarget(slug);
-      const range = commitScope.submissionRange(root, { commit, gitRef, upstream: target.upstream });
+      const allowedBases = store.submissionBaseCandidates(slug, ticket.ref);
+      const range = commitScope.submissionRange(root, {
+        commit,
+        gitRef,
+        upstream: target.upstream,
+        base: args.base,
+        allowedBases,
+        baseCandidates: args.base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true })
+      });
       if (!range.ok) {
         return mutationAck(slug, { ok: false, ticket, reason: range.reason, message: range.message });
       }

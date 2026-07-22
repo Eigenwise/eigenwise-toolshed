@@ -1195,10 +1195,14 @@ async function cmdSubmit(opts: any, positional: any) {
   }
   const gitRef = opts.gitref || opts['git-ref'] || `refs/sidequest/${ticket.ref}`;
   const target = store.integrationTarget(slug);
+  const allowedBases = store.submissionBaseCandidates(slug, ticket.ref);
   const range = commitScope.submissionRange(process.cwd(), {
     commit: opts.commit,
     gitRef,
     upstream: target.upstream,
+    base: opts.base,
+    allowedBases,
+    baseCandidates: opts.base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true }),
   });
   if (!range.ok) {
     fail(`submit: refused ${ticket.ref}; ${range.reason}${range.message ? `: ${range.message}` : ''}.`);
@@ -2378,7 +2382,7 @@ const HELP_COMMANDS: any = {
   'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]',
   done: 'sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]',
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
-  submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
+  submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo]',
   'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]',
@@ -2462,7 +2466,7 @@ Working the board safely (multi-agent):
   sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request a scope expansion and pause with the claim held
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
-  sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
+  sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
     executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
     (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).
   sidequest submit <id|SQ-n> --clear [-s todo]     orchestrator reset: drop a submission after a bounced integration

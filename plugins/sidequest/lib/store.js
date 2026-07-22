@@ -3626,6 +3626,21 @@ function clearSubmission(slug, idOrRef, opts) {
     return { ok: true, ticket: t, cleared };
   });
 }
+function submissionBaseCandidates(slug, idOrRef, opts) {
+  const excluded = idOrRef == null ? null : getTicket(slug, idOrRef);
+  const integratedOnly = !!(opts && opts.integratedOnly);
+  const commits = /* @__PURE__ */ new Set();
+  for (const ticket of listTickets(slug)) {
+    if (excluded && ticket.id === excluded.id) continue;
+    const submission = ticket.submission;
+    const commit = String(submission && submission.commit || "").trim().toLowerCase();
+    const rangeCommits = submission && Array.isArray(submission.commits) ? submission.commits : [];
+    if (!submission || !SUBMISSION_COMMIT_RE.test(commit) || !SUBMISSION_COMMIT_RE.test(String(submission.base || "")) || !rangeCommits.length || String(rangeCommits[rangeCommits.length - 1]).trim().toLowerCase() !== commit) continue;
+    if (integratedOnly && !submission.integratedAt) continue;
+    commits.add(commit);
+  }
+  return Array.from(commits);
+}
 function submissionsPayload(slug) {
   const tickets = listTickets(slug).filter((t) => !t.archived && t.status !== "done" && pendingSubmission(t)).sort((a, b) => String(a.submission.at).localeCompare(String(b.submission.at))).map((t) => ({
     ref: t.ref,
@@ -4790,6 +4805,7 @@ module.exports = {
   submitTicket,
   clearSubmission,
   pendingSubmission,
+  submissionBaseCandidates,
   submissionsPayload,
   claimNext,
   assignTicket,

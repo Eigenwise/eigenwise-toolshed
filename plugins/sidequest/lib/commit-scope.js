@@ -306,28 +306,57 @@ function submissionRange(cwd, options) {
   if (recordedUpstream && !isAncestor(cwd, recordedUpstream.value, currentUpstream.value)) {
     return { ok: false, reason: "expected_upstream_diverged", upstream, upstreamCommit: recordedUpstream.value, currentUpstream: currentUpstream.value };
   }
-  const requestedBase = opts.base ? resolvedCommit(cwd, opts.base) : null;
-  if (requestedBase && !requestedBase.ok) return { ok: false, reason: "missing_base", message: requestedBase.message };
-  if (requestedBase && !isAncestor(cwd, requestedBase.value, currentUpstream.value)) {
-    return { ok: false, reason: "base_not_reachable", base: requestedBase.value, upstream, upstreamCommit: currentUpstream.value };
-  }
   const mergeBase = gitResult(cwd, ["merge-base", currentUpstream.value, tip.value]);
   if (!mergeBase.ok || !mergeBase.value) return { ok: false, reason: "unrelated_history", upstream, tip: tip.value, message: mergeBase.ok ? void 0 : mergeBase.message };
-  if (requestedBase && requestedBase.value !== mergeBase.value) {
-    return { ok: false, reason: "diverged_history", base: requestedBase.value, actualBase: mergeBase.value, upstream, tip: tip.value };
+  const requestedBase = opts.base ? resolvedCommit(cwd, opts.base) : null;
+  if (requestedBase && !requestedBase.ok) return { ok: false, reason: "missing_base", message: requestedBase.message };
+  if (requestedBase && (!isAncestor(cwd, mergeBase.value, requestedBase.value) || !isAncestor(cwd, requestedBase.value, tip.value))) {
+    return { ok: false, reason: "base_not_reachable", base: requestedBase.value, actualBase: mergeBase.value, upstream, tip: tip.value };
   }
-  const commitList = gitResult(cwd, ["rev-list", "--reverse", `${mergeBase.value}..${tip.value}`]);
+  const allowedBaseNames = Array.isArray(opts.allowedBases) ? opts.allowedBases : null;
+  if (requestedBase && requestedBase.value !== mergeBase.value && allowedBaseNames) {
+    const allowedBases = new Set(allowedBaseNames.map((name) => resolvedCommit(cwd, name)).filter((candidate) => candidate.ok).map((candidate) => candidate.value));
+    if (!allowedBases.has(requestedBase.value)) {
+      return {
+        ok: false,
+        reason: "unrecognized_base",
+        base: requestedBase.value,
+        actualBase: mergeBase.value,
+        upstream,
+        tip: tip.value,
+        message: "explicit base must match a validated submitted or integrated ticket boundary"
+      };
+    }
+  }
+  let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
+  if (!requestedBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
+    const candidates = /* @__PURE__ */ new Set();
+    for (const name of opts.baseCandidates) {
+      const candidate = resolvedCommit(cwd, name);
+      if (candidate.ok && isAncestor(cwd, mergeBase.value, candidate.value) && isAncestor(cwd, candidate.value, tip.value)) {
+        candidates.add(candidate.value);
+      }
+    }
+    if (candidates.size) {
+      const history = gitResult(cwd, ["rev-list", "--reverse", `${mergeBase.value}..${tip.value}`]);
+      if (!history.ok) return { ok: false, reason: "git_error", message: history.message };
+      for (const commit of history.value.split(/\r?\n/).filter(Boolean)) {
+        if (candidates.has(commit)) effectiveBase = commit;
+      }
+    }
+  }
+  const commitList = gitResult(cwd, ["rev-list", "--reverse", `${effectiveBase}..${tip.value}`]);
   if (!commitList.ok) return { ok: false, reason: "git_error", message: commitList.message };
   const commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
-  if (!commits.length) return { ok: false, reason: "empty_range", base: mergeBase.value, tip: tip.value };
-  const parents = gitResult(cwd, ["rev-list", "--parents", `${mergeBase.value}..${tip.value}`]);
+  if (!commits.length) return { ok: false, reason: "empty_range", base: effectiveBase, tip: tip.value };
+  const parents = gitResult(cwd, ["rev-list", "--parents", `${effectiveBase}..${tip.value}`]);
   if (!parents.ok) return { ok: false, reason: "git_error", message: parents.message };
   const mergeCommit = parents.value.split(/\r?\n/).find((line) => line.trim().split(/\s+/).length > 2);
   if (mergeCommit) return { ok: false, reason: "merge_commit", commit: mergeCommit.trim().split(/\s+/)[0] };
   try {
     return {
       ok: true,
-      base: mergeBase.value,
+      base: effectiveBase,
       commit: tip.value,
       gitRef,
       upstream,

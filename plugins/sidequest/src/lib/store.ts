@@ -4245,6 +4245,23 @@ function clearSubmission(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
+function submissionBaseCandidates(slug?: any, idOrRef?: any, opts?: any) {
+  const excluded = idOrRef == null ? null : getTicket(slug, idOrRef);
+  const integratedOnly = !!(opts && opts.integratedOnly);
+  const commits = new Set<string>();
+  for (const ticket of listTickets(slug)) {
+    if (excluded && ticket.id === excluded.id) continue;
+    const submission = ticket.submission;
+    const commit = String(submission && submission.commit || '').trim().toLowerCase();
+    const rangeCommits = submission && Array.isArray(submission.commits) ? submission.commits : [];
+    if (!submission || !SUBMISSION_COMMIT_RE.test(commit) || !SUBMISSION_COMMIT_RE.test(String(submission.base || ''))
+      || !rangeCommits.length || String(rangeCommits[rangeCommits.length - 1]).trim().toLowerCase() !== commit) continue;
+    if (integratedOnly && !submission.integratedAt) continue;
+    commits.add(commit);
+  }
+  return Array.from(commits);
+}
+
 // The integration queue: every ticket parked ready-for-integration, oldest
 // submission first — the order the publish transaction integrates them in.
 function submissionsPayload(slug?: any) {
@@ -5784,6 +5801,7 @@ module.exports = {
   submitTicket,
   clearSubmission,
   pendingSubmission,
+  submissionBaseCandidates,
   submissionsPayload,
   claimNext,
   assignTicket,
