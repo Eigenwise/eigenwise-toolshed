@@ -11,6 +11,22 @@ Sidequest is a local Kanban board for Claude Code work.
 
 Reload Claude Code, then open the board with `/sidequest:board`. The dashboard spans projects, while each ticket keeps its project path and status. You can also use the Sidequest MCP tools or CLI to add, update, and close tickets.
 
+## CLI basics
+
+Check the installed CLI version with `sidequest --version` (also `sidequest -V` or `sidequest version`). Add `--help` to a command for its usage, for example `sidequest add --help`; use `sidequest help` for the full command list.
+
+Preview a ticket before writing it with `sidequest add -t "title" --category <id> --dry-run`. The preview validates the input and shows what would be created without changing the board. The flag also appears in the profile and merge command forms where those commands support a preview.
+
+## Board display names
+
+A board has a stable board ID and an editable display name. The display name is for people and can change; the board ID, repository path, ticket refs, claims, and links stay the same. Use the CLI to set or view the name:
+
+```text
+sidequest board-config --name "Client work" --project <path-or-slug>
+```
+
+The MCP equivalent is `board_config` with `name: "Client work"` and the board's project or path. Use the board ID or path when you need to target a board reliably; renaming it does not create or move a board.
+
 ## Categories and dispatch
 
 Routing profiles hold a complete category set and keep each board's policy independent. Every board points at one profile, then applies its own local rows as overrides, additions, pins, or disabled entries. A profile edit propagates to every board pointing at it; local changes stay local and the dashboard shows their provenance.
