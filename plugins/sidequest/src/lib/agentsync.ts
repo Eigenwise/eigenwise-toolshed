@@ -156,7 +156,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
     .split('{{MAX_TURNS}}').join(String(execMaxTurns(String(effort))))
     .split('{{MARKER}}').join(marker || '')
     .split('{{EXTRA_NOTE}}').join(extraNote || '')
-    .split('{{TICKET_BRIEF}}').join(ticketBrief || '');
+    .split('{{TICKET_BRIEF}}').join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief ? `\n\n${ticketBrief}` : ''}`);
 }
 
 // Appended to every shared dispatch executor's body. Effort is set via Claude
@@ -290,6 +290,12 @@ function ticketRouteMarker(ticket?: any) {
     : null;
 }
 
+function ticketCloseout(ticket?: any) {
+  const resolved = store.resolveExec(ticket.model, ticket.effort);
+  const effort = resolved && (resolved.effort || ticket.effort);
+  return resolved && effort ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}` : null;
+}
+
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
   const category = ticket.category || {};
   const links = Array.isArray(ticket.links) && ticket.links.length
@@ -299,6 +305,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
     ? ticket.files.map((file: any) => `- ${file}`).join('\n')
     : '(No files were declared.)';
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(', ') : '(No labels were recorded.)';
+  const closeout = ticketCloseout(ticket);
   const parts = [
     '',
     '## This ticket',
@@ -312,6 +319,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
     `Ticket state:\nStatus: ${ticket.status || '(Unknown)'}\nPriority: ${ticket.priority || '(Unknown)'}\nLabels: ${labels}\nStory: ${ticket.storyId || '(No story)'}\nDependencies:\n${links}`,
     `Complete comment thread (chronological, inspect every entry before implementation):\n${ticketCommentsPacket(ticket.comments)}`,
     `Attachments (inspect every readable attachment before implementation):\n${ticketAssetsPacket(ticket, slug)}`,
+    ...(closeout ? [closeout] : []),
     'Dispatch claim guard:',
     `Claim this ticket with \`--token ${nonce}\`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal.`,
   ];

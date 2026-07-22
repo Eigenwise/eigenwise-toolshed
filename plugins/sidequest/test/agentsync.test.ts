@@ -170,6 +170,7 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /absolute `worktree`/);
   assert.match(body, /Never publish, push/);
   assert.match(body, /`SendMessage` is only for `main`/);
+  assert.match(body, /Teammate subagent fan-out must omit the Agent `name` parameter/);
   assert.doesNotMatch(body, /sidequest submit <ref>/);
   assert.doesNotMatch(body, /\{\{[A-Z_]+\}\}/);
 });
@@ -326,6 +327,7 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.match(briefing, /Category: briefing\.contract/);
   assert.match(briefing, /Configured route: codex-gpt-5-6-terra \/ high/);
   assert.match(briefing, /Dispatch route: codex-gpt-5-6-terra \/ high/);
+  assert.match(briefing, /Closeout: submit for repo work; otherwise done --model codex-gpt-5-6-terra --effort high/);
   assert.match(briefing, /Priority: urgent/);
   assert.match(briefing, /Story: US-99/);
   assert.match(briefing, /blocked-by: SQ-12/);
@@ -403,6 +405,15 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
     dispatchExecutor: 'sidequest-exec-high', category: {},
   }, 'claude-token-347');
   assert.doesNotMatch(briefing, /\[sidequest-route model=/);
+  assert.match(briefing, /Closeout: submit for repo work; otherwise done --model opus --effort high/);
+});
+
+test('renderTicketBriefing omits closeout when the ticket route is unresolved', () => {
+  clearCatalog();
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-733', title: 'Unresolved route', model: 'codex-missing', effort: 'high', category: {},
+  }, 'unresolved-token');
+  assert.doesNotMatch(briefing, /Closeout:/);
 });
 
 test('workflow recipes use the dispatch pin and normalized catalog marker for Codex routes', () => {

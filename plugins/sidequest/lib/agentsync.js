@@ -76,7 +76,9 @@ function workflowRecipe(category, resolved) {
 function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2 }) {
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
   return template.split("{{NAME}}").join(String(name)).split("{{EFFORT}}").join(String(effort)).split("{{MODEL_FRONTMATTER}}").join(modelId ? `
-model: ${modelId}` : "").split("{{MAX_TURNS}}").join(String(execMaxTurns(String(effort)))).split("{{MARKER}}").join(marker || "").split("{{EXTRA_NOTE}}").join(extraNote || "").split("{{TICKET_BRIEF}}").join(ticketBrief2 || "");
+model: ${modelId}` : "").split("{{MAX_TURNS}}").join(String(execMaxTurns(String(effort)))).split("{{MARKER}}").join(marker || "").split("{{EXTRA_NOTE}}").join(extraNote || "").split("{{TICKET_BRIEF}}").join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief2 ? `
+
+${ticketBrief2}` : ""}`);
 }
 function dispatchNote(effort) {
   return `
@@ -175,11 +177,17 @@ function ticketRouteMarker(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   return resolved && resolved.backend === "codex" && resolved.dispatchModel ? routeMarker(resolved.dispatchModel, ticket.effort) : null;
 }
+function ticketCloseout(ticket) {
+  const resolved = store.resolveExec(ticket.model, ticket.effort);
+  const effort = resolved && (resolved.effort || ticket.effort);
+  return resolved && effort ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}` : null;
+}
 function ticketBrief(ticket, nonce, marker, slug) {
   const category = ticket.category || {};
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}`).join("\n") : "(No ticket dependencies were recorded.)";
   const declaredFiles = Array.isArray(ticket.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "(No labels were recorded.)";
+  const closeout = ticketCloseout(ticket);
   const parts = [
     "",
     "## This ticket",
@@ -209,6 +217,7 @@ ${links}`,
 ${ticketCommentsPacket(ticket.comments)}`,
     `Attachments (inspect every readable attachment before implementation):
 ${ticketAssetsPacket(ticket, slug)}`,
+    ...closeout ? [closeout] : [],
     "Dispatch claim guard:",
     `Claim this ticket with \`--token ${nonce}\`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal.`
   ];
