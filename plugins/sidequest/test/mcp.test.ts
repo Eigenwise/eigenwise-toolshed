@@ -513,8 +513,13 @@ test('compact comment pages are latest-first and full pages reconstruct exact ch
   const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'complete-comment-briefing' });
   const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
   const completePacket = agentsync.ticketCommentsPacket(store.getTicket(project, ticket.ref).comments);
+  assert.ok(Buffer.byteLength(completePacket) <= 6 * 1024, `briefing packet is ${Buffer.byteLength(completePacket)} bytes`);
   assert.ok(briefing.includes(completePacket));
-  for (const body of bodies) assert.ok(briefing.includes(body));
+  assert.match(briefing, /Comment packet truncated/);
+  assert.match(briefing, /compact comments reads \(latest-first\)/);
+  assert.match(briefing, /comment-7:/);
+  assert.ok(briefing.indexOf('comment-7:') < briefing.indexOf('comment-6:'));
+  assert.doesNotMatch(briefing, new RegExp(`comment-0: y{${bodies[0]!.length - 1000}}`));
 
   for (const args of [{ cursor: 'bad' }, { cursor: '-1' }, { limit: 0 }, { limit: 101 }]) {
     const invalid = await callToolRaw('comments', { project, ref: ticket.ref, ...args });

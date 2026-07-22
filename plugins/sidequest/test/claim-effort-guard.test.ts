@@ -380,8 +380,12 @@ test('serialized dispatch spawn stays below the launch ceiling while briefing ke
   const briefing = runCli(['briefing', created.ref, '--token', dispatched.token]);
   assert.equal(briefing.status, 0, briefing.stderr);
   assert.match(briefing.stdout, /description-marker-/);
-  assert.ok(briefing.stdout.includes(hugeDescription));
-  for (const body of comments) assert.ok(briefing.stdout.includes(body));
+  assert.match(briefing.stdout, /Description truncated at 8 KB/);
+  assert.doesNotMatch(briefing.stdout, new RegExp(`d{${hugeDescription.length - 1000}}`));
+  assert.match(briefing.stdout, /First comment marker/);
+  assert.match(briefing.stdout, /Second comment marker/);
+  assert.match(briefing.stdout, /Comment packet truncated/);
+  assert.match(briefing.stdout, /compact comments reads \(latest-first\)/);
   assert.match(briefing.stdout, /asset-0-/);
   assert.match(briefing.stdout, /asset-119-/);
 });

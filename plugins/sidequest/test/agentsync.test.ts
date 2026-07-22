@@ -62,6 +62,45 @@ test('SQ-677: briefing comments preserve the full chronological durable thread b
   assert.strictEqual(agentsync.ticketCommentsPacket(comments), expected);
 });
 
+test('SQ-760: oversized briefing packets stay bounded and direct compact comment reads', () => {
+  const description = `Start with this scope.\n\n${'測試 '.repeat(5000)}`;
+  const comments = Array.from({ length: 20 }, (_, index) => ({
+    by: `worker-${index + 1}`,
+    kind: index === 0 ? 'decision' : 'comment',
+    at: `2026-07-22T00:${String(index).padStart(2, '0')}:00.000Z`,
+    body: index === 19
+      ? 'Decision:\nKeep this latest decision verbatim in the packet.'
+      : `Comment ${index + 1}: ${'x'.repeat(1000)}`,
+  }));
+  const ticket = {
+    id: 'bounded-briefing', ref: 'SQ-760', title: 'Bound briefing packets', description,
+    model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high', category: {},
+    executorVerify: 'node --test plugins/sidequest/test/agentsync.test.ts',
+    files: ['plugins/sidequest/src/lib/agentsync.ts'],
+    assets: ['briefing.png'], comments,
+  };
+
+  const packet = agentsync.ticketCommentsPacket(comments);
+  assert.ok(Buffer.byteLength(packet) <= 6 * 1024, `comment packet is ${Buffer.byteLength(packet)} bytes`);
+  assert.match(packet, /### Comment 20/);
+  assert.match(packet, /Keep this latest decision verbatim in the packet\./);
+  assert.ok(packet.indexOf('### Comment 20') < packet.indexOf('### Comment 19'));
+  assert.doesNotMatch(packet, /Comment 2: x/);
+  assert.match(packet, /Comment packet truncated/);
+  assert.match(packet, /compact comments reads \(latest-first\)/);
+  assert.match(packet, /decision or constraint is in omitted history: fetch the full thread/);
+
+  const briefing = agentsync.renderTicketBriefing(ticket, 'bounded-briefing-token');
+  const descriptionPacket = briefing.match(/Description:\n([\s\S]*?)\n\nCategory contract:/);
+  assert.ok(descriptionPacket);
+  assert.ok(Buffer.byteLength(descriptionPacket![1]) <= 8 * 1024, `description packet is ${Buffer.byteLength(descriptionPacket![1])} bytes`);
+  assert.match(descriptionPacket![1], /Description truncated at 8 KB/);
+  assert.match(briefing, /Comment packet \(newest-first excerpts; read full history only when flagged below\):/);
+  assert.match(briefing, new RegExp(ticket.executorVerify));
+  assert.match(briefing, /plugins\/sidequest\/src\/lib\/agentsync\.ts/);
+  assert.match(briefing, /briefing\.png/);
+});
+
 test('generation-two marker cannot be mistaken for the legacy marker', () => {
   assert.ok(!agentsync.MARKER.includes(agentsync.LEGACY_MARKER));
 });

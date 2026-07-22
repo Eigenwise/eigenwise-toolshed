@@ -254,16 +254,108 @@ function waitForNativeAgentReload(waitMs?: any) {
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function ticketCommentsPacket(comments?: any) {
-  if (!Array.isArray(comments) || !comments.length) return '(No ticket comments were recorded.)';
-  return comments.map((comment: any, index: number) => [
-    `### Comment ${index + 1}`,
+const TICKET_DESCRIPTION_MAX_BYTES = 8 * 1024;
+const TICKET_COMMENTS_MAX_BYTES = 6 * 1024;
+const TICKET_COMMENT_BODY_MAX_BYTES = 768;
+const TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES = 4 * 1024;
+const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
+
+function byteLength(value?: any) {
+  return Buffer.byteLength(String(value || ''), 'utf8');
+}
+
+function utf8Excerpt(value?: any, maxBytes?: any) {
+  const source = String(value || '');
+  const limit = Math.max(0, Number(maxBytes) || 0);
+  if (byteLength(source) <= limit) return { text: source, truncated: false };
+  let text = '';
+  let used = 0;
+  for (const character of source) {
+    const size = byteLength(character);
+    if (used + size > limit) break;
+    text += character;
+    used += size;
+  }
+  return { text, truncated: true };
+}
+
+function boundedPacket(value?: any, maxBytes?: any, marker?: any) {
+  const source = String(value || '');
+  const limit = Math.max(0, Number(maxBytes) || 0);
+  if (byteLength(source) <= limit) return source;
+  const suffix = String(marker || '');
+  return `${utf8Excerpt(source, Math.max(0, limit - byteLength(suffix))).text}${suffix}`;
+}
+
+function commentBody(comment?: any) {
+  return comment && Object.hasOwn(comment, 'body') ? String(comment.body) : String(comment || '');
+}
+
+function isPriorityComment(comment?: any) {
+  const kind = String(comment && comment.kind || '');
+  const body = commentBody(comment);
+  return /\b(?:decision|constraint)\b/i.test(kind)
+    || /(?:^|\n)\s*(?:decision|constraint)\s*:/i.test(body);
+}
+
+function commentPacketEntry(comment?: any, index?: any, bodyLimit?: any) {
+  const body = commentBody(comment);
+  const marker = '\n\n[Comment body excerpt truncated. Fetch specifics with compact comments reads.]';
+  const excerpt = boundedPacket(body, bodyLimit, marker);
+  return [
+    `### Comment ${Number(index) + 1}`,
     `Author: ${comment && comment.by ? comment.by : 'unknown'}`,
     `Kind: ${comment && comment.kind ? comment.kind : 'comment'}`,
     `Recorded: ${comment && comment.at ? comment.at : '(timestamp unavailable)'}`,
     'Body:',
-    comment && Object.hasOwn(comment, 'body') ? String(comment.body) : String(comment || ''),
-  ].join('\n')).join('\n\n');
+    excerpt,
+  ].join('\n');
+}
+
+function commentPacketMarker(omitted?: any, excerpts?: any, decisionInHistory?: any) {
+  const omittedText = omitted ? ` ${omitted} earlier comment(s) were omitted.` : '';
+  const excerptText = excerpts ? ` ${excerpts} included comment body excerpt(s) were truncated.` : '';
+  const historyText = decisionInHistory
+    ? ' A decision or constraint is in omitted history: fetch the full thread.'
+    : ' Read the full thread only when this packet flags a decision or constraint in omitted history.';
+  return `[Comment packet truncated.${omittedText}${excerptText} Fetch specifics with compact comments reads (latest-first).${historyText}]`;
+}
+
+function ticketDescriptionPacket(description?: any) {
+  return boundedPacket(
+    description || '(No additional description was recorded.)',
+    TICKET_DESCRIPTION_MAX_BYTES,
+    '\n\n[Description truncated at 8 KB. Fetch ticket specifics before acting.]',
+  );
+}
+
+function ticketCommentsPacket(comments?: any) {
+  if (!Array.isArray(comments) || !comments.length) return '(No ticket comments were recorded.)';
+  const complete = comments.map((comment: any, index: number) => commentPacketEntry(comment, index, Number.MAX_SAFE_INTEGER)).join('\n\n');
+  if (byteLength(complete) <= TICKET_COMMENTS_MAX_BYTES) return complete;
+
+  const selected: { entry: string; priority: boolean; truncated: boolean }[] = [];
+  let bytes = 0;
+  for (let index = comments.length - 1; index >= 0; index--) {
+    const comment = comments[index];
+    const priority = isPriorityComment(comment);
+    const entry = commentPacketEntry(
+      comment,
+      index,
+      priority ? TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES : TICKET_COMMENT_BODY_MAX_BYTES,
+    );
+    const separatorBytes = selected.length ? byteLength('\n\n') : 0;
+    if (bytes + separatorBytes + byteLength(entry) > TICKET_COMMENTS_MAX_BYTES - TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES) break;
+    selected.push({ entry, priority, truncated: entry.includes('[Comment body excerpt truncated.') });
+    bytes += separatorBytes + byteLength(entry);
+  }
+
+  const omitted = comments.length - selected.length;
+  const excerpts = selected.filter((entry) => entry.truncated).length;
+  const decisionInHistory = comments.slice(0, omitted).some(isPriorityComment);
+  const marker = commentPacketMarker(omitted, excerpts, decisionInHistory);
+  const entries = selected.map((entry) => entry.entry).join('\n\n');
+  return `${entries}${entries ? '\n\n' : ''}${marker}`;
 }
 
 function ticketAssetsPacket(ticket?: any, slug?: any) {
@@ -304,6 +396,10 @@ function ticketWorktreeSetup(ticket?: any, slug?: any) {
 
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
   const category = ticket.category || {};
+  const comments = ticketCommentsPacket(ticket.comments);
+  const commentHeading = comments.includes('[Comment packet truncated.')
+    ? 'Comment packet (newest-first excerpts; read full history only when flagged below):'
+    : 'Complete comment thread (chronological, inspect every entry before implementation):';
   const links = Array.isArray(ticket.links) && ticket.links.length
     ? ticket.links.map((link: any) => `- ${link.type || 'related'}: ${link.ref || '(unknown ticket)'}`).join('\n')
     : '(No ticket dependencies were recorded.)';
@@ -318,14 +414,14 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
     '## This ticket',
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || '(Untitled ticket)'}`,
-    `Description:\n${ticket.description || '(No additional description was recorded.)'}`,
+    `Description:\n${ticketDescriptionPacket(ticket.description)}`,
     `Category contract:\nCategory: ${category.id || ticket.categoryId || '(Unclassified)'}\nConfigured route: ${category.route?.model || '(No configured route)'} / ${category.route?.effort || '(No configured effort)'}\nDispatch route: ${ticket.model || category.route?.model || '(No route)'} / ${ticket.effort || category.route?.effort || '(No effort)'}\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
     `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
     ...(worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : []),
     `Declared files:\n${declaredFiles}`,
     `Ticket state:\nStatus: ${ticket.status || '(Unknown)'}\nPriority: ${ticket.priority || '(Unknown)'}\nLabels: ${labels}\nStory: ${ticket.storyId || '(No story)'}\nDependencies:\n${links}`,
-    `Complete comment thread (chronological, inspect every entry before implementation):\n${ticketCommentsPacket(ticket.comments)}`,
+    `${commentHeading}\n${comments}`,
     `Attachments (inspect every readable attachment before implementation):\n${ticketAssetsPacket(ticket, slug)}`,
     ...(closeout ? [closeout] : []),
     'Dispatch claim guard:',
