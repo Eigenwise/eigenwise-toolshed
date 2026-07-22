@@ -122,6 +122,14 @@ Also check what's already there:
   interview so you propose rather than interrogate.
 - **Git?** Note whether it's a git repo (affects the commit reminder and the map's state file).
 
+### Pre-enable Sidequest lookup
+
+When this flow needs Sidequest before reload, read `~/.claude/plugins/installed_plugins.json` and select the
+`sidequest@eigenwise-toolshed` entry for the current project (or its user-scope entry). Its `installPath` must
+match `~/.claude/plugins/cache/eigenwise-toolshed/sidequest/<version>` and its final segment must equal the
+entry's `version`; otherwise stop and ask the user to reinstall Sidequest. Invoke
+`node "<installPath>/plugins/sidequest/bin/sidequest.js" profile list`. Never PATH-probe or search the cache.
+
 ### Routing profile
 
 When Sidequest is selected, make one routing choice immediately after this scan and before the Phase 1
