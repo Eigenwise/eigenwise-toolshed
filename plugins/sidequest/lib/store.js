@@ -3672,6 +3672,20 @@ function claimPulse(claim, now) {
     ageMs: Number.isFinite(atMs) ? Math.max(0, now - atMs) : null
   };
 }
+function boundedExcerpt(value, maxChars = 1200) {
+  const text = String(value || "");
+  if (text.length <= maxChars) return { text, length: text.length, truncated: false };
+  const tailLength = Math.min(240, Math.floor(maxChars / 4));
+  const marker = `
+[… ${text.length - maxChars} more chars; use full:true …]
+`;
+  const headLength = maxChars - tailLength - marker.length;
+  return {
+    text: `${text.slice(0, headLength)}${marker}${text.slice(-tailLength)}`,
+    length: text.length,
+    truncated: true
+  };
+}
 function lastCommentPulse(ticket) {
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   const comment = comments[comments.length - 1];
@@ -3681,6 +3695,19 @@ function lastCommentPulse(ticket) {
     by: comment.by,
     kind: comment.kind,
     body: String(comment.body || "").slice(0, 100)
+  };
+}
+function latestCommentExcerpt(ticket) {
+  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  const comment = comments[comments.length - 1];
+  if (!comment) return null;
+  const body = boundedExcerpt(comment.body, 200);
+  return {
+    by: comment.by,
+    kind: comment.kind,
+    body: body.text,
+    bodyLength: body.length,
+    bodyTruncated: body.truncated
   };
 }
 function gitPulse(projectPath, files) {
@@ -3767,6 +3794,7 @@ function changesPayload(slug, since) {
     status: ticket.status,
     lastEventType: ticket.lastEventType || null,
     lastEventSource: ticket.lastEventSource || null,
+    lastComment: latestCommentExcerpt(ticket),
     claim: claimPulse(ticket.claim, Date.now()),
     updatedAt: ticket.updatedAt
   }));
@@ -4321,6 +4349,7 @@ module.exports = {
   readyPayload,
   pulsePayload,
   changesPayload,
+  boundedExcerpt,
   archiveTicket,
   unarchiveTicket,
   archiveAllDone,

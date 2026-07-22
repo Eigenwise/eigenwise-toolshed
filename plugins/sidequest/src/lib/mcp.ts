@@ -46,6 +46,8 @@ const SERVER_NAME = 'sidequest';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 const CATEGORY_TAXONOMY_WARNING = 'Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.';
 let categoryListServed = false;
+const COMMENT_REPOLL_NUDGE_MS = 5 * 60 * 1000;
+const commentReads = new Map<string, { atMs: number; latestCommentId: string | null; serverTime: string }>();
 
 function serverVersion() {
   try {
@@ -325,23 +327,10 @@ function outOfScopeComment(paths: any[]) {
 }
 
 const COMPACT_RESULT_MAX_BYTES = 13000;
-const COMPACT_BODY_MAX_CHARS = 1200;
 const COMPACT_PULSE_BODY_MAX_CHARS = 280;
 const PAGED_FULL_DEFAULT_LIMIT = 10;
 const PAGE_LIMIT_MAX = 100;
-
-function boundedExcerpt(value?: any, maxChars = COMPACT_BODY_MAX_CHARS) {
-  const text = String(value || '');
-  if (text.length <= maxChars) return { text, length: text.length, truncated: false };
-  const tailLength = Math.min(240, Math.floor(maxChars / 4));
-  const marker = `\n[… ${text.length - maxChars} more chars; use full:true …]\n`;
-  const headLength = maxChars - tailLength - marker.length;
-  return {
-    text: `${text.slice(0, headLength)}${marker}${text.slice(-tailLength)}`,
-    length: text.length,
-    truncated: true,
-  };
-}
+const boundedExcerpt = store.boundedExcerpt;
 
 function compactComment(comment?: any) {
   const body = boundedExcerpt(comment.body);
@@ -423,6 +412,21 @@ function pagedPayload(rows: any[], args: any, action: string, buildPayload: any,
   return pageRows(rows, pagingArgs, action, buildPayload, full ? null : COMPACT_RESULT_MAX_BYTES);
 }
 
+function commentsPayload(slug: string, ticket: any, args: any, payload: any) {
+  if (args.cursor != null) return payload;
+  const now = Date.now();
+  const key = JSON.stringify([slug, ticket.ref]);
+  const latest = Array.isArray(ticket.comments) ? ticket.comments[ticket.comments.length - 1] : null;
+  const latestCommentId = latest ? String(latest.id || latest.at || '') : null;
+  const previous = commentReads.get(key);
+  const serverTime = new Date(now).toISOString();
+  commentReads.set(key, { atMs: now, latestCommentId, serverTime });
+  if (!previous || now - previous.atMs > COMMENT_REPOLL_NUDGE_MS || previous.latestCommentId !== latestCommentId) return payload;
+  return Object.assign({}, payload, {
+    hint: `No new comments since your prior read; poll progress with changes --since ${previous.serverTime}.`,
+  });
+}
+
 function compactPulse(pulse?: any) {
   const lastComment = pulse.lastComment && Object.assign({}, pulse.lastComment, {
     body: boundedExcerpt(pulse.lastComment.body, COMPACT_PULSE_BODY_MAX_CHARS).text,
@@ -486,7 +490,7 @@ function withoutCategories(payload?: any) {
 const TOOLS: ToolDefinition[] = [
   {
     name: 'list',
-    description: 'List tickets, paged; compact rows by default. Follow nextCursor until null; detail:true adds bodies + threads.',
+    description: 'For liveness/progress polling use changes/pulse, not this. List tickets, paged; compact rows by default. Follow nextCursor until null; detail:true adds bodies + threads.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -543,7 +547,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'changes',
-    description: 'Compact ticket delta since an ISO timestamp. Omit since for the last 60 minutes. Returns serverTime to use as the next since value.',
+    description: 'THE polling read for liveness/progress: compact ticket delta since an ISO timestamp. Omit since for the last 60 minutes. Returns serverTime to use as the next since value.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1026,7 +1030,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'comments',
-    description: 'Read ticket comments before work; compact pages are latest-first. Follow nextCursor; full:true is chronological and exact.',
+    description: 'For liveness/progress polling use changes/pulse, not this. Read ticket comments before work; compact pages are latest-first. Follow nextCursor; full:true is chronological and exact.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1055,8 +1059,8 @@ const TOOLS: ToolDefinition[] = [
         order: full ? 'chronological' : 'latest-first',
       });
       const paged = pagedPayload(comments, args, 'comments', buildPayload, full);
-      if (paged) return paged;
-      return { ref: t.ref, comments };
+      const payload = paged || { ref: t.ref, comments };
+      return commentsPayload(slug, t, args, payload);
     },
   },
   {

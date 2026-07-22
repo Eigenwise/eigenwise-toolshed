@@ -147,9 +147,9 @@ optionally `--status todo`).
 - **Stale claims** reclaim after a TTL (`SIDEQUEST_CLAIM_TTL_MIN`); this session's claims
   auto-release at session end. Dead executor past the TTL: salvage its worktree FIRST, then
   `release SQ-3 --by <dead-worker-id> --status todo`, re-read, spawn one replacement.
-- Native Agent results arrive automatically. **Never use `TaskOutput`** for a Sidequest task ID
-  or launch name. For liveness, `pulse <ref>` / `changes --since`;
-  `TaskStop` only after terminal board evidence.
+- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID
+  or launch name. THE polling read: `changes --since`; `pulse <ref>` for liveness.
+  `TaskStop` only after terminal evidence.
   **Never proxy-wait** either: no shell/`Monitor`/cron task whose only job is waiting for an
   executor or polling for its artifact (a one-shot local readiness watch is fine).
 

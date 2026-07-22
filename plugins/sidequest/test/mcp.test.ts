@@ -180,6 +180,9 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
+  assert.match(tools.find((tool: any) => tool.name === 'list').description, /^For liveness\/progress polling use changes\/pulse, not this\./);
+  assert.match(tools.find((tool: any) => tool.name === 'comments').description, /^For liveness\/progress polling use changes\/pulse, not this\./);
+  assert.match(tools.find((tool: any) => tool.name === 'changes').description, /^THE polling read/);
   const comments = tools.find((tool: any) => tool.name === 'comments');
   assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref']);
   assert.equal(comments.inputSchema.properties.full.type, 'boolean');
@@ -503,6 +506,31 @@ test('compact comment pages are latest-first and full pages reconstruct exact ch
   }
   const pastEnd = await callToolRaw('comments', { project, ref: ticket.ref, cursor: '9' });
   assert.equal(pastEnd.isError, true);
+});
+
+test('MCP polling redirects repeat comment reads and changes includes bounded comment excerpts', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-polling-diet-')).slug;
+  const ticket = store.createTicket(project, { title: 'polling diet fixture' });
+  const body = `latest progress: ${'x'.repeat(500)}`;
+  const since = new Date(Date.now() - 1000).toISOString();
+  assert.equal(store.addComment(project, ticket.ref, { body, by: 'polling-worker', kind: 'comment', source: 'mcp' }).ok, true);
+
+  const first = await callTool('comments', { project, ref: ticket.ref });
+  assert.equal(first.hint, undefined);
+  const second = await callTool('comments', { project, ref: ticket.ref });
+  assert.match(second.hint, /^No new comments since your prior read; poll progress with changes --since \d{4}-\d\d-\d\dT/);
+
+  const changes = await callTool('changes', { project, since });
+  const changed = changes.tickets.find((entry: any) => entry.ref === ticket.ref);
+  assert.deepEqual(changed.lastComment, {
+    by: 'polling-worker',
+    kind: 'comment',
+    body: changed.lastComment.body,
+    bodyLength: body.length,
+    bodyTruncated: true,
+  });
+  assert.ok(changed.lastComment.body.length <= 200);
+  assert.match(changed.lastComment.body, /use full:true/);
 });
 
 test('MCP commit and submit finish an isolated worktree without a PATH command', async () => {

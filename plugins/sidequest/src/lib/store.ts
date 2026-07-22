@@ -4437,6 +4437,19 @@ function claimPulse(claim?: any, now?: any) {
   };
 }
 
+function boundedExcerpt(value?: any, maxChars = 1200) {
+  const text = String(value || '');
+  if (text.length <= maxChars) return { text, length: text.length, truncated: false };
+  const tailLength = Math.min(240, Math.floor(maxChars / 4));
+  const marker = `\n[… ${text.length - maxChars} more chars; use full:true …]\n`;
+  const headLength = maxChars - tailLength - marker.length;
+  return {
+    text: `${text.slice(0, headLength)}${marker}${text.slice(-tailLength)}`,
+    length: text.length,
+    truncated: true,
+  };
+}
+
 function lastCommentPulse(ticket?: any) {
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   const comment = comments[comments.length - 1];
@@ -4446,6 +4459,20 @@ function lastCommentPulse(ticket?: any) {
     by: comment.by,
     kind: comment.kind,
     body: String(comment.body || '').slice(0, 100),
+  };
+}
+
+function latestCommentExcerpt(ticket?: any) {
+  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  const comment = comments[comments.length - 1];
+  if (!comment) return null;
+  const body = boundedExcerpt(comment.body, 200);
+  return {
+    by: comment.by,
+    kind: comment.kind,
+    body: body.text,
+    bodyLength: body.length,
+    bodyTruncated: body.truncated,
   };
 }
 
@@ -4541,6 +4568,7 @@ function changesPayload(slug?: any, since?: any) {
       status: ticket.status,
       lastEventType: ticket.lastEventType || null,
       lastEventSource: ticket.lastEventSource || null,
+      lastComment: latestCommentExcerpt(ticket),
       claim: claimPulse(ticket.claim, Date.now()),
       updatedAt: ticket.updatedAt,
     }));
@@ -5284,6 +5312,7 @@ module.exports = {
   readyPayload,
   pulsePayload,
   changesPayload,
+  boundedExcerpt,
   archiveTicket,
   unarchiveTicket,
   archiveAllDone,

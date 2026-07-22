@@ -30,11 +30,12 @@ test('workflow routing guidance uses the live recipe wiring surface', () => {
   assert.match(routingGuide, /authentication failure remains a spawn-time error/);
 });
 
-test('sidequest skill bans TaskOutput for native Agent launches', () => {
-  assert.match(skill, /Native Agent results arrive automatically/);
+test('sidequest guidance makes changes the polling read and bans TaskOutput', () => {
+  assert.match(skill, /Agents report automatically/);
   assert.match(skill, /Never use `TaskOutput`/);
-  assert.match(skill, /`pulse <ref>` \/ `changes --since`/);
-  assert.match(skill, /`TaskStop` only after terminal board evidence/);
+  assert.match(skill, /THE polling read: `changes --since`/);
+  assert.match(skill, /`pulse <ref>` for liveness/);
+  assert.match(skill, /`TaskStop` only after terminal evidence/);
 });
 
 test('sidequest guidance bans proxy waiters for executors', () => {
