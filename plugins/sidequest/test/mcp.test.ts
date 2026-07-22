@@ -90,9 +90,10 @@ function gitAt(cwd?: any, args?: any) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
 }
 
-function runCli(args?: any) {
+function runCli(args?: any, cwd?: any) {
   const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
   const output = execFileSync(process.execPath, [cli, ...args], {
+    cwd,
     encoding: 'utf8', windowsHide: true,
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
   });
@@ -124,6 +125,18 @@ function createGitWorktree() {
   gitAt(worktree, ['remote', 'add', 'origin', remote]);
   gitAt(worktree, ['push', '-u', 'origin', 'main']);
   return worktree;
+}
+
+function stageLongOutOfScopeChangeSet(worktree?: any) {
+  fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'lib', 'allowed.js'), 'allowed\n');
+  const paths = Array.from({ length: 180 }, (_, index) => `foreign/${String(index).padStart(3, '0')}-${'x'.repeat(110)}.js`);
+  for (const file of paths) {
+    fs.mkdirSync(path.dirname(path.join(worktree, file)), { recursive: true });
+    fs.writeFileSync(path.join(worktree, file), 'foreign\n');
+  }
+  gitAt(worktree, ['add', '.']);
+  return paths;
 }
 
 test('initialize returns a protocol version, tools capability, and serverInfo', async () => {
@@ -537,6 +550,69 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
+});
+
+test('MCP commit truncates out-of-scope comments and retains successful commits on comment failures', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'MCP out-of-scope warning', files: ['lib/allowed.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise bounded MCP commit warnings',
+  });
+  const by = 'mcp-bounded-warning-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The MCP warning fixture requires a local direct claim.' })).ok, true);
+  const foreignPaths = stageLongOutOfScopeChangeSet(worktree);
+  const committed = await callTool('commit', { project, ref: ticket.ref, by, message: 'MCP bounded warning', worktree });
+  const comment = store.getTicket(project, ticket.ref).comments.at(-1);
+  assert.ok(committed.commit, 'commit succeeds with long unscoped path lists');
+  assert.ok(comment.body.length <= 16000, `comment is ${comment.body.length} characters`);
+  assert.match(comment.body, /^out-of-scope changes present: foreign\/000-/);
+  assert.match(comment.body, /… \+\d+ more \(run git status in the worktree for the full list\)$/);
+  assert.equal(gitAt(worktree, ['diff', '--cached', '--name-only']).split('\n').length, foreignPaths.length);
+
+  const failedCommentWorktree = createGitWorktree();
+  const failedCommentProject = store.ensureProject(failedCommentWorktree).slug;
+  const failedCommentTicket = store.createTicket(failedCommentProject, {
+    title: 'MCP comment failure warning', files: ['lib/allowed.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm comments cannot turn committed MCP work into a tool error',
+  });
+  const failedCommentBy = 'mcp-comment-failure-worker';
+  assert.equal((await callTool('claim', { project: failedCommentProject, ref: failedCommentTicket.ref, by: failedCommentBy, direct: true, reason: 'The MCP comment failure fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(failedCommentWorktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(failedCommentWorktree, 'lib', 'allowed.js'), 'allowed\n');
+  fs.writeFileSync(path.join(failedCommentWorktree, 'foreign.js'), 'foreign\n');
+  gitAt(failedCommentWorktree, ['add', '.']);
+  const addComment = store.addComment;
+  store.addComment = () => ({ ok: false, reason: 'too_long' });
+  try {
+    const warning = await callTool('commit', {
+      project: failedCommentProject, ref: failedCommentTicket.ref, by: failedCommentBy,
+      message: 'MCP comment failure warning', worktree: failedCommentWorktree,
+    });
+    assert.ok(warning.commit, 'the commit acknowledgement stays successful');
+    assert.deepEqual(warning.warnings, ["out-of-scope paths weren't recorded: too_long"]);
+  } finally {
+    store.addComment = addComment;
+  }
+});
+
+test('CLI commit truncates out-of-scope comments', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'CLI out-of-scope warning', files: ['lib/allowed.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise bounded CLI commit warnings',
+  });
+  const by = 'cli-bounded-warning-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The CLI warning fixture requires a local direct claim.' })).ok, true);
+  stageLongOutOfScopeChangeSet(worktree);
+  const committed = runCli(['commit', ticket.ref, '--project', project, '--by', by, '--message', 'CLI bounded warning', '--json'], worktree);
+  const comment = store.getTicket(project, ticket.ref).comments.at(-1);
+  assert.ok(committed.commit, 'CLI commit succeeds with long unscoped path lists');
+  assert.equal(committed.warnings, undefined, 'a recorded warning does not add a failure warning');
+  assert.ok(comment.body.length <= 16000, `comment is ${comment.body.length} characters`);
+  assert.match(comment.body, /^out-of-scope changes present: foreign\/000-/);
+  assert.match(comment.body, /… \+\d+ more \(run git status in the worktree for the full list\)$/);
 });
 
 test('MCP submit refuses out-of-scope committed ranges', async () => {

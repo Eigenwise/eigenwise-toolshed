@@ -825,6 +825,19 @@ async function cmdGroomClose(opts, positional) {
   if (res.ok) console.log(`✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
   else reportClaimFailure("groom-close", idOrRef, res, meta);
 }
+const OUT_OF_SCOPE_COMMENT_MAX = 16e3;
+function outOfScopeComment(paths) {
+  const prefix = "out-of-scope changes present: ";
+  const complete = `${prefix}${paths.join(", ")} — widen scope + second commit, or discard`;
+  if (complete.length <= OUT_OF_SCOPE_COMMENT_MAX) return complete;
+  for (let shown = paths.length - 1; shown >= 0; shown -= 1) {
+    const omitted = paths.length - shown;
+    const suffix = `… +${omitted} more (run git status in the worktree for the full list)`;
+    const body = `${prefix}${paths.slice(0, shown).join(", ")}${shown ? " " : ""}${suffix}`;
+    if (body.length <= OUT_OF_SCOPE_COMMENT_MAX) return body;
+  }
+  return `${prefix}… +${paths.length} more (run git status in the worktree for the full list)`;
+}
 async function cmdCommit(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('commit: pass a ticket ref, e.g. sidequest commit SQ-3 --by me --message "fix the thing".');
@@ -842,21 +855,30 @@ async function cmdCommit(opts, positional) {
     if (result.reason === "no_existing_scope") fail(`commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.`);
     fail(`commit: git failed: ${result.message || result.reason}`);
   }
+  const warnings = [];
   if (result.unscopedPaths.length) {
-    const body = `out-of-scope changes present: ${result.unscopedPaths.join(", ")} — widen scope + second commit, or discard`;
-    const comment = store.addComment(slug, ticket.ref, { by, body, kind: "comment", source: "cli" });
-    if (!comment.ok) fail(`commit: committed ${ticket.ref}, but couldn't record out-of-scope paths: ${comment.reason}`);
+    const comment = store.addComment(slug, ticket.ref, { by, body: outOfScopeComment(result.unscopedPaths), kind: "comment", source: "cli" });
+    if (!comment.ok) warnings.push(`out-of-scope paths weren't recorded: ${comment.reason}`);
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ project: slug, ref: ticket.ref, commit: result.commit, paths: result.paths, missingScopes: result.missingScopes, unscopedPaths: result.unscopedPaths }, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({
+      project: slug,
+      ref: ticket.ref,
+      commit: result.commit,
+      paths: result.paths,
+      missingScopes: result.missingScopes,
+      unscopedPaths: result.unscopedPaths,
+      ...warnings.length ? { warnings } : {}
+    }, null, 2) + "\n");
     return;
   }
-  const warnings = [
+  warnings.push(
     result.missingScopes.length ? `missing declared paths: ${result.missingScopes.join(", ")}` : "",
     result.unscopedPaths.length ? `out-of-scope changes: ${result.unscopedPaths.join(", ")}` : ""
-  ].filter(Boolean);
-  console.log(`✓ ${ticket.ref} committed ${result.commit.slice(0, 12)} (${result.paths.join(", ")})${warnings.length ? `
-  ${warnings.join("\n  ")}` : ""}`);
+  );
+  const visibleWarnings = warnings.filter(Boolean);
+  console.log(`✓ ${ticket.ref} committed ${result.commit.slice(0, 12)} (${result.paths.join(", ")})${visibleWarnings.length ? `
+  ${visibleWarnings.join("\n  ")}` : ""}`);
 }
 function verifyEmbedsWorktreeRoot(verify, worktreeRoot) {
   if (typeof verify !== "string" || !verify || !worktreeRoot) return false;
