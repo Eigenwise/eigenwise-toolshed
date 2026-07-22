@@ -307,6 +307,7 @@ function mutationAck(project?: any, result?: any, changed?: any) {
 
 const COMPACT_RESULT_MAX_BYTES = 13000;
 const COMPACT_BODY_MAX_CHARS = 1200;
+const COMPACT_PULSE_BODY_MAX_CHARS = 280;
 const PAGED_FULL_DEFAULT_LIMIT = 10;
 const PAGE_LIMIT_MAX = 100;
 
@@ -404,13 +405,16 @@ function pagedPayload(rows: any[], args: any, action: string, buildPayload: any,
 }
 
 function compactPulse(pulse?: any) {
+  const lastComment = pulse.lastComment && Object.assign({}, pulse.lastComment, {
+    body: boundedExcerpt(pulse.lastComment.body, COMPACT_PULSE_BODY_MAX_CHARS).text,
+  });
   return {
     ref: pulse.ref,
     status: pulse.status,
     claim: pulse.claim,
     working: pulse.working,
     lastActivityAt: pulse.lastActivityAt,
-    lastComment: pulse.lastComment,
+    lastComment,
     dispatch: pulse.dispatch && {
       state: pulse.dispatch.state,
       executor: pulse.dispatch.executor,

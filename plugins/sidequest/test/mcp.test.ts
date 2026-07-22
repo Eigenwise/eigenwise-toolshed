@@ -263,6 +263,44 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(pulsePayload.dispatch.tokenPrefix, undefined);
 });
 
+test('compact pulse bounds latest comment bodies and list rows omit ticket bodies', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-compact-pulse-body-')).slug;
+  const body = `latest comment body: ${'x'.repeat(6000)}`;
+  const ticket = store.createTicket(project, {
+    title: 'compact pulse body',
+    description: `ticket description: ${'y'.repeat(6000)}`,
+  });
+  assert.equal(store.addComment(project, ticket.ref, { body, by: 'payload-tester', kind: 'comment', source: 'mcp' }).ok, true);
+
+  const originalPulsePayload = store.pulsePayload;
+  store.pulsePayload = (slug: any, ref: any) => {
+    const payload = originalPulsePayload(slug, ref);
+    return Object.assign({}, payload, {
+      lastComment: Object.assign({}, payload.lastComment, { body }),
+    });
+  };
+  try {
+    const raw = await callToolRaw('pulse', { project, ref: ticket.ref });
+    const compact = JSON.parse(raw.content[0].text);
+    assert.ok(Buffer.byteLength(raw.content[0].text) < 1000, `compact pulse is ${Buffer.byteLength(raw.content[0].text)} bytes`);
+    assert.ok(compact.lastComment.body.length <= 280);
+    assert.match(compact.lastComment.body, /use full:true/);
+
+    const full = await callTool('pulse', { project, ref: ticket.ref, full: true });
+    assert.equal(full.lastComment.body, body);
+  } finally {
+    store.pulsePayload = originalPulsePayload;
+  }
+
+  const list = await callToolRaw('list', { project });
+  const row = JSON.parse(list.content[0].text).tickets.find((candidate: any) => candidate.ref === ticket.ref);
+  assert.equal(row.description, undefined);
+  assert.equal(row.lastComment, undefined);
+  assert.equal(row.comments, 1);
+  assert.ok(!list.content[0].text.includes('ticket description:'), 'compact list rows omit ticket descriptions');
+  assert.ok(!list.content[0].text.includes('latest comment body:'), 'compact list rows omit comment bodies');
+});
+
 test('compact category pages stay bounded and recover complete taxonomy rows', async (t: any) => {
   const root = path.join(os.tmpdir(), 'sq-mcp-category-pages');
   const project = store.ensureProject(root, 'SQ category pages').slug;
