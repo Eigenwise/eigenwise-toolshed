@@ -456,6 +456,37 @@ function availableRoute(model?: any) {
   return entry ? resolvedBackend(entry, discovered) : null;
 }
 
+function reportingModelForms(value?: any) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/\[1m\]$/, '');
+  if (!normalized) return [];
+  const forms = new Set([normalized]);
+  for (const form of Array.from(forms)) {
+    forms.add(form.replace(/^claude-codex-/, ''));
+    forms.add(form.replace(/^claude-/, ''));
+  }
+  for (const form of Array.from(forms)) forms.add(form.replace(/\./g, '-'));
+  return Array.from(forms);
+}
+
+function normalizeReportedModel(model?: any) {
+  const normalized = normalizeRouteModel(model);
+  const direct = normalized && availableRoute(normalized);
+  if (direct) return direct.slug;
+  const forms = new Set(reportingModelForms(model));
+  for (const entry of discoverExternalModels()) {
+    const identities = [entry.slug, entry.id, dispatchModelFor(entry.id)];
+    if (identities.some((identity?: any) => reportingModelForms(identity).some((form?: any) => forms.has(form)))) {
+      return entry.slug;
+    }
+  }
+  return null;
+}
+
+function resolvedDispatchRoute(ticket?: any) {
+  const route = ticket && ticket.dispatch && normalizeRoute(ticket.dispatch.route);
+  return route && availableRoute(route.model) ? route : null;
+}
+
 // The id the codex-gateway shim forwards upstream for a discovered backend: its
 // advertised id minus the local claude-codex- discovery prefix and any [1m]
 // suffix. Dispatch briefings embed it as the [sidequest-route model=...] marker
@@ -478,6 +509,11 @@ function resolveExec(model?: any, effort?: any) {
   const backend = availableRoute(model);
   if (!backend) return null;
   return execFromBackend(backend, coerceEffort(effort));
+}
+
+function resolveReportedExec(model?: any, effort?: any) {
+  const normalized = normalizeReportedModel(model);
+  return normalized ? resolveExec(normalized, effort) : null;
 }
 
 function resolveModelId(model?: any) {
@@ -527,7 +563,7 @@ function classifyModelFilter(v?: any) {
   if (v == null) return 'any';
   const value = String(v).trim().toLowerCase();
   if (!value || value === 'any' || value === 'none' || value === 'null') return 'any';
-  const exec = resolveExec(value, null);
+  const exec = resolveReportedExec(value, null);
   return exec ? exec.runsModel : 'unknown';
 }
 
@@ -3529,7 +3565,7 @@ function makeWorkedBy(input?: any) {
   if (!input) return null;
   const rawModel = input.model;
   if (rawModel == null || String(rawModel).trim() === '') return null;
-  const model = normalizeRouteModel(rawModel);
+  const model = normalizeReportedModel(rawModel);
   if (!model || !availableRoute(model)) {
     throw new Error(`invalid model "${rawModel}" — expected an available Claude runtime or discovered Codex model`);
   }
@@ -3552,7 +3588,15 @@ function makeWorkedBy(input?: any) {
 // provenance stamp; invalid values throw before anything is written.
 function completeTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   opts = opts || {};
-  const workedBy = makeWorkedBy({ model: opts.model, effort: opts.effort, by });
+  const ticket = getTicket(slug, idOrRef);
+  const dispatched = resolvedDispatchRoute(ticket);
+  const omittedProvenance = (opts.model == null || String(opts.model).trim() === '')
+    && (opts.effort == null || String(opts.effort).trim() === '');
+  const workedBy = makeWorkedBy({
+    model: omittedProvenance && dispatched ? dispatched.model : opts.model,
+    effort: omittedProvenance && dispatched ? dispatched.effort : opts.effort,
+    by,
+  });
   let completionComment = null;
   if (opts.body != null && String(opts.body).trim()) {
     completionComment = prepareComment({ by, body: opts.body, kind: 'comment', source: opts.source || 'cli' });
@@ -5097,6 +5141,9 @@ module.exports = {
   routingModels,
   resolveModelId,
   resolveExec,
+  resolveReportedExec,
+  normalizeReportedModel,
+  resolvedDispatchRoute,
   spawnDescription,
   SHARED_TREE_ARTIFACT_MARKER,
   sharedTreeArtifactRequested,

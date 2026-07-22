@@ -313,6 +313,34 @@ function availableRoute(model) {
   const entry = catalog[normalized] || discoveredBySlug()[normalized];
   return entry ? resolvedBackend(entry, discovered) : null;
 }
+function reportingModelForms(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/\[1m\]$/, "");
+  if (!normalized) return [];
+  const forms = /* @__PURE__ */ new Set([normalized]);
+  for (const form of Array.from(forms)) {
+    forms.add(form.replace(/^claude-codex-/, ""));
+    forms.add(form.replace(/^claude-/, ""));
+  }
+  for (const form of Array.from(forms)) forms.add(form.replace(/\./g, "-"));
+  return Array.from(forms);
+}
+function normalizeReportedModel(model) {
+  const normalized = normalizeRouteModel(model);
+  const direct = normalized && availableRoute(normalized);
+  if (direct) return direct.slug;
+  const forms = new Set(reportingModelForms(model));
+  for (const entry of discoverExternalModels()) {
+    const identities = [entry.slug, entry.id, dispatchModelFor(entry.id)];
+    if (identities.some((identity) => reportingModelForms(identity).some((form) => forms.has(form)))) {
+      return entry.slug;
+    }
+  }
+  return null;
+}
+function resolvedDispatchRoute(ticket) {
+  const route = ticket && ticket.dispatch && normalizeRoute(ticket.dispatch.route);
+  return route && availableRoute(route.model) ? route : null;
+}
 function dispatchModelFor(id) {
   return String(id || "").replace(/^claude-codex-/, "").replace(/\[1m\]$/, "");
 }
@@ -329,6 +357,10 @@ function resolveExec(model, effort) {
   const backend = availableRoute(model);
   if (!backend) return null;
   return execFromBackend(backend, coerceEffort(effort));
+}
+function resolveReportedExec(model, effort) {
+  const normalized = normalizeReportedModel(model);
+  return normalized ? resolveExec(normalized, effort) : null;
 }
 function resolveModelId(model) {
   const exec = resolveExec(model, null);
@@ -373,7 +405,7 @@ function classifyModelFilter(v) {
   if (v == null) return "any";
   const value = String(v).trim().toLowerCase();
   if (!value || value === "any" || value === "none" || value === "null") return "any";
-  const exec = resolveExec(value, null);
+  const exec = resolveReportedExec(value, null);
   return exec ? exec.runsModel : "unknown";
 }
 function legacyCategoryForComplexity(value) {
@@ -2994,7 +3026,7 @@ function makeWorkedBy(input) {
   if (!input) return null;
   const rawModel = input.model;
   if (rawModel == null || String(rawModel).trim() === "") return null;
-  const model = normalizeRouteModel(rawModel);
+  const model = normalizeReportedModel(rawModel);
   if (!model || !availableRoute(model)) {
     throw new Error(`invalid model "${rawModel}" — expected an available Claude runtime or discovered Codex model`);
   }
@@ -3013,7 +3045,14 @@ function makeWorkedBy(input) {
 }
 function completeTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
-  const workedBy = makeWorkedBy({ model: opts.model, effort: opts.effort, by });
+  const ticket = getTicket(slug, idOrRef);
+  const dispatched = resolvedDispatchRoute(ticket);
+  const omittedProvenance = (opts.model == null || String(opts.model).trim() === "") && (opts.effort == null || String(opts.effort).trim() === "");
+  const workedBy = makeWorkedBy({
+    model: omittedProvenance && dispatched ? dispatched.model : opts.model,
+    effort: omittedProvenance && dispatched ? dispatched.effort : opts.effort,
+    by
+  });
   let completionComment = null;
   if (opts.body != null && String(opts.body).trim()) {
     completionComment = prepareComment({ by, body: opts.body, kind: "comment", source: opts.source || "cli" });
@@ -4143,6 +4182,9 @@ module.exports = {
   routingModels,
   resolveModelId,
   resolveExec,
+  resolveReportedExec,
+  normalizeReportedModel,
+  resolvedDispatchRoute,
   spawnDescription,
   SHARED_TREE_ARTIFACT_MARKER,
   sharedTreeArtifactRequested,

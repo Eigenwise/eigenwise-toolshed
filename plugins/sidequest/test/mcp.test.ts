@@ -1232,6 +1232,63 @@ test('done stamps workedBy with a discovered Codex slug', async () => {
   }
 });
 
+test('reporting aliases resolve to catalog slugs and dispatched done defaults provenance', async () => {
+  seedCatalog([
+    { slug: 'codex-gpt-5-6-terra-fast', id: 'claude-codex-gpt-5.6-terra-fast[1m]' },
+    { slug: 'codex-gpt-5-6-luna-fast', id: 'claude-codex-gpt-5.6-luna-fast[1m]' },
+  ]);
+  try {
+    store.setCategory({ id: 'alias-codex', name: 'Alias Codex', route: { model: 'codex-gpt-5-6-terra-fast', effort: 'high' } });
+    const complete = async (title: any, model?: any) => {
+      const added = await callTool('add', {
+        title,
+        category: 'alias-codex',
+        description: DISPATCH_DESCRIPTION,
+        verify: 'node --test test/mcp.test.js',
+      });
+      const prepared = await callTool('dispatch', { ref: added.ref, full: true });
+      const by = `mcp-alias-${added.ref}`;
+      await callTool('claim', { ref: added.ref, by, executor: prepared.agent, effort: 'high', token: prepared.token });
+      await callTool('done', { ref: added.ref, by, ...(model == null ? {} : { model, effort: 'high' }) });
+      return store.getTicket(added.project, added.ref);
+    };
+
+    for (const alias of ['gpt-5.6-terra-fast', 'claude-codex-gpt-5.6-terra-fast[1m]', 'CLAUDE-CODEX-GPT-5.6-TERRA-FAST']) {
+      const ticket = await complete(`alias ${alias}`, alias);
+      assert.equal(ticket.workedBy.model, 'codex-gpt-5-6-terra-fast');
+    }
+    assert.equal(store.classifyModelFilter('gpt-5.6-terra-fast'), 'codex-gpt-5-6-terra-fast');
+    assert.equal(store.classifyModelFilter('claude-codex-gpt-5.6-terra-fast'), 'codex-gpt-5-6-terra-fast');
+    assert.throws(() => store.setCategory({
+      id: 'alias-route-rejected',
+      name: 'Alias Route Rejected',
+      route: { model: 'gpt-5.6-terra-fast', effort: 'high' },
+    }), /valid model and effort/);
+    await callTool('ready', { model: 'gpt-5.6-terra-fast' });
+
+    const defaulted = await complete('dispatched default');
+    assert.deepEqual(defaulted.workedBy.model, 'codex-gpt-5-6-terra-fast');
+    assert.deepEqual(defaulted.workedBy.effort, 'high');
+
+    const overridden = await complete('dispatched alternate model', 'gpt-5.6-luna-fast');
+    assert.equal(overridden.workedBy.model, 'codex-gpt-5-6-luna-fast');
+
+    const added = await callTool('add', {
+      title: 'unknown alias',
+      category: 'alias-codex',
+      description: DISPATCH_DESCRIPTION,
+      verify: 'node --test test/mcp.test.js',
+    });
+    const prepared = await callTool('dispatch', { ref: added.ref, full: true });
+    const unknown = await callToolRaw('done', { ref: added.ref, by: 'mcp-alias-unknown', model: 'claude-codex-auto' });
+    assert.ok(unknown.isError);
+    assert.match(unknown.content[0].text, /expected for .*: codex-gpt-5-6-terra-fast/);
+    assert.equal(store.getTicket(added.project, added.ref).dispatchNonce, prepared.token);
+  } finally {
+    clearCatalog();
+  }
+});
+
 test('ready with an unrecognized model errors instead of silently meaning "no filter"', async () => {
   const res = await callToolRaw('ready', { model: 'totally-bogus-tier' });
   assert.ok(res.isError, 'an unrecognized model filter is refused, not silently ignored');

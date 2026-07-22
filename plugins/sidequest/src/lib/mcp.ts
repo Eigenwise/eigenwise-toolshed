@@ -197,11 +197,15 @@ function requireKnownModelFilter(action?: any, value?: any) {
   }
 }
 
-function requireKnownModel(action?: any, value?: any) {
-  if (value == null || !String(value).trim()) return;
-  if (!store.resolveExec(value, null)) {
-    throw new Error(`${action}: unknown model "${value}" — known: ${store.getModelVocab().models.join(', ')}`);
+function requireKnownModel(action?: any, value?: any, ticket?: any) {
+  if (value == null || !String(value).trim()) return value;
+  const exec = store.resolveReportedExec(value, null);
+  if (!exec) {
+    const expected = store.resolvedDispatchRoute(ticket);
+    const routeHint = expected ? ` — expected for ${ticket.ref}: ${expected.model}` : '';
+    throw new Error(`${action}: unknown model "${value}"${routeHint} — known: ${store.getModelVocab().models.join(', ')}`);
   }
+  return exec.runsModel;
 }
 
 /* ------------------------------------------------------------------ *
@@ -816,9 +820,9 @@ const TOOLS: ToolDefinition[] = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'done');
-      requireKnownModel('done', args.model);
       const ticket = store.getTicket(slug, args.ref);
-      const res = store.completeTicket(slug, args.ref, by, { source: 'mcp', model: args.model, effort: args.effort, sessionId: sessionOf(args) });
+      const model = requireKnownModel('done', args.model, ticket);
+      const res = store.completeTicket(slug, args.ref, by, { source: 'mcp', model, effort: args.effort, sessionId: sessionOf(args) });
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);
     },
