@@ -135,15 +135,53 @@ function categoryEchoLine(ticket) {
   const category = categoryEcho(ticket);
   return category ? `  category: ${category.name} — ${category.description}  [${category.route.model} · ${category.route.effort}]` : "";
 }
-async function cmdAdd(opts) {
+function validatedAddInput(opts) {
   if (!opts.title) fail('add: --title is required (e.g. sidequest add -t "Contact form does not send")');
   guardDirectRouting(opts);
-  const { slug, meta } = await resolveProject(opts);
-  const category = opts.category != null ? categoryIdOrFail(slug, opts.category) : null;
   const complexity = store.coerceComplexity(opts.complexity);
+  const category = opts.category == null ? null : String(opts.category).trim().toLowerCase();
+  if (opts.category != null && !category) fail("add: --category needs an id.");
   if (!category && !opts.unclassified && complexity == null) fail("add: pass --category, legacy --complexity + --why, or --unclassified for a deliberately unclassified ticket");
   if (complexity != null && (!opts.why || String(opts.why).trim().length < WHY_MIN)) failWhy();
   if (!category && complexity == null && !opts.unclassified) failComplexity();
+  if (opts.status != null && !store.VALID_STATUS.includes(String(opts.status).toLowerCase())) {
+    fail(`add: invalid status "${opts.status}". Valid statuses: ${store.VALID_STATUS.join(", ")}.`);
+  }
+  return { category, complexity };
+}
+function addPreview(opts, category, complexity) {
+  const priority = store.VALID_PRIORITY.includes(String(opts.priority || "").toLowerCase()) ? String(opts.priority).toLowerCase() : "normal";
+  return {
+    title: String(opts.title).trim().slice(0, 300) || "Untitled",
+    description: String(opts.desc || opts.description || "").trim(),
+    status: String(opts.status || "todo").toLowerCase(),
+    priority,
+    labels: opts.label || [],
+    images: opts.image || [],
+    files: opts.file || [],
+    executorAnchors: opts.anchors || "",
+    executorVerify: opts.verify || "",
+    storyId: opts.story || null,
+    category,
+    complexity,
+    complexityWhy: opts.why || "",
+    source: opts.source || "cli"
+  };
+}
+async function cmdAdd(opts) {
+  const input = validatedAddInput(opts);
+  if (opts["dry-run"]) {
+    const ticket2 = addPreview(opts, input.category, input.complexity);
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ ok: true, dryRun: true, ticket: ticket2 }, null, 2) + "\n");
+      return;
+    }
+    console.log(`Dry run: would create "${ticket2.title}" [${ticket2.status}/${ticket2.priority}]`);
+    console.log(JSON.stringify(ticket2, null, 2));
+    return;
+  }
+  const { slug, meta } = await resolveProject(opts);
+  const category = input.category == null ? null : categoryIdOrFail(slug, input.category);
   const warnings = [];
   const created = store.createTicket(slug, {
     title: opts.title,
@@ -1911,6 +1949,92 @@ async function cmdStop() {
   }
   store.clearServerInfo();
 }
+const HELP_COMMANDS = {
+  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
+  list: "sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]",
+  pulse: "sidequest pulse <SQ-n> [--project <path-or-slug>]",
+  changes: "sidequest changes [--since <iso>] [--project <path-or-slug>]",
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
+  rm: "sidequest rm <id|SQ-n> [--force]",
+  profile: "sidequest profile <hygiene|list|show|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]",
+  category: "sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--json]",
+  "global-fallback": "sidequest global-fallback [--model <model> --effort <effort>] [--json]",
+  claim: 'sidequest claim <id|SQ-n> [--by who] [--token nonce] [--effort level] [--force] [--direct --reason "why"]',
+  claims: "sidequest claims sweep [--project <path-or-slug>]",
+  worktrees: "sidequest worktrees [--sweep] [--yes] [--project <path-or-slug>]",
+  next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
+  reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
+  work: "sidequest work|drain",
+  "groom-close": "sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]",
+  done: "sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]",
+  commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
+  submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
+  publish: "sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]",
+  release: "sidequest release <id|SQ-n> [--by who] [-s todo]",
+  assign: "sidequest assign <id|SQ-n> [--to who=you]",
+  unassign: "sidequest unassign <id|SQ-n>",
+  remind: 'sidequest remind <id|SQ-n> (--in 1h|3h|tomorrow | --at "date/time")',
+  unremind: "sidequest unremind <id|SQ-n>",
+  comment: 'sidequest comment <id|SQ-n> (-m "body" | --body-file path) [--by who]',
+  comments: "sidequest comments <id|SQ-n> [--json]",
+  link: "sidequest link <id|SQ-n> <blocks|depends-on|related> <id|SQ-n>",
+  unlink: "sidequest unlink <id|SQ-n> <id|SQ-n>",
+  ready: "sidequest ready [--model <model>] [--category <id>] [--json] [--brief]",
+  archive: "sidequest archive [<id|SQ-n>] [--done]",
+  unarchive: "sidequest unarchive <id|SQ-n>",
+  dispatch: "sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]",
+  briefing: "sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]",
+  "native-agent": 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]',
+  models: "sidequest models [--project <path-or-slug>] [--json]",
+  route: "sidequest route <category> [--project <path-or-slug>] --json",
+  "board-config": 'sidequest board-config [--always-in-scope path]... [--integration-mode <mode>] [--worktree-setup "command"] [--json]',
+  projects: "sidequest projects [--archived] [--json]",
+  routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
+  "archive-board": "sidequest archive-board <board-ref> [--json]",
+  "unarchive-board": "sidequest unarchive-board <board-ref> [--json]",
+  merge: "sidequest merge <src> <dst> [--dry-run]",
+  dashboard: "sidequest dashboard [--port N] [--no-open]",
+  serve: "sidequest serve [--port N]",
+  stop: "sidequest stop",
+  story: "sidequest story <add|list|show|update|rm> ... [--json]"
+};
+const HELP_ALIASES = {
+  new: "add",
+  ticket: "add",
+  ls: "list",
+  edit: "update",
+  set: "update",
+  remove: "rm",
+  delete: "rm",
+  profiles: "profile",
+  categories: "category",
+  global_fallback: "global-fallback",
+  take: "claim",
+  grab: "next",
+  drain: "work",
+  complete: "done",
+  finish: "done",
+  unclaim: "release",
+  restore: "unarchive",
+  native_agent: "native-agent",
+  board_config: "board-config",
+  boards: "projects",
+  archive_board: "archive-board",
+  unarchive_board: "unarchive-board",
+  "restore-board": "unarchive-board",
+  open: "dashboard",
+  board: "dashboard"
+};
+function commandHelp(command) {
+  const name = HELP_ALIASES[command] || command;
+  const usage = HELP_COMMANDS[name];
+  if (!usage) return false;
+  console.log(`Usage:
+  ${usage}
+
+Run "sidequest help" for all commands.`);
+  return true;
+}
 function help() {
   const colorNames = Object.keys(store.STORY_COLOR_NAMES || {}).join(", ");
   console.log(
@@ -2048,8 +2172,16 @@ async function main() {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
   const { opts, positional } = parseArgs(argv.slice(1));
-  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h" || opts.help) {
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
     help();
+    return;
+  }
+  if (cmd === "--version" || cmd === "-V" || cmd === "version") {
+    console.log(PLUGIN_VERSION || "unknown");
+    return;
+  }
+  if (opts.help) {
+    if (!commandHelp(cmd)) help();
     return;
   }
   switch (cmd) {
