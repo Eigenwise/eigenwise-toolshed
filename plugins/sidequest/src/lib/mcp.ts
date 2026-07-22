@@ -223,6 +223,7 @@ const MODEL_FILTER_PROP = { type: 'string', description: 'Filter by resolved mod
 
 const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   claim: 'Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.',
+  checkpoint: 'Record a live review candidate while keeping its claim and dispatch active.',
   dispatch: 'Prepare a ticket executor through its stable route.',
   done: 'Finish a claimed ticket and release its claim. Stamp the actual model and effort.',
   groomClose: 'Grooming closure; pass integration:true after a submission is integrated.',
@@ -440,6 +441,7 @@ function compactPulse(pulse?: any) {
     working: pulse.working,
     lastActivityAt: pulse.lastActivityAt,
     lastComment,
+    checkpoint: pulse.checkpoint,
     dispatch: pulse.dispatch && {
       state: pulse.dispatch.state,
       executor: pulse.dispatch.executor,
@@ -783,6 +785,39 @@ const TOOLS: ToolDefinition[] = [
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
       if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim);
       return mutationAck(slug, res);
+    },
+  },
+  {
+    name: 'checkpoint',
+    description: 'Record a verified live review candidate without releasing the claim or ending the dispatch. Use the returned checkpoint id in linked review findings.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        by: { type: 'string' },
+        commit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$' },
+        worktree: { type: 'string', description: 'Absolute path to the verified candidate worktree.' },
+        verify: { type: 'string', minLength: 1, maxLength: 4000, description: 'Verification command and result evidence.' },
+        ttlMinutes: { type: 'integer', minimum: 1, maximum: store.MAX_CHECKPOINT_TTL_MIN },
+      },
+      required: ['ref', 'by', 'verify'],
+      anyOf: [
+        { required: ['commit'] },
+        { required: ['worktree'] },
+      ],
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      const by = requireBy(args, 'checkpoint');
+      const res = store.checkpointTicket(slug, args.ref, by, {
+        commit: args.commit,
+        worktree: args.worktree,
+        verify: args.verify,
+        ttlMinutes: args.ttlMinutes,
+        source: 'mcp',
+      });
+      return mutationAck(slug, res, res.ok ? { checkpoint: res.checkpoint, commentId: res.comment.id } : null);
     },
   },
   {

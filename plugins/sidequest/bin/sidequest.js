@@ -794,6 +794,35 @@ async function cmdClaim(opts, positional) {
     reportClaimFailure("claim", idOrRef, res, meta);
   }
 }
+async function cmdCheckpoint(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('checkpoint: pass a ticket ref, e.g. sidequest checkpoint SQ-3 --by me --commit <hash> --verify "command: passed"');
+  const { slug, meta } = await resolveProject(opts);
+  const by = workerId(opts);
+  let res;
+  try {
+    res = store.checkpointTicket(slug, idOrRef, by, {
+      commit: opts.commit,
+      worktree: opts.worktree,
+      verify: opts.verify,
+      ttlMinutes: opts["ttl-minutes"],
+      source: opts.source || "cli"
+    });
+  } catch (e) {
+    fail(`checkpoint: ${e && e.message || e}`);
+  }
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) {
+    console.log(`✓ ${res.ticket.ref} live review checkpoint ${res.checkpoint.id} [${res.checkpoint.state}] until ${res.checkpoint.expiresAt}: ${meta.name}`);
+    console.log(`  claim remains held by "${by}"; dispatch remains active`);
+  } else {
+    reportClaimFailure("checkpoint", idOrRef, res, meta);
+  }
+}
 function closeDispatchExecutor(ticket) {
   if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
 }
@@ -1960,6 +1989,7 @@ const HELP_COMMANDS = {
   category: "sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--json]",
   "global-fallback": "sidequest global-fallback [--model <model> --effort <effort>] [--json]",
   claim: 'sidequest claim <id|SQ-n> [--by who] [--token nonce] [--effort level] [--force] [--direct --reason "why"]',
+  checkpoint: 'sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "command: result" [--ttl-minutes N] [--json]',
   claims: "sidequest claims sweep [--project <path-or-slug>]",
   worktrees: "sidequest worktrees [--sweep] [--yes] [--project <path-or-slug>]",
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
@@ -2064,6 +2094,7 @@ Usage:
 Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
   sidequest claim <id|SQ-n> [--by who] [--force] [--token nonce] [--effort level] [--direct --reason "why no executor can do this"]   atomically take a ticket (category-routed executor claims require a prepared nonce and exact executor; direct is a justified inline exception)
+  sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record a live review candidate while the claim and dispatch stay active
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why no executor can do this"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
   sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]   control-plane closure; --integration consumes a submitted ticket after publish
@@ -2225,6 +2256,9 @@ async function main() {
     case "claim":
     case "take":
       await cmdClaim(opts, positional);
+      break;
+    case "checkpoint":
+      await cmdCheckpoint(opts, positional);
       break;
     case "claims":
       if (positional[0] !== "sweep") fail("claims: expected `sidequest claims sweep`");

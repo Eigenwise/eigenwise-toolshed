@@ -2341,6 +2341,7 @@ function createTicket(slug?: any, fields?: any) {
     comments: [],              // [{ id, by, body, kind: 'comment', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
     claim: null,               // { by, at } when an agent has claimed it to work on
+    checkpoint: null,
     dispatchNonce: null,
     dispatchExecutor: null,
     directClaim: null,
@@ -3760,6 +3761,114 @@ function closeTicketForGrooming(slug?: any, idOrRef?: any, opts?: any) {
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 const SUBMISSION_GITREF_MAX = 200;
 const SUBMISSION_WORKTREE_MAX = 500;
+const DEFAULT_CHECKPOINT_TTL_MIN = 60;
+const MAX_CHECKPOINT_TTL_MIN = 24 * 60;
+const CHECKPOINT_VERIFY_MAX = 4000;
+const CHECKPOINT_VERIFY_EXCERPT_MAX = 500;
+
+function checkpointTtlMs(ttlMinutes?: any) {
+  const minutes = ttlMinutes == null ? DEFAULT_CHECKPOINT_TTL_MIN : Number(ttlMinutes);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_CHECKPOINT_TTL_MIN) {
+    throw new Error(`checkpoint TTL must be an integer from 1 to ${MAX_CHECKPOINT_TTL_MIN} minutes`);
+  }
+  return minutes * 60 * 1000;
+}
+
+function checkpointProjection(ticket?: any, now?: any) {
+  const checkpoint = ticket && ticket.checkpoint;
+  if (!checkpoint) return null;
+  const atMs = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const expiresMs = Date.parse(checkpoint.expiresAt);
+  let state = 'expired';
+  if (Number.isFinite(expiresMs) && expiresMs > atMs) {
+    if (pendingSubmission(ticket)) state = 'submitted';
+    else if (ticket.status === 'done') state = 'completed';
+    else {
+      const claim = ticket.claim;
+      const claimAt = claim && Date.parse(claim.at);
+      const liveClaim = claim && claim.by && Number.isFinite(claimAt) && atMs - claimAt <= claimTtlMs();
+      if (!liveClaim) state = 'recoverable';
+      else state = claim.by === checkpoint.by ? 'active' : 'resumed';
+    }
+  }
+  const verify = boundedExcerpt(String(checkpoint.verify || ''), CHECKPOINT_VERIFY_EXCERPT_MAX);
+  return {
+    id: checkpoint.id,
+    state,
+    by: checkpoint.by,
+    at: checkpoint.at,
+    expiresAt: checkpoint.expiresAt,
+    ttlMinutes: checkpoint.ttlMinutes,
+    commit: checkpoint.commit || null,
+    worktree: checkpoint.worktree || null,
+    verify: verify.text,
+    verifyLength: verify.length,
+    verifyTruncated: verify.truncated,
+  };
+}
+
+function checkpointCommentBody(checkpoint?: any) {
+  const candidate = [
+    checkpoint.commit ? `commit ${checkpoint.commit}` : null,
+    checkpoint.worktree ? `worktree ${checkpoint.worktree}` : null,
+  ].filter(Boolean).join(', ');
+  return `Live review checkpoint ${checkpoint.id}\nCandidate: ${candidate}\nVerification: ${checkpoint.verify}\nExpires: ${checkpoint.expiresAt}`;
+}
+
+function checkpointTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
+  opts = opts || {};
+  by = String(by || 'agent');
+  const commit = opts.commit == null || String(opts.commit).trim() === '' ? null : String(opts.commit).trim().toLowerCase();
+  if (commit && !SUBMISSION_COMMIT_RE.test(commit)) {
+    throw new Error(`invalid commit "${opts.commit}": pass the verified commit's hex hash (7-64 chars)`);
+  }
+  const worktree = opts.worktree == null || String(opts.worktree).trim() === '' ? null : String(opts.worktree).trim();
+  if (worktree && (!path.isAbsolute(worktree) || worktree.length > SUBMISSION_WORKTREE_MAX)) {
+    throw new Error(`checkpoint worktree must be an absolute path no longer than ${SUBMISSION_WORKTREE_MAX} characters`);
+  }
+  if (!commit && !worktree) throw new Error('checkpoint requires a commit hash or absolute worktree path');
+  const verify = String(opts.verify || '').trim();
+  if (!verify) throw new Error('checkpoint verification evidence is required');
+  if (verify.length > CHECKPOINT_VERIFY_MAX) throw new Error(`checkpoint verification evidence exceeds ${CHECKPOINT_VERIFY_MAX} characters`);
+  const ttlMs = checkpointTtlMs(opts.ttlMinutes);
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
+    if (pendingSubmission(t)) return { ok: false, reason: 'submitted', ticket: t, submission: t.submission };
+    const held = t.claim;
+    if (!held || !held.by) return { ok: false, reason: 'not_claimed', ticket: t };
+    if (held.by !== by) return { ok: false, reason: 'not_owner', ticket: t, claim: held };
+    if (isClaimStale(held)) return { ok: false, reason: 'claim_stale', ticket: t, claim: held };
+    const nowMs = Number.isFinite(Number(opts.now)) ? Number(opts.now) : Date.now();
+    const now = new Date(nowMs).toISOString();
+    const checkpoint = {
+      id: `cp_${crypto.randomBytes(8).toString('hex')}`,
+      by,
+      at: now,
+      expiresAt: new Date(nowMs + ttlMs).toISOString(),
+      ttlMinutes: ttlMs / 60000,
+      commit,
+      worktree,
+      verify,
+    };
+    const prepared = prepareComment({ by, body: checkpointCommentBody(checkpoint), source: opts.source || 'cli' });
+    if (!prepared.ok) throw new Error(`checkpoint comment ${prepared.reason}`);
+    const comment = createComment(prepared, now);
+    if (!Array.isArray(t.comments)) t.comments = [];
+    t.comments.push(comment);
+    t.checkpoint = checkpoint;
+    t.claim = Object.assign({}, held, { at: now });
+    t.lastEventType = 'comment';
+    t.lastEventSource = comment.source;
+    t.updatedAt = now;
+    putTicket(slug, t);
+    queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
+    return { ok: true, ticket: t, checkpoint: checkpointProjection(t, nowMs), comment };
+  });
+}
 
 function submissionUnscopedPaths(paths?: any) {
   return Array.from(new Set((Array.isArray(paths) ? paths : [])
@@ -4388,6 +4497,7 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
+    checkpoint: checkpointProjection(t),
     submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at } : null,
   };
 }
@@ -4618,6 +4728,7 @@ function pulsePayload(slug?: any, idOrRef?: any) {
       terminalSource: dispatch.terminalSource || null,
       outcome: dispatch.outcome || null,
     } : null,
+    checkpoint: checkpointProjection(ticket),
     submission: ticket.submission || null,
     git,
   };
@@ -4625,13 +4736,19 @@ function pulsePayload(slug?: any, idOrRef?: any) {
 
 function changesPayload(slug?: any, since?: any) {
   const serverTime = new Date().toISOString();
+  const nowMs = Date.parse(serverTime);
   const defaultSince = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const after = since == null ? defaultSince : String(since);
   const afterMs = Date.parse(after);
   if (!Number.isFinite(afterMs)) throw new Error('changes: --since must be an ISO timestamp.');
+  const changedAt = (ticket?: any) => {
+    const updatedMs = Date.parse(ticket.updatedAt);
+    const expiresMs = Date.parse(ticket.checkpoint && ticket.checkpoint.expiresAt);
+    return Number.isFinite(expiresMs) && expiresMs <= nowMs ? Math.max(updatedMs, expiresMs) : updatedMs;
+  };
   const tickets = listTickets(slug)
-    .filter((ticket?: any) => Date.parse(ticket.updatedAt) > afterMs)
-    .sort((a?: any, b?: any) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt))
+    .filter((ticket?: any) => changedAt(ticket) > afterMs)
+    .sort((a?: any, b?: any) => changedAt(a) - changedAt(b))
     .map((ticket?: any) => ({
       ref: ticket.ref,
       title: ticket.title,
@@ -4639,7 +4756,8 @@ function changesPayload(slug?: any, since?: any) {
       lastEventType: ticket.lastEventType || null,
       lastEventSource: ticket.lastEventSource || null,
       lastComment: latestCommentExcerpt(ticket),
-      claim: claimPulse(ticket.claim, Date.now()),
+      claim: claimPulse(ticket.claim, nowMs),
+      checkpoint: checkpointProjection(ticket, nowMs),
       updatedAt: ticket.updatedAt,
     }));
   return { since: after, serverTime, tickets };
@@ -5356,6 +5474,11 @@ module.exports = {
   completeTicketAsControlPlane,
   closeTicketForGrooming,
   makeWorkedBy,
+  checkpointTicket,
+  checkpointProjection,
+  checkpointTtlMs,
+  DEFAULT_CHECKPOINT_TTL_MIN,
+  MAX_CHECKPOINT_TTL_MIN,
   submitTicket,
   clearSubmission,
   pendingSubmission,

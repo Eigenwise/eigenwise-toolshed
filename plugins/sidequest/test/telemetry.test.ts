@@ -67,7 +67,7 @@ test('seed telemetry fixture', () => {
 
 test('CLI and MCP pulse return the compact liveness shape with git activity', async () => {
   const pulse = cliJson<Pulse>(['pulse', ref]);
-  assert.deepStrictEqual(Object.keys(pulse).sort(), ['claim', 'comments', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastActivityAt', 'lastComment', 'project', 'projectName', 'ref', 'status', 'submission', 'title', 'working']);
+  assert.deepStrictEqual(Object.keys(pulse).sort(), ['checkpoint', 'claim', 'comments', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastActivityAt', 'lastComment', 'project', 'projectName', 'ref', 'status', 'submission', 'title', 'working']);
   assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'by']);
   assert.strictEqual(pulse.comments, 1);
   assert.deepStrictEqual(pulse.lastComment, { at: pulse.lastComment.at, by: 'telemetry-worker', kind: 'comment', body: 'a recent telemetry note' });
@@ -85,7 +85,7 @@ test('changes returns an ordered compact delta and reusable serverTime', async (
   assert.deepStrictEqual(Object.keys(changes).sort(), ['project', 'projectName', 'serverTime', 'since', 'tickets']);
   const changed = changes.tickets.find((ticket) => ticket.ref === ref);
   assert.ok(changed);
-  assert.deepStrictEqual(Object.keys(changed).sort(), ['claim', 'lastComment', 'lastEventSource', 'lastEventType', 'ref', 'status', 'title', 'updatedAt']);
+  assert.deepStrictEqual(Object.keys(changed).sort(), ['checkpoint', 'claim', 'lastComment', 'lastEventSource', 'lastEventType', 'ref', 'status', 'title', 'updatedAt']);
   assert.deepStrictEqual(changed.lastComment, {
     by: 'telemetry-worker',
     kind: 'comment',
