@@ -183,6 +183,10 @@ function conciseDescription(description) {
   const firstSentence = String(description || "").match(/^.*?[.!?](?:\s|$)/);
   return firstSentence ? firstSentence[0].trim() : description;
 }
+function validateStoryId(value, allowClear = false) {
+  if (allowClear && String(value).toLowerCase() === "none") return;
+  if (!/^US-\d+$/.test(String(value))) throw new Error("storyId must be a US-n story ref.");
+}
 function compactSchema(schema, propertyMap = false) {
   if (Array.isArray(schema)) return schema.map((entry) => compactSchema(entry));
   if (!schema || typeof schema !== "object") return schema;
@@ -511,7 +515,7 @@ const TOOLS = [
         readonly: { type: "boolean", description: "Set false for a read-only category when the spike must execute modified code." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
-        story: { type: "string", description: "A story ref (US-n) to file this ticket into." },
+        storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
         complexity: { type: "integer", minimum: 1, maximum: 10 },
         why: { type: "string", description: "Motivation for the complexity score (min 20 chars)." },
         category: { type: "string", description: "Enabled category id from category_list." },
@@ -532,6 +536,7 @@ const TOOLS = [
       const complexity = store.coerceComplexity(args.complexity);
       if (!category && complexity == null && !args.unclassified) throw new Error("add: pass category, legacy complexity + why, or unclassified:true.");
       if (complexity != null && (!args.why || String(args.why).trim().length < 20)) throw new Error("add: why is required with complexity (min 20 chars).");
+      if (args.storyId !== void 0) validateStoryId(args.storyId);
       const created = store.createTicket(slug, {
         title: args.title,
         description: args.description || "",
@@ -544,7 +549,7 @@ const TOOLS = [
         readonly: args.readonly,
         executorAnchors: args.anchors,
         executorVerify: args.verify,
-        storyId: args.story,
+        storyId: args.storyId,
         complexity: args.complexity,
         complexityWhy: args.why,
         category,
@@ -558,7 +563,7 @@ const TOOLS = [
   },
   {
     name: "update",
-    description: 'Edit a ticket by ref. Any omitted field is left unchanged. Re-scoring needs both complexity and a fresh why. Set story to "none" to detach. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
+    description: 'Edit a ticket by ref. Any omitted field is left unchanged. Re-scoring needs both complexity and a fresh why. Set storyId to "none" to detach. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: "object",
       properties: {
@@ -577,7 +582,7 @@ const TOOLS = [
         readonly: { type: "boolean", description: "Set false for a read-only category when the spike must execute modified code." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
-        story: { type: "string" },
+        storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },
         why: { type: "string" },
         category: { type: "string", description: 'Enabled category id from category_list. Use "none" to clear.' }
@@ -606,7 +611,10 @@ const TOOLS = [
       if (args.readonly !== void 0) patch.readonly = args.readonly;
       if (args.anchors !== void 0) patch.executorAnchors = args.anchors;
       if (args.verify !== void 0) patch.executorVerify = args.verify;
-      if (args.story !== void 0) patch.storyId = args.story;
+      if (args.storyId !== void 0) {
+        validateStoryId(args.storyId, true);
+        patch.storyId = args.storyId;
+      }
       if (args.category !== void 0) {
         if (args.category === "none" || args.category === null) patch.category = null;
         else {

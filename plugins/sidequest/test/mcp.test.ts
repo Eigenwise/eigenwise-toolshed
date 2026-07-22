@@ -174,6 +174,41 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(submit.inputSchema.properties.base, 'submit exposes an explicit base');
 });
 
+test('add and update preserve descriptions and expose storyId explicitly', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-description-'))).slug;
+  const story = store.createStory(project, { title: 'Description contract' });
+  const description = 'Where: MCP add.\nContract: preserve this prose byte-for-byte.\nVerify: read the ticket.';
+  const added = await callTool('add', { project, title: 'description persistence', description, storyId: story.ref, unclassified: true });
+  let ticket = store.getTicket(project, added.ref);
+  assert.equal(ticket.description, description);
+  assert.equal(ticket.storyId, story.id);
+
+  const updatedDescription = 'Where: MCP update.\nContract: keep every newline.\nVerify: inspect the returned ticket.';
+  await callTool('update', { project, ref: added.ref, description: updatedDescription, storyId: 'none' });
+  ticket = store.getTicket(project, added.ref);
+  assert.equal(ticket.description, updatedDescription);
+  assert.equal(ticket.storyId, null);
+
+  const tools = mcp.toolDescriptors();
+  for (const name of ['add', 'update']) {
+    const properties = tools.find((tool: any) => tool.name === name).inputSchema.properties;
+    assert.ok(properties.description, `${name} exposes description`);
+    assert.ok(properties.storyId, `${name} exposes storyId`);
+    assert.equal(properties.story, undefined, `${name} does not overload story`);
+  }
+  assert.equal(tools.find((tool: any) => tool.name === 'add').inputSchema.properties.storyId.pattern, '^US-\\d+$');
+});
+
+test('storyId rejects values outside the US-n format', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-id-'))).slug;
+  const response = await mcp.handleRequest({
+    jsonrpc: '2.0', id: ++idc, method: 'tools/call',
+    params: { name: 'add', arguments: { project, title: 'invalid story ID', storyId: 'story prose', unclassified: true } },
+  });
+  assert.equal(response.result.isError, true);
+  assert.match(response.result.content[0].text, /storyId must be a US-n story ref/);
+});
+
 test('story contracts are bounded, revisioned, and warn claimed members about drift', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-contract-'))).slug;
   const story = store.createStory(project, { title: 'Contract packet' });
