@@ -54,7 +54,7 @@ async function waitForHealthz(port) {
   throw lastError || new Error('shim did not become healthy');
 }
 
-test('dispatch model resolves canonical and legacy route markers', async (t) => {
+test('dispatch model stays routable when omitted from the default model listing', async (t) => {
   const shimPort = await freePort();
   const proxyPort = await freePort();
   const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-dispatch-'));
@@ -90,7 +90,7 @@ test('dispatch model resolves canonical and legacy route markers', async (t) => 
   await waitForHealthz(shimPort);
 
   const models = JSON.parse((await request(shimPort, '/v1/models')).body).data;
-  assert.ok(models.some((model) => model.id === 'claude-codex-auto' && model.display_name === 'Sidequest Dispatch (Codex)'));
+  assert.ok(models.every((model) => model.id !== 'claude-codex-auto'));
 
   const v2Response = await request(shimPort, '/v1/messages', JSON.stringify({
     model: 'claude-codex-auto',
@@ -124,7 +124,7 @@ test('dispatch model resolves canonical and legacy route markers', async (t) => 
   });
 });
 
-test('dispatch model stays routable when omitted from the model listing', async (t) => {
+test('dispatch model is listed with the explicit rollback flag and stays routable', async (t) => {
   const shimPort = await freePort();
   const proxyPort = await freePort();
   const forwarded = [];
@@ -149,7 +149,7 @@ test('dispatch model stays routable when omitted from the model listing', async 
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
       CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_LIST_DISPATCH_MODEL: '0',
+      CODEX_GATEWAY_LIST_DISPATCH_MODEL: '1',
       CODEX_GATEWAY_REQUEST_LOG: '0',
       CODEX_GATEWAY_SENTRY: '0',
     },
@@ -159,7 +159,7 @@ test('dispatch model stays routable when omitted from the model listing', async 
   await waitForHealthz(shimPort);
 
   const models = JSON.parse((await request(shimPort, '/v1/models')).body).data;
-  assert.ok(models.every((model) => model.id !== 'claude-codex-auto'));
+  assert.ok(models.some((model) => model.id === 'claude-codex-auto' && model.display_name === 'Sidequest Dispatch (Codex)'));
 
   const response = await request(shimPort, '/v1/messages', JSON.stringify({
     model: 'claude-codex-auto',

@@ -131,7 +131,6 @@ test('Codex discovery advertises context metadata but keeps the local model id u
     { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 370000 },
     { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 370000 },
     { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 370000 },
-    { id: 'claude-codex-auto', max_input_tokens: 370000 },
   ]);
   // 370000 = the measured backend input ceiling. Claude Code 2.1.207 still
   // hardwires 200k for claude-codex-* ids, so this value is inert for
