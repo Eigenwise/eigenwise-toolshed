@@ -212,6 +212,14 @@ test('board_config reads and replaces always-in-scope paths', async () => {
   assert.deepEqual((await callTool('board_config', { project })).alwaysInScope, ['docs', 'notes']);
 });
 
+test('board_config stores and clears a worktree setup command', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-worktree-setup'), 'SQ worktree setup').slug;
+  const setup = 'cd plugins/sidequest && npm ci';
+  assert.equal((await callTool('board_config', { project, worktreeSetup: setup })).worktreeSetup, setup);
+  assert.equal((await callTool('board_config', { project })).worktreeSetup, setup);
+  assert.equal((await callTool('board_config', { project, worktreeSetup: null })).worktreeSetup, null);
+});
+
 
 test('write acks and pulse stay lean: no body echoes, no lifecycle noise by default', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-lean-shapes'), 'SQ lean shapes').slug;

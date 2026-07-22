@@ -366,6 +366,13 @@ test('CLI: a range containing another queued ticket commit is refused', () => {
   assert.strictEqual(runCli(['release', second.ref, '--by', 'second-worker']).status, 0);
 });
 
+test('CLI: board config stores a worktree setup command', () => {
+  const setup = 'cd plugins/sidequest && npm ci';
+  const configured = cliJson(['board-config', '--worktree-setup', setup, '--json']);
+  assert.strictEqual(configured.worktreeSetup, setup);
+  assert.strictEqual(cliJson(['board-config', '--json']).worktreeSetup, setup);
+});
+
 test('CLI: a remote-less board auto-selects local integration and records a main baseline', () => {
   git(['checkout', '-f', 'main']);
   git(['clean', '-fd']);

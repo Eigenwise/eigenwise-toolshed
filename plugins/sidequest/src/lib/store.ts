@@ -42,6 +42,7 @@ const { routingDisabledMessage } = require('./refusal-guidance.js');
 
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
+const WORKTREE_SETUP_MAX_LENGTH = 1000;
 const SHARED_TREE_ARTIFACT_MARKER = 'Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.';
 const CONTROL_PLANE_COMPLETION = Symbol('sidequest.control-plane-completion');
 
@@ -1562,6 +1563,16 @@ function normalizeIntegrationMode(mode?: any) {
   return value;
 }
 
+function normalizeWorktreeSetup(value?: any) {
+  if (value == null || String(value).trim() === '') return null;
+  const setup = String(value);
+  if (/[\r\n]/.test(setup)) throw new Error('worktreeSetup must be a one-line command.');
+  if (setup.length > WORKTREE_SETUP_MAX_LENGTH) {
+    throw new Error(`worktreeSetup exceeds the ${WORKTREE_SETUP_MAX_LENGTH}-character board-config limit.`);
+  }
+  return setup;
+}
+
 function hasOriginRemote(absPath?: any) {
   try {
     execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: absPath, encoding: 'utf8', windowsHide: true, stdio: 'pipe' });
@@ -1589,6 +1600,7 @@ function boardConfig(slug?: any) {
   return {
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
+    worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
     profile: {
       id: selected.profile.id,
       name: selected.profile.name,
@@ -1615,6 +1627,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'integrationMode')) {
       meta.integrationMode = normalizeIntegrationMode(patch.integrationMode);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'worktreeSetup')) {
+      meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
     }
     putProject(slug, meta);
     return { ok: true, config: boardConfig(slug) };

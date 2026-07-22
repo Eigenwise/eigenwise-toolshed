@@ -1534,13 +1534,14 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'board_config',
-    description: 'View or update board-level always-in-scope paths and integration mode. docs is included by default when the board repo has a docs directory.',
+    description: 'View or update board-level scope, integration mode, and optional worktree setup command.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
         integrationMode: { type: 'string', enum: ['auto', 'local', 'remote'], description: 'auto uses local mode when origin is absent; local integrates against main without a push.' },
+        worktreeSetup: { type: ['string', 'null'], maxLength: 1000, pattern: '^[^\\r\\n]*$', description: 'One-line command shown before verify for isolated worktrees; null clears it.' },
       },
     },
     handler(args) {
@@ -1548,6 +1549,7 @@ const TOOLS: ToolDefinition[] = [
       const patch: any = {};
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
+      if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length
         ? store.setBoardConfig(slug, patch)
         : { ok: true, config: store.boardConfig(slug) };
@@ -1628,7 +1630,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.alwaysInScope != null || args.integrationMode != null;
+  if (name === 'board_config') return args.alwaysInScope != null || args.integrationMode != null || args.worktreeSetup !== undefined;
   return false;
 }
 

@@ -398,6 +398,28 @@ test('artifact lifecycle marker appears only for a validated shared-tree artifac
   }
 });
 
+test('worktree setup appears only in isolated worktree briefings', () => {
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(tmpDir(), 'worktree setup briefing').slug;
+  const setup = 'cd plugins/sidequest && npm ci';
+  store.setBoardConfig(slug, { worktreeSetup: setup });
+  const ticket = {
+    ref: 'SQ-745', title: 'Worktree setup', model: 'opus', effort: 'high', category: {},
+    files: ['plugins/sidequest/src/lib/agentsync.ts'], dispatch: { sharedTree: false },
+  };
+
+  assert.match(agentsync.renderTicketBriefing(ticket, 'worktree-token', slug), new RegExp(`Worktree setup \\(run before verify\\): ${setup}`));
+  assert.doesNotMatch(
+    agentsync.renderTicketBriefing(Object.assign({}, ticket, { dispatch: { sharedTree: true } }), 'shared-token', slug),
+    /Worktree setup \(run before verify\):/,
+  );
+
+  store.setBoardConfig(slug, { worktreeSetup: null });
+  assert.doesNotMatch(agentsync.renderTicketBriefing(ticket, 'unset-token', slug), /Worktree setup \(run before verify\):/);
+  assert.throws(() => store.setBoardConfig(slug, { worktreeSetup: 'npm ci\nnode --test' }), /one-line command/);
+  assert.throws(() => store.setBoardConfig(slug, { worktreeSetup: 'x'.repeat(1001) }), /1000-character/);
+});
+
 test('renderTicketBriefing embeds no route marker for a Claude-backed route', () => {
   clearCatalog();
   const briefing = agentsync.renderTicketBriefing({

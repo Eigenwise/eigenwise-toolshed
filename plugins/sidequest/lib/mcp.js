@@ -1417,13 +1417,14 @@ const TOOLS = [
   },
   {
     name: "board_config",
-    description: "View or update board-level always-in-scope paths and integration mode. docs is included by default when the board repo has a docs directory.",
+    description: "View or update board-level scope, integration mode, and optional worktree setup command.",
     inputSchema: {
       type: "object",
       properties: {
         project: PROJECT_PROP,
         alwaysInScope: { type: "array", items: { type: "string" }, description: "When supplied, replaces the board paths merged into every ticket scope." },
-        integrationMode: { type: "string", enum: ["auto", "local", "remote"], description: "auto uses local mode when origin is absent; local integrates against main without a push." }
+        integrationMode: { type: "string", enum: ["auto", "local", "remote"], description: "auto uses local mode when origin is absent; local integrates against main without a push." },
+        worktreeSetup: { type: ["string", "null"], maxLength: 1e3, pattern: "^[^\\r\\n]*$", description: "One-line command shown before verify for isolated worktrees; null clears it." }
       }
     },
     handler(args) {
@@ -1431,6 +1432,7 @@ const TOOLS = [
       const patch = {};
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
+      if (args.worktreeSetup !== void 0) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
       if (!result.ok) throw new Error(`board_config: no board "${meta.name}".`);
       return Object.assign({ ok: true, project: slug, projectName: meta.name }, result.config);
@@ -1530,7 +1532,7 @@ function toolMutates(name, args) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === "new_board_profile") return args.profile !== void 0;
   if (name === "global_fallback") return args.model !== void 0 || args.effort !== void 0;
-  if (name === "board_config") return args.alwaysInScope != null || args.integrationMode != null;
+  if (name === "board_config") return args.alwaysInScope != null || args.integrationMode != null || args.worktreeSetup !== void 0;
   return false;
 }
 function mutationQueueKey(name, args) {

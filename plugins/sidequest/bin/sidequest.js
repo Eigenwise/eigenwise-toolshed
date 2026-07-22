@@ -1492,6 +1492,7 @@ async function cmdBoardConfig(opts) {
   const patch = {};
   if (opts["always-in-scope"] != null) patch.alwaysInScope = opts["always-in-scope"];
   if (opts["integration-mode"] != null) patch.integrationMode = opts["integration-mode"];
+  if (opts["worktree-setup"] != null) patch.worktreeSetup = opts["worktree-setup"];
   const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
   if (!result.ok) fail(`board-config: no board "${meta.name}".`);
   const payload = Object.assign({ project: slug, projectName: meta.name }, result.config);
@@ -1501,6 +1502,7 @@ async function cmdBoardConfig(opts) {
   }
   console.log(`always in scope: ${payload.alwaysInScope.length ? payload.alwaysInScope.join(", ") : "(none)"}`);
   console.log(`integration mode: ${payload.integrationMode}`);
+  console.log(`worktree setup: ${payload.worktreeSetup || "(none)"}`);
 }
 async function cmdProjects(opts) {
   const projects = store.listProjects({ archived: !!opts.archived });

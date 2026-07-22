@@ -182,12 +182,18 @@ function ticketCloseout(ticket) {
   const effort = resolved && (resolved.effort || ticket.effort);
   return resolved && effort ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}` : null;
 }
+function ticketWorktreeSetup(ticket, slug) {
+  if (!ticket || !ticket.dispatch || ticketIsolation(ticket, ticket.dispatch.sharedTree) !== "worktree") return null;
+  const config = store.boardConfig(slug);
+  return config && config.worktreeSetup ? config.worktreeSetup : null;
+}
 function ticketBrief(ticket, nonce, marker, slug) {
   const category = ticket.category || {};
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}`).join("\n") : "(No ticket dependencies were recorded.)";
   const declaredFiles = Array.isArray(ticket.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "(No labels were recorded.)";
   const closeout = ticketCloseout(ticket);
+  const worktreeSetup = ticketWorktreeSetup(ticket, slug);
   const parts = [
     "",
     "## This ticket",
@@ -204,6 +210,7 @@ ${category.contract || "(No category-specific executor instructions were recorde
 ${ticket.executorAnchors || "(No anchors were recorded.)"}`,
     `Verify command:
 ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
+    ...worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : [],
     `Declared files:
 ${declaredFiles}`,
     `Ticket state:

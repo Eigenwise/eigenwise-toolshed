@@ -296,6 +296,12 @@ function ticketCloseout(ticket?: any) {
   return resolved && effort ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}` : null;
 }
 
+function ticketWorktreeSetup(ticket?: any, slug?: any) {
+  if (!ticket || !ticket.dispatch || ticketIsolation(ticket, ticket.dispatch.sharedTree) !== 'worktree') return null;
+  const config = store.boardConfig(slug);
+  return config && config.worktreeSetup ? config.worktreeSetup : null;
+}
+
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
   const category = ticket.category || {};
   const links = Array.isArray(ticket.links) && ticket.links.length
@@ -306,6 +312,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
     : '(No files were declared.)';
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(', ') : '(No labels were recorded.)';
   const closeout = ticketCloseout(ticket);
+  const worktreeSetup = ticketWorktreeSetup(ticket, slug);
   const parts = [
     '',
     '## This ticket',
@@ -315,6 +322,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
     `Category contract:\nCategory: ${category.id || ticket.categoryId || '(Unclassified)'}\nConfigured route: ${category.route?.model || '(No configured route)'} / ${category.route?.effort || '(No configured effort)'}\nDispatch route: ${ticket.model || category.route?.model || '(No route)'} / ${ticket.effort || category.route?.effort || '(No effort)'}\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
     `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
+    ...(worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : []),
     `Declared files:\n${declaredFiles}`,
     `Ticket state:\nStatus: ${ticket.status || '(Unknown)'}\nPriority: ${ticket.priority || '(Unknown)'}\nLabels: ${labels}\nStory: ${ticket.storyId || '(No story)'}\nDependencies:\n${links}`,
     `Complete comment thread (chronological, inspect every entry before implementation):\n${ticketCommentsPacket(ticket.comments)}`,
