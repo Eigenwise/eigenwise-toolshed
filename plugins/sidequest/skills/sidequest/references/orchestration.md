@@ -43,6 +43,23 @@ investigation found (paths, the surrounding contract, the gotcha you spotted). I
 ticket would need context its description does not carry, gather it first and put what you learned
 in the spec, or split it further.
 
+## Acceptance evidence before fix chains
+
+Product rework gets expensive when a chain proves individual patches before it proves the system
+behavior it needs. Set the acceptance boundary before splitting fixes:
+
+- **Front-load the adversarial evidence.** Before filing behavior patches, build and freeze the
+  acceptance matrix or lifecycle-acceptance ticket that can reject the whole behavior. Do not run a
+  pitch patch chain before its benchmark exists, or split UI identity, teardown, resize, and reopen
+  into separate tickets before one matrix covers the lifecycle.
+- **Keep one implementation ticket open through independent review.** Review remains a separate
+  ticket, but attach its findings as comments on the open implementation claim and correct them
+  there. Submit that implementation only after the review is clean, rather than closing each narrow
+  step and filing a follow-up fix chain.
+- **Record stable facts once.** Put facts such as local-only git, artifact lifecycle, and frozen
+  acceptance wording in the ticket or board record that owns them. Executors should consume that
+  source instead of receiving the same steering repeatedly.
+
 ## Fan-out mechanics
 
 When several tickets are **ready and independent**, work them in parallel — one executor per ticket,
