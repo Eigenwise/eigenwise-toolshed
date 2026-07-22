@@ -2185,11 +2185,34 @@ function dispatchDescriptionError(ticket?: any) {
   return `dispatch: ${DISPATCH_DESCRIPTION_GUIDANCE}.`;
 }
 
-function dispatchWarnings(ticket?: any) {
+function dispatchWarnings(ticket?: any, slug?: any) {
+  const warnings: any[] = [];
   const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
-  if (!/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || ''))) return [];
-  if (String(ticket.executorVerify || '').trim()) return [];
-  return ['Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.'];
+  if (/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || '')) && !String(ticket.executorVerify || '').trim()) {
+    warnings.push('Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.');
+  }
+  const declaredFiles = dispatchDeclaredFiles(ticket);
+  if (!slug || !declaredFiles.length) return warnings;
+  for (const sibling of listTickets(slug)) {
+    if (sibling.id === ticket.id) continue;
+    const dispatch = dispatchState(sibling);
+    const liveClaim = sibling.claim && sibling.claim.by && !isClaimStale(sibling.claim);
+    const liveDispatch = dispatch && !dispatch.terminalAt && ['prepared', 'launched', 'bound', 'claimed'].includes(pulseDispatchState(dispatch));
+    if (!liveClaim && !liveDispatch) continue;
+    const overlaps = overlappingScopePaths(declaredFiles, dispatchDeclaredFiles(sibling));
+    if (!overlaps.length) continue;
+    const lockfilesOnly = overlaps.every((file?: any) => /(?:^|\/)(?:Cargo\.lock|package-lock\.json|pnpm-lock\.yaml)$/i.test(file));
+    const lockfileGuidance = lockfilesOnly
+      ? ' Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.'
+      : '';
+    warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(', ')}.${lockfileGuidance}`);
+  }
+  return warnings;
+}
+
+function dispatchDeclaredFiles(ticket?: any) {
+  const dispatch = dispatchState(ticket);
+  return normalizeFiles(dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : ticket && ticket.files);
 }
 
 function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
@@ -2329,16 +2352,23 @@ function normalizeFiles(files?: any) {
 // one that is a directory-prefix of it (case-insensitive, "/"-normalized).
 // Empty scopes never conflict mechanically — "no declaration" means "no
 // information", and the skill tells the orchestrator how to treat that.
-function scopesOverlap(filesA?: any, filesB?: any) {
-  const a = normalizeFiles(filesA).map((f?: any) => f.toLowerCase());
-  const b = normalizeFiles(filesB).map((f?: any) => f.toLowerCase());
-  if (!a.length || !b.length) return false;
+function overlappingScopePaths(filesA?: any, filesB?: any) {
+  const a = normalizeFiles(filesA);
+  const b = normalizeFiles(filesB);
+  const overlaps = new Map();
   for (const x of a) {
     for (const y of b) {
-      if (x === y || x.startsWith(y + '/') || y.startsWith(x + '/')) return true;
+      const left = x.toLowerCase();
+      const right = y.toLowerCase();
+      const overlap = left === right ? x : (left.startsWith(right + '/') ? x : (right.startsWith(left + '/') ? y : null));
+      if (overlap) overlaps.set(overlap.toLowerCase(), overlap);
     }
   }
-  return false;
+  return Array.from(overlaps.values()).sort((left?: any, right?: any) => left.localeCompare(right));
+}
+
+function scopesOverlap(filesA?: any, filesB?: any) {
+  return overlappingScopePaths(filesA, filesB).length > 0;
 }
 
 // Partition the ready set into waves an orchestrator can fan out one wave at a

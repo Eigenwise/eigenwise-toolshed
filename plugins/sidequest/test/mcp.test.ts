@@ -263,6 +263,58 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(pulsePayload.dispatch.tokenPrefix, undefined);
 });
 
+test('dispatch warns about declared scopes held by in-flight tickets', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-dispatch-overlap-')).slug;
+  const inFlight = await callTool('add', {
+    project,
+    title: 'in-flight scope',
+    description: DISPATCH_DESCRIPTION,
+    category: 'general',
+    files: ['src'],
+  });
+  const prepared = store.prepareDispatch(project, inFlight.ref);
+  assert.equal(store.claimTicket(project, inFlight.ref, 'overlap-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const target = await callTool('add', {
+    project,
+    title: 'overlapping scope',
+    description: DISPATCH_DESCRIPTION,
+    category: 'general',
+    files: ['src/lib.rs'],
+  });
+
+  const dispatched = await callTool('dispatch', { project, ref: target.ref, full: true });
+  assert.deepEqual(dispatched.warnings, [
+    `Dispatch warning: ${target.ref} overlaps in-flight ${inFlight.ref} at src/lib.rs.`,
+  ]);
+});
+
+test('dispatch identifies lockfile-only scope overlaps', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-lockfile-overlap-')).slug;
+  const inFlight = await callTool('add', {
+    project,
+    title: 'in-flight lockfile',
+    description: DISPATCH_DESCRIPTION,
+    category: 'general',
+    files: ['Cargo.lock'],
+  });
+  store.prepareDispatch(project, inFlight.ref);
+  const target = await callTool('add', {
+    project,
+    title: 'overlapping lockfile',
+    description: DISPATCH_DESCRIPTION,
+    category: 'general',
+    files: ['Cargo.lock'],
+  });
+
+  const dispatched = await callTool('dispatch', { project, ref: target.ref, full: true });
+  assert.deepEqual(dispatched.warnings, [
+    `Dispatch warning: ${target.ref} overlaps in-flight ${inFlight.ref} at Cargo.lock. Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.`,
+  ]);
+});
+
 test('compact pulse bounds latest comment bodies and list rows omit ticket bodies', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-compact-pulse-body-')).slug;
   const body = `latest comment body: ${'x'.repeat(6000)}`;

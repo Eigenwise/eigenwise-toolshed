@@ -1124,7 +1124,7 @@ const TOOLS: ToolDefinition[] = [
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
         spawn,
       };
-      const warnings = store.dispatchWarnings(prepared.ticket);
+      const warnings = store.dispatchWarnings(prepared.ticket, slug);
       if (!args.full) {
         const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
         // Compact dispatches must keep a bounded spawn payload. Warnings ride only when they fit the MCP ceiling.
@@ -1141,7 +1141,7 @@ const TOOLS: ToolDefinition[] = [
         tokenPrefix: prepared.token.slice(0, 12),
         token: prepared.token,
         recovery: prepared.recovery || null,
-        warnings: store.dispatchWarnings(prepared.ticket),
+        warnings: store.dispatchWarnings(prepared.ticket, slug),
         spawn,
         guidance: prepared.recovery
           ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
