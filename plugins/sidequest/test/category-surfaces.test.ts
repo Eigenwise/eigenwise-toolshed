@@ -170,6 +170,18 @@ test('CLI profile category operations never resolve the current board', () => {
   assert.equal(run.result.status, 0, run.result.stderr);
   const boardSnapshot = () => JSON.stringify(isolatedCli('projects').body.projects);
 
+  const beforeBareAdd = boardSnapshot();
+  run = isolatedCli('category', 'add', `bare-category-${process.pid}`, '--name', 'Bare add must not rename board', '--route-model', 'sonnet', '--route-effort', 'medium');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(run.body.category.name, 'Bare add must not rename board');
+  assert.equal(boardSnapshot(), beforeBareAdd);
+
+  const beforeBareEdit = boardSnapshot();
+  run = isolatedCli('category', 'edit', 'general', '--route-model', 'opus');
+  assert.equal(run.result.status, 0, run.result.stderr);
+  assert.equal(run.body.category.route.model, 'opus');
+  assert.equal(boardSnapshot(), beforeBareEdit);
+
   const beforeAdd = boardSnapshot();
   run = isolatedCli('category', 'add', scopedId, '--profile', 'coding', '--name', 'Profile add must not rename board', '--route-model', 'sonnet', '--route-effort', 'medium');
   assert.equal(run.result.status, 0, run.result.stderr);

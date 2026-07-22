@@ -471,17 +471,19 @@ async function cmdCategory(opts: any, positional: any) {
   const id = positional[1];
   const projectScope = opts.project != null;
   const profileScope = opts.profile != null;
-  const implicitProjectScope = action === 'list' || action === 'ls';
   if (projectScope && profileScope) fail(`category ${action || '<action>'}: pass exactly one of --profile or --project.`);
-  if (!projectScope && !profileScope && !implicitProjectScope) fail(`category ${action || '<action>'}: pass exactly one of --profile or --project.`);
-  const { slug, meta } = profileScope ? { slug: null, meta: null } : await resolveProject(opts);
+  const { slug, meta } = profileScope ? { slug: null, meta: null } : await resolveProject(Object.assign({}, opts, { name: undefined }));
   const scopeName = profileScope ? `profile ${opts.profile}` : meta.name;
   const usage = (categoryId: any) => profileScope ? 0 : store.listTickets(slug).filter((ticket: any) => (ticket.categoryId || (ticket.category && ticket.category.id)) === categoryId).length;
   const projectLayer = () => store.getProjectCategories(slug);
   const localRow = (categoryId: any) => projectLayer().rows.find((row: any) => row.id === String(categoryId).trim().toLowerCase()) || null;
   const details = (categoryId: any) => ({
     localRow: projectScope ? localRow(categoryId) : null,
-    effective: profileScope ? store.routingProfileCategory(opts.profile, categoryId) : store.getCategory(categoryId, { project: slug }),
+    effective: profileScope
+      ? store.routingProfileCategory(opts.profile, categoryId)
+      : projectScope
+        ? store.getCategory(categoryId, { project: slug })
+        : store.getCategory(categoryId),
     warnings: projectScope ? projectLayer().warnings : [],
   });
   const output = (result: any) => {
@@ -563,13 +565,13 @@ async function cmdCategory(opts: any, positional: any) {
     }
     return;
   }
-  if (!projectScope && !profileScope) fail(`category ${action || '<action>'}: pass exactly one of --profile or --project.`);
   if (!id) fail(`category ${action || '<action>'}: pass a category id`);
   if (action === 'add' || action === 'new' || action === 'create') {
     try {
       const category = categoryInput();
       if (projectScope) store.setProjectCategory(slug, id, 'ADD', category);
-      else store.setRoutingProfileCategory(opts.profile, category);
+      else if (profileScope) store.setRoutingProfileCategory(opts.profile, category);
+      else store.setCategory(category);
     } catch (error: any) { fail(`category add: ${error.message}`); }
     const saved = details(id);
     if (opts.json) return output(projectScope ? Object.assign({ ok: true }, saved) : { ok: true, category: saved.effective });
@@ -625,12 +627,18 @@ async function cmdCategory(opts: any, positional: any) {
       try {
         store.setProjectCategory(slug, id, kind, Object.assign({}, existing, patch, { id }));
       } catch (error: any) { fail(`category edit: ${error.message}`); }
-    } else {
+    } else if (profileScope) {
       const existing = store.routingProfileCategory(opts.profile, id);
       if (!existing) fail(`category edit: no category "${id}" in profile "${opts.profile}"`);
       const patch = patchFor(existing);
       if (opts.enabled || opts.disabled) patch.enabled = !!opts.enabled;
       try { store.setRoutingProfileCategory(opts.profile, id, patch); } catch (error: any) { fail(`category edit: ${error.message}`); }
+    } else {
+      const existing = store.getCategory(id);
+      if (!existing) fail(`category edit: no shared category "${id}"`);
+      const patch = patchFor(existing);
+      if (opts.enabled || opts.disabled) patch.enabled = !!opts.enabled;
+      try { store.setCategory(id, patch); } catch (error: any) { fail(`category edit: ${error.message}`); }
     }
     const saved = details(id);
     if (opts.json) return output(projectScope ? Object.assign({ ok: true }, saved) : { ok: true, category: saved.effective });
@@ -643,8 +651,10 @@ async function cmdCategory(opts: any, positional: any) {
       if (projectScope) {
         if (localRow(id)) store.removeProjectCategory(slug, id);
         else store.setProjectCategory(slug, id, 'DISABLE', {});
-      } else if (!store.removeRoutingProfileCategory(opts.profile, id)) {
-        fail(`category rm: no category "${id}" in profile "${opts.profile}"`);
+      } else if (profileScope) {
+        if (!store.removeRoutingProfileCategory(opts.profile, id)) fail(`category rm: no category "${id}" in profile "${opts.profile}"`);
+      } else if (!store.removeCategory(id)) {
+        fail(`category rm: no shared category "${id}"`);
       }
     } catch (error: any) { fail(`category rm: ${error.message}`); }
     if (opts.json) return output(Object.assign({ ok: true, id: String(id).toLowerCase(), ticketCount }, projectScope ? details(id) : {}));
