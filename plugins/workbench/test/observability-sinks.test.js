@@ -414,6 +414,11 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const hookActivity = byTitle.get('Hook execution activity / failures');
   assert.match(hookActivity.targets[0].expr, /workbench_attribute_hook_name/);
   assert.equal(hookActivity.targets[0].legendFormat, '{{workbench_attribute_hook_name}}');
+  const wakeupJoin = byTitle.get('Wakeup join keys');
+  assert.equal(wakeupJoin?.type, 'text');
+  assert.match(wakeupJoin.options.content, /workbench_attribute_recipient/);
+  assert.match(wakeupJoin.options.content, /workbench_tool_use_id/);
+  assert.match(wakeupJoin.options.content, /workbench_attribute_wake_reason/);
   const lifecycle = byTitle.get('Subagent lifecycle activity');
   assert.match(lifecycle.targets[0].expr, /workbench_attribute_agent_type != ""/);
   assert.match(lifecycle.targets[0].expr, /regexReplaceAll/);

@@ -1822,6 +1822,21 @@
           }
         }
       ]
+    },
+    {
+      "id": 31,
+      "title": "Wakeup join keys",
+      "type": "text",
+      "gridPos": {
+        "x": 0,
+        "y": 117,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Wakeup joins (SQ-755).** `hook.post_tool_use` records for `SendMessage` retain `workbench_attribute_recipient` and `workbench_tool_use_id`, so pre/post/tool-result records join on the exact tool-use ID without logging message text. The first later orchestrator `gateway.token.usage` record gets `workbench_attribute_wake_reason` as `subagent_stop` or `teammate_message` when the local observer already has the causal hook. Group wake reasons by `workbench_session_id`; an empty reason means no causal hook was available, not zero wakeups."
+      }
     }
   ]
 }

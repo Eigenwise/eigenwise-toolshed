@@ -21,7 +21,7 @@ function accept(observation) {
 
 test('every mapped hook event yields an acceptable canonical observation', () => {
   const payloads = {
-    SessionStart: { hook_event_name: 'SessionStart', session_id: 'session-1', source: 'resume', permission_mode: 'default' },
+    SessionStart: { hook_event_name: 'SessionStart', session_id: 'session-1', source: 'resume', permission_mode: 'default', effort: { level: 'high' } },
     SessionEnd: { hook_event_name: 'SessionEnd', session_id: 'session-1', reason: 'logout' },
     UserPromptSubmit: { hook_event_name: 'UserPromptSubmit', session_id: 'session-1', prompt_id: 'prompt-9', permission_mode: 'acceptEdits' },
     PreToolUse: { hook_event_name: 'PreToolUse', session_id: 'session-1', tool_name: 'Bash', tool_use_id: 'toolu_1', permission_mode: 'default' },
@@ -34,6 +34,7 @@ test('every mapped hook event yields an acceptable canonical observation', () =>
     assert.equal(observation.event_name, EVENT_MAP[event]);
     assert.equal(observation.attributes.project_name, 'eigenwise-toolshed');
     assert.match(observation.project_id, /^[0-9a-f]{64}$/);
+    if (event === 'SessionStart') assert.equal(observation.attributes.effort, 'high');
     accept(observation);
   }
 });
@@ -96,6 +97,21 @@ test('tool facets classify native vs MCP tools without capturing arguments', () 
   const native = buildObservation({ hook_event_name: 'PreToolUse', session_id: 's', tool_name: 'Bash' }, NOW);
   assert.equal(native.attributes.is_mcp, false);
   assert.equal(native.attributes.tool_kind, 'native');
+});
+
+test('SendMessage observations retain recipient and source tool-use ID without retaining message text', () => {
+  const observation = buildObservation({
+    hook_event_name: 'PostToolUse',
+    session_id: 'session-1',
+    tool_name: 'SendMessage',
+    tool_use_id: 'toolu-message-1',
+    tool_input: { recipient: 'main', message: 'private milestone details' },
+    status: 'ok',
+  }, NOW);
+  assert.equal(observation.attributes.recipient, 'main');
+  assert.equal(observation.tool_use_id, 'toolu-message-1');
+  assert.equal(JSON.stringify(observation).includes('private milestone details'), false);
+  accept(observation);
 });
 
 test('PostToolUse measures serialized input and result sizes without retaining content', () => {
@@ -187,6 +203,51 @@ test('hook spool drains into the observer store and replays idempotently', (t) =
   assert.equal(tool.mcp_tool, 'list');
   assert.equal(tool.duration_ms, 42);
   assert.equal(store.database.prepare('SELECT project_id FROM observation').get().project_id, projectId);
+});
+
+test('hook wake signals annotate only the first subsequent orchestrator request', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-wake-'));
+  const store = openObservabilityStore(path.join(dir, 'observability.db'), { outboxEnabled: false });
+  t.after(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const gateway = (id, at) => ({
+    source: 'codex_gateway',
+    source_event_id: id,
+    source_schema: 'gateway-usage-v1',
+    observed_at: at,
+    event_name: 'gateway.token.usage',
+    session_id: 'session-1',
+    request_id: 'request-' + id,
+    attributes: { agent_role: 'orchestrator', model: 'gpt-5.6-terra' },
+  });
+
+  const stop = buildObservation({
+    hook_event_name: 'SubagentStop',
+    session_id: 'session-1',
+    agent_id: 'agent-worker',
+  }, new Date('2026-07-19T10:00:00.000Z'));
+  const first = gateway('wake-after-stop', '2026-07-19T10:00:01.000Z');
+  const second = gateway('ordinary-request', '2026-07-19T10:00:02.000Z');
+  store.ingestBatch([stop, first, second]);
+
+  const sent = buildObservation({
+    hook_event_name: 'PostToolUse',
+    session_id: 'session-1',
+    tool_name: 'SendMessage',
+    tool_use_id: 'toolu-message-main',
+    tool_input: { to: 'main', message: 'private handoff' },
+  }, new Date('2026-07-19T10:00:03.000Z'));
+  const afterMessage = gateway('wake-after-message', '2026-07-19T10:00:04.000Z');
+  store.ingestBatch([sent, afterMessage]);
+
+  const byRequest = Object.fromEntries(store.database.prepare(
+    "SELECT request_id, attributes_json FROM observation WHERE event_name = 'gateway.token.usage'",
+  ).all().map((row) => [row.request_id, JSON.parse(row.attributes_json)]));
+  assert.equal(byRequest['request-wake-after-stop'].wake_reason, 'subagent_stop');
+  assert.equal(byRequest['request-ordinary-request'].wake_reason, undefined);
+  assert.equal(byRequest['request-wake-after-message'].wake_reason, 'teammate_message');
 });
 
 test('statusline emits acceptable context + rate-limit snapshots and marks missing usage unavailable', () => {

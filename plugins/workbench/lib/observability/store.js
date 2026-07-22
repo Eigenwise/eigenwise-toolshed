@@ -157,6 +157,31 @@ function createStatements(database) {
     observationById: database.prepare('SELECT * FROM observation WHERE event_id = ?'),
     measurementsByEvent: database.prepare('SELECT * FROM measurement WHERE event_id = ? ORDER BY name, scope'),
     linksByEvent: database.prepare('SELECT * FROM link WHERE from_event_id = ? ORDER BY relation, to_kind, to_id'),
+    latestWakeCandidate: database.prepare(`
+      SELECT event_name, observed_at
+      FROM observation
+      WHERE session_id = ?
+        AND observed_at <= ?
+        AND (
+          event_name = 'hook.subagent_stop'
+          OR (
+            event_name = 'hook.post_tool_use'
+            AND json_extract(attributes_json, '$.tool_name') = 'SendMessage'
+            AND json_extract(attributes_json, '$.recipient') = 'main'
+          )
+        )
+      ORDER BY observed_at DESC, event_id DESC
+      LIMIT 1
+    `),
+    orchestratorRequestAfterWake: database.prepare(`
+      SELECT 1
+      FROM observation
+      WHERE session_id = ?
+        AND event_name = 'gateway.token.usage'
+        AND (json_extract(attributes_json, '$.agent_role') = 'orchestrator' OR agent_id IS NULL)
+        AND observed_at >= ?
+      LIMIT 1
+    `),
   };
 }
 
@@ -248,6 +273,22 @@ function openObservabilityStore(databaseFile, options = {}) {
         ...(project && project.project_name ? { project_name: project.project_name } : {}),
       },
     };
+  }
+
+  function enrichWake(input) {
+    if (!input || input.event_name !== 'gateway.token.usage') return input;
+    const sessionId = validIdentifier(input.session_id) ? input.session_id : null;
+    const observedAt = typeof input.observed_at === 'string' && Number.isFinite(Date.parse(input.observed_at))
+      ? new Date(input.observed_at).toISOString()
+      : null;
+    const attributes = input.attributes && typeof input.attributes === 'object' ? input.attributes : {};
+    const isOrchestrator = attributes.agent_role === 'orchestrator' || !validIdentifier(input.agent_id);
+    if (!sessionId || !observedAt || !isOrchestrator) return input;
+
+    const candidate = statements.latestWakeCandidate.get(sessionId, observedAt);
+    if (!candidate || statements.orchestratorRequestAfterWake.get(sessionId, candidate.observed_at)) return input;
+    const wakeReason = candidate.event_name === 'hook.subagent_stop' ? 'subagent_stop' : 'teammate_message';
+    return { ...input, attributes: { ...attributes, wake_reason: wakeReason } };
   }
 
   function assertOpen() {
@@ -518,14 +559,18 @@ function openObservabilityStore(databaseFile, options = {}) {
   }
 
   function ingest(input) {
-    const normalized = normalizeObservation(enrichGateway(input), { now, randomUUID: createId });
-    return transaction(() => ingestNormalized(normalized));
+    return transaction(() => {
+      const normalized = normalizeObservation(enrichWake(enrichGateway(input)), { now, randomUUID: createId });
+      return ingestNormalized(normalized);
+    });
   }
 
   function ingestBatch(inputs) {
     if (!Array.isArray(inputs) || inputs.length === 0) throw new TypeError('A non-empty observation array is required.');
-    const normalized = inputs.map((input) => normalizeObservation(enrichGateway(input), { now, randomUUID: createId }));
-    return transaction(() => normalized.map(ingestNormalized));
+    return transaction(() => inputs.map((input) => {
+      const normalized = normalizeObservation(enrichWake(enrichGateway(input)), { now, randomUUID: createId });
+      return ingestNormalized(normalized);
+    }));
   }
 
   function getObservation(eventId) {

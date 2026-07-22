@@ -46,7 +46,13 @@ function assign(target, key, value) {
 }
 
 function effort(value) {
-  return typeof value === 'string' && EFFORTS.has(value) ? value : null;
+  const level = value && typeof value === 'object' ? value.level : value;
+  return typeof level === 'string' && EFFORTS.has(level) ? level : null;
+}
+
+function sendMessageRecipient(payload) {
+  if (payload.tool_name !== 'SendMessage' || !payload.tool_input || typeof payload.tool_input !== 'object') return null;
+  return identifier(first(payload.tool_input.recipient, payload.tool_input.to));
 }
 
 function nonnegativeNumber(value) {
@@ -103,9 +109,11 @@ function buildObservation(payload, now) {
     assign(attributes, 'effort', effortValue);
   } else if (eventName === 'hook.pre_tool_use') {
     Object.assign(attributes, toolFacets(payload.tool_name));
+    assign(attributes, 'recipient', sendMessageRecipient(payload));
     assign(attributes, 'permission_mode', permissionMode);
   } else if (eventName === 'hook.post_tool_use') {
     Object.assign(attributes, toolFacets(payload.tool_name));
+    assign(attributes, 'recipient', sendMessageRecipient(payload));
     assign(attributes, 'status', identifier(first(payload.status, payload.tool_status)));
     assign(attributes, 'error_type', identifier(payload.error_type));
     assign(attributes, 'error_code', identifier(payload.error_code));
@@ -208,4 +216,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { EVENT_MAP, buildObservation, defaultSpoolPath, projectMetadata, spool };
+module.exports = { EVENT_MAP, buildObservation, defaultSpoolPath, projectMetadata, sendMessageRecipient, spool };

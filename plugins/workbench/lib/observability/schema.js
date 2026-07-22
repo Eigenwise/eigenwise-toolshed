@@ -262,6 +262,7 @@ const ATTRIBUTE_SPECS = Object.freeze({
   permission_mode: 'identifier',
   provider: 'identifier',
   project_name: 'identifier',
+  recipient: 'identifier',
   requested_model: 'identifier',
   request_id_source: 'identifier',
   response_mode: 'identifier',
@@ -280,6 +281,7 @@ const ATTRIBUTE_SPECS = Object.freeze({
   tool_name: 'identifier',
   turns: 'nonnegative_integer',
   via: 'identifier',
+  wake_reason: 'identifier',
 });
 
 const COMMON_ROUTING_ATTRIBUTES = Object.freeze([
@@ -302,8 +304,8 @@ const EVENT_ATTRIBUTES = Object.freeze({
   'hook.session_start': ['project_name', 'permission_mode', 'effort'],
   'hook.session_end': ['project_name', 'end_reason', 'permission_mode', 'effort'],
   'hook.user_prompt_submit': ['project_name', 'permission_mode', 'effort'],
-  'hook.pre_tool_use': ['project_name', 'tool_name', 'tool_kind', 'is_mcp', 'mcp_server', 'mcp_tool', 'permission_mode'],
-  'hook.post_tool_use': ['project_name', 'tool_name', 'tool_kind', 'is_mcp', 'mcp_server', 'mcp_tool', 'status', 'error_type', 'error_code'],
+  'hook.pre_tool_use': ['project_name', 'tool_name', 'tool_kind', 'is_mcp', 'mcp_server', 'mcp_tool', 'recipient', 'permission_mode'],
+  'hook.post_tool_use': ['project_name', 'tool_name', 'tool_kind', 'is_mcp', 'mcp_server', 'mcp_tool', 'recipient', 'status', 'error_type', 'error_code'],
   'hook.stop': ['project_name', 'end_reason', 'permission_mode', 'effort'],
   'hook.subagent_start': ['project_name', 'agent_type', 'model', 'effort'],
   'hook.subagent_stop': ['project_name', 'agent_type', 'model', 'effort', 'end_reason', 'status'],
@@ -323,7 +325,7 @@ const EVENT_ATTRIBUTES = Object.freeze({
   ],
   'gateway.token.usage': [
     'model', 'requested_model', 'backend', 'effort', 'via', 'status', 'status_code',
-    'agent_role', 'request_id_source', 'response_mode', 'token_estimator', 'cache_attribution', 'project_name',
+    'agent_role', 'request_id_source', 'response_mode', 'token_estimator', 'cache_attribution', 'project_name', 'wake_reason',
   ],
   'gateway.tool_result.usage': [
     'model', 'requested_model', 'backend', 'effort', 'via', 'agent_role', 'tool_name', 'project_name',
