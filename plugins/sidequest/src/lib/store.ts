@@ -496,6 +496,16 @@ function dispatchModelFor(id?: any) {
   return String(id || '').replace(/^claude-codex-/, '').replace(/\[1m\]$/, '');
 }
 
+// The marker rides along so the spawn gate can compare like with like: the
+// briefing embeds exec.dispatchModel (gateway form), never the board slug.
+function dispatchRouteState(model?: any, effort?: any, exec?: any) {
+  return {
+    model,
+    effort,
+    ...(exec && exec.dispatchModel ? { marker: exec.dispatchModel } : {}),
+  };
+}
+
 function execFromBackend(backend?: any, effort?: any) {
   if (backend.backend === 'codex') {
     const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
@@ -3178,6 +3188,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const artifactMode = Boolean(artifactRoot);
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
+    const preparedExec = resolveExec(t.model, t.effort);
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       sharedTree,
@@ -3188,8 +3199,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ...(artifactMode ? { artifactDirtyBaseline } : {}),
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
-      description: spawnDescription(t, resolveExec(t.model, t.effort)),
-      route: { model: t.model, effort: t.effort },
+      description: spawnDescription(t, preparedExec),
+      route: dispatchRouteState(t.model, t.effort, preparedExec),
       preparedAt: now,
       launchedAt: null,
       boundAt: null,
@@ -3301,8 +3312,8 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       ...(Array.isArray(state.artifactDirtyBaseline) ? { artifactDirtyBaseline: state.artifactDirtyBaseline.slice() } : {}),
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
-      description: spawnDescription(t, resolveExec(t.model, t.effort)),
-      route: { model: fallback.model, effort: fallback.effort },
+      description: spawnDescription(t, fallback.exec),
+      route: dispatchRouteState(fallback.model, fallback.effort, fallback.exec),
       preparedAt: now,
       launchedAt: null,
       boundAt: null,

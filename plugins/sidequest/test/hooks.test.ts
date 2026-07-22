@@ -1212,6 +1212,45 @@ test('pre-tool hook: dispatch executor rejects a route marker with different eff
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /executor effort "high" does not match route marker effort "medium"/);
 });
 
+test('pre-tool hook: prepared codex dispatch accepts the gateway-form route marker (SQ-753)', () => {
+  const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-marker-form-'));
+  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 3,
+    source: 'codex-gateway',
+    models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }],
+  }));
+  const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
+  process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
+  try {
+    const ticket = fixtureTicket('SQ-753 marker form regression', 'codex-gpt-5-6-terra', 'high');
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `marker-form-${++sqSeq}` });
+    assert.equal(prepared.ticket.dispatch.route.model, 'codex-gpt-5-6-terra');
+    assert.equal(prepared.ticket.dispatch.route.marker, 'gpt-5.6-terra');
+
+    const projectPath = store.readMeta(slug).path;
+    const base = {
+      subagent_type: prepared.ticket.dispatchExecutor,
+      name: `sidequest-${ticket.ref.toLowerCase()}-${prepared.token.slice(0, 12)}`,
+      description: prepared.ticket.dispatch.description,
+      prompt: `Ref: ${ticket.ref}\n[sidequest-route model=gpt-5.6-terra effort=high]\n--project "${projectPath}" --token ${prepared.token}`,
+    };
+    const exact = runForceBypassWithEnv(base, { SIDEQUEST_DISCOVERY_DIRS: catalog });
+    assert.ok(!exact.hookSpecificOutput.permissionDecision, 'the production marker form must be allowed');
+    assert.equal(exact.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
+    const drifted = runForceBypassWithEnv(
+      { ...base, prompt: base.prompt.replace('model=gpt-5.6-terra', 'model=gpt-5.6-sol') },
+      { SIDEQUEST_DISCOVERY_DIRS: catalog }
+    );
+    assert.equal(drifted.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /route marker must match the prepared spawn/);
+  } finally {
+    if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
+    else process.env.SIDEQUEST_DISCOVERY_DIRS = previousDirs;
+  }
+});
+
 test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject integrity drift', () => {
   const ticket = addEffortTicket('correct prepared dispatch spawn drift', 'high');
   const sessionId = `description-${++sqSeq}`;

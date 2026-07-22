@@ -127,6 +127,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.deepEqual(current.category.fallback, { model: 'codex-gpt-5-6-sol', effort: 'max' });
   const pulse = store.pulsePayload(slug, ticket.ref);
   assert.deepEqual(pulse.dispatch.route, { model: 'codex-gpt-5-6-sol', effort: 'max' });
+  assert.equal(current.dispatch.route.marker, 'gpt-5.6-sol');
   assert.equal(pulse.dispatch.attempts.length, 1);
   assert.equal(pulse.dispatch.attempts[0].outcome, 'quota_exhausted');
   assert.equal(pulse.dispatch.attempts[0].failure.signature, "You've reached your Fable 5 limit");

@@ -26,7 +26,7 @@ interface Ticket {
   dispatchNonce?: string;
   dispatch?: {
     description?: string;
-    route?: { model?: string; effort?: string };
+    route?: { model?: string; effort?: string; marker?: string };
   };
 }
 interface PreparedDispatchSpawn {
@@ -35,7 +35,7 @@ interface PreparedDispatchSpawn {
   ref: string;
   token: string;
   project: string;
-  route: { model: string; effort: string } | null;
+  route: { model: string; effort: string; marker: string | null } | null;
 }
 interface PreparedDispatchValidation {
   status: 'none' | 'stale' | 'valid';
@@ -229,7 +229,7 @@ function preparedDispatchValidation(input: HookInput): PreparedDispatchValidatio
         token: launch.token,
         project,
         route: typeof route?.model === 'string' && typeof route.effort === 'string'
-          ? { model: route.model, effort: route.effort }
+          ? { model: route.model, effort: route.effort, marker: typeof route.marker === 'string' && route.marker ? route.marker : null }
           : null,
       },
     };
@@ -330,7 +330,14 @@ function main(): void {
   if (classification.kind === 'codex_dispatch') {
     const markers = dispatchRouteMarkers(input);
     const routeModels = [...new Set(markers.map((marker) => marker.model))];
-    if (preparedSpawn?.route && markers.some((marker) => marker.model !== preparedSpawn.route?.model || marker.effort !== preparedSpawn.route?.effort)) {
+    // The prompt marker carries the gateway model form, so compare it against
+    // route.marker (recorded at dispatch-prepare since 3.6.7), not the board
+    // slug in route.model — those never match for codex routes. Falling back
+    // to route.model keeps pre-3.6.7 prepared dispatches denied into the
+    // "re-run dispatch" path, which records the marker.
+    if (preparedSpawn?.route && markers.some((marker) =>
+      marker.model !== (preparedSpawn.route?.marker ?? preparedSpawn.route?.model)
+        || marker.effort !== preparedSpawn.route?.effort)) {
       writeDeny('PreToolUse', 'sidequest: dispatch route marker must match the prepared spawn. Re-run dispatch and pass the returned spawn unchanged.');
       return;
     }

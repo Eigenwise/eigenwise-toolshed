@@ -345,6 +345,13 @@ function resolvedDispatchRoute(ticket) {
 function dispatchModelFor(id) {
   return String(id || "").replace(/^claude-codex-/, "").replace(/\[1m\]$/, "");
 }
+function dispatchRouteState(model, effort, exec) {
+  return {
+    model,
+    effort,
+    ...exec && exec.dispatchModel ? { marker: exec.dispatchModel } : {}
+  };
+}
 function execFromBackend(backend, effort) {
   if (backend.backend === "codex") {
     const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
@@ -2682,6 +2689,7 @@ function prepareDispatch(slug, idOrRef, opts) {
     const artifactMode = Boolean(artifactRoot);
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
+    const preparedExec = resolveExec(t.model, t.effort);
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       sharedTree,
@@ -2692,8 +2700,8 @@ function prepareDispatch(slug, idOrRef, opts) {
       ...artifactMode ? { artifactDirtyBaseline } : {},
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
-      description: spawnDescription(t, resolveExec(t.model, t.effort)),
-      route: { model: t.model, effort: t.effort },
+      description: spawnDescription(t, preparedExec),
+      route: dispatchRouteState(t.model, t.effort, preparedExec),
       preparedAt: now,
       launchedAt: null,
       boundAt: null,
@@ -2800,8 +2808,8 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
       ...Array.isArray(state.artifactDirtyBaseline) ? { artifactDirtyBaseline: state.artifactDirtyBaseline.slice() } : {},
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
-      description: spawnDescription(t, resolveExec(t.model, t.effort)),
-      route: { model: fallback.model, effort: fallback.effort },
+      description: spawnDescription(t, fallback.exec),
+      route: dispatchRouteState(fallback.model, fallback.effort, fallback.exec),
       preparedAt: now,
       launchedAt: null,
       boundAt: null,

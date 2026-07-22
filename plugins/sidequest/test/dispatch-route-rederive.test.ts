@@ -51,7 +51,7 @@ test('re-dispatch re-derives an unlaunched prepared route after model availabili
 
   const recovered = store.prepareDispatch(slug, ticket.ref, { sessionId: 'recovered-roster' });
   assert.notEqual(recovered.token, degraded.token);
-  assert.deepEqual(recovered.ticket.dispatch.route, { model: 'codex-gpt-recovered', effort: 'medium' });
+  assert.deepEqual(recovered.ticket.dispatch.route, { model: 'codex-gpt-recovered', effort: 'medium', marker: 'gpt-recovered' });
   assert.equal(recovered.ticket.dispatchExecutor, 'sidequest-exec-dispatch-medium');
   assert.equal(recovered.ticket.dispatch.supersededTokens.length, 1);
 });

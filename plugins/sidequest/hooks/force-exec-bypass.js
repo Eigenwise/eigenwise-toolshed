@@ -228,7 +228,7 @@ function preparedDispatchValidation(input) {
         ref: launch.ref,
         token: launch.token,
         project,
-        route: typeof route?.model === "string" && typeof route.effort === "string" ? { model: route.model, effort: route.effort } : null
+        route: typeof route?.model === "string" && typeof route.effort === "string" ? { model: route.model, effort: route.effort, marker: typeof route.marker === "string" && route.marker ? route.marker : null } : null
       }
     };
   } catch (_) {
@@ -315,7 +315,7 @@ function main() {
   if (classification.kind === "codex_dispatch") {
     const markers = dispatchRouteMarkers(input);
     const routeModels = [...new Set(markers.map((marker) => marker.model))];
-    if (preparedSpawn?.route && markers.some((marker) => marker.model !== preparedSpawn.route?.model || marker.effort !== preparedSpawn.route?.effort)) {
+    if (preparedSpawn?.route && markers.some((marker) => marker.model !== (preparedSpawn.route?.marker ?? preparedSpawn.route?.model) || marker.effort !== preparedSpawn.route?.effort)) {
       writeDeny("PreToolUse", "sidequest: dispatch route marker must match the prepared spawn. Re-run dispatch and pass the returned spawn unchanged.");
       return;
     }
