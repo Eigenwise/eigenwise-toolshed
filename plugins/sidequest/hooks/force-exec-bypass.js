@@ -71,6 +71,10 @@ function runtimeModule(name) {
 // src/hooks/force-exec-bypass.ts
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
 function fallbackClassify(type) {
+  const readOnlyDispatch = /^sidequest-exec-dispatch-readonly-(low|medium|high|xhigh|max)$/.exec(type);
+  if (readOnlyDispatch) return { kind: "read_only_codex_dispatch", effort: readOnlyDispatch[1] || null };
+  const readOnlyBuiltin = /^sidequest-exec-readonly-(low|medium|high|xhigh|max)$/.exec(type);
+  if (readOnlyBuiltin) return { kind: "read_only_claude_builtin", effort: readOnlyBuiltin[1] || null };
   const dispatch = /^sidequest-exec-dispatch-(low|medium|high|xhigh|max)$/.exec(type);
   if (dispatch) return { kind: "codex_dispatch", effort: dispatch[1] || null };
   const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);
@@ -87,7 +91,7 @@ function classifyExecutor(type) {
   }
 }
 function isCurrentExecutor(classification) {
-  return classification.kind === "claude_builtin" || classification.kind === "codex_dispatch";
+  return classification.kind === "claude_builtin" || classification.kind === "codex_dispatch" || classification.kind === "read_only_claude_builtin" || classification.kind === "read_only_codex_dispatch";
 }
 function isExecutorCaller(input) {
   if (!stringField(input, "agent_id")) return false;
@@ -95,9 +99,12 @@ function isExecutorCaller(input) {
   if (!type) return false;
   return isCurrentExecutor(classifyExecutor(type)) || type.startsWith("sidequest-sq-") || type.startsWith("sidequest-ticket-") || type.startsWith("sidequest-native-");
 }
-function agentDenyReason(type) {
+function agentDenyReason(type, classification) {
   if (type.startsWith("sidequest-")) {
-    return `sidequest: ${type} is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.`;
+    if (classification.kind === "ticket" || classification.kind === "legacy_ticket") {
+      return `sidequest: ${type} looks like a Sidequest executor name but is invalid or retired. Re-run dispatch and spawn the returned executor.`;
+    }
+    return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
   }
   return `sidequest: ${type || "custom"} is a generic Agent, not a Sidequest ticket executor. For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor.`;
 }
@@ -278,7 +285,7 @@ function main() {
       });
       return;
     }
-    writeDeny("PreToolUse", agentDenyReason(type));
+    writeDeny("PreToolUse", agentDenyReason(type, classification));
     return;
   }
   const subagentOverride = String(process.env.CLAUDE_CODE_SUBAGENT_MODEL || "").trim();
@@ -312,7 +319,7 @@ function main() {
   const launchAgentName = preparedSpawn?.name || dispatchAgentName(input);
   if (launchAgentName) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
-  if (classification.kind === "codex_dispatch") {
+  if (classification.kind === "codex_dispatch" || classification.kind === "read_only_codex_dispatch") {
     const markers = dispatchRouteMarkers(input);
     const routeModels = [...new Set(markers.map((marker) => marker.model))];
     if (preparedSpawn?.route && markers.some((marker) => marker.model !== (preparedSpawn.route?.marker ?? preparedSpawn.route?.model) || marker.effort !== preparedSpawn.route?.effort)) {

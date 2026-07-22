@@ -6,7 +6,7 @@ import { readStdin, stringField } from './shared/input.js';
 import { writeContext } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
-type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
+type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
 interface ExecutorClassification {
   kind: ExecutorKind;
   effort: string | null;
@@ -41,6 +41,10 @@ interface Store {
 }
 
 function fallbackClassify(type: string): ExecutorClassification {
+  const readOnlyDispatch = /^sidequest-exec-dispatch-readonly-(low|medium|high|xhigh|max)$/.exec(type);
+  if (readOnlyDispatch) return { kind: 'read_only_codex_dispatch', effort: readOnlyDispatch[1] || null };
+  const readOnlyBuiltin = /^sidequest-exec-readonly-(low|medium|high|xhigh|max)$/.exec(type);
+  if (readOnlyBuiltin) return { kind: 'read_only_claude_builtin', effort: readOnlyBuiltin[1] || null };
   const dispatch = /^sidequest-exec-dispatch-(low|medium|high|xhigh|max)$/.exec(type);
   if (dispatch) return { kind: 'codex_dispatch', effort: dispatch[1] || null };
   const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);

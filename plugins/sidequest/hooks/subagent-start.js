@@ -57,6 +57,10 @@ function runtimeModule(name) {
 
 // src/hooks/subagent-start.ts
 function fallbackClassify(type) {
+  const readOnlyDispatch = /^sidequest-exec-dispatch-readonly-(low|medium|high|xhigh|max)$/.exec(type);
+  if (readOnlyDispatch) return { kind: "read_only_codex_dispatch", effort: readOnlyDispatch[1] || null };
+  const readOnlyBuiltin = /^sidequest-exec-readonly-(low|medium|high|xhigh|max)$/.exec(type);
+  if (readOnlyBuiltin) return { kind: "read_only_claude_builtin", effort: readOnlyBuiltin[1] || null };
   const dispatch = /^sidequest-exec-dispatch-(low|medium|high|xhigh|max)$/.exec(type);
   if (dispatch) return { kind: "codex_dispatch", effort: dispatch[1] || null };
   const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);

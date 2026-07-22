@@ -4,7 +4,7 @@ import { runtimeModule } from './shared/paths.js';
 
 const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statusline-setup']);
 
-type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
+type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
 interface ExecutorClassification {
   kind: ExecutorKind;
   effort: string | null;
@@ -48,6 +48,10 @@ interface Store {
 }
 
 function fallbackClassify(type: string): ExecutorClassification {
+  const readOnlyDispatch = /^sidequest-exec-dispatch-readonly-(low|medium|high|xhigh|max)$/.exec(type);
+  if (readOnlyDispatch) return { kind: 'read_only_codex_dispatch', effort: readOnlyDispatch[1] || null };
+  const readOnlyBuiltin = /^sidequest-exec-readonly-(low|medium|high|xhigh|max)$/.exec(type);
+  if (readOnlyBuiltin) return { kind: 'read_only_claude_builtin', effort: readOnlyBuiltin[1] || null };
   const dispatch = /^sidequest-exec-dispatch-(low|medium|high|xhigh|max)$/.exec(type);
   if (dispatch) return { kind: 'codex_dispatch', effort: dispatch[1] || null };
   const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);
@@ -66,7 +70,10 @@ function classifyExecutor(type: string): ExecutorClassification {
 }
 
 function isCurrentExecutor(classification: ExecutorClassification): boolean {
-  return classification.kind === 'claude_builtin' || classification.kind === 'codex_dispatch';
+  return classification.kind === 'claude_builtin'
+    || classification.kind === 'codex_dispatch'
+    || classification.kind === 'read_only_claude_builtin'
+    || classification.kind === 'read_only_codex_dispatch';
 }
 
 function isExecutorCaller(input: HookInput): boolean {
@@ -79,9 +86,12 @@ function isExecutorCaller(input: HookInput): boolean {
     || type.startsWith('sidequest-native-');
 }
 
-function agentDenyReason(type: string): string {
+function agentDenyReason(type: string, classification: ExecutorClassification): string {
   if (type.startsWith('sidequest-')) {
-    return `sidequest: ${type} is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.`;
+    if (classification.kind === 'ticket' || classification.kind === 'legacy_ticket') {
+      return `sidequest: ${type} looks like a Sidequest executor name but is invalid or retired. Re-run dispatch and spawn the returned executor.`;
+    }
+    return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
   }
   return `sidequest: ${type || 'custom'} is a generic Agent, not a Sidequest ticket executor. ` +
     'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor.';
@@ -288,7 +298,7 @@ function main(): void {
       });
       return;
     }
-    writeDeny('PreToolUse', agentDenyReason(type));
+    writeDeny('PreToolUse', agentDenyReason(type, classification));
     return;
   }
 
@@ -327,7 +337,7 @@ function main(): void {
   if (launchAgentName) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
 
-  if (classification.kind === 'codex_dispatch') {
+  if (classification.kind === 'codex_dispatch' || classification.kind === 'read_only_codex_dispatch') {
     const markers = dispatchRouteMarkers(input);
     const routeModels = [...new Set(markers.map((marker) => marker.model))];
     // The prompt marker carries the gateway model form, so compare it against

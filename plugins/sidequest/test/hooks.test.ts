@@ -14,6 +14,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
+const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
 const { slug } = store.ensureProject(BOARD_PATH);
 const database = db.openDb(SIDEQUEST_HOME);
@@ -108,6 +109,33 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
 });
 
+test('pre-tool hook: every stable readonly executor remains allowed and forced to bypass', () => {
+  for (const effort of EFFORTS) {
+    const claude = runHookOutput(FORCE_BYPASS, {
+      tool_name: 'Agent',
+      tool_input: {
+        subagent_type: stableReadOnlyClaudeName(effort),
+        model: 'sonnet',
+        prompt: `Review SQ-1 at ${effort} effort.`,
+      },
+    });
+    assert.equal(claude.hookSpecificOutput.permissionDecision, undefined);
+    assert.equal(claude.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
+    const dispatch = runHookOutput(FORCE_BYPASS, {
+      tool_name: 'Agent',
+      tool_input: {
+        subagent_type: stableReadOnlyDispatchName(effort),
+        model: 'fable',
+        prompt: `Review SQ-1.\n[sidequest-route model=gpt-5.6-sol effort=${effort}]`,
+      },
+    });
+    assert.equal(dispatch.hookSpecificOutput.permissionDecision, undefined);
+    assert.equal(dispatch.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+    assert.equal(dispatch.hookSpecificOutput.updatedInput.model, undefined);
+  }
+});
+
 test('pre-tool hook: native Explore and approved harness utilities pass through unchanged', () => {
   for (const subagent_type of ['Explore', 'claude-code-guide', 'statusline-setup']) {
     assert.equal(runHookOutput(FORCE_BYPASS, {
@@ -142,8 +170,15 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
   assert.equal(mismatch.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(
     mismatch.hookSpecificOutput.permissionDecisionReason,
-    'sidequest: sidequest-invalid is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.'
+    'sidequest: sidequest-invalid is an unknown Sidequest agent type. Use the executor returned by dispatch.'
   );
+  assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, /update\+reload|version mismatch/);
+  const malformedExecutor = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'sidequest-exec-readonly-ultra', prompt: 'Quick lookup.' },
+  });
+  assert.match(malformedExecutor.hookSpecificOutput.permissionDecisionReason, /looks like a Sidequest executor name but is invalid or retired/);
+  assert.doesNotMatch(malformedExecutor.hookSpecificOutput.permissionDecisionReason, /update\+reload|version mismatch/);
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
@@ -226,7 +261,7 @@ test('pre-tool hook keeps builtin models and strips a stable dispatch executor m
   for (const subagent_type of ['sidequest-native-sq-210-gpt-5-6-terra', 'sidequest-ticket-sq-584-haiku-b37fffcb']) {
     const out = runHookOutput(FORCE_BYPASS, { tool_name: 'Agent', tool_input: { subagent_type, prompt: 'work SQ-210' } });
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-    assert.match(out.hookSpecificOutput.permissionDecisionReason, /not a recognized ticket executor/);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /unknown Sidequest agent type|invalid or retired/);
   }
 });
 
@@ -1375,6 +1410,78 @@ test('dispatch ledger records an authoritative launch, agent bind, and claim ack
   assert.equal(pulse.dispatch.agentName, agentName);
 });
 
+test('readonly category executors pass spawn correction, start binding, and stop verdict hooks', () => {
+  const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-readonly-catalog-'));
+  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 3,
+    source: 'codex-gateway',
+    models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]' }],
+  }));
+  const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
+  process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
+  try {
+    const cases = [
+      ['codebase-exploration', 'sonnet', 'low', 'sidequest-exec-readonly-low'],
+      ['research', 'codex-gpt-5-6-sol', 'medium', 'sidequest-exec-dispatch-readonly-medium'],
+      ['review-audit', 'sonnet', 'high', 'sidequest-exec-readonly-high'],
+      ['spike-investigation', 'codex-gpt-5-6-sol', 'xhigh', 'sidequest-exec-dispatch-readonly-xhigh'],
+    ] as const;
+    const projectPath = store.readMeta(slug).path;
+
+    for (const [category, model, effort, expectedExecutor] of cases) {
+      store.setCategory({ id: category, name: category, route: { model, effort }, fallback: null, enabled: true });
+      const ticket = store.createTicket(slug, { title: `readonly ${category} hook fixture`, category, source: 'cli' });
+      const sessionId = `readonly-${category}-${++sqSeq}`;
+      const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+      assert.equal(prepared.ticket.dispatchExecutor, expectedExecutor);
+      const marker = expectedExecutor.includes('dispatch')
+        ? `\n[sidequest-route model=${prepared.ticket.dispatch.route.marker} effort=${effort}]`
+        : '';
+      const prompt = `Ref: ${ticket.ref}${marker}\n--project "${projectPath}" --token ${prepared.token}`;
+      const launch = runHookOutput(FORCE_BYPASS, {
+        session_id: sessionId,
+        tool_name: 'Agent',
+        tool_input: {
+          subagent_type: expectedExecutor,
+          model,
+          name: 'drifted-readonly-name',
+          description: 'drifted readonly description',
+          prompt,
+        },
+      });
+      assert.equal(launch.hookSpecificOutput.permissionDecision, undefined);
+      assert.equal(launch.hookSpecificOutput.updatedInput.description, prepared.ticket.dispatch.description);
+      assert.match(launch.systemMessage, /corrected prepared dispatch description/);
+
+      const agentId = `readonly-agent-${category}`;
+      const agentName = launch.hookSpecificOutput.updatedInput.name;
+      runHookOutput(SUBAGENT_START, {
+        session_id: sessionId,
+        agent_type: expectedExecutor,
+        agent_id: agentId,
+        agent_name: agentName,
+      });
+      assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, agentId);
+      assert.equal(store.claimTicket(slug, ticket.ref, `readonly-worker-${category}`, {
+        sessionId,
+        token: prepared.token,
+        executor: expectedExecutor,
+      }).ok, true);
+      const verdict = runHook(SUBAGENT_STOP, {
+        session_id: sessionId,
+        agent_type: expectedExecutor,
+        agent_id: agentId,
+        agent_name: agentName,
+      });
+      assert.match(verdict, new RegExp(`HOLDING ${ticket.ref} claim`));
+    }
+  } finally {
+    if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
+    else process.env.SIDEQUEST_DISCOVERY_DIRS = previousDirs;
+  }
+});
+
 test('concurrent same-type dispatches isolate launch, bind, claim, and stop by token-derived native identity', () => {
   const first = addEffortTicket('first same-type dispatch', 'high');
   const second = addEffortTicket('second same-type dispatch', 'high');
@@ -1505,5 +1612,5 @@ test('pre-tool hook: dispatch executor requires a canonical route marker and leg
     tool_input: { subagent_type: 'sidequest-ticket-sq-584-haiku-b37fffcb', name: 'w-legacy', prompt: 'work SQ-377' },
   });
   assert.equal(legacy.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(legacy.hookSpecificOutput.permissionDecisionReason, /not a recognized ticket executor/);
+  assert.match(legacy.hookSpecificOutput.permissionDecisionReason, /invalid or retired/);
 });
