@@ -203,25 +203,47 @@ function dispatchRouteMarkers(input) {
   if (typeof prompt !== "string" || !prompt) return [];
   return [...prompt.matchAll(ROUTE_MARKER_RE)].map((match) => ({ model: match[1] || "", effort: match[2] || "" }));
 }
-function expectedDispatchDescription(input) {
+function preparedDispatchValidation(input) {
   const toolInput = toolInputOf(input);
-  if (!toolInput) return null;
+  if (!toolInput) return { status: "none" };
   const launches = dispatchLaunches(toolInput.prompt);
-  if (launches.length !== 1) return null;
+  if (launches.length !== 1) return { status: "none" };
   const launch = launches[0];
-  const projectArg = extractProjectArg(toolInput.prompt) || stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR;
-  if (!launch || !projectArg) return null;
+  const project = extractProjectArg(toolInput.prompt) || stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR;
+  if (!launch || !project) return { status: "none" };
   try {
     const store = require(runtimeModule("store"));
-    const found = store.findProject(projectArg);
-    if (!found.ok || !found.slug) return null;
+    const found = store.findProject(project);
+    if (!found.ok || !found.slug) return { status: "none" };
     const ticket = store.getTicket(found.slug, launch.ref);
-    if (!ticket || ticket.dispatchNonce !== launch.token) return null;
+    if (!ticket) return { status: "none" };
+    if (ticket.dispatchNonce !== launch.token) return { status: "stale" };
     const description = ticket.dispatch?.description;
-    return typeof description === "string" && description ? description : null;
+    const route = ticket.dispatch?.route;
+    return {
+      status: "valid",
+      spawn: {
+        description: typeof description === "string" && description ? description : null,
+        name: `sidequest-${launch.ref.toLowerCase()}-${launch.token.slice(0, 12)}`,
+        ref: launch.ref,
+        token: launch.token,
+        project,
+        route: typeof route?.model === "string" && typeof route.effort === "string" ? { model: route.model, effort: route.effort } : null
+      }
+    };
   } catch (_) {
-    return null;
+    return { status: "none" };
   }
+}
+function briefingCommandDrifted(prompt, spawn) {
+  if (typeof prompt !== "string" || !/FIRST action:\s*run/i.test(prompt)) return false;
+  const command = /FIRST action:\s*run\s+`([^`]+)`/i.exec(prompt)?.[1];
+  if (!command) return true;
+  const refs = extractRefs(command);
+  return !/sidequest-launcher\.js["']?\s+briefing\b/i.test(command) || refs.length !== 1 || refs[0] !== spawn.ref || extractDispatchToken(command) !== spawn.token || extractProjectArg(command) !== spawn.project;
+}
+function correctionMessage(corrections) {
+  return corrections.length ? `sidequest: corrected prepared dispatch ${corrections.join(" and ")}.` : null;
 }
 function denyReason(result, type) {
   const retry = "Re-read the wave (`ready --brief`) and re-spawn with `model: exec.model`.";
@@ -268,16 +290,35 @@ function main() {
     return;
   }
   const updatedInput = { ...toolInput, mode: "bypassPermissions" };
-  const expectedDescription = expectedDispatchDescription(input);
-  if (expectedDescription && toolInput.description !== expectedDescription) {
-    writeDeny("PreToolUse", `sidequest: dispatch description must match the prepared spawn. Re-run dispatch and pass its spawn unchanged. Expected description: ${expectedDescription}`);
+  const dispatchValidation = preparedDispatchValidation(input);
+  if (dispatchValidation.status === "stale") {
+    writeDeny("PreToolUse", "sidequest: dispatch token is stale or rotated. Re-run dispatch and pass its spawn unchanged.");
     return;
   }
-  const launchAgentName = dispatchAgentName(input);
+  const preparedSpawn = dispatchValidation.spawn;
+  if (preparedSpawn && briefingCommandDrifted(toolInput.prompt, preparedSpawn)) {
+    writeDeny("PreToolUse", "sidequest: dispatch briefing command must match the prepared spawn. Re-run dispatch and pass its spawn unchanged.");
+    return;
+  }
+  const corrections = [];
+  if (preparedSpawn?.description && toolInput.description !== preparedSpawn.description) {
+    updatedInput.description = preparedSpawn.description;
+    corrections.push("description");
+  }
+  if (preparedSpawn && toolInput.name !== preparedSpawn.name) {
+    updatedInput.name = preparedSpawn.name;
+    corrections.push("name");
+  }
+  const launchAgentName = preparedSpawn?.name || dispatchAgentName(input);
   if (launchAgentName) updatedInput.name = launchAgentName;
+  const preparedCorrection = correctionMessage(corrections);
   if (classification.kind === "codex_dispatch") {
     const markers = dispatchRouteMarkers(input);
     const routeModels = [...new Set(markers.map((marker) => marker.model))];
+    if (preparedSpawn?.route && markers.some((marker) => marker.model !== preparedSpawn.route?.model || marker.effort !== preparedSpawn.route?.effort)) {
+      writeDeny("PreToolUse", "sidequest: dispatch route marker must match the prepared spawn. Re-run dispatch and pass the returned spawn unchanged.");
+      return;
+    }
     if (!routeModels.length) {
       writeDeny("PreToolUse", "sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged.");
       return;
@@ -297,8 +338,12 @@ function main() {
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, "model");
     if (hadModel) delete updatedInput.model;
     recordAuthoritativeLaunch(input, type, launchAgentName);
+    const messages = [
+      preparedCorrection,
+      hadModel ? `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` : null
+    ].filter((message) => Boolean(message));
     writeJson({
-      ...hadModel ? { systemMessage: `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` } : {},
+      ...messages.length ? { systemMessage: messages.join(" ") } : {},
       hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput }
     });
     return;
@@ -310,7 +355,10 @@ function main() {
       updatedInput.model = result2.model;
       recordAuthoritativeLaunch(input, type, launchAgentName);
       writeJson({
-        systemMessage: `sidequest: ${type} spawned without a model — injected "${result2.model}" from ${result2.refs.join(", ")}'s resolved category route. Always pass model: exec.model on Claude routes.`,
+        systemMessage: [
+          preparedCorrection,
+          `sidequest: ${type} spawned without a model — injected "${result2.model}" from ${result2.refs.join(", ")}'s resolved category route. Always pass model: exec.model on Claude routes.`
+        ].filter(Boolean).join(" "),
         hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput }
       });
       return;
@@ -322,13 +370,19 @@ function main() {
   if (result.status === "ok" && result.model !== toolInput.model) {
     recordAuthoritativeLaunch(input, type, launchAgentName);
     writeJson({
-      systemMessage: `sidequest: ${type} was spawned with model "${String(toolInput.model)}" but ${result.refs.join(", ")} resolves to "${result.model}" — kept the caller's value; confirm the cap is deliberate.`,
+      systemMessage: [
+        preparedCorrection,
+        `sidequest: ${type} was spawned with model "${String(toolInput.model)}" but ${result.refs.join(", ")} resolves to "${result.model}" — kept the caller's value; confirm the cap is deliberate.`
+      ].filter(Boolean).join(" "),
       hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput }
     });
     return;
   }
   recordAuthoritativeLaunch(input, type, launchAgentName);
-  writeJson({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } });
+  writeJson({
+    ...preparedCorrection ? { systemMessage: preparedCorrection } : {},
+    hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput }
+  });
 }
 try {
   main();

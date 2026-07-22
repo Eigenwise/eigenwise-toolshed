@@ -1212,16 +1212,17 @@ test('pre-tool hook: dispatch executor rejects a route marker with different eff
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /executor effort "high" does not match route marker effort "medium"/);
 });
 
-test('pre-tool hook: dispatch spawns require their issued description without touching ordinary executor calls', () => {
-  const ticket = addEffortTicket('preserve exact dispatch description', 'high');
+test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject integrity drift', () => {
+  const ticket = addEffortTicket('correct prepared dispatch spawn drift', 'high');
   const sessionId = `description-${++sqSeq}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const projectPath = store.readMeta(slug).path;
   const description = prepared.ticket.dispatch.description;
   const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
+  const expectedName = `sidequest-${ticket.ref.toLowerCase()}-${prepared.token.slice(0, 12)}`;
   const base = {
     subagent_type: prepared.ticket.dispatchExecutor,
-    name: 'exact-description',
+    name: expectedName,
     description,
     prompt,
   };
@@ -1229,14 +1230,58 @@ test('pre-tool hook: dispatch spawns require their issued description without to
   const exact = runHookOutput(FORCE_BYPASS, { session_id: sessionId, tool_name: 'Agent', tool_input: base });
   assert.equal(exact.hookSpecificOutput.permissionDecision, undefined);
   assert.equal(exact.hookSpecificOutput.updatedInput.description, description);
+  assert.equal(exact.hookSpecificOutput.updatedInput.name, expectedName);
 
-  const paraphrased = runHookOutput(FORCE_BYPASS, {
+  const driftedDescription = runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
     tool_name: 'Agent',
     tool_input: { ...base, description: 'shorter paraphrase' },
   });
-  assert.equal(paraphrased.hookSpecificOutput.permissionDecision, 'deny');
-  assert.ok(paraphrased.hookSpecificOutput.permissionDecisionReason.includes(description));
+  assert.equal(driftedDescription.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(driftedDescription.hookSpecificOutput.updatedInput.description, description);
+  assert.match(driftedDescription.systemMessage, /corrected prepared dispatch description/);
+
+  const driftedName = runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    tool_name: 'Agent',
+    tool_input: { ...base, name: 'drifted-agent-name' },
+  });
+  assert.equal(driftedName.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(driftedName.hookSpecificOutput.updatedInput.name, expectedName);
+  assert.match(driftedName.systemMessage, /corrected prepared dispatch name/);
+
+  const driftedRoute = runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    tool_name: 'Agent',
+    tool_input: {
+      ...base,
+      subagent_type: 'sidequest-exec-dispatch-high',
+      prompt: `${prompt}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]`,
+    },
+  });
+  assert.equal(driftedRoute.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /route marker must match the prepared spawn/);
+
+  const driftedBriefing = runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    tool_name: 'Agent',
+    tool_input: {
+      ...base,
+      subagent_type: 'sidequest-exec-dispatch-high',
+      prompt: `[sidequest-route model=sonnet effort=high]\nFIRST action: run \`node "sidequest-launcher.js" brief ${ticket.ref} --token ${prepared.token} --project "${projectPath}"\``,
+    },
+  });
+  assert.equal(driftedBriefing.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(driftedBriefing.hookSpecificOutput.permissionDecisionReason, /briefing command must match the prepared spawn/);
+
+  store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const staleToken = runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    tool_name: 'Agent',
+    tool_input: base,
+  });
+  assert.equal(staleToken.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(staleToken.hookSpecificOutput.permissionDecisionReason, /token is stale or rotated/);
 
   const ordinary = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
