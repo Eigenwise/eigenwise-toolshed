@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.205.0",
+  "version": "3.206.0",
   "plugins": [
     {
       "name": "workbench",
       "source": "./plugins/workbench",
       "description": "Set up and maintain a Claude Code workspace: initialize project-side configuration, check and update Toolshed plugins, diagnose local health, and run retrospectives.",
-      "version": "0.63.2",
+      "version": "0.63.3",
       "author": {
         "name": "Eigenwise"
       },
