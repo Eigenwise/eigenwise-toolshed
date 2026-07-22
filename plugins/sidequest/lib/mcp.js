@@ -182,12 +182,14 @@ function conciseDescription(description) {
   const firstSentence = String(description || "").match(/^.*?[.!?](?:\s|$)/);
   return firstSentence ? firstSentence[0].trim() : description;
 }
-function compactSchema(schema) {
-  if (Array.isArray(schema)) return schema.map(compactSchema);
+function compactSchema(schema, propertyMap = false) {
+  if (Array.isArray(schema)) return schema.map((entry) => compactSchema(entry));
   if (!schema || typeof schema !== "object") return schema;
   const compact = {};
   for (const [key, value] of Object.entries(schema)) {
-    if (key !== "description") compact[key] = compactSchema(value);
+    if (key !== "description" || propertyMap) {
+      compact[key] = compactSchema(value, !propertyMap && key === "properties");
+    }
   }
   return compact;
 }

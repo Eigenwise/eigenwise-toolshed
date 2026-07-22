@@ -187,6 +187,14 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref']);
   assert.equal(comments.inputSchema.properties.full.type, 'boolean');
   assert.equal(Object.hasOwn(tools.find((tool: any) => tool.name === 'unarchive').inputSchema.properties, 'full'), false);
+  for (const tool of tools) {
+    const source = mcp.TOOLS.find((candidate: any) => candidate.name === tool.name);
+    assert.deepEqual(
+      Object.keys(tool.inputSchema.properties).sort(),
+      Object.keys(source.inputSchema.properties).sort(),
+      `${tool.name} preserves every input property`,
+    );
+  }
 });
 
 test('board_config defaults docs to always-in-scope', async () => {

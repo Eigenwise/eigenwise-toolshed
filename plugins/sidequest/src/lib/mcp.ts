@@ -258,12 +258,14 @@ function conciseDescription(description?: any) {
   return firstSentence ? firstSentence[0].trim() : description;
 }
 
-function compactSchema(schema?: any): any {
-  if (Array.isArray(schema)) return schema.map(compactSchema);
+function compactSchema(schema?: any, propertyMap = false): any {
+  if (Array.isArray(schema)) return schema.map((entry) => compactSchema(entry));
   if (!schema || typeof schema !== 'object') return schema;
   const compact: any = {};
   for (const [key, value] of Object.entries(schema)) {
-    if (key !== 'description') compact[key] = compactSchema(value);
+    if (key !== 'description' || propertyMap) {
+      compact[key] = compactSchema(value, !propertyMap && key === 'properties');
+    }
   }
   return compact;
 }
