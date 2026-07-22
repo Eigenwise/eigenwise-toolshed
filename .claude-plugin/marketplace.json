@@ -54,7 +54,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
-      "version": "3.6.9",
+      "version": "3.6.10",
       "author": {
         "name": "Eigenwise"
       },
