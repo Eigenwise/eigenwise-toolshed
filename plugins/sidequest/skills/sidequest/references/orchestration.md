@@ -43,6 +43,8 @@ investigation found (paths, the surrounding contract, the gotcha you spotted). I
 ticket would need context its description does not carry, gather it first and put what you learned
 in the spec, or split it further.
 
+**Non-repo deliverables need a durable rendezvous.** A report, analysis, or dataset must land on an agent-independent surface: the ticket comment thread when it fits the comment cap, a declared artifact root under the project (for example `.claude/.codebase-info`) for larger artifacts, or a user-named absolute path outside any session temp tree. Never pin a session scratchpad path in a ticket as the deliverable location or its verify command, because different agents resolve different scratchpad roots for the same project. Put the durable location and the exact verification step in the ticket before dispatch.
+
 ## Acceptance evidence before fix chains
 
 Product rework gets expensive when a chain proves individual patches before it proves the system
