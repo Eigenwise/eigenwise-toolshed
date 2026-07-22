@@ -147,6 +147,40 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
+test('pre-tool hook: executor callers can fan out generic agents with bounded guidance', () => {
+  const proposed = {
+    subagent_type: 'general-purpose',
+    isolation: 'worktree',
+    prompt: 'Audit the ticket-scoped storage API.',
+  };
+  for (const agent_type of [
+    'sidequest-exec-high',
+    'sidequest-exec-dispatch-high',
+    'sidequest-sq-738-gpt-5-6-terra',
+    'sidequest-native-sq-738-gpt-5-6-terra',
+  ]) {
+    const out = runHookOutput(FORCE_BYPASS, {
+      agent_id: `native-task@${agent_type}`,
+      agent_type,
+      tool_name: 'Agent',
+      tool_input: proposed,
+    });
+    assert.match(out.systemMessage, /executor fan-out is allowed/);
+    assert.match(out.systemMessage, /unnamed subagents only/);
+    assert.match(out.systemMessage, /ticket scope/);
+    assert.match(out.systemMessage, /never file, route, or dispatch board tickets/);
+    assert.equal(out.hookSpecificOutput, undefined);
+  }
+
+  const mainThread = runHookOutput(FORCE_BYPASS, {
+    agent_type: 'sidequest-exec-dispatch-high',
+    tool_name: 'Agent',
+    tool_input: proposed,
+  });
+  assert.equal(mainThread.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(mainThread.hookSpecificOutput.permissionDecisionReason, /generic Agent, not a Sidequest ticket executor/);
+});
+
 test('pre-tool hook: a marked arbitrary agent is still denied', () => {
   const marked = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',

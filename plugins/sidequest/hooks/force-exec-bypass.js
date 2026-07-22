@@ -89,6 +89,12 @@ function classifyExecutor(type) {
 function isCurrentExecutor(classification) {
   return classification.kind === "claude_builtin" || classification.kind === "codex_dispatch";
 }
+function isExecutorCaller(input) {
+  if (!stringField(input, "agent_id")) return false;
+  const type = stringField(input, "agent_type");
+  if (!type) return false;
+  return isCurrentExecutor(classifyExecutor(type)) || type.startsWith("sidequest-sq-") || type.startsWith("sidequest-ticket-") || type.startsWith("sidequest-native-");
+}
 function agentDenyReason(type) {
   if (type.startsWith("sidequest-")) {
     return `sidequest: ${type} is not a recognized ticket executor — gate/executor version mismatch — update+reload sidequest, do not respawn or re-dispatch.`;
@@ -244,6 +250,12 @@ function main() {
   if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
   const classification = classifyExecutor(type);
   if (!isCurrentExecutor(classification)) {
+    if (isExecutorCaller(input) && !type.startsWith("sidequest-")) {
+      writeJson({
+        systemMessage: "sidequest: executor fan-out is allowed for this ticket. Spawn unnamed subagents only, keep them inside the ticket scope, and never file, route, or dispatch board tickets from an executor."
+      });
+      return;
+    }
     writeDeny("PreToolUse", agentDenyReason(type));
     return;
   }
