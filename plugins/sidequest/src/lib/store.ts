@@ -2271,12 +2271,18 @@ function dispatchWarnings(ticket?: any, slug?: any) {
     const liveDispatch = dispatch && !dispatch.terminalAt && ['prepared', 'launched', 'bound', 'claimed'].includes(pulseDispatchState(dispatch));
     if (!liveClaim && !liveDispatch) continue;
     const overlaps = overlappingScopePaths(declaredFiles, dispatchDeclaredFiles(sibling));
-    if (!overlaps.length) continue;
-    const lockfilesOnly = overlaps.every((file?: any) => /(?:^|\/)(?:Cargo\.lock|package-lock\.json|pnpm-lock\.yaml)$/i.test(file));
-    const lockfileGuidance = lockfilesOnly
-      ? ' Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.'
-      : '';
-    warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(', ')}.${lockfileGuidance}`);
+    const contractReasons = contractCollisionReasons(ticket, sibling);
+    if (!overlaps.length && !contractReasons.length) continue;
+    if (overlaps.length) {
+      const lockfilesOnly = overlaps.every((file?: any) => /(?:^|\/)(?:Cargo\.lock|package-lock\.json|pnpm-lock\.yaml)$/i.test(file));
+      const lockfileGuidance = lockfilesOnly
+        ? ' Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.'
+        : '';
+      warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(', ')}.${lockfileGuidance}`);
+    }
+    for (const collision of contractReasons) {
+      warnings.push(`Dispatch warning: contract edge with in-flight ${sibling.ref}: ${collision.message} Serialize unless a reviewed contract waiver applies.`);
+    }
   }
   return warnings;
 }
@@ -2342,6 +2348,8 @@ function createTicket(slug?: any, fields?: any) {
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
     complexityWhy: String(fields.complexityWhy || '').trim().slice(0, 1000), // the mandatory motivation for the score
     files: normalizeFiles(fields.files),          // declared file scope, for parallel-wave planning
+    contracts: normalizeContracts(fields.contracts), // declared contract edges, for parallel-wave planning
+    contractWaiver: !!fields.contractWaiver,
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
     executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command'),
     assets,
@@ -2492,17 +2500,111 @@ function scopesOverlap(filesA?: any, filesB?: any) {
   return overlappingScopePaths(filesA, filesB).length > 0;
 }
 
+const CONTRACT_EDGE_KINDS = ['produces', 'changes', 'consumes'];
+
+function normalizeContractNames(values?: any) {
+  if (!values) return [];
+  const entries = Array.isArray(values) ? values : String(values).split(',');
+  const seen = new Set();
+  const normalized: any[] = [];
+  for (const value of entries) {
+    const name = String(value).trim().slice(0, 200);
+    if (name && !seen.has(name.toLowerCase())) {
+      seen.add(name.toLowerCase());
+      normalized.push(name);
+    }
+  }
+  return normalized.slice(0, 20);
+}
+
+function normalizeContracts(contracts?: any) {
+  const source = contracts && typeof contracts === 'object' ? contracts : {};
+  return Object.fromEntries(CONTRACT_EDGE_KINDS.map((kind) => [kind, normalizeContractNames(source[kind])]));
+}
+
+function contractNamesByLowerCase(values?: any) {
+  return new Map(normalizeContractNames(values).map((value?: any) => [value.toLowerCase(), value]));
+}
+
+function contractCollisionReasons(left?: any, right?: any) {
+  if (!left || !right || left.contractWaiver || right.contractWaiver) return [];
+  const leftContracts = normalizeContracts(left.contracts);
+  const rightContracts = normalizeContracts(right.contracts);
+  const reasons: any[] = [];
+  const matchingNames = (a?: any, b?: any) => {
+    const matches: any[] = [];
+    for (const [key, name] of contractNamesByLowerCase(a)) {
+      if (contractNamesByLowerCase(b).has(key)) matches.push(name);
+    }
+    return matches.sort((a?: any, b?: any) => a.localeCompare(b));
+  };
+  for (const contract of matchingNames(leftContracts.produces, rightContracts.consumes)) {
+    reasons.push({ contract, type: 'produces-consumes', message: `${left.ref} produces ${contract}, which ${right.ref} consumes.` });
+  }
+  for (const contract of matchingNames(rightContracts.produces, leftContracts.consumes)) {
+    reasons.push({ contract, type: 'produces-consumes', message: `${right.ref} produces ${contract}, which ${left.ref} consumes.` });
+  }
+  for (const contract of matchingNames(leftContracts.changes, rightContracts.changes)) {
+    reasons.push({ contract, type: 'changes-changes', message: `${left.ref} and ${right.ref} both change ${contract}.` });
+  }
+  return reasons;
+}
+
+function ticketsConflict(left?: any, right?: any) {
+  return scopesOverlap(left.files, right.files) || contractCollisionReasons(left, right).length > 0;
+}
+
+function orderReadyTicketsByContractDependencies(tickets?: any) {
+  const ordered = Array.isArray(tickets) ? tickets : [];
+  const edges = new Map(ordered.map((ticket?: any) => [ticket.id, new Set()]));
+  for (const producer of ordered) {
+    if (producer.contractWaiver) continue;
+    const produced = contractNamesByLowerCase(normalizeContracts(producer.contracts).produces);
+    for (const consumer of ordered) {
+      if (producer.id === consumer.id || consumer.contractWaiver) continue;
+      const consumed = contractNamesByLowerCase(normalizeContracts(consumer.contracts).consumes);
+      const dependencies = edges.get(producer.id);
+      if (dependencies && [...produced.keys()].some((name?: any) => consumed.has(name))) dependencies.add(consumer.id);
+    }
+  }
+  const pending = new Set(ordered.map((ticket?: any) => ticket.id));
+  const result: any[] = [];
+  while (pending.size) {
+    const next = ordered.find((ticket?: any) => {
+      if (!pending.has(ticket.id)) return false;
+      for (const [from, targets] of edges) {
+        if (pending.has(from) && targets.has(ticket.id)) return false;
+      }
+      return true;
+    }) || ordered.find((ticket?: any) => pending.has(ticket.id));
+    result.push(next);
+    pending.delete(next.id);
+  }
+  return result;
+}
+
+function contractMetadata(ticket?: any) {
+  const contracts = normalizeContracts(ticket && ticket.contracts);
+  return {
+    produces: contracts.produces,
+    changes: contracts.changes,
+    consumes: contracts.consumes,
+    waiver: !!(ticket && ticket.contractWaiver),
+  };
+}
+
 // Partition the ready set into waves an orchestrator can fan out one wave at a
-// time: within a wave no two tickets' declared scopes overlap. Greedy first-fit
-// in priority order, so wave 1 is "start these now", wave 2 "after wave 1",
-// etc. Tickets with no declared files never mechanically conflict (see above).
+// time: within a wave no two tickets' declared scopes or named contracts
+// conflict. Greedy first-fit in priority order, so wave 1 is "start these now",
+// wave 2 "after wave 1", etc. Tickets with no declarations never mechanically
+// conflict.
 function readyWaves(slug?: any, opts?: any) {
-  const ready = readyTickets(slug, opts);
+  const ready = orderReadyTicketsByContractDependencies(readyTickets(slug, opts));
   const waves: any[] = [];
   for (const t of ready) {
     let placed = false;
     for (const wave of waves) {
-      if (!wave.some((w?: any) => scopesOverlap(w.files, t.files))) {
+      if (!wave.some((w?: any) => ticketsConflict(w, t))) {
         wave.push(t);
         placed = true;
         break;
@@ -2511,6 +2613,23 @@ function readyWaves(slug?: any, opts?: any) {
     if (!placed) waves.push([t]);
   }
   return waves;
+}
+
+function readyWaveDependencies(slug?: any, opts?: any) {
+  const waves = readyWaves(slug, opts);
+  const dependencies: any[] = [];
+  for (let waveIndex = 1; waveIndex < waves.length; waveIndex++) {
+    for (const ticket of waves[waveIndex]) {
+      for (let priorWave = 0; priorWave < waveIndex; priorWave++) {
+        for (const earlier of waves[priorWave]) {
+          for (const reason of contractCollisionReasons(earlier, ticket)) {
+            dependencies.push({ before: earlier.ref, after: ticket.ref, contract: reason.contract, type: reason.type, reason: reason.message });
+          }
+        }
+      }
+    }
+  }
+  return dependencies;
 }
 
 // An assignee is a free-form name (the human "you", or an agent). Empty/blank
@@ -2573,6 +2692,8 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
         }
       }
     }
+    if (patch.contracts !== undefined) t.contracts = normalizeContracts(patch.contracts);
+    if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;
     if (patch.executorAnchors !== undefined) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors');
     if (patch.executorVerify !== undefined) t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
     // A provenance stamp may ride along a patch (e.g. the dashboard completing a
@@ -4615,6 +4736,7 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     effort: t.effort || null,
     direct: t.directClaim || null,
     files: Array.isArray(t.files) ? t.files : [],
+    contracts: contractMetadata(t),
     claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
@@ -4724,8 +4846,9 @@ function readyPayload(slug?: any, opts?: any) {
   opts = opts || {};
   let tickets = readyTickets(slug, { model: opts.model, category: opts.category });
   const waves = readyWaves(slug, { model: opts.model, category: opts.category }).map((wave?: any) => wave.map((t?: any) => t.ref));
+  const waveDependencies = readyWaveDependencies(slug, { model: opts.model, category: opts.category });
   if (opts.brief) tickets = tickets.map((t?: any) => briefTicket(slug, t, { blockedBy: [] }));
-  return { tickets, waves, claimTtlMs: claimTtlMs(), categories: classifierCategories({ project: slug }) };
+  return { tickets, waves, waveDependencies, claimTtlMs: claimTtlMs(), categories: classifierCategories({ project: slug }) };
 }
 
 function claimPulse(claim?: any, now?: any) {
@@ -5610,11 +5733,14 @@ module.exports = {
   assignTicket,
   readyTickets,
   readyWaves,
+  readyWaveDependencies,
   scopesOverlap,
   normalizeFiles,
   scopeExpansionFiles,
   scopeExpansionCommand,
   requestScope,
+  normalizeContracts,
+  contractCollisionReasons,
   STORY_PALETTE,
   STORY_COLOR_NAMES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,

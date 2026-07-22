@@ -113,8 +113,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   agent is addressable and its board activity is stamped by the same identity. The `--by` must be
   genuinely random per session (not the ticket ref, not a fixed label): a second session fanning out
   over the same board would derive the identical value and silently coexist as the same worker.
-- **One wave at a time.** `ready --json --brief` partitions the set into parallel-safe waves by
-  declared file scope — no two tickets in a wave overlap. Before spawning a wave, assess the runtime
+- **One wave at a time.** `ready --json --brief` partitions the set into parallel-safe waves by declared file scope and named contract edges. A ticket can declare free-form `produces`, `changes`, and `consumes` metadata for interfaces it touches; a produce/consume or change/change match sequences otherwise disjoint tickets. Read `waveDependencies` for the named reason before spawning. `contractWaiver:true` is an explicit reviewed override, so use it only after checking the real integration seam. Before spawning a wave, assess the runtime
   resources each ticket needs: fixed ports, domains, shared databases, existing servers, and files
   outside the declared scopes. Worktrees isolate files, not those resources. Serialize tickets that
   share one, and name the orchestrator/worker ownership before launch. Spawn wave 1, wait, re-run

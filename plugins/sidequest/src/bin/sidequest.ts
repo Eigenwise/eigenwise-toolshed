@@ -36,7 +36,7 @@ const { claimRefusalMessage } = require('../lib/refusal-guidance');
  * ------------------------------------------------------------------ */
 
 // Flags that may be repeated collect into arrays; everything else is a scalar.
-const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope']);
+const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope', 'produces', 'changes', 'consumes']);
 const ALIASES: any = {
   t: 'title',
   d: 'desc',
@@ -72,7 +72,7 @@ function parseArgs(argv: any) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'contract-waiver']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -225,6 +225,20 @@ function validatedAddInput(opts: any) {
   return { category, complexity };
 }
 
+function contractsFromOpts(opts: any, current?: any) {
+  const existing = store.normalizeContracts(current);
+  return {
+    produces: opts.produces === undefined ? existing.produces : opts.produces,
+    changes: opts.changes === undefined ? existing.changes : opts.changes,
+    consumes: opts.consumes === undefined ? existing.consumes : opts.consumes,
+  };
+}
+
+function contractWaiverFromOpts(opts: any) {
+  if (opts['contract-waiver'] === undefined) return undefined;
+  return opts['contract-waiver'] !== false && String(opts['contract-waiver']).toLowerCase() !== 'false';
+}
+
 function addPreview(opts: any, category: any, complexity: any) {
   const priority = store.VALID_PRIORITY.includes(String(opts.priority || '').toLowerCase())
     ? String(opts.priority).toLowerCase()
@@ -237,6 +251,8 @@ function addPreview(opts: any, category: any, complexity: any) {
     labels: opts.label || [],
     images: opts.image || [],
     files: opts.file || [],
+    contracts: contractsFromOpts(opts),
+    contractWaiver: contractWaiverFromOpts(opts) || false,
     executorAnchors: opts.anchors || '',
     executorVerify: opts.verify || '',
     storyId: opts.story || null,
@@ -270,6 +286,8 @@ async function cmdAdd(opts: any) {
     labels: opts.label,
     images: opts.image || [],
     files: opts.file,
+    contracts: contractsFromOpts(opts),
+    contractWaiver: contractWaiverFromOpts(opts),
     executorAnchors: opts.anchors,
     executorVerify: opts.verify,
     storyId: opts.story,
@@ -365,6 +383,7 @@ async function cmdUpdate(opts: any, positional: any) {
   if (!idOrRef) fail('update: pass a ticket id or ref, e.g. sidequest update SQ-4 --status done');
   guardDirectRouting(opts); // --model/--effort are no longer accepted; route via --complexity
   const { slug, meta } = await resolveProject(opts);
+  const current = store.getTicket(slug, idOrRef);
   const patch: any = {};
   if (opts.title != null) patch.title = opts.title;
   if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
@@ -376,6 +395,8 @@ async function cmdUpdate(opts: any, positional: any) {
     const files = opts.file != null ? opts.file : opts.files;
     patch.files = (Array.isArray(files) && files.length === 1 && String(files[0]).toLowerCase() === 'none') || String(files).toLowerCase() === 'none' ? [] : files;
   }
+  if (opts.produces !== undefined || opts.changes !== undefined || opts.consumes !== undefined) patch.contracts = contractsFromOpts(opts, current && current.contracts);
+  if (opts['contract-waiver'] !== undefined) patch.contractWaiver = contractWaiverFromOpts(opts);
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
   if (opts.assignee != null) patch.assignee = opts.assignee;
@@ -1595,6 +1616,7 @@ async function cmdReady(opts: any) {
   }
   const tickets = store.readyTickets(slug, { model: opts.model, category: opts.category });
   const waves = store.readyWaves(slug, { model: opts.model, category: opts.category });
+  const waveDependencies = store.readyWaveDependencies(slug, { model: opts.model, category: opts.category });
   if (!tickets.length) {
     console.log(`Nothing ready to work in ${meta.name}.`);
     return;
@@ -1610,6 +1632,9 @@ async function cmdReady(opts: any) {
     waves.forEach((wave: any, i: any) => {
       console.log(i === 0 ? '\n  Wave 1 — safe to run in parallel:' : `\n  Wave ${i + 1} — after wave ${i}:`);
       for (const t of wave) printTicket(t);
+      for (const dependency of waveDependencies.filter((entry?: any) => wave.some((ticket?: any) => ticket.ref === entry.after))) {
+        console.log(`      contract edge: ${dependency.reason}`);
+      }
     });
   } else {
     for (const t of tickets) printTicket(t);
@@ -2324,11 +2349,11 @@ async function cmdStop() {
  * ------------------------------------------------------------------ */
 
 const HELP_COMMANDS: any = {
-  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
+  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
   list: 'sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
-  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
   rm: 'sidequest rm <id|SQ-n> [--force]',
   profile: 'sidequest profile <hygiene|list|show|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
   category: 'sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--json]',
@@ -2397,11 +2422,11 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [-i image]... [-s todo|doing|done]
+  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
+  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
@@ -2439,6 +2464,9 @@ Working the board safely (multi-agent):
   sidequest add/update ... --file path [--file path...] (or --files "path,...")   declare the files a ticket will touch — repeat for
     several; "none" clears (update only). 'ready' groups tickets into parallel-safe waves by declared file
     scope: tickets in the same wave never touch overlapping files/directories; untagged tickets never conflict.
+  sidequest add/update ... --produces name --changes name --consumes name   declare free-form contract edges;
+    'ready --brief' reports a produce/consume or change/change collision in waveDependencies. --contract-waiver
+    is a reviewed override and can be cleared with --contract-waiver=false.
   sidequest add/update ... --anchors "file:line symbol" --verify "<exact command>"
     seed a bounded executor with investigation findings and its exact check. Anchors (4k), verify (1k), and the
     final prompt (7.6k) stay below the Windows command-line ceiling; values are preserved verbatim.

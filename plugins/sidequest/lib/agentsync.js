@@ -307,6 +307,21 @@ function storyContractPacket(ticket, slug) {
   return `## Story execution contract (revision ${Number(snapshot.revision) || 1})
 ${snapshot.body}`;
 }
+function ticketContractsPacket(ticket) {
+  const contracts = store.normalizeContracts(ticket && ticket.contracts);
+  const entries = [
+    ...contracts.produces.map((name) => `- produces: ${name}`),
+    ...contracts.changes.map((name) => `- changes: ${name}`),
+    ...contracts.consumes.map((name) => `- consumes: ${name}`)
+  ];
+  if (ticket && ticket.contractWaiver) entries.push("- reviewed waiver: true");
+  return entries.length ? entries.join("\n") : "(No contract metadata was recorded.)";
+}
+function ticketReadinessContractPacket(ticket, slug) {
+  if (!ticket || !slug) return "(No contract-edge sequencing applies.)";
+  const dependencies = store.readyWaveDependencies(slug).filter((edge) => edge.before === ticket.ref || edge.after === ticket.ref);
+  return dependencies.length ? dependencies.map((edge) => `- ${edge.reason}`).join("\n") : "(No contract-edge sequencing applies.)";
+}
 function ticketBrief(ticket, nonce, marker, slug) {
   const category = ticket.category || {};
   const comments = ticketCommentsPacket(ticket.comments);
@@ -338,6 +353,10 @@ ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
     `Declared files:
 ${declaredFiles}`,
     "Scope expansion: if work needs an undeclared path, call scope-request with that path and pause with your claim held. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues.",
+    `Contract metadata:
+${ticketContractsPacket(ticket)}`,
+    `Readiness contract edges:
+${ticketReadinessContractPacket(ticket, slug)}`,
     `Ticket state:
 Status: ${ticket.status || "(Unknown)"}
 Priority: ${ticket.priority || "(Unknown)"}

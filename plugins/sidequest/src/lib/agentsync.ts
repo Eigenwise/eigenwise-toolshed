@@ -437,6 +437,25 @@ function storyContractPacket(ticket?: any, slug?: any) {
   return `## Story execution contract (revision ${Number(snapshot.revision) || 1})\n${snapshot.body}`;
 }
 
+function ticketContractsPacket(ticket?: any) {
+  const contracts = store.normalizeContracts(ticket && ticket.contracts);
+  const entries = [
+    ...contracts.produces.map((name?: any) => `- produces: ${name}`),
+    ...contracts.changes.map((name?: any) => `- changes: ${name}`),
+    ...contracts.consumes.map((name?: any) => `- consumes: ${name}`),
+  ];
+  if (ticket && ticket.contractWaiver) entries.push('- reviewed waiver: true');
+  return entries.length ? entries.join('\n') : '(No contract metadata was recorded.)';
+}
+
+function ticketReadinessContractPacket(ticket?: any, slug?: any) {
+  if (!ticket || !slug) return '(No contract-edge sequencing applies.)';
+  const dependencies = store.readyWaveDependencies(slug).filter((edge?: any) => edge.before === ticket.ref || edge.after === ticket.ref);
+  return dependencies.length
+    ? dependencies.map((edge?: any) => `- ${edge.reason}`).join('\n')
+    : '(No contract-edge sequencing applies.)';
+}
+
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
   const category = ticket.category || {};
   const comments = ticketCommentsPacket(ticket.comments);
@@ -466,6 +485,8 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
     ...(worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : []),
     `Declared files:\n${declaredFiles}`,
     'Scope expansion: if work needs an undeclared path, call scope-request with that path and pause with your claim held. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues.',
+    `Contract metadata:\n${ticketContractsPacket(ticket)}`,
+    `Readiness contract edges:\n${ticketReadinessContractPacket(ticket, slug)}`,
     `Ticket state:\nStatus: ${ticket.status || '(Unknown)'}\nPriority: ${ticket.priority || '(Unknown)'}\nLabels: ${labels}\nStory: ${ticket.storyId || '(No story)'}\nDependencies:\n${links}`,
     `${commentHeading}\n${comments}`,
     `Attachments (inspect every readable attachment before implementation):\n${ticketAssetsPacket(ticket, slug)}`,

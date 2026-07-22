@@ -504,6 +504,10 @@ const TOOLS = [
         status: { type: "string", enum: store.VALID_STATUS },
         labels: { type: "array", items: { type: "string" } },
         files: { type: "array", items: { type: "string" }, description: "Declared file scope (paths or dir prefixes)." },
+        produces: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket produces." },
+        changes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket changes." },
+        consumes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket consumes." },
+        contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
         story: { type: "string", description: "A story ref (US-n) to file this ticket into." },
@@ -534,6 +538,8 @@ const TOOLS = [
         status: args.status,
         labels: args.labels,
         files: args.files,
+        contracts: { produces: args.produces, changes: args.changes, consumes: args.consumes },
+        contractWaiver: args.contractWaiver,
         executorAnchors: args.anchors,
         executorVerify: args.verify,
         storyId: args.story,
@@ -562,6 +568,10 @@ const TOOLS = [
         status: { type: "string", enum: store.VALID_STATUS },
         labels: { type: "array", items: { type: "string" } },
         files: { type: "array", items: { type: "string" }, description: "Declared file scope (paths or dir prefixes)." },
+        produces: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket produces." },
+        changes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket changes." },
+        consumes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket consumes." },
+        contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
         story: { type: "string" },
@@ -581,6 +591,15 @@ const TOOLS = [
       for (const k of ["title", "description", "priority", "status", "labels", "files", "complexity"]) {
         if (args[k] !== void 0) patch[k] = args[k];
       }
+      if (args.produces !== void 0 || args.changes !== void 0 || args.consumes !== void 0) {
+        const existing = store.normalizeContracts((store.getTicket(slug, args.ref) || {}).contracts);
+        patch.contracts = {
+          produces: args.produces === void 0 ? existing.produces : args.produces,
+          changes: args.changes === void 0 ? existing.changes : args.changes,
+          consumes: args.consumes === void 0 ? existing.consumes : args.consumes
+        };
+      }
+      if (args.contractWaiver !== void 0) patch.contractWaiver = args.contractWaiver;
       if (args.anchors !== void 0) patch.executorAnchors = args.anchors;
       if (args.verify !== void 0) patch.executorVerify = args.verify;
       if (args.story !== void 0) patch.storyId = args.story;

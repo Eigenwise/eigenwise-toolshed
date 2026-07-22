@@ -1904,10 +1904,16 @@ function dispatchWarnings(ticket, slug) {
     const liveDispatch = dispatch && !dispatch.terminalAt && ["prepared", "launched", "bound", "claimed"].includes(pulseDispatchState(dispatch));
     if (!liveClaim && !liveDispatch) continue;
     const overlaps = overlappingScopePaths(declaredFiles, dispatchDeclaredFiles(sibling));
-    if (!overlaps.length) continue;
-    const lockfilesOnly = overlaps.every((file) => /(?:^|\/)(?:Cargo\.lock|package-lock\.json|pnpm-lock\.yaml)$/i.test(file));
-    const lockfileGuidance = lockfilesOnly ? " Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration." : "";
-    warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(", ")}.${lockfileGuidance}`);
+    const contractReasons = contractCollisionReasons(ticket, sibling);
+    if (!overlaps.length && !contractReasons.length) continue;
+    if (overlaps.length) {
+      const lockfilesOnly = overlaps.every((file) => /(?:^|\/)(?:Cargo\.lock|package-lock\.json|pnpm-lock\.yaml)$/i.test(file));
+      const lockfileGuidance = lockfilesOnly ? " Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration." : "";
+      warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(", ")}.${lockfileGuidance}`);
+    }
+    for (const collision of contractReasons) {
+      warnings.push(`Dispatch warning: contract edge with in-flight ${sibling.ref}: ${collision.message} Serialize unless a reviewed contract waiver applies.`);
+    }
   }
   return warnings;
 }
@@ -1970,6 +1976,9 @@ function createTicket(slug, fields) {
     // the mandatory motivation for the score
     files: normalizeFiles(fields.files),
     // declared file scope, for parallel-wave planning
+    contracts: normalizeContracts(fields.contracts),
+    // declared contract edges, for parallel-wave planning
+    contractWaiver: !!fields.contractWaiver,
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors"),
     executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, "executor verify command"),
     assets,
@@ -2107,13 +2116,98 @@ function overlappingScopePaths(filesA, filesB) {
 function scopesOverlap(filesA, filesB) {
   return overlappingScopePaths(filesA, filesB).length > 0;
 }
+const CONTRACT_EDGE_KINDS = ["produces", "changes", "consumes"];
+function normalizeContractNames(values) {
+  if (!values) return [];
+  const entries = Array.isArray(values) ? values : String(values).split(",");
+  const seen = /* @__PURE__ */ new Set();
+  const normalized = [];
+  for (const value of entries) {
+    const name = String(value).trim().slice(0, 200);
+    if (name && !seen.has(name.toLowerCase())) {
+      seen.add(name.toLowerCase());
+      normalized.push(name);
+    }
+  }
+  return normalized.slice(0, 20);
+}
+function normalizeContracts(contracts) {
+  const source = contracts && typeof contracts === "object" ? contracts : {};
+  return Object.fromEntries(CONTRACT_EDGE_KINDS.map((kind) => [kind, normalizeContractNames(source[kind])]));
+}
+function contractNamesByLowerCase(values) {
+  return new Map(normalizeContractNames(values).map((value) => [value.toLowerCase(), value]));
+}
+function contractCollisionReasons(left, right) {
+  if (!left || !right || left.contractWaiver || right.contractWaiver) return [];
+  const leftContracts = normalizeContracts(left.contracts);
+  const rightContracts = normalizeContracts(right.contracts);
+  const reasons = [];
+  const matchingNames = (a, b) => {
+    const matches = [];
+    for (const [key, name] of contractNamesByLowerCase(a)) {
+      if (contractNamesByLowerCase(b).has(key)) matches.push(name);
+    }
+    return matches.sort((a2, b2) => a2.localeCompare(b2));
+  };
+  for (const contract of matchingNames(leftContracts.produces, rightContracts.consumes)) {
+    reasons.push({ contract, type: "produces-consumes", message: `${left.ref} produces ${contract}, which ${right.ref} consumes.` });
+  }
+  for (const contract of matchingNames(rightContracts.produces, leftContracts.consumes)) {
+    reasons.push({ contract, type: "produces-consumes", message: `${right.ref} produces ${contract}, which ${left.ref} consumes.` });
+  }
+  for (const contract of matchingNames(leftContracts.changes, rightContracts.changes)) {
+    reasons.push({ contract, type: "changes-changes", message: `${left.ref} and ${right.ref} both change ${contract}.` });
+  }
+  return reasons;
+}
+function ticketsConflict(left, right) {
+  return scopesOverlap(left.files, right.files) || contractCollisionReasons(left, right).length > 0;
+}
+function orderReadyTicketsByContractDependencies(tickets) {
+  const ordered = Array.isArray(tickets) ? tickets : [];
+  const edges = new Map(ordered.map((ticket) => [ticket.id, /* @__PURE__ */ new Set()]));
+  for (const producer of ordered) {
+    if (producer.contractWaiver) continue;
+    const produced = contractNamesByLowerCase(normalizeContracts(producer.contracts).produces);
+    for (const consumer of ordered) {
+      if (producer.id === consumer.id || consumer.contractWaiver) continue;
+      const consumed = contractNamesByLowerCase(normalizeContracts(consumer.contracts).consumes);
+      const dependencies = edges.get(producer.id);
+      if (dependencies && [...produced.keys()].some((name) => consumed.has(name))) dependencies.add(consumer.id);
+    }
+  }
+  const pending = new Set(ordered.map((ticket) => ticket.id));
+  const result = [];
+  while (pending.size) {
+    const next = ordered.find((ticket) => {
+      if (!pending.has(ticket.id)) return false;
+      for (const [from, targets] of edges) {
+        if (pending.has(from) && targets.has(ticket.id)) return false;
+      }
+      return true;
+    }) || ordered.find((ticket) => pending.has(ticket.id));
+    result.push(next);
+    pending.delete(next.id);
+  }
+  return result;
+}
+function contractMetadata(ticket) {
+  const contracts = normalizeContracts(ticket && ticket.contracts);
+  return {
+    produces: contracts.produces,
+    changes: contracts.changes,
+    consumes: contracts.consumes,
+    waiver: !!(ticket && ticket.contractWaiver)
+  };
+}
 function readyWaves(slug, opts) {
-  const ready = readyTickets(slug, opts);
+  const ready = orderReadyTicketsByContractDependencies(readyTickets(slug, opts));
   const waves = [];
   for (const t of ready) {
     let placed = false;
     for (const wave of waves) {
-      if (!wave.some((w) => scopesOverlap(w.files, t.files))) {
+      if (!wave.some((w) => ticketsConflict(w, t))) {
         wave.push(t);
         placed = true;
         break;
@@ -2122,6 +2216,22 @@ function readyWaves(slug, opts) {
     if (!placed) waves.push([t]);
   }
   return waves;
+}
+function readyWaveDependencies(slug, opts) {
+  const waves = readyWaves(slug, opts);
+  const dependencies = [];
+  for (let waveIndex = 1; waveIndex < waves.length; waveIndex++) {
+    for (const ticket of waves[waveIndex]) {
+      for (let priorWave = 0; priorWave < waveIndex; priorWave++) {
+        for (const earlier of waves[priorWave]) {
+          for (const reason of contractCollisionReasons(earlier, ticket)) {
+            dependencies.push({ before: earlier.ref, after: ticket.ref, contract: reason.contract, type: reason.type, reason: reason.message });
+          }
+        }
+      }
+    }
+  }
+  return dependencies;
 }
 function normalizeAssignee(v) {
   if (v == null) return null;
@@ -2177,6 +2287,8 @@ function updateTicket(slug, idOrRef, patch) {
         }
       }
     }
+    if (patch.contracts !== void 0) t.contracts = normalizeContracts(patch.contracts);
+    if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;
     if (patch.executorAnchors !== void 0) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors");
     if (patch.executorVerify !== void 0) t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
     if (patch.workedBy !== void 0) {
@@ -3869,6 +3981,7 @@ function briefTicket(slug, t, opts) {
     effort: t.effort || null,
     direct: t.directClaim || null,
     files: Array.isArray(t.files) ? t.files : [],
+    contracts: contractMetadata(t),
     claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
@@ -3943,8 +4056,9 @@ function readyPayload(slug, opts) {
   opts = opts || {};
   let tickets = readyTickets(slug, { model: opts.model, category: opts.category });
   const waves = readyWaves(slug, { model: opts.model, category: opts.category }).map((wave) => wave.map((t) => t.ref));
+  const waveDependencies = readyWaveDependencies(slug, { model: opts.model, category: opts.category });
   if (opts.brief) tickets = tickets.map((t) => briefTicket(slug, t, { blockedBy: [] }));
-  return { tickets, waves, claimTtlMs: claimTtlMs(), categories: classifierCategories({ project: slug }) };
+  return { tickets, waves, waveDependencies, claimTtlMs: claimTtlMs(), categories: classifierCategories({ project: slug }) };
 }
 function claimPulse(claim, now) {
   if (!claim || !claim.by) return null;
@@ -4629,11 +4743,14 @@ module.exports = {
   assignTicket,
   readyTickets,
   readyWaves,
+  readyWaveDependencies,
   scopesOverlap,
   normalizeFiles,
   scopeExpansionFiles,
   scopeExpansionCommand,
   requestScope,
+  normalizeContracts,
+  contractCollisionReasons,
   STORY_PALETTE,
   STORY_COLOR_NAMES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,
