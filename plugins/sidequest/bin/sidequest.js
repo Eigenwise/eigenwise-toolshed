@@ -919,10 +919,11 @@ async function cmdSubmit(opts, positional) {
     fail(`submit: refused ${ticket.ref}; --verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
   }
   const gitRef = opts.gitref || opts["git-ref"] || `refs/sidequest/${ticket.ref}`;
+  const target = store.integrationTarget(slug);
   const range = commitScope.submissionRange(process.cwd(), {
     commit: opts.commit,
     gitRef,
-    upstream: "origin/main"
+    upstream: target.upstream
   });
   if (!range.ok) {
     fail(`submit: refused ${ticket.ref}; ${range.reason}${range.message ? `: ${range.message}` : ""}.`);
@@ -945,7 +946,7 @@ async function cmdSubmit(opts, positional) {
     res = store.submitTicket(slug, idOrRef, by, {
       commit: range.commit,
       gitRef,
-      range,
+      range: Object.assign({}, range, { integrationMode: target.mode }),
       verify: opts.verify,
       worktree: opts.worktree,
       unscopedPaths,
@@ -968,7 +969,7 @@ async function cmdSubmit(opts, positional) {
   if (res.ok) {
     const s = res.ticket.submission;
     console.log(`✓ ${res.ticket.ref} READY_FOR_INTEGRATION (${s.commit.slice(0, 12)} @ ${s.gitRef})  — ${meta.name}`);
-    console.log("  claim released; the orchestrator publish transaction integrates, reverifies, pushes, and marks done.");
+    console.log(s.integrationMode === "local" ? "  claim released; the orchestrator integrates and reverifies against local main, then marks done without pushing." : "  claim released; the orchestrator publish transaction integrates, reverifies, pushes, and marks done.");
   } else {
     reportClaimFailure("submit", idOrRef, res, meta);
   }
@@ -1488,7 +1489,10 @@ async function cmdRoute(opts, positional) {
 }
 async function cmdBoardConfig(opts) {
   const { slug, meta } = await resolveProject(opts);
-  const result = opts["always-in-scope"] == null ? { ok: true, config: store.boardConfig(slug) } : store.setBoardConfig(slug, { alwaysInScope: opts["always-in-scope"] });
+  const patch = {};
+  if (opts["always-in-scope"] != null) patch.alwaysInScope = opts["always-in-scope"];
+  if (opts["integration-mode"] != null) patch.integrationMode = opts["integration-mode"];
+  const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
   if (!result.ok) fail(`board-config: no board "${meta.name}".`);
   const payload = Object.assign({ project: slug, projectName: meta.name }, result.config);
   if (opts.json) {
@@ -1496,6 +1500,7 @@ async function cmdBoardConfig(opts) {
     return;
   }
   console.log(`always in scope: ${payload.alwaysInScope.length ? payload.alwaysInScope.join(", ") : "(none)"}`);
+  console.log(`integration mode: ${payload.integrationMode}`);
 }
 async function cmdProjects(opts) {
   const projects = store.listProjects({ archived: !!opts.archived });

@@ -366,4 +366,33 @@ test('CLI: a range containing another queued ticket commit is refused', () => {
   assert.strictEqual(runCli(['release', second.ref, '--by', 'second-worker']).status, 0);
 });
 
+test('CLI: a remote-less board auto-selects local integration and records a main baseline', () => {
+  git(['checkout', '-f', 'main']);
+  git(['clean', '-fd']);
+  git(['remote', 'remove', 'origin']);
+  git(['checkout', '-f', '-B', 'local-only', 'main']);
+
+  const configured = cliJson(['board-config', '--integration-mode', 'local', '--json']);
+  assert.strictEqual(configured.integrationMode, 'local');
+  store.setBoardConfig(slug, { integrationMode: 'auto' });
+  assert.deepStrictEqual(store.integrationTarget(slug), { mode: 'local', upstream: 'main' });
+
+  const t = addTicket('local-only submit', { files: ['lib/local-only.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'local-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'local-only.js'), 'local-only\n');
+  git(['add', 'lib/local-only.js']);
+  git(['commit', '-m', 'local-only submission']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+
+  const submitted = runCli(['submit', t.ref, '--by', 'local-worker', '--commit', commit]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  assert.match(submitted.stdout, /against local main, then marks done without pushing/);
+  const submission = store.getTicket(slug, t.ref).submission;
+  assert.strictEqual(submission.integrationMode, 'local');
+  assert.strictEqual(submission.upstream, 'main');
+  assert.strictEqual(submission.base, git(['rev-parse', 'main']));
+});
+
 export {};

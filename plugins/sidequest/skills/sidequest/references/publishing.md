@@ -20,6 +20,14 @@ Batch deliberately: when a wave is mid-flight, let its remaining executors finis
 wave's submissions in one transaction — one lock hold, one version assignment, one seam check, one
 push — instead of one transaction per ticket. Don't wait on work that isn't in flight.
 
+## Local-only repositories
+
+`board-config --integration-mode local` records ranges against local `main`; `auto` chooses that mode when
+`origin` is absent. Integrate in a clean worktree from `main`, run the same reachability checks against
+`main`, then skip fetch and push. Use `groom-close --integration` after the integrated commits are reachable
+from local `main`. Remote mode keeps the transaction below unchanged; an existing but broken upstream still
+rejects the submission.
+
 ## The publish transaction
 
 Run every step in order; any failure before the push aborts the transaction without touching the

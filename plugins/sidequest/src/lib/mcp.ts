@@ -973,7 +973,8 @@ const TOOLS: ToolDefinition[] = [
         throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
       }
       const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
-      const range = commitScope.submissionRange(root, { commit, gitRef, upstream: 'origin/main' });
+      const target = store.integrationTarget(slug);
+      const range = commitScope.submissionRange(root, { commit, gitRef, upstream: target.upstream });
       if (!range.ok) {
         return mutationAck(slug, { ok: false, ticket, reason: range.reason, message: range.message });
       }
@@ -1001,7 +1002,7 @@ const TOOLS: ToolDefinition[] = [
       const res = store.submitTicket(slug, args.ref, by, {
         commit: range.commit,
         gitRef,
-        range,
+        range: Object.assign({}, range, { integrationMode: target.mode }),
         verify: args.verify,
         worktree: args.worktree,
         unscopedPaths,
@@ -1533,19 +1534,23 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'board_config',
-    description: 'View or replace board-level always-in-scope paths. docs is included by default when the board repo has a docs directory.',
+    description: 'View or update board-level always-in-scope paths and integration mode. docs is included by default when the board repo has a docs directory.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
+        integrationMode: { type: 'string', enum: ['auto', 'local', 'remote'], description: 'auto uses local mode when origin is absent; local integrates against main without a push.' },
       },
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const result = args.alwaysInScope == null
-        ? { ok: true, config: store.boardConfig(slug) }
-        : store.setBoardConfig(slug, { alwaysInScope: args.alwaysInScope });
+      const patch: any = {};
+      if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
+      if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
+      const result = Object.keys(patch).length
+        ? store.setBoardConfig(slug, patch)
+        : { ok: true, config: store.boardConfig(slug) };
       if (!result.ok) throw new Error(`board_config: no board "${meta.name}".`);
       return Object.assign({ ok: true, project: slug, projectName: meta.name }, result.config);
     },
@@ -1623,7 +1628,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.alwaysInScope != null;
+  if (name === 'board_config') return args.alwaysInScope != null || args.integrationMode != null;
   return false;
 }
 

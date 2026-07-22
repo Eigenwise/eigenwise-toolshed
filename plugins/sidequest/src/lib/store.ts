@@ -1554,6 +1554,31 @@ function defaultAlwaysInScope(absPath?: any) {
   }
 }
 
+function normalizeIntegrationMode(mode?: any) {
+  const value = String(mode || 'auto').trim().toLowerCase();
+  if (!['auto', 'local', 'remote'].includes(value)) {
+    throw new Error('integrationMode must be "auto", "local", or "remote".');
+  }
+  return value;
+}
+
+function hasOriginRemote(absPath?: any) {
+  try {
+    execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: absPath, encoding: 'utf8', windowsHide: true, stdio: 'pipe' });
+    return true;
+  } catch (_: any) {
+    return false;
+  }
+}
+
+function integrationTarget(slug?: any) {
+  const meta = readMeta(slug);
+  if (!meta) return null;
+  const configured = normalizeIntegrationMode(meta.integrationMode);
+  const mode = configured === 'auto' ? (hasOriginRemote(meta.path) ? 'remote' : 'local') : configured;
+  return { mode, upstream: mode === 'local' ? 'main' : 'origin/main' };
+}
+
 function boardConfig(slug?: any) {
   const meta = readMeta(slug);
   if (!meta) return null;
@@ -1563,6 +1588,7 @@ function boardConfig(slug?: any) {
   const byKind = Object.fromEntries(['ADD', 'OVERRIDE', 'DETACH', 'DISABLE'].map((kind?: any) => [kind, layer.rows.filter((row?: any) => row.kind === kind).length]));
   return {
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
+    integrationMode: normalizeIntegrationMode(meta.integrationMode),
     profile: {
       id: selected.profile.id,
       name: selected.profile.name,
@@ -1583,10 +1609,13 @@ function setBoardConfig(slug?: any, patch?: any) {
   return withMetaLock(slug, () => {
     const meta = readMeta(slug);
     if (!meta) return { ok: false, reason: 'not_found' };
-    if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'alwaysInScope')) {
-      return { ok: true, config: boardConfig(slug) };
+    if (!patch || typeof patch !== 'object') return { ok: true, config: boardConfig(slug) };
+    if (Object.prototype.hasOwnProperty.call(patch, 'alwaysInScope')) {
+      meta.alwaysInScope = normalizeAlwaysInScope(patch.alwaysInScope);
     }
-    meta.alwaysInScope = normalizeAlwaysInScope(patch.alwaysInScope);
+    if (Object.prototype.hasOwnProperty.call(patch, 'integrationMode')) {
+      meta.integrationMode = normalizeIntegrationMode(patch.integrationMode);
+    }
     putProject(slug, meta);
     return { ok: true, config: boardConfig(slug) };
   });
@@ -3706,11 +3735,13 @@ function submissionRangeMetadata(range?: any, commit?: any) {
   const upstreamCommit = String(range.upstreamCommit || '').trim().toLowerCase();
   const commits = Array.isArray(range.commits) ? range.commits.map((value?: any) => String(value).trim().toLowerCase()) : [];
   const changedPaths = Array.isArray(range.changedPaths) ? range.changedPaths.map((value?: any) => String(value).trim().replace(/\\/g, '/')).filter(Boolean) : [];
+  const integrationMode = range.integrationMode == null ? null : String(range.integrationMode).trim().toLowerCase();
   if (!SUBMISSION_COMMIT_RE.test(base) || !upstream || !SUBMISSION_COMMIT_RE.test(upstreamCommit) || !commits.length
-    || commits.some((value?: any) => !SUBMISSION_COMMIT_RE.test(value)) || commits[commits.length - 1] !== commit) {
+    || commits.some((value?: any) => !SUBMISSION_COMMIT_RE.test(value)) || commits[commits.length - 1] !== commit
+    || (integrationMode != null && !['local', 'remote'].includes(integrationMode))) {
     throw new Error('invalid submission range metadata');
   }
-  return { base, upstream, upstreamCommit, commits, changedPaths };
+  return Object.assign({ base, upstream, upstreamCommit, commits, changedPaths }, integrationMode ? { integrationMode } : {});
 }
 
 // A submission that has not been consumed by a done transition yet — the
@@ -5250,6 +5281,7 @@ module.exports = {
   readMeta,
   boardConfig,
   setBoardConfig,
+  integrationTarget,
   effectiveScope,
   listProjects,
   findProject,
