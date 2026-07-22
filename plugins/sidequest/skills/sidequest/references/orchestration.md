@@ -132,7 +132,9 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
   replacing it. Preserve a verified commit, or recover the declared-scope diff, then read the ticket and
   its thread again before deciding whether a replacement is needed. Never overwrite stranded work by
-  blindly redispatching. When a natural wakeup shows that an executor has no claim and no commit past the
+  blindly redispatching. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees; it only
+  removes worktrees that are clean, at least three hours old, and whose commits are patch-equivalent to
+  `origin/main`. Pass `--yes` only after reviewing the list. When a natural wakeup shows that an executor has no claim and no commit past the
   2–3 minute grace period, stop it, then diagnose before retrying: `pulse <ref>` and read the denial or
   terminal reason verbatim. Make ONE retry only when that diagnosis changes the dispatch; never blindly
   respawn the identical spec. When native Agent reports the exact supported Claude quota-limit signature before claim, the failure hook records that primary attempt

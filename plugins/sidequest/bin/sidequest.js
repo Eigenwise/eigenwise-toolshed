@@ -1141,14 +1141,20 @@ async function cmdSweepClaims(opts) {
   }
   console.log(`✓ swept ${res.released.length} stale claim(s) from ${meta.name} (TTL ${Math.round(res.ttlMs / 6e4)}m)`);
 }
-async function cmdWorktrees(opts) {
-  if (!opts.sweep) fail("worktrees: pass --sweep to inspect stale agent worktrees.");
+async function cmdWorktrees(opts, positional) {
+  const action = String(positional[0] || "").toLowerCase();
+  if (action && action !== "sweep" || !action && !opts.sweep) {
+    fail("worktrees: use `sidequest worktrees sweep` to inspect stale agent worktrees.");
+  }
+  const minAgeHours = opts["min-age-hours"] == null ? 3 : Number(opts["min-age-hours"]);
+  if (!Number.isFinite(minAgeHours) || minAgeHours < 0) fail("worktrees sweep: --min-age-hours must be a non-negative number.");
   const { slug, meta } = await resolveProject(opts);
   let result;
   try {
     result = await worktrees.sweep(meta.path, store.listTickets(slug), {
-      execute: !!opts.yes,
-      currentPath: store.nearestRepoRoot(process.cwd())
+      execute: !!opts.yes && !opts["dry-run"],
+      currentPath: store.nearestRepoRoot(process.cwd()),
+      minAgeMs: minAgeHours * 60 * 60 * 1e3
     });
   } catch (error) {
     fail(`worktrees: ${error && error.message || error}`);
@@ -1158,11 +1164,11 @@ async function cmdWorktrees(opts) {
     if (result.failures.length) process.exitCode = 1;
     return;
   }
-  console.log(`worktrees sweep: ${result.dryRun ? "dry run" : "executed"} for ${meta.name}`);
+  console.log(`worktrees sweep: ${result.dryRun ? "dry run" : "executed"} for ${meta.name} (minimum age ${minAgeHours}h)`);
   for (const entry of result.entries) {
     const ticket = entry.ticket ? ` ${entry.ticket}` : "";
     const ahead = entry.ahead == null ? "?" : entry.ahead;
-    console.log(`  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${entry.clean ? "clean" : "dirty"}; ahead ${ahead}]`);
+    console.log(`  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${entry.clean ? "clean" : "dirty"}; ahead ${ahead}; patch-equivalent ${entry.patchEquivalent}; age ${entry.ageMs == null ? "?" : Math.round(entry.ageMs / 6e4) + "m"}]`);
   }
   if (result.dryRun) console.log("  pass --yes to remove the planned worktrees.");
   if (result.removed.length) console.log(`  removed ${result.removed.length} worktree(s).`);
@@ -1991,7 +1997,7 @@ const HELP_COMMANDS = {
   claim: 'sidequest claim <id|SQ-n> [--by who] [--token nonce] [--effort level] [--force] [--direct --reason "why"]',
   checkpoint: 'sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "command: result" [--ttl-minutes N] [--json]',
   claims: "sidequest claims sweep [--project <path-or-slug>]",
-  worktrees: "sidequest worktrees [--sweep] [--yes] [--project <path-or-slug>]",
+  worktrees: "sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]",
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: "sidequest work|drain",
@@ -2138,7 +2144,7 @@ Native Agent dispatch (routed work stays in this conversation):
     tickets recover immediately instead of waiting out the claim TTL; safe — it only touches that session's
     claims). Defaults to $CLAUDE_CODE_SESSION_ID when --session is omitted.
   sidequest claims sweep [--project <path-or-slug>]  release claims older than SIDEQUEST_CLAIM_TTL_MIN (default 60m)
-  sidequest worktrees --sweep [--yes] [--project <path-or-slug>]  list stale agent worktrees; dry run by default, --yes removes only safe entries
+  sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  list agent worktrees; removes only clean, patch-equivalent, older-than-3h entries
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
@@ -2265,7 +2271,7 @@ async function main() {
       await cmdSweepClaims(opts);
       break;
     case "worktrees":
-      await cmdWorktrees(opts);
+      await cmdWorktrees(opts, positional);
       break;
     case "next":
     case "grab":

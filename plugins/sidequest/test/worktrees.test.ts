@@ -2,10 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { execFileSync } = require('child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-home-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -16,15 +16,37 @@ const { makeCliRunner } = require('./_helpers.js');
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-project-'));
 const REMOTE = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-remote-'));
 const WORKTREES = path.join(PROJECT, '.claude', 'worktrees');
+const OLD = new Date(Date.now() - 4 * 60 * 60 * 1000);
 
 function git(args: any, cwd?: any) {
   return execFileSync('git', args, { cwd: cwd || PROJECT, encoding: 'utf8', windowsHide: true }).trim();
 }
 
-function agentWorktree(ref: any) {
-  const dir = path.join(WORKTREES, `agent-${ref.toLowerCase()}`);
-  git(['worktree', 'add', '-b', ref, dir, 'origin/main']);
+function agentWorktree(name: any) {
+  const dir = path.join(WORKTREES, `agent-${name}`);
+  git(['worktree', 'add', '-b', `fixture-${name}`, dir, 'origin/main']);
   return dir;
+}
+
+function makeCommit(worktree: any, filename: any) {
+  fs.writeFileSync(path.join(worktree, filename), `${filename}\n`);
+  git(['add', filename], worktree);
+  git(['commit', '-m', `fixture ${filename}`], worktree);
+  return git(['rev-parse', 'HEAD'], worktree);
+}
+
+function integrate(commit: any) {
+  git(['cherry-pick', commit]);
+  git(['push', 'origin', 'main']);
+  git(['fetch', 'origin']);
+}
+
+function makeOld(worktree: any) {
+  fs.utimesSync(worktree, OLD, OLD);
+}
+
+function entryFor(result: any, worktree: any) {
+  return result.entries.find((entry: any) => path.resolve(entry.path) === path.resolve(worktree));
 }
 
 git(['init']);
@@ -43,66 +65,41 @@ const { slug } = store.ensureProject(PROJECT);
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT }, { cwd: PROJECT });
 
-function ticket(title: any) {
-  return store.createTicket(slug, {
-    title,
-    complexity: 3,
-    complexityWhy: 'fixture ticket for stale executor worktree cleanup coverage',
-    files: ['lib/fixture.js'],
-    labels: ['direct-ok'],
-    source: 'cli',
-  });
-}
+void slug;
 
-function complete(t: any) {
-  assert.equal(store.claimTicket(slug, t.ref, 'worker', { direct: true, reason: 'The worktree fixture needs a local direct claim.' }).ok, true);
-  assert.equal(store.completeTicket(slug, t.ref, 'worker', {}).ok, true);
-}
+test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees', () => {
+  const equivalentOld = agentWorktree('equivalent-old');
+  integrate(makeCommit(equivalentOld, 'equivalent-old.txt'));
+  makeOld(equivalentOld);
 
-test('worktrees sweep classifies done, integrated, dirty, and ahead agent worktrees', () => {
-  const done = ticket('done worktree');
-  complete(done);
-  const donePath = agentWorktree(done.ref);
+  const equivalentFresh = agentWorktree('equivalent-fresh');
+  integrate(makeCommit(equivalentFresh, 'equivalent-fresh.txt'));
 
-  const integrated = ticket('integrated worktree');
-  const integratedPath = agentWorktree(integrated.ref);
-  assert.equal(store.claimTicket(slug, integrated.ref, 'worker', { direct: true, reason: 'The worktree fixture needs a local direct claim.' }).ok, true);
-  assert.equal(store.submitTicket(slug, integrated.ref, 'worker', {
-    commit: 'abc1234def5678abc1234def5678abc1234def56',
-    worktree: integratedPath,
-  }).ok, true);
-  assert.equal(store.completeTicket(slug, integrated.ref, 'orchestrator', {}).ok, true);
+  const unmergedOld = agentWorktree('unmerged-old');
+  makeCommit(unmergedOld, 'unmerged-old.txt');
+  makeOld(unmergedOld);
 
-  const dirty = ticket('dirty worktree');
-  const dirtyPath = agentWorktree(dirty.ref);
-  fs.writeFileSync(path.join(dirtyPath, 'dirty.txt'), 'keep me\n');
+  const dirtyOld = agentWorktree('dirty-old');
+  fs.writeFileSync(path.join(dirtyOld, 'dirty.txt'), 'keep me\n');
+  makeOld(dirtyOld);
 
-  const ahead = ticket('ahead worktree');
-  const aheadPath = agentWorktree(ahead.ref);
-  fs.writeFileSync(path.join(aheadPath, 'ahead.txt'), 'ahead\n');
-  git(['add', 'ahead.txt'], aheadPath);
-  git(['commit', '-m', 'ahead fixture'], aheadPath);
+  const dryRun = cliJson(['worktrees', 'sweep', '--dry-run', '--json']);
+  assert.equal(dryRun.dryRun, true);
+  assert.equal(entryFor(dryRun, equivalentOld).action, 'remove');
+  assert.equal(entryFor(dryRun, equivalentOld).patchEquivalent, true);
+  assert.equal(entryFor(dryRun, equivalentOld).reason, 'clean_patch_equivalent_old');
+  assert.equal(entryFor(dryRun, equivalentFresh).reason, 'too_recent');
+  assert.equal(entryFor(dryRun, unmergedOld).reason, 'not_patch_equivalent');
+  assert.equal(entryFor(dryRun, dirtyOld).reason, 'dirty');
+  assert.ok(fs.existsSync(equivalentOld), 'dry run does not remove worktrees');
 
-  const dryRun = cliJson(['worktrees', '--sweep', '--json']);
-  const byTicket: Map<any, any> = new Map(dryRun.entries.map((entry: any) => [entry.ticket, entry]));
+  const applied = cliJson(['worktrees', 'sweep', '--yes', '--json']);
   assert.deepEqual(
-    [byTicket.get(done.ref).action, byTicket.get(integrated.ref).action, byTicket.get(dirty.ref).action, byTicket.get(ahead.ref).action],
-    ['remove', 'remove', 'keep', 'keep']
+    applied.removed.map((entry: any) => path.resolve(entry)),
+    [path.resolve(equivalentOld)]
   );
-  assert.equal(byTicket.get(done.ref).reason, 'done');
-  assert.equal(byTicket.get(integrated.ref).reason, 'integrated');
-  assert.equal(byTicket.get(dirty.ref).reason, 'dirty');
-  assert.equal(byTicket.get(ahead.ref).reason, 'ahead');
-  assert.equal(byTicket.get(ahead.ref).ahead, 1);
-  assert.ok(fs.existsSync(donePath), 'dry runs do not remove worktrees');
-
-  const applied = cliJson(['worktrees', '--sweep', '--yes', '--json']);
-  assert.deepEqual(
-    new Set(applied.removed.map((entry: any) => entry.replace(/\\/g, '/'))),
-    new Set([donePath, integratedPath].map((entry: any) => entry.replace(/\\/g, '/')))
-  );
-  assert.ok(!fs.existsSync(donePath));
-  assert.ok(!fs.existsSync(integratedPath));
-  assert.ok(fs.existsSync(dirtyPath));
-  assert.ok(fs.existsSync(aheadPath));
+  assert.ok(!fs.existsSync(equivalentOld));
+  assert.ok(fs.existsSync(equivalentFresh));
+  assert.ok(fs.existsSync(unmergedOld));
+  assert.ok(fs.existsSync(dirtyOld));
 });
