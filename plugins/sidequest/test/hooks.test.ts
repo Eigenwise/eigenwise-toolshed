@@ -716,6 +716,8 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /investigation, spike, or review/, 'a ticket can be investigation, not only a code change');
   assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
   assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/);
+  assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket\/dispatch/);
+  assert.match(ctx, /Need other-file reading\? Ticket it/);
   assert.match(ctx, /Ticket \+ dispatch MUST precede multi-file exploration/);
   assert.match(ctx, /Native results: never TaskOutput/);
   assert.match(ctx, /pulse ref \/ changes --since; TaskStop only after terminal board evidence/);
@@ -861,6 +863,8 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
     assert.match(ctx, /ROLE: ORCHESTRATOR/);
     assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/);
+    assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket\/dispatch/);
+    assert.match(ctx, /Need other-file reading\? Ticket it/);
     assert.match(ctx, /Ticket \+ dispatch BEFORE multi-file exploration/);
     assert.match(ctx, /Routed direct:true needs `direct-ok` \+ a reason/);
     assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'));

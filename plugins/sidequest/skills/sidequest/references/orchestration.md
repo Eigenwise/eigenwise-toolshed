@@ -8,7 +8,8 @@ in the main skill — this file is the detail on the bigger shapes.
 ## Decomposition in depth
 
 The main skill's planning rules, expanded. One ticket = one piece a single agent can finish in a
-short bounded run and check on its own. That's often a code change with a verify command, but just
+short bounded run and check on its own. User-directed mechanical edits to one or two exact named
+files with stated content use `Edit` inline; needing other-file reading or investigation means a ticket. That's often a code change with a verify command, but just
 as often an investigation, spike, or review whose "done" is a concrete answer or artifact, not a
 diff — don't force every ticket into an implementation shape. The reason to split is parallelism as
 much as cost: independent tickets fan out to sub-agents that run at the same time, so cut where the

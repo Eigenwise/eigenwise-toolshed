@@ -48,7 +48,8 @@ When a task is **more than a single small change**, do this **before writing any
 For a **complexity 4+** ticket, first make a planning pass: pin concrete scope, anchors, and
 the exact verify command. Wave tickets verify with a scoped test; full-suite
 green belongs to the integration or ship ticket. The board makes the plan survive context loss; a
-trivial one-step change needs no ticket. An external tracker (Jira/Linear/GitHub) owns the
+user-directed mechanical edit to one or two exact named files with stated content needs no ticket;
+any edit requiring other-file reading or investigation does. An external tracker (Jira/Linear/GitHub) owns the
 deliverable; sidequest stays the local execution ledger.
 
 ## MCP is the executor board interface
