@@ -1,7 +1,10 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs/promises');
 const { spawn } = require('node:child_process');
+
+const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
 
 interface GitResult {
   ok: boolean;
@@ -65,42 +68,74 @@ function ticketForWorktree(tickets: any[], entry: any): any | null {
     : null;
 }
 
-async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string): Promise<any> {
+async function worktreeAge(pathname: string): Promise<number | null> {
+  try {
+    const stat = await fs.stat(pathname);
+    return Math.max(0, Date.now() - stat.mtimeMs);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function patchEquivalence(worktree: string): Promise<any> {
+  const base = await git(worktree, ['merge-base', 'HEAD', 'origin/main']);
+  if (!base.ok || !base.stdout) return { equivalent: false, ahead: null, equivalentCommits: 0, unmatchedCommits: null };
+
+  const [ahead, cherry] = await Promise.all([
+    git(worktree, ['rev-list', '--count', `${base.stdout}..HEAD`]),
+    git(worktree, ['cherry', 'origin/main', 'HEAD', base.stdout]),
+  ]);
+  const aheadCount = ahead.ok && /^\d+$/.test(ahead.stdout) ? Number(ahead.stdout) : null;
+  if (aheadCount == null || !cherry.ok) {
+    return { equivalent: false, ahead: aheadCount, equivalentCommits: 0, unmatchedCommits: null };
+  }
+
+  const marks = cherry.stdout ? cherry.stdout.split(/\r?\n/).filter(Boolean).map((line) => line[0]) : [];
+  const equivalentCommits = marks.filter((mark) => mark === '-').length;
+  const unmatchedCommits = marks.filter((mark) => mark !== '-').length;
+  return {
+    equivalent: marks.length === aheadCount && unmatchedCommits === 0,
+    ahead: aheadCount,
+    equivalentCommits,
+    unmatchedCommits,
+  };
+}
+
+async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string, minAgeMs: number): Promise<any> {
   const ticket = ticketForWorktree(tickets, entry);
-  const [cleanResult, ancestorResult, aheadResult] = await Promise.all([
+  const [cleanResult, ageMs, patch] = await Promise.all([
     git(entry.worktree, ['status', '--porcelain']),
-    git(entry.worktree, ['merge-base', '--is-ancestor', 'HEAD', 'origin/main']),
-    git(entry.worktree, ['rev-list', '--count', 'origin/main..HEAD']),
+    worktreeAge(entry.worktree),
+    patchEquivalence(entry.worktree),
   ]);
   const clean = cleanResult.ok ? cleanResult.stdout === '' : false;
-  const ancestor = ancestorResult.ok;
-  const ahead = aheadResult.ok ? Number(aheadResult.stdout) : null;
   const current = normalize(entry.worktree) === normalize(currentPath);
-  const integrated = !!(ticket && ticket.submission && ticket.submission.integratedAt);
+  const oldEnough = ageMs != null && ageMs >= minAgeMs;
 
   let action = 'keep';
-  let reason = 'not_merged';
+  let reason = 'not_patch_equivalent';
   if (current) reason = 'current_worktree';
   else if (entry.locked) reason = 'locked';
   else if (!clean) reason = 'dirty';
-  else if (integrated) {
+  else if (!patch.equivalent) reason = 'not_patch_equivalent';
+  else if (!oldEnough) reason = ageMs == null ? 'age_unknown' : 'too_recent';
+  else {
     action = 'remove';
-    reason = 'integrated';
-  } else if (ticket && ticket.status === 'done') {
-    action = 'remove';
-    reason = 'done';
-  } else if (ancestor) {
-    action = 'remove';
-    reason = 'merged';
-  } else if (ahead != null && ahead > 0) reason = 'ahead';
+    reason = 'clean_patch_equivalent_old';
+  }
 
   return {
     path: entry.worktree,
     branch: entry.branch || null,
     ticket: ticket ? ticket.ref : null,
     clean,
-    ancestor,
-    ahead,
+    ahead: patch.ahead,
+    patchEquivalent: patch.equivalent,
+    equivalentCommits: patch.equivalentCommits,
+    unmatchedCommits: patch.unmatchedCommits,
+    ageMs,
+    minAgeMs,
+    oldEnough,
     locked: entry.locked || null,
     action,
     reason,
@@ -110,10 +145,13 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
 async function sweep(repo: string, tickets: any[], options: any = {}): Promise<any> {
   const listed = await git(repo, ['worktree', 'list', '--porcelain']);
   if (!listed.ok) throw new Error(listed.stderr || 'could not list git worktrees');
+  const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0
+    ? Number(options.minAgeMs)
+    : DEFAULT_MIN_AGE_MS;
   const candidates = parseWorktreeList(listed.stdout)
     .filter((entry) => isAgentWorktree(repo, entry.worktree));
   const entries = await Promise.all(candidates.map((entry) => (
-    classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd())
+    classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs)
   )));
   const execute = !!options.execute;
   const removed: string[] = [];
@@ -121,7 +159,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
 
   if (execute) {
     for (const entry of entries.filter((candidate) => candidate.action === 'remove')) {
-      const result = await git(repo, ['worktree', 'remove', '--force', entry.path]);
+      const result = await git(repo, ['worktree', 'remove', entry.path]);
       if (result.ok) removed.push(entry.path);
       else failures.push({ path: entry.path, message: result.stderr || 'git worktree remove failed' });
     }
@@ -131,7 +169,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     }
   }
 
-  return { dryRun: !execute, entries, removed, failures };
+  return { dryRun: !execute, minAgeMs, entries, removed, failures };
 }
 
-module.exports = { parseWorktreeList, isAgentWorktree, classifyWorktree, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, parseWorktreeList, isAgentWorktree, classifyWorktree, sweep };
