@@ -67,6 +67,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-bash-windows-paths.js\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [

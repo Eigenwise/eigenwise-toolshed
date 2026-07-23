@@ -26,6 +26,7 @@ const SUBAGENT_START = path.join(HOOKS, 'subagent-start.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
+const GUARD_BASH_WINDOWS_PATHS = path.join(HOOKS, 'guard-bash-windows-paths.js');
 const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
 const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
 const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
@@ -648,6 +649,41 @@ test('peer-guard: a non-sidequest subagent messaging a peer is allowed', () => {
 function runHomeDeleteGuard(tool_name?: any, command?: any) {
   return runHookOutput(GUARD_HOME_DELETE, { tool_name, tool_input: { command } });
 }
+
+function runBashWindowsPathGuard(command?: any, platform = 'win32') {
+  const out = execFileSync(process.execPath, [
+    '-e',
+    `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} }); require(${JSON.stringify(GUARD_BASH_WINDOWS_PATHS)});`,
+  ], {
+    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
+    encoding: 'utf8',
+  });
+  return out.trim() ? JSON.parse(out) : null;
+}
+
+test('Bash Windows-path guard: denies an unquoted backslash path', () => {
+  const token = 'C:\\Users\\kenny\\AppData\\Local\\Temp\\lookup4.err';
+  const out = runBashWindowsPathGuard(`node script.js 2> ${token}`);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(token.replace(/\\/g, '\\\\')));
+});
+
+test('Bash Windows-path guard: allows quoted backslash paths', () => {
+  for (const command of [
+    'node script.js 2> "C:\\Users\\kenny\\AppData\\Local\\Temp\\lookup4.err"',
+    "node script.js 2> 'C:\\Users\\kenny\\AppData\\Local\\Temp\\lookup4.err'",
+  ]) {
+    assert.strictEqual(runBashWindowsPathGuard(command), null, command);
+  }
+});
+
+test('Bash Windows-path guard: allows forward-slash paths', () => {
+  assert.strictEqual(runBashWindowsPathGuard('node script.js 2> C:/Users/kenny/AppData/Local/Temp/lookup4.err'), null);
+});
+
+test('Bash Windows-path guard: is a no-op outside Windows', () => {
+  assert.strictEqual(runBashWindowsPathGuard('node script.js 2> C:\\Users\\kenny\\AppData\\Local\\Temp\\lookup4.err', 'linux'), null);
+});
 
 test('home-delete guard: blocks a recursive delete using $home', () => {
   const out = runHomeDeleteGuard('PowerShell', 'Remove-Item -Recurse -Force $home');

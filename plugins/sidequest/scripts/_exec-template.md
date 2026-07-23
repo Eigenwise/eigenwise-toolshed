@@ -18,8 +18,9 @@ line fallback. If those tools are absent, release through an available board too
 blocker UP, and stop.
 
 **Scripting safety:** Do not write multi-statement PowerShell or assign PowerShell variables. Use a
-scratchpad `.js` script for cross-platform-sensitive work. Never scan from the filesystem root. The
-central board store is normally `~/.claude/sidequest` (overridden by `SIDEQUEST_HOME`); resolve asset
+scratchpad `.js` script for cross-platform-sensitive work. In the Bash tool, always quote absolute Windows
+paths or use forward slashes; unquoted backslash paths collapse into junk files. Never scan from the filesystem
+root. The central board store is normally `~/.claude/sidequest` (overridden by `SIDEQUEST_HOME`); resolve asset
 locations from ticket data before reading them.
 
 **Worktree safety:** Declared-file tickets use an isolated worktree unless the ticket explicitly needs
