@@ -79,10 +79,13 @@ Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when yo
 
 ```text
 sidequest board-config --integration-mode auto|local|remote
+sidequest board-config --no-worktree-isolation
 sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
 ```
 
-`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against local `main` without a push. `local` forces that same no-push path. `remote` uses the repository's `origin/main` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"` and `worktreeSetup: "<one-line command>" | null`.
+`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against local `main` without a push. `local` forces that same no-push path. `remote` uses the repository's `origin/main` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"`, `worktreeIsolation: boolean`, and `worktreeSetup: "<one-line command>" | null`.
+
+Worktree isolation defaults to enabled. Set `--no-worktree-isolation` (or `worktreeIsolation: false` through MCP) to force every dispatched executor onto the shared checkout, including calls that explicitly request `sharedTree: false`.
 
 `worktreeSetup` is per-project. A nonblank command is retained verbatim and shown in a fresh isolated executor briefing as `Worktree setup (run before verify): ...`; shared-tree dispatches and unset configuration omit it. Sidequest does not execute or shell-escape the command. The value must be one line and no longer than 1000 characters. Pass `null` through MCP to clear it.
 

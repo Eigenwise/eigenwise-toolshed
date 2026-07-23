@@ -1173,6 +1173,7 @@ const TOOLS = [
       if (!ticket.model || !ticket.effort) throw new Error(`native_agent: ${ticket.ref} has no routable model and effort.`);
       const resolved = store.resolveExec(ticket.model, ticket.effort);
       const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, args.prompt), meta.path);
+      const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || !!args.sharedTree;
       const created = agentsync.createNativeAgent({
         ref: ticket.ref,
         agentType: resolved.agent || `sidequest-exec-${ticket.effort || "low"}`,
@@ -1180,7 +1181,7 @@ const TOOLS = [
         effort: ticket.effort,
         runtime: resolved.runsModel,
         description: agentsync.spawnDescription(ticket, resolved),
-        isolation: agentsync.ticketIsolation(ticket, !!args.sharedTree),
+        isolation: agentsync.ticketIsolation(ticket, sharedTree),
         sessionId: sessionOf(args),
         prompt
       });
@@ -1528,15 +1529,16 @@ const TOOLS = [
   },
   {
     name: "board_config",
-    description: "View or update a board display name, scope, integration mode, and optional worktree setup command.",
+    description: "Board name, scope, integration, worktree isolation, and setup.",
     inputSchema: {
       type: "object",
       properties: {
         project: PROJECT_PROP,
         name: { type: "string", minLength: 1, description: "Display name only. The board slug, path, tickets, claims, and refs stay unchanged." },
         alwaysInScope: { type: "array", items: { type: "string" }, description: "When supplied, replaces the board paths merged into every ticket scope." },
-        integrationMode: { type: "string", enum: ["auto", "local", "remote"], description: "auto uses local mode when origin is absent; local integrates against main without a push." },
-        worktreeSetup: { type: ["string", "null"], maxLength: 1e3, pattern: "^[^\\r\\n]*$", description: "One-line command shown before verify for isolated worktrees; null clears it." }
+        integrationMode: { type: "string", enum: ["auto", "local", "remote"], description: "auto is local without origin; local does not push." },
+        worktreeIsolation: { type: "boolean", description: "When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true." },
+        worktreeSetup: { type: ["string", "null"], maxLength: 1e3, pattern: "^[^\\r\\n]*$", description: "One-line isolated-worktree setup; null clears it." }
       }
     },
     handler(args) {
@@ -1545,6 +1547,7 @@ const TOOLS = [
       if (args.name !== void 0) patch.name = args.name;
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
+      if (args.worktreeIsolation !== void 0) patch.worktreeIsolation = args.worktreeIsolation;
       if (args.worktreeSetup !== void 0) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
       if (!result.ok) throw new Error(`board_config: no board "${meta.name}".`);
@@ -1645,7 +1648,7 @@ function toolMutates(name, args) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === "new_board_profile") return args.profile !== void 0;
   if (name === "global_fallback") return args.model !== void 0 || args.effort !== void 0;
-  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.integrationMode != null || args.worktreeSetup !== void 0;
+  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.integrationMode != null || args.worktreeIsolation !== void 0 || args.worktreeSetup !== void 0;
   return false;
 }
 function mutationQueueKey(name, args) {

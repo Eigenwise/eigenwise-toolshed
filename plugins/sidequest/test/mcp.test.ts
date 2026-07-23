@@ -316,6 +316,43 @@ test('board_config stores and clears a worktree setup command', async () => {
   assert.equal((await callTool('board_config', { project, worktreeSetup: null })).worktreeSetup, null);
 });
 
+test('board worktree isolation defaults on and overrides dispatch isolation when disabled', async () => {
+  const isolatedRoot = committedRepo('sq-mcp-worktree-isolation-default-');
+  const isolatedProject = store.ensureProject(isolatedRoot, 'SQ default isolation').slug;
+  assert.equal((await callTool('board_config', { project: isolatedProject })).worktreeIsolation, true);
+  const isolatedTicket = store.createTicket(isolatedProject, {
+    title: 'default board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/work.ts'],
+  });
+  const isolated = await callTool('dispatch', { project: isolatedProject, ref: isolatedTicket.ref, full: true });
+  assert.equal(isolated.spawn.isolation, 'worktree');
+  assert.equal(store.getTicket(isolatedProject, isolatedTicket.ref).dispatch.sharedTree, false);
+
+  const sharedRoot = committedRepo('sq-mcp-worktree-isolation-off-');
+  const sharedProject = store.ensureProject(sharedRoot, 'SQ shared isolation').slug;
+  const configured = await callTool('board_config', { project: sharedProject, worktreeIsolation: false });
+  assert.equal(configured.worktreeIsolation, false);
+  assert.equal((await callTool('board_config', { project: sharedProject })).worktreeIsolation, false);
+  assert.equal(runCli(['board-config', '--project', sharedRoot, '--worktree-isolation', '--json'], sharedRoot).worktreeIsolation, true);
+  assert.equal(runCli(['board-config', '--project', sharedRoot, '--no-worktree-isolation', '--json'], sharedRoot).worktreeIsolation, false);
+
+  const sharedTicket = store.createTicket(sharedProject, {
+    title: 'disabled board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/work.ts'],
+  });
+  const shared = await callTool('dispatch', { project: sharedProject, ref: sharedTicket.ref, full: true });
+  assert.equal(shared.spawn.isolation, undefined);
+  assert.equal(store.getTicket(sharedProject, sharedTicket.ref).dispatch.sharedTree, true);
+  const legacyShared = await callHandler('native_agent', { project: sharedProject, ref: sharedTicket.ref, prompt: 'Implement the ticket.' });
+  assert.equal(legacyShared.spawn.isolation, undefined);
+
+  const overriddenTicket = store.createTicket(sharedProject, {
+    title: 'forced shared tree', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/other.ts'],
+  });
+  const overridden = await callTool('dispatch', { project: sharedProject, ref: overriddenTicket.ref, sharedTree: false, full: true });
+  assert.equal(overridden.spawn.isolation, undefined);
+  assert.equal(store.getTicket(sharedProject, overriddenTicket.ref).dispatch.sharedTree, true);
+  assert.match(store.getTicket(sharedProject, overriddenTicket.ref).dispatch.worktreeWarning, /explicit sharedTree:false was overridden/);
+});
+
 
 test('write acks and pulse stay lean: no body echoes, no lifecycle noise by default', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-lean-shapes'), 'SQ lean shapes').slug;

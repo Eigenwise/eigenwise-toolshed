@@ -71,8 +71,12 @@ function parseArgs(argv: any) {
         opts.open = false;
         continue;
       }
+      if (key === 'no-worktree-isolation') {
+        opts['worktree-isolation'] = false;
+        continue;
+      }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'contract-waiver', 'full']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'contract-waiver', 'full', 'worktree-isolation']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -1786,13 +1790,14 @@ async function cmdNativeAgent(opts: any, positional: any) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`), meta.path);
+  const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || !!opts['shared-tree'];
   const created = agentsync.createNativeAgent({
     ref: ticket.ref,
     agentType: resolved.agent || `sidequest-exec-${ticket.effort || 'low'}`,
     spawnModel: resolved.model,
     effort: ticket.effort,
     runtime: resolved.runsModel,
-    isolation: agentsync.ticketIsolation(ticket, !!opts['shared-tree']),
+    isolation: agentsync.ticketIsolation(ticket, sharedTree),
     sessionId,
     prompt,
   });
@@ -1863,6 +1868,7 @@ async function cmdBoardConfig(opts: any) {
   if (opts.name != null) patch.name = opts.name;
   if (opts['always-in-scope'] != null) patch.alwaysInScope = opts['always-in-scope'];
   if (opts['integration-mode'] != null) patch.integrationMode = opts['integration-mode'];
+  if (opts['worktree-isolation'] !== undefined) patch.worktreeIsolation = opts['worktree-isolation'];
   if (opts['worktree-setup'] != null) patch.worktreeSetup = opts['worktree-setup'];
   const result = Object.keys(patch).length
     ? store.setBoardConfig(slug, patch)
@@ -1876,6 +1882,7 @@ async function cmdBoardConfig(opts: any) {
   console.log(`board name: ${payload.name}`);
   console.log(`always in scope: ${payload.alwaysInScope.length ? payload.alwaysInScope.join(', ') : '(none)'}`);
   console.log(`integration mode: ${payload.integrationMode}`);
+  console.log(`worktree isolation: ${payload.worktreeIsolation ? 'enabled' : 'disabled'}`);
   console.log(`worktree setup: ${payload.worktreeSetup || '(none)'}`);
 }
 
@@ -2414,7 +2421,7 @@ const HELP_COMMANDS: any = {
   'native-agent': 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]',
   models: 'sidequest models [--project <path-or-slug>] [--json]',
   route: 'sidequest route <category> [--project <path-or-slug>] --json',
-  'board-config': 'sidequest board-config [--always-in-scope path]... [--integration-mode <mode>] [--worktree-setup "command"] [--json]',
+  'board-config': 'sidequest board-config [--always-in-scope path]... [--integration-mode <mode>] [--worktree-isolation|--no-worktree-isolation] [--worktree-setup "command"] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
   routing: 'sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]',
   'archive-board': 'sidequest archive-board <board-ref> [--json]',
@@ -2567,7 +2574,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--integration-mode <auto|local|remote>] [--worktree-setup <command>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--integration-mode <auto|local|remote>] [--worktree-isolation|--no-worktree-isolation] [--worktree-setup <command>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then

@@ -1573,6 +1573,12 @@ function normalizeIntegrationMode(mode?: any) {
   return value;
 }
 
+function normalizeWorktreeIsolation(value?: any) {
+  if (value == null) return true;
+  if (typeof value !== 'boolean') throw new Error('worktreeIsolation must be a boolean.');
+  return value;
+}
+
 function normalizeWorktreeSetup(value?: any) {
   if (value == null || String(value).trim() === '') return null;
   const setup = String(value);
@@ -1617,6 +1623,7 @@ function boardConfig(slug?: any) {
     name: meta.name,
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
+    worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
     profile: {
       id: selected.profile.id,
@@ -1647,6 +1654,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'integrationMode')) {
       meta.integrationMode = normalizeIntegrationMode(patch.integrationMode);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'worktreeIsolation')) {
+      meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeSetup')) {
       meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
@@ -1682,6 +1692,7 @@ function ensureProject(absPath?: any, name?: any) {
         seq: 0,
         storySeq: 0,
         alwaysInScope: defaultAlwaysInScope(resolved),
+        worktreeIsolation: true,
       };
       db.putRow(handle, 'projects', { slug, data: meta });
       changed = true;
@@ -3433,9 +3444,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
     t.dispatchExecutor = stableExecutorName(t);
-    let sharedTree = Object.hasOwn(opts, 'sharedTree') ? opts.sharedTree === true : Boolean(current && current.sharedTree);
+    const requestedSharedTree = Object.hasOwn(opts, 'sharedTree') ? opts.sharedTree === true : Boolean(current && current.sharedTree);
+    const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
+    let sharedTree = worktreeIsolation ? requestedSharedTree : true;
     const declaredFiles = normalizeFiles(t.files);
-    const worktreeWarning = !sharedTree && declaredFiles.length ? worktreeIsolationWarning(slug) : null;
+    const worktreeWarning = !worktreeIsolation && Object.hasOwn(opts, 'sharedTree') && requestedSharedTree === false
+      ? 'Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately.'
+      : (!sharedTree && declaredFiles.length ? worktreeIsolationWarning(slug) : null);
     if (worktreeWarning) sharedTree = true;
     const category = getCategory(ticketCategory(t), { project: slug });
     const artifactRoot = sharedTree && declaredFiles.length === 1 && sharedTreeArtifactRequested(t)
