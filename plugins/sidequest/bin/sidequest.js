@@ -719,7 +719,7 @@ function sessionId(opts) {
 }
 function reportClaimFailure(action, idOrRef, res, meta) {
   process.exitCode = 1;
-  console.log(`✗ ${res.message || claimRefusalMessage(res.reason, idOrRef, res.claim)}`);
+  console.log(`✗ ${res.message || claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path)}`);
 }
 function effortDriftReason(slug, idOrRef, claimedEffort) {
   if (claimedEffort == null) return null;
@@ -804,6 +804,9 @@ async function cmdClaim(opts, positional) {
   const by = workerId(opts);
   const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor, opts.token, !!opts.direct);
   if (drift) {
+    if (drift.reason === "executor_mismatch") {
+      drift.message = claimRefusalMessage("executor_mismatch", idOrRef, store.getTicket(slug, idOrRef) || {}, meta.path);
+    }
     process.exitCode = 1;
     if (opts.json) {
       process.stdout.write(JSON.stringify(Object.assign({ ok: false, reason: drift.reason || "effort_mismatch", project: slug }, drift), null, 2) + "\n");
@@ -816,7 +819,7 @@ async function cmdClaim(opts, positional) {
   const warnings = res.ok ? claimPlanningWarnings(res.ticket, meta.path) : [];
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });
-    if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim);
+    if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path);
     process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
@@ -1573,7 +1576,7 @@ async function cmdBriefing(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const result = store.readDispatchBriefing(slug, idOrRef, opts.token);
   if (!result.ok) fail(`briefing: ${result.reason === "not_found" ? `no ticket "${idOrRef}".` : "dispatch token was refused; re-run dispatch for a current spawn."}`);
-  process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token, slug), meta.path));
+  process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token, slug, meta.path), meta.path));
 }
 async function cmdNativeAgent(opts, positional) {
   const action = String(positional[0] || "").toLowerCase();

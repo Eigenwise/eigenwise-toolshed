@@ -991,7 +991,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.doesNotMatch(instant.spawn.prompt, /You are a sidequest ticket executor/);
   assert.doesNotMatch(instant.spawn.prompt, /^---$/m);
   const expectedBriefing = agentsync.withProjectIdentity(agentsync.renderTicketBriefing(
-    store.getTicket(slug, addedInstant.ref), instant.token,
+    store.getTicket(slug, addedInstant.ref), instant.token, slug, PROJ,
   ), PROJ);
   const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
   const printedBriefing = execFileSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token', instant.token, '--project', PROJ], {
@@ -1511,16 +1511,36 @@ test('MCP blocks no-dispatch routed claims and records an explicit direct resear
   assert.strictEqual(pulse.direct.model, ticket.model);
 });
 
+test('MCP direct-claim refusal prints the prepared executor call', async () => {
+  const added = await callTool('add', { title: 'prepared direct refusal', category: 'coding.easy' });
+  const slug = store.ensureProject(PROJ).slug;
+  const prepared = store.prepareDispatch(slug, added.ref);
+  const refused = await callTool('claim', { ref: added.ref, by: 'mcp-direct-refusal', direct: true });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'direct_not_allowed');
+  assert.strictEqual(refused.expectedExecutor, prepared.ticket.dispatchExecutor);
+  assert.ok(refused.message.includes('Expected executor: `' + prepared.ticket.dispatchExecutor + '`'));
+  assert.ok(refused.message.includes(`executor: ${JSON.stringify(prepared.ticket.dispatchExecutor)}`));
+  assert.ok(refused.message.includes(`token: ${JSON.stringify(prepared.token)}`));
+  assert.ok(refused.message.includes(`project: ${JSON.stringify(PROJ)}`));
+  assert.match(refused.message, /without `direct`/);
+});
+
 test('MCP claim rejects a generic executor for a Codex route', async () => {
   seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
   try {
     store.setCategory({ id: 'claim-codex', name: 'Claim Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
     const added = await callTool('add', { title: 'Codex executor guard', category: 'claim-codex' });
     const ticket = store.getTicket(store.ensureProject(PROJ).slug, added.ref);
-    const rejected = await callTool('claim', { ref: added.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}` });
+    const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, added.ref);
+    const rejected = await callTool('claim', { ref: added.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}`, token: prepared.token });
     assert.strictEqual(rejected.ok, false);
     assert.strictEqual(rejected.reason, 'executor_mismatch');
-    assert.strictEqual(rejected.expectedExecutor, ticket.exec.agent);
+    assert.strictEqual(rejected.expectedExecutor, prepared.ticket.dispatchExecutor);
+    assert.ok(rejected.message.includes('Expected executor: `' + prepared.ticket.dispatchExecutor + '`'));
+    assert.ok(rejected.message.includes(`executor: ${JSON.stringify(prepared.ticket.dispatchExecutor)}`));
+    assert.ok(rejected.message.includes(`token: ${JSON.stringify(prepared.token)}`));
+    assert.ok(rejected.message.includes(`project: ${JSON.stringify(PROJ)}`));
   } finally {
     clearCatalog();
   }

@@ -387,7 +387,7 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   fs.writeFileSync(path.join(assetDir, ticket.assets[0]!), 'first');
   fs.writeFileSync(path.join(assetDir, ticket.assets[1]!), 'second');
 
-  const briefing = agentsync.renderTicketBriefing(ticket, 'instant-token-334', slug);
+  const briefing = agentsync.renderTicketBriefing(ticket, 'instant-token-334', slug, 'C:\\dev\\fixture');
   const descriptionPacket = briefing.match(/Description:\n([\s\S]*?)\n\nCategory contract:/);
   assert.ok(descriptionPacket);
   assert.strictEqual(descriptionPacket![1], ticket.description);
@@ -404,6 +404,13 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.match(briefing, /Category: briefing\.contract/);
   assert.match(briefing, /Configured route: codex-gpt-5-6-terra \/ high/);
   assert.match(briefing, /Dispatch route: codex-gpt-5-6-terra \/ high/);
+  assert.match(briefing, /mcp__plugin_sidequest_board__claim\(\{/);
+  assert.ok(briefing.includes('ref: "SQ-334"'));
+  assert.ok(briefing.includes('executor: "sidequest-exec-dispatch-high"'));
+  assert.ok(briefing.includes('effort: "high"'));
+  assert.ok(briefing.includes(`project: ${JSON.stringify('C:\\dev\\fixture')}`));
+  assert.ok(briefing.includes('token: "instant-token-334"'));
+  assert.match(briefing, /Do not pass `direct`\. Do not substitute the model slug for `executor`\./);
   assert.match(briefing, /Closeout: submit for repo work; otherwise done --model codex-gpt-5-6-terra --effort high\./);
   assert.match(briefing, /keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative/);
   assert.match(briefing, /Non-repo done comments still carry the full report/);

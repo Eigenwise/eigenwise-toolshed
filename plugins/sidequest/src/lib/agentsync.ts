@@ -456,8 +456,20 @@ function ticketReadinessContractPacket(ticket?: any, slug?: any) {
     : '(No contract-edge sequencing applies.)';
 }
 
-function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
+function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projectPath?: any) {
   const category = ticket.category || {};
+  const project = String(projectPath || (slug && store.readMeta(slug)?.path) || '').trim();
+  const executor = String(ticket.dispatchExecutor || ticket.exec?.agent || '').trim();
+  const claimCall = [
+    'mcp__plugin_sidequest_board__claim({',
+    `  ref: ${JSON.stringify(ticket.ref)},`,
+    '  by: "<choose a unique id>",',
+    `  executor: ${JSON.stringify(executor)},`,
+    `  effort: ${JSON.stringify(ticket.effort)},`,
+    `  project: ${JSON.stringify(project)},`,
+    `  token: ${JSON.stringify(nonce)}`,
+    '})',
+  ].join('\n');
   const comments = ticketCommentsPacket(ticket.comments);
   const commentHeading = comments.includes('[Comment packet truncated.')
     ? 'Comment packet (newest-first excerpts; read full history only when flagged below):'
@@ -492,7 +504,9 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
     `Attachments (inspect every readable attachment before implementation):\n${ticketAssetsPacket(ticket, slug)}`,
     ...(closeout ? [closeout] : []),
     'Dispatch claim guard:',
-    `Claim this ticket with \`--token ${nonce}\`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal.`,
+    'Copy this claim call verbatim, replacing only the `by` placeholder with a unique id:',
+    `\`\`\`javascript\n${claimCall}\n\`\`\``,
+    'Do not pass `direct`. Do not substitute the model slug for `executor`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal.',
   ];
   if (store.sharedTreeArtifactMode(ticket)) {
     parts.push(
@@ -509,11 +523,11 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any) {
 // Stable executor definitions carry the invariant protocol as their system
 // prompt. The spawn prompt only carries a fetch command and route marker, so
 // instant dispatch keeps the durable ticket packet out of the launch request.
-function renderTicketBriefing(ticket?: any, nonce?: any, slug?: any) {
+function renderTicketBriefing(ticket?: any, nonce?: any, slug?: any, projectPath?: any) {
   if (typeof nonce !== 'string' || !nonce.trim() || /[\r\n]/.test(nonce)) {
     throw new Error('dispatch briefing nonce is required and must be a non-empty one-line string.');
   }
-  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug);
+  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug, projectPath);
 }
 
 function ticketIsolation(ticket?: any, sharedTree?: any) {

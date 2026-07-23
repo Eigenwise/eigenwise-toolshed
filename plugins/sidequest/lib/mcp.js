@@ -708,9 +708,13 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, "claim");
       const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token, !!args.direct);
-      if (drift) return Object.assign({ ok: false }, drift);
+      if (drift) {
+        const ticket = store.getTicket(slug, args.ref);
+        const guidance = drift.reason === "executor_mismatch" ? { message: claimRefusalMessage(drift.reason, args.ref, ticket || {}, meta.path) } : {};
+        return Object.assign({ ok: false }, drift, guidance);
+      }
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, executor: args.executor, source: "mcp", sessionId: sessionOf(args) });
-      if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim);
+      if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
       return mutationAck(slug, res);
     }
   },

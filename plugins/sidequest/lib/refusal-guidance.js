@@ -23,6 +23,20 @@ __export(refusal_guidance_exports, {
   routingDisabledMessage: () => routingDisabledMessage
 });
 module.exports = __toCommonJS(refusal_guidance_exports);
+function correctedMcpClaim(ref, ticket = {}, projectPath) {
+  const executor = ticket.dispatchExecutor || ticket.exec?.agent || "<prepared executor>";
+  const effort = ticket.effort || "<prepared effort>";
+  const token = ticket.dispatchNonce || "<dispatch token>";
+  const project = projectPath || "<current board project>";
+  return `Corrected MCP claim, without \`direct\`: \`mcp__plugin_sidequest_board__claim({ ref: ${JSON.stringify(ref)}, by: "<choose a unique id>", executor: ${JSON.stringify(executor)}, effort: ${JSON.stringify(effort)}, project: ${JSON.stringify(project)}, token: ${JSON.stringify(token)} })\`.`;
+}
+function dispatchedClaimGuidance(ref, ticket, projectPath) {
+  const expected = ticket.dispatchExecutor || ticket.exec?.agent || "<prepared executor>";
+  if (!ticket.dispatchNonce) {
+    return `Expected executor: \`${expected}\`. Run \`sidequest dispatch ${ref}\` first to get the current token.`;
+  }
+  return `Expected executor: \`${expected}\`. ${correctedMcpClaim(ref, ticket, projectPath)}`;
+}
 const CLAIM_REFUSAL_MESSAGES = Object.freeze({
   not_found: (ref) => `${ref} does not exist on this board. Run \`sidequest list\` and claim a listed ticket.`,
   done: (ref) => `${ref} is already done. Choose another ticket with \`sidequest ready\`.`,
@@ -33,16 +47,16 @@ const CLAIM_REFUSAL_MESSAGES = Object.freeze({
   submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow, or use \`sidequest submit ${ref} --clear\` before re-claiming.`,
   dispatch_required: (ref) => `${ref} is category-routed and has no prepared dispatch. File a spike for investigation when needed, then run \`sidequest dispatch ${ref}\` and spawn its returned executor. Inline is a justified exception: \`sidequest claim ${ref} --direct --reason "why no executor can do this"\` (MCP \`direct:true\` with \`reason\`).`,
   token: (ref) => `${ref} has a prepared dispatch whose token was missing or invalid. Re-run \`sidequest dispatch ${ref}\` and claim with its returned \`--token\` and \`--executor\`.`,
-  executor_mismatch: (ref) => `${ref} has a prepared dispatch for a different executor. Re-run \`sidequest dispatch ${ref}\` and claim with its returned \`--executor\` and \`--token\`.`,
-  direct_not_allowed: (ref, ticket) => `${ref} resolves to ${ticket.model} · ${ticket.effort}. Run \`sidequest dispatch ${ref}\` and spawn its returned executor instead. A direct claim needs the user-granted \`direct-ok\` label. "context already loaded", "small change", and "handoff/transfer cost" are not valid direct reasons, and a direct claim cannot retroactively legitimize prior inline investigation.`,
+  executor_mismatch: (ref, ticket, projectPath) => `${ref} has a prepared dispatch for a different executor. ${dispatchedClaimGuidance(ref, ticket, projectPath)}`,
+  direct_not_allowed: (ref, ticket, projectPath) => `${ref} resolves to ${ticket.model} · ${ticket.effort}. ${dispatchedClaimGuidance(ref, ticket, projectPath)} A direct claim needs the user-granted \`direct-ok\` label. "context already loaded", "small change", and "handoff/transfer cost" are not valid direct reasons, and a direct claim cannot retroactively legitimize prior inline investigation.`,
   direct_reason_required: (ref) => `${ref} has a user-granted \`direct-ok\` label but still needs a direct rationale. Add \`--reason "why no executor can do this"\` (at least 20 characters) to \`sidequest claim ${ref} --direct\`, or pass MCP \`reason\`.`,
   direct_conflict: (ref) => `${ref} already has a prepared dispatch. Run \`sidequest dispatch ${ref}\` and spawn its returned executor with the current token.`,
   not_claimed: (ref) => `${ref} is not claimed by anyone. Run \`sidequest claim ${ref}\` before submitting.`,
   no_submission: (ref) => `${ref} has no submission to clear. Run \`sidequest submissions\` to inspect work awaiting integration.`
 });
-function claimRefusalMessage(reason, ref, claim = {}) {
+function claimRefusalMessage(reason, ref, claim = {}, projectPath) {
   const message = CLAIM_REFUSAL_MESSAGES[reason];
-  return message ? message(ref, claim) : `${ref} could not be claimed because ${reason}. Run \`sidequest pulse ${ref}\` and follow its current status.`;
+  return message ? message(ref, claim, projectPath) : `${ref} could not be claimed because ${reason}. Run \`sidequest pulse ${ref}\` and follow its current status.`;
 }
 function routingDisabledMessage(ref) {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; on routed work, inline is a justified exception: \`sidequest claim ${ref} --direct --reason "why no executor can do this"\`.`;

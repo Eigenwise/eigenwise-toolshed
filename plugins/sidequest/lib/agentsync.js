@@ -322,8 +322,20 @@ function ticketReadinessContractPacket(ticket, slug) {
   const dependencies = store.readyWaveDependencies(slug).filter((edge) => edge.before === ticket.ref || edge.after === ticket.ref);
   return dependencies.length ? dependencies.map((edge) => `- ${edge.reason}`).join("\n") : "(No contract-edge sequencing applies.)";
 }
-function ticketBrief(ticket, nonce, marker, slug) {
+function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const category = ticket.category || {};
+  const project = String(projectPath || slug && store.readMeta(slug)?.path || "").trim();
+  const executor = String(ticket.dispatchExecutor || ticket.exec?.agent || "").trim();
+  const claimCall = [
+    "mcp__plugin_sidequest_board__claim({",
+    `  ref: ${JSON.stringify(ticket.ref)},`,
+    '  by: "<choose a unique id>",',
+    `  executor: ${JSON.stringify(executor)},`,
+    `  effort: ${JSON.stringify(ticket.effort)},`,
+    `  project: ${JSON.stringify(project)},`,
+    `  token: ${JSON.stringify(nonce)}`,
+    "})"
+  ].join("\n");
   const comments = ticketCommentsPacket(ticket.comments);
   const commentHeading = comments.includes("[Comment packet truncated.") ? "Comment packet (newest-first excerpts; read full history only when flagged below):" : "Complete comment thread (chronological, inspect every entry before implementation):";
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}`).join("\n") : "(No ticket dependencies were recorded.)";
@@ -370,7 +382,11 @@ ${comments}`,
 ${ticketAssetsPacket(ticket, slug)}`,
     ...closeout ? [closeout] : [],
     "Dispatch claim guard:",
-    `Claim this ticket with \`--token ${nonce}\`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal.`
+    "Copy this claim call verbatim, replacing only the `by` placeholder with a unique id:",
+    `\`\`\`javascript
+${claimCall}
+\`\`\``,
+    "Do not pass `direct`. Do not substitute the model slug for `executor`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal."
   ];
   if (store.sharedTreeArtifactMode(ticket)) {
     parts.push(
@@ -384,11 +400,11 @@ This shared-tree artifact ticket may leave verified changes in its declared scop
   }
   return parts.join("\n\n");
 }
-function renderTicketBriefing(ticket, nonce, slug) {
+function renderTicketBriefing(ticket, nonce, slug, projectPath) {
   if (typeof nonce !== "string" || !nonce.trim() || /[\r\n]/.test(nonce)) {
     throw new Error("dispatch briefing nonce is required and must be a non-empty one-line string.");
   }
-  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug);
+  return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug, projectPath);
 }
 function ticketIsolation(ticket, sharedTree) {
   const hasDeclaredScope = Array.isArray(ticket && ticket.files) && ticket.files.length > 0;
