@@ -153,6 +153,17 @@ shared policy and setup must never mutate it. Do not create a project profile wh
 a starter. Keep the selected profile and any confirmed delta in the plan; Phase 4 applies the profile after
 Sidequest creates or opens the board.
 
+### Executor worktree isolation
+
+When Sidequest is selected, after recording the routing choice and before the Phase 1 interview, ask this
+plain-text question: **"Should dispatched executors use isolated git worktrees here? I recommend keeping
+them on. Choose the shared checkout when the project's outputs need to appear in this working tree, or when
+parallel worktrees have caused problems here."** Keep it conversational rather than turning it into a menu.
+
+Record the accepted choice in the session/bootstrap plan alongside the routing choice. Default to isolated
+worktrees when the user accepts the recommendation or asks for good defaults. Use the shared checkout only
+when they explicitly choose it. If Sidequest was not selected, skip this question.
+
 ## Phase 1 — Interview and selection
 
 Before the normal interview, invoke `/codex-gateway:codex-gateway` and use its `env --show-mode` command to inspect the machine-local gateway mode. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH. When no mode is saved, ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the choice through that skill with its `env --mode global` or `env --mode local` command; do not ask again once a mode exists, and later setup flows honor it silently. Do not ask during non-interactive setup: default to local and say `wiring mode defaulted to per-project; use /codex-gateway:codex-gateway to run its env --mode global command to change`.
@@ -329,7 +340,10 @@ empirically — this is the part that separates "wrote some files" from "set up 
 5. **sidequest board.** If selected, bring up the board (`sidequest dashboard`, or ask the board skill), then
    apply the profile recorded after Phase 0 with `sidequest profile use <profile> --project <board>`. For a
    new project profile, create it from its recorded starter and apply only its confirmed delta before using
-   it. Report the URL and selected profile, so the user sees the Kanban and its routing policy are live.
+   it. Then call `board_config` for this board with `worktreeIsolation: true` for isolated worktrees or
+   `worktreeIsolation: false` for the shared checkout, using the choice recorded in the plan. Confirm the
+   returned setting. Report the URL, selected profile, and executor checkout choice, so the user sees the
+   Kanban and its routing policy are live.
 6. **Optional plugins.** Verify each selected extra is usable: an LSP responds and its binary is on
    `PATH`, a named skill resolves, or its documented integration opens. Keep it quick, but verify every
    selected plugin rather than assuming a loaded entry works.
@@ -370,6 +384,7 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 - [ ] Project intent was asked before the picker; current marketplace catalog plugin picker came third with
       intent-grounded recommendations, before Phase 0
 - [ ] Phase 0 assessment done (new/existing, codebase/not, existing `.claude/` read and merged)
+- [ ] When Sidequest is selected, routing profile and executor checkout choice recorded in the bootstrap plan
 - [ ] Stack and compact project-detail interview complete; LSP binary prerequisites checked
 - [ ] Bootstrap plan created in the session scratchpad; helper check and install both succeeded
 - [ ] CLI-owned `enabledPlugins` left to `claude plugin install`; only non-plugin settings and portable
