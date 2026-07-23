@@ -87,3 +87,14 @@ test('add --dry-run validates and previews without writing a board', () => {
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stdout, /SQ-2/);
 });
+
+test('CLI add accepts both --files and --file for ticket scope', () => {
+  const env = isolatedEnv();
+  const plural = run(['add', '--title', 'plural scope', '--category', 'general', '--files', 'plugins/a.ts,plugins/b.ts', '--json'], env);
+  assert.equal(plural.status, 0, plural.stderr);
+  assert.deepEqual(JSON.parse(plural.stdout).ticket.files, ['plugins/a.ts', 'plugins/b.ts']);
+
+  const singular = run(['add', '--title', 'singular scope', '--category', 'general', '--file', 'plugins/c.ts', '--json'], env);
+  assert.equal(singular.status, 0, singular.stderr);
+  assert.deepEqual(JSON.parse(singular.stdout).ticket.files, ['plugins/c.ts']);
+});
