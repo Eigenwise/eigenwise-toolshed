@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeContext } from './shared/output.js';
-import { runtimeModule } from './shared/paths.js';
+import { pluginRoot, runtimeModule } from './shared/paths.js';
 
 const MAX_WORKFORCE_BYTES = 1800;
 const MAX_WORKFORCE_DESCRIPTION = 90;
@@ -129,13 +129,13 @@ function main(): void {
   ].filter(Boolean).join('\n');
 
   if (nudgeOff()) return;
-  const cli = 'node "${CLAUDE_PLUGIN_ROOT}/bin/sidequest.js"';
+  const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const source = stringField(data, 'source');
 
   if (source === 'compact' || source === 'resume') {
     emit(
       '=== sidequest (active — context restored) ===\n' +
-        'ROLE: ORCHESTRATOR. Reload Sidequest. Substantive work needs a ticket; each Agent launch uses fresh dispatch\'s token-gated executor/spawn. Ticket + dispatch BEFORE multi-file exploration: second file is the boundary. Tiny lookup: Read, Glob, Grep, or WebFetch inline. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Routed direct:true needs `direct-ok` + a reason; invalid: "the context is already loaded in this session", "it\'s a small patch", "a fresh executor would need context transfer / handoff costs more". Direct never retroactively legitimizes inline investigation. Use mcp__plugin_sidequest_board__list with status=doing FIRST; CLI fallback: `' + cli + ' list --status doing`.\n' +
+        'ROLE: ORCHESTRATOR. Reload Sidequest. Work needs a ticket; each Agent launch uses dispatch\'s executor/spawn. Ticket + dispatch BEFORE multi-file exploration: second file is the boundary. Tiny lookup: Read, Glob, Grep, or WebFetch inline. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Routed direct:true needs `direct-ok` + a reason; invalid: loaded context, small patch, or handoff cost. Direct never retroactively legitimizes inline investigation. mcp__plugin_sidequest_board__list status=doing FIRST; CLI fallback: run `' + cli + ' list --status doing`.\n' +
         'Native results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. one background timer, never foreground sleep loop.\n',
       restartNotice,
     );
@@ -151,7 +151,7 @@ function main(): void {
       'Specs need anchors, contract, bounds, decisions, and verify. ' +
       'several deliverables on one ticket is a smell: use a ticketed planning investigation that pins the shared contract, then a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest.\n' +
       'Execution economy:\n' +
-      '• Tiny lookup: Read, Glob, Grep, or WebFetch inline. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Ticket + dispatch MUST precede multi-file exploration: second file is the boundary, never ten-read retrospective. Delegated work, even a quick investigation, is a spike ticket (`codebase-exploration`): file, route, dispatch. `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities; other delegated implementation or investigation work needs a ticketed route. Routed direct:true needs user `direct-ok` + a reason; invalid: "the context is already loaded in this session", "it\'s a small patch", "a fresh executor would need context transfer / handoff costs more". Direct never retroactively legitimizes inline investigation. Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Never proxy-wait: no Bash/PowerShell/Monitor/cron executor/report poll or blocking TaskOutput. Denied: pulse + deny, ONE diagnose-first retry only, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Inline: trivial; beyond it, substantive actions are BLOCKED until claim. Use `bypassPermissions`; do not use `native_agent`.\n' +
+      '• Tiny lookup: Read, Glob, Grep, or WebFetch inline. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Ticket + dispatch MUST precede multi-file exploration: second file is the boundary, never ten-read retrospective. Delegated work, even a quick investigation, is a spike ticket (`codebase-exploration`): file, route, dispatch. `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities; other delegated implementation or investigation work needs a ticketed route. Routed direct:true needs user `direct-ok` + a reason; invalid: loaded context, small patch, or handoff cost. Direct never retroactively legitimizes inline investigation. Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Never proxy-wait: no Bash/PowerShell/Monitor/cron executor/report poll or blocking TaskOutput. Denied: pulse + deny, ONE diagnose-first retry only, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Inline: trivial; beyond it, substantive actions are BLOCKED until claim. Use `bypassPermissions`; do not use `native_agent`.\n' +
       '• SHORT: category description; ticket description is executor brief; bounce back.\n' +
       '• Batch small SAME-model tickets into ONE executor; parallelize only independent tickets.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +

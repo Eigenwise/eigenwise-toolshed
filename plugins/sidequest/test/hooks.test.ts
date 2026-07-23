@@ -920,13 +920,15 @@ test('session-start: compact and resume preserve evidence-first routing guidance
   }
 });
 
-test('session-start: compact byte budget ignores a long plugin path', () => {
+test('session-start: embeds the expanded plugin path in CLI fallbacks', () => {
+  const pluginRoot = 'C:/plugins/sidequest';
   const ctx = runHook(
     SESSION,
     { session_id: 't', source: 'compact' },
-    { CLAUDE_PLUGIN_ROOT: 'C:/sidequest/' + 'deep-install-root/'.repeat(100) }
+    { CLAUDE_PLUGIN_ROOT: pluginRoot }
   );
-  assert.ok(ctx.includes('node "${CLAUDE_PLUGIN_ROOT}/bin/sidequest.js"'), 'CLI fallback must use the stable plugin-root variable');
+  assert.ok(ctx.includes(`node "${pluginRoot}/bin/sidequest.js"`), 'CLI fallback must embed the hook runtime plugin path');
+  assert.ok(!ctx.includes('${CLAUDE_PLUGIN_ROOT}'), 'CLI fallback must not rely on an unset shell variable');
   assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `compact block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
 });
 
