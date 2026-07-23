@@ -1888,6 +1888,17 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
   const unknown = [...refs].filter((ref) => !known.has(ref));
   return unknown.length ? [`Unknown ticket refs: ${unknown.join(", ")}.`] : [];
 }
+function ticketPrescribesFix(description) {
+  const body = String(description || "");
+  if (/^\s*fix\s*:/im.test(body)) return true;
+  if (/\b(?:replace|change)\s+\S[\s\S]{0,160}?\s+(?:with|to)\s+\S/i.test(body)) return true;
+  if (/```(?:diff|patch)?\s*\r?\n[\s\S]*?^-\S[\s\S]*?^\+\S[\s\S]*?```/im.test(body)) return true;
+  return (body.match(/^\s*\d+[.)]\s+(?:add|change|replace|remove|rename|move|update|set|delete|edit|wire)\b/gim) || []).length >= 2;
+}
+function ticketCategoryWarnings(ticket) {
+  if (ticketCategory(ticket) !== "coding.hard" || !ticketPrescribesFix(ticket && ticket.description)) return [];
+  return ["coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category."];
+}
 function dispatchDescriptionError(ticket) {
   if (!ticket || !ticket.model || !ticket.effort) return null;
   if (String(ticket.description || "").trim().length >= DISPATCH_DESCRIPTION_MIN) return null;
@@ -4737,6 +4748,7 @@ module.exports = {
   dispatchDescriptionError,
   dispatchWarnings,
   ticketReferenceWarnings,
+  ticketCategoryWarnings,
   ticketPlanningWarnings,
   coerceComplexity,
   legacyCategoryForComplexity,

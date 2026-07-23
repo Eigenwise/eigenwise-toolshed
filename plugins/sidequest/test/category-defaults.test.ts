@@ -10,3 +10,8 @@ test('seeded categories match the checked-in global category snapshot', () => {
   const snapshot: unknown = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
   assert.deepEqual(DEFAULT_CATEGORIES, snapshot);
 });
+
+test('hard coding excludes stakes alone from classification', () => {
+  const hard = (DEFAULT_CATEGORIES as any[]).find((category) => category.id === 'coding.hard');
+  assert.match(hard.description, /do not make a ticket hard/);
+});

@@ -229,6 +229,7 @@ async function cmdAdd(opts) {
   });
   const ticket = store.getTicket(slug, created.ref) || created;
   warnings.push(...store.ticketReferenceWarnings(slug, ticket.title, ticket.description));
+  warnings.push(...store.ticketCategoryWarnings(ticket));
   warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, ticket, category: categoryEcho(ticket), warnings }, null, 2) + "\n");

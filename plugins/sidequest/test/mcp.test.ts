@@ -1210,6 +1210,16 @@ test('add returns a compact acknowledgement', async () => {
   assert.strictEqual(out.status, 'todo');
 });
 
+test('MCP add warns when coding.hard already prescribes a fix', async () => {
+  await callTool('category_list', {});
+  const added = await callTool('add', {
+    title: 'MCP prescriptive hard change',
+    category: 'coding.hard',
+    description: 'FIX: replace the legacy parser with the shared parser.',
+  });
+  assert.deepStrictEqual(added.warnings, ['coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.']);
+});
+
 test('category stamps warn until category_list is served by the MCP session', async () => {
   const session = freshMcpServer();
   const slug = store.ensureProject(PROJ).slug;

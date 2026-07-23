@@ -11,6 +11,7 @@ const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const WARNING = 'Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: executor anchors, verify command, file scope.';
 const MISSING_SCOPE_WARNING = 'Planning-depth warning: declared file scope does not exist in the repo: missing/scope.js.';
+const PRESCRIPTIVE_HARD_WARNING = 'coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.';
 
 function cliJson(args?: any) {
   const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
@@ -85,6 +86,17 @@ test('add and update warn only for unknown mentioned ticket refs', () => {
 
   const updated = cliJson(['update', added.ticket.ref, '--title', `follow ${known.ticket.ref} and SQ-9998`]);
   assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998, SQ-9999.']);
+});
+
+test('coding.hard add warns only when the description prescribes a fix', () => {
+  const prescriptive = cliJson(['add', '-t', 'prescriptive hard change', '--category', 'coding.hard', '--description', 'FIX: replace the legacy parser with the shared parser.']);
+  assert.deepStrictEqual(prescriptive.warnings, [PRESCRIPTIVE_HARD_WARNING]);
+
+  const openEnded = cliJson(['add', '-t', 'open hard change', '--category', 'coding.hard', '--description', 'Investigate the competing persistence designs and recommend a safe migration path.']);
+  assert.deepStrictEqual(openEnded.warnings, []);
+
+  const normal = cliJson(['add', '-t', 'prescriptive normal change', '--category', 'coding.normal', '--description', 'FIX: replace the legacy parser with the shared parser.']);
+  assert.deepStrictEqual(normal.warnings, []);
 });
 
 export {};

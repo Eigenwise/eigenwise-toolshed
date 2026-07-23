@@ -659,6 +659,7 @@ const TOOLS: ToolDefinition[] = [
       });
       const ticket = store.getTicket(slug, created.ref) || created;
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
+      warnings.push(...store.ticketCategoryWarnings(ticket));
       if (category && !categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
       return mutationAck(slug, { ok: true, ticket }, warnings.length ? { warnings } : null);
     },

@@ -313,6 +313,7 @@ async function cmdAdd(opts: any) {
   // model/effort (stamped from complexity at read time) for display/JSON.
   const ticket = store.getTicket(slug, created.ref) || created;
   warnings.push(...store.ticketReferenceWarnings(slug, ticket.title, ticket.description));
+  warnings.push(...store.ticketCategoryWarnings(ticket));
   warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
 
   if (opts.json) {
