@@ -972,6 +972,14 @@ const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEART
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
   : 20000;
+const configuredWebSocketUpgradeRetries = Number(process.env.CODEX_GATEWAY_WS_UPGRADE_RETRIES);
+const WEBSOCKET_UPGRADE_RETRIES = Number.isInteger(configuredWebSocketUpgradeRetries) && configuredWebSocketUpgradeRetries >= 0
+  ? configuredWebSocketUpgradeRetries
+  : 2;
+const configuredWebSocketUpgradeRetryDelayMs = Number(process.env.CODEX_GATEWAY_WS_UPGRADE_RETRY_DELAY_MS);
+const WEBSOCKET_UPGRADE_RETRY_DELAY_MS = Number.isFinite(configuredWebSocketUpgradeRetryDelayMs) && configuredWebSocketUpgradeRetryDelayMs >= 0
+  ? configuredWebSocketUpgradeRetryDelayMs
+  : 250;
 
 function gatewayModel(id) {
   return {
@@ -1737,6 +1745,24 @@ function runShim() {
     return Buffer.from(JSON.stringify(parsed));
   }
 
+  function isWebSocketUpgradeRejection(statusCode, body) {
+    if (statusCode !== 403) return false;
+    try {
+      const error = JSON.parse(body.toString()).error;
+      return error?.type === 'permission_error' && error.message === 'WebSocket upgrade was rejected';
+    } catch { return false; }
+  }
+
+  function transientWebSocketUpgradeError(attempts) {
+    return Buffer.from(JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: `codex-gateway: Codex WebSocket upgrade was temporarily rejected after ${attempts} attempts; retry the request.`,
+      },
+    }));
+  }
+
   function createCodexSseTransformer(write, observe, advertisedModel, filterPlanTools) {
     const decoder = new StringDecoder('utf8');
     let pending = '';
@@ -1891,7 +1917,7 @@ function runShim() {
     arm();
   }
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null, usageCapture = null) {
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null, usageCapture = null, webSocketUpgradeRetries = 0) {
     const url = new URL(clientReq.url, target);
     let finishUsage = () => usageCapture?.finish();
     if (usageCapture) clientRes.once('finish', () => finishUsage());
@@ -1910,12 +1936,44 @@ function runShim() {
       reqOptions.lookup = anthropicBypass.lookup;
     }
     const upReq = (isHttps ? https : http).request(url, reqOptions, (upRes) => {
+      const resHeaders = { ...upRes.headers };
+      for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
+      if (normalizeContextErrors && upRes.statusCode === 403) {
+        const chunks = [];
+        upRes.on('data', (chunk) => {
+          usageCapture?.noteResponseBytes(chunk.length);
+          chunks.push(chunk);
+        });
+        upRes.on('error', () => clientRes.destroy());
+        upRes.on('aborted', () => clientRes.destroy());
+        upRes.on('end', () => {
+          const upstreamBody = Buffer.concat(chunks);
+          if (!isWebSocketUpgradeRejection(upRes.statusCode, upstreamBody)) {
+            usageCapture?.setResponse(upRes.statusCode, upRes.headers);
+            routeTelemetry?.finish(upRes.statusCode);
+            const rewritten = rewriteCodexJson(upstreamBody, advertisedModel, false);
+            resHeaders['content-length'] = rewritten.length;
+            clientRes.writeHead(upRes.statusCode, resHeaders);
+            return clientRes.end(rewritten);
+          }
+          if (webSocketUpgradeRetries < WEBSOCKET_UPGRADE_RETRIES) {
+            return setTimeout(() => forward(clientReq, clientRes, target, body, extraHeaderDrop,
+              normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, routeTelemetry,
+              usageCapture, webSocketUpgradeRetries + 1), WEBSOCKET_UPGRADE_RETRY_DELAY_MS);
+          }
+          const transientError = transientWebSocketUpgradeError(webSocketUpgradeRetries + 1);
+          usageCapture?.setResponse(503, resHeaders);
+          routeTelemetry?.finish(503, 'upstream_error');
+          resHeaders['content-length'] = transientError.length;
+          clientRes.writeHead(503, resHeaders);
+          clientRes.end(transientError);
+        });
+        return;
+      }
       usageCapture?.setResponse(upRes.statusCode, upRes.headers);
       upRes.once('end', () => routeTelemetry?.finish(upRes.statusCode));
       upRes.once('aborted', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted'));
       upRes.once('error', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_error'));
-      const resHeaders = { ...upRes.headers };
-      for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
       if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) {
         const chunks = [];
         let settled = false;

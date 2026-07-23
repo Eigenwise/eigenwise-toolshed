@@ -409,6 +409,68 @@ test('genuine no-numbers 413 gets usage numbers appended', async (t) => {
   assert.match(parsed.error.message, /366000 tokens > 370000 tokens/);
 });
 
+test('retries transient Codex WebSocket upgrade rejections before returning the response', async (t) => {
+  let forwarded = 0;
+  const rejection = JSON.stringify({
+    type: 'error',
+    error: { type: 'permission_error', message: 'WebSocket upgrade was rejected' },
+  });
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    forwarded++;
+    if (forwarded < 3) {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      return res.end(rejection);
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ model: 'gpt-5.6-sol', ok: true }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort, {
+    CODEX_GATEWAY_WS_UPGRADE_RETRIES: '2',
+    CODEX_GATEWAY_WS_UPGRADE_RETRY_DELAY_MS: '1',
+  });
+
+  const response = await request(shimPort, 'POST', '/v1/messages', codexBody);
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(response.body).model, 'claude-codex-gpt-5.6-sol');
+  assert.equal(forwarded, 3);
+});
+
+test('exhausted Codex WebSocket upgrade retries become a transient gateway error', async (t) => {
+  let forwarded = 0;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    forwarded++;
+    res.writeHead(403, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      type: 'error',
+      error: { type: 'permission_error', message: 'WebSocket upgrade was rejected' },
+    }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort, {
+    CODEX_GATEWAY_WS_UPGRADE_RETRIES: '1',
+    CODEX_GATEWAY_WS_UPGRADE_RETRY_DELAY_MS: '1',
+  });
+
+  const response = await request(shimPort, 'POST', '/v1/messages', codexBody);
+  const error = JSON.parse(response.body).error;
+  assert.equal(response.status, 503);
+  assert.equal(error.type, 'api_error');
+  assert.match(error.message, /temporarily rejected after 2 attempts/);
+  assert.doesNotMatch(error.message, /login|permission/i);
+  assert.equal(forwarded, 2);
+});
+
 test('an old-proxy context error is normalized to HTTP 413 request_too_large', async (t) => {
   // claude-code-proxy <=0.1.13 signalled overflow with a 5xx of its own shape; the
   // shim must normalize that to the same 413 request_too_large the new proxy emits.
