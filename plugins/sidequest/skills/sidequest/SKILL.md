@@ -152,21 +152,20 @@ optionally `--status todo`).
   **Never proxy-wait** either: no shell/`Monitor`/cron task whose only job is waiting for an
   executor or polling for its artifact (a one-shot local readiness watch is fine).
 
-**Repository publishing is the orchestrator's, alone.** Executors stop at a verified local commit
-and `submit` it (claim released, parked in `doing`, excluded from `ready`). The submission holds the
-full report; the executor's terminal comment keeps the commit hash + verify evidence and points back
-there instead of repeating the narrative. The orchestrator then
-runs the serialized publish transaction (lock → integrate → central version assignment →
-reverify → diff review → push → reachability → `done`):
+**Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
+`submit` (claim released, parked in `doing`, excluded from `ready`); the submission holds the full report,
+and the terminal comment keeps only the commit hash + verification. The orchestrator runs the publish
+transaction (lock → integrate → central version → reverify → review → push → reachability → `done`):
 `references/publishing.md`.
 Before integrating or closing a submitted ticket, read
 `sidequest comments <ref> --json` and resolve any unresolved risk.
 **Green verification is necessary but never a review**: before pushing, review the diff (yourself
 for a small change, a dispatched `review-audit`/`security-audit` executor otherwise) and resolve
 or explicitly accept every finding. Never mark a submitted ticket done without integrating it;
-never re-dispatch one (refused as `submitted`). A dead executor's `done` proves only the board
-transition — check `git status` and its declared files, and recover uncommitted in-scope work
-through the publish transaction first.
+never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves the board transition:
+inspect declared scope and publish uncommitted work. For committed, verified but unsubmitted work,
+recover `refs/sidequest/<ref>`, verify, release stale claim, publish, then use the control-plane grooming
+closure citing commit hash; never spawn an executor for `submit`/`done`.
 
 ## Route execution down; keep the loop tight
 
