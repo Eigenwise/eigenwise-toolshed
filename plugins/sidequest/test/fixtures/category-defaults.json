@@ -59,7 +59,7 @@
   {
     "id": "coding.hard",
     "name": "Hard coding",
-    "description": "A code change with no single obviously-correct approach and real, hard-to-reverse consequences: a genuine architectural tradeoff, a blast radius spanning many systems, or work that must survive adversarial scrutiny (security, data integrity, a public API contract). Belongs here: a cross-cutting change with no established repo pattern to copy; a fix requiring an actual design tradeoff rather than a known recipe; a schema or data migration with real data-loss risk. Does not belong here: a change that merely touches many files but follows one clear pattern throughout — that stays coding.normal. Irreversibility and absence of a clear right answer are the signals, never file or line count.",
+    "description": "A code change with no single obviously-correct approach and real, hard-to-reverse consequences: a genuine architectural tradeoff, a blast radius spanning many systems, or work that must survive adversarial scrutiny (security, data integrity, a public API contract). Belongs here: a cross-cutting change with no established repo pattern to copy; a fix requiring an actual design tradeoff rather than a known recipe; a schema or data migration with real data-loss risk. Does not belong here: a change that merely touches many files but follows one clear pattern throughout — that stays coding.normal. Irreversibility and absence of a clear right answer are the signals, never file or line count. This tier is deliberately RARE and expensive (it routes to the strongest model): choose it only when irreversibility or a genuine unsolved-design element is clearly present. On the fence between coding.normal and coding.hard? It's coding.normal.",
     "route": {
       "model": "codex-gpt-5-6-sol",
       "effort": "xhigh"
@@ -93,11 +93,11 @@
     "name": "Review or audit",
     "description": "Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review: threat-model the change and hunt injection, authz, secrets exposure, and unsafe-input issues when the ticket calls for it.",
     "route": {
-      "model": "codex-gpt-5-6-sol",
+      "model": "codex-gpt-5-6-terra",
       "effort": "high"
     },
     "fallback": {
-      "model": "opus",
+      "model": "sonnet",
       "effort": "high"
     },
     "contract": "Report concrete findings with evidence, confidence, and impact; do not edit unless asked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.",
@@ -123,14 +123,14 @@
   {
     "id": "coding.normal",
     "name": "Standard coding",
-    "description": "A code change with a clear destination but real engineering judgment in getting there: choosing among a few conventional, already-used-in-this-repo patterns, coordinating edits across files that reference each other, or filling in reasonable defaults the request left unspecified. Belongs here: a new endpoint or component following the shape of existing ones; a fix requiring understanding how two or three parts interact; a refactor following an established pattern already used elsewhere in this codebase. Does not belong here: work where the repo doesn't show the right pattern and you'd have to invent one (coding.hard), or work with no real decision points (coding.easy). Touching many files does not by itself promote a ticket out of this tier if one pattern applies throughout.",
+    "description": "A code change with a clear destination but real engineering judgment in getting there: choosing among a few conventional, already-used-in-this-repo patterns, coordinating edits across files that reference each other, or filling in reasonable defaults the request left unspecified. Belongs here: a new endpoint or component following the shape of existing ones; a fix requiring understanding how two or three parts interact; a refactor following an established pattern already used elsewhere in this codebase. Does not belong here: work where the repo doesn't show the right pattern and you'd have to invent one (coding.hard), or work with no real decision points (coding.easy). Touching many files does not by itself promote a ticket out of this tier if one pattern applies throughout. This is the DEFAULT tier for real coding work: when you're unsure whether a change is normal or hard, choose coding.normal — coding.hard is a rare exception reserved for genuine architectural risk, not the bucket for anything that merely feels involved or large.",
     "route": {
-      "model": "codex-gpt-5-6-sol",
-      "effort": "medium"
+      "model": "codex-gpt-5-6-terra",
+      "effort": "high"
     },
     "fallback": {
-      "model": "opus",
-      "effort": "medium"
+      "model": "sonnet",
+      "effort": "high"
     },
     "contract": "Establish the local pattern, implement to it, then run relevant checks.",
     "artifactRoots": [],
