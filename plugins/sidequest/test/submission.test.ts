@@ -448,6 +448,37 @@ test('CLI: an explicit submitted base isolates a dependent queued range', () => 
   assert.deepStrictEqual(submission.changedPaths, ['lib/second.js']);
 });
 
+test('CLI: a control-plane-integrated local main commit is accepted as an explicit base', (t?: any) => {
+  cleanBranch();
+  t.after(() => git(['branch', '-f', 'main', 'origin/main']));
+
+  const integratedTicket = addTicket('control-plane-integrated base', { files: ['foreign.js'] });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'integrated locally\n');
+  git(['add', 'foreign.js']);
+  git(['commit', '-m', 'control-plane-integrated base']);
+  const integratedBase = git(['rev-parse', 'HEAD']);
+  git(['branch', '-f', 'main', integratedBase]);
+  const closed = runCli(['groom-close', integratedTicket.ref, '--by', 'orchestrator', '--reason', `Integrated ${integratedBase} into local main without a submission.`]);
+  assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
+  assert.ok(!store.getTicket(slug, integratedTicket.ref).submission);
+
+  const ticket = addTicket('depends on control-plane-integrated base', { files: ['lib/allowed.js'] });
+  assert.strictEqual(runCli(['claim', ticket.ref, '--by', 'local-main-base-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'allowed.js'), 'allowed\n');
+  git(['add', 'lib/allowed.js']);
+  git(['commit', '-m', 'dependent submission']);
+  const tip = git(['rev-parse', 'HEAD']);
+  pin(ticket, tip);
+
+  const submitted = runCli(['submit', ticket.ref, '--by', 'local-main-base-worker', '--commit', tip, '--base', integratedBase]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  const submission = store.getTicket(slug, ticket.ref).submission;
+  assert.strictEqual(submission.base, integratedBase);
+  assert.deepStrictEqual(submission.commits, [tip]);
+  assert.deepStrictEqual(submission.changedPaths, ['lib/allowed.js']);
+});
+
 test('CLI: an arbitrary explicit base cannot hide an out-of-scope commit', () => {
   cleanBranch();
   const ticket = addTicket('unrecognized explicit base', { files: ['lib/allowed.js'] });
@@ -526,7 +557,7 @@ test('CLI: a remote-less board auto-selects local integration and records a main
   const configured = cliJson(['board-config', '--integration-mode', 'local', '--json']);
   assert.strictEqual(configured.integrationMode, 'local');
   store.setBoardConfig(slug, { integrationMode: 'auto' });
-  assert.deepStrictEqual(store.integrationTarget(slug), { mode: 'local', upstream: 'main' });
+  assert.deepStrictEqual(store.integrationTarget(slug), { mode: 'local', upstream: 'main', branch: 'main' });
 
   const t = addTicket('local-only submit', { files: ['lib/local-only.js'] });
   assert.strictEqual(runCli(['claim', t.ref, '--by', 'local-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);

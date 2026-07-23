@@ -310,13 +310,17 @@ function submissionRange(cwd, options) {
   if (!mergeBase.ok || !mergeBase.value) return { ok: false, reason: "unrelated_history", upstream, tip: tip.value, message: mergeBase.ok ? void 0 : mergeBase.message };
   const requestedBase = opts.base ? resolvedCommit(cwd, opts.base) : null;
   if (requestedBase && !requestedBase.ok) return { ok: false, reason: "missing_base", message: requestedBase.message };
-  if (requestedBase && (!isAncestor(cwd, mergeBase.value, requestedBase.value) || !isAncestor(cwd, requestedBase.value, tip.value))) {
+  const integrationBranch = requestedBase ? resolvedCommit(cwd, opts.integrationBranch || upstream) : null;
+  const baseIsOnTip = !!requestedBase && isAncestor(cwd, requestedBase.value, tip.value);
+  const baseIsAfterMergeBase = !!requestedBase && isAncestor(cwd, mergeBase.value, requestedBase.value);
+  const baseIsIntegrated = !!requestedBase && !!integrationBranch?.ok && isAncestor(cwd, requestedBase.value, integrationBranch.value);
+  if (requestedBase && (!baseIsOnTip || !baseIsAfterMergeBase && !baseIsIntegrated)) {
     return { ok: false, reason: "base_not_reachable", base: requestedBase.value, actualBase: mergeBase.value, upstream, tip: tip.value };
   }
   const allowedBaseNames = Array.isArray(opts.allowedBases) ? opts.allowedBases : null;
   if (requestedBase && requestedBase.value !== mergeBase.value && allowedBaseNames) {
     const allowedBases = new Set(allowedBaseNames.map((name) => resolvedCommit(cwd, name)).filter((candidate) => candidate.ok).map((candidate) => candidate.value));
-    if (!allowedBases.has(requestedBase.value)) {
+    if (!baseIsIntegrated && !allowedBases.has(requestedBase.value)) {
       return {
         ok: false,
         reason: "unrecognized_base",
@@ -324,7 +328,7 @@ function submissionRange(cwd, options) {
         actualBase: mergeBase.value,
         upstream,
         tip: tip.value,
-        message: "explicit base must match a validated submitted or integrated ticket boundary"
+        message: "explicit base must be on the integration branch or match a validated submitted ticket boundary"
       };
     }
   }

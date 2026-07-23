@@ -1603,7 +1603,7 @@ function integrationTarget(slug?: any) {
   if (!meta) return null;
   const configured = normalizeIntegrationMode(meta.integrationMode);
   const mode = configured === 'auto' ? (hasOriginRemote(meta.path) ? 'remote' : 'local') : configured;
-  return { mode, upstream: mode === 'local' ? 'main' : 'origin/main' };
+  return { mode, upstream: mode === 'local' ? 'main' : 'origin/main', branch: 'main' };
 }
 
 function normalizeBoardName(value?: any) {

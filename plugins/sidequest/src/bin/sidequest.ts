@@ -1210,6 +1210,7 @@ async function cmdSubmit(opts: any, positional: any) {
     commit: opts.commit,
     gitRef,
     upstream: target.upstream,
+    integrationBranch: target.branch,
     base: opts.base,
     allowedBases,
     baseCandidates: opts.base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true }),

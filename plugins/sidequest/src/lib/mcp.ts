@@ -1083,6 +1083,7 @@ const TOOLS: ToolDefinition[] = [
         commit,
         gitRef,
         upstream: target.upstream,
+        integrationBranch: target.branch,
         base: args.base,
         allowedBases,
         baseCandidates: args.base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true }),
