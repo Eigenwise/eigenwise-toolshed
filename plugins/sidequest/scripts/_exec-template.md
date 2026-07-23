@@ -23,8 +23,9 @@ paths or use forward slashes; unquoted backslash paths collapse into junk files.
 root. The central board store is normally `~/.claude/sidequest` (overridden by `SIDEQUEST_HOME`); resolve asset
 locations from ticket data before reading them.
 
-**Worktree safety:** Declared-file tickets use an isolated worktree unless the ticket explicitly needs
-uncommitted shared-tree state. In a shared tree, after claiming inspect `git diff --cached --name-only`.
+**Worktree safety:** Worktree isolation follows the dispatch and board decision, regardless of whether the ticket
+has declared files. Only a dispatch explicitly marked for shared-tree execution runs in the shared tree. In a shared
+tree, after claiming inspect `git diff --cached --name-only`.
 Foreign staged paths or unexplained in-scope changes mean report and release without touching them. Out-of-scope changes are normal: commit what is declared, the rest is reported automatically; never release verified work over scope friction. Stay
 within declared files and scope test runs. Never read large files whole. Never publish, push, create or
 switch branches. NEVER edit or commit `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`.

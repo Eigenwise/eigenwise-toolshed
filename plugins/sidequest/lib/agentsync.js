@@ -407,8 +407,6 @@ function renderTicketBriefing(ticket, nonce, slug, projectPath) {
   return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug, projectPath);
 }
 function ticketIsolation(ticket, sharedTree) {
-  const hasDeclaredScope = Array.isArray(ticket && ticket.files) && ticket.files.length > 0;
-  if (!hasDeclaredScope) return null;
   return sharedTree === true ? null : "worktree";
 }
 function withProjectIdentity(prompt, projectPath) {

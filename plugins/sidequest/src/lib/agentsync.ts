@@ -531,8 +531,6 @@ function renderTicketBriefing(ticket?: any, nonce?: any, slug?: any, projectPath
 }
 
 function ticketIsolation(ticket?: any, sharedTree?: any) {
-  const hasDeclaredScope = Array.isArray(ticket && ticket.files) && ticket.files.length > 0;
-  if (!hasDeclaredScope) return null;
   return sharedTree === true ? null : 'worktree';
 }
 

@@ -327,6 +327,13 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   assert.equal(isolated.spawn.isolation, 'worktree');
   assert.equal(store.getTicket(isolatedProject, isolatedTicket.ref).dispatch.sharedTree, false);
 
+  const scopeLessTicket = store.createTicket(isolatedProject, {
+    title: 'scope-less default board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal',
+  });
+  const scopeLess = await callTool('dispatch', { project: isolatedProject, ref: scopeLessTicket.ref, full: true });
+  assert.equal(scopeLess.spawn.isolation, 'worktree');
+  assert.equal(store.getTicket(isolatedProject, scopeLessTicket.ref).dispatch.sharedTree, false);
+
   const sharedRoot = committedRepo('sq-mcp-worktree-isolation-off-');
   const sharedProject = store.ensureProject(sharedRoot, 'SQ shared isolation').slug;
   const configured = await callTool('board_config', { project: sharedProject, worktreeIsolation: false });
@@ -336,7 +343,7 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   assert.equal(runCli(['board-config', '--project', sharedRoot, '--no-worktree-isolation', '--json'], sharedRoot).worktreeIsolation, false);
 
   const sharedTicket = store.createTicket(sharedProject, {
-    title: 'disabled board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/work.ts'],
+    title: 'scope-less disabled board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal',
   });
   const shared = await callTool('dispatch', { project: sharedProject, ref: sharedTicket.ref, full: true });
   assert.equal(shared.spawn.isolation, undefined);

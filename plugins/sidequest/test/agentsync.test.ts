@@ -307,11 +307,12 @@ test('native dispatch fallback does not write a temporary agent file', () => {
   assert.deepStrictEqual(readDir(dir), []);
 });
 
-test('declared-file tickets receive a worktree spawn unless shared-tree is explicit', () => {
-  const ticket = { files: ['plugins/sidequest'] };
-  assert.equal(agentsync.ticketIsolation(ticket, false), 'worktree');
-  assert.equal(agentsync.ticketIsolation(ticket, true), null);
-  assert.equal(agentsync.ticketIsolation({ files: [] }, false), null);
+test('dispatch intent controls worktree isolation regardless of declared files', () => {
+  assert.equal(agentsync.ticketIsolation({ files: ['plugins/sidequest'] }, false), 'worktree');
+  assert.equal(agentsync.ticketIsolation({ files: [] }, false), 'worktree');
+  assert.equal(agentsync.ticketIsolation({}, false), 'worktree');
+  assert.equal(agentsync.ticketIsolation({ files: ['plugins/sidequest'] }, true), null);
+  assert.equal(agentsync.ticketIsolation({ files: [] }, true), null);
 
   const created = agentsync.createNativeAgent({
     ref: 'SQ-396', agentType: 'sidequest-exec-dispatch-high', runtime: 'codex-gpt-5-6-terra',
