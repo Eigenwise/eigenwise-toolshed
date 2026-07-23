@@ -607,7 +607,7 @@ const TOOLS: ToolDefinition[] = [
         title: { type: 'string' },
         description: { type: 'string' },
         priority: { type: 'string', enum: store.VALID_PRIORITY },
-        status: { type: 'string', enum: store.VALID_STATUS },
+        highStakes: { type: 'boolean' },
         labels: { type: 'array', items: { type: 'string' } },
         files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes).' },
         produces: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket produces.' },
@@ -621,7 +621,6 @@ const TOOLS: ToolDefinition[] = [
         complexity: { type: 'integer', minimum: 1, maximum: 10, description: 'Legacy score. Requires why (min 20 chars).' },
         why: { type: 'string', description: 'Motivation for the complexity score (min 20 chars).' },
         category: { type: 'string', description: 'Enabled category id from category_list.' },
-        unclassified: { type: 'boolean', description: 'Allow filing without category or complexity.' },
       },
       required: ['title'],
     },
@@ -644,6 +643,7 @@ const TOOLS: ToolDefinition[] = [
         description: args.description || '',
         priority: args.priority,
         status: args.status,
+        highStakes: args.highStakes,
         labels: args.labels,
         files: args.files,
         contracts: { produces: args.produces, changes: args.changes, consumes: args.consumes },
@@ -676,6 +676,7 @@ const TOOLS: ToolDefinition[] = [
         description: { type: 'string' },
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         status: { type: 'string', enum: store.VALID_STATUS },
+        highStakes: { type: 'boolean' },
         labels: { type: 'array', items: { type: 'string' } },
         files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes).' },
         produces: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket produces.' },
@@ -699,7 +700,7 @@ const TOOLS: ToolDefinition[] = [
       }
       const { slug, meta } = resolveProject(args.project);
       const patch: any = { source: 'mcp' };
-      for (const k of ['title', 'description', 'priority', 'status', 'labels', 'files', 'complexity']) {
+      for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'complexity']) {
         if (args[k] !== undefined) patch[k] = args[k];
       }
       if (args.produces !== undefined || args.changes !== undefined || args.consumes !== undefined) {

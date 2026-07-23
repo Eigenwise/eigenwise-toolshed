@@ -67,6 +67,14 @@ On the first prompt in each session, an active routed board adds one advisory re
 
 Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
 
+### High-stakes tickets
+
+Use `--high-stakes` on `sidequest add` or `sidequest update` when the work has a clear approach but a bad change could damage shared state or consumers, such as migrations, shared API or payload changes, and cross-consumer edits. The MCP `add` and `update` tools use `highStakes: true`.
+
+The flag does not change a ticket's category, model, or effort. It requires the executor to check every consumer of each changed surface, run every affected consumer suite, and get a review-audit before integration. Add a comment starting `reviewed-by: <reviewer>` after the review. Integration stays advisory for now: `groomClose` with `integration: true` warns when a high-stakes ticket has no recorded review pass.
+
+When the approach is clear but the work is dangerous, use the normal route plus deeper verification and review.
+
 When dependent submissions share a main branch, Sidequest automatically trims the submitted range through the newest reachable ancestor that was already submitted. Use an explicit base when you need a different boundary: the CLI accepts `--base <commit>`, and MCP submit accepts `base`. The explicit base must be an ancestor of the submitted tip. Genuine ownership overlap and out-of-scope paths still fail submission.
 
 For deliberate orchestrator-owned inline work, such as a browser reproduction or review, the user must first grant the exception on the ticket, then claim it with a concrete reason: `sidequest update SQ-3 -l direct-ok`, followed by `sidequest claim SQ-3 --by <unique-worker-id> --direct --reason "No routed executor is available for this user-approved inline review"` (MCP: `direct:true` with `reason`, after the user applies the `direct-ok` label). The reason must be at least 20 characters. Do not start either path until its claim succeeds.

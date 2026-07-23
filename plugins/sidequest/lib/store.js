@@ -2000,6 +2000,7 @@ function createTicket(slug, fields) {
     status,
     priority: coercePriority(fields.priority, "normal"),
     labels: normalizeLabels(fields.labels),
+    highStakes: !!fields.highStakes,
     storyId: coerceStoryId(slug, fields.storyId),
     // the user story this ticket belongs to (null = none)
     category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,
@@ -2302,6 +2303,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.status != null) t.status = nextStatus;
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
+    if (patch.highStakes !== void 0) t.highStakes = !!patch.highStakes;
     if (patch.storyId !== void 0) t.storyId = coerceStoryId(slug, patch.storyId);
     if (patch.category !== void 0) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
     if (patch.complexity !== void 0) {
@@ -3408,6 +3410,10 @@ function completeTicket(slug, idOrRef, by, opts) {
     completionComment
   }));
 }
+function recordedReviewPass(ticket) {
+  return Array.isArray(ticket?.comments) && ticket.comments.some((comment) => /^\s*reviewed-by\s*:\s*\S/i.test(String(comment?.body || "")));
+}
+const HIGH_STAKES_REVIEW_WARNING = "high-stakes ticket integrated without a recorded review pass";
 function completeTicketAsControlPlane(slug, idOrRef, opts) {
   opts = opts || {};
   const purpose = String(opts.purpose || "").trim();
@@ -3430,12 +3436,14 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   if (!reason) return { ok: false, reason: "evidence_required", ticket };
   const by = String(opts.by || "").trim();
   if (!by) return { ok: false, reason: "identity_required", ticket };
-  return completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
+  const advisory = purpose === "integration" && ticket.highStakes && !recordedReviewPass(ticket) ? HIGH_STAKES_REVIEW_WARNING : null;
+  const result = completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
     body: reason,
     source: `control-plane-${purpose}`,
     completionAuthority: CONTROL_PLANE_COMPLETION,
     completionProvenance: { authority: "control-plane", purpose, reason }
   }));
+  return advisory ? Object.assign(result, { advisory }) : result;
 }
 function closeTicketForGrooming(slug, idOrRef, opts) {
   return completeTicketAsControlPlane(slug, idOrRef, Object.assign({}, opts, { purpose: "grooming" }));

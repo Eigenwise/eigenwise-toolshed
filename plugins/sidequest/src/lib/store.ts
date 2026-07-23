@@ -2382,6 +2382,7 @@ function createTicket(slug?: any, fields?: any) {
     status,
     priority: coercePriority(fields.priority, 'normal'),
     labels: normalizeLabels(fields.labels),
+    highStakes: !!fields.highStakes,
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
     category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
@@ -2714,6 +2715,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.status != null) t.status = nextStatus;
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
+    if (patch.highStakes !== undefined) t.highStakes = !!patch.highStakes;
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
     if (patch.category !== undefined) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
     // Complexity can move to another valid score, never clear; a fresh motivation
@@ -3989,6 +3991,12 @@ function completeTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   }));
 }
 
+function recordedReviewPass(ticket?: any) {
+  return Array.isArray(ticket?.comments) && ticket.comments.some((comment?: any) => /^\s*reviewed-by\s*:\s*\S/i.test(String(comment?.body || '')));
+}
+
+const HIGH_STAKES_REVIEW_WARNING = 'high-stakes ticket integrated without a recorded review pass';
+
 function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const purpose = String(opts.purpose || '').trim();
@@ -4011,12 +4019,16 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   if (!reason) return { ok: false, reason: 'evidence_required', ticket };
   const by = String(opts.by || '').trim();
   if (!by) return { ok: false, reason: 'identity_required', ticket };
-  return completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
+  const advisory = purpose === 'integration' && ticket.highStakes && !recordedReviewPass(ticket)
+    ? HIGH_STAKES_REVIEW_WARNING
+    : null;
+  const result = completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
     body: reason,
     source: `control-plane-${purpose}`,
     completionAuthority: CONTROL_PLANE_COMPLETION,
     completionProvenance: { authority: 'control-plane', purpose, reason },
   }));
+  return advisory ? Object.assign(result, { advisory }) : result;
 }
 
 function closeTicketForGrooming(slug?: any, idOrRef?: any, opts?: any) {

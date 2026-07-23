@@ -361,6 +361,7 @@ ${category.contract || "(No category-specific executor instructions were recorde
 ${ticket.executorAnchors || "(No anchors were recorded.)"}`,
     `Verify command:
 ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
+    ...ticket.highStakes ? ["High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration."] : [],
     ...worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : [],
     `Declared files:
 ${declaredFiles}`,

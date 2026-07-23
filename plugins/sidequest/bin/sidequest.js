@@ -49,7 +49,7 @@ function parseArgs(argv) {
         opts["worktree-isolation"] = false;
         continue;
       }
-      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "contract-waiver", "full", "worktree-isolation"]);
+      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "contract-waiver", "full", "worktree-isolation", "high-stakes"]);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -170,6 +170,10 @@ function readonlyFromOpts(opts) {
   if (String(opts.readonly).toLowerCase() !== "false") fail("--readonly only accepts false; omit it to use the category default.");
   return false;
 }
+function highStakesFromOpts(opts) {
+  if (opts["high-stakes"] === void 0) return void 0;
+  return String(opts["high-stakes"]).toLowerCase() !== "false";
+}
 function addPreview(opts, category, complexity) {
   const priority = store.VALID_PRIORITY.includes(String(opts.priority || "").toLowerCase()) ? String(opts.priority).toLowerCase() : "normal";
   return {
@@ -177,6 +181,7 @@ function addPreview(opts, category, complexity) {
     description: String(opts.desc || opts.description || "").trim(),
     status: String(opts.status || "todo").toLowerCase(),
     priority,
+    highStakes: highStakesFromOpts(opts) || false,
     labels: opts.label || [],
     images: opts.image || [],
     files: opts.file ?? opts.files ?? [],
@@ -212,6 +217,7 @@ async function cmdAdd(opts) {
     description: opts.desc || opts.description || "",
     priority: opts.priority,
     status: opts.status,
+    highStakes: highStakesFromOpts(opts),
     labels: opts.label,
     images: opts.image || [],
     files: opts.file ?? opts.files,
@@ -314,6 +320,7 @@ async function cmdUpdate(opts, positional) {
   if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
   if (opts.status != null) patch.status = opts.status;
   if (opts.priority != null) patch.priority = opts.priority;
+  if (opts["high-stakes"] !== void 0) patch.highStakes = highStakesFromOpts(opts);
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
   if (opts.file != null || opts.files != null) {
@@ -943,8 +950,10 @@ async function cmdGroomClose(opts, positional) {
     if (!res.ok) process.exitCode = 1;
     return;
   }
-  if (res.ok) console.log(`✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
-  else reportClaimFailure("groom-close", idOrRef, res, meta);
+  if (res.ok) {
+    console.log(`✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
+    if (res.advisory) console.log(`  advisory: ${res.advisory}`);
+  } else reportClaimFailure("groom-close", idOrRef, res, meta);
 }
 const OUT_OF_SCOPE_COMMENT_MAX = 16e3;
 function outOfScopeComment(paths) {
@@ -2093,11 +2102,11 @@ async function cmdStop() {
   store.clearServerInfo();
 }
 const HELP_COMMANDS = {
-  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
+  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
   list: "sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]",
   pulse: "sidequest pulse <SQ-n> [--project <path-or-slug>]",
   changes: "sidequest changes [--since <iso>] [--project <path-or-slug>]",
-  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
   rm: "sidequest rm <id|SQ-n> [--force]",
   profile: "sidequest profile <hygiene|list|show|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]",
   category: "sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--json]",
@@ -2187,11 +2196,11 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done]
+  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
+  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]

@@ -49,6 +49,7 @@ Protocol for each ticket:
 3. **Do only the ticket work.** Comments are handoffs, not a diary. Record decisions, constraints,
    risks, verification evidence, or concise findings with `mcp__plugin_sidequest_board__comment`.
 4. **Verify** with the ticket's exact repo-relative command.
+   High-stakes tickets keep their routed model and effort. They require every changed surface's consumers and suites checked, then a review-audit before integration.
    On Windows with Node 22, use explicit test-file globs such as `plugins/<plugin>/test/*.test.js`, never a
    bare test directory. Keep the useful result count and a short
    relevant excerpt for the closing evidence.

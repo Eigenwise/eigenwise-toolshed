@@ -16,9 +16,8 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 - `references/publishing.md` — the serialized publish transaction.
 - `references/routing-details.md` — profiles, board rows, routes, fallbacks, spawn parameters.
 - `references/routing-guide.md` — profile-aware classification; workflow recipe wiring.
-- `references/external-trackers.md`, `references/board-features.md`,
-  `references/category-links.md` — external trackers; stories, reminders, assignment,
-  attachments; category forks.
+- `references/high-stakes.md`
+- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`
 
 ## Plan substantial work on the board first
 
