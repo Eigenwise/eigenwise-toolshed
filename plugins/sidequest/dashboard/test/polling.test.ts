@@ -12,6 +12,7 @@ const fetcher = vi.fn((input: RequestInfo | URL) => {
   if (url.includes('/stories')) return response({ stories: [] });
   if (url.includes('/categories')) return response({ categories: [], warnings: [] });
   if (url.includes('/notifications')) return response({ notifications: [], unread: 0, unreadNeeds: 0 });
+  if (url.includes('/routing-models')) return response({ models: ['sonnet', 'codex-fixture'], discovered: [{ slug: 'codex-fixture' }], efforts: ['medium'], globalFallback: { model: 'sonnet', effort: 'medium' } });
   return response({ ok: true, name: 'sidequest', pid: 1, startedAt: '2026-01-01', version: '1.0.0' });
 });
 
@@ -22,7 +23,8 @@ describe('PollingController', () => {
     controller.refresh();
 
     await vi.waitFor(() => expect(state.raw?.health.version).toBe('1.0.0'));
-    expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(state.routingCatalog.models).toContain('codex-fixture');
+    expect(fetcher).toHaveBeenCalledTimes(7);
   });
 
   it('keeps the current board and marks the state offline after a mandatory fetch fails', async () => {

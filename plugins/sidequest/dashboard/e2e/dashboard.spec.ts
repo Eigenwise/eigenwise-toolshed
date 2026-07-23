@@ -328,16 +328,30 @@ test('returns focus to Settings and Ticket invokers for every close path', async
 });
 
 test('renders board routing previews and the profile library', async ({ page, dashboard }) => {
+  await page.route('**/api/routing-models*', (route) => route.fulfill({ json: {
+    models: ['sonnet', 'opus', 'haiku', 'codex-fixture'],
+    efforts: ['low', 'medium', 'high', 'xhigh'],
+    discovered: [{ slug: 'codex-fixture' }],
+    globalFallback: { model: 'sonnet', effort: 'high' }
+  } }));
   await openBoard(page, dashboard);
   await page.locator('.rail').getByRole('button', { name: /Alpha board/ }).click();
   await page.getByRole('button', { name: 'Settings' }).click();
 
+  const settings = page.getByRole('dialog', { name: 'Settings' });
   await expect(page.getByText('Availability fallback', { exact: true })).toBeVisible();
   await expect(page.getByText('Board routing', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Profile library' })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Routing profile' })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Profile library' })).toBeVisible();
   await expect(page.getByText(/Following/)).toBeVisible();
+
+  await settings.getByRole('button', { name: 'Edit' }).first().click();
+  await expect(settings).toBeVisible();
+  await expect(settings.getByRole('heading', { name: /^Edit / })).toBeVisible();
+  await settings.getByRole('combobox', { name: 'Primary model' }).click();
+  await expect(page.getByRole('option', { name: 'codex-fixture' })).toBeVisible();
+  await settings.getByRole('button', { name: 'Cancel' }).click();
 
   await page.getByRole('combobox', { name: 'Routing profile' }).click();
   await page.getByRole('option', { name: /Research fixture/ }).click();

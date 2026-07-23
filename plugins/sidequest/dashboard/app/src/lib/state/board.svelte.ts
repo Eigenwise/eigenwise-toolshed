@@ -141,6 +141,7 @@ export class BoardState {
   async restoreProject(project: Project | string) { await this.mutate(() => this.api.unarchiveProject(this.projectSlug(project))); }
   async deleteProject(project: Project | string) { await this.mutate(() => this.api.deleteProject(this.projectSlug(project))); }
   async setProjectRouting(project: Project | string, routing: 'enabled' | 'disabled') { await this.mutate(() => this.api.setProjectRouting(this.projectSlug(project), routing)); }
+  async loadRoutingCatalog() { const result = await this.api.routingModels(this.selectedProject === 'all' ? undefined : this.selectedProject); this.routingCatalog = result; return result; }
   async loadRoutingProfiles(retired = false) { const result = await this.api.routingProfiles(retired); this.routingProfiles = result.profiles; return result.profiles; }
   async setProjectRoutingProfile(project: Project | string, profileId: string) { return this.mutate(() => this.api.setProjectRoutingProfile(this.projectSlug(project), profileId)); }
   async routingPreview(project: Project | string, profileId: string): Promise<RoutingPreview> { return this.api.routingPreview(this.projectSlug(project), profileId); }

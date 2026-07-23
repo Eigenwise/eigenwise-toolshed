@@ -12,7 +12,13 @@
   }
 
   function handleClick(event: MouseEvent) {
-    if (event.target === dialog) close();
+    if (!dialog) return;
+    const bounds = dialog.getBoundingClientRect();
+    const inside = event.target !== dialog
+      || (event.clientX >= bounds.left && event.clientX <= bounds.right
+        && event.clientY >= bounds.top && event.clientY <= bounds.bottom);
+    if (inside) event.stopPropagation();
+    else close();
   }
 
   $effect(() => {

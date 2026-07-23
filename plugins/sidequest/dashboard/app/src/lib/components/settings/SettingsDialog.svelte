@@ -206,7 +206,7 @@
   async function openSettings() {
     board.popover = 'settings';
     try {
-      await board.loadRoutingProfiles();
+      await Promise.all([board.loadRoutingCatalog(), board.loadRoutingProfiles()]);
       const first = board.routingProfiles.find((profile) => profile.id === selectedProfileId) || board.routingProfiles[0];
       if (first) await loadProfile(first.id);
       await loadBoardRouting();

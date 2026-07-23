@@ -29,15 +29,17 @@ export class PollingController {
   private async run() {
     this.inFlight = true;
     try {
-      const [projects, tickets, stories, categories, notifications, health] = await Promise.all([
+      const [projects, tickets, stories, categories, notifications, health, routingCatalog] = await Promise.all([
         this.state.api.projects(),
         this.state.api.tickets('all'),
         this.state.api.stories('all').catch(() => ({ project: 'all', stories: this.state.raw?.stories ?? [] })),
         this.state.api.categories(this.state.selectedProject).catch(() => ({ project: this.state.selectedProject, categories: this.state.raw?.categories ?? [], warnings: [] })),
         this.state.api.notifications({ limit: 50 }).catch(() => this.state.raw?.notifications ?? { notifications: [], unread: 0, unreadNeeds: 0 }),
-        this.state.api.health().catch(() => this.state.raw?.health ?? null)
+        this.state.api.health().catch(() => this.state.raw?.health ?? null),
+        this.state.api.routingModels(this.state.selectedProject === 'all' ? undefined : this.state.selectedProject).catch(() => this.state.routingCatalog)
       ]);
       if (!health) return;
+      this.state.routingCatalog = routingCatalog;
       const snapshot: Snapshot = { projects: projects.projects, tickets: tickets.tickets, stories: stories.stories, categories: categories.categories, notifications, health };
       this.state.applySnapshot(snapshot);
       if (this.state.view === 'archive') this.state.archivedTickets = (await this.state.api.tickets(this.state.selectedProject, true)).tickets;
