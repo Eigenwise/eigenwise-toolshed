@@ -343,8 +343,8 @@ async function cmdList(opts: any) {
   const { slug, meta } = await resolveProject(opts);
   // --brief is a JSON shape, so it implies --json rather than silently no-oping.
   // Paging (--limit/--cursor/--all) rides the same store.listPayload as MCP, so
-  // the shape can't drift. No paging flag = the whole set in one call (unchanged
-  // full dump); --limit N + --cursor <nextCursor> walks a big board page by page.
+  // the shape can't drift. Default reads contain only active tickets and one
+  // bounded page; --status done or --all opts into completed tickets.
   if (opts.json || opts.brief) {
     const payload = store.listPayload(slug, {
       status: opts.status, archived: opts.archived, brief: opts.brief,
@@ -357,6 +357,7 @@ async function cmdList(opts: any) {
   // Archived tickets are hidden from the board by default; `--archived` shows only them.
   tickets = opts.archived ? tickets.filter((t: any) => t.archived) : tickets.filter((t: any) => !t.archived);
   if (opts.status) tickets = tickets.filter((t: any) => t.status === String(opts.status).toLowerCase());
+  else if (!opts.all) tickets = tickets.filter((t: any) => t.status === 'todo' || t.status === 'doing');
   if (!tickets.length) {
     console.log(`No tickets in ${meta.name}.`);
     return;
@@ -1843,7 +1844,7 @@ async function cmdModels(opts: any, positional: any) {
     return;
   }
   const { slug } = await resolveProject(opts);
-  const payload = store.modelsPayload({ project: slug });
+  const payload = store.modelsPayload({ project: slug, full: !!opts.full });
   if (opts.json) {
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return;
@@ -1853,6 +1854,10 @@ async function cmdModels(opts: any, positional: any) {
   console.log(`Global fallback: ${payload.globalFallback ? `${payload.globalFallback.model}·${payload.globalFallback.effort}` : 'missing or invalid'}`);
   console.log('Categories:');
   for (const category of payload.categories) {
+    if (!opts.full) {
+      console.log(`  ${category.id}  ${category.route || 'unresolved'}`);
+      continue;
+    }
     const fallback = category.fallback ? `; fallback ${category.fallback.model}·${category.fallback.effort}` : '';
     console.log(`  ${category.id}  ${category.name}  route ${category.route.model}·${category.route.effort}${fallback}  → ${category.resolved.model}·${category.resolved.effort}`);
     for (const warning of category.warnings) console.log(`    ! ${warning}`);
@@ -2401,7 +2406,7 @@ async function cmdStop() {
 
 const HELP_COMMANDS: any = {
   add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
-  list: 'sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]',
+  list: 'sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
   update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
@@ -2437,7 +2442,7 @@ const HELP_COMMANDS: any = {
   dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]',
   briefing: 'sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]',
   'native-agent': 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]',
-  models: 'sidequest models [--project <path-or-slug>] [--json]',
+  models: 'sidequest models [--project <path-or-slug>] [--full] [--json]',
   route: 'sidequest route <category> [--project <path-or-slug>] --json',
   'board-config': 'sidequest board-config [--always-in-scope path]... [--integration-mode <mode>] [--worktree-isolation|--no-worktree-isolation] [--worktree-setup "command"] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
@@ -2474,7 +2479,7 @@ function help() {
 
 Usage:
   sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done]
-  sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   (--brief: compact JSON, no bodies; implies --json. --limit/--cursor page a big board; follow nextCursor until null. --all: whole column in one call)
+  sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
@@ -2526,7 +2531,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   sidequest add ... --category <id>
   sidequest update <id|SQ-n> --category <id|none>
   sidequest ready --model <model> --category <id>  ·  sidequest next --model <model> --category <id>
-  sidequest models [--project <path-or-slug>] [--json]  available models and the selected project's effective category routes
+  sidequest models [--project <path-or-slug>] [--full] [--json]  available models and effective category routes (use --full for detailed configuration)
   sidequest route <category> [--project <path-or-slug>] --json  live workflow agent recipe for a category
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   Legacy --complexity + --why remains supported for existing intake and maps to a category at read time.

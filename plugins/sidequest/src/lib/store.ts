@@ -545,20 +545,33 @@ function getModelVocab() {
   return routingModels();
 }
 
+function routeDescriptor(model?: any, effort?: any) {
+  return model && effort ? `${model}·${effort}` : null;
+}
+
 function modelsPayload(opts?: any) {
   opts = opts || {};
   const catalog = routingModels();
-  const projectCategories = getProjectCategories(opts.project);
-  const selected = opts.project ? projectRoutingProfile(opts.project) : null;
-  const profile = selected ? selected.profile : getRoutingProfile(defaultRoutingProfileId());
-  return {
+  const categories = getCategories({ project: opts.project });
+  const payload: any = {
     models: catalog.models,
     efforts: catalog.efforts,
     discovered: catalog.discovered,
     globalFallback: Object.assign({ label: 'availability fallback' }, getRoutingFallback()),
+    categories: categories.map((category?: any) => {
+      const resolved = resolveCategoryRoute(category);
+      return { id: category.id, route: routeDescriptor(resolved.model, resolved.effort) };
+    }),
+  };
+  if (!opts.full) return payload;
+
+  const projectCategories = getProjectCategories(opts.project);
+  const selected = opts.project ? projectRoutingProfile(opts.project) : null;
+  const profile = selected ? selected.profile : getRoutingProfile(defaultRoutingProfileId());
+  return Object.assign(payload, {
     newBoardProfile: routingProfileDetails(defaultRoutingProfileId()),
     profile: profile ? { id: profile.id, name: profile.name, revision: profile.revision, entryCount: routingProfileEntries(profile.id).length } : null,
-    categories: getCategories({ project: opts.project }).map((category?: any) => {
+    categories: categories.map((category?: any) => {
       const resolved = resolveCategoryRoute(category);
       return Object.assign({}, category, {
         configured: { route: category.route, fallback: category.fallback },
@@ -567,7 +580,7 @@ function modelsPayload(opts?: any) {
       });
     }),
     warnings: projectCategories.warnings,
-  };
+  });
 }
 
 function classifyModelFilter(v?: any) {
@@ -4848,17 +4861,14 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     complexity: t.complexity || null,
     categoryId: t.categoryId || (t.category && t.category.id) || null,
     categoryName: t.category && t.category.name || null,
-    model: t.model || null,
-    backend: t.exec ? t.exec.backend : null,
-    runsModel: t.exec ? t.exec.runsModel : null,
-    apiModel: t.exec ? t.exec.apiModel : null,
-    runsLabel: t.exec ? t.exec.runsLabel : null,
-    executor: t.exec ? t.exec.agent : null,
+    route: routeDescriptor(t.model, t.effort),
     effort: t.effort || null,
     readonlyOverride: t.readonlyOverride === false ? false : null,
     direct: t.directClaim || null,
-    files: Array.isArray(t.files) ? t.files : [],
-    contracts: contractMetadata(t),
+    ...(opts.includeScope ? {
+      files: Array.isArray(t.files) ? t.files : [],
+      contracts: contractMetadata(t),
+    } : {}),
     claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
@@ -4884,8 +4894,7 @@ function decodeListCursor(cursor?: any) {
 //   - maxChars: a size-budgeted page — accumulate rows until the serialized
 //     cost would cross the budget (always keep at least one, so a lone fat row
 //     still advances the cursor and iteration can't stall).
-//   - none of the above: the whole set from the cursor (CLI default / small
-//     board — one call returns everything, backward compatible).
+//   - none of the above: the default page cap from the cursor.
 // nextCursor is the next offset as a string, or null when the page reaches the
 // end. Because each page is a contiguous slice and the next cursor is exactly
 // where it stopped, following nextCursor to exhaustion yields every ticket once.
@@ -4925,10 +4934,16 @@ function pageTickets(tickets?: any, opts?: any) {
 // their shapes cannot drift: filtering, the brief projection, the blocker
 // index, and paging (limit/cursor/maxChars -> total/returned/nextCursor) all
 // live here and nowhere else.
+const DEFAULT_LIST_PAGE_LIMIT = 40;
+
 function listPayload(slug?: any, opts?: any) {
   opts = opts || {};
   const project = String(slug || '');
-  const filter = { archived: !!opts.archived, status: opts.status };
+  const filter = {
+    archived: !!opts.archived,
+    status: opts.status == null && !opts.all ? ['todo', 'doing'] : opts.status,
+  };
+  const paging = !opts.all && opts.limit == null ? Object.assign({}, opts, { limit: DEFAULT_LIST_PAGE_LIMIT }) : opts;
   const total = countTickets(project, filter);
   let index: any;
   if (opts.brief) {
@@ -4936,9 +4951,9 @@ function listPayload(slug?: any, opts?: any) {
     index = new Map(rows.map((row?: any) => [String(row.ref).toUpperCase(), row]));
   }
 
-  if (!opts.all && opts.limit != null && opts.maxChars == null) {
-    const offset = Math.min(decodeListCursor(opts.cursor), total);
-    let tickets = queryTickets(project, { ...filter, limit: opts.limit, offset });
+  if (!paging.all && paging.limit != null && paging.maxChars == null) {
+    const offset = Math.min(decodeListCursor(paging.cursor), total);
+    let tickets = queryTickets(project, { ...filter, limit: paging.limit, offset });
     if (opts.brief) tickets = tickets.map((ticket?: any) => briefTicket(project, ticket, { index }));
     const returned = tickets.length;
     const nextOffset = offset + returned;
@@ -4954,7 +4969,7 @@ function listPayload(slug?: any, opts?: any) {
 
   let tickets = queryTickets(project, filter);
   if (opts.brief) tickets = tickets.map((ticket?: any) => briefTicket(project, ticket, { index }));
-  const page: any = pageTickets(tickets, opts);
+  const page: any = pageTickets(tickets, paging);
   page.claimTtlMs = claimTtlMs();
   page.categories = classifierCategories({ project });
   return page;
@@ -4969,7 +4984,7 @@ function readyPayload(slug?: any, opts?: any) {
   let tickets = readyTickets(slug, { model: opts.model, category: opts.category });
   const waves = readyWaves(slug, { model: opts.model, category: opts.category }).map((wave?: any) => wave.map((t?: any) => t.ref));
   const waveDependencies = readyWaveDependencies(slug, { model: opts.model, category: opts.category });
-  if (opts.brief) tickets = tickets.map((t?: any) => briefTicket(slug, t, { blockedBy: [] }));
+  if (opts.brief) tickets = tickets.map((t?: any) => briefTicket(slug, t, { blockedBy: [], includeScope: true }));
   return { tickets, waves, waveDependencies, claimTtlMs: claimTtlMs(), categories: classifierCategories({ project: slug }) };
 }
 

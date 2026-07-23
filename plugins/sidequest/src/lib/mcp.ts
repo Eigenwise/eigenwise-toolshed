@@ -487,7 +487,7 @@ function withoutCategories(payload?: any) {
 const TOOLS: ToolDefinition[] = [
   {
     name: 'list',
-    description: 'For liveness/progress polling use changes/pulse, not this. List tickets, paged; compact rows by default. Follow nextCursor until null. detail:true is audit-only.',
+    description: 'For liveness/progress polling use changes/pulse, not this. List active tickets (todo + doing) by default, paged with compact rows. Pass status:"done" for completed tickets or all:true for every non-archived status. Follow nextCursor until null. detail:true is audit-only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -497,14 +497,14 @@ const TOOLS: ToolDefinition[] = [
         detail: { type: 'boolean', description: 'Audit only: full bodies and comment threads. Orchestration uses default brief rows; liveness uses changes/pulse.' },
         cursor: { type: 'string', description: 'nextCursor from the prior page.' },
         limit: { type: 'integer', minimum: 0, description: 'Exact page size.' },
-        all: { type: 'boolean', description: 'Whole column in one call (can overflow).' },
+        all: { type: 'boolean', description: 'Include every non-archived status, including done.' },
       },
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       // MCP board reads are routine orchestration reads, so omit completed work
       // and ticket bodies unless the caller explicitly asks for either.
-      const status = args.status == null ? ['todo', 'doing'] : args.status;
+      const status = args.status == null && !args.all ? ['todo', 'doing'] : args.status;
       const brief = !args.detail;
       // Bound the DEFAULT page so a few-hundred-ticket column can't overflow the
       // tool-result token ceiling. A caller that passes limit or all opts out of
@@ -1684,11 +1684,11 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'models',
-    description: 'Available models, global fallback, and the effective category taxonomy for project, including project-layer warnings.',
-    inputSchema: { type: 'object', properties: { project: PROJECT_PROP } },
+    description: 'Available models, global fallback, and compact effective category routes. Pass full:true for configured routes, resolved executors, and warnings.',
+    inputSchema: { type: 'object', properties: { project: PROJECT_PROP, full: { type: 'boolean', description: 'Include configured/resolved category detail and warnings.' } } },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      return store.modelsPayload({ project: slug });
+      const { slug } = resolveProject(args.project);
+      return store.modelsPayload({ project: slug, full: !!args.full });
     },
   },
   {

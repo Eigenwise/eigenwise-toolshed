@@ -1689,7 +1689,9 @@ test('models reports concrete routes and no grade output', async () => {
     store.setCategory({ id: 'model-codex', name: 'Model Codex', route: { model: 'codex-terra', effort: 'high' }, fallback: { model: 'opus', effort: 'high' } });
     const out = await callHandler('models', {});
     assert.ok(out.models.includes('codex-terra'));
-    assert.ok(out.categories.some((category: any) => category.id === 'model-codex' && category.resolved.model === 'codex-terra'));
+    assert.ok(out.categories.some((category: any) => category.id === 'model-codex' && category.route === 'codex-terra·high'));
+    const full = await callHandler('models', { full: true });
+    assert.ok(full.categories.some((category: any) => category.id === 'model-codex' && category.resolved.model === 'codex-terra'));
     assert.ok(!JSON.stringify(out).includes('grade-'));
   } finally {
     clearCatalog();

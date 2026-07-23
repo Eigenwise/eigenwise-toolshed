@@ -17,6 +17,8 @@ Check the installed CLI version with `sidequest --version` (also `sidequest -V` 
 
 Preview a ticket before writing it with `sidequest add -t "title" --category <id> --dry-run`. The preview validates the input and shows what would be created without changing the board. The flag also appears in the profile and merge command forms where those commands support a preview.
 
+`sidequest list` and the MCP `list` tool show active tickets by default. Pass `--status done` or `status: "done"` to inspect completed work, or `--all` / `all: true` for every non-archived status. The dashboard keeps its Done column. List results are paged, so follow `nextCursor` when one is returned. `sidequest models` and the MCP `models` tool return compact routes by default; use `--full` or `full: true` for configured routes, resolved executors, and warnings.
+
 ## Board display names
 
 A board has a stable board ID and an editable display name. The display name is for people and can change; the board ID, repository path, ticket refs, claims, and links stay the same. Use the CLI to set or view the name:

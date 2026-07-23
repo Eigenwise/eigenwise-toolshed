@@ -207,7 +207,7 @@ test('DETACH provenance remains visible and CLI, MCP, and REST agree on effectiv
   assert.deepEqual(categoryTaxonomy(cli.categories.map(normalize)), categoryTaxonomy(mcpPayload.categories.map(normalize)));
   assert.deepEqual(categoryTaxonomy(cli.categories.map(normalize)), categoryTaxonomy(rest.body.categories.filter((entry: any) => !entry.disabled).map(normalize)));
 
-  const models = store.modelsPayload({ project: pinned });
+  const models = store.modelsPayload({ project: pinned, full: true });
   const modelPinned = models.categories.find((entry: any) => entry.id === 'coding.easy');
   assert.equal(modelPinned.origin, 'detached');
   assert.equal(modelPinned.baseProfileId, 'coding');

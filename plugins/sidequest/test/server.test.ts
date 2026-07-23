@@ -447,6 +447,16 @@ test('all-project tickets use the filtered store query', async (t?: any) => {
   assert.ok(Array.isArray(payload.tickets));
 });
 
+test('dashboard ticket feed retains done tickets', async (t?: any) => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-dashboard-done-tickets'), 'Dashboard done tickets').slug;
+  const done = store.createTicket(project, { title: 'dashboard done ticket', status: 'done' });
+  const started = await start(await availablePort());
+  t.after(() => started.server.close());
+
+  const payload = await fetchJson(started.port, `/api/tickets?project=${encodeURIComponent(project)}`);
+  assert.equal(payload.tickets.some((ticket?: any) => ticket.ref === done.ref && ticket.status === 'done'), true);
+});
+
 test('dashboard self-updates to a newer cached install at the same URL', { timeout: 180000 }, async (t?: any) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-upgrade-'));
   const oldRoot = path.join(root, '1.37.0');

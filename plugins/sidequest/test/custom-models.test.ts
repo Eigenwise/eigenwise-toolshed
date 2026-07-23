@@ -56,7 +56,9 @@ test('models payload contains resolved category policy without grade vocabulary'
   assert.ok(payload.categories.length);
   assert.deepEqual(payload.globalFallback, { label: 'availability fallback', model: 'sonnet', effort: 'high' });
   assert.doesNotMatch(JSON.stringify(payload), /grade-[1-4]|tierBackend|routingLadder|routingBias|profiles/);
-  assert.ok(payload.categories.every((category?: any) => category.resolved && category.resolved.model));
+  assert.ok(payload.categories.every((category?: any) => category.id && category.route));
+  const full = store.modelsPayload({ full: true });
+  assert.ok(full.categories.every((category?: any) => category.resolved && category.resolved.model));
 });
 
 export {};

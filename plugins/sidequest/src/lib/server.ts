@@ -177,7 +177,7 @@ async function readJsonBody(req?: any) {
 }
 
 function categoryDraftPrompt(sentence?: any, project?: any) {
-  const catalog = store.modelsPayload(project ? { project } : undefined);
+  const catalog = store.modelsPayload(project ? { project, full: true } : { full: true });
   const examples = catalog.categories.slice(0, 4).map((category?: any) => ({ id: category.id, name: category.name, description: category.description, contract: category.contract, route: category.route, fallback: category.fallback }));
   const positioning = 'Haiku is for fast straightforward work; Sonnet for coding and analysis; Opus for complex autonomous work; Fable for the most demanding long-running work. Luna is clear repeatable high-volume work; Terra is the everyday tool-using workhorse; Sol is complex open-ended work.';
   return 'Return strict JSON only, with no markdown. Draft one Sidequest category from the user sentence. The JSON schema is {"id":string,"name":string,"description":string,"contract":string,"route":{"model":string,"effort":string},"fallback":{"model":string,"effort":string}|null}. The id must be lowercase kebab-case or dot-namespaced. The description must classify requested work, not restate a title. The contract is executor instructions. Pick route and optional fallback only from the live catalog.\n\nUser sentence:\n' + JSON.stringify(String(sentence || '').trim()) + '\n\nLive catalog:\n' + JSON.stringify({ models: catalog.models, efforts: catalog.efforts, discovered: catalog.discovered, positioning }) + '\n\nStyle examples:\n' + JSON.stringify(examples);
@@ -190,7 +190,7 @@ function validateCategoryDraft(raw?: any, project?: any) {
   for (const field of ['name', 'description', 'contract']) {
     if (typeof raw[field] !== 'string' || !raw[field].trim()) throw new Error(`Claude omitted ${field}.`);
   }
-  const catalog = store.modelsPayload(project ? { project } : undefined);
+  const catalog = store.modelsPayload(project ? { project, full: true } : { full: true });
   const isRoute = (route?: any) => route && typeof route === 'object' && !Array.isArray(route) && typeof route.model === 'string' && typeof route.effort === 'string' && catalog.models.includes(route.model) && catalog.efforts.includes(route.effort);
   if (!isRoute(raw.route)) throw new Error('Claude returned a route outside the live catalog.');
   if (raw.fallback !== null && !isRoute(raw.fallback)) throw new Error('Claude returned a fallback outside the live catalog.');
