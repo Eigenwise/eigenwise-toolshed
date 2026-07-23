@@ -470,6 +470,7 @@ test('markerless child agents inherit only their trusted parent route', async (t
   const proxyPort = await freePort();
   const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-child-route-'));
   const routeLog = path.join(logDir, 'routes.jsonl');
+  const routeCache = path.join(logDir, 'dispatch-routes.json');
   const forwarded = [];
   let nativeClaudeBody = null;
   const anthropic = http.createServer((req, res) => {
@@ -507,6 +508,7 @@ test('markerless child agents inherit only their trusted parent route', async (t
       CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
       CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
       CODEX_GATEWAY_REQUEST_LOG_PATH: routeLog,
+      CODEX_GATEWAY_DISPATCH_CACHE_PATH: routeCache,
       CODEX_GATEWAY_SENTRY: '0',
     },
     stdio: 'ignore',
