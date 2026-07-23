@@ -246,9 +246,16 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /^For liveness\/progress polling use changes\/pulse, not this\./);
+  const list = tools.find((tool: any) => tool.name === 'list');
+  assert.match(list.inputSchema.properties.detail.description, /^Audit only:/);
+  assert.match(list.inputSchema.properties.detail.description, /liveness uses changes\/pulse/);
   assert.match(tools.find((tool: any) => tool.name === 'comments').description, /^Read ticket comments before work; full history is chronological/);
-  assert.match(tools.find((tool: any) => tool.name === 'changes').description, /^THE polling read/);
   const comments = tools.find((tool: any) => tool.name === 'comments');
+  assert.match(comments.inputSchema.properties.full.description, /^Recovery read:/);
+  assert.match(comments.inputSchema.properties.full.description, /1200 chars\/body/);
+  const add = tools.find((tool: any) => tool.name === 'add');
+  assert.match(add.inputSchema.properties.complexity.description, /Requires why \(min 20 chars\)/);
+  assert.match(tools.find((tool: any) => tool.name === 'changes').description, /^THE polling read/);
   assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref']);
   assert.equal(comments.inputSchema.properties.full.type, 'boolean');
   assert.equal(Object.hasOwn(tools.find((tool: any) => tool.name === 'unarchive').inputSchema.properties, 'full'), false);

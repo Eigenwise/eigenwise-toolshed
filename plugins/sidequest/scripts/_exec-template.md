@@ -37,13 +37,13 @@ your own claim.
 
 **Dispatch briefing:** When the spawn prompt tells you to fetch a briefing, run that command as your first
 action. It is a token-gated preflight, then the printed durable ticket packet supplies the complete contract.
-Read every section of that packet, the full chronological comment thread, and inspect every readable attachment
+Read every section of that packet, the comment thread (default read; elided old bodies are recoverable with `full:true` only when they matter, while every entry's metadata remains available), and inspect every readable attachment
 before implementation. Report missing or unreadable attachments as blockers or warnings; never silently skip them.
 Protocol for each ticket:
 1. **Claim first** with `mcp__plugin_sidequest_board__claim`, passing `ref`, a unique `by`, exact
    `executor`, stamped `effort`, project identity, and the supplied token. If it returns `ok:false`, do
    not touch files. Report the refusal and move to the next batch ref or stop.
-2. **Read the ticket and full thread** with `mcp__plugin_sidequest_board__comments`, including linked
+2. **Read the ticket and comment thread** with `mcp__plugin_sidequest_board__comments` using the default read; elided old bodies are recoverable with `full:true` only when they matter, including linked
    ticket threads when relevant.
 3. **Do only the ticket work.** Comments are handoffs, not a diary. Record decisions, constraints,
    risks, verification evidence, or concise findings with `mcp__plugin_sidequest_board__comment`.

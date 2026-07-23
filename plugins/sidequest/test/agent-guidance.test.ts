@@ -89,7 +89,7 @@ test('executor guidance keeps board lifecycle MCP-only and protects shared trees
   assert.match(executorTemplate, /orchestrator assigns release versions centrally/);
   assert.match(executorTemplate, /same absolute `worktree`/);
   assert.doesNotMatch(executorTemplate, /sidequest submit <ref>/);
-  assert.match(executorTemplate, /Read every section of that packet, the full chronological comment thread, and inspect every readable attachment/);
+  assert.match(executorTemplate, /Read every section of that packet, the comment thread \(default read; elided old bodies are recoverable with `full:true` only when they matter/);
   assert.match(executorTemplate, /missing or unreadable attachments as blockers or warnings/);
   assert.doesNotMatch(executorTemplate, /comments digest/i);
   assert.doesNotMatch(orchestration, /It carries the full ticket contract/);

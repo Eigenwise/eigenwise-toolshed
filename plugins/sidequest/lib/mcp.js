@@ -374,14 +374,14 @@ function withoutCategories(payload) {
 const TOOLS = [
   {
     name: "list",
-    description: "For liveness/progress polling use changes/pulse, not this. List tickets, paged; compact rows by default. Follow nextCursor until null; detail:true adds bodies + threads.",
+    description: "For liveness/progress polling use changes/pulse, not this. List tickets, paged; compact rows by default. Follow nextCursor until null. detail:true is audit-only.",
     inputSchema: {
       type: "object",
       properties: {
         project: PROJECT_PROP,
         status: { type: "string", enum: ["todo", "doing", "done"] },
         archived: { type: "boolean" },
-        detail: { type: "boolean", description: "Full bodies and comment threads." },
+        detail: { type: "boolean", description: "Audit only: full bodies and comment threads. Orchestration uses default brief rows; liveness uses changes/pulse." },
         cursor: { type: "string", description: "nextCursor from the prior page." },
         limit: { type: "integer", minimum: 0, description: "Exact page size." },
         all: { type: "boolean", description: "Whole column in one call (can overflow)." }
@@ -503,7 +503,7 @@ const TOOLS = [
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
         storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
-        complexity: { type: "integer", minimum: 1, maximum: 10 },
+        complexity: { type: "integer", minimum: 1, maximum: 10, description: "Legacy score. Requires why (min 20 chars)." },
         why: { type: "string", description: "Motivation for the complexity score (min 20 chars)." },
         category: { type: "string", description: "Enabled category id from category_list." },
         unclassified: { type: "boolean", description: "Allow filing without category or complexity." }
@@ -1016,7 +1016,7 @@ const TOOLS = [
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
-        full: { type: "boolean" },
+        full: { type: "boolean", description: "Recovery read: whole bodies, uncapped, bypasses elision. Default reads return capped excerpts (1200 chars/body) with full metadata; use defaults for closeout and status reads." },
         cursor: { type: "string", pattern: "^(0|[1-9]\\d*)$" },
         limit: { type: "integer", minimum: 1, maximum: PAGE_LIMIT_MAX }
       },
@@ -1671,12 +1671,24 @@ async function runTool(tool, args) {
   const board = mutationQueueKey(tool.name, args);
   return enqueueMutation(board, () => tool.handler(args));
 }
+const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
+  add: ["complexity"],
+  comments: ["full"],
+  list: ["detail"]
+};
 function toolDescriptors() {
-  return TOOLS.filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name)).map((tool) => ({
-    name: tool.name,
-    description: TOOL_DESCRIPTION_OVERRIDES[tool.name] || conciseDescription(tool.description),
-    inputSchema: compactSchema(tool.inputSchema)
-  }));
+  return TOOLS.filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name)).map((tool) => {
+    const inputSchema = compactSchema(tool.inputSchema);
+    for (const property of MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || []) {
+      const description = tool.inputSchema.properties?.[property]?.description;
+      if (description) inputSchema.properties[property].description = description;
+    }
+    return {
+      name: tool.name,
+      description: TOOL_DESCRIPTION_OVERRIDES[tool.name] || conciseDescription(tool.description),
+      inputSchema
+    };
+  });
 }
 function rpcResult(id, result) {
   return { jsonrpc: "2.0", id, result };

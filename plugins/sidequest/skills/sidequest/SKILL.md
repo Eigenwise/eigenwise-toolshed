@@ -66,7 +66,7 @@ plugins before MCP writes. Commands default to the current project; `--project "
 `dispatch <ref>` is **instant**: it returns the ticket's stable executor, a short `spawn` fetch
 stub, and a token. Pass every supplied `spawn` field to Agent unchanged. The executor fetches its
 token-gated durable packet as the first action: full description, category route and contract, scope,
-state, complete chronological comments, and absolute attachment paths. It must inspect every readable
+state, comment metadata, and absolute attachment paths. It must inspect every readable
 attachment and report missing or unreadable ones, while the spawn keeps that content out of this transcript.
 Adopting sessions dispatch again for a fresh token. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
@@ -141,8 +141,8 @@ optionally `--status todo`).
   changes the spawn — never a blind respawn. Two failures on one dispatch:
   comment the evidence on the ticket and surface the failure to the user. Never both resume a
   prior executor and spawn a fresh one for the same ticket.
-- **Read the thread before working a ticket** (`sidequest comments <ref>`). Threads over 10
-  comments keep every entry but omit the oldest bodies; pass `--full` when those bodies matter.
+- **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
+  metadata; pass `--full` only for needed elided bodies.
 - **Stale claims** reclaim after a TTL (`SIDEQUEST_CLAIM_TTL_MIN`); this session's claims
   auto-release at session end. Dead executor past the TTL: salvage its worktree FIRST, then
   `release SQ-3 --by <dead-worker-id> --status todo`, re-read, spawn one replacement.
