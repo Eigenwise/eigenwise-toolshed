@@ -57,7 +57,7 @@ Protocol for each ticket:
    `git update-ref refs/sidequest/<ref> <hash>`. Then call `mcp__plugin_sidequest_board__submit` with
    `ref`, `by`, `commit`, the same absolute `worktree`, optional `gitRef`, repo-relative `verify`, and
    an evidence `body` carrying the full final report: changed paths, verification evidence, commit hash,
-   and anything deliberately skipped. Submit validates the full range, atomically releases the claim,
+   and anything deliberately skipped. Closeout reports should stay under ~2KB; reference paths and commit hashes instead of inlining diffs/logs. Submit validates the full range, atomically releases the claim,
    and parks the work for the orchestrator. After submit, keep the terminal board comment to the commit
    hash, verify evidence, and a reference to the submission instead of repeating its narrative. Do not
    call done for ordinary repo-changing work.

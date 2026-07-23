@@ -3338,7 +3338,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     if (comment) queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
-    return { ok: true, ticket: t, comment };
+    return { ok: true, ticket: t, comment, ...opts.completionComment && opts.completionComment.advisory ? { advisory: opts.completionComment.advisory } : {} };
   });
 }
 function makeWorkedBy(input) {
@@ -3876,6 +3876,12 @@ function deleteStory(slug, idOrRef) {
   return true;
 }
 const COMMENT_BODY_MAX = 16e3;
+const COMMENT_BODY_ADVISORY_BYTES = 4096;
+function commentBodyAdvisory(body) {
+  const bytes = Buffer.byteLength(body, "utf8");
+  if (bytes <= COMMENT_BODY_ADVISORY_BYTES) return null;
+  return `body stored in full (${(bytes / 1024).toFixed(1)} KB); default reads excerpt bodies past 1200 chars - prefer a tight report and link artifacts (paths, commit hashes) over pasting content.`;
+}
 function newCommentId() {
   return "c_" + Date.now().toString(36) + "_" + crypto.randomBytes(3).toString("hex");
 }
@@ -3889,12 +3895,14 @@ function prepareComment(fields) {
   if (body.length > COMMENT_BODY_MAX) {
     return { ok: false, reason: "too_long", max: COMMENT_BODY_MAX, length: body.length };
   }
+  const advisory = commentBodyAdvisory(body);
   return {
     ok: true,
     by: String(fields.by || "agent"),
     kind: "comment",
     body,
-    source: fields.source ? String(fields.source) : "cli"
+    source: fields.source ? String(fields.source) : "cli",
+    ...advisory ? { advisory } : {}
   };
 }
 function createComment(fields, at) {
@@ -3923,7 +3931,7 @@ function addComment(slug, idOrRef, fields) {
     t.updatedAt = comment.at;
     putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource, { commentBody: comment.body });
-    return { ok: true, ticket: t, comment };
+    return { ok: true, ticket: t, comment, ...prepared.advisory ? { advisory: prepared.advisory } : {} };
   });
 }
 function linkTypePair(verb) {

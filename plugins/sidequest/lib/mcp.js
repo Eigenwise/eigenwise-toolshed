@@ -149,7 +149,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   claim: "Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.",
   checkpoint: "Record a live review candidate while keeping its claim and dispatch active.",
   dispatch: "Prepare a ticket executor through its stable route.",
-  done: "Finish a claimed ticket and release its claim. Stamp the actual model and effort.",
+  done: "Finish ticket and release its claim. Stamp the actual model and effort.",
   groomClose: "Grooming closure; pass integration:true after a submission is integrated.",
   native_agent: "Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.",
   archive: "Archive one ticket, or every done ticket.",
@@ -210,6 +210,7 @@ function mutationAck(project, result, changed) {
     }
     return out;
   }
+  if (result.advisory) out.advisory = result.advisory;
   return Object.assign(out, changed || {});
 }
 const OUT_OF_SCOPE_COMMENT_MAX = 16e3;
@@ -786,7 +787,7 @@ const TOOLS = [
   },
   {
     name: "done",
-    description: "Finish claimed non-repo or active authorized artifact work; repo work submits, released work uses control-plane grooming. Stamp actual model and effort.",
+    description: "Finish claimed non-repo or active artifact work; repo work submits, released work uses control-plane grooming. Stamp actual model and effort.",
     inputSchema: {
       type: "object",
       properties: {
@@ -795,6 +796,7 @@ const TOOLS = [
         by: { type: "string" },
         model: { type: "string", description: "Concrete runtime model that actually worked this ticket (provenance)." },
         effort: { type: "string", enum: store.VALID_EFFORTS },
+        body: { type: "string" },
         session: { type: "string" }
       },
       required: ["ref", "by"]
@@ -804,7 +806,7 @@ const TOOLS = [
       const by = requireBy(args, "done");
       const ticket = store.getTicket(slug, args.ref);
       const model = requireKnownModel("done", args.model, ticket);
-      const res = store.completeTicket(slug, args.ref, by, { source: "mcp", model, effort: args.effort, sessionId: sessionOf(args) });
+      const res = store.completeTicket(slug, args.ref, by, { source: "mcp", model, effort: args.effort, body: args.body, sessionId: sessionOf(args) });
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);
     }
@@ -989,6 +991,7 @@ const TOOLS = [
       if (res.ok && args.body != null) {
         const comment = store.addComment(slug, args.ref, { body: String(args.body), by, kind: "comment", source: "mcp" });
         if (!comment.ok) throw new Error(`submit: recorded ${ticket.ref}, but could not add evidence comment: ${comment.reason}`);
+        if (comment.advisory) res.advisory = comment.advisory;
       }
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);

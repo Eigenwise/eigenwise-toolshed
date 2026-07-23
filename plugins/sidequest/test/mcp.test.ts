@@ -1366,6 +1366,32 @@ test('claim -> comment -> done return compact acknowledgements', async () => {
   assert.strictEqual(done.status, 'done');
 });
 
+test('oversized comment acks advise without changing stored bodies', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-comment-advisory')).slug;
+  const ticket = store.createTicket(project, {
+    title: 'comment advisory fixture', complexity: 1, complexityWhy: 'exercise the oversized comment acknowledgement without changing storage',
+  });
+  const small = 'Tight closeout with commit abc1234.';
+  const large = `Verification output:\n${'測'.repeat(1400)}`;
+
+  const smallAck = await callTool('comment', { project, ref: ticket.ref, body: small, by: 'advisory-worker' });
+  const largeAck = await callTool('comment', { project, ref: ticket.ref, body: large, by: 'advisory-worker' });
+  const stored = store.getTicket(project, ticket.ref).comments;
+
+  assert.equal(smallAck.advisory, undefined);
+  assert.match(largeAck.advisory, /body stored in full \(4\.1 KB\); default reads excerpt bodies past 1200 chars/);
+  assert.strictEqual(stored[0].body, small);
+  assert.strictEqual(stored[1].body, large);
+
+  const completion = store.createTicket(project, {
+    title: 'completion advisory fixture', complexity: 1, complexityWhy: 'exercise the oversized completion acknowledgement without changing storage',
+  });
+  await callTool('claim', { project, ref: completion.ref, by: 'advisory-worker', direct: true, reason: 'The completion advisory fixture requires a direct claim.' });
+  const doneAck = await callTool('done', { project, ref: completion.ref, by: 'advisory-worker', model: completion.model, effort: completion.effort, body: large });
+  assert.match(doneAck.advisory, /body stored in full \(4\.1 KB\); default reads excerpt bodies past 1200 chars/);
+  assert.strictEqual(store.getTicket(project, completion.ref).comments.at(-1).body, large);
+});
+
 test('SQ-174: a spaced comment round-trips with spaces intact and no NUL bytes', async () => {
   const added = await callTool('add', { title: 'spaces intact', complexity: 1, why: 'exercise the MCP comment write path preserves internal spaces verbatim' });
   const ref = added.ref;

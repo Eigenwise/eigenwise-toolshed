@@ -1041,7 +1041,10 @@ async function cmdDone(opts: any, positional: any) {
     if (!res.ok) process.exitCode = 1;
     return;
   }
-  if (res.ok) console.log(`✓ ${res.ticket.ref} done  — ${meta.name}`);
+  if (res.ok) {
+    console.log(`✓ ${res.ticket.ref} done  — ${meta.name}`);
+    if (res.advisory) console.log(`  advisory: ${res.advisory}`);
+  }
   else reportClaimFailure('complete', idOrRef, res, meta);
 }
 
@@ -1245,6 +1248,7 @@ async function cmdSubmit(opts: any, positional: any) {
   if (res.ok) {
     const comment = addBodyComment(slug, idOrRef, by, body, opts.source || 'cli');
     if (comment && !comment.ok) fail(`submit: recorded ${idOrRef}, but couldn't add evidence comment: ${comment.reason}`);
+    if (comment && comment.advisory) res.advisory = comment.advisory;
   }
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
@@ -1257,6 +1261,7 @@ async function cmdSubmit(opts: any, positional: any) {
     console.log(s.integrationMode === 'local'
       ? '  claim released; the orchestrator integrates and reverifies against local main, then marks done without pushing.'
       : '  claim released; the orchestrator publish transaction integrates, reverifies, pushes, and marks done.');
+    if (res.advisory) console.log(`  advisory: ${res.advisory}`);
   } else {
     reportClaimFailure('submit', idOrRef, res, meta);
   }
@@ -1540,6 +1545,7 @@ async function cmdComment(opts: any, positional: any) {
   }
   if (res.ok) {
     console.log(`✓ » comment added to ${res.ticket.ref} by "${by}"  — ${meta.name}`);
+    if (res.advisory) console.log(`  advisory: ${res.advisory}`);
   } else {
     process.exitCode = 1;
     const messages: any = {
