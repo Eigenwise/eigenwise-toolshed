@@ -12,12 +12,30 @@ function main(): void {
   try {
     const store = require(runtimeModule('store')) as {
       reconcileSession: (sessionId: string, options: { reason: string; source: string }) => unknown;
+      nearestRepoRoot: (start: string) => string;
+      findProject: (ref: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
+      integrationTarget: (slug: string) => { upstream: string; branch: string } | null;
+      listTickets: (slug: string) => any[];
     };
     store.reconcileSession(sessionId, { reason, source: 'session-end' });
     const agentsync = require(runtimeModule('agentsync')) as {
       cleanupNativeAgents: (options: { sessionId: string }) => unknown;
     };
     agentsync.cleanupNativeAgents({ sessionId });
+
+    const start = stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const project = store.findProject(store.nearestRepoRoot(start));
+    if (!project.ok || !project.slug || !project.meta?.path) return;
+    const target = store.integrationTarget(project.slug);
+    if (!target) return;
+    const worktrees = require(runtimeModule('worktrees')) as {
+      sweep: (repo: string, tickets: any[], options: { execute: boolean; currentPath: string; integrationTarget: { upstream: string; branch: string } }) => Promise<unknown>;
+    };
+    void worktrees.sweep(project.meta.path, store.listTickets(project.slug), {
+      execute: true,
+      currentPath: store.nearestRepoRoot(start),
+      integrationTarget: target,
+    }).catch(() => {});
   } catch (_) {}
 }
 

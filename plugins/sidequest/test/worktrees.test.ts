@@ -22,9 +22,13 @@ function git(args: any, cwd?: any) {
   return execFileSync('git', args, { cwd: cwd || PROJECT, encoding: 'utf8', windowsHide: true }).trim();
 }
 
+function branchName(name: any) {
+  return `worktree-agent-${name}`;
+}
+
 function agentWorktree(name: any) {
   const dir = path.join(WORKTREES, `agent-${name}`);
-  git(['worktree', 'add', '-b', `fixture-${name}`, dir, 'origin/main']);
+  git(['worktree', 'add', '-b', branchName(name), dir, 'origin/main']);
   return dir;
 }
 
@@ -47,6 +51,10 @@ function makeOld(worktree: any) {
 
 function entryFor(result: any, worktree: any) {
   return result.entries.find((entry: any) => path.resolve(entry.path) === path.resolve(worktree));
+}
+
+function branchExists(branch: any) {
+  return git(['branch', '--list', branch]).split(/\r?\n/).some((line: any) => line.trim().replace(/^[*+]\s+/, '') === branch);
 }
 
 git(['init']);
@@ -98,8 +106,43 @@ test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees'
     applied.removed.map((entry: any) => path.resolve(entry)),
     [path.resolve(equivalentOld)]
   );
+  assert.deepEqual(applied.deletedBranches, [branchName('equivalent-old')]);
+  assert.equal(applied.counts.removedWorktrees, 1);
+  assert.equal(applied.counts.deletedBranches, 1);
   assert.ok(!fs.existsSync(equivalentOld));
+  assert.ok(!branchExists(branchName('equivalent-old')));
   assert.ok(fs.existsSync(equivalentFresh));
   assert.ok(fs.existsSync(unmergedOld));
   assert.ok(fs.existsSync(dirtyOld));
+});
+
+test('worktrees sweep prunes only patch-equivalent orphan worktree branches', () => {
+  const equivalentOrphan = agentWorktree('orphan-equivalent');
+  integrate(makeCommit(equivalentOrphan, 'orphan-equivalent.txt'));
+  git(['worktree', 'remove', equivalentOrphan]);
+
+  const unintegratedOrphan = agentWorktree('orphan-unintegrated');
+  makeCommit(unintegratedOrphan, 'orphan-unintegrated.txt');
+  git(['worktree', 'remove', unintegratedOrphan]);
+
+  const checkedOut = agentWorktree('checked-out-equivalent');
+  integrate(makeCommit(checkedOut, 'checked-out-equivalent.txt'));
+  fs.writeFileSync(path.join(checkedOut, 'still-running.txt'), 'keep this live worktree\n');
+
+  const dryRun = cliJson(['worktrees', 'sweep', '--dry-run', '--json']);
+  const orphan = dryRun.orphanBranches.find((entry: any) => entry.branch === branchName('orphan-equivalent'));
+  assert.equal(orphan.action, 'prune');
+  assert.equal(orphan.patchEquivalent, true);
+  const unintegrated = dryRun.orphanBranches.find((entry: any) => entry.branch === branchName('orphan-unintegrated'));
+  assert.equal(unintegrated.action, 'keep');
+  assert.equal(unintegrated.patchEquivalent, false);
+  assert.equal(dryRun.orphanBranches.some((entry: any) => entry.branch === branchName('checked-out-equivalent')), false);
+
+  const applied = cliJson(['worktrees', 'sweep', '--yes', '--json']);
+  assert.deepEqual(applied.prunedOrphanBranches, [branchName('orphan-equivalent')]);
+  assert.equal(applied.counts.prunedOrphanBranches, 1);
+  assert.ok(!branchExists(branchName('orphan-equivalent')));
+  assert.ok(branchExists(branchName('orphan-unintegrated')));
+  assert.ok(branchExists(branchName('checked-out-equivalent')));
+  assert.ok(fs.existsSync(checkedOut));
 });

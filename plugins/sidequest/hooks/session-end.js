@@ -68,6 +68,18 @@ function main() {
     store.reconcileSession(sessionId, { reason, source: "session-end" });
     const agentsync = require(runtimeModule("agentsync"));
     agentsync.cleanupNativeAgents({ sessionId });
+    const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const project = store.findProject(store.nearestRepoRoot(start));
+    if (!project.ok || !project.slug || !project.meta?.path) return;
+    const target = store.integrationTarget(project.slug);
+    if (!target) return;
+    const worktrees = require(runtimeModule("worktrees"));
+    void worktrees.sweep(project.meta.path, store.listTickets(project.slug), {
+      execute: true,
+      currentPath: store.nearestRepoRoot(start),
+      integrationTarget: target
+    }).catch(() => {
+    });
   } catch (_) {
   }
 }

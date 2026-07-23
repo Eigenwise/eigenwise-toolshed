@@ -68,6 +68,16 @@ function ticketForWorktree(tickets: any[], entry: any): any | null {
     : null;
 }
 
+function localBranchName(ref: unknown): string | null {
+  const match = /^refs\/heads\/(.+)$/.exec(String(ref || ''));
+  return match?.[1] || null;
+}
+
+function integrationUpstream(options: any): string {
+  const target = options.integrationTarget || {};
+  return String(target.upstream || options.upstream || 'main');
+}
+
 async function worktreeAge(pathname: string): Promise<number | null> {
   try {
     const stat = await fs.stat(pathname);
@@ -77,13 +87,13 @@ async function worktreeAge(pathname: string): Promise<number | null> {
   }
 }
 
-async function patchEquivalence(worktree: string): Promise<any> {
-  const base = await git(worktree, ['merge-base', 'HEAD', 'origin/main']);
+async function patchEquivalence(repo: string, revision: string, upstream: string): Promise<any> {
+  const base = await git(repo, ['merge-base', revision, upstream]);
   if (!base.ok || !base.stdout) return { equivalent: false, ahead: null, equivalentCommits: 0, unmatchedCommits: null };
 
   const [ahead, cherry] = await Promise.all([
-    git(worktree, ['rev-list', '--count', `${base.stdout}..HEAD`]),
-    git(worktree, ['cherry', 'origin/main', 'HEAD', base.stdout]),
+    git(repo, ['rev-list', '--count', `${base.stdout}..${revision}`]),
+    git(repo, ['cherry', upstream, revision, base.stdout]),
   ]);
   const aheadCount = ahead.ok && /^\d+$/.test(ahead.stdout) ? Number(ahead.stdout) : null;
   if (aheadCount == null || !cherry.ok) {
@@ -101,12 +111,12 @@ async function patchEquivalence(worktree: string): Promise<any> {
   };
 }
 
-async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string, minAgeMs: number): Promise<any> {
+async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string, minAgeMs: number, upstream: string): Promise<any> {
   const ticket = ticketForWorktree(tickets, entry);
   const [cleanResult, ageMs, patch] = await Promise.all([
     git(entry.worktree, ['status', '--porcelain']),
     worktreeAge(entry.worktree),
-    patchEquivalence(entry.worktree),
+    patchEquivalence(entry.worktree, 'HEAD', upstream),
   ]);
   const clean = cleanResult.ok ? cleanResult.stdout === '' : false;
   const current = normalize(entry.worktree) === normalize(currentPath);
@@ -142,26 +152,57 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
   };
 }
 
+async function findOrphanBranches(repo: string, checkedOutBranches: Set<string>, upstream: string): Promise<any[]> {
+  const result = await git(repo, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/worktree-agent-*']);
+  if (!result.ok) throw new Error(result.stderr || 'could not list worktree branches');
+  const branches = result.stdout ? result.stdout.split(/\r?\n/).filter(Boolean) : [];
+  return Promise.all(branches
+    .filter((branch) => !checkedOutBranches.has(branch))
+    .map(async (branch) => {
+      const patch = await patchEquivalence(repo, branch, upstream);
+      return {
+        branch,
+        ahead: patch.ahead,
+        patchEquivalent: patch.equivalent,
+        equivalentCommits: patch.equivalentCommits,
+        unmatchedCommits: patch.unmatchedCommits,
+        action: patch.equivalent ? 'prune' : 'keep',
+        reason: patch.equivalent ? 'patch_equivalent_orphan' : 'not_patch_equivalent',
+      };
+    }));
+}
+
 async function sweep(repo: string, tickets: any[], options: any = {}): Promise<any> {
   const listed = await git(repo, ['worktree', 'list', '--porcelain']);
   if (!listed.ok) throw new Error(listed.stderr || 'could not list git worktrees');
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0
     ? Number(options.minAgeMs)
     : DEFAULT_MIN_AGE_MS;
-  const candidates = parseWorktreeList(listed.stdout)
-    .filter((entry) => isAgentWorktree(repo, entry.worktree));
+  const upstream = integrationUpstream(options);
+  const worktreeList = parseWorktreeList(listed.stdout);
+  const candidates = worktreeList.filter((entry) => isAgentWorktree(repo, entry.worktree));
   const entries = await Promise.all(candidates.map((entry) => (
-    classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs)
+    classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream)
   )));
   const execute = !!options.execute;
   const removed: string[] = [];
+  const deletedBranches: string[] = [];
+  const prunedOrphanBranches: string[] = [];
   const failures: Array<{ path: string | null; message: string }> = [];
 
   if (execute) {
     for (const entry of entries.filter((candidate) => candidate.action === 'remove')) {
       const result = await git(repo, ['worktree', 'remove', entry.path]);
-      if (result.ok) removed.push(entry.path);
-      else failures.push({ path: entry.path, message: result.stderr || 'git worktree remove failed' });
+      if (!result.ok) {
+        failures.push({ path: entry.path, message: result.stderr || 'git worktree remove failed' });
+        continue;
+      }
+      removed.push(entry.path);
+      const branch = localBranchName(entry.branch);
+      if (!branch) continue;
+      const deleted = await git(repo, ['branch', '-D', '--', branch]);
+      if (deleted.ok) deletedBranches.push(branch);
+      else failures.push({ path: branch, message: deleted.stderr || 'git branch delete failed' });
     }
     if (removed.length) {
       const prune = await git(repo, ['worktree', 'prune']);
@@ -169,7 +210,37 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     }
   }
 
-  return { dryRun: !execute, minAgeMs, entries, removed, failures };
+  const remainingList = execute ? await git(repo, ['worktree', 'list', '--porcelain']) : listed;
+  if (!remainingList.ok) throw new Error(remainingList.stderr || 'could not list git worktrees');
+  const remainingWorktrees = parseWorktreeList(remainingList.stdout);
+  const checkedOutBranches = new Set<string>(remainingWorktrees
+    .map((entry) => localBranchName(entry.branch))
+    .filter((branch): branch is string => !!branch));
+  const orphanBranches = await findOrphanBranches(repo, checkedOutBranches, upstream);
+  if (execute) {
+    for (const entry of orphanBranches.filter((candidate) => candidate.action === 'prune')) {
+      const deleted = await git(repo, ['branch', '-D', '--', entry.branch]);
+      if (deleted.ok) prunedOrphanBranches.push(entry.branch);
+      else failures.push({ path: entry.branch, message: deleted.stderr || 'git branch delete failed' });
+    }
+  }
+
+  return {
+    dryRun: !execute,
+    minAgeMs,
+    upstream,
+    entries,
+    orphanBranches,
+    removed,
+    deletedBranches,
+    prunedOrphanBranches,
+    counts: {
+      removedWorktrees: removed.length,
+      deletedBranches: deletedBranches.length,
+      prunedOrphanBranches: prunedOrphanBranches.length,
+    },
+    failures,
+  };
 }
 
 module.exports = { DEFAULT_MIN_AGE_MS, parseWorktreeList, isAgentWorktree, classifyWorktree, sweep };

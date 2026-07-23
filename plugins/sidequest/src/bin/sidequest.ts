@@ -1381,6 +1381,7 @@ async function cmdWorktrees(opts: any, positional: any) {
     result = await worktrees.sweep(meta.path, store.listTickets(slug), {
       execute: !!opts.yes && !opts['dry-run'],
       currentPath: store.nearestRepoRoot(process.cwd()),
+      integrationTarget: store.integrationTarget(slug),
       minAgeMs: minAgeHours * 60 * 60 * 1000,
     });
   } catch (error: any) {
@@ -1398,7 +1399,8 @@ async function cmdWorktrees(opts: any, positional: any) {
     console.log(`  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${entry.clean ? 'clean' : 'dirty'}; ahead ${ahead}; patch-equivalent ${entry.patchEquivalent}; age ${entry.ageMs == null ? '?' : Math.round(entry.ageMs / 60000) + 'm'}]`);
   }
   if (result.dryRun) console.log('  pass --yes to remove the planned worktrees.');
-  if (result.removed.length) console.log(`  removed ${result.removed.length} worktree(s).`);
+  if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
+  if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
   for (const failure of result.failures) console.log(`  ERROR ${failure.path || 'prune'}: ${failure.message}`);
   if (result.failures.length) process.exitCode = 1;
 }

@@ -21,6 +21,7 @@ const database = db.openDb(SIDEQUEST_HOME);
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const SESSION = path.join(HOOKS, 'session-start.js');
+const SESSION_END = path.join(HOOKS, 'session-end.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(HOOKS, 'subagent-start.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
@@ -777,6 +778,36 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
   assert.doesNotThrow(() => runHook(SESSION, { session_id: 'sweep-test' }));
   assert.equal(store.getTicket(slug, stale.ref).claim, null);
   assert.equal(store.getTicket(slug, fresh.ref).claim.by, 'fresh-session');
+});
+
+test('session-end sweeps old patch-equivalent worktrees and stays fail-soft', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-end-project-'));
+  const worktrees = path.join(project, '.claude', 'worktrees');
+  const projectGit = (args: string[], cwd?: string) => execFileSync('git', args, { cwd: cwd || project, encoding: 'utf8', windowsHide: true }).trim();
+  projectGit(['init']);
+  projectGit(['config', 'user.name', 'Sidequest Test']);
+  projectGit(['config', 'user.email', 'sidequest-test@example.invalid']);
+  fs.writeFileSync(path.join(project, 'README.md'), 'session-end fixture\n');
+  projectGit(['add', '.']);
+  projectGit(['commit', '-m', 'base']);
+  projectGit(['branch', '-M', 'main']);
+  fs.mkdirSync(worktrees, { recursive: true });
+  const worktree = path.join(worktrees, 'agent-session-end');
+  const branch = 'worktree-agent-session-end';
+  projectGit(['worktree', 'add', '-b', branch, worktree, 'main']);
+  fs.writeFileSync(path.join(worktree, 'integrated.txt'), 'integrated\n');
+  projectGit(['add', 'integrated.txt'], worktree);
+  projectGit(['commit', '-m', 'integrated fixture'], worktree);
+  const commit = projectGit(['rev-parse', 'HEAD'], worktree);
+  projectGit(['cherry-pick', commit]);
+  const old = new Date(Date.now() - 4 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, old, old);
+  store.ensureProject(project);
+
+  assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-test', cwd: project }));
+  assert.ok(!fs.existsSync(worktree));
+  assert.equal(projectGit(['branch', '--list', branch]), '');
+  assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
 });
 
 test('session-start: carries evidence-first advisory routing guidance', () => {
