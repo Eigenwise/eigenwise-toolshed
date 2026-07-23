@@ -30,7 +30,7 @@ function context(map, source) {
         : '';
   return '<MANDATORY_INSTRUCTION>\n' +
     'This repository has a maintained codebase map in .claude/.codebase-info/.\n\n' +
-    'Read only map document(s) relevant to the current request. If the request does not require codebase knowledge, state that no map read is needed. Never re-read a document already read this session unless this hook names it as changed.\n\n' +
+    'Before anything else in your first reply, and before starting the task, output exactly one acknowledgment line: "Codebase map: read <doc(s)>" after actually reading only relevant map document(s) from .claude/.codebase-info/, or "Codebase map: no read needed - <reason>" if the request needs no codebase knowledge. This is mandatory; do not silently skip it. Never re-read a document already read this session unless this hook names it as changed.\n\n' +
     'After code changes, list modified files, assess whether the map needs an update, and end with either "Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation." or "Documentation check complete. No documentation updates needed because [reason]."\n' +
     '</MANDATORY_INSTRUCTION>\n\n' +
     '=== CODEBASE MAP RE-GROUNDED AFTER SESSIONSTART (' + source + ') ===\n\n' +

@@ -102,8 +102,11 @@ test('SessionStart scopes re-grounding to its source and preserves seen document
   const startup = text(hook(startHook, directory, state, { session_id: 'one', source: 'startup' }));
   assert.match(startup, /SESSIONSTART \(startup\)/);
   assert.match(startup, /Read focused docs as needed/);
-  assert.match(startup, /Read only map document\(s\) relevant to the current request/);
-  assert.match(startup, /no map read is needed/);
+  assert.match(startup, /Before anything else in your first reply/);
+  assert.match(startup, /Codebase map: read <doc\(s\)>/);
+  assert.match(startup, /Codebase map: no read needed - <reason>/);
+  assert.match(startup, /This is mandatory; do not silently skip it/);
+  assert.match(startup, /only relevant map document\(s\)/);
   assert.match(startup, /Never re-read a document already read this session unless this hook names it as changed/);
   assert.strictEqual(hook(promptHook, directory, state, { session_id: 'one' }), '');
 
@@ -113,6 +116,9 @@ test('SessionStart scopes re-grounding to its source and preserves seen document
   const compact = text(hook(startHook, directory, state, { session_id: 'one', source: 'compact' }));
   assert.match(compact, /SESSIONSTART \(compact\)/);
   assert.match(compact, /Read focused docs as needed/);
+  assert.match(compact, /Before anything else in your first reply/);
+  assert.match(compact, /Codebase map: read <doc\(s\)>/);
+  assert.match(compact, /Codebase map: no read needed - <reason>/);
   const changedAfterCompact = text(hook(promptHook, directory, state, { session_id: 'one' }));
   assert.match(changedAfterCompact, /architecture\.md/);
 
