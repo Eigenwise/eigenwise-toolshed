@@ -99,7 +99,7 @@ const STATIC_ENV_BLOCK = {
   // window instead of the 200k gateway default. Haiku is 200k, leave it
   // unpinned. Codex models must stay unsuffixed: [1m] is a local Claude Code
   // override that delays compaction until far beyond Codex's 272k limit.
-  ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
+  ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
   ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
   ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5[1m]',
   // Lift the per-response output cap above Claude Code's 32k gateway default so

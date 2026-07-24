@@ -699,7 +699,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
 
   const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
   const legacy = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
-  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
   assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
   // Fable is a 1M Claude model too; pin it so a gateway session gets its full
   // window instead of Claude Code's 200k gateway default.

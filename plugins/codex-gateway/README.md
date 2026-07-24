@@ -216,7 +216,7 @@ note for the routing side.
   (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows and compaction
   limits; the shim forwards them byte-identically to Anthropic and never applies Codex window
   advertisement or error rewriting to them. The env block pins the real 1M aliases
-  (`ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8[1m]`,
+  (`ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-5[1m]`,
   `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`,
   `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5[1m]`) so a gateway session on any of them gets its
   true 1M window instead of Claude Code's 200k gateway default; haiku stays unpinned (it's 200k).
