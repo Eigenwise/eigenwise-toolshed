@@ -104,6 +104,7 @@ release and is the upgrade path.
 | `ensure [--quiet]` | Start whatever's down; the SessionStart hook runs this |
 | `models` | Show exactly what the shim advertises to the picker |
 | `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
+| `pin [--opus\|--sonnet\|--fable <model\|default>]` | Show or persist the native Claude alias pins |
 | `env [--write-user\|--write-project\|--remove] [--mode local\|global]` | Select private local or global wiring, then wire/unwire the Claude Code env block |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
 | `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility procedure, or read-only diagnosis |
@@ -220,6 +221,12 @@ note for the routing side.
   `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`,
   `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5[1m]`) so a gateway session on any of them gets its
   true 1M window instead of Claude Code's 200k gateway default; haiku stays unpinned (it's 200k).
+  To choose an older or custom native model, run `pin --opus claude-opus-4-8[1m]` (or `--sonnet` /
+  `--fable`); `pin --opus default` clears that alias back to the shipped pin. `pin` prints the
+  effective values and marks overrides, and `doctor` does the same. Overrides persist in
+  `~/.claude/codex-gateway/pins.json`, outside the plugin cache. Run `env --write-project` (or
+  `env --write-user`) after changing one, then start a new Claude Code session. Until both happen,
+  the existing wiring and open sessions keep their previous pin.
   Do NOT set a global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to Claude passthrough models too.
   Version 0.4.4 rewrites stale pre-0.4.2 `[1m]` Codex rows in Claude Code's gateway-model cache in
   place and serves the built-in rows immediately during shim startup, so restart Claude Code once

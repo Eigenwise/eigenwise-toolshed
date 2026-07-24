@@ -65,7 +65,13 @@ back, or you kill the session that was about to use it.
   and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
   applies Codex window advertisement or error rewriting to them. The env block pins the real 1M
   aliases (Opus, Sonnet, Fable) to their `[1m]` ids so a gateway session on one gets its full 1M
-  window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). Do NOT set a
+  window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). Set a persistent
+  per-alias override with `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or
+  use `pin --opus default` to return to the shipped pin. `pin` with no arguments shows each effective
+  pin and whether it is overridden. Overrides live in `~/.claude/codex-gateway/pins.json`, outside
+  the plugin cache. After a change, run `env --write-project` (or `env --write-user`) and start a
+  new Claude Code session; changing the saved override alone cannot alter an open session.
+- Do NOT set a
   global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex
   `/compact` fail after history already exceeds the Codex limit.
 - Caution: loading a huge reference skill (e.g. `claude-api`, ~800k chars) in a single turn can

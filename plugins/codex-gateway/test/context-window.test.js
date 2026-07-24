@@ -720,6 +720,41 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(legacy.env?.USER_SETTING, 'keep-me');
 });
 
+test('Claude pin overrides persist outside the plugin and are applied by rewiring', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-pins-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-pins-project-'));
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  try {
+    const set = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
+    assert.equal(set.status, 0, set.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'pins.json'), 'utf8')), {
+      opus: 'claude-opus-4-8[1m]',
+    });
+
+    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    assert.equal(wired.status, 0, wired.stderr);
+    const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
+
+    const pins = spawnSync(process.execPath, [CLI, 'pin'], { env, encoding: 'utf8' });
+    assert.equal(pins.status, 0, pins.stderr);
+    assert.match(pins.stdout, /opus: claude-opus-4-8\[1m\] \(overridden; shipped default: claude-opus-5\[1m\]\)/);
+
+    const cleared = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'default'], { env, encoding: 'utf8' });
+    assert.equal(cleared.status, 0, cleared.stderr);
+    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    assert.equal(rewired.status, 0, rewired.stderr);
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
+
+    const invalid = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'bad;value'], { env, encoding: 'utf8' });
+    assert.equal(invalid.status, 2);
+    assert.match(invalid.stderr, /invalid opus pin/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('doctor describes local settings.local.json wiring', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-doctor-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-doctor-project-'));
@@ -730,6 +765,7 @@ test('doctor describes local settings.local.json wiring', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring mode: local/);
+    assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(default\)/);
     assert.match(result.stdout, /project settings\.local\.json: not wired/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });

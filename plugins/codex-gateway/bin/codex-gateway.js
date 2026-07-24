@@ -109,11 +109,54 @@ const STATIC_ENV_BLOCK = {
   // if any backend rejects a 64k max_tokens request.
   CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
 };
+const PIN_ALIASES = {
+  opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  fable: 'ANTHROPIC_DEFAULT_FABLE_MODEL',
+};
+const PIN_OVERRIDE_PATH = path.join(STATE, 'pins.json');
+
+function isValidPin(value) {
+  return typeof value === 'string' && value.trim() === value && value.length > 0
+    && !/[\s\x00-\x1F\x7F"'`$\\;&|<>(){}]/.test(value);
+}
+
+function readPinOverrides() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(PIN_OVERRIDE_PATH, 'utf8'));
+    if (!saved || Array.isArray(saved) || typeof saved !== 'object') return {};
+    return Object.fromEntries(Object.keys(PIN_ALIASES)
+      .filter((alias) => isValidPin(saved[alias]))
+      .map((alias) => [alias, saved[alias]]));
+  } catch { return {}; }
+}
+
+function writePinOverrides(overrides) {
+  fs.mkdirSync(STATE, { recursive: true });
+  fs.writeFileSync(PIN_OVERRIDE_PATH, JSON.stringify(overrides, null, 2) + '\n');
+}
+
+function effectivePins() {
+  const overrides = readPinOverrides();
+  return Object.fromEntries(Object.entries(PIN_ALIASES).map(([alias, key]) => [alias, {
+    default: STATIC_ENV_BLOCK[key],
+    override: overrides[alias] || null,
+    value: overrides[alias] || STATIC_ENV_BLOCK[key],
+  }]));
+}
+
+function pinEnvBlock() {
+  return Object.fromEntries(Object.entries(effectivePins()).map(([alias, pin]) => [PIN_ALIASES[alias], pin.value]));
+}
+
+function gatewayEnvBlock() {
+  return { ...STATIC_ENV_BLOCK, ...pinEnvBlock() };
+}
 
 // The only plugin-owned setting that differs between default and
 // RC-compatibility mode is ANTHROPIC_BASE_URL; everything else stays put.
 function envBlockFor(mode) {
-  return { ANTHROPIC_BASE_URL: mode === 'compat' ? COMPAT_BASE_URL : DEFAULT_BASE_URL, ...STATIC_ENV_BLOCK };
+  return { ANTHROPIC_BASE_URL: mode === 'compat' ? COMPAT_BASE_URL : DEFAULT_BASE_URL, ...gatewayEnvBlock() };
 }
 function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
@@ -133,6 +176,8 @@ const USAGE = `usage: codex-gateway.js <command>
   status           show what's running
   models           show the model list the shim advertises to Claude Code
   catalog [--json] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
+  pin [--opus|--sonnet|--fable <model|default>]
+                   show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
   env [--show-mode | --write-user | --write-project | --remove] [--mode local|global]
                    print the Claude Code env block, inspect/select wiring mode, or merge/remove it
                    (local writes go to .claude/settings.local.json)
@@ -276,6 +321,7 @@ function writeSettings(file, settings) {
 function ownedGatewayEnvEntries(env) {
   return Object.entries(env || {}).filter(([key, value]) => (
     (key === 'ANTHROPIC_BASE_URL' && ourBaseUrls().includes(value))
+    || Object.values(PIN_ALIASES).includes(key)
     || (Object.hasOwn(STATIC_ENV_BLOCK, key) && String(value) === String(STATIC_ENV_BLOCK[key]))
   ));
 }
@@ -648,7 +694,8 @@ async function setup() {
       writeEnv(current.scope, false, { mode, quiet: true });
       log(`codex-gateway: hosts compatibility state changed since last wired; switched ${current.scope} settings to ${mode} mode. Restart Claude Code.`);
     } else {
-      log('already wired; restart Claude Code and open /model');
+      writeEnv(current.scope, false, { mode, quiet: true });
+      log('already wired; refreshed Claude alias pins. Restart Claude Code and open /model');
     }
     return;
   }
@@ -775,6 +822,43 @@ async function statusReport() {
 
 // -------------------------------------------------------------- env wiring
 
+function pinCommand() {
+  if (args.length === 0) {
+    for (const [alias, pin] of Object.entries(effectivePins())) {
+      log(`${alias}: ${pin.value} (${pin.override ? `overridden; shipped default: ${pin.default}` : 'default'})`);
+    }
+    return;
+  }
+
+  const overrides = readPinOverrides();
+  for (let index = 0; index < args.length; index += 2) {
+    const option = args[index];
+    const alias = option && option.startsWith('--') ? option.slice(2) : null;
+    const value = args[index + 1];
+    if (!Object.hasOwn(PIN_ALIASES, alias) || value == null) {
+      die('pin expects --opus, --sonnet, or --fable followed by a model id or default', 2);
+    }
+    if (value === 'default') {
+      delete overrides[alias];
+      continue;
+    }
+    if (!isValidPin(value)) die(`invalid ${alias} pin: use a non-empty model id without whitespace or shell characters`, 2);
+    overrides[alias] = value;
+  }
+  writePinOverrides(overrides);
+  log(`saved Claude alias pins to ${PIN_OVERRIDE_PATH}`);
+  log('Rewire with env --write-project (or env --write-user), then start a new Claude Code session for the change to apply.');
+}
+
+function syncEffectivePins() {
+  const current = wiredMode();
+  if (!current) return;
+  const env = readSettingsForWrite(settingsPath(current.scope)).env || {};
+  if (Object.entries(pinEnvBlock()).some(([key, value]) => env[key] !== value)) {
+    writeEnv(current.scope, false, { mode: current.mode, quiet: true });
+  }
+}
+
 function envCommand() {
   if (flag('--show-mode')) {
     const configured = hasWiringMode();
@@ -824,8 +908,8 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   settings.env = settings.env || {};
   if (remove) {
     if (ourBaseUrls().includes(settings.env.ANTHROPIC_BASE_URL)) delete settings.env.ANTHROPIC_BASE_URL;
-    for (const [k, v] of Object.entries({ ...STATIC_ENV_BLOCK, ...LEGACY_ENV_BLOCK })) {
-      if (String(settings.env[k]) === String(v)) delete settings.env[k];
+    for (const [k, v] of Object.entries({ ...gatewayEnvBlock(), ...LEGACY_ENV_BLOCK })) {
+      if (Object.values(PIN_ALIASES).includes(k) || String(settings.env[k]) === String(v)) delete settings.env[k];
     }
     if (!Object.keys(settings.env).length) delete settings.env;
   } else {
@@ -885,6 +969,9 @@ async function doctor() {
   log(catalog && Array.isArray(catalog.models)
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
     : 'catalog: not written yet');
+  for (const [alias, pin] of Object.entries(effectivePins())) {
+    log(`Claude ${alias} pin: ${pin.value}${pin.override ? ` (overridden; shipped default: ${pin.default})` : ' (default)'}`);
+  }
   const activeMode = wiringMode();
   const activeScope = selectedWiringScope();
   log(`wiring mode: ${activeMode} (${activeMode === 'local' ? 'per-project .claude/settings.local.json' : 'global ~/.claude/settings.json'})`);
@@ -2433,6 +2520,7 @@ if (require.main === module) {
         // to RC-compatibility mode once the entry appears (and :80 actually
         // bound), revert the moment either stops being true.
         await syncCompatMode();
+        syncEffectivePins();
       }
       if (!quiet) await statusReport();
       break;
@@ -2445,6 +2533,7 @@ if (require.main === module) {
       break;
     }
     case 'catalog': await catalogCommand(); break;
+    case 'pin': pinCommand(); break;
     case 'env': envCommand(); break;
     case 'doctor': await doctor(); break;
     case 'remote-control': await remoteControlCommand(); break;
