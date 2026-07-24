@@ -12,6 +12,13 @@ export interface Project {
   [key: string]: unknown;
 }
 
+export interface Claim {
+  by?: string;
+  at?: string;
+  idleMs?: number | null;
+  reclaimable?: string | null;
+}
+
 export interface Ticket {
   id: string;
   ref: string;
@@ -27,6 +34,7 @@ export interface Ticket {
   updatedAt?: string;
   archivedAt?: string;
   archived?: boolean;
+  claim?: Claim;
   [key: string]: unknown;
 }
 

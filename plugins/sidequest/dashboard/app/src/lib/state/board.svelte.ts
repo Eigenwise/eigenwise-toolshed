@@ -207,14 +207,10 @@ export class BoardState {
   }
   private isAssignedToYou(ticket: Ticket) { return String(ticket.assignee ?? '').toLowerCase() === 'you'; }
   private isAgentHeld(ticket: Ticket) {
-    const claim = ticket.claim as { by?: unknown; at?: unknown } | undefined;
-    if (claim?.by && !this.isStaleClaim(claim.at)) return true;
+    const claim = ticket.claim;
+    if (claim?.by) return !claim.reclaimable;
     const assignee = String(ticket.assignee ?? '');
     return Boolean(assignee) && assignee.toLowerCase() !== 'you';
-  }
-  private isStaleClaim(value: unknown) {
-    const at = Date.parse(String(value ?? ''));
-    return !Number.isFinite(at) || Date.now() - at > 60 * 60 * 1000;
   }
   private recordDesktopNotificationEvents(tickets: Ticket[]) {
     const keys = tickets.map((ticket) => this.notificationEventKey(ticket));

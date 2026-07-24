@@ -5109,6 +5109,7 @@ module.exports = {
   listPayload,
   readyPayload,
   pulsePayload,
+  claimPulse,
   changesPayload,
   boundedExcerpt,
   commentHistory,

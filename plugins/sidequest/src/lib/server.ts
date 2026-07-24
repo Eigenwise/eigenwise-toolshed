@@ -329,7 +329,11 @@ function storiesWithCounts(slug?: any) {
 // purely a response-shape convenience for the dashboard's "bell in 1h" chip.
 function annotateReminders(tickets?: any) {
   const map = store.pendingReminders();
-  for (const t of tickets) t.reminder = map.get(t.id) || null;
+  const now = Date.now();
+  for (const t of tickets) {
+    t.reminder = map.get(t.id) || null;
+    if (t.claim?.by) t.claim = { ...t.claim, ...store.claimPulse(t, now) };
+  }
   return tickets;
 }
 

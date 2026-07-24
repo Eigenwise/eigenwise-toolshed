@@ -275,9 +275,7 @@ Routed executors use MCP, not shell commands, for the lifecycle:
 - **`--by`** is a unique worker id. Concurrent workers must use distinct ids.
 - **Steerable background execution is the default.** The orchestrator plans and integrates; short bounded
   executors do the labor. Synchronous runs are only for a tight wave when blindness is acceptable.
-- **Crash-safe salvage.** A dead worker becomes reclaimable after `SIDEQUEST_CLAIM_TTL_MIN` (default 60
-  min), but inspect its worktree and preserve a verified commit or in-scope diff before releasing and
-  redispatching. SessionEnd releases its own claims; TTL is the backstop for anything the hook never saw.
+- **Crash-safe salvage.** Claims release after an observed executor stop, then after `SIDEQUEST_CLAIM_IDLE_MIN` (default 60 min) with no live executor, or after the `SIDEQUEST_CLAIM_ABANDON_MIN` 24-hour backstop. Idleness starts at the holder's last board write, not its claim time. Preserve its worktree and verified commit or in-scope diff before redispatching. SessionEnd releases its own claims.
 - **Release versions stay central.** The orchestrator alone assigns matching versions in both
   `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` during publish. Executors never edit
   manifests or bump versions.
@@ -523,7 +521,9 @@ Two optional environment variables (set them in `.claude/settings.json` under `e
 | `SIDEQUEST_HOME` | `~/.claude/sidequest` | Where the central store lives. Point several machines at a synced folder to share boards. When set, the generated Codex-backend exec agents go under `<home>/agents` instead of `~/.claude/agents`, so an isolated/test instance never writes into your live agents dir. |
 | `SIDEQUEST_AGENTS_DIR` | (see `SIDEQUEST_HOME`) | Explicit override for where the generated exec agents are written. Wins over the `SIDEQUEST_HOME` rule above. |
 | `SIDEQUEST_PORT` | `41730` | Preferred dashboard port. If taken, the next free port is used. |
-| `SIDEQUEST_CLAIM_TTL_MIN` | `60` | Minutes before an unrefreshed claim is treated as stale and another worker may take it over. |
+| `SIDEQUEST_CLAIM_IDLE_MIN` | `60` | Minutes without a holder board write before a claim with no live executor is reclaimable. |
+| `SIDEQUEST_CLAIM_ABANDON_MIN` | `1440` | Idle-minute backstop that reclaims a claim when no death was observed. |
+| `SIDEQUEST_CLAIM_TTL_MIN` | `60` | Legacy alias for `SIDEQUEST_CLAIM_IDLE_MIN`. |
 | `SIDEQUEST_NUDGE` | `on` | Set to `off` to silence SessionStart routing context. It does not disable the Agent execution gate. |
 
 ## Troubleshooting

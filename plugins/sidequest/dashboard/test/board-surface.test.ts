@@ -15,8 +15,8 @@ describe('board surface interactions', () => {
     expect(plainText('## **Ship** [it](https://example.com)')).toBe('Ship it');
   });
 
-  it('identifies stale and fresh agent claims', () => {
-    expect(isStaleClaim({ at: new Date(Date.now() - 61 * 60 * 1_000).toISOString() })).toBe(true);
-    expect(isStaleClaim({ at: new Date().toISOString() })).toBe(false);
+  it('uses the server claim verdict instead of claim age', () => {
+    expect(isStaleClaim({ at: new Date(Date.now() - 61 * 60 * 1_000).toISOString(), reclaimable: null })).toBe(false);
+    expect(isStaleClaim({ at: new Date().toISOString(), reclaimable: 'observed_stop' })).toBe(true);
   });
 });

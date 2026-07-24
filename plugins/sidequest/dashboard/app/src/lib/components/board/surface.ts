@@ -28,6 +28,5 @@ export function movePayload(ticket: Ticket, status: Status, now = Date.now()) {
 }
 
 export function isStaleClaim(claim: unknown) {
-  const at = Date.parse(String((claim as { at?: unknown } | undefined)?.at ?? ''));
-  return !Number.isFinite(at) || Date.now() - at > 60 * 60 * 1_000;
+  return Boolean((claim as { reclaimable?: unknown } | undefined)?.reclaimable);
 }

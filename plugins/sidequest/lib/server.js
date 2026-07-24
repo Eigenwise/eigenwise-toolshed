@@ -292,7 +292,11 @@ function storiesWithCounts(slug) {
 }
 function annotateReminders(tickets) {
   const map = store.pendingReminders();
-  for (const t of tickets) t.reminder = map.get(t.id) || null;
+  const now = Date.now();
+  for (const t of tickets) {
+    t.reminder = map.get(t.id) || null;
+    if (t.claim?.by) t.claim = { ...t.claim, ...store.claimPulse(t, now) };
+  }
   return tickets;
 }
 async function handle(req, res) {

@@ -36,7 +36,9 @@ describe('BoardState', () => {
     const state = new BoardState();
     const data = snapshot();
     data.tickets[0].assignee = 'you';
-    data.tickets[1].claim = { by: 'agent', at: new Date().toISOString() };
+    data.tickets[1].claim = { by: 'agent', at: new Date(Date.now() - 6 * 60 * 60 * 1_000).toISOString(), reclaimable: null };
+    data.tickets[2].claim = { by: 'former-agent', at: new Date().toISOString(), reclaimable: 'observed_stop' };
+    data.tickets[2].assignee = 'former-agent';
     state.applySnapshot(data);
 
     state.assignee = 'you';
