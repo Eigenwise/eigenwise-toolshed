@@ -48,7 +48,7 @@ const CONTROL_PLANE_COMPLETION = Symbol('sidequest.control-plane-completion');
 
 function spawnDescription(ticket?: any, resolved?: any) {
   const title = String(ticket && ticket.title || 'Sidequest ticket').replace(/\s+/g, ' ').trim();
-  const route = resolved && resolved.backend === 'codex'
+  const route = resolved
     ? String(resolved.runsLabel || resolved.runsModel || '').replace(/\s+/g, ' ').trim()
     : '';
   const suffix = route ? ` (${route})` : '';

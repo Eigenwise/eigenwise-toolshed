@@ -1231,7 +1231,7 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
     subagent_type: 'sidequest-exec-xhigh',
     name: 'sidequest-exec-xhigh',
     mode: 'bypassPermissions',
-    description: 'complete instant spawn',
+    description: 'complete instant spawn (Claude Fable)',
     isolation: 'worktree',
     model: 'fable',
   });
@@ -1313,7 +1313,7 @@ test('native_agent returns a complete Claude worktree spawn spec', async () => {
     subagent_type: 'sidequest-exec-xhigh',
     name: 'sidequest-native-' + added.ref.toLowerCase() + '-fable',
     mode: 'bypassPermissions',
-    description: 'complete native spawn',
+    description: 'complete native spawn (Claude Fable)',
     isolation: 'worktree',
     model: 'fable',
     prompt: native.prompt,

@@ -19,7 +19,7 @@ const SHARED_TREE_ARTIFACT_MARKER = "Shared-tree artifact mode: leave the genera
 const CONTROL_PLANE_COMPLETION = /* @__PURE__ */ Symbol("sidequest.control-plane-completion");
 function spawnDescription(ticket, resolved) {
   const title = String(ticket && ticket.title || "Sidequest ticket").replace(/\s+/g, " ").trim();
-  const route = resolved && resolved.backend === "codex" ? String(resolved.runsLabel || resolved.runsModel || "").replace(/\s+/g, " ").trim() : "";
+  const route = resolved ? String(resolved.runsLabel || resolved.runsModel || "").replace(/\s+/g, " ").trim() : "";
   const suffix = route ? ` (${route})` : "";
   const maxTitleLength = Math.max(1, AGENT_DESCRIPTION_MAX_LENGTH - suffix.length);
   return `${title.slice(0, maxTitleLength).trimEnd()}${suffix}`.slice(0, AGENT_DESCRIPTION_MAX_LENGTH);

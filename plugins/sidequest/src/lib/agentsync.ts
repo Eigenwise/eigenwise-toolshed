@@ -640,7 +640,8 @@ function createNativeAgent(spec?: any, opts?: any) {
   // into a ticket-specific definition. It stays available while the watcher is
   // registering a new temporary definition.
   if (spec.agentType) {
-    const name = nativeAgentName(spec.ref, spec.runtime, spec.nonce);
+    const runtime = spec.runtime != null ? spec.runtime : spec.runsModel;
+    const name = nativeAgentName(spec.ref, runtime, spec.nonce);
     const model = spec.spawnModel == null ? null : String(spec.spawnModel).trim();
     return {
       name,

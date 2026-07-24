@@ -120,12 +120,14 @@ test('generation-two marker cannot be mistaken for the legacy marker', () => {
   assert.ok(!agentsync.MARKER.includes(agentsync.LEGACY_MARKER));
 });
 
-test('spawn descriptions are bounded and retain Codex route labels', () => {
+test('spawn descriptions are bounded and retain runtime route labels', () => {
   const title = 'Make Sidequest own executor card labels '.repeat(4);
   const codex = agentsync.spawnDescription({ title }, { backend: 'codex', runsLabel: TERRA.label });
   assert.ok(codex.length <= 80);
   assert.match(codex, /\(GPT-5\.6 Terra\)$/);
-  assert.equal(agentsync.spawnDescription({ title: 'Claude title' }, { backend: 'claude', runsLabel: 'Fable' }), 'Claude title');
+  const claude = agentsync.spawnDescription({ title }, { backend: 'claude', runsLabel: 'Opus 5' });
+  assert.ok(claude.length <= 80);
+  assert.match(claude, /\(Opus 5\)$/);
 });
 
 test('sync protects generation-two executors from legacy marker GC and prunes legacy definitions', () => {
@@ -296,13 +298,14 @@ test('unchanged install hash skips the full executor ladder comparison', () => {
   });
 });
 
-test('native dispatch fallback does not write a temporary agent file', () => {
+test('native dispatch fallback names Claude agents after their runtime', () => {
   const dir = tmpDir();
   const created = agentsync.createNativeAgent({
-    ref: 'SQ-249', agentType: 'sidequest-exec-codex-gpt-5-6-terra-medium',
-    runtime: 'codex-gpt-5-6-terra', effort: 'medium', sessionId: 'session-249',
+    ref: 'SQ-249', agentType: 'sidequest-exec-high',
+    runsModel: 'opus', effort: 'high', sessionId: 'session-249',
   }, { dir, waitMs: 0 });
   assert.strictEqual(created.fallback, true);
+  assert.strictEqual(created.name, 'sidequest-native-sq-249-opus');
   assert.strictEqual(created.file, null);
   assert.deepStrictEqual(readDir(dir), []);
 });
