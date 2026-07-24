@@ -147,8 +147,20 @@ function requireKnownModel(action, value, ticket) {
 const PROJECT_PROP = { type: "string", description: "Board (current project)." };
 const MODEL_FILTER_PROP = { type: "string", description: "Filter by resolved model slug." };
 const TOOL_DESCRIPTION_OVERRIDES = {
+  pulse: "Liveness: status, claim, activity.",
+  changes: "THE polling read.",
+  ready: "Unclaimed, unblocked tickets in safe waves.",
+  story: "Manage stories.",
+  checkpoint: "Record review candidate; retain claim.",
+  sweepClaims: "Release stale claims; fresh stay.",
+  next: "Claim the top available ticket.",
+  scopeRequest: "Request scope while keeping claim active.",
+  commit: "Commit declared paths from claimed worktree.",
+  submit: "Submit verified work for integration.",
+  comment: "Add a durable handoff comment.",
+  link: "Relate tickets; inverse automatic.",
+  remove: "Delete a ticket. Claims need force:true.",
   claim: "Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.",
-  checkpoint: "Record a live review candidate while keeping its claim and dispatch active.",
   dispatch: "Prepare a ticket executor through its stable route.",
   done: "Finish ticket and release its claim. Stamp the actual model and effort.",
   groomClose: "Grooming closure; pass integration:true after a submission is integrated.",
@@ -173,7 +185,6 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   new_board_profile: "Read or set the new-board profile.",
   models: "Read models and category routes.",
   projects: "List registered boards.",
-  remove: "Permanently delete a ticket. Live claims require force:true.",
   unarchive: "Restore an archived ticket.",
   unarchive_board: "Restore an explicitly named board.",
   unlink: "Remove links between two tickets."
@@ -444,6 +455,63 @@ const TOOLS = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(store.changesPayload(slug, args.since)));
+    }
+  },
+  {
+    name: "story",
+    description: "Manage user stories: add, list, show, update, or rm.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["add", "list", "show", "update", "rm"] },
+        project: PROJECT_PROP,
+        story: { type: "string", description: "Story ref or id for show, update, or rm." },
+        title: { type: "string", description: "Required for add." },
+        description: { type: "string" },
+        color: { type: "string" }
+      },
+      required: ["action"]
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      const action = String(args.action || "").toLowerCase();
+      if (!["add", "list", "show", "update", "rm"].includes(action)) {
+        throw new Error(`story: unknown action "${args.action || ""}". Use add | list | show | update | rm. Run "sidequest help".`);
+      }
+      if (action === "add") {
+        if (!args.title) throw new Error('story add: --title/-t is required, e.g. sidequest story add -t "Auth revamp" [--color teal]');
+        const story = store.createStory(slug, { title: args.title, description: args.description, color: args.color });
+        return { ok: true, project: slug, projectName: meta.name, story };
+      }
+      if (action === "list") {
+        const stories = store.listStories(slug).map((story) => Object.assign({}, story, {
+          ticketCount: store.listTickets(slug).filter((ticket) => !ticket.archived && ticket.storyId === story.id).length
+        }));
+        return { project: slug, projectName: meta.name, stories };
+      }
+      if (!args.story) {
+        throw new Error(`story ${action}: pass a story ref, e.g. sidequest story ${action} US-1`);
+      }
+      if (action === "show") {
+        const story = store.getStory(slug, args.story);
+        if (!story) throw new Error(`story show: no story "${args.story}" in ${meta.name}`);
+        const tickets = store.listTickets(slug).filter((ticket) => !ticket.archived && ticket.storyId === story.id);
+        return { project: slug, projectName: meta.name, story, tickets };
+      }
+      if (action === "update") {
+        const patch = {};
+        for (const key of ["title", "description", "color"]) {
+          if (args[key] !== void 0) patch[key] = args[key];
+        }
+        const story = store.updateStory(slug, args.story, patch);
+        if (!story) throw new Error(`story update: no story "${args.story}" in ${meta.name}`);
+        return { ok: true, project: slug, story };
+      }
+      if (action === "rm") {
+        const story = store.getStory(slug, args.story);
+        return { ok: store.deleteStory(slug, args.story), project: slug, story: story || null };
+      }
+      throw new Error(`story: unknown action "${args.action || ""}". Use add | list | show | update | rm. Run "sidequest help".`);
     }
   },
   {

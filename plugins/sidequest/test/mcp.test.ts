@@ -176,7 +176,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'story_contract', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -222,6 +222,46 @@ test('storyId rejects values outside the US-n format', async () => {
   });
   assert.equal(response.result.isError, true);
   assert.match(response.result.content[0].text, /storyId must be a US-n story ref/);
+});
+
+test('story MCP tool covers the CLI story lifecycle', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-lifecycle-'))).slug;
+  const created = await callTool('story', {
+    project, action: 'add', title: 'MCP story', description: 'Group story work.', color: 'teal',
+  });
+  assert.equal(created.ok, true);
+  assert.equal(created.project, project);
+  assert.equal(created.story.title, 'MCP story');
+
+  const ticket = store.createTicket(project, { title: 'Story member', storyId: created.story.ref, source: 'test' });
+  const listed = await callTool('story', { project, action: 'list' });
+  assert.equal(listed.stories[0].ticketCount, 1);
+  const shown = await callTool('story', { project, action: 'show', story: created.story.id });
+  assert.deepEqual(shown.tickets.map((entry: any) => entry.ref), [ticket.ref]);
+
+  const updated = await callTool('story', { project, action: 'update', story: created.story.ref, title: 'Renamed story' });
+  assert.equal(updated.ok, true);
+  assert.equal(updated.story.title, 'Renamed story');
+  const removed = await callTool('story', { project, action: 'rm', story: created.story.ref });
+  assert.equal(removed.ok, true);
+  assert.equal(removed.story.id, created.story.id);
+  assert.equal(store.getTicket(project, ticket.ref).storyId, null);
+});
+
+test('story MCP tool rejects missing and invalid identifiers', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-identifiers-'))).slug;
+  for (const action of ['show', 'update', 'rm']) {
+    const missing = await callToolRaw('story', { project, action });
+    assert.equal(missing.isError, true);
+    assert.match(missing.content[0].text, new RegExp(`story ${action}: pass a story ref`));
+  }
+  for (const action of ['show', 'update']) {
+    const missing = await callToolRaw('story', { project, action, story: 'US-999' });
+    assert.equal(missing.isError, true);
+    assert.match(missing.content[0].text, new RegExp(`story ${action}: no story "US-999"`));
+  }
+  const removed = await callTool('story', { project, action: 'rm', story: 'US-999' });
+  assert.deepEqual(removed, { ok: false, project, story: null });
 });
 
 test('story contracts are bounded, revisioned, and warn claimed members about drift', async () => {
