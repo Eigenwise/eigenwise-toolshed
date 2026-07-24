@@ -31,6 +31,7 @@ __export(commit_scope_exports, {
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
   isInScope: () => isInScope,
+  linkedWorktree: () => linkedWorktree,
   rangePaths: () => rangePaths,
   repoRoot: () => repoRoot,
   scopedPaths: () => scopedPaths,
@@ -92,6 +93,20 @@ function gitResult(cwd, args) {
 }
 function repoRoot(cwd) {
   return git(cwd, ["rev-parse", "--show-toplevel"]).trim();
+}
+function filesystemPathKey(value) {
+  const normalized = import_node_path.default.resolve(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+function linkedWorktree(cwd) {
+  const gitDir = gitResult(cwd, ["rev-parse", "--git-dir"]);
+  if (!gitDir.ok) return { ok: false, message: gitDir.message };
+  const commonDir = gitResult(cwd, ["rev-parse", "--git-common-dir"]);
+  if (!commonDir.ok) return { ok: false, message: commonDir.message };
+  return {
+    ok: true,
+    linked: filesystemPathKey(import_node_path.default.resolve(cwd, gitDir.value)) !== filesystemPathKey(import_node_path.default.resolve(cwd, commonDir.value))
+  };
 }
 function indexedPaths(cwd) {
   return git(cwd, ["ls-files", "--full-name", "-z"]).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
@@ -421,6 +436,7 @@ function commitScoped(cwd, message, files) {
   commitPaths,
   commitScoped,
   isInScope,
+  linkedWorktree,
   rangePaths,
   repoRoot,
   scopedPaths,

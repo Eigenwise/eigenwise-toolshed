@@ -910,6 +910,17 @@ const TOOLS = [
         return mutationAck(slug, { ok: false, ticket, reason: "not_owner", message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.` });
       }
       const root = worktreeRoot(args.worktree, "commit");
+      if (ticket.dispatch && ticket.dispatch.sharedTree === false) {
+        const location = commitScope.linkedWorktree(root);
+        if (!location.ok || !location.linked) {
+          return mutationAck(slug, {
+            ok: false,
+            ticket,
+            reason: "worktree_isolation",
+            message: `commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`
+          });
+        }
+      }
       const scope = store.effectiveScope(slug, ticket.files);
       const result = commitScope.commitScoped(root, message, scope);
       if (!result.ok) {

@@ -65,6 +65,22 @@ export function repoRoot(cwd: string): string {
   return git(cwd, ['rev-parse', '--show-toplevel']).trim();
 }
 
+function filesystemPathKey(value: string): string {
+  const normalized = path.resolve(value);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+export function linkedWorktree(cwd: string): { ok: true; linked: boolean } | { ok: false; message: string } {
+  const gitDir = gitResult(cwd, ['rev-parse', '--git-dir']);
+  if (!gitDir.ok) return { ok: false, message: gitDir.message };
+  const commonDir = gitResult(cwd, ['rev-parse', '--git-common-dir']);
+  if (!commonDir.ok) return { ok: false, message: commonDir.message };
+  return {
+    ok: true,
+    linked: filesystemPathKey(path.resolve(cwd, gitDir.value)) !== filesystemPathKey(path.resolve(cwd, commonDir.value)),
+  };
+}
+
 function indexedPaths(cwd: string): string[] {
   return git(cwd, ['ls-files', '--full-name', '-z'])
     .split('\0')

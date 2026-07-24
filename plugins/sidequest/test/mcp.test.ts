@@ -134,6 +134,21 @@ function createGitWorktree() {
   return worktree;
 }
 
+function createLinkedWorktree(primary?: any) {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-linked-worktree-'));
+  const linked = path.join(parent, 'linked');
+  gitAt(primary, ['worktree', 'add', '--detach', linked, 'HEAD']);
+  return linked;
+}
+
+function claimDispatchedTicket(project?: any, ticket?: any, by?: any, sharedTree?: any) {
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree });
+  assert.equal(store.claimTicket(project, ticket.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+}
+
 function stageLongOutOfScopeChangeSet(worktree?: any) {
   fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(worktree, 'lib', 'allowed.js'), 'allowed\n');
@@ -785,6 +800,49 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
+});
+
+test('MCP commit refuses an isolated dispatch in the primary worktree but permits linked and shared trees', async () => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  const isolated = store.createTicket(project, {
+    title: 'isolated commit guard', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['lib/guarded.js'],
+  });
+  const isolatedBy = 'mcp-isolated-guard-worker';
+  claimDispatchedTicket(project, isolated, isolatedBy);
+
+  fs.mkdirSync(path.join(primary, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(primary, 'lib', 'guarded.js'), 'primary\n');
+  gitAt(primary, ['add', 'lib/guarded.js']);
+  const primaryHead = gitAt(primary, ['rev-parse', 'HEAD']);
+  const refused = await callTool('commit', {
+    project, ref: isolated.ref, by: isolatedBy, message: 'must not commit in primary', worktree: primary,
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'worktree_isolation');
+  assert.match(refused.message, /requires a linked worktree/);
+  assert.equal(gitAt(primary, ['rev-parse', 'HEAD']), primaryHead, 'primary worktree remains uncommitted');
+
+  const linked = createLinkedWorktree(primary);
+  fs.mkdirSync(path.join(linked, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(linked, 'lib', 'guarded.js'), 'linked\n');
+  gitAt(linked, ['add', 'lib/guarded.js']);
+  const committed = await callTool('commit', {
+    project, ref: isolated.ref, by: isolatedBy, message: 'commit from linked worktree', worktree: linked,
+  });
+  assert.ok(committed.commit, 'isolated dispatch can commit from a linked worktree');
+
+  const shared = store.createTicket(project, {
+    title: 'shared commit exemption', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['lib/shared.js'],
+  });
+  const sharedBy = 'mcp-shared-guard-worker';
+  claimDispatchedTicket(project, shared, sharedBy, true);
+  fs.writeFileSync(path.join(primary, 'lib', 'shared.js'), 'shared\n');
+  gitAt(primary, ['add', 'lib/shared.js']);
+  const sharedCommit = await callTool('commit', {
+    project, ref: shared.ref, by: sharedBy, message: 'shared tree commit', worktree: primary,
+  });
+  assert.ok(sharedCommit.commit, 'shared-tree dispatch can commit from the primary worktree');
 });
 
 test('MCP submit accepts a known submitted commit as an explicit base', async () => {
