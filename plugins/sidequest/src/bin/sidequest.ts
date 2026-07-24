@@ -1076,6 +1076,18 @@ async function cmdGroomClose(opts: any, positional: any) {
   const purpose = opts.integration ? 'integration' : 'grooming';
   const res = store.completeTicketAsControlPlane(slug, idOrRef, { by, reason, purpose });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
+  if (res.ok && opts.integration) {
+    try {
+      res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
+        execute: true,
+        currentPath: store.nearestRepoRoot(process.cwd()),
+        integrationTarget: store.integrationTarget(slug),
+        ticketRef: res.ticket.ref,
+      });
+    } catch (error: any) {
+      res.worktreeSweep = { failures: [{ path: null, message: (error && error.message) || String(error) }] };
+    }
+  }
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
@@ -1397,7 +1409,7 @@ async function cmdWorktrees(opts: any, positional: any) {
   const { slug, meta } = await resolveProject(opts);
   let result;
   try {
-    result = await worktrees.sweep(meta.path, store.listTickets(slug), {
+    result = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
       execute: !!opts.yes && !opts['dry-run'],
       currentPath: store.nearestRepoRoot(process.cwd()),
       integrationTarget: store.integrationTarget(slug),
@@ -2555,7 +2567,7 @@ Native Agent dispatch (routed work stays in this conversation):
     tickets recover immediately instead of waiting out the claim TTL; safe — it only touches that session's
     claims). Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.
   sidequest claims sweep [--project <path-or-slug>]  release claims older than SIDEQUEST_CLAIM_TTL_MIN (default 60m)
-  sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  list agent worktrees; removes only clean, patch-equivalent, older-than-3h entries
+  sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  list unlocked stale agent worktrees; backs up dirty cleanup before removal
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)

@@ -26,6 +26,7 @@ const path = require('path');
 const fs = require('fs');
 const store = require('./store');
 const work = require('./work');
+const worktrees = require('./worktrees');
 const agentsync = require('./agentsync');
 const commitScope = require('./commit-scope');
 const { claimRefusalMessage } = require('./refusal-guidance');
@@ -949,8 +950,8 @@ const TOOLS: ToolDefinition[] = [
       },
       required: ['ref', 'by', 'reason'],
     },
-    handler(args) {
-      const { slug } = resolveProject(args.project);
+    async handler(args) {
+      const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'groomClose');
       const reason = String(args.reason || '').trim();
       if (!reason) throw new Error('groomClose: reason is required.');
@@ -958,6 +959,18 @@ const TOOLS: ToolDefinition[] = [
       const purpose = args.integration ? 'integration' : 'grooming';
       const res = store.completeTicketAsControlPlane(slug, args.ref, { by, reason, purpose });
       if (res.ok) closeDispatchExecutor(ticket);
+      if (res.ok && args.integration) {
+        try {
+          res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
+            execute: true,
+            currentPath: store.nearestRepoRoot(process.cwd()),
+            integrationTarget: store.integrationTarget(slug),
+            ticketRef: res.ticket.ref,
+          });
+        } catch (error: any) {
+          res.worktreeSweep = { failures: [{ path: null, message: (error && error.message) || String(error) }] };
+        }
+      }
       return mutationAck(slug, res, res.ok ? { completion: res.ticket.completion } : null);
     },
   },
