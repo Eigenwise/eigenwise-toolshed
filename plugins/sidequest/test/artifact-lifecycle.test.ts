@@ -19,6 +19,12 @@ execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequ
 const { slug } = store.ensureProject(PROJECT);
 const exploration = store.getCategory('codebase-exploration');
 store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
+store.setCategory({
+  id: 'repository-write',
+  name: 'Repository write',
+  route: { model: 'sonnet', effort: 'medium' },
+  artifactRoots: [],
+});
 
 function ticket(title: any, description: any, files?: any) {
   return store.createTicket(slug, {
@@ -146,19 +152,69 @@ test('artifact completion refuses restaged pre-existing dirt', () => {
   assertArtifactPathRejected(created, 'restaged-dirt-worker', relativePath);
 });
 
-test('ordinary scoped tickets still require commit and submit even in the shared tree', () => {
-  const created = ticket('ordinary repository edit', 'Change the declared repository files.');
+test('read-only dispatches with in-repo declared files may close with done', () => {
+  const created = ticket('read in-repo scope', 'Inspect the declared repository files.', ['.claude/.codebase-info']);
   const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
-  assert.strictEqual(prepared.ticket.dispatch.artifactMode, false);
+  assert.strictEqual(prepared.ticket.dispatch.readonly, true);
+  assert.strictEqual(claim(prepared, 'readonly-worker').ok, true);
+
+  const done = store.completeTicket(slug, created.ref, 'readonly-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, true);
+  assert.strictEqual(done.ticket.status, 'done');
+  assert.strictEqual(done.ticket.submission == null, true);
+});
+
+test('read-only dispatches without declared files may close with done', () => {
+  const created = ticket('read unscoped repository', 'Inspect the repository without a file declaration.', []);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
+  assert.strictEqual(prepared.ticket.dispatch.readonly, true);
+  assert.strictEqual(claim(prepared, 'readonly-unscoped-worker').ok, true);
+
+  const done = store.completeTicket(slug, created.ref, 'readonly-unscoped-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, true);
+  assert.strictEqual(done.ticket.status, 'done');
+});
+
+test('ordinary scoped dispatches still require commit and submit', () => {
+  const created = store.createTicket(slug, {
+    title: 'ordinary repository edit',
+    description: 'Change the declared repository files.',
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(prepared.ticket.dispatch.readonly, false);
   assert.strictEqual(claim(prepared, 'ordinary-worker').ok, true);
 
-  writeProjectFile('.claude/.codebase-info/ordinary.md', 'uncommitted\n');
   const done = store.completeTicket(slug, created.ref, 'ordinary-worker', { source: 'mcp' });
 
   assert.strictEqual(done.ok, false);
   assert.strictEqual(done.reason, 'submission_required');
-  assert.match(done.message, /commit and submit verified changes/i);
+  assert.match(done.message, /read-only dispatch may close with done/i);
   assert.strictEqual(store.getTicket(slug, created.ref).claim.by, 'ordinary-worker');
+});
+
+test('readonly:false selects the submission-required write path', () => {
+  const created = store.createTicket(slug, {
+    title: 'mutable exploration',
+    description: 'Change the declared repository files.',
+    category: 'codebase-exploration',
+    readonly: false,
+    files: ['.claude/.codebase-info'],
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(prepared.ticket.dispatch.readonly, false);
+  assert.strictEqual(claim(prepared, 'readonly-override-worker').ok, true);
+
+  const done = store.completeTicket(slug, created.ref, 'readonly-override-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'submission_required');
+  assert.match(done.message, /readonly:false selects this write path/i);
 });
 
 test('read-only dispatches with external output may close with done', () => {
@@ -203,7 +259,13 @@ test('repository-category external output still requires submission', () => {
 });
 
 test('the artifact marker alone does not bypass submit from an isolated dispatch', () => {
-  const created = ticket('isolated artifact attempt', store.SHARED_TREE_ARTIFACT_MARKER);
+  const created = store.createTicket(slug, {
+    title: 'isolated artifact attempt',
+    description: store.SHARED_TREE_ARTIFACT_MARKER,
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    source: 'mcp',
+  });
   const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
   assert.strictEqual(prepared.ticket.dispatch.artifactMode, false);
   assert.strictEqual(claim(prepared, 'isolated-worker').ok, true);
@@ -232,7 +294,13 @@ test('marker text cannot grant artifact authority to a category or scope', () =>
   assert.strictEqual(claim(categoryDispatch, 'arbitrary-category-worker').ok, true);
   assert.strictEqual(store.completeTicket(slug, arbitraryCategory.ref, 'spoofed-groomer', { source: 'control-plane-grooming' }).reason, 'submission_required');
 
-  const arbitraryScope = ticket('arbitrary scope artifact attempt', store.SHARED_TREE_ARTIFACT_MARKER, ['src']);
+  const arbitraryScope = store.createTicket(slug, {
+    title: 'arbitrary scope artifact attempt',
+    description: store.SHARED_TREE_ARTIFACT_MARKER,
+    category: 'review-audit-artifact-attempt',
+    files: ['src'],
+    source: 'mcp',
+  });
   const scopeDispatch = store.prepareDispatch(slug, arbitraryScope.ref, { sharedTree: true });
   assert.strictEqual(scopeDispatch.ticket.dispatch.artifactMode, false);
   assert.strictEqual(claim(scopeDispatch, 'arbitrary-scope-worker').ok, true);
@@ -354,7 +422,13 @@ test('a claimed ticket cannot be rewritten and redispatched into artifact mode',
 });
 
 test('description and files mutations after dispatch do not flip pinned artifact authority', () => {
-  const ordinary = ticket('pinned ordinary dispatch', 'Start without artifact authority.');
+  const ordinary = store.createTicket(slug, {
+    title: 'pinned ordinary dispatch',
+    description: 'Start without artifact authority.',
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    source: 'mcp',
+  });
   const ordinaryDispatch = store.prepareDispatch(slug, ordinary.ref, { sharedTree: true });
   assert.strictEqual(claim(ordinaryDispatch, 'ordinary-mutation-worker').ok, true);
   store.updateTicket(slug, ordinary.ref, {

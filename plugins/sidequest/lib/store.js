@@ -2004,6 +2004,9 @@ function requestedReadonlyOverride(fields) {
 function readOnlyOverrideActive(ticket) {
   return ticket?.readonlyOverride === false && isReadOnlyCategory(ticketCategory(ticket));
 }
+function dispatchReadOnly(ticket) {
+  return isReadOnlyCategory(ticketCategory(ticket)) && !readOnlyOverrideActive(ticket);
+}
 function createTicket(slug, fields) {
   fields = fields || {};
   const status = fields.status === void 0 ? "todo" : requireStatus(fields.status);
@@ -2566,7 +2569,7 @@ function stableExecutorName(ticket) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error("dispatch executor requires a routable ticket.");
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
-  if (!isReadOnlyCategory(ticketCategory(ticket)) || readOnlyOverrideActive(ticket)) return resolved.agent;
+  if (!dispatchReadOnly(ticket)) return resolved.agent;
   return resolved.backend === "codex" ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
 }
 function dispatchTokenPrefix(token) {
@@ -2985,6 +2988,7 @@ function prepareDispatch(slug, idOrRef, opts) {
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
     const preparedExec = resolveExec(t.model, t.effort);
+    const readonly = dispatchReadOnly(t);
     const story = t.storyId ? getStory(slug, t.storyId) : null;
     const contract = storyExecutionContract(story);
     const contractDrift = t.storyContractDrift || null;
@@ -2994,6 +2998,7 @@ function prepareDispatch(slug, idOrRef, opts) {
       sharedTree,
       ...worktreeWarning ? { worktreeWarning } : {},
       declaredFiles,
+      readonly,
       ...nonRepoOutput ? { nonRepoOutput: true } : {},
       artifactMode,
       artifactRoot,
@@ -3336,15 +3341,16 @@ function releaseTicket(slug, idOrRef, by, opts) {
     const activeDispatch = Boolean(t.dispatchNonce || dispatch && !dispatch.terminalAt);
     const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
     const activeNonRepoOutput = dispatch?.nonRepoOutput === true && liveClaim && activeDispatch;
+    const activeReadOnlyDispatch = dispatch?.readonly === true && liveClaim && activeDispatch;
     if (executorDone && activeArtifactDispatch) {
       const scopeCheck = artifactScopeCheck(slug, t, dispatch);
       if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
     }
-    if (executorDone && dispatch && declaredFiles.length && !activeArtifactDispatch && !activeNonRepoOutput) {
+    if (executorDone && dispatch && declaredFiles.length && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
       return {
         ok: false,
         reason: "submission_required",
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
         ticket: t
       };
     }
