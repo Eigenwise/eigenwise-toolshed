@@ -142,6 +142,27 @@ test('spans carry trace parentage as a link and inherit hex ids', () => {
   assert.equal(span.span_id, SPAN);
 });
 
+test('spans apply native event canonicalization before schema selection', () => {
+  const body = {
+    resourceSpans: [{
+      resource: { attributes: [] },
+      scopeSpans: [{
+        spans: [{
+          traceId: TRACE, spanId: SPAN,
+          name: 'mcp_server_connection', startTimeUnixNano: NANO,
+          attributes: attrs({ plugin_name: 'sidequest', connection_status: 'ok' }),
+        }],
+      }],
+    }],
+  };
+  const observations = otlpToObservations('traces', body);
+  accept(observations);
+  const connection = observations.find((o) => o.event_name === 'claude_code.mcp_server_connection');
+  assert.equal(connection.attributes.mcp_server, 'sidequest');
+  assert.equal(connection.attributes.status, 'ok');
+  assert.equal(observations.some((o) => o.event_name === 'schema_drop'), false);
+});
+
 test('scalar metrics map to measurements; histograms become coverage gaps', () => {
   const body = {
     resourceMetrics: [{

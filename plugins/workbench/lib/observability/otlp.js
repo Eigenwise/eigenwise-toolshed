@@ -327,8 +327,9 @@ function convertTraces(root, options, observations, dropped) {
       if (!observedAt) continue;
       const eventName = eventNameFrom(span.name, flat);
       if (!eventName) { observations.push(coverageGap('unmapped_span', observedAt, resourceIds)); continue; }
+      const canonicalFlat = canonicalEventAttributes(eventName, flat);
       const localDropped = new Set();
-      const attributes = selectAttributes(eventName, flat, localDropped);
+      const attributes = selectAttributes(eventName, canonicalFlat, localDropped);
       for (const key of localDropped) dropped.add(key);
       const measurements = measurementsFrom(flat, 'request', eventName);
       const ids = idColumns(flat, resourceIds);
