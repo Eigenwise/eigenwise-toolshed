@@ -161,6 +161,47 @@ test('ordinary scoped tickets still require commit and submit even in the shared
   assert.strictEqual(store.getTicket(slug, created.ref).claim.by, 'ordinary-worker');
 });
 
+test('read-only dispatches with external output may close with done', () => {
+  const outside = path.join(os.tmpdir(), `sq-external-audition-${process.pid}.html`);
+  const created = ticket('external HTML audition', 'Write an external HTML audition.', [outside]);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
+  assert.strictEqual(prepared.ticket.dispatch.nonRepoOutput, true);
+  assert.strictEqual(claim(prepared, 'external-output-worker').ok, true);
+
+  fs.writeFileSync(outside, '<main>audition</main>\n');
+  const done = store.completeTicket(slug, created.ref, 'external-output-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, true);
+  assert.strictEqual(done.ticket.status, 'done');
+  assert.strictEqual(done.ticket.submission == null, true);
+});
+
+test('repository-category external output still requires submission', () => {
+  store.setCategory({
+    id: 'repository-external-output',
+    name: 'Repository external output',
+    route: { model: 'sonnet', effort: 'medium' },
+    artifactRoots: [],
+  });
+  const outside = path.join(os.tmpdir(), `sq-repository-external-${process.pid}.html`);
+  const created = store.createTicket(slug, {
+    title: 'repository external output',
+    description: 'Write external output from a repository-changing category.',
+    category: 'repository-external-output',
+    files: [outside],
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
+  assert.strictEqual(prepared.ticket.dispatch.nonRepoOutput, undefined);
+  assert.strictEqual(claim(prepared, 'repository-external-worker').ok, true);
+
+  const done = store.completeTicket(slug, created.ref, 'repository-external-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'submission_required');
+  assert.match(done.message, /release it for reclassification as non-repo\/artifact work/i);
+});
+
 test('the artifact marker alone does not bypass submit from an isolated dispatch', () => {
   const created = ticket('isolated artifact attempt', store.SHARED_TREE_ARTIFACT_MARKER);
   const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });

@@ -2303,6 +2303,10 @@ function dispatchWarnings(ticket?: any, slug?: any) {
   }
   warnings.push(...storyContractDriftWarnings(ticket));
   const declaredFiles = dispatchDeclaredFiles(ticket);
+  const outside = externalDeclaredFiles(declaredFiles);
+  if (outside.length) {
+    warnings.push(`Dispatch warning: declared paths are outside the repo worktree: ${outside.join(', ')}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`);
+  }
   if (!slug || !declaredFiles.length) return warnings;
   for (const sibling of listTickets(slug)) {
     if (sibling.id === ticket.id) continue;
@@ -2332,9 +2336,26 @@ function dispatchDeclaredFiles(ticket?: any) {
   return normalizeFiles(dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : ticket && ticket.files);
 }
 
+function externalDeclaredFiles(files?: any) {
+  return commitScope.validateRelativeScopes(files).outside;
+}
+
+function nonRepoExternalOutput(ticket?: any, files?: any) {
+  const declaredFiles = normalizeFiles(files);
+  const outside = externalDeclaredFiles(declaredFiles);
+  return declaredFiles.length > 0
+    && outside.length === declaredFiles.length
+    && isReadOnlyCategory(ticketCategory(ticket))
+    && !readOnlyOverrideActive(ticket);
+}
+
 function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
   if (!ticket) return [];
   const warnings: any[] = [];
+  const outside = externalDeclaredFiles(ticket.files);
+  if (outside.length) {
+    warnings.push(`Planning-depth warning: declared paths are outside the repo worktree: ${outside.join(', ')}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`);
+  }
   if (Number(ticket.complexity) >= 4) {
     const missing: any[] = [];
     if (!String(ticket.executorAnchors || '').trim()) missing.push('executor anchors');
@@ -3476,6 +3497,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
     let sharedTree = worktreeIsolation ? requestedSharedTree : true;
     const declaredFiles = normalizeFiles(t.files);
+    const nonRepoOutput = nonRepoExternalOutput(t, declaredFiles);
     const worktreeWarning = !worktreeIsolation && Object.hasOwn(opts, 'sharedTree') && requestedSharedTree === false
       ? 'Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately.'
       : (!sharedTree && declaredFiles.length ? worktreeIsolationWarning(slug) : null);
@@ -3497,6 +3519,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       sharedTree,
       ...(worktreeWarning ? { worktreeWarning } : {}),
       declaredFiles,
+      ...(nonRepoOutput ? { nonRepoOutput: true } : {}),
       artifactMode,
       artifactRoot,
       artifactScope,
@@ -3875,15 +3898,16 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const liveClaim = held && held.by && !isClaimStale(held);
     const activeDispatch = Boolean(t.dispatchNonce || (dispatch && !dispatch.terminalAt));
     const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
+    const activeNonRepoOutput = dispatch?.nonRepoOutput === true && liveClaim && activeDispatch;
     if (executorDone && activeArtifactDispatch) {
       const scopeCheck = artifactScopeCheck(slug, t, dispatch);
       if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
     }
-    if (executorDone && dispatch && declaredFiles.length && !activeArtifactDispatch) {
+    if (executorDone && dispatch && declaredFiles.length && !activeArtifactDispatch && !activeNonRepoOutput) {
       return {
         ok: false,
         reason: 'submission_required',
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes; released work can only be closed through the control-plane grooming path.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
         ticket: t,
       };
     }

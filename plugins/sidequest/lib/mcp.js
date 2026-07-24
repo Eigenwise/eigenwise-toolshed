@@ -546,6 +546,7 @@ const TOOLS = [
       const ticket = store.getTicket(slug, created.ref) || created;
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
       warnings.push(...store.ticketCategoryWarnings(ticket));
+      warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
       if (category && !categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
       return mutationAck(slug, { ok: true, ticket }, warnings.length ? { warnings } : null);
     }
@@ -619,6 +620,7 @@ const TOOLS = [
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
       const warnings = store.ticketReferenceWarnings(slug, t.title, t.description);
+      warnings.push(...store.ticketPlanningWarnings(t, meta.path));
       if (patch.category && !categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
       return mutationAck(slug, { ok: true, ticket: t }, warnings.length ? { warnings } : null);
     }
@@ -922,6 +924,15 @@ const TOOLS = [
         }
       }
       const scope = store.effectiveScope(slug, ticket.files);
+      const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
+      if (outsideWorktree.length) {
+        return mutationAck(slug, {
+          ok: false,
+          ticket,
+          reason: "outside_scope",
+          message: `commit: refused ${ticket.ref}; declared paths are outside the repo worktree: ${outsideWorktree.join(", ")}. This dispatch cannot commit them. For genuine non-repo output, release and reclassify as non-repo/artifact work; otherwise declare in-repo paths and dispatch again.`
+        });
+      }
       const result = commitScope.commitScoped(root, message, scope);
       if (!result.ok) {
         const message2 = result.reason === "missing_scope" ? `commit: ${ticket.ref} has no declared file scope.` : result.reason === "outside_scope" ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(", ")}. Expand scope with: ${store.scopeExpansionCommand(ticket, result.outside)}` : result.reason === "no_existing_scope" ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.` : `commit: git failed: ${result.message || result.reason}`;

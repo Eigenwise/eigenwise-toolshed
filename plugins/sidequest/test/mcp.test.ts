@@ -450,6 +450,25 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(pulsePayload.dispatch.tokenPrefix, undefined);
 });
 
+test('dispatch warns about external output outside the repo worktree', async () => {
+  const project = store.ensureProject(committedRepo('sq-mcp-dispatch-external-')).slug;
+  const outside = path.join(os.tmpdir(), `sq-mcp-dispatch-audition-${process.pid}.html`);
+  const scope = outside.replace(/\\/g, '/');
+  const target = await callTool('add', {
+    project,
+    title: 'external dispatch output',
+    description: DISPATCH_DESCRIPTION,
+    category: 'general',
+    files: [scope],
+  });
+
+  const dispatched = await callTool('dispatch', { project, ref: target.ref, full: true });
+
+  assert.deepEqual(dispatched.warnings, [
+    `Dispatch warning: declared paths are outside the repo worktree: ${scope}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`,
+  ]);
+});
+
 test('dispatch warns about declared scopes held by in-flight tickets', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-dispatch-overlap-')).slug;
   const inFlight = await callTool('add', {
@@ -882,6 +901,25 @@ test('MCP submit accepts a known submitted commit as an explicit base', async ()
   assert.deepEqual(submission.changedPaths, ['lib/second.js']);
 });
 
+test('MCP commit explains external-output recovery', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const outside = path.join(os.tmpdir(), `sq-mcp-external-output-${process.pid}.html`);
+  const ticket = store.createTicket(project, {
+    title: 'MCP external output', files: [outside], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm external output commit refusal names the recovery path',
+  });
+  const by = 'mcp-external-output-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The external output fixture requires a local direct claim.' })).ok, true);
+
+  const refused = await callTool('commit', { project, ref: ticket.ref, by, message: 'MCP external output', worktree });
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'outside_scope');
+  assert.match(refused.message, /declared paths are outside the repo worktree/i);
+  assert.match(refused.message, /release and reclassify as non-repo\/artifact work/i);
+});
+
 test('MCP commit truncates out-of-scope comments and retains successful commits on comment failures', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
@@ -1266,6 +1304,22 @@ test('add returns a compact acknowledgement', async () => {
   assert.deepStrictEqual(Object.keys(out).sort(), ['ok', 'project', 'ref', 'status']);
   assert.match(out.ref, /^SQ-\d+$/);
   assert.strictEqual(out.status, 'todo');
+});
+
+test('MCP add warns when declared output is outside the repo worktree', async () => {
+  const outside = path.join(os.tmpdir(), `sq-mcp-add-audition-${process.pid}.html`);
+  fs.writeFileSync(outside, '<main>audition</main>\n');
+  const scope = outside.replace(/\\/g, '/');
+  const added = await callTool('add', {
+    title: 'MCP external output warning',
+    files: [scope],
+    complexity: 3,
+    why: 'confirm planning guidance appears before an external-output executor dispatch',
+  });
+
+  assert.deepEqual(added.warnings, [
+    `Planning-depth warning: declared paths are outside the repo worktree: ${scope}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`,
+  ]);
 });
 
 test('MCP add warns when coding.hard already prescribes a fix', async () => {

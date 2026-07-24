@@ -62,7 +62,7 @@ Protocol for each ticket:
    and anything deliberately skipped. Closeout reports should stay under ~2KB; reference paths and commit hashes instead of inlining diffs/logs. Submit validates the full range, atomically releases the claim,
    and parks the work for the orchestrator. After submit, keep the terminal board comment to the commit
    hash, verify evidence, and a reference to the submission instead of repeating its narrative. Do not
-   call done for ordinary repo-changing work.
+   call done for ordinary repo-changing work. If declared output is outside the repo worktree, don't retry commit: a prepared non-repo/read-only dispatch may close with done after verification; otherwise release it for reclassification as non-repo/artifact work.
 6. **Close non-repo and active artifact work** through `mcp__plugin_sidequest_board__done` with `ref`, `by`, actual
    model, and effort. Its completion comment carries the full final report: what changed, verification
    evidence, close confirmation, and anything deliberately skipped. Artifact closeout is valid only when
