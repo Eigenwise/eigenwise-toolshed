@@ -159,7 +159,8 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
     const reason = out.hookSpecificOutput.permissionDecisionReason;
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', subagent_type);
     assert.match(reason, /generic Agent, not a Sidequest ticket executor/);
-    assert.match(reason, /Read, Glob, Grep, or WebFetch inline/);
+    assert.match(reason, /Read, Glob, Grep, or WebFetch inline, not WebSearch/);
+    assert.match(reason, /WebSearch is executor-only: file and dispatch a research ticket/);
     assert.match(reason, /quick investigation, needs a ticket: file a spike/);
     assert.match(reason, /codebase-exploration/);
     assert.match(reason, /route it, dispatch it, then spawn the returned executor/);
@@ -821,7 +822,8 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /independently checkable/, 'must split independently checkable pieces');
   assert.match(ctx, /investigation, spike, or review/, 'a ticket can be investigation, not only a code change');
   assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
-  assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/);
+  assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
+  assert.match(ctx, /WebSearch is executor-only: file and dispatch a research ticket/);
   assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket\/dispatch/);
   assert.match(ctx, /Need other-file reading\? Ticket it/);
   assert.match(ctx, /Ticket \+ dispatch MUST precede multi-file exploration/);
@@ -832,6 +834,7 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /Two failures: comment evidence \+ surface user/);
   assert.match(ctx, /one background timer, never foreground sleep loop/);
   assert.ok(ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'));
+  assert.match(ctx, /tools are absent \(not errors\), ask USER to run `\/reload-plugins`/);
 });
 
 test('session-start: keeps Explore narrow while rejecting generic implementation agents', () => {
@@ -968,7 +971,8 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     assert.match(ctx, /sidequest \(active — context restored\)/);
     assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
     assert.match(ctx, /ROLE: ORCHESTRATOR/);
-    assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline/);
+    assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
+    assert.match(ctx, /WebSearch is executor-only: file and dispatch a research ticket/);
     assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket\/dispatch/);
     assert.match(ctx, /Need other-file reading\? Ticket it/);
     assert.match(ctx, /Ticket \+ dispatch BEFORE multi-file exploration/);
@@ -982,6 +986,7 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     assert.match(ctx, /Two failures: comment evidence \+ surface user/);
     assert.match(ctx, /one background timer, never foreground sleep loop/);
     assert.ok(ctx.includes('list --status doing'), `${source} must retain the CLI fallback`);
+    assert.match(ctx, /mcp__plugin_sidequest_board__\* absent \(not errors\)\? Ask USER to `\/reload-plugins`/);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
     assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `${source} block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
   }

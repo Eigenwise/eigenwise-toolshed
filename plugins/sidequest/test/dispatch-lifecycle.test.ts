@@ -139,6 +139,16 @@ test('read-only category classes dispatch through restricted stable executors', 
   assert.equal(store.releaseTicket(slug, updatedOverride.ref, 'updated-override-test-worker', { source: 'test' }).ok, true);
 });
 
+test('dispatch warnings flag WebSearch only for constrained Claude routes', () => {
+  const warning = /WebSearch is unavailable on this Claude xhigh\/max route.*research-category ticket/;
+  for (const [model, effort] of [['opus', 'xhigh'], ['sonnet', 'max'], ['fable', 'xhigh']]) {
+    assert.match(store.dispatchWarnings({ model, effort }).join('\n'), warning, `${model}/${effort}`);
+  }
+  for (const [model, effort] of [['codex-gpt-5-6-terra', 'xhigh'], ['opus', 'high']]) {
+    assert.doesNotMatch(store.dispatchWarnings({ model, effort }).join('\n'), warning, `${model}/${effort}`);
+  }
+});
+
 test('pulse reports derived activity and dispatch changes without leaking a nonce', () => {
   const ticket = createFixture('complete lifecycle fixture');
   const sessionId = `lifecycle-${Date.now()}`;

@@ -1926,8 +1926,16 @@ function storyContractDriftWarnings(ticket) {
   if (!contractDrift) return [];
   return [`Dispatch warning: ${contractDrift.storyRef || "story"} execution contract changed from revision ${contractDrift.fromRevision} to ${contractDrift.toRevision} while this ticket was claimed; the next briefing uses revision ${contractDrift.toRevision}.`];
 }
+function claudeWebSearchUnavailable(ticket) {
+  const model = normalizeRouteModel(ticket && ticket.model);
+  const effort = coerceEffort(ticket && ticket.effort);
+  return ["opus", "sonnet", "fable"].includes(String(model)) && ["xhigh", "max"].includes(String(effort));
+}
 function dispatchWarnings(ticket, slug) {
   const warnings = [];
+  if (claudeWebSearchUnavailable(ticket)) {
+    warnings.push("Dispatch warning: WebSearch is unavailable on this Claude xhigh/max route. Put web research in a research-category ticket.");
+  }
   if (readOnlyOverrideActive(ticket)) warnings.push("readonly override active: this read-only category routes through the writing executor.");
   const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
   if (worktreeWarning) warnings.push(worktreeWarning);

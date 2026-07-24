@@ -106,7 +106,7 @@ function agentDenyReason(type, classification) {
     }
     return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
   }
-  return `sidequest: ${type || "custom"} is a generic Agent, not a Sidequest ticket executor. For a tiny lookup, use Read, Glob, Grep, or WebFetch inline. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor.`;
+  return `sidequest: ${type || "custom"} is a generic Agent, not a Sidequest ticket executor. For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor.`;
 }
 var REF_RE = /\bSQ-\d+\b/gi;
 function extractRefs(prompt) {
