@@ -1639,7 +1639,7 @@ const TOOLS = [
   },
   {
     name: "board_config",
-    description: "Board name, scope, integration, worktree isolation, and setup.",
+    description: "Board name, scope, integration branch and mode, worktree isolation, and setup.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1647,6 +1647,7 @@ const TOOLS = [
         name: { type: "string", minLength: 1, description: "Display name only. The board slug, path, tickets, claims, and refs stay unchanged." },
         alwaysInScope: { type: "array", items: { type: "string" }, description: "When supplied, replaces the board paths merged into every ticket scope." },
         integrationMode: { type: "string", enum: ["auto", "local", "remote"], description: "auto is local without origin; local does not push." },
+        integrationBranch: { type: "string", minLength: 1, description: "Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>." },
         worktreeIsolation: { type: "boolean", description: "When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true." },
         worktreeSetup: { type: ["string", "null"], maxLength: 1e3, pattern: "^[^\\r\\n]*$", description: "One-line isolated-worktree setup; null clears it." }
       }
@@ -1657,6 +1658,7 @@ const TOOLS = [
       if (args.name !== void 0) patch.name = args.name;
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
+      if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;
       if (args.worktreeIsolation !== void 0) patch.worktreeIsolation = args.worktreeIsolation;
       if (args.worktreeSetup !== void 0) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
@@ -1758,7 +1760,7 @@ function toolMutates(name, args) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === "new_board_profile") return args.profile !== void 0;
   if (name === "global_fallback") return args.model !== void 0 || args.effort !== void 0;
-  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.integrationMode != null || args.worktreeIsolation !== void 0 || args.worktreeSetup !== void 0;
+  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.worktreeSetup !== void 0;
   return false;
 }
 function mutationQueueKey(name, args) {

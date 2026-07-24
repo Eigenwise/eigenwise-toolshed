@@ -306,9 +306,10 @@ function isAncestor(cwd, ancestor, descendant) {
 function submissionRange(cwd, options) {
   const opts = isRecord(options) ? options : {};
   const gitRef = String(opts.gitRef || "").trim();
-  const upstream = String(opts.upstream || "origin/main").trim();
+  const upstream = String(opts.upstream || "").trim();
   const tipName = String(opts.commit || "").trim();
   if (!gitRef) return { ok: false, reason: "missing_git_ref" };
+  if (!upstream) return { ok: false, reason: "missing_upstream" };
   const tip = resolvedCommit(cwd, tipName);
   if (!tip.ok) return { ok: false, reason: "missing_commit", message: tip.message };
   const refTip = resolvedCommit(cwd, gitRef);

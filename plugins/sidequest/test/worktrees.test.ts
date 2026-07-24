@@ -250,3 +250,19 @@ test('sweep resolves completed dispatches from another board in the same Sideque
   assert.equal(entryFor(swept, worktree).reason, 'ticket_done');
   assert.ok(!fs.existsSync(worktree));
 });
+
+test('worktree sweep uses the configured feature integration branch for patch equivalence', () => {
+  const worktree = agentWorktree('feature-target');
+  const commit = makeCommit(worktree, 'feature-target.txt');
+
+  git(['checkout', '-f', '-B', 'feat/worktree-target', 'origin/main']);
+  git(['cherry-pick', commit]);
+  git(['push', '-f', '-u', 'origin', 'feat/worktree-target']);
+  store.setBoardConfig(slug, { integrationMode: 'remote', integrationBranch: 'feat/worktree-target' });
+
+  const swept = cliJson(['worktrees', 'sweep', '--dry-run', '--json']);
+  const entry = entryFor(swept, worktree);
+  assert.equal(entry.patchEquivalent, true);
+  assert.equal(entry.action, 'remove');
+  assert.ok(['branch_reachable', 'patch_equivalent'].includes(entry.reason));
+});

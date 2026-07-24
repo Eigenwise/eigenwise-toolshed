@@ -548,6 +548,46 @@ test('CLI: board config renames only the display name', () => {
   assert.match(rejected.stderr, /Board name cannot be empty/);
 });
 
+test('CLI: a configured feature integration branch accepts its base and main refuses it', () => {
+  cleanBranch();
+  assert.equal(store.boardConfig(slug).integrationBranch, 'main');
+
+  git(['checkout', '-f', '-B', 'feat/submission-target', 'origin/main']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'feature-base.txt'), 'feature baseline\n');
+  git(['add', 'feature-base.txt']);
+  git(['commit', '-m', 'feature integration baseline']);
+  const featureBase = git(['rev-parse', 'HEAD']);
+  git(['push', '-f', '-u', 'origin', 'feat/submission-target']);
+  store.setBoardConfig(slug, { integrationMode: 'remote', integrationBranch: 'feat/submission-target' });
+  assert.deepStrictEqual(store.integrationTarget(slug), {
+    mode: 'remote', upstream: 'origin/feat/submission-target', branch: 'feat/submission-target',
+  });
+
+  const accepted = addTicket('feature integration branch submission', { files: ['lib/feature-target.js'] });
+  assert.equal(runCli(['claim', accepted.ref, '--by', 'feature-target-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'feature-target.js'), 'feature target\n');
+  git(['add', 'lib/feature-target.js']);
+  git(['commit', '-m', 'feature target submission']);
+  const tip = git(['rev-parse', 'HEAD']);
+  pin(accepted, tip);
+  assert.equal(runCli(['submit', accepted.ref, '--by', 'feature-target-worker', '--commit', tip, '--base', featureBase]).status, 0);
+
+  const refused = addTicket('main rejects feature integration base', { files: ['lib/feature-target.js'] });
+  assert.equal(runCli(['claim', refused.ref, '--by', 'main-target-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  pin(refused, tip);
+  store.setBoardConfig(slug, { integrationBranch: 'main' });
+  const rejected = runCli(['submit', refused.ref, '--by', 'main-target-worker', '--commit', tip, '--base', featureBase]);
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr + rejected.stdout, /unrecognized_base/);
+  assert.ok(store.getTicket(slug, refused.ref).claim, 'rejected submission keeps the claim');
+  assert.equal(runCli(['release', refused.ref, '--by', 'main-target-worker']).status, 0);
+
+  store.setBoardConfig(slug, { integrationBranch: 'missing-integration-branch' });
+  assert.throws(() => store.integrationTarget(slug), /Configured integration branch "missing-integration-branch" does not exist on origin/);
+  store.setBoardConfig(slug, { integrationBranch: 'main' });
+});
+
 test('CLI: a remote-less board auto-selects local integration and records a main baseline', () => {
   git(['checkout', '-f', 'main']);
   git(['clean', '-fd']);

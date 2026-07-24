@@ -339,6 +339,15 @@ test('board_config reads and replaces always-in-scope paths', async () => {
   assert.deepEqual((await callTool('board_config', { project })).alwaysInScope, ['docs', 'notes']);
 });
 
+test('board_config defaults and stores the integration branch', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-integration-branch'), 'SQ integration branch').slug;
+  assert.equal((await callTool('board_config', { project })).integrationBranch, 'main');
+  assert.equal((await callTool('board_config', { project, integrationBranch: 'feat/release' })).integrationBranch, 'feat/release');
+  const rejected = await callToolRaw('board_config', { project, integrationBranch: 'feat//release' });
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.content[0].text, /integrationBranch must be a valid Git branch name/);
+});
+
 test('board_config renames only a board display name', async () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-board-rename-'));
   const project = store.ensureProject(projectPath, 'Original board').slug;

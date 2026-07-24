@@ -59,7 +59,9 @@ function localBranchName(ref) {
 }
 function integrationUpstream(options) {
   const target = options.integrationTarget || {};
-  return String(target.upstream || options.upstream || "main");
+  const upstream = String(target.upstream || options.upstream || "").trim();
+  if (!upstream) throw new Error("worktree sweep requires the board integration target.");
+  return upstream;
 }
 function finalTicket(ticket) {
   return Boolean(ticket && (ticket.archived || ticket.status === "done"));

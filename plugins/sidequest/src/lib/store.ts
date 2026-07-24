@@ -1586,6 +1586,15 @@ function normalizeIntegrationMode(mode?: any) {
   return value;
 }
 
+function normalizeIntegrationBranch(value?: any) {
+  const branch = String(value == null ? 'main' : value).trim();
+  if (!branch || branch === '@' || branch.startsWith('/') || branch.endsWith('/') || branch.endsWith('.')
+    || branch.includes('//') || branch.includes('/.') || branch.endsWith('.lock') || branch.includes('..') || branch.includes('@{') || /[\s~^:?*\[\\]/.test(branch)) {
+    throw new Error('integrationBranch must be a valid Git branch name.');
+  }
+  return branch;
+}
+
 function normalizeWorktreeIsolation(value?: any) {
   if (value == null) return true;
   if (typeof value !== 'boolean') throw new Error('worktreeIsolation must be a boolean.');
@@ -1611,12 +1620,32 @@ function hasOriginRemote(absPath?: any) {
   }
 }
 
+function integrationBranchExists(absPath: any, ref: string) {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+      cwd: absPath,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: 'pipe',
+    });
+    return true;
+  } catch (_: any) {
+    return false;
+  }
+}
+
 function integrationTarget(slug?: any) {
   const meta = readMeta(slug);
   if (!meta) return null;
   const configured = normalizeIntegrationMode(meta.integrationMode);
   const mode = configured === 'auto' ? (hasOriginRemote(meta.path) ? 'remote' : 'local') : configured;
-  return { mode, upstream: mode === 'local' ? 'main' : 'origin/main', branch: 'main' };
+  const branch = normalizeIntegrationBranch(meta.integrationBranch);
+  const upstream = mode === 'local' ? branch : `origin/${branch}`;
+  const ref = mode === 'local' ? `refs/heads/${branch}` : `refs/remotes/origin/${branch}`;
+  if (!integrationBranchExists(meta.path, ref)) {
+    throw new Error(`Configured integration branch "${branch}" does not exist ${mode === 'local' ? 'locally' : 'on origin'}. Create or fetch it, or set integrationBranch with board-config --integration-branch <branch>.`);
+  }
+  return { mode, upstream, branch };
 }
 
 function normalizeBoardName(value?: any) {
@@ -1636,6 +1665,7 @@ function boardConfig(slug?: any) {
     name: meta.name,
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
+    integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
     profile: {
@@ -1667,6 +1697,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'integrationMode')) {
       meta.integrationMode = normalizeIntegrationMode(patch.integrationMode);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'integrationBranch')) {
+      meta.integrationBranch = normalizeIntegrationBranch(patch.integrationBranch);
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeIsolation')) {
       meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
@@ -4107,7 +4140,7 @@ function closeTicketForGrooming(slug?: any, idOrRef?: any, opts?: any) {
  *  lifecycle of its own, distinct from done. The orchestrator's publish
  *  transaction (see skills/sidequest/references/publishing.md) integrates the
  *  submitted commits under the repo publish lock (lib/publish.js), assigns
- *  versions centrally, reverifies, pushes main, and only then completes the
+ *  versions centrally, reverifies, pushes the configured integration branch, and only then completes the
  *  ticket — which stamps the submission integrated.
  * ------------------------------------------------------------------ */
 

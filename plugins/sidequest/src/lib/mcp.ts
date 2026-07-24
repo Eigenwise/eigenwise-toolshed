@@ -1758,7 +1758,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'board_config',
-    description: 'Board name, scope, integration, worktree isolation, and setup.',
+    description: 'Board name, scope, integration branch and mode, worktree isolation, and setup.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1766,6 +1766,7 @@ const TOOLS: ToolDefinition[] = [
         name: { type: 'string', minLength: 1, description: 'Display name only. The board slug, path, tickets, claims, and refs stay unchanged.' },
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
         integrationMode: { type: 'string', enum: ['auto', 'local', 'remote'], description: 'auto is local without origin; local does not push.' },
+        integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },
         worktreeIsolation: { type: 'boolean', description: 'When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true.' },
         worktreeSetup: { type: ['string', 'null'], maxLength: 1000, pattern: '^[^\\r\\n]*$', description: 'One-line isolated-worktree setup; null clears it.' },
       },
@@ -1776,6 +1777,7 @@ const TOOLS: ToolDefinition[] = [
       if (args.name !== undefined) patch.name = args.name;
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
+      if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
       if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length
@@ -1858,7 +1860,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.integrationMode != null || args.worktreeIsolation !== undefined || args.worktreeSetup !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeSetup !== undefined;
   return false;
 }
 

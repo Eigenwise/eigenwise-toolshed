@@ -1151,7 +1151,7 @@ async function cmdSubmit(opts, positional) {
   if (res.ok) {
     const s = res.ticket.submission;
     console.log(`✓ ${res.ticket.ref} READY_FOR_INTEGRATION (${s.commit.slice(0, 12)} @ ${s.gitRef})  — ${meta.name}`);
-    console.log(s.integrationMode === "local" ? "  claim released; the orchestrator integrates and reverifies against local main, then marks done without pushing." : "  claim released; the orchestrator publish transaction integrates, reverifies, pushes, and marks done.");
+    console.log(s.integrationMode === "local" ? `  claim released; the orchestrator integrates and reverifies against local ${s.upstream}, then marks done without pushing.` : `  claim released; the orchestrator publish transaction integrates, reverifies, pushes ${s.upstream}, and marks done.`);
     if (res.advisory) console.log(`  advisory: ${res.advisory}`);
   } else {
     reportClaimFailure("submit", idOrRef, res, meta);
@@ -1700,6 +1700,7 @@ async function cmdBoardConfig(opts) {
   if (opts.name != null) patch.name = opts.name;
   if (opts["always-in-scope"] != null) patch.alwaysInScope = opts["always-in-scope"];
   if (opts["integration-mode"] != null) patch.integrationMode = opts["integration-mode"];
+  if (opts["integration-branch"] != null) patch.integrationBranch = opts["integration-branch"];
   if (opts["worktree-isolation"] !== void 0) patch.worktreeIsolation = opts["worktree-isolation"];
   if (opts["worktree-setup"] != null) patch.worktreeSetup = opts["worktree-setup"];
   const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
@@ -1712,6 +1713,7 @@ async function cmdBoardConfig(opts) {
   console.log(`board name: ${payload.name}`);
   console.log(`always in scope: ${payload.alwaysInScope.length ? payload.alwaysInScope.join(", ") : "(none)"}`);
   console.log(`integration mode: ${payload.integrationMode}`);
+  console.log(`integration branch: ${payload.integrationBranch}`);
   console.log(`worktree isolation: ${payload.worktreeIsolation ? "enabled" : "disabled"}`);
   console.log(`worktree setup: ${payload.worktreeSetup || "(none)"}`);
 }
@@ -2164,7 +2166,7 @@ const HELP_COMMANDS = {
   "native-agent": 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]',
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--project <path-or-slug>] --json",
-  "board-config": 'sidequest board-config [--always-in-scope path]... [--integration-mode <mode>] [--worktree-isolation|--no-worktree-isolation] [--worktree-setup "command"] [--json]',
+  "board-config": 'sidequest board-config [--always-in-scope path]... [--integration-mode <mode>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--worktree-setup "command"] [--json]',
   projects: "sidequest projects [--archived] [--json]",
   routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
   "archive-board": "sidequest archive-board <board-ref> [--json]",
@@ -2338,7 +2340,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--integration-mode <auto|local|remote>] [--worktree-isolation|--no-worktree-isolation] [--worktree-setup <command>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--worktree-setup <command>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then

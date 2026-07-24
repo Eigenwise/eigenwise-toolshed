@@ -91,11 +91,14 @@ Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when yo
 
 ```text
 sidequest board-config --integration-mode auto|local|remote
+sidequest board-config --integration-branch feat/client-work
 sidequest board-config --no-worktree-isolation
 sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
 ```
 
-`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against local `main` without a push. `local` forces that same no-push path. `remote` uses the repository's `origin/main` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"`, `worktreeIsolation: boolean`, and `worktreeSetup: "<one-line command>" | null`.
+`integrationBranch` defaults to `main`. Set it to the branch your board actually integrates, such as `feat/client-work`; submissions and worktree cleanup then use that branch as their baseline. In local mode it must exist locally. In remote mode `origin/<branch>` must exist locally, so fetch it first. Sidequest refuses a missing configured branch and tells you to create, fetch, or reconfigure it rather than silently falling back to `main`.
+
+`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against the configured local branch without a push. `local` forces that same no-push path. `remote` uses the repository's configured `origin/<branch>` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"`, `integrationBranch: "branch-name"`, `worktreeIsolation: boolean`, and `worktreeSetup: "<one-line command>" | null`.
 
 Worktree isolation defaults to enabled. Set `--no-worktree-isolation` (or `worktreeIsolation: false` through MCP) to force every dispatched executor onto the shared checkout, including calls that explicitly request `sharedTree: false`.
 
