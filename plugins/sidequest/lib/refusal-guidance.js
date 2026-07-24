@@ -19,7 +19,6 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var refusal_guidance_exports = {};
 __export(refusal_guidance_exports, {
   CLAIM_REFUSAL_MESSAGES: () => CLAIM_REFUSAL_MESSAGES,
-  autoReleasedClaimMessage: () => autoReleasedClaimMessage,
   claimRefusalMessage: () => claimRefusalMessage,
   routingDisabledMessage: () => routingDisabledMessage
 });
@@ -53,15 +52,8 @@ const CLAIM_REFUSAL_MESSAGES = Object.freeze({
   direct_reason_required: (ref) => `${ref} has a user-granted \`direct-ok\` label but still needs a direct rationale. Add \`--reason "why no executor can do this"\` (at least 20 characters) to \`sidequest claim ${ref} --direct\`, or pass MCP \`reason\`.`,
   direct_conflict: (ref) => `${ref} already has a prepared dispatch. Run \`sidequest dispatch ${ref}\` and spawn its returned executor with the current token.`,
   not_claimed: (ref) => `${ref} is not claimed by anyone. Run \`sidequest claim ${ref}\` before submitting.`,
-  claim_released: (ref, claim) => autoReleasedClaimMessage(ref, claim.claimRelease),
-  claim_live: (ref, claim) => `${ref} is still live-claimed by "${claim.by}" — the sweep re-checked it under the lock and left it alone. Run \`sidequest pulse ${ref}\` before doing anything to it.`,
   no_submission: (ref) => `${ref} has no submission to clear. Run \`sidequest submissions\` to inspect work awaiting integration.`
 });
-function autoReleasedClaimMessage(ref, release = {}) {
-  const when = release.at ? ` at ${release.at}` : "";
-  const why = release.reason || release.kind || "the claim sweep released it";
-  return `${ref}'s claim was auto-released${when}: ${why}. Its dispatch token went with it, so this closeout cannot be recorded. Your commits are safe — do NOT discard, reset, or redo the work. Recovery: have the orchestrator run \`sidequest dispatch ${ref}\`, claim with that fresh token and executor, then hand in the SAME commit.`;
-}
 function claimRefusalMessage(reason, ref, claim = {}, projectPath) {
   const message = CLAIM_REFUSAL_MESSAGES[reason];
   return message ? message(ref, claim, projectPath) : `${ref} could not be claimed because ${reason}. Run \`sidequest pulse ${ref}\` and follow its current status.`;
@@ -72,7 +64,6 @@ function routingDisabledMessage(ref) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CLAIM_REFUSAL_MESSAGES,
-  autoReleasedClaimMessage,
   claimRefusalMessage,
   routingDisabledMessage
 });

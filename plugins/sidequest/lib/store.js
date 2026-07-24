@@ -11,7 +11,7 @@ const commitScope = require("./commit-scope.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { discoverExternalModels } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
-const { autoReleasedClaimMessage, routingDisabledMessage } = require("./refusal-guidance.js");
+const { routingDisabledMessage } = require("./refusal-guidance.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
@@ -2592,6 +2592,11 @@ function claimReleaseVerdict(ticket, now) {
 function claimReclaimable(ticket, now) {
   return Boolean(claimReleaseVerdict(ticket, now));
 }
+function autoReleasedClaimMessage(ref, release) {
+  const when = release && release.at ? ` at ${release.at}` : "";
+  const why = release && (release.reason || release.kind) || "the claim sweep released it";
+  return `${ref}'s claim was auto-released${when}: ${why}. Its dispatch token went with it, so this closeout cannot be recorded. Your commits are safe — do NOT discard, reset, or redo the work. Recovery: have the orchestrator run \`sidequest dispatch ${ref}\`, claim with that fresh token and executor, then hand in the SAME commit.`;
+}
 function claimIdleLabel(idleMs) {
   return Number.isFinite(idleMs) ? `${Math.round(Number(idleMs) / 6e4)}m` : "an unknown time";
 }
@@ -3491,7 +3496,13 @@ function releaseTicket(slug, idOrRef, by, opts) {
       return { ok: false, reason: "not_owner", ticket: t, claim: held };
     }
     if (opts.requireReleaseVerdict && !claimReleaseVerdict(t)) {
-      return { ok: false, reason: "claim_live", ticket: t, claim: held };
+      return {
+        ok: false,
+        reason: "claim_live",
+        message: `${t.ref} is still live-claimed by "${held && held.by}"; the sweep re-checked it under the lock and left it alone.`,
+        ticket: t,
+        claim: held
+      };
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const previousStatus = t.status;
@@ -5106,6 +5117,7 @@ module.exports = {
   archiveAllDone,
   listArchived,
   listActive,
+  autoReleasedClaimMessage,
   claimReclaimable,
   claimReleaseVerdict,
   claimActivityMs,

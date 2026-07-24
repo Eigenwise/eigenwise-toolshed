@@ -10,7 +10,7 @@ const agentsync = require("../lib/agentsync");
 const work = require("../lib/work");
 const commitScope = require("../lib/commit-scope");
 const worktrees = require("../lib/worktrees");
-const { autoReleasedClaimMessage, claimRefusalMessage } = require("../lib/refusal-guidance");
+const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "produces", "changes", "consumes"]);
 const ALIASES = {
   t: "title",
@@ -1013,7 +1013,7 @@ async function cmdCommit(opts, positional) {
   const by = workerId(opts);
   if (!ticket) fail(`commit: no ticket "${idOrRef}" in ${meta.name}.`);
   if (!ticket.claim || ticket.claim.by !== by) {
-    const released = !ticket.claim && ticket.claimRelease ? ` ${autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}` : "";
+    const released = !ticket.claim && ticket.claimRelease ? ` ${store.autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}` : "";
     fail(`commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}`);
   }
   if (ticket.dispatch && ticket.dispatch.sharedTree === false) {

@@ -6,7 +6,7 @@ const work = require("./work");
 const worktrees = require("./worktrees");
 const agentsync = require("./agentsync");
 const commitScope = require("./commit-scope");
-const { autoReleasedClaimMessage, claimRefusalMessage } = require("./refusal-guidance");
+const { claimRefusalMessage } = require("./refusal-guidance");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const CATEGORY_TAXONOMY_WARNING = "Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.";
@@ -990,7 +990,7 @@ const TOOLS = [
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`commit: no ticket "${args.ref}" in ${meta.name}.`);
       if (!ticket.claim || ticket.claim.by !== by) {
-        const released = !ticket.claim && ticket.claimRelease ? ` ${autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}` : "";
+        const released = !ticket.claim && ticket.claimRelease ? ` ${store.autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}` : "";
         return mutationAck(slug, { ok: false, ticket, reason: "not_owner", message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}` });
       }
       const root = worktreeRoot(args.worktree, "commit");

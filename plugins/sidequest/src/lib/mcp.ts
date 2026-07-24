@@ -29,7 +29,7 @@ const work = require('./work');
 const worktrees = require('./worktrees');
 const agentsync = require('./agentsync');
 const commitScope = require('./commit-scope');
-const { autoReleasedClaimMessage, claimRefusalMessage } = require('./refusal-guidance');
+const { claimRefusalMessage } = require('./refusal-guidance');
 
 type ToolDefinition = {
   name: string;
@@ -1107,7 +1107,7 @@ const TOOLS: ToolDefinition[] = [
       if (!ticket) throw new Error(`commit: no ticket "${args.ref}" in ${meta.name}.`);
       if (!ticket.claim || ticket.claim.by !== by) {
         const released = !ticket.claim && ticket.claimRelease
-          ? ` ${autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}`
+          ? ` ${store.autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}`
           : '';
         return mutationAck(slug, { ok: false, ticket, reason: 'not_owner', message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}` });
       }

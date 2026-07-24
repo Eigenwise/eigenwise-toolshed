@@ -38,7 +38,7 @@ const commitScope = require('./commit-scope.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
-const { autoReleasedClaimMessage, routingDisabledMessage } = require('./refusal-guidance.js');
+const { routingDisabledMessage } = require('./refusal-guidance.js');
 
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
@@ -3105,6 +3105,14 @@ function claimReclaimable(ticket?: any, now?: any) {
   return Boolean(claimReleaseVerdict(ticket, now));
 }
 
+// A claim taken away by the sweep must never leave its holder guessing. Name the
+// release, protect the work already on disk, and spell out the way back in.
+function autoReleasedClaimMessage(ref?: any, release?: any) {
+  const when = release && release.at ? ` at ${release.at}` : '';
+  const why = (release && (release.reason || release.kind)) || 'the claim sweep released it';
+  return `${ref}'s claim was auto-released${when}: ${why}. Its dispatch token went with it, so this closeout cannot be recorded. Your commits are safe — do NOT discard, reset, or redo the work. Recovery: have the orchestrator run \`sidequest dispatch ${ref}\`, claim with that fresh token and executor, then hand in the SAME commit.`;
+}
+
 function claimIdleLabel(idleMs?: any) {
   return Number.isFinite(idleMs) ? `${Math.round(Number(idleMs) / 60000)}m` : 'an unknown time';
 }
@@ -4118,7 +4126,13 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // The sweep decides on an unlocked snapshot; re-check under the lock so a
     // claim that came back to life in between is never released out from under it.
     if (opts.requireReleaseVerdict && !claimReleaseVerdict(t)) {
-      return { ok: false, reason: 'claim_live', ticket: t, claim: held };
+      return {
+        ok: false,
+        reason: 'claim_live',
+        message: `${t.ref} is still live-claimed by "${held && held.by}"; the sweep re-checked it under the lock and left it alone.`,
+        ticket: t,
+        claim: held,
+      };
     }
     const now = new Date().toISOString();
     const previousStatus = t.status;
@@ -6187,6 +6201,7 @@ module.exports = {
   archiveAllDone,
   listArchived,
   listActive,
+  autoReleasedClaimMessage,
   claimReclaimable,
   claimReleaseVerdict,
   claimActivityMs,
