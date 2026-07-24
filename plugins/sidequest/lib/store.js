@@ -1825,6 +1825,12 @@ function countTickets(slug, opts = {}) {
 function listTickets(slug) {
   return queryTickets(String(slug || ""));
 }
+function worktreeGcTickets() {
+  return db.selectRows(database(), "SELECT project, data FROM tickets").map((row) => {
+    const ticket = parseTicketData(row.project, row.data);
+    return ticket ? Object.assign({}, ticket, { project: row.project }) : null;
+  }).filter(Boolean);
+}
 function listAllProjectTickets(archivedOnly = false) {
   const cache = residentCache();
   const cacheKey = `all-project-tickets:${archivedOnly ? "archived" : "active"}`;
@@ -4864,6 +4870,7 @@ module.exports = {
   saveAssetData,
   assetPath,
   listTickets,
+  worktreeGcTickets,
   listAllProjectTickets,
   getTicket,
   createTicket,

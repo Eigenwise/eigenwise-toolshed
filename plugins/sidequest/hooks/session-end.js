@@ -74,7 +74,7 @@ function main() {
     const target = store.integrationTarget(project.slug);
     if (!target) return;
     const worktrees = require(runtimeModule("worktrees"));
-    void worktrees.sweep(project.meta.path, store.listTickets(project.slug), {
+    void worktrees.sweep(project.meta.path, store.worktreeGcTickets(), {
       execute: true,
       currentPath: store.nearestRepoRoot(start),
       integrationTarget: target

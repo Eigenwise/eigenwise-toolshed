@@ -15,7 +15,7 @@ function main(): void {
       nearestRepoRoot: (start: string) => string;
       findProject: (ref: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
       integrationTarget: (slug: string) => { upstream: string; branch: string } | null;
-      listTickets: (slug: string) => any[];
+      worktreeGcTickets: () => any[];
     };
     store.reconcileSession(sessionId, { reason, source: 'session-end' });
     const agentsync = require(runtimeModule('agentsync')) as {
@@ -31,7 +31,7 @@ function main(): void {
     const worktrees = require(runtimeModule('worktrees')) as {
       sweep: (repo: string, tickets: any[], options: { execute: boolean; currentPath: string; integrationTarget: { upstream: string; branch: string } }) => Promise<unknown>;
     };
-    void worktrees.sweep(project.meta.path, store.listTickets(project.slug), {
+    void worktrees.sweep(project.meta.path, store.worktreeGcTickets(), {
       execute: true,
       currentPath: store.nearestRepoRoot(start),
       integrationTarget: target,

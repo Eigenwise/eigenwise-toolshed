@@ -2182,6 +2182,15 @@ function listTickets(slug?: any) {
   return queryTickets(String(slug || ''));
 }
 
+function worktreeGcTickets(): any[] {
+  return db.selectRows(database(), 'SELECT project, data FROM tickets')
+    .map((row?: any) => {
+      const ticket = parseTicketData(row.project, row.data);
+      return ticket ? Object.assign({}, ticket, { project: row.project }) : null;
+    })
+    .filter(Boolean);
+}
+
 function listAllProjectTickets(archivedOnly: boolean = false): any[] {
   const cache = residentCache();
   const cacheKey = `all-project-tickets:${archivedOnly ? 'archived' : 'active'}`;
@@ -5879,6 +5888,7 @@ module.exports = {
   saveAssetData,
   assetPath,
   listTickets,
+  worktreeGcTickets,
   listAllProjectTickets,
   getTicket,
   createTicket,
