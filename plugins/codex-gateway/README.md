@@ -216,17 +216,18 @@ note for the routing side.
   including the top-level `model` setting, and use it only for genuine Claude models. Claude models
   (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows and compaction
   limits; the shim forwards them byte-identically to Anthropic and never applies Codex window
-  advertisement or error rewriting to them. The env block pins the real 1M aliases
-  (`ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-5[1m]`,
-  `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5[1m]`,
-  `ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5[1m]`) so a gateway session on any of them gets its
-  true 1M window instead of Claude Code's 200k gateway default; haiku stays unpinned (it's 200k).
-  To choose an older or custom native model, run `pin --opus claude-opus-4-8[1m]` (or `--sonnet` /
-  `--fable`); `pin --opus default` clears that alias back to the shipped pin. `pin` prints the
-  effective values and marks overrides, and `doctor` does the same. Overrides persist in
-  `~/.claude/codex-gateway/pins.json`, outside the plugin cache. Run `env --write-project` (or
-  `env --write-user`) after changing one, then start a new Claude Code session. Until both happen,
-  the existing wiring and open sessions keep their previous pin.
+  advertisement or error rewriting to them. The env block pins the current real 1M aliases so a
+  gateway session on any of them gets its true 1M window instead of Claude Code's 200k gateway
+  default; haiku stays unpinned (it's 200k). Each `env --write-*` resolves Opus, Sonnet, and Fable
+  through the installed Claude CLI's credential-free headless alias probe, then adds `[1m]`. The
+  result is cached for SessionStart refreshes and falls back to the last good value, then a shipped
+  safe value, if the local CLI cannot answer. To choose an older or custom native model, run
+  `pin --opus claude-opus-4-8[1m]` (or `--sonnet` / `--fable`); an override always wins over
+  auto-detection. `pin --opus default` clears that alias back to the detected default. `pin` prints
+  the effective values and marks overrides, and `doctor` does the same. Overrides persist in
+  `~/.claude/codex-gateway/pins.json`, outside the plugin cache. After a pin change or a Claude CLI
+  upgrade, run `env --write-project` (or `env --write-user`) and start a new Claude Code session.
+  Until both happen, the existing wiring and open sessions keep their previous pin.
   Do NOT set a global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to Claude passthrough models too.
   Version 0.4.4 rewrites stale pre-0.4.2 `[1m]` Codex rows in Claude Code's gateway-model cache in
   place and serves the built-in rows immediately during shim startup, so restart Claude Code once

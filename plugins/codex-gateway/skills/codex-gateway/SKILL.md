@@ -63,14 +63,18 @@ back, or you kill the session that was about to use it.
   restart Claude Code after upgrading from 0.4.1.
 - Claude models (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows
   and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
-  applies Codex window advertisement or error rewriting to them. The env block pins the real 1M
-  aliases (Opus, Sonnet, Fable) to their `[1m]` ids so a gateway session on one gets its full 1M
-  window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). Set a persistent
-  per-alias override with `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or
-  use `pin --opus default` to return to the shipped pin. `pin` with no arguments shows each effective
+  applies Codex window advertisement or error rewriting to them. The env block pins the current
+  real 1M aliases (Opus, Sonnet, Fable) to `[1m]` ids so a gateway session on one gets its full 1M
+  window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). An `env --write-*`
+  command resolves those aliases through the installed Claude CLI's credential-free headless probe;
+  SessionStart refreshes its cache after the CLI changes or the cache ages out. A failed probe keeps
+  the last good pin, then a shipped safe default. Set a persistent per-alias override with
+  `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
+  to return to auto-detection. Overrides always win. `pin` with no arguments shows each effective
   pin and whether it is overridden. Overrides live in `~/.claude/codex-gateway/pins.json`, outside
-  the plugin cache. After a change, run `env --write-project` (or `env --write-user`) and start a
-  new Claude Code session; changing the saved override alone cannot alter an open session.
+  the plugin cache. After a pin change or Claude CLI upgrade, run `env --write-project` (or
+  `env --write-user`) and start a new Claude Code session; changing a saved value alone cannot alter
+  an open session.
 - Do NOT set a
   global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex
   `/compact` fail after history already exceeds the Codex limit.

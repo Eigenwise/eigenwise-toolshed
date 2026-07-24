@@ -99,9 +99,6 @@ const STATIC_ENV_BLOCK = {
   // window instead of the 200k gateway default. Haiku is 200k, leave it
   // unpinned. Codex models must stay unsuffixed: [1m] is a local Claude Code
   // override that delays compaction until far beyond Codex's 272k limit.
-  ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
-  ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
-  ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5[1m]',
   // Lift the per-response output cap above Claude Code's 32k gateway default so
   // long Codex turns and the auto-compaction summary don't trip "response
   // exceeded the 32000 output token maximum". No per-model output override
@@ -114,11 +111,169 @@ const PIN_ALIASES = {
   sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
   fable: 'ANTHROPIC_DEFAULT_FABLE_MODEL',
 };
+const KNOWN_GOOD_PINS = {
+  opus: 'claude-opus-5[1m]',
+  sonnet: 'claude-sonnet-5[1m]',
+  fable: 'claude-fable-5[1m]',
+};
 const PIN_OVERRIDE_PATH = path.join(STATE, 'pins.json');
+const PIN_CACHE_PATH = path.join(STATE, 'detected-pins.json');
+const PIN_CACHE_TTL_MS = Number(process.env.CODEX_GATEWAY_PIN_CACHE_TTL_MS) || 24 * 60 * 60 * 1000;
+const PIN_PROBE_TIMEOUT_MS = Number(process.env.CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS) || 5000;
+const CLAUDE_BIN = process.env.CODEX_GATEWAY_CLAUDE_BIN || 'claude';
+const CLAUDE_BIN_IS_BATCH = WIN && /\.(?:cmd|bat)$/i.test(CLAUDE_BIN);
 
 function isValidPin(value) {
   return typeof value === 'string' && value.trim() === value && value.length > 0
     && !/[\s\x00-\x1F\x7F"'`$\\;&|<>(){}]/.test(value);
+}
+
+function normalizedDetectedPin(alias, value) {
+  const concrete = typeof value === 'string' ? value.replace(/\[1m\]/gi, '').trim() : '';
+  if (!/^claude-[a-z0-9][a-z0-9._-]*$/i.test(concrete)) return null;
+  if (!new RegExp(`(?:^|-)${alias}(?:-|$)`, 'i').test(concrete)) return null;
+  return `${concrete}[1m]`;
+}
+
+function readDetectedPinCache() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(PIN_CACHE_PATH, 'utf8'));
+    if (!saved || Array.isArray(saved) || typeof saved !== 'object') return null;
+    const pins = Object.fromEntries(Object.keys(PIN_ALIASES)
+      .map((alias) => [alias, normalizedDetectedPin(alias, saved.pins?.[alias])])
+      .filter(([, pin]) => pin));
+    return { cliVersion: typeof saved.cliVersion === 'string' ? saved.cliVersion : null, updatedAt: Number(saved.updatedAt) || 0, pins };
+  } catch { return null; }
+}
+
+function detectedPinDefaults() {
+  return { ...KNOWN_GOOD_PINS, ...(readDetectedPinCache()?.pins || {}) };
+}
+
+function writeDetectedPinCache(cache) {
+  fs.mkdirSync(STATE, { recursive: true });
+  const temporary = `${PIN_CACHE_PATH}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(cache, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(temporary, PIN_CACHE_PATH);
+}
+
+function terminateProbe(child) {
+  if (!child?.pid || child.exitCode != null) return;
+  child.kill('SIGTERM');
+  setTimeout(() => {
+    if (child.exitCode != null) return;
+    if (WIN) spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true });
+    else {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+    }
+  }, 250).unref();
+}
+
+function startPinProbeServer() {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((request, response) => {
+      response.writeHead(request.method === 'HEAD' ? 204 : 404);
+      response.end();
+    });
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function claudeVersion() {
+  return new Promise((resolve) => {
+    const child = spawn(CLAUDE_BIN, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN, shell: CLAUDE_BIN_IS_BATCH });
+    let output = '';
+    const timeout = setTimeout(() => { terminateProbe(child); resolve(null); }, PIN_PROBE_TIMEOUT_MS);
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    child.once('error', () => { clearTimeout(timeout); resolve(null); });
+    child.once('close', (code) => {
+      clearTimeout(timeout);
+      resolve(code === 0 && output.trim() ? output.trim() : null);
+    });
+  });
+}
+
+function probeClaudeAlias(alias, endpoint) {
+  return new Promise((resolve) => {
+    const {
+      ANTHROPIC_API_KEY,
+      ANTHROPIC_AUTH_TOKEN,
+      ANTHROPIC_BASE_URL,
+      ANTHROPIC_DEFAULT_FABLE_MODEL,
+      ANTHROPIC_DEFAULT_OPUS_MODEL,
+      ANTHROPIC_DEFAULT_SONNET_MODEL,
+      CLAUDE_CODE_OAUTH_TOKEN,
+      ...environment
+    } = process.env;
+    const child = spawn(CLAUDE_BIN, ['--bare', '--no-session-persistence', '--model', alias, '-p', '--output-format', 'stream-json', '--verbose'], {
+      env: { ...environment, ANTHROPIC_BASE_URL: endpoint },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      detached: !WIN,
+      shell: CLAUDE_BIN_IS_BATCH,
+    });
+    let output = '';
+    let detected = null;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const timeout = setTimeout(() => {
+      terminateProbe(child);
+      finish(null);
+    }, PIN_PROBE_TIMEOUT_MS);
+    const read = (chunk) => {
+      output += chunk;
+      if (output.length > 262144) {
+        terminateProbe(child);
+        return finish(null);
+      }
+      const lines = output.split(/\r?\n/);
+      output = lines.pop();
+      for (const line of lines) {
+        try {
+          const event = JSON.parse(line);
+          const pin = event.type === 'system' && event.subtype === 'init'
+            ? normalizedDetectedPin(alias, event.model)
+            : null;
+          if (pin) detected = pin;
+        } catch { /* stream-json can include non-JSON diagnostics on stderr */ }
+      }
+    };
+    child.stdout.on('data', read);
+    child.stderr.on('data', read);
+    child.once('error', () => finish(null));
+    child.once('close', (code) => finish(code === 0 ? detected : null));
+    child.stdin.end(`/model ${alias}\n`);
+  });
+}
+
+async function refreshDetectedPins({ force = false } = {}) {
+  const cached = readDetectedPinCache();
+  const version = await claudeVersion();
+  const fresh = cached && Date.now() - cached.updatedAt < PIN_CACHE_TTL_MS;
+  if (!force && fresh && (!version || cached.cliVersion === version)) return cached.pins;
+
+  let server;
+  try {
+    server = await startPinProbeServer();
+    const address = server.address();
+    const endpoint = `http://127.0.0.1:${address.port}`;
+    const detected = await Promise.all(Object.keys(PIN_ALIASES).map((alias) => probeClaudeAlias(alias, endpoint)));
+    const pins = { ...(cached?.pins || {}) };
+    for (const [index, alias] of Object.keys(PIN_ALIASES).entries()) {
+      if (detected[index]) pins[alias] = detected[index];
+    }
+    if (detected.some(Boolean)) writeDetectedPinCache({ cliVersion: version || cached?.cliVersion || null, updatedAt: Date.now(), pins });
+    return pins;
+  } catch { return cached?.pins || {}; } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 function readPinOverrides() {
@@ -138,10 +293,11 @@ function writePinOverrides(overrides) {
 
 function effectivePins() {
   const overrides = readPinOverrides();
-  return Object.fromEntries(Object.entries(PIN_ALIASES).map(([alias, key]) => [alias, {
-    default: STATIC_ENV_BLOCK[key],
+  const defaults = detectedPinDefaults();
+  return Object.fromEntries(Object.entries(PIN_ALIASES).map(([alias]) => [alias, {
+    default: defaults[alias],
     override: overrides[alias] || null,
-    value: overrides[alias] || STATIC_ENV_BLOCK[key],
+    value: overrides[alias] || defaults[alias],
   }]));
 }
 
@@ -687,6 +843,7 @@ async function setup() {
     return;
   }
   log('ChatGPT auth: valid');
+  await refreshDetectedPins({ force: true });
   const { mode } = await resolveIntendedMode();
   if (isWired()) {
     const current = wiredMode();
@@ -850,7 +1007,8 @@ function pinCommand() {
   log('Rewire with env --write-project (or env --write-user), then start a new Claude Code session for the change to apply.');
 }
 
-function syncEffectivePins() {
+async function syncEffectivePins() {
+  await refreshDetectedPins();
   const current = wiredMode();
   if (!current) return;
   const env = readSettingsForWrite(settingsPath(current.scope)).env || {};
@@ -859,7 +1017,7 @@ function syncEffectivePins() {
   }
 }
 
-function envCommand() {
+async function envCommand() {
   if (flag('--show-mode')) {
     const configured = hasWiringMode();
     log(`wiring mode: ${wiringMode()}${configured ? '' : ' (defaulted to per-project)'}`);
@@ -892,6 +1050,7 @@ function envCommand() {
   }
   if (scope === 'project') writeWiringMode('local');
   if (scope === 'user' && !remove) writeWiringMode('global');
+  if (!remove) await refreshDetectedPins({ force: true });
   writeEnv(scope, remove);
 }
 
@@ -2520,7 +2679,7 @@ if (require.main === module) {
         // to RC-compatibility mode once the entry appears (and :80 actually
         // bound), revert the moment either stops being true.
         await syncCompatMode();
-        syncEffectivePins();
+        await syncEffectivePins();
       }
       if (!quiet) await statusReport();
       break;
@@ -2534,7 +2693,7 @@ if (require.main === module) {
     }
     case 'catalog': await catalogCommand(); break;
     case 'pin': pinCommand(); break;
-    case 'env': envCommand(); break;
+    case 'env': await envCommand(); break;
     case 'doctor': await doctor(); break;
     case 'remote-control': await remoteControlCommand(); break;
     case 'serve-shim': runShim(); break;

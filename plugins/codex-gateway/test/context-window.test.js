@@ -744,11 +744,85 @@ test('Claude pin overrides persist outside the plugin and are applied by rewirin
     assert.equal(cleared.status, 0, cleared.stderr);
     const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
     assert.equal(rewired.status, 0, rewired.stderr);
-    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
+    const detected = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'detected-pins.json'), 'utf8'));
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, detected.pins.opus);
 
     const invalid = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'bad;value'], { env, encoding: 'utf8' });
     assert.equal(invalid.status, 2);
     assert.match(invalid.stderr, /invalid opus pin/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('credential-free alias probes cache valid 1M defaults without replacing overrides', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-probe-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-probe-project-'));
+  const bin = path.join(home, 'bin');
+  const fake = path.join(bin, 'fake-claude.js');
+  const command = path.join(bin, process.platform === 'win32' ? 'claude.cmd' : 'claude');
+  const logFile = path.join(home, 'probes.jsonl');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(fake, [
+    "'use strict';",
+    "const fs = require('node:fs');",
+    "const args = process.argv.slice(2);",
+    "if (args.includes('--version')) { console.log('fake-claude 1.0.0'); process.exit(0); }",
+    "const alias = args[args.indexOf('--model') + 1];",
+    "let input = '';",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    "  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args, input, baseUrl: process.env.ANTHROPIC_BASE_URL, apiKey: process.env.ANTHROPIC_API_KEY, oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN }) + '\\n');",
+    "  console.log(JSON.stringify({ type: 'system', subtype: 'init', model: process.env[`FAKE_CLAUDE_${alias.toUpperCase()}`] || `claude-${alias}-9` }));",
+    "});",
+  ].join('\n'));
+  if (process.platform === 'win32') fs.writeFileSync(command, `@"${process.execPath}" "${fake}" %*\r\n`);
+  else {
+    fs.writeFileSync(command, `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
+    fs.chmodSync(command, 0o755);
+  }
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+    Path: `${bin}${path.delimiter}${process.env.Path || process.env.PATH}`,
+    FAKE_CLAUDE_LOG: logFile,
+    CODEX_GATEWAY_CLAUDE_BIN: command,
+    ANTHROPIC_API_KEY: 'must-not-reach-probe',
+    CLAUDE_CODE_OAUTH_TOKEN: 'must-not-reach-probe',
+  };
+  try {
+    const override = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { cwd, env, encoding: 'utf8' });
+    assert.equal(override.status, 0, override.stderr);
+    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    assert.equal(wired.status, 0, wired.stderr);
+    const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).env;
+    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-9[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-9[1m]');
+    const cache = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'detected-pins.json'), 'utf8'));
+    assert.equal(cache.pins.opus, 'claude-opus-9[1m]');
+    assert.equal(cache.pins.fable, 'claude-fable-9[1m]');
+    const probes = fs.readFileSync(logFile, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(probes.length, 3);
+    for (const probe of probes) {
+      assert.deepEqual(probe.args.slice(0, 8), ['--bare', '--no-session-persistence', '--model', probe.args[3], '-p', '--output-format', 'stream-json', '--verbose']);
+      assert.equal(probe.input, `/model ${probe.args[3]}\n`);
+      assert.match(probe.baseUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
+      assert.equal(probe.apiKey, undefined);
+      assert.equal(probe.oauth, undefined);
+    }
+
+    const mismatched = spawnSync(process.execPath, [CLI, 'env', '--write-project'], {
+      cwd,
+      env: { ...env, FAKE_CLAUDE_FABLE: 'claude-sonnet-99' },
+      encoding: 'utf8',
+    });
+    assert.equal(mismatched.status, 0, mismatched.stderr);
+    const afterMismatch = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).env;
+    assert.equal(afterMismatch.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-9[1m]');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
