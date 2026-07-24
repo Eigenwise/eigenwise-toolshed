@@ -227,7 +227,7 @@ function eventNameFrom(candidate, flat) {
 function canonicalEventAttributes(eventName, flat) {
   const normalized = { ...flat };
   if (eventName === 'claude_code.mcp_server_connection') {
-    normalized.mcp_server = normalized.mcp_server || normalized.server_name || normalized.server;
+    normalized.mcp_server = normalized.mcp_server || normalized.server_name || normalized.server || normalized.plugin_name;
     normalized.status = normalized.status || normalized.connection_status;
     delete normalized.server_name;
     delete normalized.server;

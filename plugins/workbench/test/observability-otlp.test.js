@@ -84,7 +84,7 @@ test('logs convert to canonical claude_code observations with measurements and d
 test('MCP connection and hook execution events map their activity facets', () => {
   const body = {
     resourceLogs: [{ resource: { attributes: attrs({ 'session.id': 'session-1' }) }, scopeLogs: [{ logRecords: [
-      { timeUnixNano: NANO, eventName: 'mcp_server_connection', attributes: attrs({ server_name: 'sidequest', connection_status: 'error', error_type: 'timeout' }) },
+      { timeUnixNano: NANO, eventName: 'mcp_server_connection', attributes: attrs({ plugin_name: 'sidequest', connection_status: 'error', error_type: 'timeout' }) },
       { timeUnixNano: NANO, eventName: 'hook_execution_complete', attributes: attrs({ hook_name: 'observability', status: 'ok', duration_ms: 12 }) },
     ] }] }],
   };
