@@ -1137,6 +1137,12 @@ async function cmdCommit(opts: any, positional: any) {
   const by = workerId(opts);
   if (!ticket) fail(`commit: no ticket "${idOrRef}" in ${meta.name}.`);
   if (!ticket.claim || ticket.claim.by !== by) fail(`commit: ${ticket.ref} must be claimed by "${by}" before committing.`);
+  if (ticket.dispatch && ticket.dispatch.sharedTree === false) {
+    const location = commitScope.linkedWorktree(process.cwd());
+    if (!location.ok || !location.linked) {
+      fail(`commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`);
+    }
+  }
   const scope = store.effectiveScope(slug, ticket.files);
   const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
