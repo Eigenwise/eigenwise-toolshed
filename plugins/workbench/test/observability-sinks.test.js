@@ -157,7 +157,9 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   assert.equal(global.title, 'Claude Code Usage');
   assert.equal(global.uid, 'claude-code-usage');
   assert.deepEqual(global.templating, { list: [] });
-  const regularPanels = global.panels.filter(({ title }) => title !== 'Unattributed sessions');
+  const projectUnscopedTitles = new Set(['MCP connection activity']);
+  const regularPanels = global.panels
+    .filter(({ title }) => title !== 'Unattributed sessions' && !projectUnscopedTitles.has(title));
   const regularExpressions = regularPanels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   assert.ok(regularExpressions.every((expression) => !expression.includes('$project')));
   for (const expression of regularExpressions.filter((expression) => expression.includes('claude_code_'))) {
@@ -170,6 +172,12 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   for (const expression of regularExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name=~"atlas\|beacon"/);
   }
+  // claude_code.* events carry no project attribution, so the injected matcher
+  // would filter on a label that is never present and starve the panel.
+  const connections = global.panels.find(({ title }) => title === 'MCP connection activity');
+  assert.doesNotMatch(connections.targets[0].expr, /workbench_attribute_project_name/);
+  assert.doesNotMatch(connections.targets[0].expr, /\$project/);
+  assert.match(connections.targets[0].expr, /^sum by \(mcp_server, connection_status\)/);
   const unattributed = global.panels.find(({ title }) => title === 'Unattributed sessions');
   assert.equal(unattributed.type, 'stat');
   assert.equal(unattributed.targets.length, 2);
@@ -187,9 +195,11 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   const atlasTitles = atlas.panels.map(({ title }) => title);
   assert.equal(atlasTitles.includes('Usage by project'), false);
   assert.equal(atlasTitles.includes('Cost over time, by project'), false);
+  assert.equal(atlasTitles.includes('MCP connection activity'), false);
   const globalTitles = global.panels.map(({ title }) => title);
   assert.ok(globalTitles.includes('Usage by project'));
   assert.ok(globalTitles.includes('Cost over time, by project'));
+  assert.ok(globalTitles.includes('MCP connection activity'));
   for (const expression of atlasExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name="atlas"/);
   }
@@ -333,6 +343,12 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   assert.equal(costByType.gridPos.h, tokenByType.gridPos.h);
   assert.match(costByType.description, /four legend Totals add up to that card within rounding/);
   assert.deepEqual(costByType.targets.map(({ legendFormat }) => legendFormat), ['fresh input', 'cache reads', 'cache creation', 'output']);
+  // Instant $__range targets are a snapshot allocation. On a time axis they draw
+  // one point at the right edge, and a per-step window would make the legend
+  // Total over-count by the window/step overlap and stop matching the USD card.
+  assert.equal(costByType.type, 'piechart');
+  assert.equal(costByType.fieldConfig.defaults.custom, undefined);
+  assert.deepEqual(costByType.options.legend.values, ['value', 'percent']);
   for (const target of costByType.targets) {
     assert.equal(target.instant, true);
     assert.match(target.expr, /\[\$__range\]/);
@@ -406,8 +422,14 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   const connectionActivity = byTitle.get('MCP connection activity');
   assert.match(connectionActivity.targets[0].expr, /workbench_attribute_mcp_server/);
   assert.doesNotMatch(connectionActivity.targets[0].expr, /or vector\(0\)/);
-  assert.equal(connectionActivity.targets[0].legendFormat, '{{workbench_attribute_mcp_server}} ({{workbench_attribute_status}})');
-  assert.equal(connectionActivity.fieldConfig.defaults.noValue, 'No MCP connections reported');
+  // Claude Code names only plugin-hosted servers on this event, so a `!= ""`
+  // guard on either label drops every row and the panel reads as a healthy zero.
+  assert.doesNotMatch(connectionActivity.targets[0].expr, /workbench_attribute_\w+ != ""/);
+  assert.match(connectionActivity.targets[0].expr, /label_format mcp_server=/);
+  assert.match(connectionActivity.targets[0].expr, /workbench_attribute_plugin_name/);
+  assert.match(connectionActivity.targets[0].expr, /unnamed \(non-plugin server\)/);
+  assert.equal(connectionActivity.targets[0].legendFormat, '{{mcp_server}} ({{connection_status}})');
+  assert.match(connectionActivity.fieldConfig.defaults.noValue, /the observer is not receiving them/);
   for (const title of ['Tokens over time, by type', 'Tokens over time, by model', 'Context-window growth']) {
     assert.deepEqual(byTitle.get(title).options.legend, { displayMode: 'table', placement: 'right', calcs: ['sum'] });
   }

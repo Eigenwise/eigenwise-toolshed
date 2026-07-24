@@ -312,8 +312,8 @@
     {
       "id": 31,
       "title": "Cost allocation, by token type (USD)",
-      "description": "API-equivalent cost allocation in USD for the selected range. Each series uses the same selected-range total as Cost (USD estimate), so the four legend Totals add up to that card within rounding. The total is split by input × 1.0, cache reads × 0.1, cache creation × 1.25, and output × 5.0; per-model price differences stay in the reported USD total.",
-      "type": "timeseries",
+      "description": "API-equivalent cost allocation in USD for the selected range. Each slice uses the same selected-range total as Cost (USD estimate), so the four legend Totals add up to that card within rounding. The total is split by input × 1.0, cache reads × 0.1, cache creation × 1.25, and output × 5.0; per-model price differences stay in the reported USD total. This is a breakdown of the range, not a trend: all four targets are instant queries over $__range, so plotting them on a time axis leaves one point at the right edge and a legend Total that over-counts by the window/step overlap.",
+      "type": "piechart",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -326,27 +326,32 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "stacking": {
-              "mode": "normal"
-            }
-          }
+          "unit": "currencyUSD"
         },
         "overrides": []
       },
       "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
         "legend": {
           "displayMode": "table",
           "placement": "right",
-          "calcs": [
-            "sum"
+          "values": [
+            "value",
+            "percent"
           ]
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "single"
         }
       },
       "targets": [
@@ -1131,7 +1136,7 @@
     {
       "id": 16,
       "title": "MCP connection activity",
-      "description": "Connection events by server and status. Claude Code only emits these when a connection event includes both labels, so an empty state is normal when none are reported.",
+      "description": "MCP server connection attempts, by server and status. This reads Claude Code's own claude_code.mcp_server_connection event, which names only plugin-hosted servers, so IDE and user-configured servers roll up under \"unnamed (non-plugin server)\" rather than being dropped. The event carries no project attribution, so this panel is board-wide and appears on the global dashboard only.",
       "type": "timeseries",
       "datasource": {
         "type": "loki",
@@ -1153,7 +1158,7 @@
               "mode": "normal"
             }
           },
-          "noValue": "No MCP connections reported"
+          "noValue": "No connection events in range. If sessions are running, the observer is not receiving them."
         },
         "overrides": []
       },
@@ -1176,8 +1181,8 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (workbench_attribute_mcp_server, workbench_attribute_status) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.mcp_server_connection\" | workbench_attribute_mcp_server != \"\" | workbench_attribute_status != \"\" [$__auto]))",
-          "legendFormat": "{{workbench_attribute_mcp_server}} ({{workbench_attribute_status}})"
+          "expr": "sum by (mcp_server, connection_status) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.mcp_server_connection\" | label_format mcp_server=\"{{ or .workbench_attribute_mcp_server .workbench_attribute_plugin_name \\\"unnamed (non-plugin server)\\\" }}\", connection_status=\"{{ or .workbench_attribute_status \\\"unknown\\\" }}\" [$__auto]))",
+          "legendFormat": "{{mcp_server}} ({{connection_status}})"
         }
       ]
     },

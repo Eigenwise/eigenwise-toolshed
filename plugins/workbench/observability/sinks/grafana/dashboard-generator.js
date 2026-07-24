@@ -49,10 +49,21 @@ function filterLoki(expression, projects) {
   return expression.replaceAll('{service_name="workbench-observer"}', `{service_name="workbench-observer"} | ${matcher}`);
 }
 
+// Claude Code's own claude_code.* OTEL events carry no project attribution, so
+// the injected project matcher matches a label that is never there and starves
+// the panel to "no data". These read board-wide instead.
+const PROJECT_UNSCOPED_PANELS = new Set(['MCP connection activity']);
+
 function filterDashboard(dashboard, projects) {
   for (const panel of dashboard.panels) {
     for (const target of panel.targets || []) {
       if (typeof target.expr !== 'string') continue;
+      if (PROJECT_UNSCOPED_PANELS.has(panel.title)) {
+        if (target.expr.includes('$project')) {
+          throw new Error(`Project-unscoped panel cannot use $project: ${panel.title}`);
+        }
+        continue;
+      }
       target.expr = filterPrometheus(target.expr, projects);
       target.expr = filterLoki(target.expr, projects);
     }
@@ -114,7 +125,9 @@ const GLOBAL_ONLY_PANELS = new Set(['Usage by project', 'Cost over time, by proj
 
 function perProjectDashboard(template, project) {
   const dashboard = filterDashboard(template, [project]);
-  dashboard.panels = dashboard.panels.filter((panel) => !GLOBAL_ONLY_PANELS.has(panel.title));
+  dashboard.panels = dashboard.panels.filter(
+    (panel) => !GLOBAL_ONLY_PANELS.has(panel.title) && !PROJECT_UNSCOPED_PANELS.has(panel.title),
+  );
   dashboard.title = `Claude Code — ${project.project_name}`;
   dashboard.uid = `claude-code-${project.project_id.slice(0, 16)}`;
   return dashboard;

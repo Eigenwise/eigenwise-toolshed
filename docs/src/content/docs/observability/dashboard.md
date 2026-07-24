@@ -14,9 +14,11 @@ Sidequest boards show their selected routing profile, revision, category count, 
 The Profile library lets you inspect and edit profile categories. Its header shows how many boards follow the profile, and a save explains how many boards receive the update. Rows carry Profile, Override, Pinned, Board-only, or Disabled badges. Retired profiles stay hidden unless you ask to include them. The global availability fallback remains above the profile controls.
 
 
-Token panels split input, output, cache creation, and cache reads. The token cards are raw token counts. The USD card and the cost-by-token-type chart are API-equivalent cost estimates for the selected time range. The chart uses the same range total as the card, so its four legend totals add up to the USD card within rounding. Cache reads are useful context consumption, but their 0.1× cost weight keeps them from dominating the cost estimate.
+Token panels split input, output, cache creation, and cache reads. The token cards are raw token counts. The USD card and the cost-by-token-type breakdown are API-equivalent cost estimates for the selected time range. The breakdown is a share of the range rather than a trend, and it uses the same range total as the card, so its four legend totals add up to the USD card within rounding. Cache reads are useful context consumption, but their 0.1× cost weight keeps them from dominating the cost estimate.
 
 The model view shows which model routes are doing the work. The gateway view separates requests sent through Codex Gateway from direct Claude API activity. The “who is burning” view helps find projects, sessions, or models with the largest totals.
+
+MCP connection activity counts connection attempts by server and status. Claude Code names only plugin-hosted servers on that event, so IDE and user-configured servers are grouped as “unnamed (non-plugin server)” instead of being dropped. That event carries no project, so the panel is board-wide and shows up on the global dashboard only, not on the per-project ones.
 
 ![Token usage by model](../../../assets/screenshots/observability-tokens-models.png)
 
