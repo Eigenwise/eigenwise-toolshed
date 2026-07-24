@@ -61,15 +61,57 @@ function writeDeny(hookEventName, permissionDecisionReason) {
 }
 
 // src/hooks/guard-bash-windows-paths.ts
+function hereDocAt(command, index) {
+  let cursor = index + 2;
+  const stripTabs = command[cursor] === "-";
+  if (stripTabs) cursor += 1;
+  while (command[cursor] === " " || command[cursor] === "	") cursor += 1;
+  const quote = command[cursor];
+  if (quote === "'" || quote === '"') {
+    const end = command.indexOf(quote, cursor + 1);
+    if (end < 0) return null;
+    return { hereDoc: { delimiter: command.slice(cursor + 1, end), stripTabs }, end: end + 1 };
+  }
+  const match = command.slice(cursor).match(/^[^\s|&;()<>]+/);
+  if (!match) return null;
+  return { hereDoc: { delimiter: match[0], stripTabs }, end: cursor + match[0].length };
+}
+function skipHereDocBodies(command, index, hereDocs) {
+  let cursor = index;
+  for (const { delimiter, stripTabs } of hereDocs) {
+    while (cursor < command.length) {
+      const lineEnd = command.indexOf("\n", cursor);
+      const end = lineEnd < 0 ? command.length : lineEnd;
+      let line = command.slice(cursor, end).replace(/\r$/, "");
+      if (stripTabs) line = line.replace(/^\t+/, "");
+      cursor = lineEnd < 0 ? command.length : lineEnd + 1;
+      if (line === delimiter) break;
+    }
+  }
+  return cursor;
+}
+function escapedNewline(command, index) {
+  let backslashes = 0;
+  for (let cursor = index - 1; command[cursor] === "\\"; cursor -= 1) backslashes += 1;
+  return backslashes % 2 === 1;
+}
 function unquotedWindowsPath(command) {
   let quote = null;
+  let hereDocs = [];
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index];
     if (quote === "single") {
       if (character === "'") quote = null;
       continue;
     }
+    if (character === "\n" && hereDocs.length > 0 && !escapedNewline(command, index)) {
+      index = skipHereDocBodies(command, index + 1, hereDocs) - 1;
+      hereDocs = [];
+      continue;
+    }
     if (quote === "double") {
+      const token2 = command.slice(index).match(/^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/)?.[0];
+      if (token2) return token2;
       if (character === "\\") {
         index += 1;
       } else if (character === '"') {
@@ -84,6 +126,14 @@ function unquotedWindowsPath(command) {
     if (character === '"') {
       quote = "double";
       continue;
+    }
+    if (character === "<" && command[index - 1] !== "<" && command[index + 1] === "<") {
+      const parsed = hereDocAt(command, index);
+      if (parsed) {
+        hereDocs.push(parsed.hereDoc);
+        index = parsed.end - 1;
+        continue;
+      }
     }
     const token = command.slice(index).match(/^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/)?.[0];
     if (token) return token;

@@ -670,13 +670,39 @@ test('Bash Windows-path guard: denies an unquoted backslash path', () => {
   assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(token.replace(/\\/g, '\\\\')));
 });
 
-test('Bash Windows-path guard: allows quoted backslash paths', () => {
+test('Bash Windows-path guard: allows a backslash path inside a heredoc body', () => {
   for (const command of [
-    'node script.js 2> "C:\\Users\\kenny\\AppData\\Local\\Temp\\lookup4.err"',
-    "node script.js 2> 'C:\\Users\\kenny\\AppData\\Local\\Temp\\lookup4.err'",
+    "cat <<'EOF'\nCONFIRMED REPRO (C:\\dev\\atomic-agents)\nEOF\n",
+    'cat <<END\nCONFIRMED REPRO (C:\\dev\\atomic-agents)\nEND\n',
+    'cat <<-END\nCONFIRMED REPRO (C:\\dev\\atomic-agents)\n\tEND\n',
   ]) {
     assert.strictEqual(runBashWindowsPathGuard(command), null, command);
   }
+});
+
+test('Bash Windows-path guard: allows a single-quoted backslash path', () => {
+  assert.strictEqual(runBashWindowsPathGuard("node script.js 'C:\\Users\\kenny\\lookup4.err'"), null);
+});
+
+test('Bash Windows-path guard: denies a double-quoted backslash path', () => {
+  const out = runBashWindowsPathGuard('node script.js "C:\\Users\\kenny\\lookup4.err"');
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('Bash Windows-path guard: still denies an unquoted path after a heredoc body', () => {
+  const token = 'C:\\Users\\kenny\\lookup4.err';
+  const command = `cat <<EOF\nC:\\dev\\atomic-agents\nEOF\nnode script.js ${token}`;
+  const out = runBashWindowsPathGuard(command);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(token.replace(/\\/g, '\\\\')));
+});
+
+test('Bash Windows-path guard: keeps scanning a continued heredoc header', () => {
+  const token = 'C:\\Users\\kenny\\lookup4.err';
+  const command = `cat <<EOF \\\nnode script.js ${token}\nC:\\dev\\atomic-agents\nEOF\n`;
+  const out = runBashWindowsPathGuard(command);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(token.replace(/\\/g, '\\\\')));
 });
 
 test('Bash Windows-path guard: allows forward-slash paths', () => {
