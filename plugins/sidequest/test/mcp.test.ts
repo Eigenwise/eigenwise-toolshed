@@ -1080,7 +1080,7 @@ test('sweepClaims releases stale claims through MCP', async () => {
   const slug = created.project;
   assert.equal(store.claimTicket(slug, created.ref, 'mcp-stale').ok, true);
   const stale = store.getTicket(slug, created.ref);
-  stale.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  stale.claim.at = new Date(Date.now() - store.claimIdleMs() - 1).toISOString();
   const dbModule = require('../lib/db.js');
   dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
     id: stale.id, project: slug, ref: stale.ref, status: stale.status,
@@ -1470,7 +1470,7 @@ test('CLI and MCP remove protect live claims but allow force and stale claims', 
   const cliStale = await callTool('add', { title: 'CLI stale claim removal', unclassified: true });
   assert.equal(store.claimTicket(cliStale.project, cliStale.ref, 'cli-stale-worker', { direct: true }).ok, true);
   const staleCliTicket = store.getTicket(cliStale.project, cliStale.ref);
-  staleCliTicket.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  staleCliTicket.claim.at = new Date(Date.now() - store.claimIdleMs() - 1).toISOString();
   const db = require('../lib/db.js');
   db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
     id: staleCliTicket.id, project: cliStale.project, ref: staleCliTicket.ref, status: staleCliTicket.status,
@@ -1492,7 +1492,7 @@ test('CLI and MCP remove protect live claims but allow force and stale claims', 
   const mcpStale = await callTool('add', { title: 'MCP stale claim removal', unclassified: true });
   assert.equal(store.claimTicket(mcpStale.project, mcpStale.ref, 'mcp-stale-worker', { direct: true }).ok, true);
   const staleMcpTicket = store.getTicket(mcpStale.project, mcpStale.ref);
-  staleMcpTicket.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  staleMcpTicket.claim.at = new Date(Date.now() - store.claimIdleMs() - 1).toISOString();
   db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
     id: staleMcpTicket.id, project: mcpStale.project, ref: staleMcpTicket.ref, status: staleMcpTicket.status,
     archived: staleMcpTicket.archived ? 1 : 0, ord: staleMcpTicket.order, claim_by: staleMcpTicket.claim.by, data: staleMcpTicket,
@@ -1741,7 +1741,7 @@ test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', 
   assert.strictEqual(t.claim, null);
 });
 
-test('MCP board reads omit category taxonomy while preserving claim TTL and category rows', async () => {
+test('MCP board reads omit category taxonomy while preserving the claim idle window and category rows', async () => {
   const added = await callTool('add', { title: 'trimmed taxonomy response', category: 'coding.easy' });
   const list = await callTool('list', {});
   const ready = await callTool('ready', { brief: true });
@@ -1752,8 +1752,8 @@ test('MCP board reads omit category taxonomy while preserving claim TTL and cate
   assert.equal(ready.categories, undefined);
   assert.equal(changes.categories, undefined);
   assert.equal(pulse.categories, undefined);
-  assert.equal(typeof list.claimTtlMs, 'number');
-  assert.equal(typeof ready.claimTtlMs, 'number');
+  assert.equal(typeof list.claimIdleMs, 'number');
+  assert.equal(typeof ready.claimIdleMs, 'number');
   assert.equal(list.tickets.find((ticket: any) => ticket.ref === added.ref).categoryId, 'coding.easy');
   assert.equal(typeof ready.tickets.find((ticket: any) => ticket.ref === added.ref).categoryName, 'string');
 });

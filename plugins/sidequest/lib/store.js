@@ -11,7 +11,7 @@ const commitScope = require("./commit-scope.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { discoverExternalModels } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
-const { routingDisabledMessage } = require("./refusal-guidance.js");
+const { autoReleasedClaimMessage, routingDisabledMessage } = require("./refusal-guidance.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 80;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
@@ -1983,7 +1983,7 @@ function dispatchWarnings(ticket, slug) {
   for (const sibling of listTickets(slug)) {
     if (sibling.id === ticket.id) continue;
     const dispatch = dispatchState(sibling);
-    const liveClaim = sibling.claim && sibling.claim.by && !isClaimStale(sibling.claim);
+    const liveClaim = sibling.claim && sibling.claim.by && !claimReclaimable(sibling);
     const liveDispatch = dispatch && !dispatch.terminalAt && ["prepared", "launched", "bound", "claimed"].includes(pulseDispatchState(dispatch));
     if (!liveClaim && !liveDispatch) continue;
     const overlaps = overlappingScopePaths(declaredFiles, dispatchDeclaredFiles(sibling));
@@ -2179,7 +2179,7 @@ function requestScope(slug, idOrRef, by, files, opts) {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: "not_found" };
     const held = t.claim;
-    if (!held || !held.by || isClaimStale(held)) return { ok: false, reason: "not_claimed", ticket: t };
+    if (!held || !held.by) return { ok: false, reason: "not_claimed", ticket: t };
     if (held.by !== by && !opts.force) return { ok: false, reason: "not_owner", ticket: t, claim: held };
     const requested = normalizeFiles(files);
     if (!requested.length) return { ok: false, reason: "files_required", ticket: t };
@@ -2189,6 +2189,7 @@ function requestScope(slug, idOrRef, by, files, opts) {
     if (!additions.length) return { ok: false, reason: "already_in_scope", ticket: t };
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const command = scopeExpansionCommand(t, additions);
+    touchClaimActivity(t, by, now);
     t.scopeRequest = { by, files: additions, at: now };
     const dispatch = dispatchState(t);
     if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
@@ -2348,7 +2349,7 @@ function normalizeAssignee(v) {
   return s || null;
 }
 function updateDoneRefusal(ticket) {
-  if (ticket.claim && ticket.claim.by && !isClaimStale(ticket.claim)) {
+  if (ticket.claim && ticket.claim.by && !claimReclaimable(ticket)) {
     return `${ticket.ref} is claimed. Use done/completeTicket for eligible non-repo or artifact work; scoped repository work must commit and submit.`;
   }
   if (pendingSubmission(ticket)) {
@@ -2522,21 +2523,105 @@ const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 function priorityRank(p) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? PRIORITY_RANK[String(p)] ?? 9 : 9;
 }
-const DEFAULT_CLAIM_TTL_MIN = 60;
+const DEFAULT_CLAIM_IDLE_MIN = 60;
+const DEFAULT_CLAIM_ABANDON_MIN = 24 * 60;
 const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
 function preparedDispatchTtlMs() {
   const hours = Number(process.env.SIDEQUEST_PREPARED_DISPATCH_TTL_HOURS);
   return (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_PREPARED_DISPATCH_TTL_HOURS) * 60 * 60 * 1e3;
 }
-function claimTtlMs() {
-  const min = Number(process.env.SIDEQUEST_CLAIM_TTL_MIN);
-  return (Number.isFinite(min) && min > 0 ? min : DEFAULT_CLAIM_TTL_MIN) * 60 * 1e3;
+function envMinutesMs(fallbackMinutes, ...names) {
+  for (const name of names) {
+    const raw = process.env[name];
+    if (raw == null || String(raw).trim() === "") continue;
+    const minutes = Number(raw);
+    if (Number.isFinite(minutes) && minutes > 0) return minutes * 60 * 1e3;
+  }
+  return fallbackMinutes * 60 * 1e3;
 }
-function isClaimStale(claim) {
-  if (!claim || !claim.at) return true;
-  const t = Date.parse(claim.at);
-  if (!Number.isFinite(t)) return true;
-  return Date.now() - t > claimTtlMs();
+function claimIdleMs() {
+  return envMinutesMs(DEFAULT_CLAIM_IDLE_MIN, "SIDEQUEST_CLAIM_IDLE_MIN", "SIDEQUEST_CLAIM_TTL_MIN");
+}
+function claimAbandonMs() {
+  return envMinutesMs(DEFAULT_CLAIM_ABANDON_MIN, "SIDEQUEST_CLAIM_ABANDON_MIN");
+}
+function claimActivityMs(ticket) {
+  const claim = ticket && ticket.claim;
+  if (!claim || !claim.by) return Number.NaN;
+  let latest = Number.NaN;
+  const consider = (value) => {
+    const ms = Date.parse(value);
+    if (Number.isFinite(ms) && (!Number.isFinite(latest) || ms > latest)) latest = ms;
+  };
+  consider(claim.at);
+  consider(claim.activeAt);
+  for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
+    if (comment && comment.by === claim.by) consider(comment.at);
+  }
+  return latest;
+}
+function claimIdleAge(ticket, now) {
+  const latest = claimActivityMs(ticket);
+  return Number.isFinite(latest) ? Math.max(0, now - latest) : Number.POSITIVE_INFINITY;
+}
+function observedStop(dispatch, claim) {
+  if (!dispatch || dispatch.outcome !== "stopped_claimed" || !dispatch.terminalAt) return false;
+  const stoppedMs = Date.parse(dispatch.terminalAt);
+  const claimedMs = Date.parse(claim && claim.at);
+  if (!Number.isFinite(stoppedMs)) return false;
+  return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+}
+function claimReleaseVerdict(ticket, now) {
+  const claim = ticket && ticket.claim;
+  if (!claim || !claim.by) return null;
+  const atMs = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const idleMs = claimIdleAge(ticket, atMs);
+  const dispatch = dispatchState(ticket);
+  if (observedStop(dispatch, claim)) {
+    return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor was observed to stop while still holding the claim" };
+  }
+  const liveAgent = Boolean(dispatch && !dispatch.terminalAt);
+  if (!liveAgent && idleMs > claimIdleMs()) {
+    return { kind: "idle", idleMs, reason: "no board activity from the claim holder and no live executor associated" };
+  }
+  if (idleMs > claimAbandonMs()) {
+    return { kind: "abandoned", idleMs, reason: "no board activity from the claim holder past the unobserved-death backstop" };
+  }
+  return null;
+}
+function claimReclaimable(ticket, now) {
+  return Boolean(claimReleaseVerdict(ticket, now));
+}
+function claimIdleLabel(idleMs) {
+  return Number.isFinite(idleMs) ? `${Math.round(Number(idleMs) / 6e4)}m` : "an unknown time";
+}
+function claimReleaseNote(ticket, verdict) {
+  const by = ticket && ticket.claim && ticket.claim.by;
+  const idle = claimIdleLabel(verdict && verdict.idleMs);
+  if (verdict.kind === "observed_stop") {
+    return `↩️ Auto-released to **todo**: its executor was observed to stop while holding the claim (SubagentStop at ${verdict.at}, was claimed by \`${by}\`). It is back in the ready pool; re-dispatch to continue the work.`;
+  }
+  if (verdict.kind === "idle") {
+    return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle} and no live executor is associated with this ticket.`;
+  }
+  return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle}, past the unobserved-death backstop (nothing ever reported that executor stopping).`;
+}
+function touchClaimActivity(ticket, by, now) {
+  const claim = ticket && ticket.claim;
+  if (!claim || !claim.by || by != null && claim.by !== by) return false;
+  claim.activeAt = now || (/* @__PURE__ */ new Date()).toISOString();
+  return true;
+}
+function touchClaim(slug, idOrRef, by) {
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: "not_found" };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: "not_found" };
+    if (!touchClaimActivity(t, by)) return { ok: false, reason: "not_owner", ticket: t };
+    putTicket(slug, t);
+    return { ok: true, ticket: t };
+  });
 }
 function ticketLockPath(slug, id) {
   return path.join(ticketsDir(slug), "." + path.basename(String(id)) + ".lock");
@@ -2965,8 +3050,8 @@ function prepareDispatch(slug, idOrRef, opts) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
-    if (t.claim && t.claim.by && !isClaimStale(t.claim)) {
-      throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it before dispatching again.`);
+    if (t.claim && t.claim.by && !claimReclaimable(t)) {
+      throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
     }
     const current = dispatchState(t);
     rederiveUnlaunchedPreparedRoute(t, slug);
@@ -3310,11 +3395,12 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (t2.status === "done") return { ok: false, reason: "done", ticket: t2 };
     if (pendingSubmission(t2) && !opts.force) return { ok: false, reason: "submitted", ticket: t2, submission: t2.submission };
     const held2 = t2.claim;
-    if (held2 && held2.by && held2.by !== by && !isClaimStale(held2) && !opts.force) {
+    if (held2 && held2.by && held2.by !== by && !claimReclaimable(t2) && !opts.force) {
       return { ok: false, reason: "claimed", ticket: t2, claim: held2 };
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
     t2.claim = { by, at: now };
+    t2.claimRelease = null;
     if (opts.direct && isRoutedTicket(t2)) {
       t2.directClaim = {
         by,
@@ -3347,7 +3433,7 @@ function claimTicket(slug, idOrRef, by, opts) {
   if (result.reason !== "busy" || opts.force) return result;
   const t = getTicket(slug, found.id);
   const held = t && t.claim;
-  if (held && held.by && held.by !== by && !isClaimStale(held)) {
+  if (held && held.by && held.by !== by && !claimReclaimable(t)) {
     return { ok: false, reason: "claimed", ticket: t, claim: held };
   }
   return result;
@@ -3375,7 +3461,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     const artifactDispatch = sharedTreeArtifactMode(t);
     const declaredFiles = dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : normalizeFiles(t.files);
     const held = t.claim;
-    const liveClaim = held && held.by && !isClaimStale(held);
+    const liveClaim = Boolean(held && held.by);
     const activeDispatch = Boolean(t.dispatchNonce || dispatch && !dispatch.terminalAt);
     const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
     const activeNonRepoOutput = dispatch?.nonRepoOutput === true && liveClaim && activeDispatch;
@@ -3383,6 +3469,15 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (executorDone && activeArtifactDispatch) {
       const scopeCheck = artifactScopeCheck(slug, t, dispatch);
       if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
+    }
+    if (executorDone && !liveClaim && t.claimRelease) {
+      return {
+        ok: false,
+        reason: "claim_released",
+        message: autoReleasedClaimMessage(t.ref, t.claimRelease),
+        ticket: t,
+        claimRelease: t.claimRelease
+      };
     }
     if (executorDone && dispatch && declaredFiles.length && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
       return {
@@ -3392,13 +3487,19 @@ function releaseTicket(slug, idOrRef, by, opts) {
         ticket: t
       };
     }
-    if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
+    if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: "not_owner", ticket: t, claim: held };
+    }
+    if (opts.requireReleaseVerdict && !claimReleaseVerdict(t)) {
+      return { ok: false, reason: "claim_live", ticket: t, claim: held };
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const previousStatus = t.status;
     let comment = null;
     t.claim = null;
+    if (opts.claimRelease) {
+      t.claimRelease = Object.assign({ by, at: now, source: opts.source || "store" }, opts.claimRelease);
+    }
     setDispatchTerminal(t, opts.status === "done" ? "done" : "released", opts.source || "cli");
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
@@ -3504,7 +3605,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   if (!ticket) return { ok: false, reason: "not_found" };
   const state = dispatchState(ticket);
   if (purpose === "grooming") {
-    if (ticket.claim && ticket.claim.by && !isClaimStale(ticket.claim) || ticket.dispatchNonce || state && !state.terminalAt) {
+    if (ticket.claim && ticket.claim.by && !claimReclaimable(ticket) || ticket.dispatchNonce || state && !state.terminalAt) {
       return { ok: false, reason: "active_dispatch", ticket };
     }
     if (pendingSubmission(ticket)) return { ok: false, reason: "pending_submission", ticket };
@@ -3553,9 +3654,7 @@ function checkpointProjection(ticket, now) {
     else if (ticket.status === "done") state = "completed";
     else {
       const claim = ticket.claim;
-      const claimAt = claim && Date.parse(claim.at);
-      const liveClaim = claim && claim.by && Number.isFinite(claimAt) && atMs - claimAt <= claimTtlMs();
-      if (!liveClaim) state = "recoverable";
+      if (!claim || !claim.by) state = "recoverable";
       else state = claim.by === checkpoint.by ? "active" : "resumed";
     }
   }
@@ -3610,7 +3709,6 @@ function checkpointTicket(slug, idOrRef, by, opts) {
     const held = t.claim;
     if (!held || !held.by) return { ok: false, reason: "not_claimed", ticket: t };
     if (held.by !== by) return { ok: false, reason: "not_owner", ticket: t, claim: held };
-    if (isClaimStale(held)) return { ok: false, reason: "claim_stale", ticket: t, claim: held };
     const nowMs = Number.isFinite(Number(opts.now)) ? Number(opts.now) : Date.now();
     const now = new Date(nowMs).toISOString();
     const checkpoint = {
@@ -3629,7 +3727,7 @@ function checkpointTicket(slug, idOrRef, by, opts) {
     if (!Array.isArray(t.comments)) t.comments = [];
     t.comments.push(comment);
     t.checkpoint = checkpoint;
-    t.claim = Object.assign({}, held, { at: now });
+    t.claim = Object.assign({}, held, { activeAt: now });
     t.lastEventType = "comment";
     t.lastEventSource = comment.source;
     t.updatedAt = now;
@@ -3678,10 +3776,17 @@ function submitTicket(slug, idOrRef, by, opts) {
     if (!t) return { ok: false, reason: "not_found" };
     if (t.status === "done") return { ok: false, reason: "done", ticket: t };
     const held = t.claim;
-    if (held && held.by && held.by !== by && !isClaimStale(held) && !opts.force) {
+    if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: "not_owner", ticket: t, claim: held };
     }
-    if ((!held || !held.by) && !opts.force) return { ok: false, reason: "not_claimed", ticket: t };
+    if ((!held || !held.by) && !opts.force) {
+      return {
+        ok: false,
+        reason: "not_claimed",
+        ticket: t,
+        ...t.claimRelease ? { claimRelease: t.claimRelease, message: autoReleasedClaimMessage(t.ref, t.claimRelease) } : {}
+      };
+    }
     t.submission = Object.assign({
       by,
       at: (/* @__PURE__ */ new Date()).toISOString(),
@@ -3804,23 +3909,30 @@ function sweepStaleClaims(opts) {
   for (const project of listProjects({ all: true })) {
     if (opts.project && project.slug !== opts.project) continue;
     for (const ticket of listTickets(project.slug)) {
-      if (ticket.archived || ticket.status === "done" || !isClaimStale(ticket.claim)) continue;
+      if (ticket.archived || ticket.status === "done") continue;
+      const verdict = claimReleaseVerdict(ticket);
+      if (!verdict) continue;
       try {
-        const res = releaseTicket(project.slug, ticket.id, ticket.claim.by, { status: "todo", source });
+        const res = releaseTicket(project.slug, ticket.id, ticket.claim.by, {
+          status: "todo",
+          source,
+          requireReleaseVerdict: true,
+          claimRelease: { kind: verdict.kind, reason: verdict.reason, idleMs: Number.isFinite(verdict.idleMs) ? verdict.idleMs : null }
+        });
         if (!res.ok) continue;
-        released.push({ project: project.slug, ref: ticket.ref });
+        released.push({ project: project.slug, ref: ticket.ref, kind: verdict.kind });
         addComment(project.slug, ticket.id, {
           by: "sidequest",
           kind: "comment",
           source,
-          body: `Auto-released to **todo**: claim exceeded the ${Math.round(claimTtlMs() / 6e4)} minute TTL (was claimed by \`${ticket.claim.by}\`).`
+          body: claimReleaseNote(ticket, verdict)
         });
       } catch (_) {
       }
     }
   }
   const dispatches = sweepStaleDispatches(opts);
-  return { ok: true, ttlMs: claimTtlMs(), released, expiredDispatches: dispatches.expired };
+  return { ok: true, idleMs: claimIdleMs(), abandonMs: claimAbandonMs(), released, expiredDispatches: dispatches.expired };
 }
 function modelMatches(ticketModel, want) {
   return !want || ticketModel === want;
@@ -3830,7 +3942,7 @@ function readyTickets(slug, opts) {
   const want = opts.model ? classifyModelFilter(opts.model) : "any";
   if (want === "unknown") throw new Error(`Unknown model: ${opts.model}`);
   const category = opts.category == null ? null : String(opts.category).trim().toLowerCase();
-  return listTickets(slug).filter((t) => !t.archived).filter((t) => t.status !== "done").filter((t) => !pendingSubmission(t)).filter((t) => !t.claim || isClaimStale(t.claim)).filter((t) => !isBlocked(slug, t)).filter((t) => modelMatches(t.model, want === "any" ? null : want)).filter((t) => !category || t.categoryId === category).sort((a, b) => {
+  return listTickets(slug).filter((t) => !t.archived).filter((t) => t.status !== "done").filter((t) => !pendingSubmission(t)).filter((t) => !t.claim || claimReclaimable(t)).filter((t) => !isBlocked(slug, t)).filter((t) => modelMatches(t.model, want === "any" ? null : want)).filter((t) => !category || t.categoryId === category).sort((a, b) => {
     const pr = priorityRank(a.priority) - priorityRank(b.priority);
     if (pr !== 0) return pr;
     return String(a.createdAt).localeCompare(String(b.createdAt));
@@ -3842,7 +3954,7 @@ function claimNext(slug, by, opts) {
   const want = opts.model ? classifyModelFilter(opts.model) : "any";
   if (want === "unknown") throw new Error(`Unknown model: ${opts.model}`);
   const category = opts.category == null ? null : String(opts.category).trim().toLowerCase();
-  const candidates = listTickets(slug).filter((t) => !t.archived).filter((t) => t.status !== "done").filter((t) => !pendingSubmission(t)).filter((t) => !t.claim || isClaimStale(t.claim) || t.claim.by === by).filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase()).filter((t) => modelMatches(t.model, want === "any" ? null : want)).filter((t) => !category || t.categoryId === category).filter((t) => opts.includeBlocked || !isBlocked(slug, t)).sort((a, b) => {
+  const candidates = listTickets(slug).filter((t) => !t.archived).filter((t) => t.status !== "done").filter((t) => !pendingSubmission(t)).filter((t) => !t.claim || claimReclaimable(t) || t.claim.by === by).filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase()).filter((t) => modelMatches(t.model, want === "any" ? null : want)).filter((t) => !category || t.categoryId === category).filter((t) => opts.includeBlocked || !isBlocked(slug, t)).sort((a, b) => {
     const pr = priorityRank(a.priority) - priorityRank(b.priority);
     if (pr !== 0) return pr;
     return String(a.createdAt).localeCompare(String(b.createdAt));
@@ -3912,7 +4024,7 @@ function storyExecutionContract(story) {
 function markStoryContractDrift(slug, story, fromRevision, changedAt) {
   const toRevision = Number(story && story.contractRevision) || 0;
   for (const ticket of listTickets(slug)) {
-    if (ticket.storyId !== story.id || !ticket.claim || !ticket.claim.by || isClaimStale(ticket.claim)) continue;
+    if (ticket.storyId !== story.id || !ticket.claim || !ticket.claim.by || claimReclaimable(ticket)) continue;
     ticket.storyContractDrift = {
       storyRef: story.ref,
       fromRevision: Number(fromRevision) || 0,
@@ -4037,6 +4149,7 @@ function addComment(slug, idOrRef, fields) {
     if (!Array.isArray(t.comments)) t.comments = [];
     const comment = createComment(prepared);
     t.comments.push(comment);
+    touchClaimActivity(t, comment.by, comment.at);
     t.lastEventType = "comment";
     t.lastEventSource = comment.source;
     t.updatedAt = comment.at;
@@ -4165,7 +4278,7 @@ function briefTicket(slug, t, opts) {
       files: Array.isArray(t.files) ? t.files : [],
       contracts: contractMetadata(t)
     } : {},
-    claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: isClaimStale(t.claim) } : null,
+    claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: claimReclaimable(t) } : null,
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
     checkpoint: checkpointProjection(t),
@@ -4229,14 +4342,14 @@ function listPayload(slug, opts) {
       total,
       returned,
       nextCursor: nextOffset < total ? String(nextOffset) : null,
-      claimTtlMs: claimTtlMs(),
+      claimIdleMs: claimIdleMs(),
       categories: classifierCategories({ project })
     };
   }
   let tickets = queryTickets(project, filter);
   if (opts.brief) tickets = tickets.map((ticket) => briefTicket(project, ticket, { index }));
   const page = pageTickets(tickets, paging);
-  page.claimTtlMs = claimTtlMs();
+  page.claimIdleMs = claimIdleMs();
   page.categories = classifierCategories({ project });
   return page;
 }
@@ -4246,15 +4359,20 @@ function readyPayload(slug, opts) {
   const waves = readyWaves(slug, { model: opts.model, category: opts.category }).map((wave) => wave.map((t) => t.ref));
   const waveDependencies = readyWaveDependencies(slug, { model: opts.model, category: opts.category });
   if (opts.brief) tickets = tickets.map((t) => briefTicket(slug, t, { blockedBy: [], includeScope: true }));
-  return { tickets, waves, waveDependencies, claimTtlMs: claimTtlMs(), categories: classifierCategories({ project: slug }) };
+  return { tickets, waves, waveDependencies, claimIdleMs: claimIdleMs(), categories: classifierCategories({ project: slug }) };
 }
-function claimPulse(claim, now) {
+function claimPulse(ticket, now) {
+  const claim = ticket && ticket.claim;
   if (!claim || !claim.by) return null;
   const atMs = Date.parse(claim.at);
+  const idleMs = claimIdleAge(ticket, now);
+  const verdict = claimReleaseVerdict(ticket, now);
   return {
     by: claim.by,
     at: claim.at,
-    ageMs: Number.isFinite(atMs) ? Math.max(0, now - atMs) : null
+    ageMs: Number.isFinite(atMs) ? Math.max(0, now - atMs) : null,
+    idleMs: Number.isFinite(idleMs) ? idleMs : null,
+    reclaimable: verdict ? verdict.kind : null
   };
 }
 function boundedExcerpt(value, maxChars = 1200) {
@@ -4355,7 +4473,7 @@ function pulsePayload(slug, idOrRef) {
     title: ticket.title,
     status: ticket.status,
     direct: ticket.directClaim || null,
-    claim: claimPulse(ticket.claim, Date.now()),
+    claim: claimPulse(ticket, Date.now()),
     working: activity.working,
     lastActivityAt: activity.lastActivityAt,
     comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
@@ -4404,7 +4522,7 @@ function changesPayload(slug, since) {
     lastEventType: ticket.lastEventType || null,
     lastEventSource: ticket.lastEventSource || null,
     lastComment: latestCommentExcerpt(ticket),
-    claim: claimPulse(ticket.claim, nowMs),
+    claim: claimPulse(ticket, nowMs),
     checkpoint: checkpointProjection(ticket, nowMs),
     ...storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {},
     updatedAt: ticket.updatedAt
@@ -4764,7 +4882,11 @@ function reconcileSession(sessionId, opts) {
     if (!t.claim || !t.claim.by) continue;
     if (c.by && t.claim.by !== c.by) continue;
     try {
-      const res = releaseTicket(c.slug, c.ticketId, t.claim.by, { status: "todo", source });
+      const res = releaseTicket(c.slug, c.ticketId, t.claim.by, {
+        status: "todo",
+        source,
+        claimRelease: { kind: "session_ended", reason }
+      });
       if (res && res.ok) {
         released.push(t.ref);
         try {
@@ -4984,10 +5106,15 @@ module.exports = {
   archiveAllDone,
   listArchived,
   listActive,
-  isClaimStale,
-  claimTtlMs,
+  claimReclaimable,
+  claimReleaseVerdict,
+  claimActivityMs,
+  touchClaim,
+  claimIdleMs,
+  claimAbandonMs,
   preparedDispatchTtlMs,
-  DEFAULT_CLAIM_TTL_MIN,
+  DEFAULT_CLAIM_IDLE_MIN,
+  DEFAULT_CLAIM_ABANDON_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   sweepStaleClaims,
   sweepStaleDispatches,

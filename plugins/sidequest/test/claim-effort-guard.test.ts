@@ -233,7 +233,7 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   assert.ok(fs.existsSync(stableDef));
 });
 
-test('claims sweep marks stale claims, audits release, and leaves fresh claims alone', () => {
+test('claims sweep releases idle unassociated claims, audits release, and leaves fresh claims alone', () => {
   const slug = store.ensureProject(PROJ).slug;
   const staleRef = seed('guard.claude');
   const freshRef = seed('guard.claude');
@@ -243,7 +243,7 @@ test('claims sweep marks stale claims, audits release, and leaves fresh claims a
   assert.equal(store.claimTicket(slug, staleRef, 'stale-worker', { direct: true, reason }).ok, true);
   assert.equal(store.claimTicket(slug, freshRef, 'fresh-worker', { direct: true, reason }).ok, true);
   const stale = store.getTicket(slug, staleRef);
-  stale.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  stale.claim.at = new Date(Date.now() - store.claimIdleMs() - 1).toISOString();
   stale.updatedAt = stale.claim.at;
   const dbModule = require('../lib/db.js');
   const db = dbModule.openDb(SIDEQUEST_HOME);
@@ -259,7 +259,7 @@ test('claims sweep marks stale claims, audits release, and leaves fresh claims a
   assert.equal(swept.released.length, 1);
   assert.equal(ticket(staleRef).status, 'todo');
   assert.equal(ticket(staleRef).claim, null);
-  assert.match(ticket(staleRef).comments.at(-1).body, /claim exceeded the/);
+  assert.match(ticket(staleRef).comments.at(-1).body, /no board activity from `stale-worker`.*no live executor/);
   assert.equal(ticket(freshRef).claim.by, 'fresh-worker');
 });
 

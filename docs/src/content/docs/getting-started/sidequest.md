@@ -71,6 +71,14 @@ On the first prompt in each session, an active routed board adds one advisory re
 
 Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
 
+### Claims, and when one is released
+
+A claim says "someone is on this", so nothing else picks the ticket up. It is not a lease, and it never expires on the clock: an executor that has been working for five hours can still commit, submit, checkpoint, and close. That matters because a wall-clock timeout fails in the worst place, near the end of a long run, when the most unsaved work is at stake.
+
+`sidequest claims sweep` (also run at session start, and available as the `sweepClaims` MCP tool) releases a claim in three cases: its executor was observed to stop while still holding it, it went idle past `SIDEQUEST_CLAIM_IDLE_MIN` (default 60 minutes) with no executor associated, or nothing ever reported the stop and it went idle past `SIDEQUEST_CLAIM_ABANDON_MIN` (default 1440 minutes). Idleness counts from the holder's last board write, so a comment, checkpoint, scope request, or commit keeps a long run safe. `sidequest pulse SQ-3` shows the same verdict as `claim.reclaimable`; when it is null, leave the claim alone.
+
+A released claim takes its dispatch token with it. An executor that comes back to a swept ticket gets a refusal that names the recovery: keep the commit, re-dispatch, re-claim, and hand in the same commit.
+
 ### High-stakes tickets
 
 Use `--high-stakes` on `sidequest add` or `sidequest update` when the work has a clear approach but a bad change could damage shared state or consumers, such as migrations, shared API or payload changes, and cross-consumer edits. The MCP `add` and `update` tools use `highStakes: true`.

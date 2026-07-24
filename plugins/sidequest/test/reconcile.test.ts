@@ -2,8 +2,8 @@
 /**
  * Tests for the session worker registry + reconcileSession (SQ-153).
  *
- * The claim TTL (default 60 min) frees a crashed worker's ticket eventually. The
- * registry lets a SessionEnd / SubagentStop hook do it IMMEDIATELY, but safely:
+ * The sweep's idle/abandoned backstops free a crashed worker's ticket eventually.
+ * The registry lets a SessionEnd hook do it IMMEDIATELY, but safely:
  * reconciling a session must release ONLY the claims taken under that exact
  * session id, never a claim another live session holds, and never a finished
  * ticket. These tests pin that safety.

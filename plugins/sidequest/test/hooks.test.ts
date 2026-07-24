@@ -797,7 +797,7 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
   assert.equal(store.claimTicket(slug, stale.ref, 'stale-session', { direct: true, reason }).ok, true);
   assert.equal(store.claimTicket(slug, fresh.ref, 'fresh-session', { direct: true, reason }).ok, true);
   const staleTicket = store.getTicket(slug, stale.ref);
-  staleTicket.claim.at = new Date(Date.now() - store.claimTtlMs() - 1).toISOString();
+  staleTicket.claim.at = new Date(Date.now() - store.claimIdleMs() - 1).toISOString();
   db.putRow(database, 'tickets', {
     id: staleTicket.id, project: slug, ref: staleTicket.ref, status: staleTicket.status,
     archived: staleTicket.archived ? 1 : 0, ord: staleTicket.order, claim_by: staleTicket.claim.by, data: staleTicket,

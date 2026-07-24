@@ -51,7 +51,7 @@ the same presets as a "Remind me" control.
 
 ## Assign a ticket to the human
 
-Separate from an agent **claim** (atomic, TTL-bound, gates `ready`/`next`), a ticket can carry a
+Separate from an agent **claim** (atomic, released on observed death, gates `ready`/`next`), a ticket can carry a
 persistent **assignee** — normally the human. Use when the user says "assign this to me":
 
 ```bash

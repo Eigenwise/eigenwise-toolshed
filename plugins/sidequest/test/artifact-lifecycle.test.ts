@@ -416,7 +416,7 @@ test('a claimed ticket cannot be rewritten and redispatched into artifact mode',
 
   assert.throws(
     () => store.prepareDispatch(slug, created.ref, { sharedTree: true }),
-    /has a live claim.*Release it before dispatching again/
+    /has a live claim.*Release it .*before dispatching again/
   );
   assert.strictEqual(store.sharedTreeArtifactMode(store.getTicket(slug, created.ref)), false);
 });

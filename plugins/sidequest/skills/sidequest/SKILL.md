@@ -142,9 +142,16 @@ optionally `--status todo`).
   prior executor and spawn a fresh one for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
   metadata; pass `--full` only for needed elided bodies.
-- **Stale claims** reclaim after a TTL (`SIDEQUEST_CLAIM_TTL_MIN`); this session's claims
-  auto-release at session end. Dead executor past the TTL: salvage its worktree FIRST, then
+- **Claims release on observed death, never on age.** `claims sweep` frees a claim whose executor
+  was seen to stop (SubagentStop), plus two activity-based backstops: idle past
+  `SIDEQUEST_CLAIM_IDLE_MIN` (60m) with no executor associated, or `SIDEQUEST_CLAIM_ABANDON_MIN`
+  (1440m) when nothing ever reported the stop. This session's claims auto-release at session end. A
+  long-running executor is NOT stale — `pulse <ref>` reports `claim.reclaimable`, and a null there
+  means leave it alone. Dead executor: salvage its worktree FIRST, then
   `release SQ-3 --by <dead-worker-id> --status todo`, re-read, spawn one replacement.
+  Closeout (commit/submit/done/checkpoint) never consults a clock, so an executor can always hand in
+  work it did. If its claim was already swept, re-dispatch and have it re-claim, then submit the SAME
+  commit — never make it redo the work.
 - Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID
   or launch name. THE polling read: `changes --since`; `pulse <ref>` for liveness.
   `TaskStop` only after terminal evidence.
@@ -163,7 +170,7 @@ for a small change, a dispatched `review-audit`/`security-audit` executor otherw
 or explicitly accept every finding. Never mark a submitted ticket done without integrating it;
 never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves the board transition:
 inspect declared scope and publish uncommitted work. For committed, verified but unsubmitted work,
-recover `refs/sidequest/<ref>`, verify, release stale claim, publish, then use the control-plane grooming
+recover `refs/sidequest/<ref>`, verify, release the dead claim, publish, then use the control-plane grooming
 closure citing commit hash; never spawn an executor for `submit`/`done`.
 
 ## Route execution down; keep the loop tight

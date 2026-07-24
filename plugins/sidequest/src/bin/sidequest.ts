@@ -29,7 +29,7 @@ const agentsync = require('../lib/agentsync');
 const work = require('../lib/work');
 const commitScope = require('../lib/commit-scope');
 const worktrees = require('../lib/worktrees');
-const { claimRefusalMessage } = require('../lib/refusal-guidance');
+const { autoReleasedClaimMessage, claimRefusalMessage } = require('../lib/refusal-guidance');
 
 /* ------------------------------------------------------------------ *
  *  Arg parsing
@@ -372,7 +372,7 @@ async function cmdList(opts: any) {
       const pr = PRIORITY_MARK[t.priority] ? ` ${PRIORITY_MARK[t.priority]}` : '';
       const labels = t.labels.length ? `  #${t.labels.join(' #')}` : '';
       const imgs = t.assets.length ? `  \u{1F5BC}${t.assets.length}` : '';
-      const clm = t.claim && t.claim.by ? `  @${t.claim.by}${store.isClaimStale(t.claim) ? ' (stale)' : ''}` : '';
+      const clm = t.claim && t.claim.by ? `  @${t.claim.by}${store.claimReclaimable(t) ? ' (reclaimable)' : ''}` : '';
       const asn = t.assignee ? `  \u{1F464}${t.assignee}` : '';
       const blockers = store.openBlockers(slug, t);
       const blk = blockers.length ? `  ⛔ blocked-by ${blockers.join(',')}` : '';
@@ -783,7 +783,7 @@ async function cmdRm(opts: any, positional: any) {
   const { slug, meta } = await resolveProject(opts);
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`rm: no ticket "${idOrRef}" in ${meta.name}`);
-  if (ticket.claim && ticket.claim.by && !store.isClaimStale(ticket.claim) && !opts.force) {
+  if (ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket) && !opts.force) {
     fail(`rm: ${ticket.ref} is live-claimed by "${ticket.claim.by}"; pass --force to permanently remove it.`);
   }
   if (!store.deleteTicket(slug, ticket.id)) fail(`rm: could not delete "${ticket.ref}" from ${meta.name}`);
@@ -1148,7 +1148,10 @@ async function cmdCommit(opts: any, positional: any) {
   const ticket = store.getTicket(slug, idOrRef);
   const by = workerId(opts);
   if (!ticket) fail(`commit: no ticket "${idOrRef}" in ${meta.name}.`);
-  if (!ticket.claim || ticket.claim.by !== by) fail(`commit: ${ticket.ref} must be claimed by "${by}" before committing.`);
+  if (!ticket.claim || ticket.claim.by !== by) {
+    const released = !ticket.claim && ticket.claimRelease ? ` ${autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}` : '';
+    fail(`commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}`);
+  }
   if (ticket.dispatch && ticket.dispatch.sharedTree === false) {
     const location = commitScope.linkedWorktree(process.cwd());
     if (!location.ok || !location.linked) {
@@ -1165,6 +1168,7 @@ async function cmdCommit(opts: any, positional: any) {
     if (result.reason === 'no_existing_scope') fail(`commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(', ')}.`);
     fail(`commit: git failed: ${result.message || result.reason}`);
   }
+  store.touchClaim(slug, ticket.ref, by); // committing is proof of life; keep the backstop honest
   const warnings: string[] = [];
   if (result.unscopedPaths.length) {
     const comment = store.addComment(slug, ticket.ref, { by, body: outOfScopeComment(result.unscopedPaths), kind: 'comment', source: 'cli' });
@@ -1396,7 +1400,9 @@ async function cmdSweepClaims(opts: any) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     return;
   }
-  console.log(`✓ swept ${res.released.length} stale claim(s) from ${meta.name} (TTL ${Math.round(res.ttlMs / 60000)}m)`);
+  const kinds = res.released.map((entry: any) => entry.kind).filter(Boolean);
+  const detail = kinds.length ? `: ${kinds.join(', ')}` : '';
+  console.log(`✓ swept ${res.released.length} dead claim(s) from ${meta.name}${detail} (idle backstop ${Math.round(res.idleMs / 60000)}m, abandoned ${Math.round(res.abandonMs / 60000)}m)`);
 }
 
 async function cmdWorktrees(opts: any, positional: any) {
@@ -2564,11 +2570,14 @@ Native Agent dispatch (routed work stays in this conversation):
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
     \`sidequest work\`/\`drain\` are disabled because they cannot invoke Agent and never start a separate Claude process.
-  sidequest reconcile [--session <id>] [--reason "..."]   release a session's stale claims back to todo now
+  sidequest reconcile [--session <id>] [--reason "..."]   release a session's claims back to todo now
     (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's
-    tickets recover immediately instead of waiting out the claim TTL; safe — it only touches that session's
-    claims). Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.
-  sidequest claims sweep [--project <path-or-slug>]  release claims older than SIDEQUEST_CLAIM_TTL_MIN (default 60m)
+    tickets recover immediately; safe — it only touches that session's claims).
+    Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.
+  sidequest claims sweep [--project <path-or-slug>]  release claims whose executor was observed to stop (SubagentStop),
+    then two activity-based backstops: no board activity for SIDEQUEST_CLAIM_IDLE_MIN (default 60m) with no live executor
+    associated, or SIDEQUEST_CLAIM_ABANDON_MIN (default 1440m) for a death nothing observed. A running executor's claim is
+    never swept on age, and closeout (commit/submit/done) never consults these windows.
   sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  list unlocked stale agent worktrees; backs up dirty cleanup before removal
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):

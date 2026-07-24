@@ -6,7 +6,7 @@ const work = require("./work");
 const worktrees = require("./worktrees");
 const agentsync = require("./agentsync");
 const commitScope = require("./commit-scope");
-const { claimRefusalMessage } = require("./refusal-guidance");
+const { autoReleasedClaimMessage, claimRefusalMessage } = require("./refusal-guidance");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const CATEGORY_TAXONOMY_WARNING = "Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.";
@@ -152,7 +152,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   ready: "Unclaimed, unblocked tickets in safe waves.",
   story: "Manage stories.",
   checkpoint: "Record review candidate; retain claim.",
-  sweepClaims: "Release stale claims; fresh stay.",
+  sweepClaims: "Release dead claims; live ones stay.",
   next: "Claim the top available ticket.",
   scopeRequest: "Request scope while keeping claim active.",
   commit: "Commit declared paths from claimed worktree.",
@@ -710,7 +710,7 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
-      if (ticket.claim && ticket.claim.by && !store.isClaimStale(ticket.claim) && !args.force) {
+      if (ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket) && !args.force) {
         return { ok: false, reason: "claimed", ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
       }
       const ref = ticket.ref;
@@ -826,7 +826,7 @@ const TOOLS = [
   },
   {
     name: "sweepClaims",
-    description: "Release claims older than the staleness TTL (audited); fresh claims untouched.",
+    description: "Release claims whose executor was observed to stop, plus the idle/abandoned backstops (audited); live claims untouched however long they run.",
     inputSchema: {
       type: "object",
       properties: { project: PROJECT_PROP }
@@ -990,7 +990,8 @@ const TOOLS = [
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`commit: no ticket "${args.ref}" in ${meta.name}.`);
       if (!ticket.claim || ticket.claim.by !== by) {
-        return mutationAck(slug, { ok: false, ticket, reason: "not_owner", message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.` });
+        const released = !ticket.claim && ticket.claimRelease ? ` ${autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}` : "";
+        return mutationAck(slug, { ok: false, ticket, reason: "not_owner", message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}` });
       }
       const root = worktreeRoot(args.worktree, "commit");
       if (ticket.dispatch && ticket.dispatch.sharedTree === false) {
@@ -1019,6 +1020,7 @@ const TOOLS = [
         const message2 = result.reason === "missing_scope" ? `commit: ${ticket.ref} has no declared file scope.` : result.reason === "outside_scope" ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(", ")}. Expand scope with: ${store.scopeExpansionCommand(ticket, result.outside)}` : result.reason === "no_existing_scope" ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.` : `commit: git failed: ${result.message || result.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: result.reason, message: message2 });
       }
+      store.touchClaim(slug, ticket.ref, by);
       const warnings = [];
       if (result.unscopedPaths.length) {
         const comment = store.addComment(slug, ticket.ref, { by, body: outOfScopeComment(result.unscopedPaths), kind: "comment", source: "mcp" });

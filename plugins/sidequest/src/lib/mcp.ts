@@ -29,7 +29,7 @@ const work = require('./work');
 const worktrees = require('./worktrees');
 const agentsync = require('./agentsync');
 const commitScope = require('./commit-scope');
-const { claimRefusalMessage } = require('./refusal-guidance');
+const { autoReleasedClaimMessage, claimRefusalMessage } = require('./refusal-guidance');
 
 type ToolDefinition = {
   name: string;
@@ -226,7 +226,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   ready: 'Unclaimed, unblocked tickets in safe waves.',
   story: 'Manage stories.',
   checkpoint: 'Record review candidate; retain claim.',
-  sweepClaims: 'Release stale claims; fresh stay.',
+  sweepClaims: 'Release dead claims; live ones stay.',
   next: 'Claim the top available ticket.',
   scopeRequest: 'Request scope while keeping claim active.',
   commit: 'Commit declared paths from claimed worktree.',
@@ -824,7 +824,7 @@ const TOOLS: ToolDefinition[] = [
       const { slug, meta } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
-      if (ticket.claim && ticket.claim.by && !store.isClaimStale(ticket.claim) && !args.force) {
+      if (ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket) && !args.force) {
         return { ok: false, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
       }
       const ref = ticket.ref;
@@ -942,7 +942,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'sweepClaims',
-    description: 'Release claims older than the staleness TTL (audited); fresh claims untouched.',
+    description: 'Release claims whose executor was observed to stop, plus the idle/abandoned backstops (audited); live claims untouched however long they run.',
     inputSchema: {
       type: 'object',
       properties: { project: PROJECT_PROP },
@@ -1106,7 +1106,10 @@ const TOOLS: ToolDefinition[] = [
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`commit: no ticket "${args.ref}" in ${meta.name}.`);
       if (!ticket.claim || ticket.claim.by !== by) {
-        return mutationAck(slug, { ok: false, ticket, reason: 'not_owner', message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.` });
+        const released = !ticket.claim && ticket.claimRelease
+          ? ` ${autoReleasedClaimMessage(ticket.ref, ticket.claimRelease)}`
+          : '';
+        return mutationAck(slug, { ok: false, ticket, reason: 'not_owner', message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}` });
       }
       const root = worktreeRoot(args.worktree, 'commit');
       if (ticket.dispatch && ticket.dispatch.sharedTree === false) {
@@ -1141,6 +1144,7 @@ const TOOLS: ToolDefinition[] = [
               : `commit: git failed: ${result.message || result.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: result.reason, message });
       }
+      store.touchClaim(slug, ticket.ref, by); // committing is proof of life; keep the backstop honest
       const warnings: string[] = [];
       if (result.unscopedPaths.length) {
         const comment = store.addComment(slug, ticket.ref, { by, body: outOfScopeComment(result.unscopedPaths), kind: 'comment', source: 'mcp' });

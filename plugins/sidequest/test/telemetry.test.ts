@@ -21,7 +21,7 @@ interface TicketObservation {
 interface Pulse {
   ref: string;
   comments: number;
-  claim: { ageMs: number; at: string; by: string };
+  claim: { ageMs: number; at: string; by: string; idleMs: number | null; reclaimable: string | null };
   lastComment: { at: string; by: string; kind: string; body: string };
   git: { commit: { hash: string }; dirty: boolean };
   [key: string]: unknown;
@@ -68,7 +68,8 @@ test('seed telemetry fixture', () => {
 test('CLI and MCP pulse return the compact liveness shape with git activity', async () => {
   const pulse = cliJson<Pulse>(['pulse', ref]);
   assert.deepStrictEqual(Object.keys(pulse).sort(), ['checkpoint', 'claim', 'comments', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastActivityAt', 'lastComment', 'project', 'projectName', 'ref', 'status', 'submission', 'title', 'working']);
-  assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'by']);
+  assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'by', 'idleMs', 'reclaimable']);
+  assert.strictEqual(pulse.claim.reclaimable, null, 'a working claim is never reclaimable');
   assert.strictEqual(pulse.comments, 1);
   assert.deepStrictEqual(pulse.lastComment, { at: pulse.lastComment.at, by: 'telemetry-worker', kind: 'comment', body: 'a recent telemetry note' });
   assert.match(pulse.git.commit.hash, /^[0-9a-f]{40}$/);

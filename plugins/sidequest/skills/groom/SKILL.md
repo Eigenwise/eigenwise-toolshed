@@ -14,7 +14,7 @@ repo with no ticket ever filed for it. This skill runs that check end to end: sw
 what's safe, ask about what isn't, apply the answers, report.
 
 **Reference pass this is modeled on:** the 2026-07-07 temporal-RL grooming pass — 17 tickets closed
-with evidence-bearing notes, several stale claims released, and new frontier tickets filed with
+with evidence-bearing notes, several dead claims released, and new frontier tickets filed with
 `depends-on` links for the work that had already been decided but never ticketed. That's the shape a good
 pass takes: mostly mechanical cleanup, a handful of real judgment calls surfaced to the user, nothing
 silently dropped.
@@ -24,10 +24,11 @@ silently dropped.
 - **Never `sidequest rm` a ticket.** Closing means an evidence-bearing `sidequest groom-close <ref> --reason <evidence>`, not deletion. This explicit control-plane operation is for board grooming only; routed executor `done` cannot close released repository work.
   If a ticket is genuinely bogus (duplicate, never should have existed), close it with a comment
   explaining why — the record stays, just off the active board.
-- **Never touch a claim held by an active agent.** Only release a claim that is actually stale: `doing`,
-  claimed by someone, and idle past the claim TTL (`SIDEQUEST_CLAIM_TTL_MIN`, default 60 minutes — check
-  the ticket's claim timestamp against "now"). If a claim is recent, leave it alone even if you don't
-  recognize the `--by` — another session may genuinely be mid-work. Never pass `--force` to `release` or
+- **Never touch a claim held by an active agent.** Age is not evidence of death: a 5-hour claim can be a
+  working executor. Only release a claim the board itself calls reclaimable — `pulse <ref>` reports
+  `claim.reclaimable` (`observed_stop`, `idle`, or `abandoned`), and `claims sweep` releases exactly
+  those. If it is null, leave the claim alone even if you don't recognize the `--by` — another session
+  may genuinely be mid-work. Never pass `--force` to `release` or
   `claim` during a grooming pass; force overrides a *live* claim, which is exactly what this guardrail
   forbids.
 - **Every closure needs evidence.** A ticket only moves to `done` (or gets marked superseded) with a
@@ -72,8 +73,9 @@ Sort every ticket (and every untracked chunk of repo work you found) into one bu
   that matches the ticket's ask.
 - **(b) Superseded** — a later decision (another ticket, a doc, a design change) replaced this ticket's
   plan. Evidence: the superseding ticket/doc/commit.
-- **(c) Stale claim** — status `doing`, held by an agent, `claim.at` older than the TTL, no sign of
-  active work (no recent comment, no matching recent commit). Evidence: the claim timestamp vs. now.
+- **(c) Dead claim** — status `doing`, held by an agent, and `pulse` reports `claim.reclaimable` (its
+  executor was observed to stop, or it went idle past a backstop). Evidence: that verdict plus the
+  absence of recent activity. A claim that is merely old is not this bucket.
 - **(d) Duplicate/overlap** — two or more open tickets describing the same work. Evidence: both refs,
   quoting the overlapping ask.
 - **(e) Missing ticket** — real work found in the repo/docs with no corresponding ticket at all.
@@ -104,10 +106,10 @@ a single backoff queue (see SQ-40 comment thread, 2026-07-06). This ticket's ori
 built."
 sidequest groom-close SQ-9 --reason "Superseded by SQ-40's design; see the preceding evidence comment."
 
-# (c) stale claim — release, don't force, only past TTL
+# (c) dead claim — release, don't force, only when pulse says reclaimable
 sidequest release SQ-21 --by <you> --status todo
-sidequest comment SQ-21 -m "Claim by agent-xyz from 2026-07-05T10:00Z was idle past the 60min TTL with
-no matching commit or comment since. Released back to todo."
+sidequest comment SQ-21 -m "Claim by agent-xyz was reclaimable (observed_stop): its executor stopped
+while holding the claim, with no commit or comment since. Released back to todo."
 
 # (d) duplicate — close the newer/thinner one, point at the survivor
 sidequest comment SQ-33 -m "Duplicate of SQ-31 (same ask: retry queue for the ingest worker, filed a day
