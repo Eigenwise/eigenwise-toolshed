@@ -20,6 +20,8 @@ every project you work in.
 
 You stay on your main quest; the side quests get written down.
 
+*Why this exists, what bet it makes, and what it costs: [WHY.md](WHY.md).*
+
 ![The sidequest dashboard showing one board across every project](docs/board.png)
 
 *One live board across every project you work in. It's completely local: the server binds to `127.0.0.1`, nothing phones home, and there's no hosted version. Free and MIT.*
