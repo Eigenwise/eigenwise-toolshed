@@ -49,10 +49,8 @@ function filterLoki(expression, projects) {
   return expression.replaceAll('{service_name="workbench-observer"}', `{service_name="workbench-observer"} | ${matcher}`);
 }
 
-// Claude Code's own claude_code.* OTEL events carry no project attribution, so
-// the injected project matcher matches a label that is never there and starves
-// the panel to "no data". These read board-wide instead.
-const PROJECT_UNSCOPED_PANELS = new Set(['MCP connection activity']);
+// MCP events have no project attribution; offload share measures board-wide routing.
+const PROJECT_UNSCOPED_PANELS = new Set(['MCP connection activity', 'Off-Anthropic offload share']);
 
 function filterDashboard(dashboard, projects) {
   for (const panel of dashboard.panels) {

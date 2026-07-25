@@ -18,6 +18,12 @@ Token panels split input, output, cache creation, and cache reads. The token car
 
 The model view shows which model routes are doing the work. The gateway view separates requests sent through Codex Gateway from direct Claude API activity. The “who is burning” view helps find projects, sessions, or models with the largest totals.
 
+## Efficiency
+
+- **Billed tokens per output token** compares billed input, cache, and creation tokens with generated output by query source. Lower is better. Main normally exceeds subagent, but a widening gap means the orchestrator is waking up with too much context.
+- **Off-Anthropic offload share** shows the percentage of notional cost routed to Codex models, plus the offloaded and total figures. Higher means category routing is shifting more work onto the ChatGPT subscription. It is board-wide, so don't use the project filter to interpret it.
+- **Auxiliary spend by model and project** ranks compaction, summarization, and background-work cost. A large or climbing entry is overhead nobody directly asked for.
+
 MCP connection activity counts connection attempts by server and status. Claude Code names only plugin-hosted servers on that event, so IDE and user-configured servers are grouped as “unnamed (non-plugin server)” instead of being dropped. That event carries no project, so the panel is board-wide and shows up on the global dashboard only, not on the per-project ones.
 
 ![Token usage by model](../../../assets/screenshots/observability-tokens-models.png)

@@ -676,13 +676,252 @@
       ]
     },
     {
+      "id": 105,
+      "title": "Efficiency",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 32,
+      "title": "Billed tokens per output token",
+      "description": "Billed input, cache creation, and cache reads divided by output tokens, split by query source. Lower is better. Main normally runs higher than subagent; a widening gap means the orchestrator is waking up with too much context.",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 8,
+        "h": 6
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "vertical",
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "suffix": ":1",
+          "noValue": "No data"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum by (query_source) (increase(claude_code_token_usage_tokens_total{type=~\"cacheRead|cacheCreation|input\",project_id=~\"$project\"}[$__range])) / sum by (query_source) (increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range]))) and (sum by (query_source) (increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) > 0)",
+          "legendFormat": "{{query_source}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "title": "Off-Anthropic offload share",
+      "description": "Cost on Codex-routed models as a share of all notional cost. Higher means category routing is moving more work onto the ChatGPT subscription. The two figures underneath show the offloaded and total notional costs for the selected range.",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 38,
+        "w": 8,
+        "h": 6
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "vertical",
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "noValue": "No data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "offloaded cost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total notional cost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(100 * sum(increase(claude_code_cost_usage_USD_total{model=~\"claude-codex-.*\"}[$__range])) / sum(increase(claude_code_cost_usage_USD_total[$__range]))) and (sum(increase(claude_code_cost_usage_USD_total[$__range])) > 0)",
+          "legendFormat": "offload share",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{model=~\"claude-codex-.*\"}[$__range]))",
+          "legendFormat": "offloaded cost",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(claude_code_cost_usage_USD_total[$__range]))",
+          "legendFormat": "total notional cost",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "title": "Auxiliary spend by model and project",
+      "description": "API-equivalent cost from compaction, summarization, and background work, sorted highest first. A large or climbing entry is overhead rather than work someone directly asked for.",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 38,
+        "w": 8,
+        "h": 6
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": true,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sort_desc(sum by (model, project_id) (increase(claude_code_cost_usage_USD_total{query_source=\"auxiliary\",project_id=~\"$project\"}[$__range])))",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "model": "Model",
+              "project_id": "Project",
+              "Value #A": "Cost"
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": 102,
       "title": "Tool activity",
       "type": "row",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 37,
+        "y": 44,
         "w": 24,
         "h": 1
       },
@@ -699,7 +938,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 45,
         "w": 12,
         "h": 8
       },
@@ -767,7 +1006,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 38,
+        "y": 45,
         "w": 6,
         "h": 4
       },
@@ -829,7 +1068,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 38,
+        "y": 45,
         "w": 6,
         "h": 4
       },
@@ -878,7 +1117,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 42,
+        "y": 49,
         "w": 12,
         "h": 8
       },
@@ -926,7 +1165,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 57,
         "w": 24,
         "h": 1
       },
@@ -943,7 +1182,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 51,
+        "y": 58,
         "w": 12,
         "h": 8
       },
@@ -1017,7 +1256,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 51,
+        "y": 58,
         "w": 12,
         "h": 8
       },
@@ -1069,7 +1308,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 59,
+        "y": 66,
         "w": 24,
         "h": 8
       },
@@ -1144,7 +1383,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 67,
+        "y": 74,
         "w": 24,
         "h": 6
       },
@@ -1193,7 +1432,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 73,
+        "y": 80,
         "w": 24,
         "h": 1
       },
@@ -1210,7 +1449,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 74,
+        "y": 81,
         "w": 12,
         "h": 8
       },
@@ -1327,7 +1566,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 74,
+        "y": 81,
         "w": 12,
         "h": 8
       },
@@ -1381,7 +1620,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 82,
+        "y": 89,
         "w": 12,
         "h": 8
       },
@@ -1433,7 +1672,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 82,
+        "y": 89,
         "w": 12,
         "h": 8
       },
@@ -1482,7 +1721,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 90,
+        "y": 97,
         "w": 24,
         "h": 1
       },
@@ -1499,7 +1738,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 91,
+        "y": 98,
         "w": 12,
         "h": 8
       },
@@ -1589,7 +1828,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 91,
+        "y": 98,
         "w": 12,
         "h": 8
       },
@@ -1661,7 +1900,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 99,
+        "y": 106,
         "w": 24,
         "h": 8
       },
@@ -1707,7 +1946,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 107,
+        "y": 114,
         "w": 24,
         "h": 1
       },
@@ -1724,7 +1963,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 108,
+        "y": 115,
         "w": 24,
         "h": 9
       },
@@ -1834,7 +2073,7 @@
       "type": "text",
       "gridPos": {
         "x": 0,
-        "y": 117,
+        "y": 124,
         "w": 24,
         "h": 4
       },
