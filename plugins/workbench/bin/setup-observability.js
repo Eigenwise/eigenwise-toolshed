@@ -291,8 +291,8 @@ function collectorBinaryName(platform = process.platform) {
   return platform === 'win32' ? 'otelcol-contrib.exe' : 'otelcol-contrib';
 }
 
-function resolveCollectorBinary(dataDir, environment = process.env) {
-  return environment.WORKBENCH_OTELCOL_CONTRIB || path.join(dataDir, 'collector', collectorBinaryName());
+function resolveCollectorBinary(dataDir, environment = process.env, platform = process.platform) {
+  return environment.WORKBENCH_OTELCOL_CONTRIB || path.join(dataDir, 'collector', collectorBinaryName(platform));
 }
 
 function parseChecksum(text, archiveName) {
@@ -304,7 +304,8 @@ function parseChecksum(text, archiveName) {
 
 async function downloadCollector(options) {
   const dataDir = options.dataDir;
-  const archiveUrl = options.archiveUrl || collectorArchiveUrl();
+  const platform = options.platform || process.platform;
+  const archiveUrl = options.archiveUrl || collectorArchiveUrl(platform, options.arch);
   const archiveName = path.basename(archiveUrl);
   const checksumsUrl = options.checksumsUrl || `${archiveUrl.slice(0, archiveUrl.lastIndexOf('/'))}/opentelemetry-collector-releases_otelcol-contrib_checksums.txt`;
   const fetchImpl = options.fetch || global.fetch;
@@ -319,7 +320,6 @@ async function downloadCollector(options) {
   const collectorDir = path.join(dataDir, 'collector');
   fs.mkdirSync(collectorDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(archivePath, archive, { mode: 0o600 });
-  const platform = options.platform || process.platform;
   const environment = options.environment || process.env;
   const systemRoot = environment.SystemRoot || environment.WINDIR || 'C:\\Windows';
   const systemTar = path.join(systemRoot, 'System32', 'tar.exe');
@@ -330,7 +330,7 @@ async function downloadCollector(options) {
   const result = (options.spawnSync || spawnSync)(tar, tarArgs, { encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) throw new Error('Could not extract the pinned Collector archive.');
   try { fs.unlinkSync(archivePath); } catch {}
-  return resolveCollectorBinary(dataDir, options.environment);
+  return resolveCollectorBinary(dataDir, options.environment, platform);
 }
 
 function ensureCollectorConfig(dataDir, sink, ports = DEFAULT_PORTS) {
@@ -382,7 +382,7 @@ function setupPlan(options = {}) {
     settingsPath: projectSettingsPath(projectDir),
     databaseFile: path.join(dataDir, 'observability.db'),
     collectorConfig: path.join(dataDir, 'otel-collector-config.yaml'),
-    collectorBinary: resolveCollectorBinary(dataDir, options.environment),
+    collectorBinary: resolveCollectorBinary(dataDir, options.environment, options.platform),
     observabilityConfig: defaultConfigPath(dataDir),
     sink,
     lgtm: sink === DEFAULT_SINK,

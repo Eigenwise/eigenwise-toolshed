@@ -89,8 +89,11 @@ function warnOnce(input, installedVersion, loadedVersion, options = {}) {
   }
 }
 
+// Only an absolute project directory can be walked: path.resolve would otherwise anchor a
+// relative (or foreign-platform) value to whatever cwd the hook happens to run under, and climb
+// into an unrelated toolshed checkout above it.
 function marketplaceRoot(projectDirectory, fileSystem) {
-  if (!projectDirectory) return false;
+  if (!projectDirectory || !path.isAbsolute(projectDirectory)) return false;
   let directory = path.resolve(projectDirectory);
   while (true) {
     const manifest = readJson(fileSystem, path.join(directory, '.claude-plugin', 'marketplace.json'));

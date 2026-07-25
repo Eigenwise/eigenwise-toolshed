@@ -16,7 +16,10 @@ const { generatedDashboards } = require('../observability/sinks/grafana/dashboar
 const { buildOtlpLogPayload, createGatewayUsageEmitter } = require('../../codex-gateway/lib/usage-observability.js');
 const { ticketObservation: nativeTicketObservation } = require('../../sidequest/lib/telemetry.js');
 
-const PROJECT_DIR = 'C:\\workspace\\canonical-project';
+// Hooks hash the cwd Claude Code hands them, project-telemetry hashes path.resolve of its
+// project directory. They only agree on a path that is already absolute for the running
+// platform, so a Windows-shaped literal silently forks the project_id on Linux.
+const PROJECT_DIR = process.platform === 'win32' ? 'C:\\workspace\\canonical-project' : '/workspace/canonical-project';
 const NOW = new Date('2026-07-20T12:00:00.000Z');
 
 function assertAccepted(observation, fixture) {

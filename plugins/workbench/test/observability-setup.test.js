@@ -157,9 +157,10 @@ test('downloads the pinned archive with the release checksums manifest and Windo
   const urls = [];
   const calls = [];
 
-  await downloadCollector({
+  const binary = await downloadCollector({
     dataDir: directory,
     platform: 'win32',
+    arch: 'x64',
     environment: { SystemRoot: path.join(directory, 'missing-windows') },
     fetch: async (url) => {
       urls.push(url);
@@ -173,9 +174,11 @@ test('downloads the pinned archive with the release checksums manifest and Windo
     },
   });
 
+  assert.match(urls[0], new RegExp(`/otelcol-contrib_${COLLECTOR_VERSION}_windows_amd64\\.tar\\.gz$`));
   assert.match(urls[1], /opentelemetry-collector-releases_otelcol-contrib_checksums\.txt$/);
   assert.equal(calls[0][0], 'tar');
   assert.equal(calls[0][1][0], '--force-local');
+  assert.equal(path.basename(binary), 'otelcol-contrib.exe');
 });
 
 test('plans current-user application data and only starts LGTM on request', () => {
