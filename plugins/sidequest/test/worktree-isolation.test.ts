@@ -50,6 +50,15 @@ function runHook(script: string, payload: unknown) {
   return out.trim() ? JSON.parse(out) : null;
 }
 
+function runCli(args: string[]) {
+  return execFileSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME },
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
 function dispatched(agentId: string, options: { sharedTree?: boolean } = {}) {
   const ticket = store.createTicket(slug, {
     title: `isolation fixture ${agentId}`,
@@ -105,6 +114,42 @@ test('a write inside the agent worktree is allowed', () => {
   const { sessionId, executor } = dispatched(agentId);
   const target = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`, 'README.md');
   assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, PROJECT)), null);
+});
+
+test('a junction alias to the shared checkout is refused', () => {
+  const agentId = 'a2alias';
+  const { sessionId, executor } = dispatched(agentId);
+  const alias = path.join(os.tmpdir(), `sq-isolation-alias-${process.pid}-${Date.now()}`);
+  fs.symlinkSync(PROJECT, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  try {
+    const target = path.join(alias, 'README.md');
+    const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, alias));
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes(target));
+  } finally {
+    fs.rmSync(alias, { recursive: true, force: true });
+  }
+});
+
+test('a linked worktree remains allowed', () => {
+  const agentId = 'a2linked';
+  const { sessionId, executor } = dispatched(agentId);
+  const linked = path.join(os.tmpdir(), `sq-isolation-linked-${process.pid}-${Date.now()}`);
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  try {
+    const target = path.join(linked, 'README.md');
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, linked)), null);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+test('a missing target under the shared checkout is refused', () => {
+  const agentId = 'a2missing';
+  const { sessionId, executor } = dispatched(agentId);
+  const target = path.join(PROJECT, 'new-folder', 'missing.txt');
+  const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, PROJECT));
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
 });
 
 test('a shared-tree dispatch writes in the shared checkout without complaint', () => {
@@ -191,6 +236,7 @@ test('a destructive git command is refused while the shared checkout carries unc
   const reason = out.hookSpecificOutput.permissionDecisionReason;
   assert.ok(reason.includes('executor-work.txt'), 'lists what would be destroyed');
   assert.ok(reason.includes('git stash push'), 'names the recoverable alternative');
+  assert.ok(reason.includes('sidequest recover-shared'), 'names the exact recovery action');
 
   const narrow = runHook(GUARD_DESTRUCTIVE, {
     cwd: repo,
@@ -205,6 +251,35 @@ test('a destructive git command is refused while the shared checkout carries unc
     tool_input: { command: `git -C "${repo.replace(/\\/g, '/')}" clean -fd` },
   });
   assert.equal(elsewhere.hookSpecificOutput.permissionDecision, 'deny', 'git -C targets the named repo');
+});
+
+test('recover-shared refuses a named stash that misses dirty paths', () => {
+  const repo = initRepo('sq-recover-missing-');
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
+  fs.writeFileSync(path.join(repo, 'preserved.txt'), 'saved first\n');
+  git(['stash', 'push', '-u', '-m', 'sidequest incomplete recovery fixture']);
+  fs.writeFileSync(path.join(repo, 'unpreserved.txt'), 'still at risk\n');
+
+  assert.throws(
+    () => runCli(['recover-shared', '--project', repo, '--stash', 'stash@{0}', '--yes']),
+    /does not preserve: unpreserved\.txt/
+  );
+  assert.equal(fs.existsSync(path.join(repo, 'unpreserved.txt')), true, 'the dirty file stays in place after a failed recovery check');
+});
+
+test('recover-shared verifies a named stash before cleaning a dirty shared checkout', () => {
+  const repo = initRepo('sq-recover-shared-');
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
+  fs.writeFileSync(path.join(repo, 'executor-work.txt'), 'preserved executor work\n');
+  git(['stash', 'push', '-u', '-m', 'sidequest recovery fixture']);
+  git(['stash', 'apply', 'stash@{0}']);
+
+  const output = runCli(['recover-shared', '--project', repo, '--stash', 'stash@{0}', '--yes']);
+  assert.equal(git(['status', '--porcelain']), '', 'the shared checkout is clean after recovery');
+  assert.equal(fs.existsSync(path.join(repo, 'executor-work.txt')), false, 'the destructive cleanup ran only after verification');
+  assert.ok(output.includes('stash stash@{0}'), 'prints the named stash evidence');
+  assert.ok(output.includes('executor-work.txt'), 'prints the covered path evidence');
+  assert.ok(git(['stash', 'list', '--format=%gd']).includes('stash@{0}'), 'the preserved stash remains recoverable');
 });
 
 test('closure refusals name the next legal action instead of only their precondition', () => {

@@ -118,7 +118,7 @@ function refusal(label, repo, dirty) {
     `  repo: ${repo}`,
     ...shown,
     "Some of this may be a live executor's finished work that lost its worktree; the shared tree is not yours alone.",
-    "Next step: decide per path. Commit what belongs to a ticket (`sidequest commit`, or a scoped `git commit`), then `git stash push -u -- <paths>` for anything you truly want out of the way. A stash is recoverable, this operation is not. Re-run once `git status --porcelain` is empty."
+    `Next step: preserve every dirty path in a named stash (for example, \`git stash push -u -m "sidequest recovery"\`), then run \`sidequest recover-shared --project "${repo}" --stash <stash@{n}> --yes\`. That exact recovery action verifies the stash before it runs \`git reset --hard && git clean -fd\`.`
   ].join("\n");
 }
 function main() {

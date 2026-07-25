@@ -86,8 +86,23 @@ function targetPath(input) {
 function insideAgentWorktree(target) {
   return `${target}${import_node_path2.default.sep}`.includes(AGENT_WORKTREE);
 }
+function canonicalPath(value) {
+  let candidate = import_node_path2.default.resolve(value);
+  const missing = [];
+  for (; ; ) {
+    try {
+      const real = import_node_fs2.default.realpathSync.native(candidate);
+      return import_node_path2.default.join(real, ...missing.reverse());
+    } catch (_) {
+      const parent = import_node_path2.default.dirname(candidate);
+      if (parent === candidate) return import_node_path2.default.resolve(value);
+      missing.push(import_node_path2.default.basename(candidate));
+      candidate = parent;
+    }
+  }
+}
 function repoRootFor(target) {
-  let directory = import_node_path2.default.dirname(target);
+  let directory = import_node_path2.default.dirname(canonicalPath(target));
   for (; ; ) {
     const gitEntry = import_node_path2.default.join(directory, ".git");
     let stats = null;
@@ -104,7 +119,7 @@ function repoRootFor(target) {
 }
 function samePath(a, b) {
   const normalize = (value) => {
-    const resolved = import_node_path2.default.resolve(value);
+    const resolved = canonicalPath(value);
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   };
   return normalize(a) === normalize(b);

@@ -27,8 +27,24 @@ function insideAgentWorktree(target: string): boolean {
   return `${target}${path.sep}`.includes(AGENT_WORKTREE);
 }
 
+function canonicalPath(value: string): string {
+  let candidate = path.resolve(value);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const real = fs.realpathSync.native(candidate);
+      return path.join(real, ...missing.reverse());
+    } catch (_) {
+      const parent = path.dirname(candidate);
+      if (parent === candidate) return path.resolve(value);
+      missing.push(path.basename(candidate));
+      candidate = parent;
+    }
+  }
+}
+
 function repoRootFor(target: string): { root: string; linked: boolean } | null {
-  let directory = path.dirname(target);
+  let directory = path.dirname(canonicalPath(target));
   for (;;) {
     const gitEntry = path.join(directory, '.git');
     let stats: fs.Stats | null = null;
@@ -46,7 +62,7 @@ function repoRootFor(target: string): { root: string; linked: boolean } | null {
 
 function samePath(a: string, b: string): boolean {
   const normalize = (value: string) => {
-    const resolved = path.resolve(value);
+    const resolved = canonicalPath(value);
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
   };
   return normalize(a) === normalize(b);

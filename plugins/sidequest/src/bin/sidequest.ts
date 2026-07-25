@@ -23,7 +23,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('node:fs/promises');
 const http = require('http');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const store = require('../lib/store');
 const agentsync = require('../lib/agentsync');
 const work = require('../lib/work');
@@ -1442,6 +1442,42 @@ async function cmdWorktrees(opts: any, positional: any) {
   if (result.failures.length) process.exitCode = 1;
 }
 
+async function cmdRecoverShared(opts: any) {
+  const { meta } = await resolveProject(opts);
+  const repo = path.resolve(meta.path);
+  const stash = String(opts.stash || '').trim();
+  const action = 'git reset --hard && git clean -fd';
+  if (!stash) fail(`recover-shared: refusing recovery action "${action}"; pass --stash <stash@{n}> with the named stash that preserves this checkout.`);
+  if (!opts.yes) fail(`recover-shared: refusing recovery action "${action}"; re-run \`sidequest recover-shared --project "${repo}" --stash ${stash} --yes\` after checking the stash evidence.`);
+  let shared = false;
+  try { shared = (await fs.stat(path.join(repo, '.git'))).isDirectory(); } catch (_) {}
+  if (!shared) fail(`recover-shared: refusing recovery action "${action}"; "${repo}" is not a shared checkout.`);
+
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const statusEntries = git(['status', '--porcelain=v1', '-z']).split('\0').filter(Boolean);
+  const dirty: string[] = [];
+  for (let index = 0; index < statusEntries.length; index += 1) {
+    const entry = statusEntries[index];
+    dirty.push(entry.slice(3));
+    if (/^[RC]/.test(entry.slice(0, 2)) && statusEntries[index + 1]) dirty.push(statusEntries[++index]);
+  }
+  if (!dirty.length) fail(`recover-shared: refusing recovery action "${action}"; the shared checkout is already clean.`);
+
+  const namedStashes = git(['stash', 'list', '--format=%gd']).split(/\r?\n/).filter(Boolean);
+  if (!namedStashes.includes(stash)) fail(`recover-shared: refusing recovery action "${action}"; "${stash}" is not a named stash in "${repo}".`);
+  const object = git(['rev-parse', '--verify', `${stash}^{commit}`]);
+  const preserved = new Set(git(['stash', 'show', '--name-only', '--format=', '--include-untracked', '-z', stash]).split('\0').filter(Boolean));
+  const missing = dirty.filter((file: string) => !preserved.has(file));
+  if (missing.length) fail(`recover-shared: refusing recovery action "${action}"; stash ${stash} (${object}) does not preserve: ${missing.join(', ')}.`);
+
+  execFileSync('git', ['reset', '--hard'], { cwd: repo, windowsHide: true, stdio: 'ignore' });
+  execFileSync('git', ['clean', '-fd'], { cwd: repo, windowsHide: true, stdio: 'ignore' });
+  const remaining = git(['status', '--porcelain']);
+  if (remaining) fail(`recover-shared: ${action} completed, but the checkout remains dirty:\n${remaining}`);
+  console.log(`✓ recovered shared checkout with ${action}`);
+  console.log(`  preserved evidence: stash ${stash} (${object}) covering ${dirty.join(', ')}`);
+}
+
 async function cmdNext(opts: any) {
   const { slug, meta } = await resolveProject(opts);
   if (!validateModelFilter('next', opts)) return;
@@ -2579,6 +2615,7 @@ Native Agent dispatch (routed work stays in this conversation):
     associated, or SIDEQUEST_CLAIM_ABANDON_MIN (default 1440m) for a death nothing observed. A running executor's claim is
     never swept on age, and closeout (commit/submit/done) never consults these windows.
   sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  list unlocked stale agent worktrees; backs up dirty cleanup before removal
+  sidequest recover-shared --project <path-or-slug> --stash <stash@{n}> --yes  reset a dirty shared checkout only after verifying its named stash
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
   sidequest assign <id|SQ-n> [--to who=you]        assign a ticket (defaults to "you", the human)
@@ -2712,6 +2749,9 @@ async function main() {
       break;
     case 'worktrees':
       await cmdWorktrees(opts, positional);
+      break;
+    case 'recover-shared':
+      await cmdRecoverShared(opts);
       break;
     case 'next':
     case 'grab':
