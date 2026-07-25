@@ -682,6 +682,11 @@ test('SessionStart cleanup leaves unrelated gateway caches alone', () => {
 
 test('env wiring preserves Claude 1M aliases and removes the unsafe global threshold', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-env-'));
+  // Isolated home plus an unrunnable probe: wiring writes pin state under
+  // ~/.claude, and the assertions below are about the shipped defaults, not
+  // whatever a locally installed Claude CLI happens to report.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-env-home-'));
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
   fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(cwd, '.claude', 'settings.json'), JSON.stringify({
     env: {
@@ -693,6 +698,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
 
   const result = spawnSync(process.execPath, [CLI, 'env', '--write-project'], {
     cwd,
+    env,
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
@@ -711,7 +717,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(legacy.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(legacy.env.USER_SETTING, 'keep-me');
 
-  const removed = spawnSync(process.execPath, [CLI, 'env', '--write-project', '--remove'], { cwd, encoding: 'utf8' });
+  const removed = spawnSync(process.execPath, [CLI, 'env', '--write-project', '--remove'], { cwd, env, encoding: 'utf8' });
   assert.equal(removed.status, 0, removed.stderr);
   const after = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
   assert.equal(after.env?.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
@@ -720,49 +726,14 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(legacy.env?.USER_SETTING, 'keep-me');
 });
 
-test('Claude pin overrides persist outside the plugin and are applied by rewiring', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-pins-home-'));
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-pins-project-'));
-  const env = { ...process.env, HOME: home, USERPROFILE: home };
-  try {
-    const set = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
-    assert.equal(set.status, 0, set.stderr);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'pins.json'), 'utf8')), {
-      opus: 'claude-opus-4-8[1m]',
-    });
-
-    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
-    assert.equal(wired.status, 0, wired.stderr);
-    const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
-    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
-
-    const pins = spawnSync(process.execPath, [CLI, 'pin'], { env, encoding: 'utf8' });
-    assert.equal(pins.status, 0, pins.stderr);
-    assert.match(pins.stdout, /opus: claude-opus-4-8\[1m\] \(overridden; shipped default: claude-opus-5\[1m\]\)/);
-
-    const cleared = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'default'], { env, encoding: 'utf8' });
-    assert.equal(cleared.status, 0, cleared.stderr);
-    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
-    assert.equal(rewired.status, 0, rewired.stderr);
-    const detected = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'detected-pins.json'), 'utf8'));
-    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, detected.pins.opus);
-
-    const invalid = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'bad;value'], { env, encoding: 'utf8' });
-    assert.equal(invalid.status, 2);
-    assert.match(invalid.stderr, /invalid opus pin/);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
-test('credential-free alias probes cache valid 1M defaults without replacing overrides', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-probe-home-'));
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-probe-project-'));
+// Pin detection shells out to whatever `claude` is on PATH, so any test that
+// asserts on detected pins has to bring its own. Machines with the real CLI
+// installed and CI runners without one otherwise disagree about whether a
+// detection cache exists at all.
+function installFakeClaude(home) {
   const bin = path.join(home, 'bin');
   const fake = path.join(bin, 'fake-claude.js');
   const command = path.join(bin, process.platform === 'win32' ? 'claude.cmd' : 'claude');
-  const logFile = path.join(home, 'probes.jsonl');
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(fake, [
     "'use strict';",
@@ -782,6 +753,89 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
     fs.writeFileSync(command, `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
     fs.chmodSync(command, 0o755);
   }
+  return { bin, command, logFile: path.join(home, 'probes.jsonl') };
+}
+
+// A path that no probe can ever execute, for tests that want the shipped
+// defaults regardless of what the host machine has installed.
+function missingClaude(home) {
+  return path.join(home, 'bin', 'claude-not-installed');
+}
+
+test('Claude pin overrides persist outside the plugin and are applied by rewiring', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-pins-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-pins-project-'));
+  const claude = installFakeClaude(home);
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    FAKE_CLAUDE_LOG: claude.logFile,
+    CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+  };
+  try {
+    const set = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
+    assert.equal(set.status, 0, set.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'pins.json'), 'utf8')), {
+      opus: 'claude-opus-4-8[1m]',
+    });
+
+    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    assert.equal(wired.status, 0, wired.stderr);
+    const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
+
+    const pins = spawnSync(process.execPath, [CLI, 'pin'], { env, encoding: 'utf8' });
+    assert.equal(pins.status, 0, pins.stderr);
+    assert.match(pins.stdout, /opus: claude-opus-4-8\[1m\] \(overridden; shipped default: claude-opus-9\[1m\]\)/);
+
+    const cleared = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'default'], { env, encoding: 'utf8' });
+    assert.equal(cleared.status, 0, cleared.stderr);
+    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    assert.equal(rewired.status, 0, rewired.stderr);
+    const detected = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'detected-pins.json'), 'utf8'));
+    assert.equal(detected.pins.opus, 'claude-opus-9[1m]');
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, detected.pins.opus);
+
+    const invalid = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'bad;value'], { env, encoding: 'utf8' });
+    assert.equal(invalid.status, 2);
+    assert.match(invalid.stderr, /invalid opus pin/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('rewiring without a Claude CLI wires the shipped pins and caches no detection', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-nocli-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-nocli-project-'));
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
+  try {
+    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    assert.equal(wired.status, 0, wired.stderr);
+    const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).env;
+    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5[1m]');
+    assert.equal(fs.existsSync(path.join(home, '.claude', 'codex-gateway', 'detected-pins.json')), false);
+
+    const override = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
+    assert.equal(override.status, 0, override.stderr);
+    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    assert.equal(rewired.status, 0, rewired.stderr);
+    const afterOverride = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).env;
+    assert.equal(afterOverride.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
+    assert.equal(afterOverride.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('credential-free alias probes cache valid 1M defaults without replacing overrides', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-probe-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-probe-project-'));
+  const { bin, command, logFile } = installFakeClaude(home);
   const env = {
     ...process.env,
     HOME: home,
