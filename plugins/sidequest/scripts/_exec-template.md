@@ -1,8 +1,8 @@
 ---
 name: {{NAME}}
 description: >-
-  Executes one or more sidequest tickets at {{EFFORT}} reasoning effort. Spawn with a unique
-  lowercase-hyphen name and the tickets' model; pass the ref(s), a unique --by id, and the task(s).
+  Executes one or more sidequest tickets at {{EFFORT}} reasoning effort. Spawn with the dispatch's
+  spawn.name, spawn.description, and the tickets' model; pass the ref(s), a unique --by id, and the task(s).
 effort: {{EFFORT}}{{MODEL_FRONTMATTER}}
 maxTurns: {{MAX_TURNS}}
 permissionMode: bypassPermissions

@@ -63,7 +63,8 @@ plugins before MCP writes. Commands default to the current project; `--project "
 (MCP: `project`) targets another board.
 
 `dispatch <ref>` is **instant**: it returns the ticket's stable executor, a short `spawn` fetch
-stub, and a token. Pass every supplied `spawn` field to Agent unchanged. The executor fetches its
+stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent
+unchanged. The executor fetches its
 token-gated durable packet as the first action: full description, category route and contract, scope,
 state, comment metadata, and absolute attachment paths. It must inspect every readable
 attachment and report missing or unreadable ones, while the spawn keeps that content out of this transcript.

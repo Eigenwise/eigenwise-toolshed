@@ -659,7 +659,9 @@ function createNativeAgent(spec?: any, opts?: any) {
   // registering a new temporary definition.
   if (spec.agentType) {
     const runtime = spec.runtime != null ? spec.runtime : spec.runsModel;
-    const name = nativeAgentName(spec.ref, runtime, spec.nonce);
+    // No definition file is written on this route, so the name is free to be the
+    // readable launch name instead of the file-safe temporary one.
+    const name = spec.launchName ? String(spec.launchName) : nativeAgentName(spec.ref, runtime, spec.nonce);
     const model = spec.spawnModel == null ? null : String(spec.spawnModel).trim();
     return {
       name,

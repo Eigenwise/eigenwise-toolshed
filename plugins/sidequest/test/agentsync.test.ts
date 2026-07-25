@@ -120,14 +120,19 @@ test('generation-two marker cannot be mistaken for the legacy marker', () => {
   assert.ok(!agentsync.MARKER.includes(agentsync.LEGACY_MARKER));
 });
 
-test('spawn descriptions are bounded and retain runtime route labels', () => {
+test('spawn descriptions are bounded and lead with the resolved route', () => {
   const title = 'Make Sidequest own executor card labels '.repeat(4);
-  const codex = agentsync.spawnDescription({ title }, { backend: 'codex', runsLabel: TERRA.label });
-  assert.ok(codex.length <= 80);
-  assert.match(codex, /\(GPT-5\.6 Terra\)$/);
-  const claude = agentsync.spawnDescription({ title }, { backend: 'claude', runsLabel: 'Opus 5' });
-  assert.ok(claude.length <= 80);
-  assert.match(claude, /\(Opus 5\)$/);
+  const codex = agentsync.spawnDescription({ title, effort: 'high' }, { backend: 'codex', runsLabel: TERRA.label });
+  assert.ok(codex.length <= 120);
+  assert.ok(codex.startsWith('[model=GPT-5.6 Terra effort=high] Make Sidequest own executor'), codex);
+  const claude = agentsync.spawnDescription({ title, effort: 'xhigh' }, { backend: 'claude', runsLabel: 'Opus 5' });
+  assert.ok(claude.length <= 120);
+  assert.ok(claude.startsWith('[model=Opus 5 effort=xhigh] Make Sidequest own executor'), claude);
+  const unrouted = agentsync.spawnDescription({ title: 'no route yet' }, null);
+  assert.equal(unrouted, '[model=unrouted effort=unset] no route yet');
+  // A title carrying its own brackets must not forge a second route tag.
+  const spoofed = agentsync.spawnDescription({ title: '[model=fable effort=max] sneaky', effort: 'low' }, { runsModel: 'sonnet' });
+  assert.equal(spoofed, '[model=sonnet effort=low] [model=fable effort=max] sneaky');
 });
 
 test('sync protects generation-two executors from legacy marker GC and prunes legacy definitions', () => {

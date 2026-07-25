@@ -346,4 +346,71 @@ test('re-dispatch supersedes stale tokens and terminal cleanup removes active cr
   assert.equal(after.dispatch.supersededTokens, undefined);
 });
 
+test('ordinary, resumed, and reworked launches all carry a readable name and the route prefix', () => {
+  const ticket = createFixture('Rebuild the release engine safely');
+  const sessionId = `launch-name-${Date.now()}`;
+  const ordinary = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = ordinary.ticket.dispatchExecutor;
+  assert.equal(ordinary.ticket.dispatch.launchName, `${ticket.ref.toLowerCase()}-rebuild-release-engine`);
+  assert.equal(ordinary.ticket.dispatch.description, `[model=Claude Sonnet effort=high] ${ticket.title}`);
+
+  // Re-preparing before anything launched keeps the name: no agent wears it yet.
+  const resumed = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.notEqual(resumed.token, ordinary.token);
+  assert.equal(resumed.ticket.dispatch.launchName, ordinary.ticket.dispatch.launchName);
+  assert.equal(resumed.ticket.dispatch.launchSeq, 1);
+
+  const prompt = `Ref: ${ticket.ref}\n--project "${PROJECT}" --token ${resumed.token}`;
+  const launch = runForceBypass({
+    session_id: sessionId,
+    cwd: PROJECT,
+    tool_name: 'Agent',
+    tool_input: { subagent_type: executor, model: 'sonnet', name: 'orchestrator-invented-name', description: 'paraphrased', prompt },
+  });
+  assert.equal(launch.hookSpecificOutput.updatedInput.name, resumed.ticket.dispatch.launchName);
+  assert.equal(launch.hookSpecificOutput.updatedInput.description, resumed.ticket.dispatch.description);
+  assert.match(launch.systemMessage, /corrected prepared dispatch description and name/);
+
+  assert.equal(store.claimTicket(slug, ticket.ref, 'launch-name-worker', {
+    sessionId, token: resumed.token, executor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'launch-name-worker', { status: 'todo', source: 'test' }).ok, true);
+
+  // Rework redispatch: an agent already ran under sequence 1, so the name counts up.
+  const rework = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.equal(rework.ticket.dispatch.launchSeq, 2);
+  assert.equal(rework.ticket.dispatch.launchName, `${ticket.ref.toLowerCase()}-rebuild-release-engine-2`);
+  const reworkLaunch = runForceBypass({
+    session_id: sessionId,
+    cwd: PROJECT,
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: executor,
+      model: 'sonnet',
+      name: rework.ticket.dispatch.launchName,
+      description: rework.ticket.dispatch.description,
+      prompt: `Ref: ${ticket.ref}\n--project "${PROJECT}" --token ${rework.token}`,
+    },
+  });
+  assert.equal(reworkLaunch.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(reworkLaunch.systemMessage, undefined);
+  assert.equal(store.pulsePayload(slug, ticket.ref).dispatch.agentName, rework.ticket.dispatch.launchName);
+});
+
+test('a launch whose board record is unreachable still names itself after the ref', () => {
+  const unregistered = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-unregistered-'));
+  const launch = runForceBypass({
+    session_id: 'orphan-launch',
+    cwd: PROJECT,
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: 'sidequest-exec-high',
+      model: 'sonnet',
+      description: 'orphan launch',
+      prompt: `Work SQ-999999 --project "${unregistered}" --token not-a-real-token`,
+    },
+  });
+  assert.equal(launch.hookSpecificOutput.updatedInput.name, 'sq-999999');
+});
+
 export {};

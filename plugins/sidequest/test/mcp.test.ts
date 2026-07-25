@@ -1130,7 +1130,8 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
     runsLabel: 'Terra', dispatch: 'native-agent',
   });
   assert.equal(instant.agent, 'sidequest-exec-dispatch-high');
-  assert.equal(instant.spawn.description, 'instant dispatch (Terra)');
+  assert.equal(instant.spawn.description, '[model=Terra effort=high] instant dispatch');
+  assert.equal(instant.spawn.name, `${addedInstant.ref.toLowerCase()}-instant-dispatch`);
   assert.equal(instant.spawn.model, undefined);
   assert.equal(instant.spawn.subagent_type, instant.agent);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
@@ -1229,9 +1230,9 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
   const { prompt, ...spawn } = dispatched.spawn;
   assert.deepStrictEqual(spawn, {
     subagent_type: 'sidequest-exec-xhigh',
-    name: 'sidequest-exec-xhigh',
+    name: `${added.ref.toLowerCase()}-complete-instant-spawn`,
     mode: 'bypassPermissions',
-    description: 'complete instant spawn (Claude Fable)',
+    description: '[model=Claude Fable effort=xhigh] complete instant spawn',
     isolation: 'worktree',
     model: 'fable',
   });
@@ -1293,7 +1294,8 @@ test('native_agent carries ticket anchors and verify command through its stable 
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
     assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch-high');
-    assert.strictEqual(native.spawn.description, 'prompt context (Terra)');
+    assert.strictEqual(native.spawn.description, '[model=Terra effort=high] prompt context');
+    assert.strictEqual(native.spawn.name, `${added.ref.toLowerCase()}-prompt-context`);
     assert.strictEqual(native.spawn.model, undefined);
     assert.match(native.prompt, /Authoritative ticket contract \(the task prompt may add logistics only; do not narrow this scope\):/);
     assert.match(native.prompt, /Title: prompt context/);
@@ -1311,9 +1313,9 @@ test('native_agent returns a complete Claude worktree spawn spec', async () => {
 
   assert.deepStrictEqual(native.spawn, {
     subagent_type: 'sidequest-exec-xhigh',
-    name: 'sidequest-native-' + added.ref.toLowerCase() + '-fable',
+    name: added.ref.toLowerCase() + '-complete-native-spawn',
     mode: 'bypassPermissions',
-    description: 'complete native spawn (Claude Fable)',
+    description: '[model=Claude Fable effort=xhigh] complete native spawn',
     isolation: 'worktree',
     model: 'fable',
     prompt: native.prompt,

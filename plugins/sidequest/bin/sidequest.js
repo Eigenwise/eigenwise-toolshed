@@ -10,6 +10,7 @@ const agentsync = require("../lib/agentsync");
 const work = require("../lib/work");
 const commitScope = require("../lib/commit-scope");
 const worktrees = require("../lib/worktrees");
+const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "produces", "changes", "consumes"]);
 const ALIASES = {
@@ -1632,7 +1633,8 @@ async function cmdDispatch(opts, positional) {
   const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
   const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
   const agent = prepared.ticket.dispatchExecutor;
-  const spawn2 = agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt);
+  const dispatchState = prepared.ticket.dispatch || {};
+  const spawn2 = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, dispatchState.description);
   process.stdout.write(JSON.stringify({
     project: slug,
     projectPath: meta.path,
@@ -1683,6 +1685,8 @@ async function cmdNativeAgent(opts, positional) {
     spawnModel: resolved.model,
     effort: ticket.effort,
     runtime: resolved.runsModel,
+    launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
+    description: agentsync.spawnDescription(ticket, resolved),
     isolation: agentsync.ticketIsolation(ticket, sharedTree),
     sessionId: sessionId2,
     prompt

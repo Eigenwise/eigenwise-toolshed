@@ -18,6 +18,7 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var exec_names_exports = {};
 __export(exec_names_exports, {
+  AGENT_NAME_MAX_LENGTH: () => AGENT_NAME_MAX_LENGTH,
   CLAUDE_PREFIX: () => CLAUDE_PREFIX,
   DISPATCH_PREFIX: () => DISPATCH_PREFIX,
   EFFORTS: () => EFFORTS,
@@ -27,12 +28,15 @@ __export(exec_names_exports, {
   READ_ONLY_DISPATCH_PREFIX: () => READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX: () => TICKET_PREFIX,
   classify: () => classify,
+  dispatchLaunchName: () => dispatchLaunchName,
   isEffort: () => isEffort,
   isReadOnlyCategory: () => isReadOnlyCategory,
+  refSlug: () => refSlug,
   stableClaudeName: () => stableClaudeName,
   stableDispatchName: () => stableDispatchName,
   stableReadOnlyClaudeName: () => stableReadOnlyClaudeName,
-  stableReadOnlyDispatchName: () => stableReadOnlyDispatchName
+  stableReadOnlyDispatchName: () => stableReadOnlyDispatchName,
+  titleSlug: () => titleSlug
 });
 module.exports = __toCommonJS(exec_names_exports);
 const EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
@@ -50,6 +54,73 @@ const READ_ONLY_CATEGORY_IDS = Object.freeze([
 ]);
 function isEffort(value) {
   return typeof value === "string" && EFFORTS.includes(value);
+}
+const AGENT_NAME_MAX_LENGTH = 64;
+const LAUNCH_SLUG_MAX_WORDS = 3;
+const LAUNCH_SLUG_MAX_LENGTH = 24;
+const LAUNCH_SLUG_FILLER = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "but",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "or",
+  "over",
+  "per",
+  "that",
+  "the",
+  "their",
+  "then",
+  "this",
+  "to",
+  "under",
+  "via",
+  "when",
+  "while",
+  "with",
+  "without"
+]);
+function slugTokens(value) {
+  return String(value == null ? "" : value).normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+}
+function refSlug(ref) {
+  return slugTokens(ref).join("-");
+}
+function titleSlug(title) {
+  const tokens = slugTokens(title);
+  const meaningful = tokens.filter((token) => !LAUNCH_SLUG_FILLER.has(token));
+  const chosen = (meaningful.length ? meaningful : tokens).slice(0, LAUNCH_SLUG_MAX_WORDS);
+  let slug = "";
+  for (const token of chosen) {
+    const next = slug ? `${slug}-${token}` : token;
+    if (next.length > LAUNCH_SLUG_MAX_LENGTH) break;
+    slug = next;
+  }
+  if (!slug && chosen.length) slug = String(chosen[0]).slice(0, LAUNCH_SLUG_MAX_LENGTH);
+  return slug;
+}
+function dispatchLaunchName(ref, title, sequence) {
+  const base = refSlug(ref) || "sidequest";
+  const slug = titleSlug(title);
+  const seq = Number(sequence);
+  const suffix = Number.isInteger(seq) && seq > 1 ? `-${seq}` : "";
+  let name = slug ? `${base}-${slug}` : base;
+  const budget = AGENT_NAME_MAX_LENGTH - suffix.length;
+  if (name.length > budget) name = name.slice(0, budget).replace(/-+$/, "");
+  return `${name}${suffix}`;
 }
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
@@ -94,6 +165,7 @@ function classify(name) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  AGENT_NAME_MAX_LENGTH,
   CLAUDE_PREFIX,
   DISPATCH_PREFIX,
   EFFORTS,
@@ -103,10 +175,13 @@ function classify(name) {
   READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX,
   classify,
+  dispatchLaunchName,
   isEffort,
   isReadOnlyCategory,
+  refSlug,
   stableClaudeName,
   stableDispatchName,
   stableReadOnlyClaudeName,
-  stableReadOnlyDispatchName
+  stableReadOnlyDispatchName,
+  titleSlug
 });

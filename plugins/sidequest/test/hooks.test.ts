@@ -1374,7 +1374,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
     const projectPath = store.readMeta(slug).path;
     const base = {
       subagent_type: prepared.ticket.dispatchExecutor,
-      name: `sidequest-${ticket.ref.toLowerCase()}-${prepared.token.slice(0, 12)}`,
+      name: prepared.ticket.dispatch.launchName,
       description: prepared.ticket.dispatch.description,
       prompt: `Ref: ${ticket.ref}\n[sidequest-route model=gpt-5.6-terra effort=high]\n--project "${projectPath}" --token ${prepared.token}`,
     };
@@ -1400,8 +1400,10 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const projectPath = store.readMeta(slug).path;
   const description = prepared.ticket.dispatch.description;
+  assert.equal(description, `[model=Claude Sonnet effort=high] ${ticket.title}`);
   const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
-  const expectedName = `sidequest-${ticket.ref.toLowerCase()}-${prepared.token.slice(0, 12)}`;
+  const expectedName = `${ticket.ref.toLowerCase()}-correct-prepared`;
+  assert.equal(prepared.ticket.dispatch.launchName, expectedName);
   const base = {
     subagent_type: prepared.ticket.dispatchExecutor,
     name: expectedName,
@@ -1605,8 +1607,9 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
   }));
   const names = launches.map((launch) => launch.hookSpecificOutput.updatedInput.name);
   assert.notEqual(names[0], names[1]);
-  assert.match(names[0], new RegExp(`${first.ref.toLowerCase()}-${preparedFirst.token.slice(0, 12)}$`));
-  assert.match(names[1], new RegExp(`${second.ref.toLowerCase()}-${preparedSecond.token.slice(0, 12)}$`));
+  assert.equal(names[0], `${first.ref.toLowerCase()}-first-same-type`);
+  assert.equal(names[1], `${second.ref.toLowerCase()}-second-same-type`);
+  for (const name of names) assert.doesNotMatch(name, /[A-Z_]|-[a-z0-9]{8,}$/, `${name} still reads as an opaque id`);
 
   for (const [index, prepared] of [preparedFirst, preparedSecond].entries()) {
     runHookOutput(SUBAGENT_START, {

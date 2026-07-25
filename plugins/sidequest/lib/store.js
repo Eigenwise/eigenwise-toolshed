@@ -2,7 +2,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { isReadOnlyCategory, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require("./exec-names.js");
+const { dispatchLaunchName, isReadOnlyCategory, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require("./exec-names.js");
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const db = require("./db.js");
@@ -12,17 +12,30 @@ const { migrateIfNeeded } = require("./migrate.js");
 const { discoverExternalModels } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
 const { routingDisabledMessage } = require("./refusal-guidance.js");
-const AGENT_DESCRIPTION_MAX_LENGTH = 80;
+const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
 const SHARED_TREE_ARTIFACT_MARKER = "Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.";
 const CONTROL_PLANE_COMPLETION = /* @__PURE__ */ Symbol("sidequest.control-plane-completion");
+function descriptionField(...candidates) {
+  for (const candidate of candidates) {
+    const value = String(candidate == null ? "" : candidate).replace(/[\s\[\]]+/g, " ").trim();
+    if (value) return value;
+  }
+  return "";
+}
 function spawnDescription(ticket, resolved) {
   const title = String(ticket && ticket.title || "Sidequest ticket").replace(/\s+/g, " ").trim();
-  const route = resolved ? String(resolved.runsLabel || resolved.runsModel || "").replace(/\s+/g, " ").trim() : "";
-  const suffix = route ? ` (${route})` : "";
-  const maxTitleLength = Math.max(1, AGENT_DESCRIPTION_MAX_LENGTH - suffix.length);
-  return `${title.slice(0, maxTitleLength).trimEnd()}${suffix}`.slice(0, AGENT_DESCRIPTION_MAX_LENGTH);
+  const model = descriptionField(resolved && resolved.runsLabel, resolved && resolved.runsModel, ticket && ticket.model) || "unrouted";
+  const effort = descriptionField(ticket && ticket.effort, resolved && resolved.effort) || "unset";
+  const prefix = `[model=${model} effort=${effort}] `;
+  const maxTitleLength = Math.max(1, AGENT_DESCRIPTION_MAX_LENGTH - prefix.length);
+  return `${prefix}${title.slice(0, maxTitleLength).trimEnd()}`.slice(0, AGENT_DESCRIPTION_MAX_LENGTH);
+}
+function nextDispatchLaunchSeq(state) {
+  if (!state) return 1;
+  const current = Number.isInteger(state.launchSeq) && state.launchSeq > 0 ? state.launchSeq : 1;
+  return state.launchedAt ? current + 1 : current;
 }
 function homeRoot() {
   const env = process.env.SIDEQUEST_HOME;
@@ -3069,6 +3082,8 @@ function prepareDispatch(slug, idOrRef, opts) {
     const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
     if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && t.dispatchExecutor && currentExec && stableExecutorName(t) === t.dispatchExecutor) {
       if (opts.sessionId) current.sessionId = String(opts.sessionId);
+      if (!current.launchSeq) current.launchSeq = 1;
+      if (!current.launchName) current.launchName = dispatchLaunchName(t.ref, t.title, current.launchSeq);
       putTicket(slug, t);
       return {
         ok: true,
@@ -3121,6 +3136,7 @@ function prepareDispatch(slug, idOrRef, opts) {
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
     const preparedExec = resolveExec(t.model, t.effort);
+    const launchSeq = nextDispatchLaunchSeq(current);
     const readonly = dispatchReadOnly(t);
     const story = t.storyId ? getStory(slug, t.storyId) : null;
     const contract = storyExecutionContract(story);
@@ -3140,6 +3156,8 @@ function prepareDispatch(slug, idOrRef, opts) {
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, preparedExec),
+      launchSeq,
+      launchName: dispatchLaunchName(t.ref, t.title, launchSeq),
       route: dispatchRouteState(t.model, t.effort, preparedExec),
       storyContract: contract,
       ...contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {},
@@ -3239,6 +3257,10 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
     };
     t.dispatchNonce = crypto.randomBytes(24).toString("base64url");
     t.dispatchExecutor = fallback.exec.agent;
+    t.model = fallback.model;
+    t.effort = fallback.effort;
+    t.exec = execProjection(fallback.exec);
+    const launchSeq = nextDispatchLaunchSeq(state);
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
       sharedTree: state.sharedTree === true,
@@ -3250,6 +3272,8 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, fallback.exec),
+      launchSeq,
+      launchName: dispatchLaunchName(t.ref, t.title, launchSeq),
       route: dispatchRouteState(fallback.model, fallback.effort, fallback.exec),
       storyContract: state.storyContract || storyExecutionContract(t.storyId ? getStory(slug, t.storyId) : null),
       ...state.storyContractDrift ? { storyContractDrift: state.storyContractDrift } : {},
@@ -3263,9 +3287,6 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
       supersededTokens,
       recovery
     };
-    t.model = fallback.model;
-    t.effort = fallback.effort;
-    t.exec = execProjection(fallback.exec);
     stampDispatchEvent(t, opts.source || "agent-launch-failure", now);
     putTicket(slug, t);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery };

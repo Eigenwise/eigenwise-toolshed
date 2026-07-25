@@ -29,6 +29,7 @@ const work = require('./work');
 const worktrees = require('./worktrees');
 const agentsync = require('./agentsync');
 const commitScope = require('./commit-scope');
+const execNames = require('./exec-names');
 const { claimRefusalMessage } = require('./refusal-guidance');
 
 type ToolDefinition = {
@@ -1366,7 +1367,11 @@ const TOOLS: ToolDefinition[] = [
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
       const agent = prepared.ticket.dispatchExecutor;
-      const spawn = agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt, agentsync.spawnDescription(prepared.ticket, resolved));
+      const dispatchState = prepared.ticket.dispatch || {};
+      // Name and description come from the prepared record, not a second
+      // rendering: the PreToolUse guard enforces that exact pair on the Agent
+      // call, so any drift here would be corrected into a mismatch.
+      const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, dispatchState.description);
       const compact: any = {
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
@@ -1426,6 +1431,7 @@ const TOOLS: ToolDefinition[] = [
         spawnModel: resolved.model,
         effort: ticket.effort,
         runtime: resolved.runsModel,
+        launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
         description: agentsync.spawnDescription(ticket, resolved),
         isolation: agentsync.ticketIsolation(ticket, sharedTree),
         sessionId: sessionOf(args),

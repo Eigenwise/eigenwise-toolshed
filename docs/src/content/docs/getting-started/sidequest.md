@@ -73,6 +73,12 @@ On the first prompt in each session, an active routed board adds one advisory re
 
 Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
 
+### How a launch shows up in the agent list
+
+Dispatch builds the launch's `spawn.name` from the board, not from a random id: the ticket ref plus a short slug of its title, like `sq-843-release-engine`. Redispatching the same ticket after something already launched counts up (`sq-843-release-engine-2`), so a reworked or resumed run never shadows a live sibling. That name is what the fleet view filters on (`a:<name>`) and what `SendMessage` resumes.
+
+`spawn.description` leads with the resolved route, as in `[model=GPT-5.6 Terra effort=high] Rebuild the release engine`, so you can see what a run is costing while it is still in flight. Pass both fields through verbatim. If an orchestrator invents its own name or paraphrases the description, the PreToolUse guard rewrites them back to the prepared values and says so.
+
 ### Claims, and when one is released
 
 A claim says "someone is on this", so nothing else picks the ticket up. It is not a lease, and it never expires on the clock: an executor that has been working for five hours can still commit, submit, checkpoint, and close. That matters because a wall-clock timeout fails in the worst place, near the end of a long run, when the most unsaved work is at stake.

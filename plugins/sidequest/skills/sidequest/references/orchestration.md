@@ -106,14 +106,17 @@ When several tickets are **ready and independent**, work them in parallel — on
 all spawned in a **single message** (true parallel). This is safe precisely because claiming is
 atomic: each subagent claims a different ticket, and any race just sends the loser onward.
 
-- **Name every worker.** Each concurrent executor gets a unique `name` (lowercase-hyphens, e.g.
-  `exec-sq12`). Naming makes it addressable: it shows in the fleet view (filter `a:<name>`) and is
-  resumable via `SendMessage {to: name}` with its history intact. Every Agent launch must be a freshly
-  dispatched Sidequest executor.
-- **Tie the `name` to the `--by` id** — both unique and session-scoped for the same worker, so the
-  agent is addressable and its board activity is stamped by the same identity. The `--by` must be
-  genuinely random per session (not the ticket ref, not a fixed label): a second session fanning out
-  over the same board would derive the identical value and silently coexist as the same worker.
+- **Never invent a worker name.** `dispatch` returns `spawn.name` already built from the board:
+  ticket ref plus a short title slug (`sq-843-release-engine`), counting up on a relaunch
+  (`-2`, `-3`) so a reworked or resumed launch never shadows a live sibling. That name is what shows
+  in the fleet view (filter `a:<name>`) and what `SendMessage {to: name}` resumes, and the PreToolUse
+  guard rewrites anything else back to it. Pass it through; the same goes for `spawn.description`,
+  which leads with `[model=… effort=…]` so the route stays visible in the agent list mid-run.
+  Every Agent launch must be a freshly dispatched Sidequest executor.
+- **The `--by` id is separate and must be genuinely random per session** (not the ticket ref, not a
+  fixed label): a second session fanning out over the same board would derive the identical value
+  and silently coexist as the same worker. The launch name is board-derived and stable; the worker id
+  is session-random.
 - **One wave at a time.** `ready --json --brief` partitions the set into parallel-safe waves by declared file scope and named contract edges. A ticket can declare free-form `produces`, `changes`, and `consumes` metadata for interfaces it touches; a produce/consume or change/change match sequences otherwise disjoint tickets. Read `waveDependencies` for the named reason before spawning. `contractWaiver:true` is an explicit reviewed override, so use it only after checking the real integration seam. Before spawning a wave, assess the runtime
   resources each ticket needs: fixed ports, domains, shared databases, existing servers, and files
   outside the declared scopes. Worktrees isolate files, not those resources. Serialize tickets that

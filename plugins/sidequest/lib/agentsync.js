@@ -527,7 +527,7 @@ function createNativeAgent(spec, opts) {
   spec = spec || {};
   if (spec.agentType) {
     const runtime2 = spec.runtime != null ? spec.runtime : spec.runsModel;
-    const name2 = nativeAgentName(spec.ref, runtime2, spec.nonce);
+    const name2 = spec.launchName ? String(spec.launchName) : nativeAgentName(spec.ref, runtime2, spec.nonce);
     const model = spec.spawnModel == null ? null : String(spec.spawnModel).trim();
     return {
       name: name2,

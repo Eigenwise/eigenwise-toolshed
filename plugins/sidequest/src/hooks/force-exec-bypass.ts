@@ -1,6 +1,9 @@
 import { isRecord, readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeDeny, writeJson } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
+// Dependency-free, so bundling it keeps launch naming identical in the hook and
+// in the store even when the installed lib is mid-upgrade.
+import { dispatchLaunchName } from '../lib/exec-names.js';
 
 const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statusline-setup']);
 
@@ -22,10 +25,14 @@ interface ResolveResult {
   model?: string;
 }
 interface Ticket {
+  ref?: string;
+  title?: string;
   exec?: { model?: string };
   dispatchNonce?: string;
   dispatch?: {
     description?: string;
+    launchName?: string;
+    launchSeq?: number;
     route?: { model?: string; effort?: string; marker?: string };
   };
 }
@@ -147,12 +154,15 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
   return isRecord(input.tool_input) ? input.tool_input : null;
 }
 
+// Last resort for a single-ticket launch whose board record could not be read
+// (unregistered project, deleted ticket). No title is reachable, so the name is
+// the bare ref rather than an opaque token slice.
 function dispatchAgentName(input: HookInput): string | null {
   const toolInput = toolInputOf(input);
   const refs = extractRefs(toolInput?.prompt);
   const token = extractDispatchToken(toolInput?.prompt);
   if (refs.length !== 1 || !token) return null;
-  return `sidequest-${(refs[0] || '').toLowerCase()}-${token.slice(0, 12)}`;
+  return dispatchLaunchName(refs[0]);
 }
 
 function recordAuthoritativeLaunch(input: HookInput, type: string, agentName: string | null): void {
@@ -234,7 +244,10 @@ function preparedDispatchValidation(input: HookInput): PreparedDispatchValidatio
       status: 'valid',
       spawn: {
         description: typeof description === 'string' && description ? description : null,
-        name: `sidequest-${launch.ref.toLowerCase()}-${launch.token.slice(0, 12)}`,
+        // Records prepared before launch naming existed still get a readable
+        // name: ref plus title is the same derivation the store now stores.
+        name: ticket.dispatch?.launchName
+          || dispatchLaunchName(ticket.ref || launch.ref, ticket.title, ticket.dispatch?.launchSeq),
         ref: launch.ref,
         token: launch.token,
         project,

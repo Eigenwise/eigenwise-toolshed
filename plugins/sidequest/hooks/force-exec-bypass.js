@@ -68,6 +68,82 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
+// src/lib/exec-names.ts
+var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+var READ_ONLY_CATEGORY_IDS = Object.freeze([
+  "codebase-exploration",
+  "research",
+  "review-audit",
+  "spike-investigation"
+]);
+var AGENT_NAME_MAX_LENGTH = 64;
+var LAUNCH_SLUG_MAX_WORDS = 3;
+var LAUNCH_SLUG_MAX_LENGTH = 24;
+var LAUNCH_SLUG_FILLER = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "but",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "or",
+  "over",
+  "per",
+  "that",
+  "the",
+  "their",
+  "then",
+  "this",
+  "to",
+  "under",
+  "via",
+  "when",
+  "while",
+  "with",
+  "without"
+]);
+function slugTokens(value) {
+  return String(value == null ? "" : value).normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+}
+function refSlug(ref) {
+  return slugTokens(ref).join("-");
+}
+function titleSlug(title) {
+  const tokens = slugTokens(title);
+  const meaningful = tokens.filter((token) => !LAUNCH_SLUG_FILLER.has(token));
+  const chosen = (meaningful.length ? meaningful : tokens).slice(0, LAUNCH_SLUG_MAX_WORDS);
+  let slug = "";
+  for (const token of chosen) {
+    const next = slug ? `${slug}-${token}` : token;
+    if (next.length > LAUNCH_SLUG_MAX_LENGTH) break;
+    slug = next;
+  }
+  if (!slug && chosen.length) slug = String(chosen[0]).slice(0, LAUNCH_SLUG_MAX_LENGTH);
+  return slug;
+}
+function dispatchLaunchName(ref, title, sequence) {
+  const base = refSlug(ref) || "sidequest";
+  const slug = titleSlug(title);
+  const seq = Number(sequence);
+  const suffix = Number.isInteger(seq) && seq > 1 ? `-${seq}` : "";
+  let name = slug ? `${base}-${slug}` : base;
+  const budget = AGENT_NAME_MAX_LENGTH - suffix.length;
+  if (name.length > budget) name = name.slice(0, budget).replace(/-+$/, "");
+  return `${name}${suffix}`;
+}
+
 // src/hooks/force-exec-bypass.ts
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
 function fallbackClassify(type) {
@@ -156,7 +232,7 @@ function dispatchAgentName(input) {
   const refs = extractRefs(toolInput?.prompt);
   const token = extractDispatchToken(toolInput?.prompt);
   if (refs.length !== 1 || !token) return null;
-  return `sidequest-${(refs[0] || "").toLowerCase()}-${token.slice(0, 12)}`;
+  return dispatchLaunchName(refs[0]);
 }
 function recordAuthoritativeLaunch(input, type, agentName) {
   const toolInput = toolInputOf(input);
@@ -231,7 +307,9 @@ function preparedDispatchValidation(input) {
       status: "valid",
       spawn: {
         description: typeof description === "string" && description ? description : null,
-        name: `sidequest-${launch.ref.toLowerCase()}-${launch.token.slice(0, 12)}`,
+        // Records prepared before launch naming existed still get a readable
+        // name: ref plus title is the same derivation the store now stores.
+        name: ticket.dispatch?.launchName || dispatchLaunchName(ticket.ref || launch.ref, ticket.title, ticket.dispatch?.launchSeq),
         ref: launch.ref,
         token: launch.token,
         project,

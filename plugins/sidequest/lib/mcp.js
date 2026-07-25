@@ -6,6 +6,7 @@ const work = require("./work");
 const worktrees = require("./worktrees");
 const agentsync = require("./agentsync");
 const commitScope = require("./commit-scope");
+const execNames = require("./exec-names");
 const { claimRefusalMessage } = require("./refusal-guidance");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
@@ -1235,7 +1236,8 @@ const TOOLS = [
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
       const agent = prepared.ticket.dispatchExecutor;
-      const spawn = agentsync.agentSpawn(agent, isolation, resolved && resolved.model, agent, prompt, agentsync.spawnDescription(prepared.ticket, resolved));
+      const dispatchState = prepared.ticket.dispatch || {};
+      const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, dispatchState.description);
       const compact = {
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
@@ -1292,6 +1294,7 @@ const TOOLS = [
         spawnModel: resolved.model,
         effort: ticket.effort,
         runtime: resolved.runsModel,
+        launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
         description: agentsync.spawnDescription(ticket, resolved),
         isolation: agentsync.ticketIsolation(ticket, sharedTree),
         sessionId: sessionOf(args),
