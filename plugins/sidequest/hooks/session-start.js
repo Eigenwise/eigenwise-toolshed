@@ -45,6 +45,12 @@ function stringField(input, ...names) {
   }
   return "";
 }
+function isSubagent(input) {
+  return ["agent_id", "agentId", "agent_type", "agentType"].some((name) => {
+    const identity = String(input[name] || "").trim().toLowerCase();
+    return identity && identity !== "main" && identity !== "main-thread";
+  });
+}
 
 // src/hooks/shared/output.ts
 function writeJson(value) {
@@ -61,6 +67,50 @@ function pluginRoot() {
 }
 function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
+}
+
+// src/hooks/shared/compaction.ts
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_os = __toESM(require("node:os"));
+var import_node_path2 = __toESM(require("node:path"));
+var TRANSCRIPT_BYTES_THRESHOLD = 3 * 1024 * 1024;
+function disabledValue(value) {
+  return ["0", "false", "no", "off"].includes(String(value || "").trim().toLowerCase());
+}
+function compactionSuggestionsEnabled() {
+  return !disabledValue(process.env.SIDEQUEST_COMPACTION_SUGGESTIONS);
+}
+function isPrimarySession(input) {
+  return !isSubagent(input);
+}
+function stateDirectory() {
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
+  return import_node_path2.default.join(home, "compaction-suggestions");
+}
+function stateFile(sessionId) {
+  return import_node_path2.default.join(stateDirectory(), `${encodeURIComponent(sessionId)}.json`);
+}
+function transcriptBytes(transcriptPath) {
+  try {
+    return import_node_fs2.default.statSync(String(transcriptPath || "")).size;
+  } catch (_) {
+    return 0;
+  }
+}
+function writeState(sessionId, state) {
+  try {
+    import_node_fs2.default.mkdirSync(stateDirectory(), { recursive: true });
+    import_node_fs2.default.writeFileSync(stateFile(sessionId), JSON.stringify(state));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+function initializeCompactionState(sessionId, transcriptPath) {
+  if (!sessionId || !compactionSuggestionsEnabled()) return;
+  const file = stateFile(sessionId);
+  if (import_node_fs2.default.existsSync(file)) return;
+  writeState(sessionId, { resetAt: (/* @__PURE__ */ new Date()).toISOString(), transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
 // src/hooks/session-start.ts
@@ -146,6 +196,10 @@ function emit(context, notice) {
 function main() {
   const data = readStdin();
   if (!data) return;
+  if (isPrimarySession(data)) {
+    const sessionId = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+    initializeCompactionState(sessionId, data.transcript_path || data.transcriptPath);
+  }
   const syncResult = provisionExecAgents();
   const lostLaunches = reconcileLostLaunches(data);
   const restartNotice = [

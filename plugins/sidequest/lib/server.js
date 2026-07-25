@@ -30,6 +30,7 @@ const CONTENT_TYPES = {
   ".woff2": "font/woff2"
 };
 const START_TIME = (/* @__PURE__ */ new Date()).toISOString();
+const COMPACTION_SUGGESTIONS_ENABLED = !["0", "false", "no", "off"].includes(String(process.env.SIDEQUEST_COMPACTION_SUGGESTIONS || "").trim().toLowerCase());
 const CATEGORY_DRAFT_CLI = process.env.SIDEQUEST_CLAUDE_BIN || "claude";
 const CATEGORY_DRAFT_TIMEOUT_MS = 60 * 1e3;
 let categoryDraftTimeoutMs = CATEGORY_DRAFT_TIMEOUT_MS;
@@ -304,7 +305,14 @@ async function handle(req, res) {
   const pathname = decodeURIComponent(parsed.pathname);
   const q = parsed.query || {};
   if (req.method === "GET" && pathname === "/api/health") {
-    sendJson(res, 200, { ok: true, name: "sidequest", pid: process.pid, startedAt: START_TIME, version: PLUGIN_VERSION });
+    sendJson(res, 200, {
+      ok: true,
+      name: "sidequest",
+      pid: process.pid,
+      startedAt: START_TIME,
+      version: PLUGIN_VERSION,
+      compactionSuggestionsEnabled: COMPACTION_SUGGESTIONS_ENABLED
+    });
     return;
   }
   if (req.method === "GET" && pathname === "/api/projects") {

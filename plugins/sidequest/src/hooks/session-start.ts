@@ -2,6 +2,7 @@
 import { readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeContext } from './shared/output.js';
 import { pluginRoot, runtimeModule } from './shared/paths.js';
+import { initializeCompactionState, isPrimarySession } from './shared/compaction.js';
 
 const MAX_WORKFORCE_BYTES = 1800;
 const MAX_WORKFORCE_DESCRIPTION = 90;
@@ -120,6 +121,10 @@ function emit(context: string, notice: string): void {
 function main(): void {
   const data = readStdin();
   if (!data) return;
+  if (isPrimarySession(data)) {
+    const sessionId = stringField(data, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || '';
+    initializeCompactionState(sessionId, data.transcript_path || data.transcriptPath);
+  }
 
   const syncResult = provisionExecAgents();
   const lostLaunches = reconcileLostLaunches(data);

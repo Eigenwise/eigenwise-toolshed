@@ -422,6 +422,7 @@ test('server keeps API matching ahead of the legacy dashboard fallback', async (
   const health = await requestRaw(started.port, '/api/health');
   assert.strictEqual(health.status, 200);
   assert.match(health.headers['content-type'], /^application\/json/);
+  assert.strictEqual(JSON.parse(health.body).compactionSuggestionsEnabled, true);
 
   const shell = await requestRaw(started.port, '/');
   assert.strictEqual(shell.status, 200);

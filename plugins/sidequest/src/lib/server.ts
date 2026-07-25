@@ -55,6 +55,7 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 const START_TIME = new Date().toISOString();
+const COMPACTION_SUGGESTIONS_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.SIDEQUEST_COMPACTION_SUGGESTIONS || '').trim().toLowerCase());
 const CATEGORY_DRAFT_CLI = process.env.SIDEQUEST_CLAUDE_BIN || 'claude';
 const CATEGORY_DRAFT_TIMEOUT_MS = 60 * 1000;
 let categoryDraftTimeoutMs = CATEGORY_DRAFT_TIMEOUT_MS;
@@ -348,7 +349,14 @@ async function handle(req?: any, res?: any) {
 
   // --- Health / handshake ---
   if (req.method === 'GET' && pathname === '/api/health') {
-    sendJson(res, 200, { ok: true, name: 'sidequest', pid: process.pid, startedAt: START_TIME, version: PLUGIN_VERSION });
+    sendJson(res, 200, {
+      ok: true,
+      name: 'sidequest',
+      pid: process.pid,
+      startedAt: START_TIME,
+      version: PLUGIN_VERSION,
+      compactionSuggestionsEnabled: COMPACTION_SUGGESTIONS_ENABLED,
+    });
     return;
   }
 
