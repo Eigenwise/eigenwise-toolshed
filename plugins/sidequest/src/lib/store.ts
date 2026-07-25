@@ -2253,6 +2253,20 @@ function worktreeGcTickets(): any[] {
     .filter(Boolean);
 }
 
+function worktreeGcProjects(currentSlug?: any, limit: number = 3): any[] {
+  const projects = listProjects({ all: true }).filter((project?: any) => project && project.slug && project.path);
+  if (!projects.length || limit < 1) return [];
+  const current = String(currentSlug || '');
+  const focused = projects.find((project?: any) => project.slug === current);
+  const cursor = String(readGlobal('worktree-gc-project-cursor', '') || '');
+  const start = Math.max(0, projects.findIndex((project?: any) => project.slug === cursor) + 1) % projects.length;
+  const ordered = Array.from({ length: projects.length }, (_, index) => projects[(start + index) % projects.length]);
+  const selected = focused ? [focused, ...ordered.filter((project?: any) => project.slug !== focused.slug)] : ordered;
+  const result = selected.slice(0, Math.min(limit, projects.length));
+  writeGlobal('worktree-gc-project-cursor', result[result.length - 1].slug);
+  return result;
+}
+
 function listAllProjectTickets(archivedOnly: boolean = false): any[] {
   const cache = residentCache();
   const cacheKey = `all-project-tickets:${archivedOnly ? 'archived' : 'active'}`;
@@ -6382,6 +6396,7 @@ module.exports = {
   assetPath,
   listTickets,
   worktreeGcTickets,
+  worktreeGcProjects,
   listAllProjectTickets,
   getTicket,
   createTicket,

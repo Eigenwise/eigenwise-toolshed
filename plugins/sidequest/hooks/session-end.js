@@ -55,36 +55,86 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
+// src/hooks/shared/worktree-sweep.ts
+var import_promises = require("node:fs/promises");
+var import_node_path2 = __toESM(require("node:path"));
+var MAX_PROJECTS_PER_START = 3;
+var MAX_CANDIDATES_PER_PROJECT = 8;
+function projectCommand(project) {
+  return `node "${pluginRoot()}/bin/sidequest.js" board-config --project "${project.path}" --integration-branch <branch>`;
+}
+function currentProject(data, store) {
+  const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const currentPath = store.nearestRepoRoot(start);
+  const found = store.findProject(currentPath);
+  return {
+    project: found.ok && found.slug && found.meta?.path ? { slug: found.slug, path: found.meta.path } : null,
+    currentPath
+  };
+}
+async function sweepWorktrees(data, includeKnownProjects) {
+  const store = require(runtimeModule("store"));
+  const { project: current, currentPath } = currentProject(data, store);
+  if (!current) return [];
+  const projects = includeKnownProjects ? store.worktreeGcProjects(current.slug, MAX_PROJECTS_PER_START) : [current];
+  const notices = [];
+  const worktrees = require(runtimeModule("worktrees"));
+  for (const project of projects) {
+    try {
+      await (0, import_promises.stat)(import_node_path2.default.join(project.path, ".git"));
+    } catch (_) {
+      notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the project directory is unavailable or is not a git worktree.`);
+      continue;
+    }
+    try {
+      const target = store.integrationTarget(project.slug);
+      if (!target) {
+        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: no integration target. Configure one with ${projectCommand(project)}.`);
+        continue;
+      }
+      const result = await worktrees.sweep(project.path, store.worktreeGcTickets(), {
+        execute: true,
+        currentPath: current?.slug === project.slug ? currentPath : "",
+        integrationTarget: target,
+        maxCandidates: MAX_CANDIDATES_PER_PROJECT
+      });
+      if (result.skipped === "repository_busy") {
+        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the repository has an in-progress git operation.`);
+      }
+      for (const failure of result.failures || []) {
+        notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not remove ${failure.path || "a git entry"}: ${failure.message}`);
+      }
+    } catch (error) {
+      notices.push(`sidequest: worktree sweep failed for ${project.name || project.slug}: ${error && error.message || error}. Check the repository is available, then run ${projectCommand(project)}.`);
+    }
+  }
+  return notices;
+}
+
 // src/hooks/session-end.ts
-function main() {
+async function main() {
   const data = readStdin();
   if (!data) return;
   const sessionId = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
   if (!sessionId) return;
   const reasonValue = data.reason;
   const reason = reasonValue ? `session ended (${String(reasonValue)})` : "session ended";
+  const notices = [];
   try {
     const store = require(runtimeModule("store"));
     store.reconcileSession(sessionId, { reason, source: "session-end" });
     const agentsync = require(runtimeModule("agentsync"));
     agentsync.cleanupNativeAgents({ sessionId });
-    const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    const project = store.findProject(store.nearestRepoRoot(start));
-    if (!project.ok || !project.slug || !project.meta?.path) return;
-    const target = store.integrationTarget(project.slug);
-    if (!target) return;
-    const worktrees = require(runtimeModule("worktrees"));
-    void worktrees.sweep(project.meta.path, store.worktreeGcTickets(), {
-      execute: true,
-      currentPath: store.nearestRepoRoot(start),
-      integrationTarget: target
-    }).catch(() => {
-    });
-  } catch (_) {
+  } catch (error) {
+    notices.push(`sidequest: session-end reconciliation failed: ${error && error.message || error}`);
   }
+  try {
+    notices.push(...await sweepWorktrees(data, false));
+  } catch (error) {
+    notices.push(`sidequest: session-end worktree sweep failed: ${error && error.message || error}`);
+  }
+  if (notices.length) console.error(notices.join("\n"));
 }
-try {
-  main();
-} catch (_) {
-  process.exit(0);
-}
+main().catch((error) => {
+  console.error(`sidequest: session-end failed: ${error && error.message || error}`);
+});
