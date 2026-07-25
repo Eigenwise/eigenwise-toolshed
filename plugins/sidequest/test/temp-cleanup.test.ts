@@ -6,22 +6,41 @@ import path from 'node:path';
 import test from 'node:test';
 import { cleanupTempRoots, TEMP_CLEANUP_RECENT_MS } from '../src/lib/temp-cleanup.js';
 
+// Every case sweeps its own sandbox inside the OS temp directory, never the
+// temp directory itself. A real sweep here deletes every sq- root on the
+// machine older than five minutes, which is any sibling test file's fixtures
+// and any other suite run in progress (SQ-867).
+function sandbox() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cleanup-sandbox-'));
+}
+
+function aged(root: string, name: string) {
+  const directory = path.join(root, name);
+  fs.mkdirSync(directory, { recursive: true });
+  const old = new Date(Date.now() - TEMP_CLEANUP_RECENT_MS - 1000);
+  fs.utimesSync(directory, old, old);
+  return directory;
+}
+
 test('cleanup removes old roots, keeps recent roots, and reports reparse points', () => {
-  const oldRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cleanup-old-'));
+  const root = sandbox();
+  const oldRoot = path.join(root, 'sq-cleanup-old');
+  fs.mkdirSync(oldRoot);
   fs.writeFileSync(path.join(oldRoot, 'payload.txt'), 'old');
   const old = new Date(Date.now() - TEMP_CLEANUP_RECENT_MS - 1000);
   fs.utimesSync(oldRoot, old, old);
 
-  const recentRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cleanup-recent-'));
-  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-target-'));
-  const link = path.join(os.tmpdir(), `sq-cleanup-link-${process.pid}-${Date.now()}`);
+  const recentRoot = path.join(root, 'sq-cleanup-recent');
+  fs.mkdirSync(recentRoot);
+  const target = path.join(root, 'link-target');
+  fs.mkdirSync(target);
+  const link = path.join(root, 'sq-cleanup-link');
   fs.symlinkSync(target, link, 'junction');
-  const linkOld = new Date(Date.now() - TEMP_CLEANUP_RECENT_MS - 1000);
-  try { fs.lutimesSync(link, linkOld, linkOld); } catch { }
+  try { fs.lutimesSync(link, old, old); } catch { }
 
-  const report = cleanupTempRoots();
+  const report = cleanupTempRoots({ root });
 
-  assert.ok(report.removed >= 1);
+  assert.equal(report.removed, 1);
   assert.ok(report.removedEntries >= 2);
   assert.ok(report.skippedRecent.includes(recentRoot));
   assert.ok(report.skippedUnsafe.includes(link));
@@ -31,15 +50,12 @@ test('cleanup removes old roots, keeps recent roots, and reports reparse points'
   assert.equal(fs.existsSync(link), true);
 
   fs.rmSync(link, { force: true });
-  fs.rmSync(target, { recursive: true, force: true });
 });
 
 test('cleanup records classification failures and continues scanning', () => {
-  const badRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cleanup-bad-'));
-  const goodRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cleanup-good-'));
-  const old = new Date(Date.now() - TEMP_CLEANUP_RECENT_MS - 1000);
-  fs.utimesSync(badRoot, old, old);
-  fs.utimesSync(goodRoot, old, old);
+  const root = sandbox();
+  const badRoot = aged(root, 'sq-cleanup-bad');
+  const goodRoot = aged(root, 'sq-cleanup-good');
   const originalRealpath = fs.realpathSync.native;
   Object.defineProperty(fs.realpathSync, 'native', {
     configurable: true,
@@ -54,7 +70,7 @@ test('cleanup records classification failures and continues scanning', () => {
   });
 
   try {
-    const report = cleanupTempRoots();
+    const report = cleanupTempRoots({ root });
 
     assert.equal(fs.existsSync(goodRoot), false);
     assert.equal(fs.existsSync(badRoot), true);
@@ -65,8 +81,37 @@ test('cleanup records classification failures and continues scanning', () => {
   }
 });
 
+test('cleanup only considers sq- prefixed entries', () => {
+  const root = sandbox();
+  const mine = aged(root, 'sq-cleanup-mine');
+  const foreign = aged(root, 'cleanup-foreign');
+
+  const report = cleanupTempRoots({ root });
+
+  assert.equal(report.scanned, 1);
+  assert.equal(fs.existsSync(mine), false);
+  assert.equal(fs.existsSync(foreign), true);
+});
+
+test('cleanup defaults to the OS temp directory', () => {
+  // now:0 makes every entry look recent, so this proves the default root
+  // without deleting anything on the machine.
+  const report = cleanupTempRoots({ now: 0 });
+
+  assert.equal(report.root, fs.realpathSync.native(os.tmpdir()));
+  assert.equal(report.removed, 0);
+  assert.equal(report.removedEntries, 0);
+});
+
 test('cleanup refuses a caller-supplied root outside the OS temp directory', () => {
   const outside = fs.mkdtempSync(path.join(process.cwd(), 'sq-cleanup-outside-'));
   assert.throws(() => cleanupTempRoots({ root: outside }), /must resolve to the OS temp directory/);
   fs.rmSync(outside, { recursive: true, force: true });
+});
+
+test('cleanup refuses a traversal that leaves the OS temp directory', () => {
+  assert.throws(
+    () => cleanupTempRoots({ root: path.join(os.tmpdir(), '..', '..') }),
+    /must resolve to the OS temp directory/,
+  );
 });

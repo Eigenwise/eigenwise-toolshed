@@ -21,7 +21,12 @@ const { spawnSync, execFileSync } = require('child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-test-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
-const PROJ = path.join(os.tmpdir(), 'sq-mcp-fixtures', 'board');
+// Per-process fixture root. A fixed path under the OS temp directory is shared
+// with every other suite run on this machine and with the real `sidequest temp
+// cleanup` sweep, either of which deletes this repo mid-run and takes the two
+// dispatch tests that need a live work tree with it (SQ-867).
+const FIXTURE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-fixtures-'));
+const PROJ = path.join(FIXTURE_ROOT, 'board');
 fs.mkdirSync(PROJ, { recursive: true });
 execFileSync('git', ['init', '--quiet'], { cwd: PROJ, windowsHide: true });
 execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], { cwd: PROJ, windowsHide: true });
@@ -120,7 +125,10 @@ function runForceBypass(payload?: any) {
 }
 
 function createGitWorktree() {
-  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-worktree-'));
+  // The space is the point: every commit/submit path below runs against a
+  // worktree whose absolute path contains one. Keep the sq- prefix too, it is
+  // what the temp tracker and `temp cleanup` key on.
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp worktree-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-remote-'));
   gitAt(worktree, ['init']);
   gitAt(worktree, ['config', 'user.name', 'Sidequest Test']);
@@ -1807,7 +1815,7 @@ test('mutations queue FIFO per board without blocking another board', async () =
   });
   const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9201, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, marker: 'first' } } });
   const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9202, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, marker: 'second' } } });
-  const otherProject = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-fixtures', 'other-board')).slug;
+  const otherProject = store.ensureProject(path.join(FIXTURE_ROOT, 'other-board')).slug;
   const other = mcp.handleRequest({ jsonrpc: '2.0', id: 9203, method: 'tools/call', params: { name: 'comment', arguments: { project: otherProject, marker: 'other' } } });
   try {
     await new Promise((resolve) => setImmediate(resolve));

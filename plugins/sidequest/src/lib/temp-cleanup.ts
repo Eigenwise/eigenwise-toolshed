@@ -69,6 +69,11 @@ function removeTree(candidate: string): number {
   return removed + 1;
 }
 
+function isInside(candidate: string, parent: string) {
+  const relative = path.relative(parent, candidate);
+  return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 function resolveCleanupRoot(candidate?: string) {
   const expected = realPath(os.tmpdir());
   const requested = candidate ? path.resolve(candidate) : expected;
@@ -78,13 +83,13 @@ function resolveCleanupRoot(candidate?: string) {
   } catch {
     throw new Error(`temp cleanup refused: root does not exist: ${requested}`);
   }
-  if (!samePath(resolved, expected)) {
-    throw new Error(`temp cleanup refused: root must resolve to the OS temp directory (${expected})`);
+  if (!samePath(resolved, expected) && !isInside(resolved, expected)) {
+    throw new Error(`temp cleanup refused: root must resolve to the OS temp directory (${expected}) or a directory inside it`);
   }
   if (isReparsePoint(requested)) {
-    throw new Error('temp cleanup refused: the OS temp directory is a symlink or reparse point');
+    throw new Error('temp cleanup refused: the cleanup root is a symlink or reparse point');
   }
-  return expected;
+  return resolved;
 }
 
 export function cleanupTempRoots(options: CleanupOptions = {}): CleanupReport {

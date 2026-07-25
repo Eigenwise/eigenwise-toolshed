@@ -77,6 +77,10 @@ function removeTree(candidate) {
   import_node_fs.default.rmdirSync(candidate);
   return removed + 1;
 }
+function isInside(candidate, parent) {
+  const relative = import_node_path.default.relative(parent, candidate);
+  return Boolean(relative) && !relative.startsWith("..") && !import_node_path.default.isAbsolute(relative);
+}
 function resolveCleanupRoot(candidate) {
   const expected = realPath(import_node_os.default.tmpdir());
   const requested = candidate ? import_node_path.default.resolve(candidate) : expected;
@@ -86,13 +90,13 @@ function resolveCleanupRoot(candidate) {
   } catch {
     throw new Error(`temp cleanup refused: root does not exist: ${requested}`);
   }
-  if (!samePath(resolved, expected)) {
-    throw new Error(`temp cleanup refused: root must resolve to the OS temp directory (${expected})`);
+  if (!samePath(resolved, expected) && !isInside(resolved, expected)) {
+    throw new Error(`temp cleanup refused: root must resolve to the OS temp directory (${expected}) or a directory inside it`);
   }
   if (isReparsePoint(requested)) {
-    throw new Error("temp cleanup refused: the OS temp directory is a symlink or reparse point");
+    throw new Error("temp cleanup refused: the cleanup root is a symlink or reparse point");
   }
-  return expected;
+  return resolved;
 }
 function cleanupTempRoots(options = {}) {
   const root = resolveCleanupRoot(options.root);
