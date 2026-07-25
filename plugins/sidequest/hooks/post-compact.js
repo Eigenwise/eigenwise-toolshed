@@ -90,7 +90,8 @@ function writeState(sessionId, state) {
 }
 function resetCompactionState(sessionId, transcriptPath) {
   if (!sessionId) return;
-  writeState(sessionId, { resetAt: (/* @__PURE__ */ new Date()).toISOString(), transcriptBytes: transcriptBytes(transcriptPath) });
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  writeState(sessionId, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
 // src/hooks/post-compact.ts

@@ -54,15 +54,23 @@ test('compaction suggestion fires only at a real board boundary and rearms on Po
   for (const ticket of first) assert.match(suggestion.systemMessage, new RegExp(ticket.ref));
   assert.equal(stop(sessionId, transcript), null, 'cooldown suppresses consecutive turns without PostCompact');
 
-  closeTicket('fourth');
-  closeTicket('fifth');
-  const sixth = closeTicket('sixth');
+  const afterFirstSuggestion = [
+    closeTicket('fourth'),
+    closeTicket('fifth'),
+    closeTicket('sixth'),
+    closeTicket('seventh'),
+    closeTicket('eighth'),
+    closeTicket('ninth'),
+  ];
   const active = store.createTicket(slug, { title: 'still running', source: 'test' });
   assert.equal(store.claimTicket(slug, active.ref, 'live-worker').ok, true);
   assert.equal(stop(sessionId, transcript), null, 'a live claim blocks the suggestion');
   assert.equal(store.releaseTicket(slug, active.ref, 'live-worker', { status: 'todo' }).ok, true);
   const resumed = stop(sessionId, transcript);
-  assert.match(resumed.systemMessage, new RegExp(sixth.ref), 'materially higher accumulation rearms after an ignored suggestion');
+  assert.match(resumed.systemMessage, new RegExp(afterFirstSuggestion.at(-1)!.ref), 'materially higher accumulation rearms after an ignored suggestion');
+  for (let turn = 1; turn <= 5; turn += 1) {
+    assert.equal(stop(sessionId, transcript), null, `turn ${turn} after the second suggestion stays silent without PostCompact`);
+  }
 
   hook(postCompactHook, { session_id: sessionId, transcript_path: transcript });
   assert.equal(stop(sessionId, transcript), null, 'PostCompact clears the accumulators and cooldown');
@@ -82,5 +90,9 @@ test('compaction suggestion tracks transcript bytes and honors the kill switch',
 
   const suggestion = stop(sessionId, transcript);
   assert.match(suggestion.systemMessage, /Transcript growth: 3.0 MB/);
+  fs.writeFileSync(transcript, 'x'.repeat(9 * 1024 * 1024 + 4));
+  const rearmed = stop(sessionId, transcript);
+  assert.match(rearmed.systemMessage, /Transcript growth: 6.0 MB/, 'the retry threshold measures fresh growth after the first suggestion');
+  assert.equal(stop(sessionId, transcript), null, 'the second transcript suggestion does not nag on later turns');
   assert.equal(stop(sessionId, transcript, { SIDEQUEST_COMPACTION_SUGGESTIONS: 'off' }), null);
 });

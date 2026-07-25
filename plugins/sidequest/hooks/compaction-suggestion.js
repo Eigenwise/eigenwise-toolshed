@@ -89,10 +89,13 @@ function transcriptBytes(transcriptPath) {
 function readState(sessionId, currentBytes) {
   try {
     const parsed = JSON.parse(import_node_fs2.default.readFileSync(stateFile(sessionId), "utf8"));
-    if (parsed && Number.isFinite(parsed.transcriptBytes) && Number.isFinite(Date.parse(parsed.resetAt))) return parsed;
+    if (parsed && Number.isFinite(parsed.transcriptBytes) && Number.isFinite(Date.parse(parsed.resetAt))) {
+      return { ...parsed, ticketBaselineAt: parsed.ticketBaselineAt || parsed.resetAt };
+    }
   } catch (_) {
   }
-  return { resetAt: (/* @__PURE__ */ new Date()).toISOString(), transcriptBytes: currentBytes };
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  return { resetAt: now, ticketBaselineAt: now, transcriptBytes: currentBytes };
 }
 function writeState(sessionId, state) {
   try {
@@ -121,6 +124,10 @@ function versionFor(ticket) {
 function recentlyClosed(tickets, resetAt) {
   const since = Date.parse(resetAt);
   return tickets.filter((ticket) => ticket?.status === "done" && completionAt(ticket) >= since);
+}
+function closedAfter(tickets, baselineAt) {
+  const since = Date.parse(baselineAt);
+  return tickets.filter((ticket) => ticket?.status === "done" && completionAt(ticket) > since);
 }
 function activeBoardWork(tickets, liveClaimRefs) {
   return tickets.some((ticket) => {
@@ -166,12 +173,16 @@ async function compactionSuggestion(input) {
     const liveClaimRefs = new Set(store.worktreeGcTickets().filter((ticket) => ticket.project === project.slug && ticket.claimLive && ticket.ref).map((ticket) => String(ticket.ref)));
     if (activeBoardWork(tickets, liveClaimRefs) || await publishLockHeld(project.path)) return null;
     const closed = recentlyClosed(tickets, state.resetAt);
+    const newlyClosed = closedAfter(tickets, state.ticketBaselineAt);
     const growth = Math.max(0, currentBytes - state.transcriptBytes);
     const multiplier = state.suggestedAt ? RETRY_MULTIPLIER : 1;
-    const enoughClosed = closed.length >= CLOSED_TICKETS_THRESHOLD * multiplier;
+    const enoughClosed = newlyClosed.length >= CLOSED_TICKETS_THRESHOLD * multiplier;
     const enoughTranscript = growth >= TRANSCRIPT_BYTES_THRESHOLD * multiplier;
     if (!enoughClosed && !enoughTranscript) return null;
-    state.suggestedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    state.suggestedAt = now;
+    state.ticketBaselineAt = now;
+    state.transcriptBytes = currentBytes;
     if (!writeState(sessionId, state)) return null;
     const accumulated = [
       closed.length ? `Closed/shipped: ${compactedRefs(closed)}.` : "",

@@ -10,6 +10,7 @@ const RETRY_MULTIPLIER = 2;
 
 interface CompactionState {
   resetAt: string;
+  ticketBaselineAt: string;
   transcriptBytes: number;
   suggestedAt?: string;
 }
@@ -53,9 +54,12 @@ function transcriptBytes(transcriptPath: unknown): number {
 function readState(sessionId: string, currentBytes: number): CompactionState {
   try {
     const parsed = JSON.parse(fs.readFileSync(stateFile(sessionId), 'utf8')) as CompactionState;
-    if (parsed && Number.isFinite(parsed.transcriptBytes) && Number.isFinite(Date.parse(parsed.resetAt))) return parsed;
+    if (parsed && Number.isFinite(parsed.transcriptBytes) && Number.isFinite(Date.parse(parsed.resetAt))) {
+      return { ...parsed, ticketBaselineAt: parsed.ticketBaselineAt || parsed.resetAt };
+    }
   } catch (_) {}
-  return { resetAt: new Date().toISOString(), transcriptBytes: currentBytes };
+  const now = new Date().toISOString();
+  return { resetAt: now, ticketBaselineAt: now, transcriptBytes: currentBytes };
 }
 
 function writeState(sessionId: string, state: CompactionState): boolean {
@@ -72,12 +76,14 @@ export function initializeCompactionState(sessionId: string, transcriptPath: unk
   if (!sessionId || !compactionSuggestionsEnabled()) return;
   const file = stateFile(sessionId);
   if (fs.existsSync(file)) return;
-  writeState(sessionId, { resetAt: new Date().toISOString(), transcriptBytes: transcriptBytes(transcriptPath) });
+  const now = new Date().toISOString();
+  writeState(sessionId, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
 export function resetCompactionState(sessionId: string, transcriptPath: unknown): void {
   if (!sessionId) return;
-  writeState(sessionId, { resetAt: new Date().toISOString(), transcriptBytes: transcriptBytes(transcriptPath) });
+  const now = new Date().toISOString();
+  writeState(sessionId, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
 function completionAt(ticket: any): number {
@@ -100,6 +106,11 @@ function versionFor(ticket: any): string {
 function recentlyClosed(tickets: any[], resetAt: string): any[] {
   const since = Date.parse(resetAt);
   return tickets.filter((ticket) => ticket?.status === 'done' && completionAt(ticket) >= since);
+}
+
+function closedAfter(tickets: any[], baselineAt: string): any[] {
+  const since = Date.parse(baselineAt);
+  return tickets.filter((ticket) => ticket?.status === 'done' && completionAt(ticket) > since);
 }
 
 function activeBoardWork(tickets: any[], liveClaimRefs: Set<string>): boolean {
@@ -156,13 +167,17 @@ export async function compactionSuggestion(input: Record<string, unknown>): Prom
     if (activeBoardWork(tickets, liveClaimRefs) || await publishLockHeld(project.path)) return null;
 
     const closed = recentlyClosed(tickets, state.resetAt);
+    const newlyClosed = closedAfter(tickets, state.ticketBaselineAt);
     const growth = Math.max(0, currentBytes - state.transcriptBytes);
     const multiplier = state.suggestedAt ? RETRY_MULTIPLIER : 1;
-    const enoughClosed = closed.length >= CLOSED_TICKETS_THRESHOLD * multiplier;
+    const enoughClosed = newlyClosed.length >= CLOSED_TICKETS_THRESHOLD * multiplier;
     const enoughTranscript = growth >= TRANSCRIPT_BYTES_THRESHOLD * multiplier;
     if (!enoughClosed && !enoughTranscript) return null;
 
-    state.suggestedAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    state.suggestedAt = now;
+    state.ticketBaselineAt = now;
+    state.transcriptBytes = currentBytes;
     if (!writeState(sessionId, state)) return null;
     const accumulated = [
       closed.length ? `Closed/shipped: ${compactedRefs(closed)}.` : '',

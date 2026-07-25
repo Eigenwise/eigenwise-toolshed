@@ -110,7 +110,8 @@ function initializeCompactionState(sessionId, transcriptPath) {
   if (!sessionId || !compactionSuggestionsEnabled()) return;
   const file = stateFile(sessionId);
   if (import_node_fs2.default.existsSync(file)) return;
-  writeState(sessionId, { resetAt: (/* @__PURE__ */ new Date()).toISOString(), transcriptBytes: transcriptBytes(transcriptPath) });
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  writeState(sessionId, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
 // src/hooks/session-start.ts
