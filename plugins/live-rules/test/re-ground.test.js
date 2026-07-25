@@ -150,3 +150,72 @@ test('stale migration locks recover while fresh locks serialize concurrent start
   fs.utimesSync(lock, old, old);
   assert.strictEqual(rules.migrateLegacyRules(dir), true);
 });
+
+test('atomic sync repairs a mistyped manifest hash from the rule file', () => {
+  const dir = project();
+  atomic(dir, [{ data: { description: 'Always' }, body: 'Trust the rule file.' }]);
+  const manifestPath = path.join(dir, '.claude', 'live-rules', 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.rules[0].hash = 'not-a-sha256';
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest) + '\n');
+
+  const repaired = rules.syncAtomicRuleSet(dir);
+  assert.match(repaired.rules[0].hash, /^[a-f0-9]{64}$/);
+  assert.strictEqual(rules.loadRuleSet(dir).stale, false);
+});
+
+test('atomic sync derives changed content and metadata from rule files', () => {
+  const dir = project();
+  atomic(dir, [{ data: { description: 'Old', globs: ['*.js'] }, body: 'Old body.' }]);
+  const target = path.join(dir, '.claude', 'live-rules', 'rules', '001.md');
+  fs.writeFileSync(target, '---\ndescription: New\nglobs: ["src/**/*.ts"]\npriority: 4\nenabled: false\ninclude: docs/rules.md\n---\nNew body.\n');
+
+  const manifest = rules.syncAtomicRuleSet(dir);
+  assert.deepStrictEqual(manifest.rules[0], {
+    path: 'rules/001.md',
+    hash: rules.hashContent(fs.readFileSync(path.join(dir, '.claude', 'live-rules', 'rules', '001.md'), 'utf8')),
+    description: 'New',
+    globs: ['src/**/*.ts'],
+    dirs: [],
+    prompt: [],
+    priority: 4,
+    enabled: false,
+    include: ['docs/rules.md'],
+  });
+});
+
+test('atomic sync is stable for unchanged rules and normalizes Windows paths', () => {
+  const dir = project();
+  atomic(dir, [{ data: { description: 'One' }, body: 'One.' }]);
+  const first = rules.syncAtomicRuleSet(dir);
+  const before = fs.readFileSync(path.join(dir, '.claude', 'live-rules', 'manifest.json'), 'utf8');
+  const second = rules.syncAtomicRuleSet(dir);
+  const after = fs.readFileSync(path.join(dir, '.claude', 'live-rules', 'manifest.json'), 'utf8');
+  assert.deepStrictEqual(second, first);
+  assert.strictEqual(after, before);
+  assert.strictEqual(second.rules[0].path, 'rules/001.md');
+});
+
+test('atomic sync repairs a partial manifest and fails loudly while another writer holds the lock', () => {
+  const dir = project();
+  atomic(dir, [{ data: { description: 'One' }, body: 'One.' }]);
+  const manifestPath = path.join(dir, '.claude', 'live-rules', 'manifest.json');
+  fs.writeFileSync(manifestPath, '{');
+  assert.strictEqual(rules.syncAtomicRuleSet(dir).rules.length, 1);
+
+  const lock = path.join(dir, '.claude', 'live-rules.write.lock');
+  fs.writeFileSync(lock, 'active\n');
+  assert.throws(() => rules.syncAtomicRuleSet(dir), /live-rules\.write\.lock is held.*run live-rules sync again/);
+});
+
+test('atomic sync leaves the manifest intact when a partial rule file is invalid', () => {
+  const dir = project();
+  atomic(dir, [{ data: { description: 'One' }, body: 'One.' }]);
+  const manifestPath = path.join(dir, '.claude', 'live-rules', 'manifest.json');
+  const before = fs.readFileSync(manifestPath, 'utf8');
+  const target = path.join(dir, '.claude', 'live-rules', 'rules', '001.md');
+  fs.writeFileSync(target, '---\ndescription: One\n---\nOne.\n---\ndescription: Two\n---\nTwo.\n');
+
+  assert.throws(() => rules.syncAtomicRuleSet(dir), /rules\/001\.md must contain exactly one rule.*run live-rules sync again/);
+  assert.strictEqual(fs.readFileSync(manifestPath, 'utf8'), before);
+});

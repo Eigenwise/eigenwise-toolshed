@@ -7,13 +7,17 @@ description: >-
 
 # Manage Rules
 
-Read, audit, and toggle the rules in the project's live-rules file without changing what any of them
-say. For authoring or editing rule content, use the `add-rule` skill. The full format is documented in
-`../add-rule/references/rule-format.md`.
+Read, audit, and toggle live rules without changing what any rule says. For authoring or editing rule content, use the `add-rule` skill. The full format is documented in `../add-rule/references/rule-format.md`.
 
-## Find the rules file
+For atomic storage, never edit `.claude/live-rules/manifest.json`. After every rule-file change, run:
 
-All rules live in **one Markdown file**. Resolve it in this order:
+```text
+node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
+```
+
+## Find the rules
+
+New workspaces store one rule per Markdown file under `.claude/live-rules/rules/`; their generated manifest stays beside them. Existing workspaces may still use one Markdown file. Resolve that legacy file in this order:
 
 1. If `LIVE_RULES_PATH` is set (commonly in `.claude/settings.json` under `env`), that path is the
    file (project-relative, absolute, or `~`-relative).
@@ -22,9 +26,9 @@ All rules live in **one Markdown file**. Resolve it in this order:
 If the file does not exist, there are no rules yet; point the user at `add-rule` to create the first
 one.
 
-## How to read the file
+## How to read the files
 
-The file is a sequence of rule sections. Each rule is a frontmatter block between `---` fences
+For atomic storage, inspect every `.md` rule under `.claude/live-rules/rules/`. For legacy storage, the file is a sequence of rule sections. Each rule is a frontmatter block between `---` fences
 followed by its body, and the next `---` begins the next rule. Anything before the first fence is a
 title or intro and is ignored. Parse each section's frontmatter to get its scope, priority, and
 enabled state; the body is the instruction text.
@@ -77,7 +81,7 @@ asks; `add-rule` is the right tool for rewrites.
 ### Enable or disable a rule
 
 Toggle a rule without deleting it: find its section, set `enabled: true` or `enabled: false` in that
-section's frontmatter (add the field if it is absent), and save. Leave the other sections untouched.
+section's frontmatter (add the field if it is absent), and save. For atomic storage, run the sync command after saving; it regenerates the manifest from the rule files. Leave the other sections untouched.
 The change takes effect on the next prompt or edit. Confirm which rule you toggled and its new state.
 
 ### Explain what is active

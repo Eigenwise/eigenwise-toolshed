@@ -31,15 +31,15 @@ Then run `/reload-plugins` (or restart Claude Code).
 
 ## Atomic rule storage
 
-Use `.claude/live-rules/manifest.json` with one frontmatter-plus-body Markdown rule under
-`.claude/live-rules/rules/`. The manifest records each rule path, SHA-256 content hash, and scope metadata.
-Write changed rule files and the manifest through a temporary sibling, then rename them into place. The hooks
-verify hashes before using the manifest. A manual edit with an old hash is still loaded from the rule file and
-called out as stale, so it is re-grounded instead of silently treated as already loaded.
+New workspaces keep one frontmatter-plus-body Markdown rule under `.claude/live-rules/rules/`. After changing a rule, generate the manifest with the plugin-owned command:
 
-Projects using the old `.claude/live-rules.md` format remain readable. The maintenance path can call
-`migrateLegacyRules(projectDir)` to write the atomic copy without deleting the original, then commit the new
-directory after checking the generated rules.
+```text
+node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
+```
+
+It derives paths, SHA-256 hashes, and rule metadata from the files on disk, stages a complete replacement, and uses a writer lock before swapping it into place. Never hand-author `.claude/live-rules/manifest.json`. A stale or mistyped manifest is repaired from the rule files when sync runs; an invalid rule file fails with its exact path and the next action. Hooks still verify content hashes while reading as defense in depth.
+
+Projects using the old `.claude/live-rules.md` format remain readable. The maintenance path can call `migrateLegacyRules(projectDir)` to write the atomic copy without deleting the original, then commit the new directory after checking the generated rules.
 
 ## Why not just use `CLAUDE.md`?
 
@@ -320,8 +320,7 @@ and split unrelated guidance into separate rules.
 | `add-rule` | "add a rule that...", "make a guardrail for...", or `/live-rules:add-rule` | Appends or edits a rule in your live-rules file, picking the right scope and writing valid frontmatter |
 | `manage-rules` | "list my rules", "audit my rules", "disable the X rule", or `/live-rules:manage-rules` | Lists, audits, enables/disables rules, and explains which rules are active when |
 
-You never have to use the skills: hand-editing the file works exactly as well, since the hooks just
-read whatever is on disk.
+You never have to use the skills: you can hand-edit a legacy file, or edit atomic rule files and run the sync command above. The hooks read the resulting files directly and verify their hashes.
 
 ## Sharing with your team
 

@@ -19,11 +19,13 @@ live-rules file.
 
 ## Atomic storage
 
-For new workspaces, write each rule as `.claude/live-rules/rules/<stable-name>.md` and maintain
-`.claude/live-rules/manifest.json`. Every manifest entry needs the relative rule path, SHA-256 hash, and the
-rule's `description`, `globs`, `dirs`, `prompt`, and `enabled` metadata. Write the replacement rule file and
-manifest to temporary sibling paths, then rename them so readers never observe half an update. Keep the old
-`.claude/live-rules.md` format only for existing projects until it has been migrated.
+For new workspaces, keep each rule in `.claude/live-rules/rules/<stable-name>.md`. After adding or editing a rule, run the plugin-owned sync command from the project root:
+
+```text
+node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
+```
+
+It derives every manifest hash and metadata field from the rule files, validates the staged replacement, and swaps the directory under a writer lock. Never author or repair `.claude/live-rules/manifest.json` by hand. If sync fails, fix the exact file it names, then run the same command again. Keep the old `.claude/live-rules.md` format only for existing projects until it has been migrated.
 
 ### Step 1 - Find the rules file
 
@@ -74,10 +76,9 @@ is read fresh each injection, and if it does not exist the rule stays silent. A 
 `globs`/`dirs`/`prompt`) is global, so the file rides along on every prompt. See the "Including a live
 file" section of `references/rule-format.md`.
 
-### Step 3 - Append the rule section
+### Step 3 - Write the rule and sync it
 
-Add a new section to the file: a frontmatter block followed by the body. Separate it from the
-previous rule with a blank line; the `---` fence is what actually starts a new rule.
+For atomic storage, create or edit one rule file under `.claude/live-rules/rules/`, then run the sync command from **Atomic storage**. Do not edit the manifest. For legacy storage, append a new section to the Markdown file: a frontmatter block followed by the body. Separate it from the previous rule with a blank line; the `---` fence is what actually starts a new rule.
 
 ```markdown
 ---

@@ -32,8 +32,8 @@ function acquire(lockPath) {
   return false;
 }
 
-function withMigrationLock(lockPath, work) {
-  if (!acquire(lockPath)) return { locked: true, migrated: false };
+function withLock(lockPath, lockedResult, work) {
+  if (!acquire(lockPath)) return lockedResult;
   try {
     return work();
   } finally {
@@ -44,4 +44,8 @@ function withMigrationLock(lockPath, work) {
   }
 }
 
-module.exports = { STALE_LOCK_MS, withMigrationLock };
+function withMigrationLock(lockPath, work) {
+  return withLock(lockPath, { locked: true, migrated: false }, work);
+}
+
+module.exports = { STALE_LOCK_MS, withLock, withMigrationLock };

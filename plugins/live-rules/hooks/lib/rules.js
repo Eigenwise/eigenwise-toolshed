@@ -485,13 +485,7 @@ function loadAtomicRules(projectDir) {
     }
     try {
       const rule = buildRule(entry.id || entry.path, sections[0].data, sections[0].body);
-      if (
-        entry.description !== rule.description ||
-        JSON.stringify(entry.globs || []) !== JSON.stringify(rule.globs) ||
-        JSON.stringify(entry.dirs || []) !== JSON.stringify(rule.dirs) ||
-        JSON.stringify(entry.prompt || []) !== JSON.stringify(rule.prompts) ||
-        entry.enabled !== rule.enabled
-      ) stale = true;
+      if (!sameManifestEntry(entry, manifestEntry(entry.path, rule, content))) stale = true;
       rules.push(enrichRule(rule, ATOMIC_RULES_DIR.replace(/\\/g, '/') + '/' + entry.path.replace(/\\/g, '/'), content));
     } catch (_) {
       stale = true;
@@ -520,12 +514,48 @@ function renderRuleFile(data, body) {
   return lines.length ? '---\n' + lines.join('\n') + '\n---\n' + String(body || '').trim() + '\n' : String(body || '').trim() + '\n';
 }
 
+function manifestEntry(relativePath, rule, content) {
+  return {
+    path: relativePath,
+    hash: hashContent(content),
+    description: rule.description,
+    globs: rule.globs,
+    dirs: rule.dirs,
+    prompt: rule.prompts,
+    priority: rule.priority,
+    enabled: rule.enabled,
+    include: rule.includes,
+  };
+}
+
+function ruleFromAtomicFile(relativePath, content) {
+  const sections = splitSections(content);
+  if (sections.length !== 1) {
+    throw new Error(relativePath + ' must contain exactly one rule. Split or repair it, then run live-rules sync again.');
+  }
+  return buildRule(relativePath, sections[0].data, sections[0].body);
+}
+
+function sameManifestEntry(entry, expected) {
+  return entry.path === expected.path &&
+    entry.hash === expected.hash &&
+    entry.description === expected.description &&
+    JSON.stringify(entry.globs || []) === JSON.stringify(expected.globs) &&
+    JSON.stringify(entry.dirs || []) === JSON.stringify(expected.dirs) &&
+    JSON.stringify(entry.prompt || []) === JSON.stringify(expected.prompt) &&
+    (entry.priority == null ? 0 : entry.priority) === expected.priority &&
+    entry.enabled === expected.enabled &&
+    JSON.stringify(entry.include || []) === JSON.stringify(expected.include);
+}
+
 function validateAtomicDirectory(directory, manifest) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.rules)) return false;
   for (const entry of manifest.rules) {
     if (!entry || !isSafeRulePath(entry.path)) return false;
     try {
-      if (hashContent(fs.readFileSync(path.join(directory, entry.path), 'utf8')) !== entry.hash) return false;
+      const content = fs.readFileSync(path.join(directory, entry.path), 'utf8');
+      const rule = ruleFromAtomicFile(entry.path, content);
+      if (!sameManifestEntry(entry, manifestEntry(entry.path, rule, content))) return false;
     } catch (_) {
       return false;
     }
@@ -533,32 +563,119 @@ function validateAtomicDirectory(directory, manifest) {
   return true;
 }
 
-function writeAtomicRuleSet(projectDir, ruleFiles) {
-  const destination = getAtomicRulesDir(projectDir);
-  if (fs.existsSync(destination)) throw new Error('Atomic live-rules directory already exists');
+function createManifest(ruleFiles) {
+  return {
+    version: 1,
+    rules: ruleFiles.map(({ path: relativePath, content }) => {
+      const rule = ruleFromAtomicFile(relativePath, content);
+      return manifestEntry(relativePath, rule, content);
+    }),
+  };
+}
+
+function writeAtomicDirectory(destination, ruleFiles) {
   const temp = destination + '.tmp-' + process.pid + '-' + crypto.randomBytes(6).toString('hex');
   try {
-    fs.mkdirSync(path.join(temp, 'rules'), { recursive: true });
-    const entries = ruleFiles.map((item, index) => {
-      const relative = 'rules/' + String(index + 1).padStart(3, '0') + '.md';
-      const content = item.content;
-      fs.writeFileSync(path.join(temp, relative), content);
-      return { path: relative, hash: hashContent(content), description: item.rule.description, globs: item.rule.globs, dirs: item.rule.dirs, prompt: item.rule.prompts, enabled: item.rule.enabled };
-    });
-    const manifest = { version: 1, rules: entries };
+    for (const item of ruleFiles) {
+      const target = path.join(temp, item.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, item.content);
+    }
+    const manifest = createManifest(ruleFiles);
     if (!validateAtomicDirectory(temp, manifest)) throw new Error('Atomic live-rules validation failed');
     fs.writeFileSync(path.join(temp, ATOMIC_MANIFEST), JSON.stringify(manifest, null, 2) + '\n');
     if (!validateAtomicDirectory(temp, JSON.parse(fs.readFileSync(path.join(temp, ATOMIC_MANIFEST), 'utf8')))) throw new Error('Atomic live-rules manifest validation failed');
-    fs.renameSync(temp, destination);
-    return manifest;
+    return { manifest, temp };
   } catch (error) {
     try {
       fs.rmSync(temp, { recursive: true, force: true });
     } catch (_) {
-      // A later SessionStart ignores this unmarked sibling and retries safely.
     }
     throw error;
   }
+}
+
+function writeAtomicRuleSet(projectDir, ruleFiles) {
+  const destination = getAtomicRulesDir(projectDir);
+  if (fs.existsSync(destination)) throw new Error('Atomic live-rules directory already exists');
+  const files = ruleFiles.map((item, index) => ({
+    path: 'rules/' + String(index + 1).padStart(3, '0') + '.md',
+    content: item.content,
+  }));
+  const staged = writeAtomicDirectory(destination, files);
+  try {
+    fs.renameSync(staged.temp, destination);
+    return staged.manifest;
+  } catch (error) {
+    try {
+      fs.rmSync(staged.temp, { recursive: true, force: true });
+    } catch (_) {
+    }
+    throw error;
+  }
+}
+
+function listAtomicRuleFiles(directory) {
+  const rulesDirectory = path.join(directory, 'rules');
+  if (!fs.existsSync(rulesDirectory)) {
+    throw new Error(rulesDirectory + ' is missing. Create rule files under .claude/live-rules/rules, then run live-rules sync again.');
+  }
+  const files = [];
+  const visit = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+      const target = path.join(current, entry.name);
+      if (entry.isDirectory()) visit(target);
+      else if (entry.isFile() && entry.name.endsWith('.md')) {
+        const relativePath = path.relative(directory, target).replace(/\\/g, '/');
+        if (!isSafeRulePath(relativePath)) throw new Error(target + ' is not a safe atomic rule path. Move it under rules/ and run live-rules sync again.');
+        files.push({ path: relativePath, content: fs.readFileSync(target, 'utf8') });
+      }
+    }
+  };
+  visit(rulesDirectory);
+  if (!files.length) throw new Error(rulesDirectory + ' has no .md rule files. Add a rule, then run live-rules sync again.');
+  return files;
+}
+
+function replaceAtomicDirectory(destination, staged) {
+  const previous = destination + '.previous-' + process.pid + '-' + crypto.randomBytes(6).toString('hex');
+  fs.renameSync(destination, previous);
+  try {
+    fs.renameSync(staged, destination);
+  } catch (error) {
+    try {
+      fs.renameSync(previous, destination);
+    } catch (_) {
+    }
+    throw error;
+  }
+  try {
+    fs.rmSync(previous, { recursive: true, force: true });
+  } catch (_) {
+  }
+}
+
+function syncAtomicRuleSet(projectDir) {
+  const destination = getAtomicRulesDir(projectDir);
+  if (!fs.existsSync(destination)) {
+    throw new Error(destination + ' is missing. Create atomic rule files first, then run live-rules sync again.');
+  }
+  const lockPath = path.join(projectDir, '.claude', 'live-rules.write.lock');
+  const result = migrationLock.withLock(lockPath, { locked: true }, () => {
+    const staged = writeAtomicDirectory(destination, listAtomicRuleFiles(destination));
+    try {
+      replaceAtomicDirectory(destination, staged.temp);
+      return { manifest: staged.manifest };
+    } catch (error) {
+      try {
+        fs.rmSync(staged.temp, { recursive: true, force: true });
+      } catch (_) {
+      }
+      throw error;
+    }
+  });
+  if (result.locked) throw new Error(lockPath + ' is held by another live-rules update. Wait for it to finish, then run live-rules sync again.');
+  return result.manifest;
 }
 
 function atomicSchema(projectDir) {
@@ -799,6 +916,7 @@ module.exports = {
   atomicSchema,
   migrateLegacyRules,
   writeAtomicRuleSet,
+  syncAtomicRuleSet,
   resolveIncludePath,
   displayPath,
   splitSections,
