@@ -30,9 +30,11 @@ push — instead of one transaction per ticket. Don't wait on work that isn't in
 
 `board-config --integration-mode local` records ranges against local `main`; `auto` chooses that mode when
 `origin` is absent. Integrate in a clean worktree from `main`, run the same reachability checks against
-`main`, then skip fetch and push. Use `groom-close --integration` after the integrated commits are reachable
-from local `main`. Remote mode keeps the transaction below unchanged; an existing but broken upstream still
-rejects the submission.
+`main`, then skip fetch and push. `groom-close --integration` fast-forwards local `main` onto the integrated
+commit itself, so you no longer have to make it reachable first. It only ever fast-forwards, only onto a commit
+that provably carries the closed ticket's work, and only while the main checkout sits on that branch with clean
+tracked files. Anything else refuses and prints the `git merge --ff-only` to run by hand. Remote mode keeps the
+transaction below unchanged; an existing but broken upstream still rejects the submission.
 
 ## The publish transaction
 
