@@ -27,7 +27,7 @@ const MODEL_PRICES_PER_MILLION = {
 };
 
 function escapePromqlRegex(value) {
-  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\\\$&');
 }
 
 function modelCostExpression(model, prices, bucket = '$bucket') {

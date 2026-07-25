@@ -74,10 +74,11 @@ test('prices every active model label and token type from one table', () => {
 
 test('keeps only unknown exact model labels in the unpriced query', () => {
   const expression = unpricedModelsExpression();
-  const modelPattern = expression.match(/model!~"([^"]+)"/)[1];
+  const quotedPattern = expression.match(/model!~"([^"]+)"/)[1];
+  const modelPattern = JSON.parse(`"${quotedPattern}"`);
   const priced = new RegExp(`^(?:${modelPattern})$`);
 
-  assert.ok(expression.includes('claude-opus-5\\[1m\\]'));
+  assert.ok(quotedPattern.includes('claude-opus-5\\\\[1m\\\\]'));
   assert.ok(priced.test('claude-opus-5[1m]'));
   assert.ok(priced.test('claude-codex-gpt-5.6-luna'));
   assert.ok(!priced.test('claude-opus-51'));
