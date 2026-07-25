@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "path": "rules/manifest-versioning.md",
+      "hash": "462abf70222e86d27ac0f803d570326932544a1aa776fcf0f682dc4581e85ddf",
+      "description": "Release-owned manifest versions",
+      "globs": [
+        ".claude-plugin/marketplace.json",
+        "plugins/*/.claude-plugin/plugin.json"
+      ],
+      "dirs": [],
+      "prompt": [],
+      "priority": 0,
+      "enabled": true,
+      "include": []
+    },
+    {
+      "path": "rules/release-publication.md",
+      "hash": "6a64313243d968450c0cdbb020585653c557fef18d68bf9b70145d8fcb6fa502",
+      "description": "Automated release policy",
+      "globs": [],
+      "dirs": [],
+      "prompt": [
+        "ship",
+        "publish",
+        "release",
+        "bump",
+        "hotfix",
+        "marketplace"
+      ],
+      "priority": 0,
+      "enabled": true,
+      "include": []
+    }
+  ]
+}

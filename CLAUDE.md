@@ -10,6 +10,10 @@ The docs site (https://eigenwise.github.io/eigenwise-toolshed/, source under `do
 
 When shipping (orchestrator publish flow), the integration checklist includes: "does this change what a user sees or does? → prose docs updated or docs ticket filed."
 
+## Release guidance
+
+Conditional release and manifest rules live in `.claude/live-rules/`. They are injected for matching manifest edits and release-related prompts.
+
 ## Screenshots
 
 Documentation screenshots come ONLY from the committed pipeline (`docs/screenshots/`, `npm run screenshots`), which renders isolated, synthetically-seeded instances. Never screenshot live boards or dashboards for docs — real project names, session ids, and costs must never appear in committed imagery. Ad-hoc verification captures are gitignored (`/*.png`, `.playwright-mcp/`); keep them out of commits.
