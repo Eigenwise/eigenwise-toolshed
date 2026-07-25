@@ -3646,6 +3646,30 @@ function terminalDispatchTarget(agentName?: any) {
   return terminal;
 }
 
+function terminalDispatchForIdle(identity?: any) {
+  const sessionId = String(identity?.sessionId || '').trim();
+  const agentId = String(identity?.agentId || '').trim();
+  const agentName = String(identity?.agentName || '').trim();
+  const executor = String(identity?.executor || '').trim();
+  if (!agentId && !agentName) return null;
+  const matches: any[] = [];
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || !state.terminalAt || state.outcome === 'scope_paused' || ticket.claim?.by) continue;
+      if (agentId) {
+        if (state.agentId !== agentId) continue;
+      } else {
+        if (agentName && state.agentName !== agentName) continue;
+        if (sessionId && state.sessionId !== sessionId) continue;
+        if (executor && state.executor !== executor) continue;
+      }
+      matches.push({ slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt });
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function setDispatchTerminal(ticket?: any, outcome?: any, source?: any) {
   const state = dispatchState(ticket);
   if (!state) return;
@@ -6411,6 +6435,7 @@ module.exports = {
   bindDispatchAgent,
   dispatchIsolationExpectation,
   terminalDispatchTarget,
+  terminalDispatchForIdle,
   markDispatchStopped,
   reconcileLaunchedDispatches,
   claimTicket,

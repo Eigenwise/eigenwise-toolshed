@@ -26,6 +26,7 @@ const SESSION_END = path.join(HOOKS, 'session-end.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(HOOKS, 'subagent-start.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
+const TEAMMATE_IDLE = path.join(HOOKS, 'teammate-idle.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_BASH_WINDOWS_PATHS = path.join(HOOKS, 'guard-bash-windows-paths.js');
@@ -634,6 +635,49 @@ test('peer-guard: terminal dispatch blocks delayed steering before delivery', ()
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /Redispatch/);
 });
 
+test('teammate-idle: terminal dispatch ends its own idle executor', () => {
+  const ticket = addEffortTicket('terminal teammate exits', 'high');
+  const sessionId = `terminal-idle-${++sqSeq}`;
+  const stop = claimStopTicket(ticket, sessionId, 'terminal-idle-worker');
+  assert.equal(store.completeTicket(slug, ticket.ref, 'terminal-idle-worker', { sessionId }).ok, true);
+
+  const out = runHookOutput(TEAMMATE_IDLE, {
+    hook_event_name: 'TeammateIdle',
+    session_id: 'teammate-own-session',
+    agent_id: stop.agent_id,
+    agent_type: stop.agent_type,
+    teammate_name: stop.agent_name,
+  });
+  assert.deepEqual(out, {
+    continue: false,
+    stopReason: `sidequest: ${ticket.ref} is terminal (done); end this idle executor.`,
+  });
+});
+
+test('teammate-idle: live and scope-paused claims remain alive', () => {
+  const live = addEffortTicket('live teammate remains', 'high');
+  const liveStop = claimStopTicket(live, `live-idle-${++sqSeq}`, 'live-idle-worker');
+  assert.equal(runHookOutput(TEAMMATE_IDLE, {
+    hook_event_name: 'TeammateIdle',
+    session_id: liveStop.session_id,
+    agent_id: liveStop.agent_id,
+    agent_type: liveStop.agent_type,
+    teammate_name: liveStop.agent_name,
+  }), null);
+
+  const paused = addStopTicket('scope-paused teammate remains', { files: ['lib/declared.js'] });
+  const pausedStop = claimStopTicket(paused, `paused-idle-${++sqSeq}`, 'paused-idle-worker');
+  assert.equal(store.requestScope(slug, paused.ref, 'paused-idle-worker', ['lib/resumed.js']).ok, true);
+  runHook(SUBAGENT_STOP, pausedStop);
+  assert.equal(runHookOutput(TEAMMATE_IDLE, {
+    hook_event_name: 'TeammateIdle',
+    session_id: pausedStop.session_id,
+    agent_id: pausedStop.agent_id,
+    agent_type: pausedStop.agent_type,
+    teammate_name: pausedStop.agent_name,
+  }), null);
+});
+
 test('peer-guard: a scope-paused executor accepts steering only after approval without losing its dispatch', () => {
   const ticket = addStopTicket('scope-paused executor resumes', { files: ['lib/declared.js'] });
   const sessionId = `scope-pause-message-${++sqSeq}`;
@@ -1147,6 +1191,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'TaskOutput'
     && entry.hooks.some((hook?: any) => hook.command.includes('guard-task-output.js'))), 'the TaskOutput guard must be registered');
+  assert.ok(config.hooks.TeammateIdle.some((entry?: any) => entry.hooks
+    .some((hook?: any) => hook.command.includes('teammate-idle.js'))), 'terminal teammates must stop when idle');
 
   const readme = fs.readFileSync(path.join(pluginRoot, 'README.md'), 'utf8');
   assert.doesNotMatch(readme, /per-prompt "use sidequest" reminder/);
