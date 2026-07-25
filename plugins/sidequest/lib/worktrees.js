@@ -145,7 +145,8 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
   } else if (ticket?.status === "done") {
     action = "remove";
     reason = "ticket_done";
-  } else if (reachable) {
+  } else if (!oldEnough) reason = "too_young";
+  else if (reachable) {
     action = "remove";
     reason = "branch_reachable";
   } else if (patch.equivalent) {
@@ -169,6 +170,52 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
     action,
     reason,
     current: false
+  };
+}
+async function orphanDirectories(repo, registered) {
+  const parent = path.join(repo, ".claude", "worktrees");
+  try {
+    const entries = await fs.readdir(parent, { withFileTypes: true });
+    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(parent, entry.name));
+    return Promise.all(directories.filter((directory) => !registered.has(normalize(directory))).map(async (directory) => {
+      try {
+        await fs.lstat(path.join(directory, ".git"));
+        return null;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      return { worktree: directory, branch: null, orphanDirectory: true };
+    })).then((entries2) => entries2.filter(Boolean));
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+async function classifyOrphanDirectory(tickets, entry, minAgeMs) {
+  const ticket = ticketForWorktree(tickets, entry);
+  if (ticket && !finalTicket(ticket)) return skippedEntry(entry, ticket, "active_ticket", false);
+  if (liveClaimTicket(ticket)) return skippedEntry(entry, ticket, "live_claim", false);
+  const [ageMs, contents] = await Promise.all([worktreeAge(entry.worktree), fs.readdir(entry.worktree)]);
+  const oldEnough = ageMs != null && ageMs >= minAgeMs;
+  if (!oldEnough) return skippedEntry(entry, ticket, "too_young", false);
+  return {
+    path: entry.worktree,
+    branch: null,
+    ticket: ticket ? ticket.ref : null,
+    clean: contents.length === 0,
+    ahead: null,
+    reachable: null,
+    patchEquivalent: null,
+    equivalentCommits: 0,
+    unmatchedCommits: null,
+    ageMs,
+    minAgeMs,
+    oldEnough,
+    locked: null,
+    action: "remove",
+    reason: "orphan_directory",
+    current: false,
+    orphanDirectory: true
   };
 }
 function backupRoot(options) {
@@ -200,6 +247,18 @@ async function backupDirtyWorktree(repo, entry, upstream, options) {
   ]);
   return destination;
 }
+async function backupDirtyOrphanDirectory(entry, options) {
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+  const destination = path.join(backupRoot(options), `orphan-${path.basename(entry.path)}-${timestamp}`);
+  await fs.mkdir(destination, { recursive: true });
+  await fs.cp(entry.path, path.join(destination, "contents"), { recursive: true, errorOnExist: true });
+  await fs.writeFile(path.join(destination, "metadata.json"), JSON.stringify({
+    worktree: entry.path,
+    backedUpAt: (/* @__PURE__ */ new Date()).toISOString(),
+    reason: "unregistered worktree directory without .git metadata"
+  }, null, 2) + "\n", "utf8");
+  return destination;
+}
 async function findOrphanBranches(repo, checkedOutBranches, upstream) {
   const result = await git(repo, ["for-each-ref", "--format=%(refname:short)", "refs/heads/worktree-agent-*"]);
   if (!result.ok) throw new Error(result.stderr || "could not list worktree branches");
@@ -219,14 +278,39 @@ async function findOrphanBranches(repo, checkedOutBranches, upstream) {
     };
   }));
 }
+async function repositoryBusy(repo) {
+  const states = await Promise.all(["REBASE_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].map((ref) => git(repo, ["rev-parse", "--verify", "--quiet", ref])));
+  return states.some((state) => state.ok);
+}
 async function sweep(repo, tickets, options = {}) {
-  const listed = await git(repo, ["worktree", "list", "--porcelain"]);
-  if (!listed.ok) throw new Error(listed.stderr || "could not list git worktrees");
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0 ? Number(options.minAgeMs) : DEFAULT_MIN_AGE_MS;
   const upstream = integrationUpstream(options);
+  if (await repositoryBusy(repo)) {
+    return {
+      dryRun: !options.execute,
+      minAgeMs,
+      upstream,
+      entries: [],
+      orphanBranches: [],
+      removed: [],
+      backups: [],
+      deletedBranches: [],
+      prunedOrphanBranches: [],
+      counts: { removedWorktrees: 0, backedUpWorktrees: 0, deletedBranches: 0, prunedOrphanBranches: 0 },
+      failures: [],
+      skipped: "repository_busy"
+    };
+  }
+  const listed = await git(repo, ["worktree", "list", "--porcelain"]);
+  if (!listed.ok) throw new Error(listed.stderr || "could not list git worktrees");
   const worktreeList = parseWorktreeList(listed.stdout);
+  const registered = new Set(worktreeList.map((entry) => normalize(entry.worktree)));
   const candidates = worktreeList.filter((entry) => isAgentWorktree(repo, entry.worktree)).filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
-  const entries = await Promise.all(candidates.map((entry) => classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream)));
+  const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
+  const allCandidates = [...candidates, ...orphanCandidates];
+  const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0 ? Math.floor(Number(options.maxCandidates)) : allCandidates.length;
+  const boundedCandidates = allCandidates.slice(0, maxCandidates);
+  const entries = await Promise.all(boundedCandidates.map((entry) => entry.orphanDirectory ? classifyOrphanDirectory(tickets, entry, minAgeMs) : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream)));
   const execute = !!options.execute;
   const removed = [];
   const backups = [];
@@ -237,19 +321,20 @@ async function sweep(repo, tickets, options = {}) {
     for (const entry of entries.filter((candidate) => candidate.action === "remove")) {
       if (!entry.clean) {
         try {
-          entry.backup = await backupDirtyWorktree(repo, entry, upstream, options);
+          entry.backup = entry.orphanDirectory ? await backupDirtyOrphanDirectory(entry, options) : await backupDirtyWorktree(repo, entry, upstream, options);
           backups.push(entry.backup);
         } catch (error) {
           failures.push({ path: entry.path, message: `backup failed: ${error && error.message || error}` });
           continue;
         }
       }
-      const result = await git(repo, entry.clean ? ["worktree", "remove", entry.path] : ["worktree", "remove", "--force", entry.path]);
+      const result = entry.orphanDirectory ? await fs.rm(entry.path, { recursive: true, force: false }).then(() => ({ ok: true, stderr: "" })).catch((error) => ({ ok: false, stderr: String(error && error.message || error) })) : await git(repo, entry.clean ? ["worktree", "remove", entry.path] : ["worktree", "remove", "--force", entry.path]);
       if (!result.ok) {
-        failures.push({ path: entry.path, message: result.stderr || "git worktree remove failed" });
+        failures.push({ path: entry.path, message: result.stderr || "worktree remove failed" });
         continue;
       }
       removed.push(entry.path);
+      if (entry.orphanDirectory) continue;
       const branch = localBranchName(entry.branch);
       if (!branch) continue;
       const deleted = await git(repo, ["branch", "-D", "--", branch]);

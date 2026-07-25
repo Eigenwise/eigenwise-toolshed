@@ -126,8 +126,8 @@ test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees'
   assert.equal(entryFor(dryRun, equivalentOld).action, 'remove');
   assert.equal(entryFor(dryRun, equivalentOld).patchEquivalent, true);
   assert.ok(['branch_reachable', 'patch_equivalent'].includes(entryFor(dryRun, equivalentOld).reason));
-  assert.equal(entryFor(dryRun, equivalentFresh).action, 'remove');
-  assert.ok(['branch_reachable', 'patch_equivalent'].includes(entryFor(dryRun, equivalentFresh).reason));
+  assert.equal(entryFor(dryRun, equivalentFresh).reason, 'too_young');
+  assert.equal(entryFor(dryRun, equivalentFresh).action, 'keep');
   assert.equal(entryFor(dryRun, unmergedOld).reason, 'not_integrated');
   assert.equal(entryFor(dryRun, dirtyOld).reason, 'branch_reachable');
   assert.equal(entryFor(dryRun, dirtyOld).action, 'remove');
@@ -136,15 +136,15 @@ test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees'
   const applied = cliJson(['worktrees', 'sweep', '--yes', '--json']);
   assert.deepEqual(
     applied.removed.map((entry: any) => path.resolve(entry)).sort(),
-    [path.resolve(equivalentOld), path.resolve(equivalentFresh), path.resolve(dirtyOld)].sort()
+    [path.resolve(equivalentOld), path.resolve(dirtyOld)].sort()
   );
-  assert.deepEqual(applied.deletedBranches.sort(), [branchName('equivalent-old'), branchName('equivalent-fresh'), branchName('dirty-old')].sort());
-  assert.equal(applied.counts.removedWorktrees, 3);
+  assert.deepEqual(applied.deletedBranches.sort(), [branchName('equivalent-old'), branchName('dirty-old')].sort());
+  assert.equal(applied.counts.removedWorktrees, 2);
   assert.ok(applied.counts.backedUpWorktrees >= 1);
-  assert.equal(applied.counts.deletedBranches, 3);
+  assert.equal(applied.counts.deletedBranches, 2);
   assert.ok(!fs.existsSync(equivalentOld));
   assert.ok(!branchExists(branchName('equivalent-old')));
-  assert.ok(!fs.existsSync(equivalentFresh));
+  assert.ok(fs.existsSync(equivalentFresh));
   assert.ok(fs.existsSync(unmergedOld));
   assert.ok(!fs.existsSync(dirtyOld));
 });
@@ -286,10 +286,34 @@ test('worktree sweep uses the configured feature integration branch for patch eq
   git(['cherry-pick', commit]);
   git(['push', '-f', '-u', 'origin', 'feat/worktree-target']);
   store.setBoardConfig(slug, { integrationMode: 'remote', integrationBranch: 'feat/worktree-target' });
+  makeOld(worktree);
 
   const swept = cliJson(['worktrees', 'sweep', '--dry-run', '--json']);
   const entry = entryFor(swept, worktree);
   assert.equal(entry.patchEquivalent, true);
   assert.equal(entry.action, 'remove');
   assert.ok(['branch_reachable', 'patch_equivalent'].includes(entry.reason));
+});
+
+test('worktree sweep reclaims old unregistered directories and backs up contents', () => {
+  const empty = path.join(WORKTREES, 'pub-empty-orphan');
+  const dirty = path.join(WORKTREES, 'pub-dirty-orphan');
+  fs.mkdirSync(empty);
+  fs.mkdirSync(dirty);
+  fs.writeFileSync(path.join(dirty, 'recovery.txt'), 'preserve this\n');
+  makeOld(empty);
+  makeOld(dirty);
+
+  const dryRun = cliJson(['worktrees', 'sweep', '--dry-run', '--json']);
+  assert.equal(entryFor(dryRun, empty).reason, 'orphan_directory');
+  assert.equal(entryFor(dryRun, dirty).clean, false);
+
+  const applied = cliJson(['worktrees', 'sweep', '--yes', '--json']);
+  assert.ok(applied.removed.includes(empty));
+  assert.ok(applied.removed.includes(dirty));
+  const backup = applied.backups.find((entry: string) => entry.includes('pub-dirty-orphan'));
+  assert.ok(backup);
+  assert.equal(fs.readFileSync(path.join(backup, 'contents', 'recovery.txt'), 'utf8'), 'preserve this\n');
+  assert.ok(!fs.existsSync(empty));
+  assert.ok(!fs.existsSync(dirty));
 });

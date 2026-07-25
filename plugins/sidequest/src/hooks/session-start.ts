@@ -3,6 +3,7 @@ import { readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeContext } from './shared/output.js';
 import { pluginRoot, runtimeModule } from './shared/paths.js';
 import { initializeCompactionState, isPrimarySession } from './shared/compaction.js';
+import { sweepWorktrees } from './shared/worktree-sweep.js';
 
 const MAX_WORKFORCE_BYTES = 1800;
 const MAX_WORKFORCE_DESCRIPTION = 90;
@@ -118,7 +119,7 @@ function emit(context: string, notice: string): void {
   writeContext('SessionStart', withWorkforce(output));
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const data = readStdin();
   if (!data) return;
   if (isPrimarySession(data)) {
@@ -128,9 +129,16 @@ function main(): void {
 
   const syncResult = provisionExecAgents();
   const lostLaunches = reconcileLostLaunches(data);
+  let sweepNotices: string[] = [];
+  try {
+    sweepNotices = await sweepWorktrees(data, true);
+  } catch (error: any) {
+    sweepNotices = [`sidequest: worktree sweep failed: ${(error && error.message) || error}`];
+  }
   const restartNotice = [
     syncResult && syncResult.written > 0 ? (require(runtimeModule('agentsync')) as AgentSync).RESTART_NOTICE : '',
     lostLaunches.length ? `sidequest: ${lostLaunches.join(', ')} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : '',
+    ...sweepNotices,
   ].filter(Boolean).join('\n');
 
   if (nudgeOff()) return;
@@ -168,8 +176,6 @@ function main(): void {
   );
 }
 
-try {
-  main();
-} catch (_) {
-  process.exit(0);
-}
+main().catch((error) => {
+  console.error(`sidequest: session-start failed: ${(error && error.message) || error}`);
+});

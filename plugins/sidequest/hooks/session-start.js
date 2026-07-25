@@ -114,6 +114,62 @@ function initializeCompactionState(sessionId, transcriptPath) {
   writeState(sessionId, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
+// src/hooks/shared/worktree-sweep.ts
+var import_promises = require("node:fs/promises");
+var import_node_path3 = __toESM(require("node:path"));
+var MAX_PROJECTS_PER_START = 3;
+var MAX_CANDIDATES_PER_PROJECT = 8;
+function projectCommand(project) {
+  return `node "${pluginRoot()}/bin/sidequest.js" board-config --project "${project.path}" --integration-branch <branch>`;
+}
+function currentProject(data, store) {
+  const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const currentPath = store.nearestRepoRoot(start);
+  const found = store.findProject(currentPath);
+  return {
+    project: found.ok && found.slug && found.meta?.path ? { slug: found.slug, path: found.meta.path } : null,
+    currentPath
+  };
+}
+async function sweepWorktrees(data, includeKnownProjects) {
+  const store = require(runtimeModule("store"));
+  const { project: current, currentPath } = currentProject(data, store);
+  if (!current) return [];
+  const projects = includeKnownProjects ? store.worktreeGcProjects(current.slug, MAX_PROJECTS_PER_START) : [current];
+  const notices = [];
+  const worktrees = require(runtimeModule("worktrees"));
+  for (const project of projects) {
+    try {
+      await (0, import_promises.stat)(import_node_path3.default.join(project.path, ".git"));
+    } catch (_) {
+      notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the project directory is unavailable or is not a git worktree.`);
+      continue;
+    }
+    try {
+      const target = store.integrationTarget(project.slug);
+      if (!target) {
+        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: no integration target. Configure one with ${projectCommand(project)}.`);
+        continue;
+      }
+      const result = await worktrees.sweep(project.path, store.worktreeGcTickets(), {
+        execute: true,
+        currentPath: current?.slug === project.slug ? currentPath : "",
+        integrationTarget: target,
+        maxCandidates: MAX_CANDIDATES_PER_PROJECT
+      });
+      if (result.skipped === "repository_busy") {
+        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the repository has an in-progress git operation.`);
+      }
+      for (const failure of result.failures || []) {
+        notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not remove ${failure.path || "a git entry"}: ${failure.message}`);
+      }
+    } catch (error) {
+      notices.push(`sidequest: worktree sweep failed for ${project.name || project.slug}: ${error && error.message || error}. Check the repository is available, then run ${projectCommand(project)}.`);
+    }
+  }
+  return notices;
+}
+
 // src/hooks/session-start.ts
 var MAX_WORKFORCE_BYTES = 1800;
 var MAX_WORKFORCE_DESCRIPTION = 90;
@@ -194,7 +250,7 @@ function emit(context, notice) {
   const output = notice ? context + "\n" + notice : context;
   writeContext("SessionStart", withWorkforce(output));
 }
-function main() {
+async function main() {
   const data = readStdin();
   if (!data) return;
   if (isPrimarySession(data)) {
@@ -203,9 +259,16 @@ function main() {
   }
   const syncResult = provisionExecAgents();
   const lostLaunches = reconcileLostLaunches(data);
+  let sweepNotices = [];
+  try {
+    sweepNotices = await sweepWorktrees(data, true);
+  } catch (error) {
+    sweepNotices = [`sidequest: worktree sweep failed: ${error && error.message || error}`];
+  }
   const restartNotice = [
     syncResult && syncResult.written > 0 ? require(runtimeModule("agentsync")).RESTART_NOTICE : "",
-    lostLaunches.length ? `sidequest: ${lostLaunches.join(", ")} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : ""
+    lostLaunches.length ? `sidequest: ${lostLaunches.join(", ")} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : "",
+    ...sweepNotices
   ].filter(Boolean).join("\n");
   if (nudgeOff()) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
@@ -222,8 +285,6 @@ function main() {
     restartNotice
   );
 }
-try {
-  main();
-} catch (_) {
-  process.exit(0);
-}
+main().catch((error) => {
+  console.error(`sidequest: session-start failed: ${error && error.message || error}`);
+});

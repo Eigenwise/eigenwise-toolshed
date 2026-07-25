@@ -96,6 +96,10 @@ function assertNoRetiredDoctrine(ctx?: any, where?: any) {
   }
 }
 
+function gitFixture(args: string[], cwd: string): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
 test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypass', () => {
   const original = {
     subagent_type: 'sidequest-exec-high',
@@ -1018,6 +1022,50 @@ test('session-start: category-route sync ignores retired prefs data', () => {
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
 });
+test('session-start sweeps an old removable worktree to completion', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-'));
+  const worktrees = path.join(repo, '.claude', 'worktrees');
+  const old = path.join(worktrees, 'agent-session-sweep');
+  gitFixture(['init'], repo);
+  gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
+  gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+  fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
+  gitFixture(['add', 'README.md'], repo);
+  gitFixture(['commit', '-m', 'base'], repo);
+  gitFixture(['branch', '-M', 'main'], repo);
+  fs.mkdirSync(worktrees, { recursive: true });
+  gitFixture(['worktree', 'add', '-b', 'worktree-agent-session-sweep', old, 'main'], repo);
+  fs.writeFileSync(path.join(old, 'sweep.txt'), 'integrated\n');
+  gitFixture(['add', 'sweep.txt'], old);
+  gitFixture(['commit', '-m', 'integrated fixture'], old);
+  const commit = gitFixture(['rev-parse', 'HEAD'], old);
+  gitFixture(['cherry-pick', commit], repo);
+  const aged = new Date(Date.now() - 4 * 60 * 60 * 1000);
+  fs.utimesSync(old, aged, aged);
+  store.ensureProject(repo);
+
+  runHook(SESSION, { session_id: 'session-sweep', source: 'startup', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+  assert.ok(!fs.existsSync(old), 'SessionStart awaits the sweep until the worktree is gone');
+});
+
+test('session-start reports an unavailable integration target with the repair command', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-target-'));
+  gitFixture(['init'], repo);
+  gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
+  gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+  fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
+  gitFixture(['add', 'README.md'], repo);
+  gitFixture(['commit', '-m', 'base'], repo);
+  gitFixture(['branch', '-M', 'main'], repo);
+  const board = store.ensureProject(repo);
+  store.setBoardConfig(board.slug, { integrationBranch: 'missing-target' });
+
+  const context = runHook(SESSION, { session_id: 'session-target', source: 'startup', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+  assert.match(context, /worktree sweep failed/);
+  assert.match(context, /board-config --project/);
+  assert.match(context, /missing-target/);
+});
+
 test('session-start: compact and resume preserve evidence-first routing guidance', () => {
   for (const source of ['compact', 'resume']) {
     const ctx = runHook(SESSION, { session_id: 't', source });
