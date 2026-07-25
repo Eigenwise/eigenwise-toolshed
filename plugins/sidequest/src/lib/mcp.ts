@@ -229,7 +229,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   checkpoint: 'Record review candidate; retain claim.',
   sweepClaims: 'Release dead claims; live ones stay.',
   next: 'Claim the top available ticket.',
-  scopeRequest: 'Request scope while keeping claim active.',
+  scopeRequest: 'Check scope or request uncovered paths while keeping claim active.',
   commit: 'Commit declared paths from claimed worktree.',
   submit: 'Submit verified work for integration.',
   comment: 'Add a durable handoff comment.',
@@ -1068,22 +1068,27 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Request extra declared paths while keeping the executor claim active. The orchestrator approves by updating files, then the same executor continues.',
+    description: 'Check candidate paths against declared scope. Covered paths return immediately; uncovered paths create a request that keeps the executor claim active. Isolated dispatches must pass their linked worktree so the pause survives.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
         by: { type: 'string' },
-        files: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Repository-relative paths to add to the ticket scope.' },
+        files: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Repository-relative paths to check and, only when uncovered, request.' },
+        worktree: { type: 'string', description: 'Absolute linked worktree root for an isolated dispatch pause.' },
       },
       required: ['ref', 'by', 'files'],
     },
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'scopeRequest');
-      const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp' });
-      return mutationAck(slug, res, res.ok ? { scopeRequest: res.scopeRequest, command: res.command } : null);
+      const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp', worktree: args.worktree });
+      return mutationAck(slug, res, res.ok ? {
+        covered: res.covered || [],
+        scopeRequest: res.scopeRequest,
+        command: res.command,
+      } : null);
     },
   },
   {

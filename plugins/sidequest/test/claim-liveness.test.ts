@@ -194,25 +194,61 @@ test('a closeout after an auto-release names the exact recovery instead of silen
   assert.match(committed.stderr + committed.stdout, /auto-released/);
 });
 
+test('a missing isolated worktree after stop is reclaimable while a live quiet dispatch remains protected', () => {
+  const stopped = addRouted('missing worktree after stop');
+  const stoppedSession = 'session-missing-worktree';
+  const stoppedAgent = 'missing-worktree-agent';
+  const stoppedPrepared = store.prepareDispatch(slug, stopped.ref, { sharedTree: false, sessionId: stoppedSession });
+  assert.equal(store.recordDispatchLaunch(slug, stopped.ref, {
+    token: stoppedPrepared.token, executor: stoppedPrepared.ticket.dispatchExecutor, sessionId: stoppedSession, agentName: stoppedAgent,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(stoppedSession, stoppedPrepared.ticket.dispatchExecutor, stoppedAgent, stoppedAgent).ok, true);
+  assert.equal(store.claimTicket(slug, stopped.ref, 'stopped-isolated-executor', {
+    token: stoppedPrepared.token, executor: stoppedPrepared.ticket.dispatchExecutor, sessionId: stoppedSession,
+  }).ok, true);
+  assert.equal(store.markDispatchStopped(stoppedSession, stoppedPrepared.ticket.dispatchExecutor, stoppedAgent, stoppedAgent).ok, true);
+  const stoppedPulse = store.pulsePayload(slug, stopped.ref);
+  assert.equal(stoppedPulse.working, false);
+  assert.equal(stoppedPulse.claim.reclaimable, 'observed_stop');
+
+  const live = addRouted('quiet live isolated dispatch');
+  const liveSession = 'session-quiet-isolated';
+  const liveAgent = 'quiet-isolated-agent';
+  const livePrepared = store.prepareDispatch(slug, live.ref, { sharedTree: false, sessionId: liveSession });
+  assert.equal(store.recordDispatchLaunch(slug, live.ref, {
+    token: livePrepared.token, executor: livePrepared.ticket.dispatchExecutor, sessionId: liveSession, agentName: liveAgent,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(liveSession, livePrepared.ticket.dispatchExecutor, liveAgent, liveAgent).ok, true);
+  assert.equal(store.claimTicket(slug, live.ref, 'quiet-isolated-executor', {
+    token: livePrepared.token, executor: livePrepared.ticket.dispatchExecutor, sessionId: liveSession,
+  }).ok, true);
+  backdateClaim(live.ref, 31 * 24 * HOUR);
+  const livePulse = store.pulsePayload(slug, live.ref);
+  assert.equal(livePulse.working, true);
+  assert.equal(livePulse.claim.reclaimable, null);
+});
+
+
 test('an unobserved death still frees the ticket, and a fresh claim clears the release record', () => {
-  const ticket = addRouted('unobserved death backstop');
-  claimRouted(ticket, 'vanished-executor');
+  const ticket = store.createTicket(slug, {
+    title: 'unobserved death backstop', complexity: 2, complexityWhy: 'fixture for an inactive claim that no hook observed',
+    labels: ['direct-ok'], files: ['lib/fixture.js'], source: 'cli',
+  });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'vanished-executor', { direct: true, reason: 'The unobserved-death fixture uses an inactive direct claim.' }).ok, true);
   backdateClaim(ticket.ref, 30 * 24 * HOUR);
 
   const verdict = store.claimReleaseVerdict(store.getTicket(slug, ticket.ref));
-  assert.strictEqual(verdict.kind, 'abandoned', 'nothing reported the stop, so only the backstop can free it');
+  assert.strictEqual(verdict.kind, 'idle', 'nothing reported the stop, so the inactive-claim backstop may free it');
 
   const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
   assert.ok(swept.released.some((entry?: any) => entry.ref === ticket.ref));
   const released = store.getTicket(slug, ticket.ref);
   assert.strictEqual(released.status, 'todo');
-  assert.match(released.comments.at(-1).body, /past the unobserved-death backstop/);
+  assert.match(released.comments.at(-1).body, /no board activity from/);
 
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true });
   const reclaimed = store.claimTicket(slug, ticket.ref, 'replacement-executor', {
-    token: prepared.token,
-    executor: prepared.ticket.dispatchExecutor,
-    source: 'mcp',
+    direct: true,
+    reason: 'The replacement fixture uses a direct claim after the inactive one releases.',
   });
   assert.strictEqual(reclaimed.ok, true);
   assert.strictEqual(store.getTicket(slug, ticket.ref).claimRelease, null);

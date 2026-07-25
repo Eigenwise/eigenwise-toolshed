@@ -217,6 +217,32 @@ test('the dispatch briefing states the isolation contract and the resume trap', 
   assert.ok(!sharedBriefing.includes('Worktree isolation contract'), 'a shared-tree dispatch is not told it is isolated');
 });
 
+test('an isolated scope request leaves a marker until scope approval clears it', () => {
+  const agentId = 'a10scope-marker';
+  const { ticket } = dispatched(agentId);
+  const linked = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
+  fs.mkdirSync(path.dirname(linked), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  try {
+    assert.equal(store.claimTicket(slug, ticket.ref, 'scope-marker-worker', {
+      token: ticket.dispatchNonce,
+      executor: ticket.dispatchExecutor,
+    }).ok, true);
+    const requested = store.requestScope(slug, ticket.ref, 'scope-marker-worker', ['new.js'], { worktree: linked });
+    assert.equal(requested.ok, true);
+    const marker = path.join(linked, '.sidequest', `scope-request-${ticket.id}.json`);
+    assert.ok(fs.existsSync(marker));
+    assert.match(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), /\.sidequest/);
+
+    store.updateTicket(slug, ticket.ref, { files: ['README.md', 'new.js'] });
+    assert.ok(!fs.existsSync(marker));
+    assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), '');
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+
 test('a destructive git command is refused while the shared checkout carries uncommitted work', () => {
   const repo = initRepo('sq-destructive-repo-');
   const clean = runHook(GUARD_DESTRUCTIVE, {

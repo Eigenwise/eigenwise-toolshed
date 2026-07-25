@@ -2597,6 +2597,45 @@ function scopeExpansionCommand(ticket?: any, additions?: any) {
   return `sidequest update ${ref} --files ${JSON.stringify(scopeExpansionFiles(ticket, additions).join(','))}`;
 }
 
+function scopeRequestMarkerFile(ticket?: any) {
+  return `scope-request-${String(ticket?.id || 'ticket').replace(/[^a-z0-9_-]/gi, '_')}.json`;
+}
+
+function createScopeRequestMarker(ticket?: any, request?: any, worktree?: any) {
+  const dispatch = dispatchState(ticket);
+  if (!dispatch || dispatch.sharedTree !== false) return { ok: true, markerWorktree: null };
+  const supplied = String(worktree || '').trim();
+  if (!supplied) return { ok: false, reason: 'worktree_required' };
+  try {
+    const root = commitScope.repoRoot(supplied);
+    const linked = commitScope.linkedWorktree(root);
+    if (!linked.ok || !linked.linked) return { ok: false, reason: 'worktree_isolation' };
+    const marker = path.join(root, '.sidequest', scopeRequestMarkerFile(ticket));
+    const relativeMarker = path.relative(root, marker).replace(/\\/g, '/');
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(marker, JSON.stringify({ ref: ticket.ref, by: request.by, files: request.files, at: request.at }) + '\n');
+    try {
+      execFileSync('git', ['add', '--intent-to-add', '--force', '--', relativeMarker], { cwd: root, windowsHide: true, stdio: 'ignore' });
+    } catch (_) {
+      fs.unlinkSync(marker);
+      return { ok: false, reason: 'worktree_unavailable' };
+    }
+    return { ok: true, markerWorktree: root };
+  } catch (_) {
+    return { ok: false, reason: 'worktree_unavailable' };
+  }
+}
+
+function clearScopeRequestMarker(ticket?: any) {
+  const worktree = String(ticket?.scopeRequest?.markerWorktree || '').trim();
+  if (!worktree) return;
+  const marker = path.join(worktree, '.sidequest', scopeRequestMarkerFile(ticket));
+  const relativeMarker = path.relative(worktree, marker).replace(/\\/g, '/');
+  try { execFileSync('git', ['reset', '--quiet', '--', relativeMarker], { cwd: worktree, windowsHide: true, stdio: 'ignore' }); } catch (_) {}
+  try { fs.unlinkSync(marker); } catch (_) {}
+  try { fs.rmdirSync(path.dirname(marker)); } catch (_) {}
+}
+
 function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: any) {
   opts = opts || {};
   by = String(by || 'agent');
@@ -2614,12 +2653,21 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     if (!requested.length) return { ok: false, reason: 'files_required', ticket: t };
     const validation = commitScope.validateRelativeScopes(requested);
     if (!validation.ok) return { ok: false, reason: 'invalid_scope', ticket: t, paths: validation.outside };
-    const additions = requested.filter((file?: any) => !commitScope.isInScope(file, effectiveScope(slug, t.files)));
-    if (!additions.length) return { ok: false, reason: 'already_in_scope', ticket: t };
+    const scope = effectiveScope(slug, t.files);
+    const additions = requested.filter((file?: any) => !commitScope.isInScope(file, scope));
+    const covered = requested.filter((file?: any) => commitScope.isInScope(file, scope));
     const now = new Date().toISOString();
-    const command = scopeExpansionCommand(t, additions);
     touchClaimActivity(t, by, now);
-    t.scopeRequest = { by, files: additions, at: now };
+    if (!additions.length) {
+      t.updatedAt = now;
+      putTicket(slug, t);
+      return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
+    }
+    const command = scopeExpansionCommand(t, additions);
+    const request = { by, files: additions, at: now };
+    const marker = createScopeRequestMarker(t, request, opts.worktree);
+    if (!marker.ok) return { ok: false, reason: marker.reason, ticket: t };
+    t.scopeRequest = Object.assign(request, marker.markerWorktree ? { markerWorktree: marker.markerWorktree } : {});
     const dispatch = dispatchState(t);
     if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
     if (!Array.isArray(t.comments)) t.comments = [];
@@ -2847,6 +2895,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
       t.files = normalizeFiles(patch.files);
       const request = t.scopeRequest;
       if (request && Array.isArray(request.files) && request.files.every((file?: any) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
+        clearScopeRequestMarker(t);
         t.scopeRequest = null;
         const dispatch = dispatchState(t);
         if (dispatch && !dispatch.terminalAt) {
@@ -3108,6 +3157,11 @@ function observedStop(dispatch?: any, claim?: any) {
 
 // Why (if at all) this claim may be swept back to todo. Null means "leave it
 // alone" — including for a quiet executor that is still running.
+function missingStoppedWorktree(dispatch?: any) {
+  if (!dispatch || dispatch.sharedTree !== false || !dispatch.terminalAt || !dispatch.worktree) return false;
+  try { return !fs.existsSync(dispatch.worktree); } catch (_) { return false; }
+}
+
 function claimReleaseVerdict(ticket?: any, now?: any) {
   const claim = ticket && ticket.claim;
   if (!claim || !claim.by) return null;
@@ -3117,11 +3171,14 @@ function claimReleaseVerdict(ticket?: any, now?: any) {
   if (observedStop(dispatch, claim)) {
     return { kind: 'observed_stop', idleMs, at: dispatch.terminalAt, reason: 'its executor was observed to stop while still holding the claim' };
   }
+  if (missingStoppedWorktree(dispatch)) {
+    return { kind: 'missing_worktree', idleMs, at: dispatch.terminalAt, reason: 'its stopped executor worktree no longer exists' };
+  }
   const liveAgent = Boolean(dispatch && !dispatch.terminalAt);
   if (!liveAgent && idleMs > claimIdleMs()) {
     return { kind: 'idle', idleMs, reason: 'no board activity from the claim holder and no live executor associated' };
   }
-  if (idleMs > claimAbandonMs()) {
+  if (!liveAgent && idleMs > claimAbandonMs()) {
     return { kind: 'abandoned', idleMs, reason: 'no board activity from the claim holder past the unobserved-death backstop' };
   }
   return null;
@@ -3974,6 +4031,10 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
       const now = new Date().toISOString();
       state.agentId = String(agentId);
       state.agentName = agentName ? String(agentName) : state.agentName || null;
+      if (state.sharedTree === false) {
+        const projectPath = readMeta(match.slug)?.path;
+        if (projectPath) state.worktree = path.join(projectPath, '.claude', 'worktrees', `agent-${agentId}`);
+      }
       state.boundAt = state.boundAt || now;
       stampDispatchEvent(t, 'subagent-start', now);
       putTicket(match.slug, t);
@@ -4227,6 +4288,8 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const now = new Date().toISOString();
     const previousStatus = t.status;
     let comment = null;
+    clearScopeRequestMarker(t);
+    t.scopeRequest = null;
     t.claim = null;
     // Provenance for a claim taken away from its holder rather than handed back,
     // so a later closeout attempt can be refused with an actionable recovery.
@@ -4605,6 +4668,8 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       integratedAt: null,
     }, range || {});
     const dispatch = dispatchState(t);
+    clearScopeRequestMarker(t);
+    t.scopeRequest = null;
     t.claim = null;
     setDispatchTerminal(t, 'submitted', opts.source || 'cli');
     t.dispatchNonce = null;
@@ -5452,7 +5517,7 @@ function gitPulse(projectPath?: any, files?: any) {
 
 function claimActivityPulse(ticket?: any, git?: any) {
   const claim = ticket && ticket.claim;
-  if (!claim || !claim.by) return { working: false, lastActivityAt: null };
+  if (!claim || !claim.by || claimReleaseVerdict(ticket)) return { working: false, lastActivityAt: null };
   const activity = [claim.at];
   for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
     if (comment && comment.by === claim.by) activity.push(comment.at);

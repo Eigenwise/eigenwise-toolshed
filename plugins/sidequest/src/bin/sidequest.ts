@@ -1127,15 +1127,19 @@ async function cmdScopeRequest(opts: any, positional: any) {
   if (files == null) fail('scope-request: pass one or more requested paths with --file or --files.');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
-  const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || 'cli', force: !!opts.force });
+  const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || 'cli', force: !!opts.force, worktree: process.cwd() });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
     return;
   }
   if (res.ok) {
-    console.log(`✓ ${res.ticket.ref} scope expansion requested; claim remains held — ${meta.name}`);
-    console.log(`  pause for approval: ${res.command}`);
+    if (res.scopeRequest) {
+      console.log(`✓ ${res.ticket.ref} scope expansion requested; claim remains held — ${meta.name}`);
+      console.log(`  pause for approval: ${res.command}`);
+    } else {
+      console.log(`✓ ${res.ticket.ref} already covers: ${res.covered.join(', ')} — ${meta.name}`);
+    }
   } else {
     reportClaimFailure('scope-request', idOrRef, res, meta);
   }

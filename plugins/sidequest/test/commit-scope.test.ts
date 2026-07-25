@@ -52,6 +52,22 @@ test('missing declared paths warn while existing declared paths commit', () => {
   assert.deepEqual(committed.missingScopes, ['plugins/sidequest/phantom.js']);
 });
 
+test('ignored declared files do not block tracked scoped commits', () => {
+  const root = repo();
+  fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.gitignore'), '.claude/settings.local.json\n');
+  git(root, ['add', '.gitignore']);
+  git(root, ['commit', '-m', 'ignore local settings']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
+  fs.writeFileSync(path.join(root, '.claude', 'settings.local.json'), '{"enabled":true}\n');
+
+  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', '.claude/settings.local.json']);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
+  assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
+});
+
+
 test('exact declared paths commit untracked additions', () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');

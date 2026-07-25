@@ -1057,22 +1057,27 @@ test('MCP submit refuses out-of-scope committed ranges', async () => {
 test('MCP scopeRequest pauses a claimed executor until the orchestrator expands scope', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-request-'))).slug;
   const ticket = store.createTicket(project, {
-    title: 'MCP scope request', files: ['lib/allowed.js'], complexity: 3,
+    title: 'MCP scope request', files: ['lib'], complexity: 3,
     labels: ['direct-ok'], complexityWhy: 'keep the executor claim while an orchestrator approves one new path',
   });
   const by = 'mcp-scope-request-worker';
   assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope request fixture requires a local direct claim.' })).ok, true);
 
-  const requested = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['lib/new.js'] });
-  assert.deepEqual(requested.scopeRequest.files, ['lib/new.js']);
-  assert.equal(requested.command, `sidequest update ${ticket.ref} --files "lib/allowed.js,lib/new.js"`);
+  const covered = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['lib/allowed.js/child.js'] });
+  assert.deepEqual(covered.covered, ['lib/allowed.js/child.js']);
+  assert.equal(covered.scopeRequest, null);
+  assert.equal(store.getTicket(project, ticket.ref).scopeRequest, undefined);
+
+  const requested = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['other/new.js'] });
+  assert.deepEqual(requested.scopeRequest.files, ['other/new.js']);
+  assert.equal(requested.command, `sidequest update ${ticket.ref} --files "lib,other/new.js"`);
   assert.equal(store.getTicket(project, ticket.ref).claim.by, by, 'scope request keeps the executor claim');
 
-  await callTool('update', { project, ref: ticket.ref, files: ['lib/allowed.js', 'lib/new.js'] });
+  await callTool('update', { project, ref: ticket.ref, files: ['lib', 'other/new.js'] });
   const approved = store.getTicket(project, ticket.ref);
   assert.equal(approved.claim.by, by, 'approval keeps the same executor runnable');
   assert.equal(approved.scopeRequest, null);
-  assert.deepEqual(approved.files, ['lib/allowed.js', 'lib/new.js']);
+  assert.deepEqual(approved.files, ['lib', 'other/new.js']);
 });
 
 test('sweepClaims releases stale claims through MCP', async () => {

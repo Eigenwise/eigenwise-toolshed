@@ -141,9 +141,19 @@ function commitScopedPaths(root, scopes) {
   const tracked = trackedPaths(root);
   return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || tracked.some((file) => isInScope(file, [scope])));
 }
+function ignoredUntrackedFile(root, scope) {
+  const target = import_node_path.default.resolve(root, scope);
+  try {
+    if (!import_node_fs.default.lstatSync(target).isFile()) return false;
+  } catch {
+    return false;
+  }
+  if (gitResult(root, ["ls-files", "--error-unmatch", "--", scope]).ok) return false;
+  return gitResult(root, ["check-ignore", "--quiet", "--no-index", "--", scope]).ok;
+}
 function stageableScopedPaths(root, scopes) {
   const indexed = indexedPaths(root);
-  return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || indexed.some((file) => isInScope(file, [scope])));
+  return scopes.filter((scope) => !ignoredUntrackedFile(root, scope) && (import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || indexed.some((file) => isInScope(file, [scope]))));
 }
 function workingPaths(cwd) {
   const status = git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
@@ -423,8 +433,9 @@ function commitScoped(cwd, message, files) {
       return { ok: false, reason: "no_existing_scope", missingScopes, unscopedPaths };
     }
     const stageableScopes = stageableScopedPaths(root, commitScopes);
+    const committableScopes = commitScopes.filter((scope) => !ignoredUntrackedFile(root, scope));
     if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
-    git(root, ["commit", "--only", "-m", String(message || ""), "--", ...commitScopes]);
+    git(root, ["commit", "--only", "-m", String(message || ""), "--", ...committableScopes]);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();
     const validation = validateCommitScope(root, commit, scopes);
     return Object.assign({ commit, missingScopes, unscopedPaths }, validation);

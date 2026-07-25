@@ -376,7 +376,7 @@ ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
     ...ticketIsolationContract(ticket, project) || [],
     `Declared files:
 ${declaredFiles}`,
-    "Scope expansion: if work needs an undeclared path, call scope-request with that path and pause with your claim held. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues.",
+    "Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. Only uncovered paths pause with your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.",
     `Contract metadata:
 ${ticketContractsPacket(ticket)}`,
     `Readiness contract edges:
