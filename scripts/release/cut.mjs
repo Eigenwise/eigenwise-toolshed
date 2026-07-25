@@ -49,6 +49,10 @@ const SUITE_CREDENTIAL_DENYLIST = [
 export function suiteEnvironment(base = process.env) {
   const env = { ...base };
   for (const name of SUITE_CREDENTIAL_DENYLIST) delete env[name];
+  for (const name of Object.keys(env)) {
+    if (name.startsWith('GIT_CONFIG_')) delete env[name];
+  }
+  delete env.GIT_HTTP_EXTRAHEADER;
   env.GIT_TERMINAL_PROMPT = '0';
   env.GIT_CONFIG_NOSYSTEM = '1';
   env.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null';

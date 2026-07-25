@@ -25,6 +25,19 @@ function version(repo, name) {
   return readValue(readFileSync(path.join(repo.root, `plugins/${name}/.claude-plugin/plugin.json`), 'utf8'), ['version']);
 }
 
+async function withEnvironment(entries, action) {
+  const previous = new Map(Object.keys(entries).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, entries);
+  try {
+    return await action();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 test('a real push lands the branch and every tag on the remote at once', async (t) => {
   const repo = setup(t);
   repo.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor' });
@@ -32,7 +45,11 @@ test('a real push lands the branch and every tag on the remote at once', async (
   repo.commit('integrate');
   const before = repo.remoteRefs();
 
-  const result = await cut({ repoRoot: repo.root, push: true, skipTests: true, log: () => {} });
+  const result = await withEnvironment({
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+    GIT_CONFIG_VALUE_0: 'AUTHORIZATION: basic cmVsZWFzZV90b2tlbl9zZWNyZXQ=',
+  }, () => cut({ repoRoot: repo.root, push: true, skipTests: true, log: () => {} }));
 
   assert.equal(result.status, 'cut');
   assert.deepEqual(result.refspecs, [
@@ -136,18 +153,36 @@ test('a suite that stages files stops the release', async (t) => {
 
 test('the suite environment carries no credentials a push could use', async () => {
   const { suiteEnvironment } = await import('../cut.mjs');
+  const token = 'release_token_secret';
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+  const header = `AUTHORIZATION: basic ${basic}`;
   const env = suiteEnvironment({
     PATH: '/usr/bin',
     GITHUB_TOKEN: 'ghp_secret',
     GH_TOKEN: 'gh_secret',
     NPM_TOKEN: 'npm_secret',
+    RELEASE_TOKEN: token,
     SSH_AUTH_SOCK: '/tmp/agent',
     GIT_SSH_COMMAND: 'ssh -i /key',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+    GIT_CONFIG_VALUE_0: header,
+    GIT_CONFIG_KEY_1: 'user.email',
+    GIT_CONFIG_VALUE_1: 'release@example.test',
+    GIT_CONFIG_PARAMETERS: `'http.https://github.com/.extraheader=${header}'`,
+    GIT_HTTP_EXTRAHEADER: header,
   });
 
-  for (const name of ['GITHUB_TOKEN', 'GH_TOKEN', 'NPM_TOKEN', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND']) {
+  for (const name of [
+    'GITHUB_TOKEN', 'GH_TOKEN', 'NPM_TOKEN', 'RELEASE_TOKEN', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND',
+    'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG_KEY_1',
+    'GIT_CONFIG_VALUE_1', 'GIT_CONFIG_PARAMETERS', 'GIT_HTTP_EXTRAHEADER',
+  ]) {
     assert.equal(env[name], undefined, `${name} must not reach a suite`);
   }
+  assert.equal(JSON.stringify(env).includes(token), false, 'the token must not survive under another name');
+  assert.equal(JSON.stringify(env).includes(basic), false, 'the derived basic credential must not reach a suite');
+  assert.equal(JSON.stringify(env).includes(header), false, 'the authorization header must not reach a suite');
   assert.equal(env.PATH, '/usr/bin', 'the rest of the environment survives');
   assert.equal(env.GIT_TERMINAL_PROMPT, '0');
   assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
