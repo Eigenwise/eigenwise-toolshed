@@ -1227,6 +1227,80 @@ const WEBSOCKET_UPGRADE_RETRY_DELAY_MS = Number.isFinite(configuredWebSocketUpgr
   ? configuredWebSocketUpgradeRetryDelayMs
   : 250;
 
+// Claude Code's own compaction system prompt, verbatim from the querySource:
+// "compact" call site in CLI 2.1.220. claude-code-proxy keys its compaction
+// handling off the same literal, so the two stay in step.
+const COMPACTION_SYSTEM_PROMPT = 'You are a helpful AI assistant tasked with summarizing conversations.';
+// A Codex compaction turn dies mid-stream far more often than a normal turn,
+// and claude-code-proxy cannot recover it. Its streaming path is WebSocket-only
+// (config.rs codex_transport() defaults to WebSocket; mod.rs routes every
+// stream:true request to live_stream_response), and that path can only retry
+// BEFORE its first non-empty chunk. After that, an upstream socket that closes
+// without a terminal event becomes an SSE error carrying the raw detail slug
+// websocket_missing_terminal (websocket.rs missing_terminal_error), which
+// Claude Code surfaces as a failed compaction. Compaction is one long
+// single-shot generation over the largest body in the session, so it sits in
+// that unrecoverable window for minutes. Buffering the translated stream for
+// compaction only lets us retry the whole turn while the client has seen
+// nothing; normal turns keep streaming live.
+const COMPACT_STREAM_GUARD = process.env.CODEX_GATEWAY_COMPACT_STREAM_GUARD !== '0';
+const configuredCompactStreamRetries = Number(process.env.CODEX_GATEWAY_COMPACT_STREAM_RETRIES);
+const COMPACT_STREAM_RETRIES = Number.isInteger(configuredCompactStreamRetries) && configuredCompactStreamRetries >= 0
+  ? configuredCompactStreamRetries
+  : 2;
+const configuredCompactStreamRetryDelayMs = Number(process.env.CODEX_GATEWAY_COMPACT_STREAM_RETRY_DELAY_MS);
+const COMPACT_STREAM_RETRY_DELAY_MS = Number.isFinite(configuredCompactStreamRetryDelayMs) && configuredCompactStreamRetryDelayMs >= 0
+  ? configuredCompactStreamRetryDelayMs
+  : 250;
+const configuredCompactStreamMaxBytes = Number(process.env.CODEX_GATEWAY_COMPACT_STREAM_MAX_BYTES);
+const COMPACT_STREAM_MAX_BYTES = Number.isFinite(configuredCompactStreamMaxBytes) && configuredCompactStreamMaxBytes > 0
+  ? configuredCompactStreamMaxBytes
+  : 16 * 1024 * 1024;
+// Retrying these would re-send a body the backend has already refused on its
+// merits; they pass straight through to the client instead.
+const COMPACT_FATAL_ERROR_TYPES = new Set([
+  'invalid_request_error',
+  'authentication_error',
+  'permission_error',
+  'not_found_error',
+  'request_too_large',
+  'rate_limit_error',
+  'billing_error',
+]);
+
+function systemPromptText(system) {
+  if (typeof system === 'string') return system;
+  if (!Array.isArray(system)) return '';
+  return system.map((block) => (block && typeof block.text === 'string' ? block.text : '')).join('\n');
+}
+
+function isCompactionRequest(payload) {
+  return !!payload && payload.stream === true
+    && systemPromptText(payload.system).includes(COMPACTION_SYSTEM_PROMPT);
+}
+
+function sseErrorFrame(type, message) {
+  const event = { type: 'error', error: { type, message } };
+  return `event: error\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function upstreamErrorMessage(body, statusCode) {
+  try {
+    const parsed = JSON.parse(body.toString());
+    const detail = parsed?.error?.message || parsed?.message;
+    if (typeof detail === 'string' && detail) return `codex-gateway: upstream returned ${statusCode}: ${detail}`;
+  } catch { /* not JSON */ }
+  return `codex-gateway: upstream returned ${statusCode} with no readable error body`;
+}
+
+function noteCompactEvent(attempt, event) {
+  if (!event || typeof event !== 'object') return;
+  if (event.type === 'message_stop') attempt.terminal = true;
+  if (event.type !== 'error') return;
+  attempt.sawError = true;
+  if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
+}
+
 function gatewayModel(id) {
   return {
     id: `${PREFIX}${id}`,
@@ -2163,7 +2237,7 @@ function runShim() {
     arm();
   }
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null, usageCapture = null, webSocketUpgradeRetries = 0) {
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null, usageCapture = null, webSocketUpgradeRetries = 0, compactGuard = null) {
     const url = new URL(clientReq.url, target);
     let finishUsage = () => usageCapture?.finish();
     if (usageCapture) clientRes.once('finish', () => finishUsage());
@@ -2184,6 +2258,33 @@ function runShim() {
     const upReq = (isHttps ? https : http).request(url, reqOptions, (upRes) => {
       const resHeaders = { ...upRes.headers };
       for (const h of ['transfer-encoding', 'connection', 'keep-alive']) delete resHeaders[h];
+      // A compaction retry already committed the SSE status line on an earlier
+      // attempt, so no later attempt may write one. Report the real upstream
+      // status and message in-band instead of crashing on ERR_HTTP_HEADERS_SENT.
+      const successful2xx = upRes.statusCode >= 200 && upRes.statusCode < 300;
+      const streamedContentType = String(upRes.headers['content-type'] || '').toLowerCase().includes('text/event-stream');
+      if (compactGuard?.headWritten && !(successful2xx && streamedContentType)) {
+        usageCapture?.setResponse(upRes.statusCode, upRes.headers);
+        const chunks = [];
+        let reported = false;
+        const report = () => {
+          if (reported) return;
+          reported = true;
+          routeTelemetry?.finish(upRes.statusCode);
+          // The status line is gone but the sentry's learned ceiling is not.
+          if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId);
+          clientRes.write(sseErrorFrame('api_error', upstreamErrorMessage(Buffer.concat(chunks), upRes.statusCode)));
+          clientRes.end();
+        };
+        upRes.on('data', (chunk) => {
+          usageCapture?.noteResponseBytes(chunk.length);
+          chunks.push(chunk);
+        });
+        upRes.on('end', report);
+        upRes.on('error', report);
+        upRes.on('aborted', report);
+        return;
+      }
       if (normalizeContextErrors && upRes.statusCode === 403) {
         const chunks = [];
         upRes.on('data', (chunk) => {
@@ -2205,7 +2306,7 @@ function runShim() {
           if (webSocketUpgradeRetries < WEBSOCKET_UPGRADE_RETRIES) {
             return setTimeout(() => forward(clientReq, clientRes, target, body, extraHeaderDrop,
               normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, routeTelemetry,
-              usageCapture, webSocketUpgradeRetries + 1), WEBSOCKET_UPGRADE_RETRY_DELAY_MS);
+              usageCapture, webSocketUpgradeRetries + 1, compactGuard), WEBSOCKET_UPGRADE_RETRY_DELAY_MS);
           }
           const transientError = transientWebSocketUpgradeError(webSocketUpgradeRetries + 1);
           usageCapture?.setResponse(503, resHeaders);
@@ -2314,27 +2415,69 @@ function runShim() {
         const contentType = String(upRes.headers['content-type'] || '').toLowerCase();
         delete resHeaders['content-length'];
         if (contentType.includes('text/event-stream')) {
-          clientRes.writeHead(upRes.statusCode, resHeaders);
+          if (!compactGuard?.headWritten) clientRes.writeHead(upRes.statusCode, resHeaders);
+          if (compactGuard) compactGuard.headWritten = true;
           keepSseAlive(upRes, clientRes);
-          const observeEvent = (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId) || usageCapture)
+          const attempt = compactGuard
+            ? { chunks: [], bytes: 0, terminal: false, fatal: false, sawError: false, degraded: false }
+            : null;
+          const observeEvent = (attempt || filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId) || usageCapture)
             ? (event) => {
+              if (attempt) noteCompactEvent(attempt, event);
               if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event);
               usageCapture?.observeEvent(event);
             }
             : null;
-          const filter = createCodexSseTransformer(
-            (chunk) => clientRes.write(chunk),
-            observeEvent,
-            advertisedModel,
-            filterPlanTools,
-          );
+          const emit = attempt
+            ? (chunk) => {
+              if (attempt.degraded) return clientRes.write(chunk);
+              attempt.chunks.push(chunk);
+              attempt.bytes += Buffer.byteLength(chunk);
+              if (attempt.bytes <= COMPACT_STREAM_MAX_BYTES) return;
+              // Far past any real summary; keep the turn alive rather than
+              // hoard it, and say plainly that retry cover is gone.
+              console.error(`codex-gateway: compaction response passed ${COMPACT_STREAM_MAX_BYTES} buffered bytes; streaming the remainder live without retry cover`);
+              attempt.degraded = true;
+              for (const buffered of attempt.chunks) clientRes.write(buffered);
+              attempt.chunks.length = 0;
+            }
+            : (chunk) => clientRes.write(chunk);
+          const filter = createCodexSseTransformer(emit, observeEvent, advertisedModel, filterPlanTools);
           upRes.on('data', (chunk) => {
             usageCapture?.noteResponseBytes(chunk.length);
             filter.write(chunk);
           });
-          upRes.on('end', () => { filter.end(); clientRes.end(); });
-          upRes.on('error', () => clientRes.destroy());
-          upRes.on('aborted', () => clientRes.destroy());
+          if (!attempt) {
+            upRes.on('end', () => { filter.end(); clientRes.end(); });
+            upRes.on('error', () => clientRes.destroy());
+            upRes.on('aborted', () => clientRes.destroy());
+            return;
+          }
+          let settled = false;
+          const settle = () => {
+            if (settled) return;
+            settled = true;
+            filter.end();
+            if (clientRes.destroyed || !clientRes.writable) return;
+            const recoverable = !attempt.terminal && !attempt.fatal && !attempt.degraded;
+            if (recoverable && compactGuard.attempts < COMPACT_STREAM_RETRIES) {
+              compactGuard.attempts++;
+              upRes.destroy();
+              return setTimeout(() => forward(clientReq, clientRes, target, body, extraHeaderDrop,
+                normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, routeTelemetry,
+                usageCapture, webSocketUpgradeRetries, compactGuard), COMPACT_STREAM_RETRY_DELAY_MS);
+            }
+            for (const buffered of attempt.chunks) clientRes.write(buffered);
+            if (!attempt.terminal && !attempt.sawError) {
+              const attempts = compactGuard.attempts + 1;
+              clientRes.write(sseErrorFrame('api_error',
+                `codex-gateway: the Codex compaction stream ended without a terminal message_stop event after ${attempts} attempt(s); the summary above is incomplete`));
+            }
+            clientRes.end();
+          };
+          upRes.on('end', settle);
+          upRes.on('error', settle);
+          upRes.on('aborted', settle);
           return;
         }
         const chunks = [];
@@ -2417,6 +2560,11 @@ function runShim() {
         models: modelCache.data.length,
         served: counters,
         compat: { ...compatState },
+        compaction: {
+          streamGuard: COMPACT_STREAM_GUARD,
+          retries: COMPACT_STREAM_RETRIES,
+          maxBufferedBytes: COMPACT_STREAM_MAX_BYTES,
+        },
         usage: {
           enabled: usageEmitter.enabled,
           endpoint: usageEmitter.endpoint,
@@ -2550,9 +2698,13 @@ function runShim() {
                 },
               })
               : null;
+            const compactGuard = COMPACT_STREAM_GUARD && pathOnly === '/v1/messages' && isCompactionRequest(parsed)
+              ? { attempts: 0, headWritten: false }
+              : null;
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              forwardedBody, AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, routeTelemetry, usageCapture);
+              forwardedBody, AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, routeTelemetry,
+              usageCapture, 0, compactGuard);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }

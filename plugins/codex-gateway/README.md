@@ -248,6 +248,21 @@ note for the routing side.
   which in bypass mode means sudden permission prompts on everything. The shim strips those two
   tools from Codex-bound requests; Claude models keep them. If you actually want plan mode with
   a GPT model, set `CODEX_GATEWAY_KEEP_PLAN_TOOLS=1` for the shim process.
+- **`/compact` on a Codex model is retried for you.** claude-code-proxy sends every streaming
+  request over a WebSocket to the Codex backend, and that path can only recover from a dropped
+  socket *before* its first chunk of output. After that, a socket that closes without the final
+  event turns into a mid-stream error carrying the raw slug `websocket_missing_terminal` (or, with
+  a status attached, Claude Code's "Server error mid-response"). A compaction turn is one long
+  generation over the biggest body in the session, so it sits in that unrecoverable window for
+  minutes and eats the failure far more often than a normal turn does. The shim now recognizes
+  Claude Code's compaction request by its own system prompt and buffers the translated stream for
+  those requests only: if the stream ends without a terminal `message_stop`, it retries the whole
+  turn on the same model while your client has seen nothing, so you get one complete summary
+  instead of a half-written one. Normal turns still stream live and are untouched. Nothing is
+  invented: once retries run out you get the real upstream error events, and a stream that
+  truncated with no error at all gets an explicit one saying so. Tune it with
+  `CODEX_GATEWAY_COMPACT_STREAM_RETRIES` (default `2`), turn it off with
+  `CODEX_GATEWAY_COMPACT_STREAM_GUARD=0`, and check what's live in `/healthz` under `compaction`.
 - **Availability**: OpenAI has tightened client fingerprinting before (May 2026), which broke
   unofficial clients until they updated. When Codex models start dying mid-stream, re-run
   `setup` to pick up the latest proxy release. Claude models are never affected; worst case
