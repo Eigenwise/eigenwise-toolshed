@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /**
  * Tests for repo-anchored boards + the `merge` command (SQ-94 / SQ-95).

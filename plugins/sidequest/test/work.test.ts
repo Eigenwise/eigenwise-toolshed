@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /** Behavioral regression coverage for SQ-213 native-only routed work. */
 const test = require('node:test');

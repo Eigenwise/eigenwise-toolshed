@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /**
  * Tests for the MCP tool layer (SQ-152): the JSON-RPC handler in lib/mcp.js and
@@ -119,7 +120,7 @@ function runForceBypass(payload?: any) {
 }
 
 function createGitWorktree() {
-  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq mcp worktree-'));
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-worktree-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-remote-'));
   gitAt(worktree, ['init']);
   gitAt(worktree, ['config', 'user.name', 'Sidequest Test']);

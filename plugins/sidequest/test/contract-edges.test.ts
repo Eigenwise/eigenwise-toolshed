@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 
 import test from 'node:test';

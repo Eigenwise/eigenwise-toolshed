@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /**
  * Tests for the session worker registry + reconcileSession (SQ-153).

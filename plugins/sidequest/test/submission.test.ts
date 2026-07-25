@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /**
  * Tests for the ready-for-integration submission lifecycle (SQ-398).

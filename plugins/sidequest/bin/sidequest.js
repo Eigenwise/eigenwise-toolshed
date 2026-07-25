@@ -10,6 +10,7 @@ const agentsync = require("../lib/agentsync");
 const work = require("../lib/work");
 const commitScope = require("../lib/commit-scope");
 const worktrees = require("../lib/worktrees");
+const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "produces", "changes", "consumes"]);
@@ -1664,6 +1665,15 @@ async function cmdBriefing(opts, positional) {
   if (!result.ok) fail(`briefing: ${result.reason === "not_found" ? `no ticket "${idOrRef}".` : "dispatch token was refused; re-run dispatch for a current spawn."}`);
   process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token, slug, meta.path), meta.path));
 }
+async function cmdTempCleanup(opts, positional) {
+  if (positional[0] && positional[0] !== "cleanup") fail("temp: expected `sidequest temp cleanup`");
+  const report = tempCleanup.cleanupTempRoots({ root: opts.root });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return;
+  }
+  console.log(`✓ temp cleanup: removed ${report.removed} root(s), ${report.removedEntries} entr${report.removedEntries === 1 ? "y" : "ies"}; scanned ${report.scanned}; skipped ${report.skippedRecent.length} recent, ${report.skippedUnsafe.length} unsafe, ${report.failed.length} failed`);
+}
 async function cmdNativeAgent(opts, positional) {
   const action = String(positional[0] || "").toLowerCase();
   if (action === "cleanup") {
@@ -2220,6 +2230,8 @@ const HELP_COMMANDS = {
   dispatch: "sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]",
   briefing: "sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]",
   "native-agent": 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]',
+  temp: "sidequest temp cleanup [--root <path>] [--json]",
+  "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--project <path-or-slug>] --json",
   "board-config": 'sidequest board-config [--always-in-scope path]... [--integration-mode <mode>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--worktree-setup "command"] [--json]',
@@ -2560,6 +2572,12 @@ async function main() {
       break;
     case "briefing":
       await cmdBriefing(opts, positional);
+      break;
+    case "temp":
+      await cmdTempCleanup(opts, positional);
+      break;
+    case "cleanup-temp":
+      await cmdTempCleanup(opts, positional);
       break;
     case "native-agent":
     case "native_agent":
