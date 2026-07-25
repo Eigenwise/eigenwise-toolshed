@@ -10,7 +10,7 @@ Codex Gateway runs a local proxy and puts `claude-codex-*` models in Claude Code
 /codex-gateway:codex-gateway setup
 ```
 
-The setup skill installs or updates the proxy, checks authentication, and starts the local gateway. Use `/codex-gateway:codex-gateway doctor` when the picker is missing models or the gateway port is unavailable. Once it is healthy, choose a `claude-codex-*` model with `/model`; regular Claude model ids continue to use the Anthropic API.
+The setup skill installs or updates the proxy, checks authentication, and starts the local gateway. Gateway updates replace the worker behind a listener that stays bound, so open sessions keep their connection while an in-flight request drains or retries. Use `/codex-gateway:codex-gateway doctor` when the picker is missing models or the gateway port is unavailable. Once it is healthy, choose a `claude-codex-*` model with `/model`; regular Claude model ids continue to use the Anthropic API.
 
 A Sidequest-routed agent keeps its resolved Codex route through compaction. A child agent can inherit that route only when Claude Code supplies same-session parent lineage; unrelated markerless agents stay rejected. Route logs label these requests `dispatch-inherited` with the parent agent ID and never include prompt content.
 

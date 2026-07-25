@@ -27,7 +27,7 @@
  * only the env switch and the extra listener are automatic.
  */
 
-const { spawn, spawnSync } = require('node:child_process');
+const { fork, spawn, spawnSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 const crypto = require('node:crypto');
 const dns = require('node:dns');
@@ -47,7 +47,8 @@ const BIN_DIR = path.join(STATE, 'bin');
 const WIRING_CONFIG_PATH = path.join(STATE, 'wiring.json');
 const PLUGIN_VERSION = readPluginVersion();
 const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-code-proxy');
-const SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
+const PUBLIC_SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
+const SHIM_PORT = Number(process.env.CODEX_GATEWAY_WORKER_PORT || PUBLIC_SHIM_PORT);
 const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
 const PREFIX = 'claude-codex-';
 const REPO = 'raine/claude-code-proxy';
@@ -399,11 +400,7 @@ async function shimHealthy() {
 }
 
 function pidFile(name) { return path.join(STATE, name + '.pid'); }
-function stopAll() {
-  killPid(readPid('shim'));
-  killPid(readPid('proxy'));
-  for (const n of ['shim', 'proxy']) { try { fs.rmSync(pidFile(n)); } catch { /* absent */ } }
-}
+function removePid(name) { try { fs.rmSync(pidFile(name)); } catch { /* absent */ } }
 function readPid(name) {
   try { return Number(fs.readFileSync(pidFile(name), 'utf8').trim()) || null; } catch { return null; }
 }
@@ -411,6 +408,81 @@ function killPid(pid) {
   if (!pid) return;
   if (WIN) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
   else { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
+}
+function stopProcess(name) {
+  killPid(readPid(name));
+  removePid(name);
+}
+function stopAll() {
+  stopProcess('shim');
+  stopProcess('guardian');
+  stopProcess('proxy');
+}
+
+function postJson(url, body, timeout = 2000) {
+  return new Promise((resolve, reject) => {
+    const payload = Buffer.from(JSON.stringify(body));
+    const req = http.request(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': payload.length },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject);
+    req.setTimeout(timeout, () => req.destroy(new Error('timeout: ' + url)));
+    req.end(payload);
+  });
+}
+
+async function waitForShimExit(timeout) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (!(await portListening(SHIM_PORT, 100))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !(await portListening(SHIM_PORT, 100));
+}
+
+async function stopShimWithDrain({ quiet = false, timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000, report = log } = {}) {
+  if (!(await portListening(SHIM_PORT))) {
+    removePid('shim');
+    return { ok: true, drained: true, running: false };
+  }
+  if (!quiet) report(`codex-gateway: restarting shim. It stopped accepting new requests and is waiting up to ${Math.ceil(timeout / 1000)}s for in-flight requests to finish.`);
+  try {
+    const response = await postJson(`http://127.0.0.1:${SHIM_PORT}/drain`, { timeout });
+    if (response.status !== 202) throw new Error(`drain endpoint returned ${response.status}`);
+  } catch (error) {
+    if (!quiet) report(`codex-gateway: could not ask the shim to drain (${error.message}); force-stopping it.`);
+    stopProcess('shim');
+    return { ok: true, drained: false, forced: true, reason: error.message };
+  }
+  if (await waitForShimExit(timeout)) {
+    removePid('shim');
+    if (!quiet) report('codex-gateway: in-flight shim requests finished; restarting shim.');
+    return { ok: true, drained: true };
+  }
+  if (!quiet) report(`codex-gateway: shim drain timed out after ${Math.ceil(timeout / 1000)}s; force-stopping it.`);
+  stopProcess('shim');
+  return { ok: true, drained: false, forced: true, reason: 'drain timeout' };
+}
+
+async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000, report = log } = {}) {
+  if (!(await portListening(PUBLIC_SHIM_PORT))) return { ok: true, running: false };
+  if (!quiet) report(`codex-gateway: restarting shim without dropping its listener; waiting up to ${Math.ceil(timeout / 1000)}s for in-flight requests.`);
+  try {
+    const response = await postJson(`http://127.0.0.1:${PUBLIC_SHIM_PORT}/restart`, { script: __filename }, 2000);
+    if (response.status === 202) return { ok: true, draining: true };
+    if (response.status === 404) {
+      if (!quiet) report('codex-gateway: upgrading the legacy shim to a supervised listener; this one transition reconnects live sessions.');
+      return stopShimWithDrain({ quiet, timeout, report });
+    }
+    throw new Error(`restart endpoint returned ${response.status}`);
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
 }
 
 function spawnDetached(name, command, cmdArgs, env) {
@@ -808,29 +880,35 @@ async function setup() {
     log('sha256 verified');
   }
 
-  // Windows can't overwrite a running exe; setup doubles as the upgrade
-  // path, so stop the gateway before extracting (restarted below)
-  stopAll();
-  await new Promise((r) => setTimeout(r, 700)); // let the file lock release
-  const tmp = path.join(BIN_DIR, assetName);
-  fs.writeFileSync(tmp, archive.body);
-  // Windows: force the System32 bsdtar (reads zip); PATH may find Git's GNU
-  // tar, which reads neither zip nor "C:\..." paths. Relative paths + cwd
-  // keep GNU tar on other platforms happy too.
+  const stage = fs.mkdtempSync(path.join(BIN_DIR, 'stage-'));
+  const archiveFile = path.join(stage, assetName);
+  fs.writeFileSync(archiveFile, archive.body);
   const tarBin = WIN
     ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
     : 'tar';
-  const tar = spawnSync(tarBin, ['-xf', assetName], { encoding: 'utf8', cwd: BIN_DIR, windowsHide: true });
+  const tar = spawnSync(tarBin, ['-xf', archiveFile], { encoding: 'utf8', cwd: stage, windowsHide: true });
   if (tar.status !== 0) die(`extract failed: ${tar.stderr || tar.status}`);
-  fs.rmSync(tmp);
-  if (!fs.existsSync(PROXY_BIN)) {
-    // some archives nest the binary; find and move it up
-    const found = fs.readdirSync(BIN_DIR, { recursive: true })
-      .map(String).find((f) => path.basename(f) === path.basename(PROXY_BIN));
-    if (!found) die(`extracted, but ${path.basename(PROXY_BIN)} not found in ${BIN_DIR}`);
-    fs.renameSync(path.join(BIN_DIR, found), PROXY_BIN);
+  const staged = fs.readdirSync(stage, { recursive: true })
+    .map(String).find((file) => path.basename(file) === path.basename(PROXY_BIN));
+  if (!staged) die(`extracted, but ${path.basename(PROXY_BIN)} not found in ${BIN_DIR}`);
+  const stagedProxy = path.join(stage, staged);
+  if (!WIN) fs.chmodSync(stagedProxy, 0o755);
+  const currentVersion = parseSemver((spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout || '').trim());
+  const stagedVersion = parseSemver((spawnSync(stagedProxy, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout || '').trim());
+  const proxyChanged = !currentVersion || !stagedVersion || currentVersion.join('.') !== stagedVersion.join('.');
+
+  if (proxyChanged) {
+    log('codex-gateway: proxy changed; restarting it after the shim drain. Live sessions will reconnect.');
+    stopProcess('proxy');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    fs.copyFileSync(stagedProxy, PROXY_BIN);
+    if (!WIN) fs.chmodSync(PROXY_BIN, 0o755);
+  } else {
+    log('codex-gateway: proxy unchanged; keeping its authenticated process running.');
   }
-  if (!WIN) fs.chmodSync(PROXY_BIN, 0o755);
+  const restarting = await restartWorkerWithDrain();
+  if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
+  fs.rmSync(stage, { recursive: true, force: true });
 
   const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true });
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
@@ -901,11 +979,11 @@ async function startAll({ quiet = false } = {}) {
     started.push('proxy');
   }
   if (!(await shimHealthy())) {
-    spawnDetached('shim', process.execPath, [__filename, 'serve-shim'], {});
+    spawnDetached('guardian', process.execPath, [__filename, 'serve-shim'], {});
     started.push('shim');
   }
   // wait for both to come up
-  const deadline = Date.now() + 12000;
+  const deadline = Date.now() + Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
   while (Date.now() < deadline) {
     if ((await portListening(PROXY_PORT)) && (await shimHealthy())) {
       if (!quiet && started.length) log(`started: ${started.join(', ')}`);
@@ -933,13 +1011,14 @@ function shimNeedsRestart(installedVersion, health) {
 async function restartShimIfOutdated({
   quiet = false,
   fetchHealth = fetchShimHealth,
-  stop = stopAll,
+  restart = restartWorkerWithDrain,
   start = startAll,
 } = {}) {
   let health;
   try { health = await fetchHealth(); } catch { return null; }
   if (!shimNeedsRestart(PLUGIN_VERSION, health)) return null;
-  stop();
+  const stopped = await restart({ quiet });
+  if (!stopped.ok) return stopped;
   return start({ quiet });
 }
 
@@ -1847,7 +1926,8 @@ function requestHeader(req, name) {
   return typeof value === 'string' ? value : null;
 }
 
-function runShim() {
+function runWorker() {
+  process.once('disconnect', () => process.exit(0));
   let modelCache = {
     at: 0,
     data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
@@ -1867,7 +1947,37 @@ function runShim() {
   // this process itself managed to bind the compat port; the OS hosts file is
   // machine-wide and would misdirect the passthrough forward either way.
   const compatState = { hostsDetected: false, hostsLine: null, port80Bound: false, reason: null };
+  const servers = new Set();
+  let draining = false;
+  let activeRequests = 0;
   const anthropicBypass = createHostsBypassResolver();
+
+  function beginDrain() {
+    let remaining = servers.size;
+    if (remaining === 0) return process.exit(0);
+    for (const server of servers) {
+      server.close(() => {
+        remaining -= 1;
+        if (remaining === 0) process.exit(0);
+      });
+      server.closeIdleConnections?.();
+    }
+  }
+
+  function trackInFlight(res) {
+    activeRequests += 1;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      activeRequests -= 1;
+      if (draining && activeRequests === 0) {
+        for (const server of servers) server.closeAllConnections?.();
+      }
+    };
+    res.once('finish', finish);
+    res.once('close', finish);
+  }
 
   function requestSessionId(req) {
     const sessionId = req.headers['x-claude-code-session-id'];
@@ -2552,6 +2662,21 @@ function runShim() {
   function handleRequest(req, res) {
     const pathOnly = req.url.split('?')[0];
 
+    if (req.method === 'POST' && pathOnly === '/drain') {
+      draining = true;
+      res.once('finish', () => setImmediate(beginDrain));
+      res.writeHead(202, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, draining, activeRequests }));
+      return;
+    }
+
+    if (draining && pathOnly !== '/healthz') {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'codex-gateway shim is restarting; retry this request shortly' } }));
+    }
+
+    if (pathOnly !== '/healthz') trackInFlight(res);
+
     if (pathOnly === '/healthz') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({
@@ -2559,6 +2684,8 @@ function runShim() {
         version: PLUGIN_VERSION,
         models: modelCache.data.length,
         served: counters,
+        draining,
+        activeRequests,
         compat: { ...compatState },
         compaction: {
           streamGuard: COMPACT_STREAM_GUARD,
@@ -2744,7 +2871,9 @@ function runShim() {
     return server;
   }
 
-  makeServer().listen(SHIM_PORT, '127.0.0.1', () => {
+  const mainServer = makeServer();
+  servers.add(mainServer);
+  mainServer.listen(SHIM_PORT, '127.0.0.1', () => {
     console.log(`codex-gateway shim listening on 127.0.0.1:${SHIM_PORT} (proxy :${PROXY_PORT}, anthropic ${ANTHROPIC_UPSTREAM})`);
   });
 
@@ -2758,9 +2887,11 @@ function runShim() {
   const hostsEntry = detectHostsCompat();
   compatState.hostsDetected = !!hostsEntry;
   compatState.hostsLine = hostsEntry ? hostsEntry.line : null;
-  if (hostsEntry) {
+  if (hostsEntry && !process.env.CODEX_GATEWAY_WORKER_PORT) {
     const compatServer = makeServer();
+    servers.add(compatServer);
     compatServer.once('error', (e) => {
+      servers.delete(compatServer);
       compatState.port80Bound = false;
       compatState.reason = e.code || e.message;
       console.error(`codex-gateway: hosts RC-compatibility entry found (${hostsEntry.line}) but could not bind ${hostsEntry.ip}:${COMPAT_PORT}: ${e.code || e.message}. Staying on default gateway mode this session.`);
@@ -2770,6 +2901,150 @@ function runShim() {
       console.log(`codex-gateway RC-compatibility listener on ${hostsEntry.ip}:${COMPAT_PORT} (hosts: ${hostsEntry.line})`);
     });
   }
+}
+
+function runShim() {
+  mkdirs();
+  const workerPort = Number(process.env.CODEX_GATEWAY_WORKER_PORT || 20000 + (PUBLIC_SHIM_PORT % 20000));
+  const timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000;
+  const hostsEntry = detectHostsCompat();
+  const compatState = { hostsDetected: !!hostsEntry, hostsLine: hostsEntry?.line ?? null, port80Bound: false, reason: null };
+  let worker = null;
+  let workerScript = __filename;
+  let restarting = false;
+  let stopped = false;
+
+  function startWorker() {
+    if (stopped || (worker && worker.exitCode == null)) return;
+    const out = fs.openSync(path.join(LOGS, 'shim.log'), 'a');
+    const child = fork(workerScript, ['serve-worker'], {
+      stdio: ['ignore', out, out, 'ipc'],
+      windowsHide: true,
+      env: { ...process.env, CODEX_GATEWAY_WORKER_PORT: String(workerPort) },
+    });
+    fs.closeSync(out);
+    worker = child;
+    fs.writeFileSync(pidFile('shim'), String(child.pid));
+    child.unref();
+    child.once('exit', () => {
+      if (worker === child) worker = null;
+      removePid('shim');
+      if (!stopped) setTimeout(startWorker, 50);
+    });
+  }
+
+  function workerReady() {
+    return portListening(workerPort, 100);
+  }
+
+  function requestWorker(req, body, retry = 0) {
+    return new Promise((resolve, reject) => {
+      const upstream = http.request({
+        host: '127.0.0.1', port: workerPort, method: req.method, path: req.url, headers: req.headers,
+      }, (response) => resolve(response));
+      upstream.once('error', (error) => {
+        if (retry < 80 && !stopped) return setTimeout(() => requestWorker(req, body, retry + 1).then(resolve, reject), 50);
+        reject(error);
+      });
+      upstream.end(body);
+    });
+  }
+
+  async function relay(req, res) {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+    try {
+      const upstream = await requestWorker(req, body);
+      if (req.url.split('?')[0] === '/healthz') {
+        const response = [];
+        upstream.on('data', (chunk) => response.push(chunk));
+        upstream.once('end', () => {
+          const health = JSON.parse(Buffer.concat(response).toString());
+          health.compat = { ...compatState };
+          res.writeHead(upstream.statusCode || 502, upstream.headers);
+          res.end(JSON.stringify(health));
+        });
+        return;
+      }
+      res.writeHead(upstream.statusCode || 502, upstream.headers);
+      upstream.pipe(res);
+    } catch {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'codex-gateway is restarting; retry this request shortly' } }));
+    }
+  }
+
+  async function restartWorker(script) {
+    if (script && path.isAbsolute(script)) workerScript = script;
+    restarting = true;
+    const current = worker;
+    if (!current) {
+      restarting = false;
+      startWorker();
+      return;
+    }
+    try { await postJson(`http://127.0.0.1:${workerPort}/drain`, { timeout }, timeout + 1000); } catch {}
+    setTimeout(() => {
+      if (worker === current && current.exitCode == null) {
+        console.error(`codex-gateway: shim drain timed out after ${Math.ceil(timeout / 1000)}s; force-stopping it.`);
+        killPid(current.pid);
+      }
+    }, timeout);
+    current.once('exit', () => {
+      restarting = false;
+      startWorker();
+    });
+  }
+
+  function handle(req, res) {
+    const pathOnly = req.url.split('?')[0];
+    if (req.method === 'POST' && pathOnly === '/restart') {
+      const chunks = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        let script;
+        try { script = JSON.parse(Buffer.concat(chunks).toString()).script; } catch {}
+        restartWorker(script);
+        res.writeHead(202, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, restarting: true }));
+      });
+      return;
+    }
+    return relay(req, res);
+  }
+
+  function listen(port, host, callback) {
+    const server = http.createServer(handle);
+    server.requestTimeout = 0;
+    server.headersTimeout = 120000;
+    server.keepAliveTimeout = 75000;
+    server.listen(port, host, callback);
+    return server;
+  }
+
+  const main = listen(PUBLIC_SHIM_PORT, '127.0.0.1', () => {
+    console.log(`codex-gateway shim supervisor listening on 127.0.0.1:${PUBLIC_SHIM_PORT}`);
+  });
+  main.once('error', (error) => { console.error(`codex-gateway: shim supervisor failed: ${error.code || error.message}`); process.exitCode = 1; });
+  let compatServer = null;
+  if (hostsEntry) {
+    compatServer = listen(COMPAT_PORT, hostsEntry.ip, () => {
+      compatState.port80Bound = true;
+      console.log(`codex-gateway RC-compatibility supervisor on ${hostsEntry.ip}:${COMPAT_PORT}`);
+    });
+    compatServer.once('error', (error) => {
+      compatState.reason = error.code || error.message;
+      console.error(`codex-gateway: RC-compatibility supervisor unavailable: ${compatState.reason}`);
+    });
+  }
+  startWorker();
+  process.once('SIGTERM', () => {
+    stopped = true;
+    killPid(worker?.pid);
+    compatServer?.close();
+    main.close(() => process.exit(0));
+  });
 }
 
 // -------------------------------------------------------------------- main
@@ -2849,6 +3124,7 @@ if (require.main === module) {
     case 'doctor': await doctor(); break;
     case 'remote-control': await remoteControlCommand(); break;
     case 'serve-shim': runShim(); break;
+    case 'serve-worker': runWorker(); break;
     default:
       log(USAGE);
       process.exit(cmd ? 1 : 0);
@@ -2888,6 +3164,7 @@ module.exports = {
   semverLt,
   shimNeedsRestart,
   restartShimIfOutdated,
+  stopShimWithDrain,
   PLUGIN_VERSION,
   MIN_PROXY_VERSION,
   CATALOG_SCHEMA_VERSION,

@@ -301,6 +301,30 @@ test('continues after failures and returns every failed operation', () => withRe
   assert.match(failed.failures.join('\n'), /codex-gateway setup/);
 }));
 
+test('reports version transitions and gateway interruption before setup', () => withRegistry(registry, (registryFile) => {
+  const configured = structuredClone(registry);
+  configured.plugins['codex-gateway@eigenwise-toolshed'][0].version = '0.2.0';
+  fs.writeFileSync(registryFile, JSON.stringify(configured));
+  const lines = [];
+  runUpdate({
+    registryFile,
+    options: { claude: 'claude', dryRun: false, check: false },
+    run: (command) => {
+      if (command.args.join(' ') === 'plugin update codex-gateway@eigenwise-toolshed --scope user') {
+        const next = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+        next.plugins['codex-gateway@eigenwise-toolshed'][0].version = '0.3.0';
+        fs.writeFileSync(registryFile, JSON.stringify(next));
+      }
+      return { ok: true };
+    },
+    report: (line) => lines.push(line),
+  });
+
+  assert.match(lines.join('\n'), /codex-gateway@eigenwise-toolshed 0\.2\.0 -> 0\.3\.0/);
+  assert.match(lines.join('\n'), /Live Claude Code sessions using Codex stay connected/);
+  assert.match(lines.join('\n'), /cannot reliably list commit subjects/);
+}));
+
 test('parses check, dry-run, and wiring-mode options', () => {
   assert.deepEqual(parseArgs(['--check', '--dry-run', '--claude', 'claude-dev']), {
     check: true,
