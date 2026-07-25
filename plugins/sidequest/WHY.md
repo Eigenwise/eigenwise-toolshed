@@ -1,242 +1,211 @@
 # Why Sidequest exists
 
-This is the reasoning behind the plugin. Not what it does (the README and the docs
-site cover that), but the problem it came from, the bet it makes, and the parts of
-that bet that have and haven't paid off.
+Sidequest exists because my brain does not work one project at a time.
 
-## The thing that started it
+I have ADHD. I usually have about five projects open, and while I'm working on one of
+them my brain keeps producing things for the others:
 
-I kept forgetting to switch models.
+- "Oh, and the contact form is still broken."
+- "By the way, this setup should be reusable."
+- "We should really fix that agent flow."
+- "I just remembered why the other project got stuck."
 
-That's it. That's the origin. Claude Code has a model picker, the picker is sticky,
-and whatever I last selected carries into the next hour of work whether or not it
-fits. So I'd set the best available model to think through something hard, and then
-stay on it while renaming a variable, fixing a typo in a doc, and running the same
-test suite eleven times. Enormous models doing trivial work, all day, quietly.
+Those thoughts are often useful. The problem is what happens next.
 
-The reverse happened too and hurt more. Something cheap would still be selected when
-the work turned genuinely hard, and I'd get a confidently wrong answer that cost an
-hour to unwind.
+If I follow one immediately, I lose the thread of the thing I was already doing. If I
+don't follow it, I forget it. If I write it in a random note, the note becomes another
+place I have to remember to check. And if I switch to a different project to record it
+properly, I may spend twenty minutes reconstructing that project's state before I can
+even explain the thought.
 
-## Why "just be disciplined about it" doesn't work
+Sidequest is the third option: capture the thought where it happens, with enough context
+to make it real, then keep going.
 
-I tried. It fails for structural reasons, not character reasons.
+## The original problem was continuity
 
-**You don't know the shape of the task until you're inside it.** Half the time a
-"quick fix" opens into a real design problem three files down. The model choice was
-made before the information that should have driven it existed.
+Sidequest did not start as a model router.
 
-**Both failure directions are silent.** Overshooting produces a correct answer and an
-invisible bill. Undershooting produces a plausible answer and an invisible defect.
-Nothing errors. Nothing warns. There is no feedback signal to learn from, so the
-habit never forms.
+It started as a quest log for interruptions. The earliest surviving Sidequest-specific
+request, from July 4, 2026, was:
 
-**The safe default is the expensive one.** Given silent failure in both directions and
-no feedback, the rational move is to always pick the strongest model. Which is exactly
-the waste I was trying to avoid, arrived at by sound reasoning.
+> "turn all grievances that are not yet done into sidequests and remove those that are done"
 
-**It's a decision with the wrong cadence.** Model choice is a per-task decision, and
-tasks turn over every few minutes. Any decision you have to make dozens of times an
-hour, while concentrating on something else, will not get made well.
+That was the first shape of the idea: unfinished things should survive outside the
+conversation that noticed them, and finished things should leave the active queue.
 
-So the problem isn't that I forget. It's that the decision is attached to the wrong
-thing. It's attached to the session, and it needs to be attached to the work.
+The important word in the name is **sidequest**. A sidequest matters, but it does not
+have to replace the main quest the moment it appears.
 
-## The bet
+This is not about training myself to stop having "oh and..." thoughts. That would fight
+the way I actually work, and it would throw away a lot of good ideas. The goal is to
+make that multitasking pattern useful without letting every new thought destroy the
+current thread.
 
-**Make routing a property of the work, not a property of the session.**
+## One board across the work I actually do
 
-If a unit of work is written down before it's done, with enough about it to classify
-it, then the model can be derived instead of chosen. I describe what needs doing.
-The system decides who does it.
+A separate task list inside every repository sounds tidy. In practice, I have to
+remember which repository contains the thing I forgot, open it, reconstruct the state,
+and then find its list. That is the same memory problem with more steps.
 
-That's the whole idea. Everything else in Sidequest is a consequence.
+Sidequest keeps durable project context while giving me one place to see the whole
+queue. A ticket still belongs to a project, has project-specific files and evidence,
+and must be executed in that project's repository. The board spans projects because my
+attention spans projects.
 
-Concretely: work becomes a ticket, a ticket gets a category, and a category names a
-concrete model and reasoning effort. Categories are things like `coding.easy`,
-`debugging`, `research`, `spike-investigation`, `docs-writing`. They're descriptions
-of the kind of thinking a task needs, which is the thing I actually know at the moment
-I file it.
+That is why the dashboard is local and cross-project. It is not a public project
+management service and it is not another account to maintain. It is a live view of the
+work already happening on this machine.
 
-Two design choices inside that are worth stating, because both were reversals:
+The board gives me answers a conversation cannot reliably keep giving after hours of
+work, compactions, restarts, and parallel sessions:
 
-**Categories name concrete models, not tiers.** An earlier version had complexity
-grades and a ladder that mapped grades onto models. It was a layer of indirection that
-made every routing question require two lookups and hid the actual decision. Routes now
-say `opus·xhigh` or `codex-gpt-5.6-terra·high` in plain text. You can read the routing
-table and know exactly what will run.
+- What was I doing in this project?
+- What did I notice while I was doing something else?
+- Which things are being worked on right now?
+- What is blocked, and why?
+- What finished while my attention was elsewhere?
+- What evidence exists that it actually works?
 
-**Classification happens from the ticket text, not from a score I assign.** Asking a
-human (or me) to rate complexity 1-10 reintroduces the same per-task judgment call that
-failed in the first place. Category descriptions are written as classifier prompts, so
-the routing decision comes out of the work description itself.
+## Remembering a task is only half the job
 
-## What falls out of the bet
+A perfect backlog that only grows is another source of guilt. Sidequests need to get
+done, not merely remembered.
 
-Once work is ticketed and routed, three other things follow that weren't the original
-goal but turned out to matter as much.
+That led to agents, dispatch, and the orchestrator/executor split. A sidequest can be
+captured while I stay on the main thread, then handed to an executor that starts with
+the ticket's project, files, constraints, and verification contract.
 
-### The session that plans stops being the session that executes
+The ticket has to be atomic enough for that to work. An executor should not need the
+entire conversation that produced the thought. The ticket carries the context needed to
+act: what is wrong, why it matters, where to look, what may change, and how to prove the
+result.
 
-If a ticket carries its own model, it also has to carry its own execution context.
-That splits the loop into an orchestrator (reads the board, files tickets, dispatches,
-integrates, publishes) and executors (one ticket, fresh context, verified commit,
-stop).
+This is why Sidequest is more than a Kanban board. The board is also the handoff format
+between attention, sessions, and agents.
 
-This is where most of the actual token savings live, and it's not the part I set out
-to build.
+## Model routing came later
 
-A long orchestrator session carries a huge context and re-bills all of it on every
-single turn. An executor starts near-empty and bills a small context per turn for the
-same work. Same task, different denominator. Measured on 2026-07-25 across 24 hours:
-the main loop spent 310 billed tokens for every token it produced. Executors spent 170.
-Roughly half as wasteful, doing most of the work.
+Once Sidequest could execute tickets, a second problem became obvious.
 
-It also buys parallelism (several tickets at once) and model diversity inside a single
-piece of work (an Opus executor debugging while a cheaper one writes docs), neither of
-which a single session can do.
+The main Claude Code session usually runs a powerful model because the main thread has
+to plan, arbitrate, integrate, and recover when something goes wrong. But many of the
+sidequests it discovers do not need that model. A typo, a small test repair, a bounded
+documentation update, and a hard debugging problem are different kinds of work.
 
-### Capacity across providers, not just across models
+On July 15, after the execution system already existed, I described the failure this
+way:
 
-`codex-gateway` puts GPT-5.6 models into the same `/model` picker by routing
-`claude-codex-*` model ids to a Codex backend. Once routing is automatic, that stops
-being a novelty and becomes a second pool of capacity on a separate subscription.
+> "the orchestrator basically does everything almost always in other projects and it's almost never delegated which means we are now using even more tokens by having the expensive model do everything in the main thread"
 
-On 2026-07-25, 34% of a day's total token spend ran on Codex models. That work does not
-touch the Anthropic usage limit at all. Inside the executor pool specifically it was
-close to an even split: $327 notional on Opus against $313 on Codex.
+That is where automatic routing enters the story.
 
-The point isn't that one provider is better. It's that a routing layer can spend from
-whichever bucket has room.
+Manual model switching has the wrong shape for this. The selected model belongs to the
+session, but the decision belongs to the task. It is sticky, easy to forget, and often
+made before the real difficulty is known. The safe manual habit is to leave the best
+model selected for everything, which quietly wastes the capacity I wanted to reserve
+for hard work.
 
-### State that survives the session
+Sidequest attaches the decision to the ticket instead. The work gets a category such as
+`coding.easy`, `debugging`, `research`, or `docs-writing`. The category routes to a
+concrete model and reasoning effort. I describe the kind of work I see; the system
+chooses the executor that fits it.
 
-Context windows compact, sessions die, agents crash mid-run. If the plan lives in the
-conversation, the plan dies with the conversation. I lost work this way enough times
-that durable external state stopped being optional.
+This has three benefits:
 
-So the board is a SQLite database outside any session: tickets, claims, checkpoints,
-submissions, comments, dispatch records, route history. An agent that dies leaves a
-ticket that still knows what it was doing. A session that compacts away its own memory
-can read the board and recover.
+1. Small work stops consuming the expensive main-loop model just because that model was
+   already selected.
+2. Hard work can still get the strongest model without making that the permanent
+   default for everything else.
+3. Work can use separate provider capacity. Codex-backed executors and Claude executors
+   draw from different subscription pools, so the queue can use both.
 
-This is also why the board spans every project rather than living per-repo. Work moves
-between projects; the queue shouldn't care.
+Right-sized model use is an important reason Sidequest grew, but it is not why
+Sidequest was born. It is an optimization made possible by first turning interruptions
+into durable units of work.
 
-## What the numbers actually say
+## Fresh context is part of the routing win
 
-Measured 2026-07-25, 24 hours, from the local telemetry stack. Notional USD (these are
-subscription-covered, the dollar figures are list-price equivalents used as a common
-unit):
+A long-running orchestrator carries the history of planning, screenshots, tool results,
+failed attempts, and every other ticket it has touched. Every new turn has to process
+that context again.
 
-| | | |
-|---|---:|---:|
-| Executors (subagent) | $656 | 60% |
-| Orchestrator (main) | $361 | 33% |
-| Auxiliary (compaction, background) | $84 | 8% |
-| **Total** | **$1,101** | |
+A dispatched executor starts with one ticket and a fresh context. Even when it uses the
+same model, the same task can be cheaper and easier to reason about because the executor
+is not carrying the rest of my day with it.
 
-Two things to read from this.
+This separation also lets work happen in parallel. I can stay with the thing that needs
+my attention while several bounded sidequests move independently. The point is not to
+create as many agents as possible. It is to keep unrelated context out of each task and
+let independent work stop waiting on my attention.
 
-**Most of the spend is delegated work.** If the routing layer were ceremony, the main
-loop would dominate and executors would be a rounding error. It's the other way around.
+## Durable state matters because sessions are temporary
 
-**A third of it is off the Anthropic limit entirely.** $378 of that $1,101 ran on Codex.
+Claude Code sessions compact. Agents stop. Terminals close. A provider request fails.
+A computer restarts. None of those events should erase the plan or make finished work
+impossible to recover.
 
-The counterfactual can't be measured directly, but the direction is clear: without
-routing, that $378 of executor work would have run inline, in the orchestrator's fat
-context, on whatever model happened to be selected. More expensive per token, and
-billed against a much larger context per turn.
+Sidequest keeps tickets, claims, comments, checkpoints, dispatch records, submissions,
+and completion evidence outside any one conversation. A new session can reconstruct
+what happened by reading the board instead of relying on whatever survived in context.
 
-## The guards, and why each one exists
+That durability is especially important for the way I multitask. I may return to a
+project after several other projects have occupied my attention. "Remember what I was
+doing" is a core feature, not a convenience.
 
-Every constraint in Sidequest is scar tissue. Listing them is the honest way to explain
-why the system is more complicated than "pick a model."
+## Trust is part of the product
 
-- **Worktree isolation.** Parallel executors in one checkout overwrite each other. Each
-  gets its own git worktree.
-- **Scoped commits.** A ticket declares the files it may touch, and a commit outside
-  that scope is refused. Prevents an executor from quietly rewriting things nobody
-  reviewed.
-- **Claims.** One agent per ticket, so two dispatches don't duplicate work.
-- **Verify before submit.** An executor runs the project's real verification and can't
-  hand in work that doesn't pass.
-- **Orchestrator owns publishing.** Executors stop at a verified commit. Merging,
-  version bumps, and pushes happen in one place, because version bumps in this repo
-  touch two files that must agree and concurrent executors can't coordinate that.
+Delegating work only helps if I can trust what comes back.
 
-The lesson that took longest to learn, and the one that generalizes past this project:
+That is why tickets declare scope, executors verify their work, parallel changes use
+git worktrees, and publishing stays with the orchestrator. Those constraints protect
+the repository while several agents and projects move at once.
 
-> A coordination record must never become an authorization gate on work already done.
+The system also has to protect the work itself. A guard should prevent damage without
+stranding a verified result behind an impossible recovery path. A claim should prevent
+duplicate assignment without becoming permission to submit. Liveness should come from
+observed agent state, not a timer guessing whether a long task died.
 
-Three separate bugs in one evening had that exact shape. A claim's 60-minute timer
-expired while an agent was still verifying, so it couldn't commit its own finished
-work. A submit released the claim, so an executor sent back for a correction couldn't
-commit the correction. An isolation guard correctly refused a shared-tree commit from
-an executor that the platform had put in the shared tree without telling it.
+The standard is simple: failures should be visible, explain what happened, and name the
+next safe action. Silent degradation is worse than a loud stop because it makes the
+board look trustworthy while its guarantees have already disappeared.
 
-Every one of those guards was individually right. Collectively they stranded verified
-work behind a wall of correct refusals, none of which named the next step. Guards
-protect the repository. They must not hold finished work hostage.
+## What Sidequest optimizes for
 
-The related rule, from the same evening: **observe, don't guess.** The claim timeout was
-a wall-clock TTL standing in for liveness, and wall-clock time is uncorrelated with
-whether an agent is alive. Worse, the error was biased toward maximum damage: short
-tasks never tripped it, long valuable ones always did, and it tripped near the end of a
-run when the most unsaved work was at stake. Death is directly observable here
-(`SubagentStop`, `SessionEnd`). Key on the real signal and keep age only as a
-conjunctive backstop.
+In order:
 
-## Non-goals
+1. **Cognitive continuity.** Capture an interruption without losing the current thread.
+2. **Durable memory across projects.** Return later and know what mattered, what changed,
+   and what remains.
+3. **Execution without attention switching.** Let bounded work move while I stay with
+   the problem that needs me.
+4. **The right model for the work.** Spend strong-model capacity where it changes the
+   result, and use cheaper or separate capacity where it does not.
+5. **Recoverable parallelism.** Several things can move at once without corrupting the
+   repository or losing finished work.
+6. **Visibility.** The dashboard should explain what the system is doing well enough
+   that I can steer it without reconstructing its internals.
 
-Worth stating, because a few of these have been proposed and rejected.
+The order matters. A system that saves tokens but makes me lose the thread has failed.
+A system that tracks every thought but never ships any of them has also failed.
 
-- **Not project management for humans.** It's a work queue for agents that a human can
-  read and steer. Tickets are written to be executed, not to be reported on.
-- **Not a token minimizer.** The goal is right-sized spend. Spending Opus-level money
-  on an Opus-level problem is a success, not a regression.
-- **Not multi-tenant.** This runs locally against a local board. Hardening against a
-  hostile tenant is not a priority and shouldn't hold releases.
-- **Not a separate router.** A standalone routing plugin was built and scrapped. Routing
-  is inseparable from the work queue that feeds it; splitting them produced two things
-  that each knew half the story.
-- **Not a replacement for judgment.** Hard problems still need the expensive model and a
-  human in the loop. The system's job is to stop spending that on everything else.
+## What Sidequest is not
 
-## The honest cost
+**It is not a cure for ADHD or a system for forcing linear work.** It accepts that my
+attention moves and gives those movements somewhere useful to land.
 
-Three things this doesn't fix, stated plainly.
+**It is not project management for a team of humans.** It is a local work queue and
+memory layer for one person working with agents across many projects.
 
-**The orchestrator is still the expensive part.** A third of spend, at the worst
-billed-to-produced ratio in the system. Long high-context sessions woken repeatedly by
-executor notifications are the single largest remaining inefficiency, and routing
-doesn't touch it.
+**It is not a token minimizer.** The goal is right-sized spend. Using the strongest
+model on a problem that needs it is correct. Using it on every small sidequest because I
+forgot to switch is the waste.
 
-**Orchestration has real overhead.** Writing a complete ticket, dispatching, reading
-results, integrating, verifying again, bumping, publishing. For a genuinely small change
-that overhead exceeds the work. There's an explicit escape hatch for user-named trivial
-edits, and it exists because the system was slower than doing it by hand often enough to
-matter.
+**It is not an excuse to delegate everything.** Tiny named edits can be faster inline.
+Ambiguous, high-impact decisions still need my judgment. Sidequest should remove
+unnecessary context switching, not remove me from the work.
 
-**The system needs maintaining.** A representative evening shipped four releases, and
-most of them were fixes to Sidequest itself rather than to anything it was built to
-help with. That's the tax on building your own tooling. It's worth it here because the
-frictions are real and recurring, but it isn't free and pretending otherwise would be
-dishonest.
+## The whole reason, in one sentence
 
-## How you'd know it stopped working
-
-Concrete falsifiers, so this doesn't stay a story:
-
-- Executor share of spend drops below the orchestrator's. Means work is drifting back
-  inline and the routing layer is being bypassed.
-- Off-provider share collapses toward zero. Means categories are all routing to one
-  model and classification has degenerated.
-- The billed-per-output ratio for executors approaches the orchestrator's. Means
-  executors are carrying too much context and the fresh-context advantage is gone.
-- Ticket count grows while integration rate flattens. Means the board is accumulating
-  intent instead of shipping.
-
-These are being built as dashboard panels rather than left as things to reason about,
-because a claim you have to hand-verify with ad-hoc queries is a claim that will quietly
-stop being true.
+Sidequest lets me say "oh, and..." without either derailing what I am doing or losing
+the thought, then gives that thought enough context, memory, and execution machinery to
+come back as finished work.
