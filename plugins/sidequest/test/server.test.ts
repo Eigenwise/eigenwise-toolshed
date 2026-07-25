@@ -305,15 +305,25 @@ test('routing profile REST exposes profile categories, previews, and board point
   assert.ok(repoint.body.result.boards.some((board?: any) => board.project === project));
 });
 
+let stagingId = 0;
+
+// The upgrade tests run a real server whose version watch polls the install
+// path every 100ms, so an install must never be observable half-built: copying
+// ~5MB in place takes longer than a poll under suite load, and the watcher then
+// hands the port to a tree that is missing lib/store.js, or whose manifest
+// still carries the source version (SQ-859). Build it under a name the watcher
+// and the sibling scan both ignore, then rename it into place in one step.
 function copyPlugin(from?: any, to?: any, version?: any) {
-  fs.cpSync(from, to, {
+  const staging = path.join(path.dirname(to), `staging-${process.pid}-${stagingId++}`);
+  fs.cpSync(from, staging, {
     recursive: true,
     filter: (source?: any) => path.basename(source) !== 'node_modules',
   });
-  const manifest = path.join(to, '.claude-plugin', 'plugin.json');
+  const manifest = path.join(staging, '.claude-plugin', 'plugin.json');
   const plugin = JSON.parse(fs.readFileSync(manifest, 'utf8'));
   plugin.version = version;
   fs.writeFileSync(manifest, `${JSON.stringify(plugin, null, 2)}\n`);
+  fs.renameSync(staging, to);
 }
 
 function waitFor(check?: any, timeoutMs?: any, label?: any) {
@@ -497,10 +507,13 @@ test('dashboard self-updates to a newer cached install at the same URL', { timeo
     stdio: 'ignore',
     windowsHide: true,
   });
+  // The successor is detached and outlives this process unless we reap it —
+  // a leaked dashboard keeps polling every 100ms for the rest of the suite.
+  let upgradedPid: any = null;
   t.after(() => {
-    for (const child of [old]) {
-      if (child.pid && isAlive(child.pid)) {
-        try { process.kill(child.pid); } catch (_: any) {}
+    for (const pid of [old.pid, upgradedPid]) {
+      if (pid && isAlive(pid)) {
+        try { process.kill(pid); } catch (_: any) {}
       }
     }
     try { fs.rmSync(root, { recursive: true, force: true }); } catch (_: any) {}
@@ -521,6 +534,7 @@ test('dashboard self-updates to a newer cached install at the same URL', { timeo
   await waitFor(async () => {
     try {
       const health = await fetchJson(port, '/api/health');
+      upgradedPid = health.pid;
       return health.version === '1.37.1';
     } catch (_: any) {
       return false;
