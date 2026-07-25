@@ -229,15 +229,27 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
 
 test('every seeded Opus category recovers to its explicit Codex fallback without replacing local overrides', () => {
   const expected = new Map([
-    ['debugging', { model: 'codex-gpt-5-6-terra', effort: 'high' }],
-    ['coding.hard', { model: 'codex-gpt-5-6-sol', effort: 'xhigh' }],
-    ['spike-investigation', { model: 'codex-gpt-5-6-sol', effort: 'high' }],
-    ['visual-review', { model: 'codex-gpt-5-6-terra', effort: 'high' }],
+    ['debugging', {
+      route: { model: 'opus', effort: 'high' },
+      fallback: { model: 'codex-gpt-5-6-terra', effort: 'high' },
+    }],
+    ['coding.hard', {
+      route: { model: 'opus', effort: 'xhigh' },
+      fallback: { model: 'codex-gpt-5-6-sol', effort: 'xhigh' },
+    }],
+    ['spike-investigation', {
+      route: { model: 'opus', effort: 'high' },
+      fallback: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    }],
+    ['visual-review', {
+      route: { model: 'opus', effort: 'medium' },
+      fallback: { model: 'codex-gpt-5-6-terra', effort: 'medium' },
+    }],
   ]);
 
-  for (const [categoryId, fallback] of expected) {
+  for (const [categoryId, { route, fallback }] of expected) {
     const category = store.getCategory(categoryId, { project: slug });
-    assert.deepEqual(category.route, { model: 'opus', effort: fallback.effort });
+    assert.deepEqual(category.route, route);
     assert.deepEqual(category.fallback, fallback);
 
     const ticket = store.createTicket(slug, {
@@ -247,6 +259,7 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
       source: 'test',
     });
     const launched = launch(ticket, `quota-${categoryId}`);
+    assert.deepEqual(launched.prepared.ticket.dispatch.route, route);
     const error = categoryId === 'visual-review'
       ? 'Agent launch failed: Your Claude Code subscription does not include access to Opus 5'
       : "Agent launch failed: You've reached your Opus 5 limit";
@@ -260,7 +273,7 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
     assert.deepEqual(recovered.recovery, {
       kind: 'claude_quota_exhausted',
       failedModel: 'opus',
-      failedEffort: fallback.effort,
+      failedEffort: route.effort,
       fallbackSource: 'category fallback',
       model: fallback.model,
       effort: fallback.effort,

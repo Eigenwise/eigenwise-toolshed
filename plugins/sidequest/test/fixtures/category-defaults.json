@@ -187,11 +187,11 @@
     "description": "Fresh-eyes review of a RENDERED interface — a dashboard, web UI, TUI, or report — judged visually through browser screenshots (Playwright) as a first-time user would see it: confusing representations, misleading labels or units, naming defects, dead panels, layout and flow problems. Belongs here: \"review this dashboard's UX\", \"does this page make sense\", screenshot-driven design critique. Does not belong here: reviewing code or diffs (review-audit), building or fixing UI (ui-frontend/coding), or anything whose evidence is source files rather than pixels.",
     "route": {
       "model": "opus",
-      "effort": "high"
+      "effort": "medium"
     },
     "fallback": {
       "model": "codex-gpt-5-6-terra",
-      "effort": "high"
+      "effort": "medium"
     },
     "contract": "Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliverable is a prioritized findings comment on the ticket — worst problems first, each naming the exact panel/element and what a user would misunderstand.",
     "artifactRoots": [],

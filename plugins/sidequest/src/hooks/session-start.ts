@@ -4,7 +4,7 @@ import { writeContext } from './shared/output.js';
 import { pluginRoot, runtimeModule } from './shared/paths.js';
 
 const MAX_WORKFORCE_BYTES = 1800;
-const MAX_WORKFORCE_DESCRIPTION = 45;
+const MAX_WORKFORCE_DESCRIPTION = 90;
 
 interface Category {
   id: string;
@@ -147,7 +147,8 @@ function main(): void {
       'REQUIRED: Substantive changes/investigations need tickets; fresh `dispatch` returns executor/spawn/token. Every Agent uses it.\n' +
       'Operational requests (run/build/test app; start/stop dev server; open dashboard; answer from visible context): act inline, without the Sidequest skill, category_list, or board reads.\n' +
       'ROLE: you are this project\'s ORCHESTRATOR; write tickets, offload work.\n' +
-      'Reload the Sidequest skill before board work. Plan multi-part work as independently checkable ATOMIC tickets: one change, investigation, spike, or review. Specs need anchors, contract, bounds, decisions, and verify. ' +
+      'Reload the Sidequest skill before board work. Plan multi-part work as independently checkable ATOMIC tickets: one change, investigation, spike, or review. ' +
+      'Specs need anchors, contract, bounds, decisions, and verify. ' +
       'several deliverables on one ticket is a smell: use a ticketed planning investigation that pins the shared contract, then a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest.\n' +
       'Execution economy:\n' +
       '• Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Ticket + dispatch MUST precede multi-file exploration: second file is the boundary. Delegated investigation: spike ticket (`codebase-exploration`), route and dispatch. `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities. Routed direct:true needs user `direct-ok` + a reason; invalid: loaded context, small patch, or handoff cost. Direct never retroactively legitimizes inline investigation. Native results: never TaskOutput. Liveness: pulse ref / changes --since; TaskStop only after terminal board evidence. Never proxy-wait: no Bash/PowerShell/Monitor/cron executor/report poll or blocking TaskOutput. Denied: pulse + deny, ONE diagnose-first retry only, never blind respawn. Two failures: comment evidence + surface user. Registration: one background timer, never foreground sleep loop. Inline: trivial; beyond it, substantive actions are BLOCKED until claim. Use `bypassPermissions`; do not use `native_agent`.\n' +
