@@ -11,7 +11,7 @@ const { flushOutbox } = require('../lib/observability/outbox.js');
 const { buildOtlpPayload, openObservabilityStore } = require('../lib/observability/store.js');
 const grafana = require('../observability/sinks/grafana/index.js');
 const { generatedDashboards, provisionDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
-const { MODEL_PRICES_PER_MILLION, modelCostTargets } = require('../observability/sinks/grafana/model-prices.js');
+const { MODEL_PRICES_PER_MILLION, modelCostTargets, unpricedModelsExpression } = require('../observability/sinks/grafana/model-prices.js');
 const posthog = require('../observability/sinks/posthog/index.js');
 const {
   DEFAULT_SINK,
@@ -46,14 +46,42 @@ function temporaryDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-sinks-'));
 }
 
-test('prices every model token type from one table', () => {
-  const terra = MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-terra'];
-  assert.deepEqual(terra, { input: 2.5, cacheRead: 0.25, cacheCreation: 2.5, output: 15 });
+test('prices every active model label and token type from one table', () => {
+  for (const model of [
+    'claude-opus-4-8',
+    'claude-opus-4-8[1m]',
+    'claude-opus-5',
+    'claude-opus-5[1m]',
+    'claude-sonnet-5',
+    'claude-sonnet-5[1m]',
+    'claude-fable-5',
+    'claude-fable-5[1m]',
+    'claude-codex-gpt-5.6-luna',
+    'claude-codex-gpt-5.6-sol',
+    'claude-codex-gpt-5.6-terra',
+  ]) {
+    assert.ok(MODEL_PRICES_PER_MILLION[model], `missing price for ${model}`);
+  }
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-sol'], { input: 5, cacheRead: 0.5, cacheCreation: 5, output: 30 });
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-terra'], { input: 2.5, cacheRead: 0.25, cacheCreation: 2.5, output: 15 });
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-luna'], { input: 1, cacheRead: 0.1, cacheCreation: 1, output: 6 });
   const target = modelCostTargets().find(({ legendFormat }) => legendFormat === 'claude-codex-gpt-5.6-terra');
   assert.match(target.expr, /type="input"/);
   assert.match(target.expr, /type="cacheRead"/);
   assert.match(target.expr, /type="cacheCreation"/);
   assert.match(target.expr, /type="output"/);
+});
+
+test('keeps only unknown exact model labels in the unpriced query', () => {
+  const expression = unpricedModelsExpression();
+  const modelPattern = expression.match(/model!~"([^"]+)"/)[1];
+  const priced = new RegExp(`^(?:${modelPattern})$`);
+
+  assert.ok(expression.includes('claude-opus-5\\[1m\\]'));
+  assert.ok(priced.test('claude-opus-5[1m]'));
+  assert.ok(priced.test('claude-codex-gpt-5.6-luna'));
+  assert.ok(!priced.test('claude-opus-51'));
+  assert.ok(!priced.test('claude-codex-gpt-5.6-unknown'));
 });
 
 test('registers the producer-agnostic sink contract', () => {
