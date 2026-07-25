@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 
 const assert = require('assert/strict');

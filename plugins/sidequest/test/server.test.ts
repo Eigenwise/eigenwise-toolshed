@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /**
  * Tests for the dashboard server's hot-reload self-recycle (SQ-136).

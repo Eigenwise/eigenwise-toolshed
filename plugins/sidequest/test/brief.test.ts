@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /**
  * Tests for the compact orchestration read: `--brief` on the CLI (list/ready)

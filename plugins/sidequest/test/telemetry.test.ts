@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 import test from 'node:test';
 import assert from 'node:assert';
 import os from 'node:os';

@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 
 // SQ-826. An executor dispatched with worktree isolation paused for a scope

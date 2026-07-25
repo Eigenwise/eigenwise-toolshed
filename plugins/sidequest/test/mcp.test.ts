@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /**
  * Tests for the MCP tool layer (SQ-152): the JSON-RPC handler in lib/mcp.js and

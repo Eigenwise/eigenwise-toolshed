@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

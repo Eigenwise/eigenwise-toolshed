@@ -1,3 +1,4 @@
+import './_temp-cleanup.js';
 'use strict';
 /**
  * Claim liveness: observed death decides, the clock never does (SQ-820).
