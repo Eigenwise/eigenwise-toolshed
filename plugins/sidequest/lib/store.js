@@ -2233,6 +2233,60 @@ function clearScopeRequestMarker(ticket) {
   } catch (_) {
   }
 }
+function scopePauseRecoveryAsset(ticket) {
+  return `scope-pause-${String(ticket?.id || "ticket").replace(/[^a-z0-9_-]/gi, "_")}.patch`;
+}
+function noIndexDiff(worktree, relativePath) {
+  try {
+    return execFileSync("git", ["diff", "--binary", "--no-index", "--", "/dev/null", relativePath], {
+      cwd: worktree,
+      encoding: "utf8",
+      windowsHide: true
+    });
+  } catch (error) {
+    return String(error?.stdout || "");
+  }
+}
+function captureScopePauseRecovery(slug, ticket) {
+  const dispatch = dispatchState(ticket);
+  const worktree = String(dispatch?.worktree || ticket?.scopeRequest?.markerWorktree || "").trim();
+  if (!worktree || !fs.existsSync(worktree)) return null;
+  let patch = "";
+  try {
+    patch = execFileSync("git", ["diff", "--binary", "HEAD", "--", ".", ":(exclude).sidequest/**"], {
+      cwd: worktree,
+      encoding: "utf8",
+      windowsHide: true
+    });
+  } catch (_) {
+    return null;
+  }
+  try {
+    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+      cwd: worktree,
+      encoding: "utf8",
+      windowsHide: true
+    }).split("\0");
+    for (const file of untracked) {
+      const relative = file.replace(/\\/g, "/");
+      if (!relative || relative === ".sidequest" || relative.startsWith(".sidequest/")) continue;
+      patch += noIndexDiff(worktree, relative);
+    }
+  } catch (_) {
+  }
+  if (!patch.trim()) return null;
+  const asset = scopePauseRecoveryAsset(ticket);
+  try {
+    fs.mkdirSync(assetsDir(slug, ticket.id), { recursive: true });
+    fs.writeFileSync(assetPath(slug, ticket.id, asset), patch);
+    if (!Array.isArray(ticket.assets)) ticket.assets = [];
+    if (!ticket.assets.includes(asset)) ticket.assets.push(asset);
+    ticket.scopePauseRecovery = { asset, at: (/* @__PURE__ */ new Date()).toISOString(), worktree };
+    return ticket.scopePauseRecovery;
+  } catch (_) {
+    return null;
+  }
+}
 function requestScope(slug, idOrRef, by, files, opts) {
   opts = opts || {};
   by = String(by || "agent");
@@ -2463,9 +2517,10 @@ function updateTicket(slug, idOrRef, patch) {
       const request = t.scopeRequest;
       if (request && Array.isArray(request.files) && request.files.every((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
         clearScopeRequestMarker(t);
-        t.scopeRequest = null;
         const dispatch = dispatchState(t);
-        if (dispatch && !dispatch.terminalAt) {
+        const resumed = reopenScopePausedDispatch(t);
+        t.scopeRequest = null;
+        if (dispatch && (!dispatch.terminalAt || resumed)) {
           dispatch.declaredFiles = t.files.slice();
           delete dispatch.scopeRequest;
         }
@@ -2637,6 +2692,12 @@ function claimIdleAge(ticket, now) {
   const latest = claimActivityMs(ticket);
   return Number.isFinite(latest) ? Math.max(0, now - latest) : Number.POSITIVE_INFINITY;
 }
+function resumableScopePause(ticket) {
+  const dispatch = dispatchState(ticket);
+  return Boolean(
+    dispatch && dispatch.terminalAt && ticket?.claim?.by && ticket?.scopeRequest && ["scope_paused", "stopped_claimed"].includes(dispatch.outcome)
+  );
+}
 function observedStop(dispatch, claim) {
   if (!dispatch || dispatch.outcome !== "stopped_claimed" || !dispatch.terminalAt) return false;
   const stoppedMs = Date.parse(dispatch.terminalAt);
@@ -2658,11 +2719,14 @@ function claimReleaseVerdict(ticket, now) {
   const atMs = Number.isFinite(Number(now)) ? Number(now) : Date.now();
   const idleMs = claimIdleAge(ticket, atMs);
   const dispatch = dispatchState(ticket);
+  if (resumableScopePause(ticket)) {
+    if (missingStoppedWorktree(dispatch)) {
+      return { kind: "missing_worktree", idleMs, at: dispatch.terminalAt, reason: "its stopped executor worktree no longer exists" };
+    }
+    return null;
+  }
   if (observedStop(dispatch, claim)) {
     return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor was observed to stop while still holding the claim" };
-  }
-  if (missingStoppedWorktree(dispatch)) {
-    return { kind: "missing_worktree", idleMs, at: dispatch.terminalAt, reason: "its stopped executor worktree no longer exists" };
   }
   const liveAgent = Boolean(dispatch && !dispatch.terminalAt);
   if (!liveAgent && idleMs > claimIdleMs()) {
@@ -2993,6 +3057,15 @@ function setDispatchTerminal(ticket, outcome, source) {
   state.terminalSource = source || "store";
   delete state.supersededTokens;
 }
+function reopenScopePausedDispatch(ticket, now) {
+  if (!resumableScopePause(ticket)) return false;
+  const state = dispatchState(ticket);
+  state.outcome = "claimed";
+  state.resumedAt = now || (/* @__PURE__ */ new Date()).toISOString();
+  delete state.terminalAt;
+  delete state.terminalSource;
+  return true;
+}
 function appendReworkEvent(ticket, kind, details) {
   const dispatch = dispatchState(ticket);
   const route = dispatch && dispatch.route && typeof dispatch.route === "object" ? dispatch.route : {};
@@ -3189,6 +3262,9 @@ function prepareDispatch(slug, idOrRef, opts) {
     }
     t.dispatchNonce = crypto.randomBytes(24).toString("base64url");
     t.dispatchExecutor = stableExecutorName(t);
+    if (t.scopePauseRecovery && current?.outcome === "released") {
+      t.scopePauseRecovery = Object.assign({}, t.scopePauseRecovery, { dispatchNonce: t.dispatchNonce });
+    }
     const requestedSharedTree = Object.hasOwn(opts, "sharedTree") ? opts.sharedTree === true : Boolean(current && current.sharedTree);
     const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
     let sharedTree = worktreeIsolation ? requestedSharedTree : true;
@@ -3461,7 +3537,8 @@ function markDispatchStopped(sessionId, executor, agentId, agentName) {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       if (agentId) state.agentId = String(agentId);
       if (agentName) state.agentName = String(agentName);
-      setDispatchTerminal(t, t.claim && t.claim.by ? "stopped_claimed" : "failed", "subagent-stop");
+      if (t.scopeRequest) captureScopePauseRecovery(match.slug, t);
+      setDispatchTerminal(t, t.claim && t.claim.by ? t.scopeRequest ? "scope_paused" : "stopped_claimed" : "failed", "subagent-stop");
       if (!t.claim || !t.claim.by) {
         t.dispatchNonce = null;
         t.dispatchExecutor = null;
@@ -3637,6 +3714,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const previousStatus = t.status;
+    if (resumableScopePause(t)) captureScopePauseRecovery(slug, t);
     let comment = null;
     clearScopeRequestMarker(t);
     t.scopeRequest = null;
@@ -3955,6 +4033,7 @@ function submitTicket(slug, idOrRef, by, opts) {
     const dispatch = dispatchState(t);
     clearScopeRequestMarker(t);
     t.scopeRequest = null;
+    delete t.scopePauseRecovery;
     t.claim = null;
     setDispatchTerminal(t, "submitted", opts.source || "cli");
     t.dispatchNonce = null;

@@ -629,6 +629,32 @@ test('peer-guard: terminal dispatch blocks delayed steering before delivery', ()
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /Redispatch/);
 });
 
+test('peer-guard: a scope-paused executor accepts steering only after approval without losing its dispatch', () => {
+  const ticket = addStopTicket('scope-paused executor resumes', { files: ['lib/declared.js'] });
+  const sessionId = `scope-pause-message-${++sqSeq}`;
+  const stop = claimStopTicket(ticket, sessionId, 'scope-paused-worker');
+  assert.equal(store.requestScope(slug, ticket.ref, 'scope-paused-worker', ['lib/resumed.js']).ok, true);
+
+  assert.equal(
+    runHook(SUBAGENT_STOP, stop),
+    `exec paused on ${ticket.ref} scope request; approve scope, then use its recovery snapshot if redispatching`,
+  );
+  const paused = store.getTicket(slug, ticket.ref);
+  assert.equal(paused.dispatch.outcome, 'scope_paused');
+  assert.ok(paused.dispatch.terminalAt);
+  assert.equal(store.claimReleaseVerdict(paused), null, 'an open scope pause keeps its claim');
+  const beforeApproval = runGuardPeer({ tool_input: { to: stop.agent_name, message: 'scope is approved' } });
+  assert.equal(beforeApproval.hookSpecificOutput.permissionDecision, 'deny');
+
+  store.updateTicket(slug, ticket.ref, { files: ['lib/declared.js', 'lib/resumed.js'] });
+  const resumed = store.getTicket(slug, ticket.ref);
+  assert.equal(resumed.scopeRequest, null);
+  assert.equal(resumed.dispatch.outcome, 'claimed');
+  assert.equal(resumed.dispatch.terminalAt, undefined);
+  assert.equal(resumed.dispatch.agentName, stop.agent_name);
+  assert.strictEqual(runGuardPeer({ tool_input: { to: stop.agent_name, message: 'resume the approved work' } }), null);
+});
+
 test('peer-guard: an active dispatch still accepts main-thread steering', () => {
   const ticket = addEffortTicket('active executor accepts steering', 'high');
   const sessionId = `active-message-${++sqSeq}`;

@@ -217,9 +217,9 @@ test('the dispatch briefing states the isolation contract and the resume trap', 
   assert.ok(!sharedBriefing.includes('Worktree isolation contract'), 'a shared-tree dispatch is not told it is isolated');
 });
 
-test('an isolated scope request leaves a marker until scope approval clears it', () => {
+test('an isolated scope pause preserves its worktree through approval', () => {
   const agentId = 'a10scope-marker';
-  const { ticket } = dispatched(agentId);
+  const { ticket, sessionId, executor } = dispatched(agentId);
   const linked = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
   fs.mkdirSync(path.dirname(linked), { recursive: true });
   execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
@@ -228,17 +228,69 @@ test('an isolated scope request leaves a marker until scope approval clears it',
       token: ticket.dispatchNonce,
       executor: ticket.dispatchExecutor,
     }).ok, true);
+    fs.appendFileSync(path.join(linked, 'README.md'), 'uncommitted executor work\n');
     const requested = store.requestScope(slug, ticket.ref, 'scope-marker-worker', ['new.js'], { worktree: linked });
     assert.equal(requested.ok, true);
     const marker = path.join(linked, '.sidequest', `scope-request-${ticket.id}.json`);
     assert.ok(fs.existsSync(marker));
     assert.match(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), /\.sidequest/);
 
+    assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
+    const paused = store.getTicket(slug, ticket.ref);
+    assert.equal(paused.dispatch.outcome, 'scope_paused');
+    assert.ok(paused.scopePauseRecovery);
+    const recoveryPath = store.assetPath(slug, paused.id, paused.scopePauseRecovery.asset);
+    assert.match(fs.readFileSync(recoveryPath, 'utf8'), /uncommitted executor work/);
+    const recovered = path.join(PROJECT, '.claude', 'worktrees', `recovered-${agentId}`);
+    execFileSync('git', ['worktree', 'add', '--detach', recovered], { cwd: PROJECT, windowsHide: true });
+    try {
+      execFileSync('git', ['apply', '--check', recoveryPath], { cwd: recovered, windowsHide: true });
+      execFileSync('git', ['apply', recoveryPath], { cwd: recovered, windowsHide: true });
+      assert.match(fs.readFileSync(path.join(recovered, 'README.md'), 'utf8'), /uncommitted executor work/);
+    } finally {
+      execFileSync('git', ['worktree', 'remove', '--force', recovered], { cwd: PROJECT, windowsHide: true });
+    }
+    assert.ok(store.dispatchIsolationExpectation({ agentId, sessionId, executor }));
+
     store.updateTicket(slug, ticket.ref, { files: ['README.md', 'new.js'] });
+    const resumed = store.getTicket(slug, ticket.ref);
     assert.ok(!fs.existsSync(marker));
-    assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), '');
+    assert.equal(resumed.dispatch.worktree, linked);
+    assert.equal(resumed.dispatch.outcome, 'claimed');
+    assert.equal(resumed.dispatch.terminalAt, undefined);
+    assert.match(fs.readFileSync(path.join(linked, 'README.md'), 'utf8'), /uncommitted executor work/);
+    const status = execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true });
+    assert.match(status, /README\.md/);
+    assert.doesNotMatch(status, /\.sidequest/);
   } finally {
     execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+test('a missing paused worktree releases the claim and carries its snapshot into redispatch', () => {
+  const agentId = 'a11scope-recovery';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
+  fs.mkdirSync(path.dirname(linked), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  try {
+    assert.equal(store.claimTicket(slug, ticket.ref, 'scope-recovery-worker', {
+      token: ticket.dispatchNonce,
+      executor: ticket.dispatchExecutor,
+    }).ok, true);
+    fs.appendFileSync(path.join(linked, 'README.md'), 'recover this work\n');
+    assert.equal(store.requestScope(slug, ticket.ref, 'scope-recovery-worker', ['new.js'], { worktree: linked }).ok, true);
+    assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
+    const paused = store.getTicket(slug, ticket.ref);
+    assert.ok(paused.scopePauseRecovery);
+
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+    assert.equal(store.claimReleaseVerdict(store.getTicket(slug, ticket.ref)).kind, 'missing_worktree');
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'scope-recovery-worker', { status: 'todo', requireReleaseVerdict: true }).ok, true);
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `recovery-${agentId}` });
+    assert.match(agentsync.renderTicketBriefing(prepared.ticket, prepared.token, slug, PROJECT), /Scope-pause recovery/);
+  } finally {
+    if (fs.existsSync(linked)) execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
   }
 });
 
