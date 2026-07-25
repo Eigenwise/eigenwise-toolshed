@@ -127,6 +127,86 @@ async function publishLockStatus(repoPath) {
     ttlMs: publishTtlMs()
   };
 }
+function publishLockOwnedBySession(repoPath, sessionId) {
+  const owner = String(sessionId || "").trim();
+  if (!owner) return false;
+  try {
+    const commonDir = require("node:child_process").execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: repoPath,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    const file = path.join(path.resolve(repoPath, commonDir), LOCK_BASENAME);
+    const holder = JSON.parse(require("node:fs").readFileSync(file, "utf8"));
+    return sameOwner(holder, { sessionId: owner });
+  } catch {
+    return false;
+  }
+}
+async function publishedBranch(repoPath, remote = "origin") {
+  try {
+    const { stdout } = await execFileAsync("git", ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`], {
+      cwd: repoPath,
+      encoding: "utf8",
+      windowsHide: true
+    });
+    const ref = String(stdout).trim();
+    if (ref.startsWith(`${remote}/`)) return ref.slice(remote.length + 1);
+  } catch {
+  }
+  try {
+    const { stdout } = await execFileAsync("git", ["for-each-ref", "--format=%(refname:short)", `refs/remotes/${remote}`], {
+      cwd: repoPath,
+      encoding: "utf8",
+      windowsHide: true
+    });
+    const branches = String(stdout).split(/\r?\n/).map((branch) => branch.replace(`${remote}/`, "")).filter((branch) => branch && branch !== "HEAD");
+    return ["main", "master", "trunk"].find((branch) => branches.includes(branch)) || branches[0] || "main";
+  } catch {
+    return "main";
+  }
+}
+async function latestRelease(repoPath) {
+  try {
+    const { stdout } = await execFileAsync("git", ["for-each-ref", "--sort=-creatordate", "--format=%(refname:short)%00%(creatordate:iso-strict)", "refs/tags/v*"], {
+      cwd: repoPath,
+      encoding: "utf8",
+      windowsHide: true
+    });
+    const [tag, at] = String(stdout).trim().split("\0");
+    return tag && at ? { tag, at } : null;
+  } catch {
+    return null;
+  }
+}
+async function releaseWindow(repoPath, integrationBranch) {
+  const directory = path.join(repoPath, ".release", "unreleased");
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const fragments = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".md"));
+  const held = await Promise.all(fragments.map(async (entry) => {
+    try {
+      const text = await fs.readFile(path.join(directory, entry.name), "utf8");
+      const closing = text.indexOf("\n---", 3);
+      return text.startsWith("---\n") && closing >= 0 && /^hold:\s*true\s*$/mi.test(text.slice(3, closing));
+    } catch {
+      return false;
+    }
+  }));
+  return {
+    fragmentCount: fragments.length,
+    heldCount: held.filter(Boolean).length,
+    latestRelease: await latestRelease(repoPath),
+    integrationBranch,
+    publishedBranch: await publishedBranch(repoPath),
+    nextScheduledCut: "daily at 06:00 local"
+  };
+}
 module.exports = {
   LOCK_BASENAME,
   DEFAULT_PUBLISH_TTL_MIN,
@@ -135,5 +215,9 @@ module.exports = {
   lockFile,
   acquirePublishLock,
   releasePublishLock,
-  publishLockStatus
+  publishLockStatus,
+  publishLockOwnedBySession,
+  publishedBranch,
+  latestRelease,
+  releaseWindow
 };

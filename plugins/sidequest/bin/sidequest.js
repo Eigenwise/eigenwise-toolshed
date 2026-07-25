@@ -1175,10 +1175,16 @@ async function cmdPublish(opts, positional) {
   if (sub === "queue") {
     const { slug, meta } = await resolveProject(opts);
     const payload = store.submissionsPayload(slug);
+    const releaseWindow = await publish.releaseWindow(meta.path, store.boardConfig(slug).integrationBranch);
     for (const ticket of payload.tickets) {
       ticket.rangeValidation = ticket.submission.base ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission) : { ok: false, reason: "legacy_submission" };
     }
-    if (emit(Object.assign({ project: slug }, payload), false)) return;
+    const queuePayload = releaseWindow ? Object.assign({ project: slug, releaseWindow }, payload) : Object.assign({ project: slug }, payload);
+    if (emit(queuePayload, false)) return;
+    if (releaseWindow) {
+      const release = releaseWindow.latestRelease ? `${releaseWindow.latestRelease.tag} (${releaseWindow.latestRelease.at})` : "none yet";
+      console.log(`release window: ${releaseWindow.fragmentCount} fragment(s), ${releaseWindow.heldCount} held; latest ${release}; ${releaseWindow.integrationBranch} → ${releaseWindow.publishedBranch}; next cut ${releaseWindow.nextScheduledCut}`);
+    }
     if (!payload.count) {
       console.log(`no submissions awaiting integration in ${meta.name}.`);
       return;

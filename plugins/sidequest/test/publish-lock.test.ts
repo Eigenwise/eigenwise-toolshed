@@ -57,6 +57,37 @@ test('the same session re-acquires (crash recovery for an interrupted transactio
   assert.strictEqual(resumed.reacquired, true);
 });
 
+test('release-window status counts held fragments and reports the latest release', async () => {
+  const repo = tempRepo();
+  const fragments = path.join(repo, '.release', 'unreleased');
+  fs.mkdirSync(fragments, { recursive: true });
+  fs.writeFileSync(path.join(fragments, 'SQ-1.md'), '---\nref: SQ-1\nhold: true\n---\nHeld\n');
+  fs.writeFileSync(path.join(fragments, 'SQ-2.md'), '---\nref: SQ-2\n---\nReady\n');
+  fs.writeFileSync(path.join(fragments, '.gitkeep'), '');
+  execFileSync('git', ['config', 'user.name', 'Sidequest Test'], { cwd: repo });
+  execFileSync('git', ['config', 'user.email', 'sidequest-test@example.invalid'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'README.md'), 'release fixture\n');
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['commit', '-m', 'release fixture'], { cwd: repo });
+  execFileSync('git', ['tag', '-a', 'v3.208.0', '-m', 'release'], { cwd: repo });
+
+  const window = await publish.releaseWindow(repo, 'dev');
+  assert.strictEqual(window.fragmentCount, 2);
+  assert.strictEqual(window.heldCount, 1);
+  assert.strictEqual(window.latestRelease.tag, 'v3.208.0');
+  assert.strictEqual(window.integrationBranch, 'dev');
+  assert.strictEqual(window.publishedBranch, 'main');
+  assert.strictEqual(window.nextScheduledCut, 'daily at 06:00 local');
+  assert.strictEqual(await publish.releaseWindow(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-no-fragments-')), 'dev'), null);
+});
+
+test('a publish lock only authorizes its owning session', async () => {
+  const repo = tempRepo();
+  await publish.acquirePublishLock(repo, { by: 'orch-a', sessionId: 'session-a', transient: true });
+  assert.strictEqual(publish.publishLockOwnedBySession(repo, 'session-a'), true);
+  assert.strictEqual(publish.publishLockOwnedBySession(repo, 'session-b'), false);
+});
+
 test('TTL expiry, dead non-transient pids, and corrupt records read as stale and are reclaimed', async () => {
   const repo = tempRepo();
   const file = await publish.lockFile(repo);

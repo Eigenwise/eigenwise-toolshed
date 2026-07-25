@@ -253,6 +253,52 @@ test('a destructive git command is refused while the shared checkout carries unc
   assert.equal(elsewhere.hookSpecificOutput.permissionDecision, 'deny', 'git -C targets the named repo');
 });
 
+test('published-branch pushes and manual tags need the current session publish lock', () => {
+  const repo = initRepo('sq-published-branch-');
+  const project = store.ensureProject(repo);
+  store.setBoardConfig(project.slug, { integrationBranch: 'dev' });
+  const sessionId = `release-owner-${Date.now()}`;
+  const payload = (command: string, tool_name: string = 'Bash', owner: string = 'other-session') => ({
+    cwd: repo,
+    session_id: owner,
+    tool_name,
+    tool_input: { command },
+  });
+  const denied = [
+    'git tag v3.208.0',
+    'git tag -a v3.208.0 -m release',
+    'git push origin main',
+    'git push origin HEAD:main',
+    'git push --force origin HEAD:main',
+    'git push origin +main',
+    'git push origin main:',
+    'git push upstream HEAD:main',
+    'git push origin --tags',
+    'git push origin dev --follow-tags',
+  ];
+  for (const command of denied) {
+    const out = runHook(GUARD_DESTRUCTIVE, payload(command, command.includes('HEAD:main') ? 'PowerShell' : 'Bash'));
+    assert.ok(out, command);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', command);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /local early warning/);
+  }
+  for (const command of ['git status', 'git fetch origin', 'git tag --list', 'git push origin dev', 'git push upstream HEAD:dev', 'echo "; git tag v3.208.0"']) {
+    assert.equal(runHook(GUARD_DESTRUCTIVE, payload(command)), null, command);
+  }
+
+  fs.writeFileSync(path.join(repo, '.git', 'sidequest-publish.lock'), JSON.stringify({
+    transient: true,
+    sessionId,
+    at: new Date().toISOString(),
+  }));
+  const other = initRepo('sq-published-branch-other-');
+  const crossRepo = runHook(GUARD_DESTRUCTIVE, payload(`git -C "${repo}" status; git -C "${other}" tag v3.208.0`, 'Bash', sessionId));
+  assert.equal(crossRepo.hookSpecificOutput.permissionDecision, 'deny');
+  for (const command of denied) {
+    assert.equal(runHook(GUARD_DESTRUCTIVE, payload(command, 'PowerShell', sessionId)), null, command);
+  }
+});
+
 test('recover-shared refuses a named stash that misses dirty paths', () => {
   const repo = initRepo('sq-recover-missing-');
   const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });

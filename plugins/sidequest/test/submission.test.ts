@@ -223,6 +223,30 @@ test('board always-in-scope paths commit and submit without ticket declaration',
 });
 
 
+test('publish queue adds release-window context only when release fragments exist', () => {
+  cleanBranch();
+  const fragments = path.join(PROJECT_DIR, '.release', 'unreleased');
+  assert.strictEqual(cliJson(['publish', 'queue', '--json']).releaseWindow, undefined);
+  fs.mkdirSync(fragments, { recursive: true });
+  fs.writeFileSync(path.join(fragments, 'SQ-1.md'), '---\nhold: true\n---\nHeld\n');
+  fs.writeFileSync(path.join(fragments, 'SQ-2.md'), '---\n---\nReady\n');
+  store.setBoardConfig(slug, { integrationBranch: 'dev' });
+  try {
+    const queue = cliJson(['publish', 'queue', '--json']);
+    assert.equal(queue.releaseWindow.fragmentCount, 2);
+    assert.equal(queue.releaseWindow.heldCount, 1);
+    assert.equal(queue.releaseWindow.integrationBranch, 'dev');
+    assert.equal(queue.releaseWindow.publishedBranch, 'main');
+    assert.equal(queue.releaseWindow.nextScheduledCut, 'daily at 06:00 local');
+    const output = runCli(['publish', 'queue']);
+    assert.match(output.stdout, /release window: 2 fragment\(s\), 1 held/);
+    assert.match(output.stdout, /dev → main/);
+  } finally {
+    store.setBoardConfig(slug, { integrationBranch: 'main' });
+    fs.rmSync(path.join(PROJECT_DIR, '.release'), { recursive: true, force: true });
+  }
+});
+
 test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence comment, publish queue lists it', () => {
   cleanBranch();
   const t = addTicket('cli submit round-trip');
