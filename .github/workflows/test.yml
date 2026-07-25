@@ -46,10 +46,15 @@ jobs:
           const root = process.cwd();
           const manifest = readManifest(diskSource(root), root);
           const resolveSuite = createSuiteResolver(root);
-          const include = [...manifest.plugins.values()].map((plugin) => {
-            const suite = resolveSuite(plugin);
-            return { name: plugin.name, path: plugin.dir, setup: suite?.setup ?? '', command: suite?.command ?? '' };
-          });
+          const suites = [...manifest.plugins.values()].map((plugin) => ({ plugin, suite: resolveSuite(plugin) }));
+          const missing = suites.filter(({ suite }) => suite === null).map(({ plugin }) => plugin.name);
+          if (missing.length) throw new Error(`Published plugins without a test suite: ${missing.join(', ')}`);
+          const include = suites.map(({ plugin, suite }) => ({
+            name: plugin.name,
+            path: plugin.dir,
+            setup: suite.setup ?? '',
+            command: suite.command,
+          }));
           process.stdout.write(`matrix=${JSON.stringify({ include })}\n`);
           NODE
 

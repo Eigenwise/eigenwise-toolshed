@@ -27,7 +27,8 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
   issues: write
 
 concurrency:
@@ -44,7 +45,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-          token: ${{ secrets.RELEASE_TOKEN }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -52,23 +52,19 @@ jobs:
           node-version: 22
       - id: gate
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_AUTOMATION: ${{ vars.RELEASE_AUTOMATION }}
           MODE: ${{ inputs.mode || 'normal' }}
           TICKETS: ${{ inputs.tickets || '' }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           FORCE: ${{ inputs.force || 'false' }}
         run: |
-          auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           git fetch origin dev
           sha="$(git rev-parse origin/dev)"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           case "${RELEASE_AUTOMATION,,}" in
-            0|false|off|pause|paused|hold)
+            active|on|true|1) ;;
+            *)
               echo "Release automation is paused by RELEASE_AUTOMATION."
               echo "decision=paused" >> "$GITHUB_OUTPUT"
               exit 0
@@ -85,23 +81,32 @@ jobs:
             echo "decision=young" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          gh api -H "Accept: application/vnd.github+json" "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs?per_page=100" > "$RUNNER_TEMP/check-runs.json"
-          state="$(node - "$RUNNER_TEMP/check-runs.json" <<'NODE'
+          required_run_state() {
+            local workflow="$1"
+            local output="$RUNNER_TEMP/${workflow}-runs.json"
+            gh api -H "Accept: application/vnd.github+json" "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${sha}&branch=dev&event=push&per_page=100" > "$output"
+            node - "$output" "$sha" <<'NODE'
           const { readFileSync } = require('node:fs');
-          const checks = JSON.parse(readFileSync(process.argv[2], 'utf8')).check_runs ?? [];
-          const pending = checks.filter((check) => check.status !== 'completed');
-          const failed = checks.filter((check) => check.status === 'completed' && !['success', 'neutral', 'skipped'].includes(check.conclusion));
-          process.stdout.write(failed.length ? 'failed' : (checks.length === 0 || pending.length ? 'pending' : 'ready'));
+          const [file, sha] = process.argv.slice(2);
+          const runs = (JSON.parse(readFileSync(file, 'utf8')).workflow_runs ?? [])
+            .filter((run) => run.head_sha === sha && run.head_branch === 'dev' && run.event === 'push')
+            .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at) || right.run_attempt - left.run_attempt);
+          const latest = runs[0];
+          if (!latest) process.stdout.write('pending');
+          else if (latest.status !== 'completed') process.stdout.write('pending');
+          else process.stdout.write(latest.conclusion === 'success' ? 'ready' : 'failed');
           NODE
-          )"
-          if [ "$state" = "pending" ]; then
-            echo "Checks for ${sha} are not complete yet."
+          }
+          test_state="$(required_run_state test.yml)"
+          guard_state="$(required_run_state release-guard.yml)"
+          if [ "$test_state" = "pending" ] || [ "$guard_state" = "pending" ]; then
+            echo "Required workflows for ${sha} are not complete yet."
             echo "decision=pending" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$state" = "failed" ]; then
+          if [ "$test_state" = "failed" ] || [ "$guard_state" = "failed" ]; then
             title="Release automation blocked by failed checks"
-            body="Release cut is waiting for successful checks on ${sha}. Fix or rerun the failed checks, then the next scheduled cut will retry."
+            body="Release cut is waiting for successful Test and Release guard workflows on ${sha}. Fix or rerun the failed workflow, then the next scheduled cut will retry."
             issue="$(gh issue list --state open --search "${title} in:title" --json number --jq '.[0].number')"
             if [ -n "$issue" ]; then
               gh issue edit "$issue" --title "$title" --body "$body"
@@ -116,7 +121,6 @@ jobs:
           if [ "$FORCE" = "true" ]; then args+=(--force); fi
           node scripts/release/cut.mjs "${args[@]}" > "$RUNNER_TEMP/preflight.json"
           status="$(node -pe "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).status" "$RUNNER_TEMP/preflight.json")"
-          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
           if [ "$status" = "held" ]; then
             echo "Release automation is paused by a held release fragment."
             echo "decision=paused" >> "$GITHUB_OUTPUT"
@@ -135,7 +139,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-          token: ${{ secrets.RELEASE_TOKEN }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -150,10 +153,6 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           FORCE: ${{ inputs.force || 'false' }}
         run: |
-          auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           git fetch origin dev main
           if [ "$(git rev-parse "$PINNED_SHA")" != "$PINNED_SHA" ]; then
             echo "Pinned dev commit is unavailable."
@@ -164,11 +163,17 @@ jobs:
           if [ "$FORCE" = "true" ]; then args+=(--force); fi
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
+            node scripts/release/cut.mjs "${args[@]}" > "$RUNNER_TEMP/cut.json"
           else
             args+=(--push)
+            auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
+            echo "::add-mask::$auth"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+            node scripts/release/cut.mjs "${args[@]}" > "$RUNNER_TEMP/cut.json"
+            unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
           fi
-          node scripts/release/cut.mjs "${args[@]}" > "$RUNNER_TEMP/cut.json"
-          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
           node - "$RUNNER_TEMP/cut.json" >> "$GITHUB_OUTPUT" <<'NODE'
           const { readFileSync } = require('node:fs');
           const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
@@ -180,16 +185,16 @@ jobs:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           RELEASE_COMMIT: ${{ steps.cut.outputs.commit }}
         run: |
-          auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           git fetch origin dev main
           if git merge-base --is-ancestor origin/main origin/dev; then
-            unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
             exit 0
           fi
           git switch --create dev --track origin/dev
+          auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
+          echo "::add-mask::$auth"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           if git merge --no-edit origin/main && git push origin HEAD:refs/heads/dev; then
             unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
             exit 0
@@ -199,7 +204,7 @@ jobs:
       - name: Open repair issue when dev is behind main
         if: failure() && inputs.dry_run != true && steps.cut.outputs.status == 'cut'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ steps.cut.outputs.commit }}
         run: |
           title="URGENT: release cut needs dev repair"
