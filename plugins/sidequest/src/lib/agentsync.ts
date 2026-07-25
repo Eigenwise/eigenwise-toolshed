@@ -456,6 +456,23 @@ function ticketReadinessContractPacket(ticket?: any, slug?: any) {
     : '(No contract-edge sequencing applies.)';
 }
 
+// An executor cannot tell an isolated tree from the shared checkout by looking
+// at its file paths, and the one place that knows the dispatch asked for
+// isolation is this packet. Resume is the trap: the harness discards an
+// unchanged worktree when its agent stops, so an executor that pauses for a
+// scope request before its first edit comes back in the shared checkout with no
+// warning (SQ-825, 2026-07-24).
+function ticketIsolationContract(ticket?: any, projectPath?: any) {
+  if (!ticket || !ticket.dispatch || ticket.dispatch.sharedTree !== false) return null;
+  const root = String(projectPath || '').trim() || '<board project path>';
+  return [[
+    'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
+    `Expected worktree root: ${root}${path.sep}.claude${path.sep}worktrees${path.sep}agent-<your agent id>`,
+    'Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.',
+    `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
+  ].join('\n')];
+}
+
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projectPath?: any) {
   const category = ticket.category || {};
   const project = String(projectPath || (slug && store.readMeta(slug)?.path) || '').trim();
@@ -496,6 +513,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
     ...(ticket.highStakes ? ['High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration.'] : []),
     ...(worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : []),
+    ...(ticketIsolationContract(ticket, project) || []),
     `Declared files:\n${declaredFiles}`,
     'Scope expansion: if work needs an undeclared path, call scope-request with that path and pause with your claim held. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues.',
     `Contract metadata:\n${ticketContractsPacket(ticket)}`,

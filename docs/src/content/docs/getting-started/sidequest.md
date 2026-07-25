@@ -110,11 +110,15 @@ sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
 
 Worktree isolation defaults to enabled. Set `--no-worktree-isolation` (or `worktreeIsolation: false` through MCP) to force every dispatched executor onto the shared checkout, including calls that explicitly request `sharedTree: false`.
 
+An isolated executor can still lose its worktree: Claude Code discards an agent's worktree when that agent stops with it unchanged, so an executor that pauses for a scope request before its first edit comes back in the shared checkout. Sidequest refuses the next write instead of letting it land on your main branch. The refusal names the ticket, the worktree it was promised, and the path it was about to write, and it tells the executor to stop and ask for a re-dispatch. Shared-tree dispatches are unaffected.
+
+Sidequest also refuses `git reset --hard`, `git clean -f`, a whole-tree `checkout`/`restore`, and a forced checkout in a shared checkout that has uncommitted changes. Some of those changes may be an executor's finished work that never made it into a commit. The refusal lists what would be destroyed and points at `git stash push -u`, which you can undo.
+
 `worktreeSetup` is per-project. A nonblank command is retained verbatim and shown in a fresh isolated executor briefing as `Worktree setup (run before verify): ...`; shared-tree dispatches and unset configuration omit it. Sidequest does not execute or shell-escape the command. The value must be one line and no longer than 1000 characters. Pass `null` through MCP to clear it.
 
 A scoped commit commits its declared paths even when another changed file is outside the ticket. Sidequest reports those paths in the commit result, records a ticket comment, and carries them in the submission as `unscopedPaths`; make a second scoped commit after widening scope, or discard them. Missing declared paths are warnings when other declared paths can be committed.
 
-Run `sidequest worktrees --sweep` from a board repo to inspect stale executor worktrees. It only plans removals by default. `--yes` removes finished, integrated, or already-merged clean `agent-*` worktrees, then prunes Git's worktree registry. Dirty, ahead, locked, and current worktrees stay put.
+Run `sidequest worktrees --sweep` from a board repo to inspect stale executor worktrees. It only plans removals by default. `--yes` removes finished, integrated, or already-merged clean `agent-*` worktrees, then prunes Git's worktree registry. Dirty, ahead, locked, and current worktrees stay put, and so does any worktree whose ticket still holds a live claim: a ticket can reach a final board state while its executor is still working in that tree.
 
 ![Sidequest kanban board](../../../assets/screenshots/sidequest-kanban.png)
 

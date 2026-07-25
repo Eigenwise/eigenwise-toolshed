@@ -251,6 +251,32 @@ test('sweep resolves completed dispatches from another board in the same Sideque
   assert.ok(!fs.existsSync(worktree));
 });
 
+// SQ-826. A ticket reaches a final board state the moment a closure or an
+// archive sweep runs, but its executor can still be alive in that tree; only
+// the claim knows. Reaping it deletes a live agent's working directory out from
+// under it.
+test('a finalized ticket that still holds a live claim keeps its worktree', () => {
+  const worktree = agentWorktree('live-claim');
+  const ticket = dispatchedTicket('live-claim');
+  assert.equal(store.claimTicket(slug, ticket.ref, 'live-worker', {
+    token: ticket.dispatchNonce,
+    executor: ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.archiveTicket(slug, ticket.ref).ok, true);
+  makeOld(worktree);
+
+  const swept = cliJson(['worktrees', 'sweep', '--yes', '--json']);
+  const entry = entryFor(swept, worktree);
+  assert.equal(entry.reason, 'live_claim');
+  assert.equal(entry.action, 'keep');
+  assert.ok(fs.existsSync(worktree), 'a live agent keeps its working directory');
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'live-worker').ok, true);
+  const after = cliJson(['worktrees', 'sweep', '--yes', '--json']);
+  assert.equal(entryFor(after, worktree).reason, 'ticket_archived');
+  assert.ok(!fs.existsSync(worktree), 'the released tree is collected on the next sweep');
+});
+
 test('worktree sweep uses the configured feature integration branch for patch equivalence', () => {
   const worktree = agentWorktree('feature-target');
   const commit = makeCommit(worktree, 'feature-target.txt');

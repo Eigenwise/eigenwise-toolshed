@@ -88,6 +88,14 @@ function finalTicket(ticket: any): boolean {
   return Boolean(ticket && (ticket.archived || ticket.status === 'done'));
 }
 
+// `done` is a board fact, not an agent fact. An integration closure marks the
+// ticket done and sweeps in the same breath, so its executor can still be alive
+// in that tree; the claim is the only thing that knows. worktreeGcTickets()
+// stamps claimLive from the same verdict the claim sweep uses.
+function liveClaimTicket(ticket: any): boolean {
+  return Boolean(ticket && ticket.claimLive);
+}
+
 async function worktreeAge(pathname: string): Promise<number | null> {
   try {
     const stat = await fs.stat(pathname);
@@ -152,6 +160,7 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
   if (current) return skippedEntry(entry, ticket, 'current_worktree', true);
   if (entry.locked) return skippedEntry(entry, ticket, 'locked', false);
   if (ticket && !finalTicket(ticket)) return skippedEntry(entry, ticket, 'active_ticket', false);
+  if (liveClaimTicket(ticket)) return skippedEntry(entry, ticket, 'live_claim', false);
 
   const [cleanResult, ageMs, patch, reachable] = await Promise.all([
     git(entry.worktree, ['status', '--porcelain']),

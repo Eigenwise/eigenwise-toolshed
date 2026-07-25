@@ -66,6 +66,9 @@ function integrationUpstream(options) {
 function finalTicket(ticket) {
   return Boolean(ticket && (ticket.archived || ticket.status === "done"));
 }
+function liveClaimTicket(ticket) {
+  return Boolean(ticket && ticket.claimLive);
+}
 async function worktreeAge(pathname) {
   try {
     const stat = await fs.stat(pathname);
@@ -124,6 +127,7 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
   if (current) return skippedEntry(entry, ticket, "current_worktree", true);
   if (entry.locked) return skippedEntry(entry, ticket, "locked", false);
   if (ticket && !finalTicket(ticket)) return skippedEntry(entry, ticket, "active_ticket", false);
+  if (liveClaimTicket(ticket)) return skippedEntry(entry, ticket, "live_claim", false);
   const [cleanResult, ageMs, patch, reachable] = await Promise.all([
     git(entry.worktree, ["status", "--porcelain"]),
     worktreeAge(entry.worktree),

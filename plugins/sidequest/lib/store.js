@@ -1858,7 +1858,10 @@ function listTickets(slug) {
 function worktreeGcTickets() {
   return db.selectRows(database(), "SELECT project, data FROM tickets").map((row) => {
     const ticket = parseTicketData(row.project, row.data);
-    return ticket ? Object.assign({}, ticket, { project: row.project }) : null;
+    return ticket ? Object.assign({}, ticket, {
+      project: row.project,
+      claimLive: Boolean(ticket.claim && ticket.claim.by && !claimReleaseVerdict(ticket))
+    }) : null;
   }).filter(Boolean);
 }
 function listAllProjectTickets(archivedOnly = false) {
@@ -3266,6 +3269,41 @@ function recoverDispatchQuotaFailure(slug, idOrRef, opts) {
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
   });
 }
+function dispatchIsolationExpectation(identity) {
+  const sessionId = String(identity?.sessionId || "").trim();
+  const executor = String(identity?.executor || "").trim();
+  const agentId = String(identity?.agentId || "").trim();
+  if (!agentId && !(sessionId && executor)) return null;
+  const byAgent = [];
+  const bySession = [];
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || state.terminalAt && !(ticket.claim && ticket.claim.by)) continue;
+      const candidate = {
+        ref: ticket.ref,
+        project: project.slug,
+        projectPath: readMeta(project.slug)?.path || null,
+        sharedTree: state.sharedTree !== false,
+        agentId: state.agentId ? String(state.agentId) : null
+      };
+      if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
+      else if (sessionId && executor && state.sessionId === String(sessionId) && state.executor === String(executor)) {
+        bySession.push(candidate);
+      }
+    }
+  }
+  const matched = byAgent.length ? byAgent : bySession;
+  if (!matched.length || matched.some((candidate) => candidate.sharedTree)) return null;
+  const expectation = matched[0];
+  return {
+    ref: expectation.ref,
+    project: expectation.project,
+    projectPath: expectation.projectPath,
+    matchedBy: byAgent.length ? "agent" : "session",
+    expectedWorktree: agentId && expectation.projectPath ? path.join(expectation.projectPath, ".claude", "worktrees", `agent-${agentId}`) : null
+  };
+}
 function bindDispatchAgent(sessionId, executor, agentId, agentName) {
   if (!sessionId || !executor || !agentId) return { ok: false, reason: "missing_identity" };
   const matches = [];
@@ -3617,12 +3655,23 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   const state = dispatchState(ticket);
   if (purpose === "grooming") {
     if (ticket.claim && ticket.claim.by && !claimReclaimable(ticket) || ticket.dispatchNonce || state && !state.terminalAt) {
-      return { ok: false, reason: "active_dispatch", ticket };
+      const holder = ticket.claim && ticket.claim.by ? String(ticket.claim.by) : "<claim holder>";
+      return {
+        ok: false,
+        reason: "active_dispatch",
+        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Release it first: \`sidequest release ${ticket.ref} --by ${holder}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`,
+        ticket
+      };
     }
     if (pendingSubmission(ticket)) return { ok: false, reason: "pending_submission", ticket };
   }
   if (purpose === "integration" && !pendingSubmission(ticket)) {
-    return { ok: false, reason: "submission_required", ticket };
+    return {
+      ok: false,
+      reason: "submission_required",
+      message: `${ticket.ref} has no submission to consume, so an integration closure has nothing to integrate. A submission only exists after its executor ran commit and then submit. When the work shipped outside that flow — the usual case is the orchestrator committing an executor's changes out of the shared tree after it lost its worktree — release the claim (\`sidequest release ${ticket.ref} --by <claim holder>\`) and close it as plain grooming with the shipped commit as evidence, without --integration.`,
+      ticket
+    };
   }
   const reason = String(opts.reason || "").trim();
   if (!reason) return { ok: false, reason: "evidence_required", ticket };
@@ -5060,6 +5109,7 @@ module.exports = {
   recordDispatchLaunch,
   recoverDispatchQuotaFailure,
   bindDispatchAgent,
+  dispatchIsolationExpectation,
   terminalDispatchTarget,
   markDispatchStopped,
   reconcileLaunchedDispatches,
