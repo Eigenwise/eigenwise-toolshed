@@ -43,14 +43,14 @@ directory after checking the generated rules.
 
 ## Why not just use `CLAUDE.md`?
 
+For the longer comparison with `CLAUDE.md` and `AGENTS.md`, see [Why live-rules exists](./WHY.md).
+
 `CLAUDE.md` is great for a static, always-on brief. live-rules is for everything that is **conditional
 or that needs to stay salient**:
 
 - **Scoped.** A React rule only shows up when editing `*.tsx`. A deploy checklist only shows up when
   you mention deploying. Your context is not permanently full of rules that apply 5% of the time.
-- **Salient.** Rules are re-asserted on every prompt (and right before each relevant edit), so they
-  do not get buried and forgotten deep in a long session. That is the difference from a one-time read
-  of `CLAUDE.md`: models drift, and live-rules keeps repeating the rules that still apply.
+- **Salient.** Rules are re-grounded when they become relevant, change, or need to return after a context reset, including right before each relevant edit. That keeps them from getting buried without sending unchanged content on every turn.
 - **Live.** Edit a rule and it applies on the very next prompt. No restart, no re-reading a giant
   file.
 - **Toggleable.** One rule per section, each with its own scope. Disable one with a single field; the
@@ -148,12 +148,11 @@ edit-approval flow is unchanged. It informs Claude, it does not auto-approve any
 ### The cost of staying salient
 
 Re-injection is not free, and it is worth knowing what you are paying for. On turn 1 of a session,
-global rules go in **twice**: once from `SessionStart`, once from the first `UserPromptSubmit`. That is
+global rules may go in **twice**: once from `SessionStart`, once from the first `UserPromptSubmit`. That is
 by design, not a bug, and it doubles as the wiring canary described above (see Restart). From then on,
-every global and prompt-keyword rule is re-sent on **every single prompt** for the rest of the session,
-whether or not it is relevant to that turn. That is the deliberate trade: salience over token cost. Keep
-global rules short, since they are the ones you pay for on every turn; scoped rules (`globs` / `dirs`)
-only cost you when they actually fire.
+the per-session seen-hash ledger skips unchanged rules. Global and prompt-keyword rules cost tokens again
+when their content changes or after a context reset; scoped rules (`globs` / `dirs`) cost you when they
+become relevant and their content hash is new to the session.
 
 ## Restart after enabling or updating
 
