@@ -147,12 +147,11 @@ edit-approval flow is unchanged. It informs Claude, it does not auto-approve any
 
 ### The cost of staying salient
 
-Re-injection is not free, and it is worth knowing what you are paying for. On turn 1 of a session,
-global rules may go in **twice**: once from `SessionStart`, once from the first `UserPromptSubmit`. That is
-by design, not a bug, and it doubles as the wiring canary described above (see Restart). From then on,
-the per-session seen-hash ledger skips unchanged rules. Global and prompt-keyword rules cost tokens again
-when their content changes or after a context reset; scoped rules (`globs` / `dirs`) cost you when they
-become relevant and their content hash is new to the session.
+Re-injection is not free, and it is worth knowing what you are paying for. `SessionStart` grounds global
+rules once and records their hashes. The first `UserPromptSubmit` skips those unchanged hashes, and later
+prompts do the same. Global and prompt-keyword rules cost tokens again when their content changes or after
+a context reset; scoped rules (`globs` / `dirs`) cost you when they become relevant and their content hash
+is new to the session.
 
 ## Restart after enabling or updating
 
