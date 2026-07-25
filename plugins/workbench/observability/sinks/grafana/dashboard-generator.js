@@ -71,52 +71,8 @@ function filterDashboard(dashboard, projects) {
   return dashboard;
 }
 
-function unattributedPanel(projects) {
-  const allowed = projects.map((project) => escapeRegex(project.project_name)).join('|') || '$^';
-  const selector = `{service_name="workbench-observer"} |= "gateway.token.usage" | workbench_session_id !~ "(probe|session-gateway).*" | workbench_attribute_project_name !~ ${quoted(allowed)}`;
-  return {
-    id: 108,
-    title: 'Unattributed sessions',
-    description: 'Sessions and context-token volume excluded from opted-in project dashboards.',
-    type: 'stat',
-    datasource: { type: 'loki', uid: 'loki' },
-    gridPos: { x: 20, y: 1, w: 4, h: 4 },
-    options: { reduceOptions: { values: false, calcs: ['lastNotNull'], fields: '' }, orientation: 'auto', textMode: 'auto', colorMode: 'value', graphMode: 'none', justifyMode: 'auto' },
-    fieldConfig: { defaults: { noValue: '0' }, overrides: [] },
-    targets: [
-      {
-        refId: 'Sessions',
-        expr: `count(sum by (workbench_session_id) (count_over_time(${selector} [$__range])))`,
-        legendFormat: 'sessions',
-        instant: true,
-      },
-      {
-        refId: 'Context',
-        expr: `sum(sum_over_time(${selector} | unwrap workbench_measurement_context_tokens_value [$__range]))`,
-        legendFormat: 'context tokens',
-        instant: true,
-      },
-    ],
-  };
-}
-
 function globalDashboard(template, projects) {
-  if (projects.length === 0) {
-    return {
-      ...template,
-      title: 'Claude Code Usage',
-      uid: 'claude-code-usage',
-      panels: [unattributedPanel(projects)],
-      templating: { list: [] },
-    };
-  }
-  const dashboard = filterDashboard(template, projects);
-  const topStats = dashboard.panels.filter((panel) => panel.gridPos?.y === 1 && panel.gridPos?.h === 4).slice(0, 4);
-  for (const [index, panel] of topStats.entries()) {
-    panel.gridPos = { ...panel.gridPos, x: index * 5, w: 5 };
-  }
-  dashboard.panels.push(unattributedPanel(projects));
-  return dashboard;
+  return filterDashboard(template, projects);
 }
 
 // By-project breakdowns can only ever show the board's own project — global-only.

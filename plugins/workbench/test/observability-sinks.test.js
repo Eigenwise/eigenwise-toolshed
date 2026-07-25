@@ -199,7 +199,7 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   assert.deepEqual(global.templating, { list: [] });
   const projectUnscopedTitles = new Set(['MCP connection activity', 'Work moved off the Anthropic limit']);
   const regularPanels = global.panels
-    .filter(({ title }) => title !== 'Unattributed sessions' && !projectUnscopedTitles.has(title));
+    .filter(({ title }) => !projectUnscopedTitles.has(title));
   const regularExpressions = regularPanels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   assert.ok(regularExpressions.every((expression) => !expression.includes('$project')));
   for (const expression of regularExpressions.filter((expression) => expression.includes('claude_code_'))) {
@@ -222,11 +222,14 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   assert.equal(offload.type, 'stat');
   assert.ok(offload.targets.every(({ expr }) => !expr.includes('project_id')));
   assert.ok(offload.targets.every(({ expr }) => !expr.includes('$project')));
-  const unattributed = global.panels.find(({ title }) => title === 'Unattributed sessions');
-  assert.equal(unattributed.type, 'stat');
-  assert.equal(unattributed.targets.length, 2);
-  assert.match(unattributed.targets[0].expr, /workbench_attribute_project_name !~ "atlas\|beacon"/);
-  assert.match(unattributed.targets[1].expr, /context_tokens_value/);
+  const topStats = global.panels.filter(({ gridPos }) => gridPos?.y === 1 && gridPos.h === 4);
+  assert.deepEqual(topStats.map(({ gridPos }) => gridPos), [
+    { x: 0, y: 1, w: 6, h: 4 },
+    { x: 6, y: 1, w: 6, h: 4 },
+    { x: 12, y: 1, w: 6, h: 4 },
+    { x: 18, y: 1, w: 6, h: 4 },
+  ]);
+  assert.ok(dashboards.every(({ dashboard }) => dashboard.panels.every(({ title }) => title !== 'Unattributed sessions')));
 
   const atlas = dashboards.find(({ dashboard }) => dashboard.title === 'Claude Code — atlas').dashboard;
   const atlasExpressions = atlas.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
@@ -255,9 +258,9 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   provisionDashboards(directory, []);
   const empty = JSON.parse(fs.readFileSync(path.join(output, 'claude-code-usage.json'), 'utf8'));
   assert.deepEqual(fs.readdirSync(output), ['claude-code-usage.json']);
-  assert.equal(empty.panels.length, 1);
-  assert.equal(empty.panels[0].title, 'Unattributed sessions');
-  assert.match(empty.panels[0].targets[0].expr, /\$\^/);
+  assert.equal(empty.panels.length, global.panels.length);
+  assert.ok(empty.panels.every(({ title }) => title !== 'Unattributed sessions'));
+  assert.ok(empty.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr).every((expression) => !expression.includes('$project')));
 });
 
 test('validates explicit generic OTLP egress and credentials', () => {
