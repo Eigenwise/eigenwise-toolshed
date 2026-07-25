@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { modelCostTargets, unpricedModelsExpression } = require('./model-prices');
 
 const TEMPLATE_FILE = path.join(__dirname, 'dashboards', 'claude-code-usage.json');
 const GENERATED_DIRECTORY = 'grafana-dashboards';
@@ -50,7 +51,7 @@ function filterLoki(expression, projects) {
 }
 
 // MCP events have no project attribution; offload share measures board-wide routing.
-const PROJECT_UNSCOPED_PANELS = new Set(['MCP connection activity', 'Off-Anthropic offload share']);
+const PROJECT_UNSCOPED_PANELS = new Set(['MCP connection activity', 'Work moved off the Anthropic limit']);
 
 function filterDashboard(dashboard, projects) {
   for (const panel of dashboard.panels) {
@@ -131,13 +132,22 @@ function perProjectDashboard(template, project) {
   return dashboard;
 }
 
+function applyModelPricing(dashboard) {
+  const costPanel = dashboard.panels.find(({ title }) => title === 'Cost over time, by model');
+  if (costPanel) costPanel.targets = modelCostTargets();
+  const unpricedPanel = dashboard.panels.find(({ title }) => title === 'Unpriced model usage');
+  if (unpricedPanel) unpricedPanel.targets[0].expr = unpricedModelsExpression();
+  return dashboard;
+}
+
 function generatedDashboards(projects, template = JSON.parse(fs.readFileSync(TEMPLATE_FILE, 'utf8'))) {
+  const pricedTemplate = applyModelPricing(template);
   const registered = registeredProjects(projects);
   return [
-    { fileName: 'claude-code-usage.json', dashboard: globalDashboard(structuredClone(template), registered) },
+    { fileName: 'claude-code-usage.json', dashboard: globalDashboard(structuredClone(pricedTemplate), registered) },
     ...registered.map((project) => ({
       fileName: `claude-code-${project.project_id.slice(0, 16)}.json`,
-      dashboard: perProjectDashboard(structuredClone(template), project),
+      dashboard: perProjectDashboard(structuredClone(pricedTemplate), project),
     })),
   ];
 }

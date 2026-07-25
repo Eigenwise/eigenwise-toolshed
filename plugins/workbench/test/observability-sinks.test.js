@@ -11,6 +11,7 @@ const { flushOutbox } = require('../lib/observability/outbox.js');
 const { buildOtlpPayload, openObservabilityStore } = require('../lib/observability/store.js');
 const grafana = require('../observability/sinks/grafana/index.js');
 const { generatedDashboards, provisionDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
+const { MODEL_PRICES_PER_MILLION, modelCostTargets } = require('../observability/sinks/grafana/model-prices.js');
 const posthog = require('../observability/sinks/posthog/index.js');
 const {
   DEFAULT_SINK,
@@ -44,6 +45,16 @@ function observation(sourceEventId = 'sink-test-event') {
 function temporaryDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-sinks-'));
 }
+
+test('prices every model token type from one table', () => {
+  const terra = MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-terra'];
+  assert.deepEqual(terra, { input: 2.5, cacheRead: 0.25, cacheCreation: 2.5, output: 15 });
+  const target = modelCostTargets().find(({ legendFormat }) => legendFormat === 'claude-codex-gpt-5.6-terra');
+  assert.match(target.expr, /type="input"/);
+  assert.match(target.expr, /type="cacheRead"/);
+  assert.match(target.expr, /type="cacheCreation"/);
+  assert.match(target.expr, /type="output"/);
+});
 
 test('registers the producer-agnostic sink contract', () => {
   assert.deepEqual(SINK_IDS, ['grafana-lgtm', 'otlp', 'posthog', 'none']);
@@ -157,7 +168,7 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   assert.equal(global.title, 'Claude Code Usage');
   assert.equal(global.uid, 'claude-code-usage');
   assert.deepEqual(global.templating, { list: [] });
-  const projectUnscopedTitles = new Set(['MCP connection activity', 'Off-Anthropic offload share']);
+  const projectUnscopedTitles = new Set(['MCP connection activity', 'Work moved off the Anthropic limit']);
   const regularPanels = global.panels
     .filter(({ title }) => title !== 'Unattributed sessions' && !projectUnscopedTitles.has(title));
   const regularExpressions = regularPanels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
@@ -178,7 +189,7 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   assert.doesNotMatch(connections.targets[0].expr, /workbench_attribute_project_name/);
   assert.doesNotMatch(connections.targets[0].expr, /\$project/);
   assert.match(connections.targets[0].expr, /^sum by \(mcp_server, connection_status\)/);
-  const offload = global.panels.find(({ title }) => title === 'Off-Anthropic offload share');
+  const offload = global.panels.find(({ title }) => title === 'Work moved off the Anthropic limit');
   assert.equal(offload.type, 'stat');
   assert.ok(offload.targets.every(({ expr }) => !expr.includes('project_id')));
   assert.ok(offload.targets.every(({ expr }) => !expr.includes('$project')));
@@ -200,12 +211,12 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   assert.equal(atlasTitles.includes('Usage by project'), false);
   assert.equal(atlasTitles.includes('Cost over time, by project'), false);
   assert.equal(atlasTitles.includes('MCP connection activity'), false);
-  assert.equal(atlasTitles.includes('Off-Anthropic offload share'), false);
+  assert.equal(atlasTitles.includes('Work moved off the Anthropic limit'), false);
   const globalTitles = global.panels.map(({ title }) => title);
   assert.ok(globalTitles.includes('Usage by project'));
   assert.ok(globalTitles.includes('Cost over time, by project'));
   assert.ok(globalTitles.includes('MCP connection activity'));
-  assert.ok(globalTitles.includes('Off-Anthropic offload share'));
+  assert.ok(globalTitles.includes('Work moved off the Anthropic limit'));
   for (const expression of atlasExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name="atlas"/);
   }
@@ -325,7 +336,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   }
   for (const title of [
     'Tokens over time, by type', 'Cost allocation, by token type (USD)', 'Tokens over time, by model', 'Models in use', 'Token volume by backend',
-    'Auxiliary spend by model and project',
+    'Background/compaction cost by model and project',
     'Tool activity by name', 'MCP activity by server / tool', 'MCP definition footprint by server',
     'Tool activity error rate',
     'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
@@ -333,25 +344,37 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     'Gateway usage by session and role',
     'Ticket dispatch usage and route drift',
   ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
+  const costByModel = byTitle.get('Cost over time, by model');
+  assert.equal(costByModel.type, 'timeseries');
+  assert.equal(costByModel.fieldConfig.defaults.custom.stacking.mode, 'normal');
+  assert.match(costByModel.description, /not money owed/);
+  assert.equal(byTitle.get('Unpriced model usage').type, 'table');
+  assert.ok(byTitle.get('How to read this row').options.content.includes('list-price-equivalent'));
+  for (const title of ['Tokens over time, by type', 'Tokens over time, by model', 'Cost over time, by project']) {
+    const overTime = byTitle.get(title);
+    assert.equal(overTime.interval, '$bucket');
+    assert.match(overTime.targets[0].expr, /\[\$bucket\]/);
+    assert.equal(overTime.fieldConfig.defaults.custom.stacking.mode, 'normal');
+  }
 
   for (const title of [
     'Fresh input (uncached)', 'Cache reads (billed at 10%)',
     'Output tokens (raw)', 'Cost (USD estimate)',
-    'Billed tokens per output token', 'Off-Anthropic offload share',
+    'Context spent per answer token (lower is better)', 'Work moved off the Anthropic limit',
   ]) assert.equal(byTitle.get(title)?.type, 'stat', `missing explanatory stat: ${title}`);
-  const billedPerOutput = byTitle.get('Billed tokens per output token');
+  const billedPerOutput = byTitle.get('Context spent per answer token (lower is better)');
   assert.equal(billedPerOutput.targets[0].instant, true);
   assert.match(billedPerOutput.targets[0].expr, /sum by \(query_source\)/);
   assert.match(billedPerOutput.targets[0].expr, /type=~"cacheRead\|cacheCreation\|input"/);
   assert.match(billedPerOutput.targets[0].expr, /and \(sum by \(query_source\).*type="output".* > 0\)/);
   assert.match(billedPerOutput.targets[0].expr, /\[\$__range\]/);
-  const offloadShare = byTitle.get('Off-Anthropic offload share');
+  const offloadShare = byTitle.get('Work moved off the Anthropic limit');
   assert.equal(offloadShare.targets.length, 3);
   assert.ok(offloadShare.targets.every((target) => target.instant));
   assert.match(offloadShare.targets[0].expr, /model=~"claude-codex-\.\*"/);
   assert.match(offloadShare.targets[0].expr, /and \(sum\(increase\(claude_code_cost_usage_USD_total\[\$__range\]\)\) > 0\)/);
   assert.ok(offloadShare.targets.every(({ expr }) => !expr.includes('project_id')));
-  const auxiliarySpend = byTitle.get('Auxiliary spend by model and project');
+  const auxiliarySpend = byTitle.get('Background/compaction cost by model and project');
   assert.equal(auxiliarySpend.type, 'table');
   assert.equal(auxiliarySpend.targets[0].instant, true);
   assert.match(auxiliarySpend.targets[0].expr, /^sort_desc\(sum by \(model, project_id\)/);
@@ -423,7 +446,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     assert.match(panel.targets[0].expr, /gateway\.token\.usage/);
     assert.match(panel.targets[0].expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   }
-  assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /\[\$__auto\]/);
+  assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /\[\$bucket\]/);
   assert.match(byTitle.get('Models in use').targets[0].expr, /\[\$__range\]/);
   assert.equal(byTitle.get('Models in use').targets[0].instant, true);
 
