@@ -400,6 +400,8 @@ const HAIKU_BACKEND_EFFORT = 'medium';
 const ROUTING_FALLBACK_DEFAULT = Object.freeze({ model: 'sonnet', effort: 'high' });
 const CLAUDE_QUOTA_FAILURES = Object.freeze([
   Object.freeze({ model: 'fable', signature: "You've reached your Fable 5 limit" }),
+  Object.freeze({ model: 'opus', signature: "You've reached your Opus 5 limit" }),
+  Object.freeze({ model: 'opus', signature: 'Your Claude Code subscription does not include access to Opus 5' }),
 ]);
 
 function coerceEffort(v?: any) {

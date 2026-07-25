@@ -19,6 +19,10 @@ fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
     slug: 'codex-gpt-5-6-sol',
     id: 'claude-codex-gpt-5.6-sol[1m]',
     label: 'GPT-5.6 Sol',
+  }, {
+    slug: 'codex-gpt-5-6-terra',
+    id: 'claude-codex-gpt-5.6-terra[1m]',
+    label: 'GPT-5.6 Terra',
   }],
 }));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
@@ -221,4 +225,60 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
   const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8'));
   assert.equal(hooks.hooks.PostToolUseFailure[0].matcher, 'Agent');
   assert.match(hooks.hooks.PostToolUseFailure[0].hooks[0].command, /quota-fallback\.js/);
+});
+
+test('every seeded Opus category recovers to its explicit Codex fallback without replacing local overrides', () => {
+  const expected = new Map([
+    ['debugging', { model: 'codex-gpt-5-6-terra', effort: 'high' }],
+    ['coding.hard', { model: 'codex-gpt-5-6-sol', effort: 'xhigh' }],
+    ['spike-investigation', { model: 'codex-gpt-5-6-sol', effort: 'high' }],
+    ['visual-review', { model: 'codex-gpt-5-6-terra', effort: 'high' }],
+  ]);
+
+  for (const [categoryId, fallback] of expected) {
+    const category = store.getCategory(categoryId, { project: slug });
+    assert.deepEqual(category.route, { model: 'opus', effort: fallback.effort });
+    assert.deepEqual(category.fallback, fallback);
+
+    const ticket = store.createTicket(slug, {
+      title: `${categoryId} Opus recovery`,
+      description: 'Where: seeded Opus fallback. Contract: recover only from recognized Claude exhaustion. Verify: inspect the replacement route.',
+      category: categoryId,
+      source: 'test',
+    });
+    const launched = launch(ticket, `quota-${categoryId}`);
+    const error = categoryId === 'visual-review'
+      ? 'Agent launch failed: Your Claude Code subscription does not include access to Opus 5'
+      : "Agent launch failed: You've reached your Opus 5 limit";
+    const recovered = store.recoverDispatchQuotaFailure(slug, ticket.ref, {
+      token: launched.prepared.token,
+      executor: launched.prepared.ticket.dispatchExecutor,
+      error,
+    });
+
+    assert.equal(recovered.ok, true);
+    assert.deepEqual(recovered.recovery, {
+      kind: 'claude_quota_exhausted',
+      failedModel: 'opus',
+      failedEffort: fallback.effort,
+      fallbackSource: 'category fallback',
+      model: fallback.model,
+      effort: fallback.effort,
+      signature: error.slice('Agent launch failed: '.length),
+      at: recovered.recovery.at,
+    });
+    const dispatchRoute = store.getTicket(slug, ticket.ref).dispatch.route;
+    assert.equal(dispatchRoute.model, fallback.model);
+    assert.equal(dispatchRoute.effort, fallback.effort);
+    assert.equal(store.releaseTicket(slug, ticket.ref, undefined, { status: 'todo', source: 'test' }).ok, true);
+  }
+
+  store.setProjectCategory(slug, 'debugging', 'OVERRIDE', {
+    route: { model: 'sonnet', effort: 'medium' },
+    fallback: { model: 'codex-gpt-5-6-sol', effort: 'medium' },
+  });
+  const overridden = store.getCategory('debugging', { project: slug });
+  assert.deepEqual(overridden.route, { model: 'sonnet', effort: 'medium' });
+  assert.deepEqual(overridden.fallback, { model: 'codex-gpt-5-6-sol', effort: 'medium' });
+  assert.equal(store.claudeQuotaFailure('Agent launch failed: network unavailable'), null);
 });

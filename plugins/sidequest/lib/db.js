@@ -304,6 +304,8 @@ function openDb(homeRoot) {
       const rows = prepareCached(database, "SELECT id, data FROM categories").all();
       for (const row of rows) {
         const category = parseStoredRecord(row.data);
+        const seeded = import_category_defaults.DEFAULT_CATEGORIES.find((entry2) => entry2.id === row.id);
+        if (seeded && JSON.stringify(category) === JSON.stringify(seeded)) continue;
         const route = isRecord(category.route) ? category.route : null;
         const oldModel = String(route?.model ?? "").trim().toLowerCase();
         const runtime = LEGACY_RUNTIME[oldModel];

@@ -1,4 +1,4 @@
-export const ROUTING_PROFILE_SEED_REVISION = 1;
+export const ROUTING_PROFILE_SEED_REVISION = 2;
 
 export const DEFAULT_CATEGORIES = [
   {
@@ -15,8 +15,8 @@ export const DEFAULT_CATEGORIES = [
     id: 'debugging',
     name: 'Debugging',
     description: 'Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. The first job is to reproduce and narrow the hypothesis space. Use testing instead when the intended behavior is already known and only verification is needed — the two share a verification step but start from opposite certainty about the cause. "Why is this slow" belongs here; "does approach X make it faster" is spike-investigation.',
-    route: { model: 'codex-gpt-5-6-terra', effort: 'high' },
-    fallback: { model: 'sonnet', effort: 'high' },
+    route: { model: 'opus', effort: 'high' },
+    fallback: { model: 'codex-gpt-5-6-terra', effort: 'high' },
     contract: 'Reproduce first; use a hypothesis loop and prove the fix.',
     artifactRoots: [],
     enabled: true,
@@ -45,8 +45,8 @@ export const DEFAULT_CATEGORIES = [
     id: 'coding.hard',
     name: 'Hard coding',
     description: 'A code change whose approach itself is genuinely unknown or contested and has hard-to-reverse consequences: competing designs, unclear root cause, or no obvious correct path. Blast radius, cross-consumer or cross-surface risk, and work that feels scary to get wrong do not make a ticket hard. If you can already state the fix approach, it is coding.normal no matter the stakes. Does not belong here: a high-risk migration with an established rollout is coding.normal. This tier is deliberately RARE and expensive; choose it only when the approach is unclear or contested and consequences are high. On the fence between coding.normal and coding.hard? It\'s coding.normal.',
-    route: { model: 'codex-gpt-5-6-sol', effort: 'xhigh' },
-    fallback: { model: 'opus', effort: 'xhigh' },
+    route: { model: 'opus', effort: 'xhigh' },
+    fallback: { model: 'codex-gpt-5-6-sol', effort: 'xhigh' },
     contract: 'Plan against the existing system, keep scope explicit, and verify end to end.',
     artifactRoots: [],
     enabled: true,
@@ -75,8 +75,8 @@ export const DEFAULT_CATEGORIES = [
     id: 'spike-investigation',
     name: 'Spike or investigation',
     description: 'Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system ("does approach X actually work/perform here"); if it\'s answerable by reading external sources — docs, tool behavior, comparative research — use research instead. Also covers direction-setting design: a system boundary, migration, or cross-cutting technical direction where several valid approaches have material tradeoffs and the deliverable is a decision framework and recommendation rather than implementation.',
-    route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
-    fallback: { model: 'opus', effort: 'high' },
+    route: { model: 'opus', effort: 'high' },
+    fallback: { model: 'codex-gpt-5-6-sol', effort: 'high' },
     contract: 'Timebox exploration; record what was tested, ruled out, and recommended. For design-direction work: state constraints, compare viable options, recommend one, and name tradeoffs.',
     artifactRoots: [],
     enabled: true,
@@ -125,8 +125,8 @@ export const DEFAULT_CATEGORIES = [
     id: 'visual-review',
     name: 'Visual review',
     description: 'Fresh-eyes review of a RENDERED interface — a dashboard, web UI, TUI, or report — judged visually through browser screenshots (Playwright) as a first-time user would see it: confusing representations, misleading labels or units, naming defects, dead panels, layout and flow problems. Belongs here: "review this dashboard\'s UX", "does this page make sense", screenshot-driven design critique. Does not belong here: reviewing code or diffs (review-audit), building or fixing UI (ui-frontend/coding), or anything whose evidence is source files rather than pixels.',
-    route: { model: 'sonnet', effort: 'high' },
-    fallback: null,
+    route: { model: 'opus', effort: 'high' },
+    fallback: { model: 'codex-gpt-5-6-terra', effort: 'high' },
     contract: 'Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliverable is a prioritized findings comment on the ticket — worst problems first, each naming the exact panel/element and what a user would misunderstand.',
     artifactRoots: [],
     enabled: true,

@@ -65,7 +65,7 @@ function runtimeModule(name) {
 
 // src/hooks/session-start.ts
 var MAX_WORKFORCE_BYTES = 1800;
-var MAX_WORKFORCE_DESCRIPTION = 90;
+var MAX_WORKFORCE_DESCRIPTION = 45;
 function truncateText(value, max) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)).trimEnd() + "…";

@@ -55,6 +55,8 @@ sidequest profile new-board [<profile>] [--json]
 
 Category commands require an explicit scope. Use `--profile <profile>` for profile entries and `--project <board>` for board-local changes. A mutation with neither scope fails. `global-fallback` remains the availability fallback used after category routes and category fallbacks.
 
+When a Claude Opus dispatch fails before claim because its subscription capacity or entitlement is exhausted, Sidequest prepares that category's configured Codex fallback with a fresh token. The ticket continues on the replacement executor, while dispatch, board, CLI, and MCP reads show the executor actually used. Other provider failures leave the route alone. Category and board-local overrides still win over this recovery path.
+
 Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. The board applies local overrides on top of the selected profile, and the dashboard marks each row as profile, override, pinned, board-only, or disabled.
 
 Compact MCP reads for `category_list` and `comments` return `total`, `returned`, and `nextCursor`. Follow `nextCursor` until it is null. Compact category descriptions and comment bodies mark excerpts explicitly; `full:true` returns exact text. Compact comments are newest-first for orchestration, while full comments stay chronological. `full:true` without a cursor or limit keeps the one-call complete response. The CLI JSON shapes do not use this pagination and remain unchanged.

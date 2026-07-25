@@ -435,6 +435,8 @@ export function openDb(homeRoot: string): SidequestDatabase {
       const rows = prepareCached(database, 'SELECT id, data FROM categories').all();
       for (const row of rows) {
         const category = parseStoredRecord(row.data);
+        const seeded = DEFAULT_CATEGORIES.find((entry) => entry.id === row.id);
+        if (seeded && JSON.stringify(category) === JSON.stringify(seeded)) continue;
         const route = isRecord(category.route) ? category.route : null;
         const oldModel = String(route?.model ?? '').trim().toLowerCase();
         const runtime = LEGACY_RUNTIME[oldModel];
