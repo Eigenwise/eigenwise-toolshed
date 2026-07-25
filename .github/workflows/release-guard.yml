@@ -1,0 +1,46 @@
+name: Release guard
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check release invariants
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            mode=dev
+            base="$PR_BASE_SHA"
+            publish_ref=origin/main
+          elif [ "$REF_NAME" = "main" ]; then
+            mode=main
+            base="$BEFORE_SHA"
+            publish_ref="$BEFORE_SHA"
+          else
+            mode=dev
+            base="$BEFORE_SHA"
+            publish_ref=origin/main
+          fi
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          git diff --name-only "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/changed-files"
+          node scripts/release/guard.mjs --mode "$mode" --publish-ref "$publish_ref" --default-branch main --changed-file "$RUNNER_TEMP/changed-files"

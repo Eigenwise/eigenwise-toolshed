@@ -1,0 +1,49 @@
+name: Publish GitHub Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: github-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Read generated changelog section
+        env:
+          TAG: ${{ github.ref_name }}
+          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+        run: |
+          node - <<'NODE'
+          const { readFileSync, writeFileSync } = require('node:fs');
+          const tag = process.env.TAG;
+          const lines = readFileSync('CHANGELOG.md', 'utf8').split(/\r?\n/);
+          const start = lines.findIndex((line) => line.startsWith(`## ${tag} (`));
+          if (start < 0) throw new Error(`No generated changelog section matches ${tag}`);
+          const end = lines.findIndex((line, index) => index > start && /^## (?!#)/.test(line));
+          writeFileSync(process.env.NOTES_FILE, `${lines.slice(start, end < 0 ? undefined : end).join('\n').trim()}\n`);
+          NODE
+      - name: Create or repair GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file "$NOTES_FILE"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$NOTES_FILE"
+          fi

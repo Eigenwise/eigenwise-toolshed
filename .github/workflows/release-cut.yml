@@ -1,0 +1,212 @@
+name: Release cut
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Release window type
+        required: true
+        default: normal
+        type: choice
+        options: [normal, hotfix]
+      tickets:
+        description: Comma-separated ticket refs for a hotfix
+        required: false
+        type: string
+      dry_run:
+        description: Build the release plan without publishing
+        required: true
+        default: false
+        type: boolean
+      force:
+        description: Override release holds and existing local tags
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      decision: ${{ steps.gate.outputs.decision }}
+      sha: ${{ steps.gate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: gate
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RELEASE_AUTOMATION: ${{ vars.RELEASE_AUTOMATION }}
+          MODE: ${{ inputs.mode || 'normal' }}
+          TICKETS: ${{ inputs.tickets || '' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          FORCE: ${{ inputs.force || 'false' }}
+        run: |
+          auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          git fetch origin dev
+          sha="$(git rev-parse origin/dev)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          case "${RELEASE_AUTOMATION,,}" in
+            0|false|off|pause|paused|hold)
+              echo "Release automation is paused by RELEASE_AUTOMATION."
+              echo "decision=paused" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          if [ "$MODE" = "normal" ] && [ -f .release/HOLD ] && [ "$FORCE" != "true" ]; then
+            echo "Release automation is paused by .release/HOLD."
+            echo "decision=paused" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          age="$(( $(date -u +%s) - $(git show -s --format=%ct "$sha") ))"
+          if [ "$age" -lt 1200 ]; then
+            echo "Pinned dev commit is only ${age}s old."
+            echo "decision=young" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api -H "Accept: application/vnd.github+json" "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs?per_page=100" > "$RUNNER_TEMP/check-runs.json"
+          state="$(node - "$RUNNER_TEMP/check-runs.json" <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const checks = JSON.parse(readFileSync(process.argv[2], 'utf8')).check_runs ?? [];
+          const pending = checks.filter((check) => check.status !== 'completed');
+          const failed = checks.filter((check) => check.status === 'completed' && !['success', 'neutral', 'skipped'].includes(check.conclusion));
+          process.stdout.write(failed.length ? 'failed' : (checks.length === 0 || pending.length ? 'pending' : 'ready'));
+          NODE
+          )"
+          if [ "$state" = "pending" ]; then
+            echo "Checks for ${sha} are not complete yet."
+            echo "decision=pending" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$state" = "failed" ]; then
+            title="Release automation blocked by failed checks"
+            body="Release cut is waiting for successful checks on ${sha}. Fix or rerun the failed checks, then the next scheduled cut will retry."
+            issue="$(gh issue list --state open --search "${title} in:title" --json number --jq '.[0].number')"
+            if [ -n "$issue" ]; then
+              gh issue edit "$issue" --title "$title" --body "$body"
+            else
+              gh issue create --title "$title" --body "$body"
+            fi
+            echo "decision=failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          args=(--sha "$sha" --mode "$MODE" --dry-run --json)
+          if [ -n "$TICKETS" ]; then args+=(--tickets "$TICKETS"); fi
+          if [ "$FORCE" = "true" ]; then args+=(--force); fi
+          node scripts/release/cut.mjs "${args[@]}" > "$RUNNER_TEMP/preflight.json"
+          status="$(node -pe "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).status" "$RUNNER_TEMP/preflight.json")"
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          if [ "$status" = "held" ]; then
+            echo "Release automation is paused by a held release fragment."
+            echo "decision=paused" >> "$GITHUB_OUTPUT"
+          elif [ "$status" = "nothing-to-release" ]; then
+            echo "No releasable fragments are queued."
+            echo "decision=nothing" >> "$GITHUB_OUTPUT"
+          else
+            echo "decision=ready" >> "$GITHUB_OUTPUT"
+          fi
+
+  cut:
+    needs: gate
+    if: needs.gate.outputs.decision == 'ready'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: cut
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          PINNED_SHA: ${{ needs.gate.outputs.sha }}
+          MODE: ${{ inputs.mode || 'normal' }}
+          TICKETS: ${{ inputs.tickets || '' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          FORCE: ${{ inputs.force || 'false' }}
+        run: |
+          auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          git fetch origin dev main
+          if [ "$(git rev-parse "$PINNED_SHA")" != "$PINNED_SHA" ]; then
+            echo "Pinned dev commit is unavailable."
+            exit 1
+          fi
+          args=(--sha "$PINNED_SHA" --mode "$MODE" --json)
+          if [ -n "$TICKETS" ]; then args+=(--tickets "$TICKETS"); fi
+          if [ "$FORCE" = "true" ]; then args+=(--force); fi
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          else
+            args+=(--push)
+          fi
+          node scripts/release/cut.mjs "${args[@]}" > "$RUNNER_TEMP/cut.json"
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          node - "$RUNNER_TEMP/cut.json" >> "$GITHUB_OUTPUT" <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          process.stdout.write(`status=${result.status}\ncommit=${result.commit ?? ''}\n`);
+          NODE
+      - name: Restore main as an ancestor of dev
+        if: inputs.dry_run != true && steps.cut.outputs.status == 'cut'
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RELEASE_COMMIT: ${{ steps.cut.outputs.commit }}
+        run: |
+          auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          git fetch origin dev main
+          if git merge-base --is-ancestor origin/main origin/dev; then
+            unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+            exit 0
+          fi
+          git switch --create dev --track origin/dev
+          if git merge --no-edit origin/main && git push origin HEAD:refs/heads/dev; then
+            unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+            exit 0
+          fi
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          exit 1
+      - name: Open repair issue when dev is behind main
+        if: failure() && inputs.dry_run != true && steps.cut.outputs.status == 'cut'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RELEASE_COMMIT: ${{ steps.cut.outputs.commit }}
+        run: |
+          title="URGENT: release cut needs dev repair"
+          body="Release ${RELEASE_COMMIT} reached main, but main could not be restored as an ancestor of dev. Merge main into dev and push the repair before the next release cut."
+          issue="$(gh issue list --state open --search "${title} in:title" --json number --jq '.[0].number')"
+          if [ -n "$issue" ]; then
+            gh issue edit "$issue" --title "$title" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

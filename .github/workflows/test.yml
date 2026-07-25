@@ -1,0 +1,86 @@
+name: Test
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test scripts/release/test/*.test.mjs
+
+  plugin-matrix:
+    needs: release-engine
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: matrix
+        run: |
+          node --input-type=module - >> "$GITHUB_OUTPUT" <<'NODE'
+          import { readManifest } from './scripts/release/lib/manifests.mjs';
+          import { createSuiteResolver } from './scripts/release/lib/suites.mjs';
+          import { diskSource } from './scripts/release/lib/treesource.mjs';
+          const root = process.cwd();
+          const manifest = readManifest(diskSource(root), root);
+          const resolveSuite = createSuiteResolver(root);
+          const include = [...manifest.plugins.values()].map((plugin) => {
+            const suite = resolveSuite(plugin);
+            return { name: plugin.name, path: plugin.dir, setup: suite?.setup ?? '', command: suite?.command ?? '' };
+          });
+          process.stdout.write(`matrix=${JSON.stringify({ include })}\n`);
+          NODE
+
+  affected-plugin:
+    needs: plugin-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plugin-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test affected plugin
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SETUP: ${{ matrix.setup }}
+          COMMAND: ${{ matrix.command }}
+        run: |
+          base="$BASE_SHA"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          if git diff --quiet "$base" "$GITHUB_SHA" -- "${{ matrix.path }}" .claude-plugin/marketplace.json scripts/release .github/workflows; then
+            echo "${{ matrix.name }} is unaffected"
+            exit 0
+          fi
+          cd "${{ matrix.path }}"
+          if [ -n "$SETUP" ]; then eval "$SETUP"; fi
+          if [ -n "$COMMAND" ]; then eval "$COMMAND"; fi
