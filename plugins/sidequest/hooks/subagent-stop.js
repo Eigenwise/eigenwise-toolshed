@@ -131,9 +131,17 @@ function stopVerdict(store, claims, classification, dispatchStopped) {
   }
   const held = claims.find((claim) => claim && claim.held && claim.status === "doing");
   if (held) {
+    let ticket = null;
+    try {
+      ticket = store.getTicket(held.slug, held.ticketId);
+    } catch (_) {
+    }
+    const label = held.ref || held.ticketId || "a ticket";
+    if (ticket?.scopeRequest) {
+      return `exec paused on ${label} scope request; approve scope, then use its recovery snapshot if redispatching`;
+    }
     const started = Date.parse(held.at || "");
     const minutes = Number.isFinite(started) ? Math.max(1, Math.round((now - started) / 6e4)) : 0;
-    const label = held.ref || held.ticketId || "a ticket";
     return `exec stopped HOLDING ${label} claim (age ${minutes}m), likely dead: release + respawn, then TaskStop it`;
   }
   if (dispatchStopped && classification.kind !== "unknown") return "exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec";

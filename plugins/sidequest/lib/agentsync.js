@@ -287,6 +287,13 @@ function ticketAssetsPacket(ticket, slug) {
     }
   }).join("\n");
 }
+function scopePauseRecoveryPacket(ticket, slug) {
+  const recovery = ticket && ticket.scopePauseRecovery;
+  const asset = String(recovery?.asset || "").trim();
+  if (!asset || !slug || recovery?.dispatchNonce !== ticket?.dispatchNonce) return null;
+  const patch = path.resolve(store.assetPath(slug, ticket.id, asset));
+  return `Scope-pause recovery: \`${patch}\` is an automatic snapshot of uncommitted work from a stopped executor. Stopped-agent messages are not a reliable recovery path, so a redispatch in a new worktree must apply this patch before implementation; do not apply it in the original paused worktree.`;
+}
 function ticketRouteMarker(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   return resolved && resolved.backend === "codex" && resolved.dispatchModel ? routeMarker(resolved.dispatchModel, ticket.effort) : null;
@@ -374,6 +381,7 @@ ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
     ...ticket.highStakes ? ["High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration."] : [],
     ...worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : [],
     ...ticketIsolationContract(ticket, project) || [],
+    ...scopePauseRecoveryPacket(ticket, slug) ? [scopePauseRecoveryPacket(ticket, slug)] : [],
     `Declared files:
 ${declaredFiles}`,
     "Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. Only uncovered paths pause with your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.",
