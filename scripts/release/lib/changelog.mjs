@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { resolveInRepo } from './paths.mjs';
+
 export const REPO_CHANGELOG = 'CHANGELOG.md';
 
 const GROUPS = [
@@ -9,7 +11,11 @@ const GROUPS = [
   ['patch', 'Fixes'],
 ];
 
-const REF_IN_ENTRY = /^-\s.*\(([A-Z][A-Z0-9]*-\d+)\)/;
+// Anchored at both ends and at column zero, so only a line the renderer produced counts as
+// evidence that a ref shipped. Fragment bodies are always indented and titles are single-line, so
+// neither can forge one. The ref binds to the LAST parenthesised group, which is the one the
+// renderer appends, so a title containing "(SQ-999)" cannot mark SQ-999 as released.
+const RENDERED_ENTRY = /^- .* \(([A-Z][A-Z0-9]*-\d+)\)(?: \[`[0-9a-f]{7,40}`\]\([^\s)]*\))?$/;
 
 export function repoChangelogHeader() {
   return [
@@ -49,10 +55,16 @@ function renderEntries(entries, repository, heading) {
     if (matching.length === 0) continue;
     lines.push(`${heading} ${label}`, '');
     for (const entry of matching) {
-      lines.push(`- ${entry.title} (${entry.ref})${commitLink(entry, repository)}`);
+      const bullet = `- ${entry.title} (${entry.ref})${commitLink(entry, repository)}`;
+      const parsed = RENDERED_ENTRY.exec(bullet);
+      if (parsed?.[1] !== entry.ref) {
+        throw new Error(`the changelog line for ${entry.ref} does not read back as ${entry.ref}; refusing to write an entry the ledger cannot parse: ${bullet}`);
+      }
+      lines.push(bullet);
       const body = (entry.body ?? '').trim();
+      // Two spaces on every body line keeps it out of column zero, where the ledger reads.
       if (body) {
-        for (const line of body.split('\n')) lines.push(line.trim() === '' ? '' : `  ${line}`);
+        for (const line of body.split('\n')) lines.push(line.trim() === '' ? '' : `  ${line.trimEnd()}`);
       }
     }
     lines.push('');
@@ -124,15 +136,14 @@ export function upsertSection(existing, heading, section, header) {
 export function releasedRefs(text) {
   const refs = new Set();
   for (const line of (text ?? '').split('\n')) {
-    const match = REF_IN_ENTRY.exec(line.trim());
+    const match = RENDERED_ENTRY.exec(line.replace(/\r$/, ''));
     if (match) refs.add(match[1]);
   }
   return refs;
 }
 
-export function readRepoChangelog(repoRoot) {
-  const absolute = path.join(repoRoot, REPO_CHANGELOG);
-  return existsSync(absolute) ? readFileSync(absolute, 'utf8') : '';
+export function readRepoChangelog(source) {
+  return source.read(REPO_CHANGELOG) ?? '';
 }
 
 export function pluginChangelogPath(plugin) {
@@ -146,7 +157,7 @@ export function pluginChangelogPath(plugin) {
 export function applyChangelogs(repoRoot, plan) {
   const written = [];
 
-  const repoAbsolute = path.join(repoRoot, REPO_CHANGELOG);
+  const repoAbsolute = resolveInRepo(repoRoot, REPO_CHANGELOG);
   const repoText = existsSync(repoAbsolute) ? readFileSync(repoAbsolute, 'utf8') : '';
   writeFileSync(
     repoAbsolute,
@@ -156,7 +167,7 @@ export function applyChangelogs(repoRoot, plan) {
 
   for (const plugin of plan.plugins) {
     const relative = pluginChangelogPath(plugin);
-    const absolute = path.join(repoRoot, relative);
+    const absolute = resolveInRepo(repoRoot, relative, `changelog for plugin "${plugin.name}"`);
     const existing = existsSync(absolute) ? readFileSync(absolute, 'utf8') : '';
     writeFileSync(
       absolute,

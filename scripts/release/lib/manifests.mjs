@@ -1,25 +1,25 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { readValue, replaceValue } from './jsonedit.mjs';
+import { pluginSourceDir, resolveInRepo } from './paths.mjs';
 import { parseVersion } from './semver.mjs';
 
 export const MARKETPLACE_PATH = '.claude-plugin/marketplace.json';
+
+const PLUGIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function pluginManifestPath(pluginDir) {
   return path.posix.join(pluginDir, '.claude-plugin/plugin.json');
 }
 
-function repoRead(repoRoot, relative) {
-  return readFileSync(path.join(repoRoot, relative), 'utf8');
-}
-
 /**
- * Everything the engine needs about published plugins, read straight from the tree so a
- * runner with no board access gets the same answer as a local session.
+ * Everything the engine needs about published plugins, read from one pinned source so a runner
+ * with no board access gets the same answer as a local session.
  */
-export function readManifest(repoRoot) {
-  const marketplaceText = repoRead(repoRoot, MARKETPLACE_PATH);
+export function readManifest(source, repoRoot = null) {
+  const marketplaceText = source.read(MARKETPLACE_PATH);
+  if (marketplaceText === null) throw new Error(`${MARKETPLACE_PATH} is missing from ${source.label}`);
   const marketplace = JSON.parse(marketplaceText);
   if (!Array.isArray(marketplace.plugins)) {
     throw new Error(`${MARKETPLACE_PATH} has no plugins array`);
@@ -28,27 +28,28 @@ export function readManifest(repoRoot) {
   const plugins = new Map();
   marketplace.plugins.forEach((entry, index) => {
     if (!entry?.name) throw new Error(`${MARKETPLACE_PATH} plugins[${index}] has no name`);
-    const dir = String(entry.source ?? `./plugins/${entry.name}`).replace(/^\.\//, '');
+    if (!PLUGIN_NAME.test(entry.name)) throw new Error(`${MARKETPLACE_PATH} plugins[${index}] has an unusable name "${entry.name}"`);
+    if (plugins.has(entry.name)) throw new Error(`${MARKETPLACE_PATH} lists "${entry.name}" twice`);
+
+    const dir = pluginSourceDir(entry.source, entry.name);
     const manifestPath = pluginManifestPath(dir);
-    const absolute = path.join(repoRoot, manifestPath);
-    let pluginVersion = null;
-    if (existsSync(absolute)) {
-      pluginVersion = readValue(readFileSync(absolute, 'utf8'), ['version']);
-    }
+    if (repoRoot) resolveInRepo(repoRoot, manifestPath, `manifest for plugin "${entry.name}"`);
+
+    const pluginText = source.read(manifestPath);
     plugins.set(entry.name, {
       name: entry.name,
       dir,
       index,
       manifestPath,
       entryVersion: entry.version ?? null,
-      pluginVersion,
-      version: entry.version ?? pluginVersion,
+      pluginVersion: pluginText === null ? null : readValue(pluginText, ['version']),
+      version: entry.version ?? null,
       repository: entry.repository ?? null,
     });
   });
 
   return {
-    repoRoot,
+    source: source.label,
     marketplacePath: MARKETPLACE_PATH,
     marketplaceText,
     version: marketplace.version,
@@ -89,24 +90,35 @@ export function checkManifest(manifest) {
 }
 
 /**
- * Writes the three version fields of a release (per-plugin manifest, its marketplace entry,
- * and the marketplace counter) and returns the repo-relative paths it touched.
+ * Writes the three version fields of a release. Every write re-reads the file on disk and refuses
+ * unless it still holds the version the plan was built from, so a tree that moved under the engine
+ * fails loudly instead of publishing a number nobody planned.
  */
-export function applyVersions(repoRoot, manifest, { plugins = new Map(), marketplaceVersion = null } = {}) {
+export function applyVersions(repoRoot, manifest, { plugins = [], marketplaceVersion = null } = {}) {
   const written = [];
-  let marketplaceText = manifest.marketplaceText;
+  const marketplaceAbsolute = resolveInRepo(repoRoot, MARKETPLACE_PATH);
+  let marketplaceText = readFileSync(marketplaceAbsolute, 'utf8');
+  const marketplaceBefore = marketplaceText;
 
-  for (const [name, nextVersion] of [...plugins].sort(([a], [b]) => a.localeCompare(b))) {
-    const plugin = manifest.plugins.get(name);
-    if (!plugin) throw new Error(`unknown plugin "${name}" (not in ${MARKETPLACE_PATH})`);
-    parseVersion(nextVersion, `new version for "${name}"`);
+  for (const plugin of [...plugins].sort((a, b) => a.name.localeCompare(b.name))) {
+    const known = manifest.plugins.get(plugin.name);
+    if (!known) throw new Error(`unknown plugin "${plugin.name}" (not in ${MARKETPLACE_PATH})`);
+    parseVersion(plugin.to, `new version for "${plugin.name}"`);
 
-    const manifestAbsolute = path.join(repoRoot, plugin.manifestPath);
+    const manifestAbsolute = resolveInRepo(repoRoot, known.manifestPath, `manifest for plugin "${plugin.name}"`);
     const pluginText = readFileSync(manifestAbsolute, 'utf8');
-    writeFileSync(manifestAbsolute, replaceValue(pluginText, ['version'], nextVersion));
-    written.push(plugin.manifestPath);
+    const onDisk = readValue(pluginText, ['version']);
+    if (onDisk !== plugin.from) {
+      throw new Error(`${known.manifestPath} is ${onDisk} on disk but the plan was built from ${plugin.from}; refusing to write a version nobody planned`);
+    }
+    const entryOnDisk = readValue(marketplaceText, ['plugins', known.index, 'version']);
+    if (entryOnDisk !== plugin.from) {
+      throw new Error(`${MARKETPLACE_PATH} has "${plugin.name}" at ${entryOnDisk} but the plan was built from ${plugin.from}`);
+    }
 
-    marketplaceText = replaceValue(marketplaceText, ['plugins', plugin.index, 'version'], nextVersion);
+    writeFileSync(manifestAbsolute, replaceValue(pluginText, ['version'], plugin.to));
+    written.push(known.manifestPath);
+    marketplaceText = replaceValue(marketplaceText, ['plugins', known.index, 'version'], plugin.to);
   }
 
   if (marketplaceVersion !== null) {
@@ -114,8 +126,8 @@ export function applyVersions(repoRoot, manifest, { plugins = new Map(), marketp
     marketplaceText = replaceValue(marketplaceText, ['version'], marketplaceVersion);
   }
 
-  if (marketplaceText !== manifest.marketplaceText) {
-    writeFileSync(path.join(repoRoot, MARKETPLACE_PATH), marketplaceText);
+  if (marketplaceText !== marketplaceBefore) {
+    writeFileSync(marketplaceAbsolute, marketplaceText);
     written.push(MARKETPLACE_PATH);
   }
 

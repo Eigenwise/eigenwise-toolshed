@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { runGuard } from '../guard.mjs';
 import { createGit } from '../lib/git.mjs';
-import { makeRepo, marketplaceJson, recordingGit } from './helpers.mjs';
+import { fileGit, makeRepo, marketplaceJson } from './helpers.mjs';
 
 const PLUGINS = { sidequest: '3.6.49', workbench: '0.63.11' };
 
@@ -15,8 +15,7 @@ function setup(t, { published = null, ...repoOptions } = {}) {
   const files = published
     ? { '.claude-plugin/marketplace.json': marketplaceJson({ version: published.version, plugins: published.plugins }) }
     : {};
-  const { run } = recordingGit({ files });
-  return { root: repo.root, git: createGit({ cwd: repo.root, run }) };
+  return { root: repo.root, git: createGit({ cwd: repo.root, run: fileGit(files) }) };
 }
 
 const reasons = (result) => result.failures.join('\n');

@@ -6,6 +6,7 @@ import test from 'node:test';
 import { buildFragment, main } from '../note.mjs';
 import { parseFragment } from '../lib/fragments.mjs';
 import { readManifest } from '../lib/manifests.mjs';
+import { diskSource } from '../lib/treesource.mjs';
 import { makeRepo } from './helpers.mjs';
 
 const PLUGINS = { 'codex-gateway': '0.33.4', sidequest: '3.6.49', workbench: '0.63.11' };
@@ -13,7 +14,7 @@ const PLUGINS = { 'codex-gateway': '0.33.4', sidequest: '3.6.49', workbench: '0.
 function setup(t, options = {}) {
   const repo = makeRepo({ plugins: PLUGINS, ...options });
   t.after(repo.cleanup);
-  return { root: repo.root, manifest: readManifest(repo.root) };
+  return { root: repo.root, manifest: readManifest(diskSource(repo.root), repo.root) };
 }
 
 test('a fragment is written in the format the reader accepts', (t) => {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { FragmentError, parseFragment, readFragments, renderFragment, writeFragment } from '../lib/fragments.mjs';
+import { diskSource } from '../lib/treesource.mjs';
 import { fragmentText, makeRepo } from './helpers.mjs';
 
 const KNOWN = new Map([['sidequest', {}], ['workbench', {}], ['live-rules', {}]]);
@@ -85,7 +86,7 @@ test('reading a directory collects every failure instead of stopping at the firs
   });
   t.after(repo.cleanup);
 
-  const { fragments, errors } = readFragments(repo.root, { knownPlugins: new Map([['sidequest', {}], ['workbench', {}]]) });
+  const { fragments, errors } = readFragments(diskSource(repo.root), { knownPlugins: new Map([['sidequest', {}], ['workbench', {}]]) });
   assert.deepEqual(fragments.map((fragment) => fragment.ref), ['SQ-1']);
   assert.equal(errors.length, 3);
   assert.ok(errors.every((error) => error instanceof FragmentError));
@@ -102,7 +103,7 @@ test('a second file claiming the same ref cannot get past the filename rule', (t
   });
   t.after(repo.cleanup);
 
-  const { errors } = readFragments(repo.root, { knownPlugins: new Map([['sidequest', {}]]) });
+  const { errors } = readFragments(diskSource(repo.root), { knownPlugins: new Map([['sidequest', {}]]) });
   assert.match(errors.map((error) => error.message).join('\n'), /filename must be "SQ-9\.md"/);
 });
 
@@ -116,7 +117,7 @@ test('fragments sort by ref number, not by string', (t) => {
   });
   t.after(repo.cleanup);
 
-  const { fragments } = readFragments(repo.root, { knownPlugins: new Map([['sidequest', {}]]) });
+  const { fragments } = readFragments(diskSource(repo.root), { knownPlugins: new Map([['sidequest', {}]]) });
   assert.deepEqual(fragments.map((fragment) => fragment.ref), ['SQ-9', 'SQ-10', 'SQ-100']);
 });
 

@@ -7,7 +7,7 @@ import { readRepoChangelog, releasedRefs, REPO_CHANGELOG } from './lib/changelog
 import { createGit } from './lib/git.mjs';
 import { fragmentFile, readFragments } from './lib/fragments.mjs';
 import { checkManifest, MARKETPLACE_PATH, readManifest } from './lib/manifests.mjs';
-import { readValue } from './lib/jsonedit.mjs';
+import { commitSource, diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList } from './lib/cli.mjs';
 
 const MODES = ['fragments', 'dev', 'main'];
@@ -52,13 +52,20 @@ export function runGuard(repoRoot, {
     return { ok: false, mode, failures, notes };
   }
 
-  const manifest = readManifest(repoRoot);
+  const source = diskSource(repoRoot);
+  let manifest;
+  try {
+    manifest = readManifest(source, repoRoot);
+  } catch (error) {
+    fail(error.message);
+    return { ok: false, mode, failures, notes };
+  }
   for (const error of checkManifest(manifest)) fail(error);
 
-  const { fragments, errors } = readFragments(repoRoot, { knownPlugins: manifest.plugins });
+  const { fragments, errors } = readFragments(source, { knownPlugins: manifest.plugins });
   for (const error of errors) fail(error.message);
 
-  const released = releasedRefs(readRepoChangelog(repoRoot));
+  const released = releasedRefs(readRepoChangelog(source));
   for (const fragment of fragments) {
     if (released.has(fragment.ref)) {
       fail(`${fragmentFile(fragment.ref)} is still queued but ${fragment.ref} already has a ${REPO_CHANGELOG} entry; a cut would release it twice`);
@@ -70,7 +77,7 @@ export function runGuard(repoRoot, {
   }
 
   if (publishRef && git) {
-    const marketplaceAtRef = git.showFile(publishRef, MARKETPLACE_PATH);
+    const marketplaceAtRef = commitSource(git, publishRef).read(MARKETPLACE_PATH);
     if (marketplaceAtRef === null) {
       notes.push(`${publishRef} has no ${MARKETPLACE_PATH} yet, so version drift was not checked`);
     } else {

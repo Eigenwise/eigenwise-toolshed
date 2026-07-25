@@ -1,78 +1,94 @@
+// Behaviour of a cut, against a real repository. What the engine writes, what it refuses, and what
+// it leaves alone are all statements about a tree, so they are tested against one.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
 import { cut } from '../cut.mjs';
-import { createGit } from '../lib/git.mjs';
 import { readValue } from '../lib/jsonedit.mjs';
-import { DEFAULT_DATE, DEFAULT_SHA, fragmentText, makeRepo, recordingGit, remoteMutations } from './helpers.mjs';
+import { makeGitRepo } from './realrepo.mjs';
 
 const PLUGINS = { 'codex-gateway': '0.33.4', sidequest: '3.6.17', workbench: '0.63.6' };
 
-function setup(t, { gitOptions = {}, suiteExit = 0, ...repoOptions } = {}) {
-  const repo = makeRepo({ plugins: PLUGINS, ...repoOptions });
+function setup(t, options = {}) {
+  const repo = makeGitRepo({ plugins: PLUGINS, ...options });
   t.after(repo.cleanup);
-  const { run, calls } = recordingGit(gitOptions);
   const suites = [];
   return {
-    root: repo.root,
-    calls,
+    ...repo,
     suites,
-    git: createGit({ cwd: repo.root, run }),
     runSuite: (suite) => {
       suites.push(suite.plugin);
-      return { code: suiteExit, command: suite.command };
+      return { code: 0, command: suite.command };
     },
     read: (relative) => readFileSync(path.join(repo.root, relative), 'utf8'),
     exists: (relative) => existsSync(path.join(repo.root, relative)),
     version: (name) => readValue(readFileSync(path.join(repo.root, `plugins/${name}/.claude-plugin/plugin.json`), 'utf8'), ['version']),
-    entryVersion: (name) => {
-      const text = readFileSync(path.join(repo.root, '.claude-plugin/marketplace.json'), 'utf8');
-      return JSON.parse(text).plugins.find((entry) => entry.name === name).version;
-    },
+    entryVersion: (name) => JSON.parse(readFileSync(path.join(repo.root, '.claude-plugin/marketplace.json'), 'utf8'))
+      .plugins.find((entry) => entry.name === name).version,
     marketplaceVersion: () => JSON.parse(readFileSync(path.join(repo.root, '.claude-plugin/marketplace.json'), 'utf8')).version,
   };
 }
 
 test('a normal cut moves three version fields and nothing else', async (t) => {
-  const context = setup(t, {
-    fragments: {
-      'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' },
-      'SQ-2': { plugins: ['sidequest'], bump: 'minor', commit: 'bbbbbbb' },
-      'SQ-3': { plugins: ['workbench'], bump: 'patch', commit: 'ccccccc' },
-    },
-    suites: { sidequest: 'package', workbench: 'testdir' },
-  });
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.writeFragment('SQ-2', { plugins: ['sidequest'], bump: 'minor' });
+  context.writeFragment('SQ-3', { plugins: ['workbench'], bump: 'patch' });
+  context.commit('integrate');
 
-  const result = await cut({ repoRoot: context.root, git: context.git, runSuite: context.runSuite, log: () => {} });
+  const result = await cut({ repoRoot: context.root, runSuite: context.runSuite, log: () => {} });
 
   assert.equal(result.status, 'cut');
-  assert.equal(context.version('sidequest'), '3.7.0');
+  assert.equal(context.version('sidequest'), '3.7.0', 'the highest level wins');
   assert.equal(context.entryVersion('sidequest'), '3.7.0');
   assert.equal(context.version('workbench'), '0.63.7');
   assert.equal(context.entryVersion('workbench'), '0.63.7');
   assert.equal(context.marketplaceVersion(), '3.208.0');
   assert.equal(context.version('codex-gateway'), '0.33.4', 'an untouched plugin never moves');
   assert.equal(context.entryVersion('codex-gateway'), '0.33.4');
-  assert.deepEqual(context.suites, ['sidequest', 'workbench']);
+  assert.deepEqual(context.suites, ['sidequest', 'workbench'], 'only the changed plugins are verified');
+});
+
+test('the release commit contains exactly what the cut generated', async (t) => {
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor' });
+  context.writeFragment('SQ-2', { plugins: ['workbench'], bump: 'patch' });
+  context.commit('integrate');
+
+  const result = await cut({ repoRoot: context.root, skipTests: true, log: () => {} });
+
+  assert.equal(result.message, 'release v3.208.0: sidequest 3.7.0, workbench 0.63.7 (SQ-1, SQ-2)');
+  assert.deepEqual(context.git('show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean).sort(), [
+    '.claude-plugin/marketplace.json',
+    '.release/unreleased/SQ-1.md',
+    '.release/unreleased/SQ-2.md',
+    'CHANGELOG.md',
+    'plugins/sidequest/.claude-plugin/plugin.json',
+    'plugins/sidequest/CHANGELOG.md',
+    'plugins/workbench/.claude-plugin/plugin.json',
+    'plugins/workbench/CHANGELOG.md',
+  ]);
+  assert.deepEqual(context.git('tag', '--list').split('\n').sort(), ['sidequest-v3.7.0', 'v3.208.0', 'workbench-v0.63.7']);
+  for (const tag of result.plan.tags) {
+    assert.equal(context.git('rev-list', '-n', '1', `refs/tags/${tag}`), result.commit);
+  }
 });
 
 test('a cut generates the changelogs and consumes the fragments it used', async (t) => {
-  const context = setup(t, {
-    fragments: {
-      'SQ-1': { plugins: ['sidequest'], bump: 'minor', commit: 'aaaaaaa' },
-      'SQ-2': { plugins: ['workbench'], bump: 'patch', commit: 'bbbbbbb', hold: true },
-    },
-  });
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor' });
+  context.writeFragment('SQ-2', { plugins: ['workbench'], bump: 'patch', hold: true });
+  context.commit('integrate');
 
-  const result = await cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} });
+  const result = await cut({ repoRoot: context.root, skipTests: true, log: () => {} });
 
-  const repoChangelog = context.read('CHANGELOG.md');
-  assert.match(repoChangelog, /^## v3\.208\.0 \(2026-07-25\)$/m);
-  assert.match(repoChangelog, /### sidequest 3\.6\.17 → 3\.7\.0/);
-  assert.doesNotMatch(repoChangelog, /SQ-2/, 'a held fragment is not in the changelog');
-  assert.match(context.read('plugins/sidequest/CHANGELOG.md'), /^## 3\.7\.0 \(2026-07-25\)$/m);
+  const changelog = context.read('CHANGELOG.md');
+  assert.match(changelog, /^## v3\.208\.0 \(\d{4}-\d{2}-\d{2}\)$/m);
+  assert.match(changelog, /### sidequest 3\.6\.17 → 3\.7\.0/);
+  assert.doesNotMatch(changelog, /SQ-2/, 'a held fragment is not in the changelog');
+  assert.match(context.read('plugins/sidequest/CHANGELOG.md'), /^## 3\.7\.0 \(\d{4}-\d{2}-\d{2}\)$/m);
   assert.equal(context.exists('plugins/workbench/CHANGELOG.md'), false, 'untouched plugins get no changelog');
 
   assert.equal(context.exists('.release/unreleased/SQ-1.md'), false, 'consumed');
@@ -81,12 +97,14 @@ test('a cut generates the changelogs and consumes the fragments it used', async 
 });
 
 test('rerunning the same cut releases nothing', async (t) => {
-  const context = setup(t, { fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' } } });
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate');
 
-  await cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} });
+  await cut({ repoRoot: context.root, skipTests: true, log: () => {} });
   const before = context.read('CHANGELOG.md');
 
-  const again = await cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} });
+  const again = await cut({ repoRoot: context.root, skipTests: true, log: () => {} });
   assert.equal(again.status, 'nothing-to-release');
   assert.equal(context.version('sidequest'), '3.6.18', 'the second run does not double-bump');
   assert.equal(context.marketplaceVersion(), '3.208.0');
@@ -95,164 +113,154 @@ test('rerunning the same cut releases nothing', async (t) => {
 
 test('a queued fragment for an already-released ref cannot ship twice', async (t) => {
   const context = setup(t, {
-    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' } },
     changelog: '# Changelog\n\n## v3.207.0 (2026-07-24)\n\n### sidequest 3.6.16 → 3.6.17\n\n#### Fixes\n- Already out (SQ-1)\n',
   });
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate');
 
-  const result = await cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} });
+  const result = await cut({ repoRoot: context.root, skipTests: true, log: () => {} });
   assert.equal(result.status, 'nothing-to-release');
   assert.equal(context.version('sidequest'), '3.6.17');
 });
 
-test('a dry run writes nothing and mutates no ref', async (t) => {
-  const context = setup(t, { fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'minor', commit: 'aaaaaaa' } } });
+test('a dry run writes nothing and moves no ref', async (t) => {
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor' });
+  const integration = context.commit('integrate');
 
-  const result = await cut({ repoRoot: context.root, git: context.git, dryRun: true, runSuite: () => ({ code: 0 }), log: () => {} });
+  const result = await cut({ repoRoot: context.root, dryRun: true, log: () => {} });
 
   assert.equal(result.status, 'dry-run');
   assert.equal(result.plan.plugins[0].to, '3.7.0');
   assert.equal(context.version('sidequest'), '3.6.17');
   assert.equal(context.exists('.release/unreleased/SQ-1.md'), true);
   assert.equal(context.exists('CHANGELOG.md'), false);
-  assert.deepEqual(context.calls.filter((call) => /^(merge|commit|tag -a|push|cherry-pick|add)/.test(call)), []);
+  assert.equal(context.git('rev-parse', 'HEAD'), integration, 'HEAD did not move');
+  assert.equal(context.git('tag', '--list'), '', 'no tag was created');
 });
 
 test('.release/HOLD stops a normal window and --force overrides it', async (t) => {
-  const context = setup(t, {
-    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' } },
-    hold: 'waiting on the docs ticket',
-  });
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.write('.release/HOLD', 'waiting on the docs ticket\n');
+  context.commit('integrate under a hold');
 
-  const held = await cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} });
+  const held = await cut({ repoRoot: context.root, skipTests: true, log: () => {} });
   assert.equal(held.status, 'held');
   assert.equal(held.reason, 'waiting on the docs ticket');
   assert.equal(context.version('sidequest'), '3.6.17');
 
-  const forced = await cut({ repoRoot: context.root, git: context.git, force: true, runSuite: () => ({ code: 0 }), log: () => {} });
+  const forced = await cut({ repoRoot: context.root, skipTests: true, force: true, log: () => {} });
   assert.equal(forced.status, 'cut');
   assert.equal(context.version('sidequest'), '3.6.18');
 });
 
-test('a hold committed on the integration branch stops the cut before the merge', async (t) => {
-  const context = setup(t, {
-    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' } },
-    gitOptions: { files: { '.release/HOLD': 'paused from dev\n' } },
-  });
-
-  const held = await cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} });
-  assert.equal(held.status, 'held');
-  assert.equal(held.reason, 'paused from dev');
-  assert.deepEqual(context.calls.filter((call) => call.startsWith('merge')), [], 'nothing was merged');
-});
-
 test('an existing tag stops the cut instead of moving it', async (t) => {
-  const context = setup(t, {
-    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' } },
-    gitOptions: { tags: ['v3.208.0'] },
-  });
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  const integration = context.commit('integrate');
+  context.git('tag', 'v3.208.0', integration);
 
   await assert.rejects(
-    () => cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} }),
+    () => cut({ repoRoot: context.root, skipTests: true, log: () => {} }),
     /these tags already exist.*v3\.208\.0/s,
   );
   assert.equal(context.version('sidequest'), '3.6.17');
+  assert.equal(context.git('rev-list', '-n', '1', 'refs/tags/v3.208.0'), integration, 'the existing tag did not move');
 });
 
 test('a plugin whose manifest and marketplace entry disagree blocks the cut', async (t) => {
-  const context = setup(t, { fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' } } });
+  const context = setup(t);
   const manifestPath = path.join(context.root, 'plugins/sidequest/.claude-plugin/plugin.json');
   writeFileSync(manifestPath, readFileSync(manifestPath, 'utf8').replace('3.6.17', '3.6.12'));
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate with drifted versions');
 
   await assert.rejects(
-    () => cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} }),
+    () => cut({ repoRoot: context.root, skipTests: true, log: () => {} }),
     /version mismatch.*marketplace\.json says 3\.6\.17.*says 3\.6\.12/s,
   );
 });
 
-test('a hotfix cherry-picks only its tickets and patch-bumps only their plugins', async (t) => {
-  const files = {
-    '.release/unreleased/SQ-1.md': fragmentText('SQ-1', { plugins: ['sidequest'], bump: 'minor', commit: 'aaaaaaa' }),
-    '.release/unreleased/SQ-2.md': fragmentText('SQ-2', { plugins: ['workbench'], bump: 'minor', commit: 'bbbbbbb' }),
-  };
-  const context = setup(t, { gitOptions: { files } });
+test('a hotfix releases only its tickets and leaves the rest unreleased', async (t) => {
+  const context = setup(t);
+  context.onBranch('dev');
+  context.write('plugins/workbench/urgent.js', '// urgent\n');
+  const fixSha = context.commit('the urgent fix');
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor', commit: fixSha });
+  context.writeFragment('SQ-2', { plugins: ['workbench'], bump: 'minor', commit: fixSha });
+  const devSha = context.commit('note both tickets');
+  context.onBranch('main');
 
   const result = await cut({
     repoRoot: context.root,
-    git: context.git,
     mode: 'hotfix',
     tickets: ['SQ-2'],
-    runSuite: () => ({ code: 0 }),
+    sha: devSha,
+    skipTests: true,
     log: () => {},
   });
 
   assert.equal(result.status, 'cut');
-  assert.deepEqual(context.calls.filter((call) => call.startsWith('cherry-pick')), ['cherry-pick -x bbbbbbb']);
   assert.equal(context.version('workbench'), '0.64.0');
   assert.equal(context.version('sidequest'), '3.6.17', 'the unreleased ticket stays unreleased');
-  assert.equal(context.marketplaceVersion(), '3.207.1');
-  assert.equal(result.plan.tag, 'v3.207.1');
+  assert.equal(context.marketplaceVersion(), '3.207.1', 'a hotfix patches the counter');
   assert.deepEqual(result.plan.tags, ['v3.207.1', 'workbench-v0.64.0']);
   assert.match(context.read('CHANGELOG.md'), /Hotfix release cut from `main`/);
+  assert.equal(context.exists('plugins/workbench/urgent.js'), true, 'the fix was cherry-picked');
 });
 
-test('a hotfix skips a cherry-pick that main already contains', async (t) => {
-  const context = setup(t, {
-    gitOptions: {
-      files: { '.release/unreleased/SQ-2.md': fragmentText('SQ-2', { plugins: ['workbench'], bump: 'patch', commit: 'bbbbbbb' }) },
-      ancestors: ['bbbbbbb'],
-    },
-  });
+test('a hotfix skips a cherry-pick that the publish branch already contains', async (t) => {
+  const context = setup(t);
+  context.write('plugins/workbench/already.js', '// already on main\n');
+  const fixSha = context.commit('a fix that is already on main');
+  context.onBranch('dev');
+  context.git('merge', '-q', 'main');
+  context.writeFragment('SQ-2', { plugins: ['workbench'], bump: 'patch', commit: fixSha });
+  const devSha = context.commit('note it');
+  context.onBranch('main');
 
-  await cut({ repoRoot: context.root, git: context.git, mode: 'hotfix', tickets: ['SQ-2'], runSuite: () => ({ code: 0 }), log: () => {} });
-  assert.deepEqual(context.calls.filter((call) => call.startsWith('cherry-pick')), []);
+  const result = await cut({ repoRoot: context.root, mode: 'hotfix', tickets: ['SQ-2'], sha: devSha, skipTests: true, log: () => {} });
+
+  assert.equal(result.status, 'cut');
   assert.equal(context.version('workbench'), '0.63.7');
+  assert.equal(
+    context.git('log', '--format=%s', '-n', '2').split('\n')[1],
+    'a fix that is already on main',
+    'the release commit sits straight on the fix, with no duplicate cherry-pick',
+  );
 });
 
 test('the cut refuses a dirty tree and the wrong branch', async (t) => {
-  const dirty = setup(t, {
-    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' } },
-    gitOptions: { clean: false },
-  });
-  await assert.rejects(() => cut({ repoRoot: dirty.root, git: dirty.git, log: () => {} }), /uncommitted changes/);
+  const dirty = setup(t);
+  dirty.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  dirty.commit('integrate');
+  writeFileSync(path.join(dirty.root, 'plugins/sidequest/index.js'), '// edited\n');
+  await assert.rejects(() => cut({ repoRoot: dirty.root, skipTests: true, log: () => {} }), /uncommitted changes/);
 
-  const wrongBranch = setup(t, {
-    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' } },
-    gitOptions: { branch: 'dev' },
-  });
-  await assert.rejects(() => cut({ repoRoot: wrongBranch.root, git: wrongBranch.git, log: () => {} }), /cutting from "dev"/);
+  const wrongBranch = setup(t);
+  wrongBranch.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  wrongBranch.commit('integrate');
+  wrongBranch.onBranch('dev');
+  wrongBranch.git('merge', '-q', 'main');
+  await assert.rejects(() => cut({ repoRoot: wrongBranch.root, skipTests: true, log: () => {} }), /cutting from "dev"/);
 });
 
-test('the release commit and tags carry the window, the plugins, and the refs', async (t) => {
-  const context = setup(t, {
-    fragments: {
-      'SQ-1': { plugins: ['sidequest'], bump: 'minor', commit: 'aaaaaaa' },
-      'SQ-2': { plugins: ['workbench'], bump: 'patch', commit: 'bbbbbbb' },
-    },
-  });
+test('a failing suite leaves the release local and says so', async (t) => {
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate');
+  const before = context.remoteRefs();
 
-  const result = await cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: () => {} });
+  await assert.rejects(
+    () => cut({
+      repoRoot: context.root,
+      push: true,
+      log: () => {},
+      runSuite: (suite) => ({ code: 1, command: suite.command }),
+    }),
+    /release suites failed, nothing was published/,
+  );
 
-  assert.equal(result.message, 'release v3.208.0: sidequest 3.7.0, workbench 0.63.7 (SQ-1, SQ-2)');
-  assert.deepEqual(context.calls.filter((call) => call.startsWith('tag -a')), [
-    'tag -a v3.208.0 -m release v3.208.0: sidequest 3.7.0, workbench 0.63.7 (SQ-1, SQ-2)',
-    'tag -a sidequest-v3.7.0 -m sidequest 3.7.0 (v3.208.0)',
-    'tag -a workbench-v0.63.7 -m workbench 0.63.7 (v3.208.0)',
-  ]);
-  const staged = context.calls.find((call) => call.startsWith('add --'));
-  for (const file of [
-    '.claude-plugin/marketplace.json',
-    'plugins/sidequest/.claude-plugin/plugin.json',
-    'plugins/workbench/.claude-plugin/plugin.json',
-    'CHANGELOG.md',
-    'plugins/sidequest/CHANGELOG.md',
-    'plugins/workbench/CHANGELOG.md',
-    '.release/unreleased/SQ-1.md',
-    '.release/unreleased/SQ-2.md',
-  ]) {
-    assert.ok(staged.includes(file), `expected ${file} in "${staged}"`);
-  }
-  assert.deepEqual(remoteMutations(context.calls), [], 'building a cut never touches a remote');
-  assert.equal(result.pushCommand, 'git push --atomic origin HEAD:main v3.208.0 sidequest-v3.7.0 workbench-v0.63.7');
-  assert.equal(result.commit, DEFAULT_SHA);
-  assert.equal(result.plan.date, DEFAULT_DATE);
+  assert.deepEqual(context.remoteRefs(), before);
 });

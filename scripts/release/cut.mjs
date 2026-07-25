@@ -6,20 +6,23 @@ import { parseArgs } from 'node:util';
 
 import { applyChangelogs, readRepoChangelog, releasedRefs, REPO_CHANGELOG } from './lib/changelog.mjs';
 import { createGit } from './lib/git.mjs';
-import { fragmentFile, FRAGMENT_DIR, HOLD_FILE, isHeld, parseFragment, readFragments } from './lib/fragments.mjs';
+import { fragmentFile, HOLD_FILE, isHeld, readFragments } from './lib/fragments.mjs';
 import { applyVersions, checkManifest, readManifest } from './lib/manifests.mjs';
-import { buildPlan, formatPlan, planCommitMessage, planPushCommand } from './lib/plan.mjs';
+import { resolveInRepo } from './lib/paths.mjs';
+import { buildPlan, formatPlan, planCommitMessage, planPushCommand, planRefspecs } from './lib/plan.mjs';
 import { createSuiteResolver } from './lib/suites.mjs';
+import { commitSource, diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList, UsageError } from './lib/cli.mjs';
 
 const USAGE = `Usage: node scripts/release/cut.mjs [options]
 
 Builds a release window in the working tree and stops just short of publishing it. Everything is
-local until --push, and the publish itself is a single atomic ref update.
+local until --push, and the publish itself is a single atomic ref update of the exact commit whose
+suites passed.
 
-  --sha <rev>              Pin the window to this commit (default HEAD)
+  --sha <rev>              Pin the window to this commit (default HEAD). Every input is read from it
   --mode <normal|hotfix>   Window kind (default normal)
-  --tickets <a,b>          Refs to release in a hotfix
+  --tickets <a,b>          Refs to release in a hotfix, each named once
   --date <YYYY-MM-DD>      Release date (defaults to the pinned commit's date)
   --publish-branch <name>  Branch the release lands on (default main)
   --remote <name>          Remote to publish to (default origin)
@@ -28,33 +31,45 @@ local until --push, and the publish itself is a single atomic ref update.
   --skip-tests             Do not run the changed plugins' suites
   --no-merge               The tree is already prepared; skip the fast-forward merge
   --no-branch-check        Allow cutting from a branch other than --publish-branch
-  --allow-dirty            Proceed with uncommitted changes in the tree
+  --allow-dirty            Tolerate unstaged or untracked files (staged changes are never allowed)
   --force                  Override .release/HOLD, held fragments, and existing tags
   --json                   Machine-readable result
   --repo <dir>             Repository root (defaults to this script's repo)`;
+
+// Anything that lets a suite authenticate to a remote, or reconfigure git underneath the engine,
+// is removed before the suite runs. The engine still re-verifies every ref afterwards, because
+// stripping credentials is a reduction in reach, not a proof.
+const SUITE_CREDENTIAL_DENYLIST = [
+  'GITHUB_TOKEN', 'GH_TOKEN', 'GH_ENTERPRISE_TOKEN', 'RELEASE_TOKEN', 'GITHUB_ACTIONS_TOKEN',
+  'NPM_TOKEN', 'NODE_AUTH_TOKEN', 'NPM_CONFIG__AUTH', 'NPM_CONFIG__AUTHTOKEN',
+  'GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_AUTH_SOCK', 'GIT_SSH', 'GIT_SSH_COMMAND',
+  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'GITLAB_TOKEN', 'CI_JOB_TOKEN',
+];
+
+export function suiteEnvironment(base = process.env) {
+  const env = { ...base };
+  for (const name of SUITE_CREDENTIAL_DENYLIST) delete env[name];
+  env.GIT_TERMINAL_PROMPT = '0';
+  env.GIT_CONFIG_NOSYSTEM = '1';
+  env.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  env.GIT_CONFIG_SYSTEM = env.GIT_CONFIG_GLOBAL;
+  env.npm_config_ignore_scripts = base.npm_config_ignore_scripts ?? '';
+  return env;
+}
 
 export function defaultSuiteRunner(repoRoot, { log = console.log } = {}) {
   return (suite) => {
     const command = suite.setup ? `${suite.setup} && ${suite.command}` : suite.command;
     log(`running ${suite.plugin}: ${command}`);
     const result = spawnSync(command, {
-      cwd: path.join(repoRoot, suite.cwd),
+      cwd: resolveInRepo(repoRoot, suite.cwd, `suite directory for "${suite.plugin}"`),
       shell: true,
       stdio: 'inherit',
       windowsHide: true,
+      env: suiteEnvironment(),
     });
     return { code: result.status ?? 1, command };
   };
-}
-
-function fragmentsFromCommit(git, pinned, knownPlugins) {
-  const files = git.listFiles(pinned, FRAGMENT_DIR).filter((file) => file.endsWith('.md'));
-  const fragments = [];
-  for (const file of files) {
-    const text = git.showFile(pinned, file);
-    if (text !== null) fragments.push(parseFragment(file, text, { knownPlugins }));
-  }
-  return fragments;
 }
 
 function assertNoStaleTags(git, plan, { remote, checkRemote, force }) {
@@ -67,6 +82,27 @@ function assertNoStaleTags(git, plan, { remote, checkRemote, force }) {
     `these tags already exist, so this window was published (or half-published) before: ${clashes.join(', ')}. ` +
     'Cut a new window instead of moving a tag; --force only if you know the tag is a local leftover.',
   );
+}
+
+/**
+ * The release commit and its tags are the verified artefact. Suites run arbitrary repository code,
+ * so nothing they could have done to the local refs is allowed to reach the remote.
+ */
+function assertReleaseIntact(git, plan, commit) {
+  const head = git.revParse('HEAD');
+  if (head !== commit) {
+    throw new Error(`HEAD moved from the verified release commit ${commit} to ${head} while the suites ran; nothing was published`);
+  }
+  const staged = git.stagedFiles();
+  if (staged.length > 0) {
+    throw new Error(`the suites left staged changes (${staged.slice(0, 5).join(', ')}); the verified release commit is no longer what the tree says, nothing was published`);
+  }
+  for (const tag of plan.tags) {
+    const target = git.tagTarget(tag);
+    if (target !== commit) {
+      throw new Error(`tag ${tag} points at ${target ?? 'nothing'} instead of the verified release commit ${commit}; nothing was published`);
+    }
+  }
 }
 
 /**
@@ -98,8 +134,8 @@ export async function cut(options = {}) {
   const git = options.git ?? createGit({ cwd: repoRoot, dryRun });
   const runSuite = options.runSuite ?? defaultSuiteRunner(repoRoot, { log });
 
-  const loadManifest = () => {
-    const loaded = readManifest(repoRoot);
+  const loadManifest = (source) => {
+    const loaded = readManifest(source, repoRoot);
     const errors = checkManifest(loaded);
     if (errors.length > 0) {
       throw new Error(`manifest versions are inconsistent, refusing to cut:\n  ${errors.join('\n  ')}`);
@@ -108,6 +144,14 @@ export async function cut(options = {}) {
   };
 
   const pinned = git.revParse(sha ?? 'HEAD');
+  const basePin = git.revParse('HEAD');
+
+  // A staged file would ride along in the release commit no matter which paths the engine adds,
+  // so the index has to be empty even when the caller tolerates a dirty tree.
+  const staged = git.stagedFiles();
+  if (staged.length > 0) {
+    throw new Error(`the index has staged changes (${staged.slice(0, 5).join(', ')}); a release commit may only contain what the cut generated`);
+  }
   if (!allowDirty && !git.isClean()) {
     throw new Error('the working tree has uncommitted changes; cut from a clean checkout or pass --allow-dirty');
   }
@@ -118,10 +162,11 @@ export async function cut(options = {}) {
     }
   }
 
+  const windowSource = commitSource(git, pinned);
+  const baseSource = mode === 'hotfix' ? commitSource(git, basePin) : windowSource;
+
   if (mode === 'normal' && !force) {
-    const heldByTree = isHeld(repoRoot);
-    const heldAtPin = git.showFile(pinned, HOLD_FILE);
-    const reason = heldByTree ?? (heldAtPin === null ? null : heldAtPin.trim() || 'no reason given');
+    const reason = isHeld(windowSource) ?? isHeld(diskSource(repoRoot));
     if (reason !== null) {
       log(`release held by ${HOLD_FILE}: ${reason}`);
       return { status: 'held', reason, plan: null };
@@ -131,26 +176,17 @@ export async function cut(options = {}) {
   if (mode === 'hotfix' && (!tickets || tickets.length === 0)) {
     throw new UsageError('--mode hotfix needs --tickets SQ-x[,SQ-y]');
   }
-  const merging = mode === 'normal' && !dryRun && !noMerge;
-  if (merging) git.mergeFastForward(pinned);
 
-  // Read after the merge: a fast-forward moves the very manifests this cut is about to rewrite.
-  let manifest = loadManifest();
-  const released = releasedRefs(readRepoChangelog(repoRoot));
-
-  const fragmentsOnDisk = () => {
-    const { fragments: onDisk, errors } = readFragments(repoRoot, { knownPlugins: manifest.plugins });
-    if (errors.length > 0) throw new Error(`invalid release fragments:\n  ${errors.map((error) => error.message).join('\n  ')}`);
-    return onDisk;
-  };
-
-  let fragments;
-  if (merging) {
-    fragments = fragmentsOnDisk();
-  } else {
-    const fromCommit = fragmentsFromCommit(git, pinned, manifest.plugins);
-    fragments = fromCommit.length > 0 || mode === 'hotfix' ? fromCommit : fragmentsOnDisk();
+  // A normal window is only what a fast-forward would produce. If the pin does not already contain
+  // the publish branch, no plan built from it describes the cut that would follow.
+  if (mode === 'normal' && pinned !== basePin && !git.isAncestor(basePin, pinned)) {
+    throw new Error(`${publishBranch} (${basePin}) is not an ancestor of the pin ${pinned}, so this window could not fast-forward; merge ${publishBranch} into ${integrationBranch} first`);
   }
+
+  const manifest = loadManifest(baseSource);
+  const released = releasedRefs(readRepoChangelog(baseSource));
+  const { fragments, errors } = readFragments(windowSource, { knownPlugins: manifest.plugins });
+  if (errors.length > 0) throw new Error(`invalid release fragments:\n  ${errors.map((error) => error.message).join('\n  ')}`);
 
   const plan = buildPlan({
     fragments,
@@ -161,6 +197,7 @@ export async function cut(options = {}) {
     force,
     date: date ?? git.commitDate(pinned),
     sha: pinned,
+    base: basePin,
     publishBranch,
     suiteResolver: createSuiteResolver(repoRoot),
   });
@@ -177,34 +214,49 @@ export async function cut(options = {}) {
     return { status: 'dry-run', plan, pushCommand: planPushCommand(plan, { remote }) };
   }
 
+  // The plan was read from the pin, so the tree the writes land on has to BE the pin.
+  if (mode === 'normal') {
+    if (!noMerge && pinned !== basePin) git.mergeFastForward(pinned);
+    const head = git.revParse('HEAD');
+    if (head !== pinned) {
+      throw new Error(`the working tree is at ${head} but the window was planned from ${pinned}; refusing to release a tree nobody planned`);
+    }
+  }
+
   if (mode === 'hotfix') {
     for (const fragment of plan.selected) {
       if (!fragment.commit) throw new Error(`${fragment.ref} has no "commit" field, so a hotfix cannot cherry-pick it`);
       if (git.isAncestor(fragment.commit, 'HEAD')) continue;
       git.cherryPick(fragment.commit);
     }
-    manifest = loadManifest();
-    const moved = plan.plugins.filter((plugin) => manifest.plugins.get(plugin.name)?.version !== plugin.from);
-    if (moved.length > 0) {
-      throw new Error(
-        `cherry-picking moved plugin versions, which only a cut may do: ${moved.map((plugin) => plugin.name).join(', ')}. ` +
-        'Those commits carry a version bump and must not be hotfixed directly.',
-      );
-    }
+  }
+
+  // The tree changed under the plan (merge or cherry-picks), so re-check the two things the plan
+  // assumed about it before writing anything.
+  const disk = diskSource(repoRoot);
+  const current = loadManifest(disk);
+  const moved = plan.plugins.filter((plugin) => current.plugins.get(plugin.name)?.version !== plugin.from);
+  if (moved.length > 0) {
+    throw new Error(
+      `plugin versions moved after the plan was built: ${moved.map((plugin) => plugin.name).join(', ')}. ` +
+      'Only a cut may write a version, so those commits must not be released this way.',
+    );
+  }
+  const releasedNow = releasedRefs(readRepoChangelog(disk));
+  const alreadyOut = plan.selected.filter((fragment) => releasedNow.has(fragment.ref));
+  if (alreadyOut.length > 0) {
+    throw new Error(`${alreadyOut.map((fragment) => fragment.ref).join(', ')} became released while this cut was building; nothing was published`);
   }
 
   const touched = [
-    ...applyVersions(repoRoot, manifest, {
-      plugins: new Map(plan.plugins.map((plugin) => [plugin.name, plugin.to])),
-      marketplaceVersion: plan.marketplace.to,
-    }),
+    ...applyVersions(repoRoot, current, { plugins: plan.plugins, marketplaceVersion: plan.marketplace.to }),
     ...applyChangelogs(repoRoot, plan),
   ];
 
   const consumed = [];
   for (const fragment of plan.selected) {
     const relative = fragmentFile(fragment.ref);
-    const absolute = path.join(repoRoot, relative);
+    const absolute = resolveInRepo(repoRoot, relative, `fragment for ${fragment.ref}`);
     if (existsSync(absolute)) {
       rmSync(absolute);
       consumed.push(relative);
@@ -214,10 +266,12 @@ export async function cut(options = {}) {
   const message = planCommitMessage(plan);
   git.add([...new Set([...touched, ...consumed])].sort());
   git.commit(message);
+  const commit = git.revParse('HEAD');
   git.tag(plan.tag, message);
   for (const plugin of plan.plugins) {
     git.tag(`${plugin.name}-v${plugin.to}`, `${plugin.name} ${plugin.to} (${plan.tag})`);
   }
+  plan.commit = commit;
 
   const failures = [];
   if (!skipTests) {
@@ -232,21 +286,22 @@ export async function cut(options = {}) {
       `The release commit and tags are local only. Fix on ${integrationBranch}, then let the next window pick it up.`,
     );
   }
+  assertReleaseIntact(git, plan, commit);
 
-  const commit = git.revParse('HEAD');
-  const pushCommand = planPushCommand(plan, { remote });
+  const refspecs = planRefspecs(plan, commit);
+  const pushCommand = planPushCommand(plan, { remote, commit });
   let pushed = false;
   if (push) {
-    git.pushAtomic(remote, [`HEAD:${publishBranch}`, ...plan.tags]);
+    git.pushAtomic(remote, refspecs);
     pushed = true;
     log(`published ${plan.tag} (${commit})`);
-    log(`now restore the invariant: git push ${remote} HEAD:${integrationBranch}`);
+    log(`now restore the invariant: git push ${remote} ${commit}:refs/heads/${integrationBranch}`);
   } else {
     log(`built ${plan.tag} locally as ${commit}; publish it with:`);
     log(`  ${pushCommand}`);
   }
 
-  return { status: 'cut', plan, commit, message, pushed, pushCommand, touched, consumed };
+  return { status: 'cut', plan, commit, message, pushed, pushCommand, refspecs, touched, consumed };
 }
 
 export async function main(argv) {
@@ -304,6 +359,7 @@ export async function main(argv) {
       commit: result.commit ?? null,
       pushed: result.pushed ?? false,
       pushCommand: result.pushCommand ?? null,
+      refspecs: result.refspecs ?? [],
       touched: result.touched ?? [],
       consumed: result.consumed ?? [],
       plan: result.plan,

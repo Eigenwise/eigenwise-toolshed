@@ -6,6 +6,7 @@ import { readFragments } from '../lib/fragments.mjs';
 import { readManifest } from '../lib/manifests.mjs';
 import { buildPlan, formatPlan, planCommitMessage, planPushCommand, PlanError } from '../lib/plan.mjs';
 import { createSuiteResolver } from '../lib/suites.mjs';
+import { diskSource } from '../lib/treesource.mjs';
 import { DEFAULT_DATE, DEFAULT_SHA, makeRepo } from './helpers.mjs';
 
 const PLUGINS = { 'codebase-mapper': '2.11.1', 'codex-gateway': '0.33.4', sidequest: '3.6.17', workbench: '0.63.6' };
@@ -13,15 +14,16 @@ const PLUGINS = { 'codebase-mapper': '2.11.1', 'codex-gateway': '0.33.4', sidequ
 function planFor(t, { fragments = {}, changelog = null, plugins = PLUGINS, suites = {}, ...options } = {}) {
   const repo = makeRepo({ plugins, fragments, changelog, suites });
   t.after(repo.cleanup);
-  const manifest = readManifest(repo.root);
-  const { fragments: parsed, errors } = readFragments(repo.root, { knownPlugins: manifest.plugins });
+  const source = diskSource(repo.root);
+  const manifest = readManifest(source, repo.root);
+  const { fragments: parsed, errors } = readFragments(source, { knownPlugins: manifest.plugins });
   assert.deepEqual(errors.map((error) => error.message), []);
   return buildPlan({
     fragments: parsed,
     manifest,
     date: DEFAULT_DATE,
     sha: DEFAULT_SHA,
-    released: releasedRefs(readRepoChangelog(repo.root)),
+    released: releasedRefs(readRepoChangelog(source)),
     suiteResolver: createSuiteResolver(repo.root),
     ...options,
   });
@@ -153,7 +155,10 @@ test('the commit message and the publish command come from the same plan', (t) =
     },
   });
   assert.equal(planCommitMessage(plan), 'release v3.208.0: sidequest 3.7.0, workbench 0.63.7 (SQ-1, SQ-2)');
-  assert.equal(planPushCommand(plan), 'git push --atomic origin HEAD:main v3.208.0 sidequest-v3.7.0 workbench-v0.63.7');
+  assert.equal(
+    planPushCommand(plan, { commit: 'abc1234' }),
+    'git push --atomic origin abc1234:refs/heads/main refs/tags/v3.208.0:refs/tags/v3.208.0 refs/tags/sidequest-v3.7.0:refs/tags/sidequest-v3.7.0 refs/tags/workbench-v0.63.7:refs/tags/workbench-v0.63.7',
+  );
   assert.match(formatPlan(plan), /sidequest {2}3\.6\.17 -> 3\.7\.0 {2}\(minor\)/);
 });
 

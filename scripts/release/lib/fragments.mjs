@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { resolveInRepo } from './paths.mjs';
 import { parseFrontmatter, stringifyYaml, YamlError } from './yaml.mjs';
 import { isLevel, LEVELS } from './semver.mjs';
 
@@ -8,6 +9,7 @@ export const RELEASE_DIR = '.release';
 export const FRAGMENT_DIR = '.release/unreleased';
 export const HOLD_FILE = '.release/HOLD';
 
+const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
 const REF_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/;
 const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/;
 const KNOWN_KEYS = new Set(['ref', 'title', 'plugins', 'bump', 'commit', 'hold', 'category', 'story']);
@@ -39,6 +41,11 @@ function requireString(file, data, key, { optional = false } = {}) {
   }
   if (typeof value !== 'string' || value.trim() === '') {
     throw new FragmentError(file, `field "${key}" must be a non-empty string`);
+  }
+  // A newline in a title would render as its own top-level changelog line, which is how a forged
+  // "- something (SQ-999)" entry could mark an unrelated ticket as already released.
+  if (CONTROL_CHARACTERS.test(value)) {
+    throw new FragmentError(file, `field "${key}" must be a single line without control characters`);
   }
   return value.trim();
 }
@@ -162,7 +169,7 @@ export function renderFragment(fragment) {
 
 export function writeFragment(repoRoot, fragment, { force = false } = {}) {
   const relative = fragmentFile(fragment.ref);
-  const absolute = path.join(repoRoot, relative);
+  const absolute = resolveInRepo(repoRoot, relative, `fragment for ${fragment.ref}`);
   if (!force && existsSync(absolute)) {
     throw new FragmentError(relative, 'already exists; pass --force to overwrite it');
   }
@@ -172,21 +179,24 @@ export function writeFragment(repoRoot, fragment, { force = false } = {}) {
 }
 
 /**
- * Reads every fragment, collecting failures rather than throwing on the first one so CI can
- * report all of them at once.
+ * Reads every fragment from one source, collecting failures rather than throwing on the first one
+ * so CI can report all of them at once.
  */
-export function readFragments(repoRoot, { knownPlugins = null } = {}) {
-  const directory = path.join(repoRoot, FRAGMENT_DIR);
+export function readFragments(source, { knownPlugins = null } = {}) {
   const fragments = [];
   const errors = [];
-  if (!existsSync(directory)) return { fragments, errors };
 
-  const names = readdirSync(directory).filter((name) => name !== '.gitkeep' && !name.startsWith('.')).sort();
-  for (const name of names) {
-    const relative = path.posix.join(FRAGMENT_DIR, name);
+  const files = source.list(FRAGMENT_DIR).filter((file) => {
+    const name = path.posix.basename(file);
+    return name !== '.gitkeep' && !name.startsWith('.');
+  });
+
+  for (const relative of files) {
     try {
-      if (!name.endsWith('.md')) throw new FragmentError(relative, 'fragments must be .md files');
-      fragments.push(parseFragment(relative, readFileSync(path.join(directory, name), 'utf8'), { knownPlugins }));
+      if (!relative.endsWith('.md')) throw new FragmentError(relative, 'fragments must be .md files');
+      const text = source.read(relative);
+      if (text === null) continue;
+      fragments.push(parseFragment(relative, text, { knownPlugins }));
     } catch (error) {
       if (error instanceof FragmentError) errors.push(error);
       else throw error;
@@ -205,8 +215,7 @@ export function readFragments(repoRoot, { knownPlugins = null } = {}) {
   return { fragments, errors };
 }
 
-export function isHeld(repoRoot) {
-  const absolute = path.join(repoRoot, HOLD_FILE);
-  if (!existsSync(absolute)) return null;
-  return readFileSync(absolute, 'utf8').trim() || 'no reason given';
+export function isHeld(source) {
+  const text = source.read(HOLD_FILE);
+  return text === null ? null : text.trim() || 'no reason given';
 }

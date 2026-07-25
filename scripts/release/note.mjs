@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { fragmentFile, parseFragment, renderFragment, writeFragment } from './lib/fragments.mjs';
 import { readManifest } from './lib/manifests.mjs';
 import { LEVELS } from './lib/semver.mjs';
+import { diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList, UsageError } from './lib/cli.mjs';
 
 const USAGE = `Usage: node scripts/release/note.mjs <REF> --bump <${LEVELS.join('|')}> [--plugins a,b] [options]
@@ -138,7 +139,7 @@ export async function main(argv) {
   }
 
   const repoRoot = path.resolve(values.repo ?? repoRootFrom(import.meta.url));
-  const manifest = readManifest(repoRoot);
+  const manifest = readManifest(diskSource(repoRoot), repoRoot);
   const { text, file, fragment } = buildFragment({ input: collectInput(values, positionals), manifest });
 
   if (values['dry-run']) {

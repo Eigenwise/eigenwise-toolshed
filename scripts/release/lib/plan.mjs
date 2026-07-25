@@ -13,6 +13,10 @@ function selectFragments({ fragments, mode, tickets, released, force }) {
 
   if (mode === 'hotfix') {
     if (!tickets || tickets.length === 0) throw new PlanError('a hotfix cut needs --tickets SQ-x[,SQ-y]');
+    const duplicates = tickets.filter((ref, index) => tickets.indexOf(ref) !== index);
+    if (duplicates.length > 0) {
+      throw new PlanError(`--tickets names ${[...new Set(duplicates)].sort().join(', ')} more than once; list each ref exactly once`);
+    }
     const byRef = new Map(fragments.map((fragment) => [fragment.ref, fragment]));
     const wanted = new Set(tickets);
     for (const ref of tickets) {
@@ -51,6 +55,7 @@ export function buildPlan({
   force = false,
   date,
   sha = null,
+  base = null,
   publishBranch = 'main',
   suiteResolver = () => null,
 }) {
@@ -102,6 +107,9 @@ export function buildPlan({
   return {
     mode,
     sha,
+    base,
+    source: manifest.source,
+    commit: null,
     date,
     publishBranch,
     repository: manifest.repository,
@@ -124,14 +132,30 @@ export function planCommitMessage(plan) {
   return `release ${kind}${plan.tag}: ${summary} (${refs})`;
 }
 
-export function planPushCommand(plan, { remote = 'origin' } = {}) {
-  return ['git', 'push', '--atomic', remote, `HEAD:${plan.publishBranch}`, ...plan.tags].join(' ');
+/**
+ * Refspecs name the verified commit explicitly, never HEAD: if anything moved HEAD after the
+ * release was built and verified, the push must still publish exactly what was verified.
+ */
+export function planRefspecs(plan, commit) {
+  const sha = commit ?? plan.commit;
+  if (!sha) throw new PlanError('the publish refspecs need the release commit sha');
+  return [`${sha}:refs/heads/${plan.publishBranch}`, ...plan.tags.map((tag) => `refs/tags/${tag}:refs/tags/${tag}`)];
+}
+
+export function planPushCommand(plan, { remote = 'origin', commit = null } = {}) {
+  const sha = commit ?? plan.commit ?? '<release-sha>';
+  const refspecs = [
+    `${sha}:refs/heads/${plan.publishBranch}`,
+    ...plan.tags.map((tag) => `refs/tags/${tag}:refs/tags/${tag}`),
+  ];
+  return ['git', 'push', '--atomic', remote, ...refspecs].join(' ');
 }
 
 export function formatPlan(plan) {
   const lines = [];
   lines.push(`mode:        ${plan.mode}`);
   lines.push(`pinned sha:  ${plan.sha ?? '(working tree)'}`);
+  lines.push(`read from:   ${plan.source}`);
   lines.push(`date:        ${plan.date}`);
   if (!plan.releasable) {
     lines.push('', 'nothing to release: no selected fragments in .release/unreleased/');

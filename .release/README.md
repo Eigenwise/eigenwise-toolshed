@@ -32,7 +32,7 @@ reader needs that the title cannot carry.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `ref` | yes | Board ref, matching the filename. `SQ-843`, not `sq-843`. |
-| `title` | yes | The changelog line. Write it for someone who did not work the ticket. |
+| `title` | yes | The changelog line. One line, no control characters. Write it for someone who did not work the ticket. |
 | `plugins` | yes | Which published plugins this releases. A list, or a map of plugin to bump level. |
 | `bump` | when `plugins` is a list | `patch`, `minor`, or `major`, applied to every plugin in the list. |
 | `commit` | no | Integration sha, 7 to 40 hex characters. Becomes the commit link in the changelog. |
@@ -43,6 +43,11 @@ reader needs that the title cannot carry.
 
 Anything else is rejected, so a typo like `plugin:` fails loudly instead of silently releasing
 nothing.
+
+`title` has to be a single line. The generated changelog is also the record of what has already
+shipped, and a title carrying a newline could write a second entry claiming some other ticket was
+released. The body is free-form, but every line of it is indented under the entry, so it cannot
+claim anything either.
 
 ### Per-plugin bump levels
 

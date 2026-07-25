@@ -1,118 +1,143 @@
+// The publish boundary: what reaches a remote, when, and what a failure leaves behind. Every case
+// runs against a real repository with a real local `origin`, because these are claims about git.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { cut } from '../cut.mjs';
-import { createGit, mutatesRemote } from '../lib/git.mjs';
-import { makeRepo, recordingGit, remoteMutations } from './helpers.mjs';
+import { createGit, mutatesRemote, spawnRunner } from '../lib/git.mjs';
+import { makeGitRepo } from './realrepo.mjs';
 
 const PLUGINS = { sidequest: '3.6.17', workbench: '0.63.6' };
-const FRAGMENTS = {
-  'SQ-1': { plugins: ['sidequest'], bump: 'minor', commit: 'aaaaaaa' },
-  'SQ-2': { plugins: ['workbench'], bump: 'patch', commit: 'bbbbbbb' },
-};
 
-function setup(t, gitOptions = {}) {
-  const repo = makeRepo({ plugins: PLUGINS, fragments: FRAGMENTS, suites: { sidequest: 'package', workbench: 'testdir' } });
+function setup(t) {
+  const repo = makeGitRepo({ plugins: PLUGINS });
   t.after(repo.cleanup);
-  const { run, calls } = recordingGit(gitOptions);
-  return { root: repo.root, calls, git: createGit({ cwd: repo.root, run }) };
+  repo.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor' });
+  repo.writeFragment('SQ-2', { plugins: ['workbench'], bump: 'patch' });
+  repo.commit('integrate');
+  return repo;
 }
 
 test('push is the only verb that can change a remote', () => {
-  for (const args of [['merge', '--ff-only', 'x'], ['commit', '-m', 'x'], ['tag', '-a', 'v1'], ['ls-remote', '--tags', 'origin'], ['rev-parse', 'HEAD']]) {
+  for (const args of [
+    ['merge', '--ff-only', 'x'],
+    ['commit', '-m', 'x'],
+    ['tag', '-a', 'v1'],
+    ['ls-remote', '--tags', 'origin'],
+    ['rev-parse', 'HEAD'],
+    ['diff', '--cached', '--name-only'],
+    ['rev-list', '-n', '1', 'refs/tags/v1'],
+  ]) {
     assert.equal(mutatesRemote(args), false, args.join(' '));
   }
   assert.equal(mutatesRemote(['push', '--atomic', 'origin', 'HEAD:main']), true);
 });
 
 test('every remote-changing command happens after the whole release is built', async (t) => {
-  const context = setup(t);
+  const repo = setup(t);
+  const calls = [];
+  const git = createGit({ cwd: repo.root, onCommand: (entry) => calls.push(entry.args.join(' ')) });
 
-  const result = await cut({
-    repoRoot: context.root,
-    git: context.git,
-    push: true,
-    runSuite: () => ({ code: 0 }),
-    log: () => {},
-  });
+  const result = await cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} });
 
-  assert.equal(result.pushed, true);
-  const mutations = remoteMutations(context.calls);
-  assert.deepEqual(mutations, ['push --atomic origin HEAD:main v3.208.0 sidequest-v3.7.0 workbench-v0.63.7']);
-  assert.equal(context.calls.at(-1), mutations[0], 'the atomic push is the last thing that runs');
+  const mutations = calls.filter((call) => call.startsWith('push'));
+  assert.equal(mutations.length, 1, 'exactly one command can touch a remote');
+  assert.equal(calls.at(-1), mutations[0], 'the atomic push is the last thing that runs');
 
-  const pushIndex = context.calls.indexOf(mutations[0]);
-  for (const verb of ['merge --ff-only', 'commit -m', 'tag -a v3.208.0', 'add --']) {
-    const index = context.calls.findIndex((call) => call.startsWith(verb));
+  const pushIndex = calls.indexOf(mutations[0]);
+  for (const verb of ['commit -m', 'tag -a v3.208.0', 'add --']) {
+    const index = calls.findIndex((call) => call.startsWith(verb));
     assert.ok(index !== -1 && index < pushIndex, `${verb} must run before the push`);
   }
+  assert.equal(repo.remoteRefs()['refs/heads/main'], result.commit);
 });
 
-test('one push carries the branch and every tag, so no ref can land alone', async (t) => {
-  const context = setup(t);
+test('one push carries the branch and every tag by explicit sha, so no ref can land alone', async (t) => {
+  const repo = setup(t);
 
-  const result = await cut({ repoRoot: context.root, git: context.git, push: true, runSuite: () => ({ code: 0 }), log: () => {} });
+  const result = await cut({ repoRoot: repo.root, push: true, skipTests: true, log: () => {} });
 
-  const [push] = remoteMutations(context.calls);
-  assert.match(push, /^push --atomic origin /);
-  assert.ok(push.includes('HEAD:main'));
-  for (const tag of result.plan.tags) assert.ok(push.includes(tag), `${tag} must ride the same push`);
-  assert.equal(remoteMutations(context.calls).length, 1);
+  assert.equal(result.refspecs[0], `${result.commit}:refs/heads/main`, 'the branch moves to the verified commit, not to whatever HEAD is');
+  assert.equal(result.refspecs.length, result.plan.tags.length + 1);
+  for (const tag of result.plan.tags) assert.ok(result.refspecs.includes(`refs/tags/${tag}:refs/tags/${tag}`));
+
+  const remote = repo.remoteRefs();
+  assert.equal(remote['refs/heads/main'], result.commit);
+  for (const tag of result.plan.tags) assert.ok(remote[`refs/tags/${tag}`], `${tag} rode the same push`);
+});
+
+test('a rejected ref rejects the whole push, so the remote never half-publishes', async (t) => {
+  const repo = setup(t);
+  const integration = repo.git('rev-parse', 'HEAD');
+  repo.git('tag', 'v3.208.0', integration);
+  repo.git('push', '-q', 'origin', 'refs/tags/v3.208.0');
+  repo.git('tag', '-d', 'v3.208.0');
+  const before = repo.remoteRefs();
+
+  await assert.rejects(
+    () => cut({ repoRoot: repo.root, push: true, skipTests: true, force: true, log: () => {} }),
+    /git push .* failed/,
+  );
+
+  assert.deepEqual(repo.remoteRefs(), before, 'not one ref moved');
 });
 
 test('a failing suite leaves every remote ref untouched', async (t) => {
-  const context = setup(t);
+  const repo = setup(t);
+  const before = repo.remoteRefs();
 
   await assert.rejects(
     () => cut({
-      repoRoot: context.root,
-      git: context.git,
+      repoRoot: repo.root,
       push: true,
-      runSuite: (suite) => ({ code: suite.plugin === 'workbench' ? 1 : 0, command: suite.command }),
       log: () => {},
+      runSuite: (suite) => ({ code: suite.plugin === 'workbench' ? 1 : 0, command: suite.command }),
     }),
     /release suites failed, nothing was published/,
   );
 
-  assert.deepEqual(remoteMutations(context.calls), []);
+  assert.deepEqual(repo.remoteRefs(), before);
 });
 
 test('a failure while building the release leaves every remote ref untouched', async (t) => {
-  const context = setup(t, { failOn: (args) => args[0] === 'commit' });
+  const repo = setup(t);
+  const before = repo.remoteRefs();
+  const real = spawnRunner(repo.root);
+  const git = createGit({
+    cwd: repo.root,
+    run: (args) => (args[0] === 'commit' ? { code: 1, stdout: '', stderr: 'forced failure' } : real(args)),
+  });
 
   await assert.rejects(
-    () => cut({ repoRoot: context.root, git: context.git, push: true, runSuite: () => ({ code: 0 }), log: () => {} }),
+    () => cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} }),
     /git commit .* failed/,
   );
 
-  assert.deepEqual(remoteMutations(context.calls), []);
+  assert.deepEqual(repo.remoteRefs(), before);
 });
 
 test('without --push nothing reaches the remote, and the command is printed instead', async (t) => {
-  const context = setup(t);
+  const repo = setup(t);
+  const before = repo.remoteRefs();
   const logged = [];
 
-  const result = await cut({ repoRoot: context.root, git: context.git, runSuite: () => ({ code: 0 }), log: (line) => logged.push(line) });
+  const result = await cut({ repoRoot: repo.root, skipTests: true, log: (line) => logged.push(line) });
 
   assert.equal(result.pushed, false);
-  assert.deepEqual(remoteMutations(context.calls), []);
-  assert.match(logged.join('\n'), /git push --atomic origin HEAD:main v3\.208\.0 sidequest-v3\.7\.0 workbench-v0\.63\.7/);
+  assert.deepEqual(repo.remoteRefs(), before);
+  assert.ok(logged.join('\n').includes(`git push --atomic origin ${result.commit}:refs/heads/main`));
+  assert.match(logged.join('\n'), /refs\/tags\/v3\.208\.0:refs\/tags\/v3\.208\.0/);
 });
 
 test('a run that finds nothing to release contacts nothing at all', async (t) => {
-  const repo = makeRepo({ plugins: PLUGINS });
+  const repo = makeGitRepo({ plugins: PLUGINS });
   t.after(repo.cleanup);
-  const { run, calls } = recordingGit();
+  const calls = [];
+  const git = createGit({ cwd: repo.root, onCommand: (entry) => calls.push(entry.args.join(' ')) });
 
-  const result = await cut({
-    repoRoot: repo.root,
-    git: createGit({ cwd: repo.root, run }),
-    push: true,
-    runSuite: () => ({ code: 0 }),
-    log: () => {},
-  });
+  const result = await cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} });
 
   assert.equal(result.status, 'nothing-to-release');
-  assert.deepEqual(remoteMutations(calls), []);
+  assert.deepEqual(calls.filter((call) => call.startsWith('push')), []);
   assert.deepEqual(calls.filter((call) => call.startsWith('ls-remote')), [], 'no remote is even read');
 });

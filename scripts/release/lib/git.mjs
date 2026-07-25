@@ -70,6 +70,12 @@ export function createGit({ cwd, run = spawnRunner(cwd), dryRun = false, onComma
         .map((ref) => ref.replace(/^refs\/tags\//, '').replace(/\^\{\}$/, ''))
         .filter(Boolean),
 
+    stagedFiles: () => capture(['diff', '--cached', '--name-only']).split('\n').map((line) => line.trim()).filter(Boolean),
+    tagTarget: (tag) => {
+      const result = invoke(['rev-list', '-n', '1', `refs/tags/${tag}`], { allowFail: true });
+      return result.code === 0 ? result.stdout.trim() : null;
+    },
+
     mergeFastForward: (rev) => invoke(['merge', '--ff-only', rev], { skipOnDryRun: true }),
     cherryPick: (rev) => invoke(['cherry-pick', '-x', rev], { skipOnDryRun: true }),
     add: (paths) => invoke(['add', '--', ...paths], { skipOnDryRun: true }),

@@ -8,6 +8,7 @@ import { buildPlan, formatPlan, planCommitMessage, planPushCommand } from './lib
 import { isHeld, readFragments } from './lib/fragments.mjs';
 import { checkManifest, readManifest } from './lib/manifests.mjs';
 import { createSuiteResolver } from './lib/suites.mjs';
+import { commitSource, diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList, today, UsageError } from './lib/cli.mjs';
 
 const USAGE = `Usage: node scripts/release/plan.mjs [options]
@@ -15,34 +16,37 @@ const USAGE = `Usage: node scripts/release/plan.mjs [options]
 Prints exactly what a cut would do and writes nothing.
 
   --mode <normal|hotfix>  Window kind (default normal)
-  --tickets <a,b>         Refs to release in a hotfix
-  --sha <rev>             Pin the window to this commit (default HEAD)
+  --tickets <a,b>         Refs to release in a hotfix, each named once
+  --sha <rev>             Read every input from this commit instead of the working tree
   --date <YYYY-MM-DD>     Release date (defaults to the pinned commit's date)
   --force                 Include held fragments
   --json                  Machine-readable plan
   --repo <dir>            Repository root (defaults to this script's repo)`;
 
+/**
+ * With --sha, every input comes from that commit, so the plan describes the cut that commit would
+ * produce. Without it, the plan describes the working tree and says so.
+ */
 export function loadPlan(repoRoot, { mode = 'normal', tickets = null, sha = null, date = null, force = false, git = null } = {}) {
-  const manifest = readManifest(repoRoot);
+  let pinned = null;
+  let resolvedDate = date;
+  if (sha) {
+    if (!git) throw new Error('--sha needs a git runner to read the pinned tree');
+    pinned = git.revParse(sha);
+    resolvedDate ??= git.commitDate(pinned);
+  }
+
+  const source = pinned ? commitSource(git, pinned) : diskSource(repoRoot);
+
+  const manifest = readManifest(source, repoRoot);
   const manifestErrors = checkManifest(manifest);
   if (manifestErrors.length > 0) {
     throw new Error(`manifest versions are inconsistent, refusing to plan a release:\n  ${manifestErrors.join('\n  ')}`);
   }
 
-  const { fragments, errors } = readFragments(repoRoot, { knownPlugins: manifest.plugins });
+  const { fragments, errors } = readFragments(source, { knownPlugins: manifest.plugins });
   if (errors.length > 0) {
     throw new Error(`invalid release fragments:\n  ${errors.map((error) => error.message).join('\n  ')}`);
-  }
-
-  let pinned = sha;
-  let resolvedDate = date;
-  if (git && (!resolvedDate || sha)) {
-    try {
-      pinned = git.revParse(sha ?? 'HEAD');
-      resolvedDate ??= git.commitDate(pinned);
-    } catch {
-      pinned = sha;
-    }
   }
 
   const plan = buildPlan({
@@ -50,14 +54,14 @@ export function loadPlan(repoRoot, { mode = 'normal', tickets = null, sha = null
     manifest,
     mode,
     tickets,
-    released: releasedRefs(readRepoChangelog(repoRoot)),
+    released: releasedRefs(readRepoChangelog(source)),
     force,
     date: resolvedDate ?? today(),
     sha: pinned,
     suiteResolver: createSuiteResolver(repoRoot),
   });
 
-  return { plan, manifest, fragments, hold: isHeld(repoRoot) };
+  return { plan, manifest, fragments, hold: isHeld(source) };
 }
 
 export async function main(argv) {

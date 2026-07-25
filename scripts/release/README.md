@@ -25,9 +25,17 @@ and pushes everything with a single `git push --atomic`.
 
 ## Determinism
 
-Every input comes from the tree at a pinned sha: which fragments exist, which plugins they name,
-the current versions, and the release date (the pinned commit's own date). `plan.mjs` and
-`cut.mjs` call the same `buildPlan`, so a plan cannot disagree with the cut it describes.
+Every input comes from one commit: the fragments, the manifests, the versions, the changelog
+ledger, and the release date (the pinned commit's own date). `git show <pin>:<path>`, never the
+checkout. A cut run from `main` with `--sha origin/dev` reads dev's tree, so `--dry-run` describes
+the cut that follows it rather than a mixture of the two. `plan.mjs` and `cut.mjs` call the same
+`buildPlan`, so a plan cannot disagree with the cut it describes.
+
+A normal window also has to be reachable: the cut refuses unless the publish branch is already an
+ancestor of the pin, since a window that could not fast-forward is not a window.
+
+`plan.mjs` reads the working tree by default and says so in its output. Pass `--sha` when you want
+the pinned answer.
 
 Two runs against the same tree produce the same answer. A rerun after a successful cut finds its
 fragments consumed and its refs already in `CHANGELOG.md`, so it releases nothing rather than
@@ -40,16 +48,36 @@ commit, tags, suites. All of that is local and disposable. The only command that
 is the final
 
 ```
-git push --atomic origin HEAD:main v3.208.0 sidequest-v3.7.0 ...
+git push --atomic origin <release-sha>:refs/heads/main refs/tags/v3.208.0:refs/tags/v3.208.0 ...
 ```
 
 Every ref moves or none do, which rules out both bad half-states: `main` published without its
 tag (a release commit that never creates a Release) and tags pushed without `main` (a tag pointing
 at a commit that is not on the branch).
 
+The branch refspec names the verified commit, never `HEAD`. Suites run arbitrary repository code,
+so between "the suites passed" and "publish", the engine re-checks that HEAD is still the release
+commit, the index is empty, and every tag still points at it. Anything else aborts before the push.
+Suites also run with credentials stripped from their environment (`GITHUB_TOKEN`, `NPM_TOKEN`,
+`SSH_AUTH_SOCK` and friends) and with git's global and system config neutralised. That is a
+reduction in reach, not a proof, which is why the ref check is the actual guarantee.
+
 Any failure before that push leaves the remote untouched, the fragments still queued, and the
 next window free to retry. `cut.mjs` prints the push command by default and only runs it with
 `--push`.
+
+## What the engine refuses
+
+- A marketplace `source` that is not exactly `plugins/<name>`, and any read or write whose path
+  reaches through a symlink. Manifest data decides which files get rewritten, so it is treated as
+  untrusted input.
+- A staged index, always, `--allow-dirty` included. A pre-staged file would ride into the release
+  commit no matter which paths the engine adds, which breaks the "this commit is what was
+  verified" boundary. `--allow-dirty` tolerates unstaged and untracked files only.
+- A version on disk that is not the one the plan was built from.
+- A fragment title containing a newline or a control character, and any generated changelog line
+  that does not read back as its own ref.
+- `--tickets` naming the same ref twice.
 
 ## Usage
 
@@ -94,6 +122,9 @@ next normal window.
 node --test scripts/release/test/*.test.mjs
 ```
 
-The git-touching tests run against a recorder, not a repository, so the suite never contacts
-GitHub and never moves a ref. `atomic.test.mjs` asserts that directly: no command that can change
-a remote runs before the single `push --atomic`, and a suite failure leaves zero of them.
+`atomic.test.mjs`, `cut.test.mjs`, and `real-git.test.mjs` run against throwaway repositories with
+a real local bare `origin` on disk, so the refspec and atomicity claims are settled by git rather
+than by a mock. Nothing in the suite contacts a network. Among other things they prove that a
+rejected tag rejects the whole push and leaves every remote ref where it was, that a suite which
+moves HEAD, retargets a tag, or stages a file stops the release before it is published, and that
+the three real 2026-07-23/24/25 windows come out as 3 cuts and 10 plugin bumps.
