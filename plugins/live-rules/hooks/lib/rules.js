@@ -637,21 +637,39 @@ function listAtomicRuleFiles(directory) {
   return files;
 }
 
-function replaceAtomicDirectory(destination, staged) {
-  const previous = destination + '.previous-' + process.pid + '-' + crypto.randomBytes(6).toString('hex');
-  fs.renameSync(destination, previous);
+function changedRulePath(before, after) {
+  const later = new Map(after.map((item) => [item.path, item.content]));
+  for (const item of before) {
+    if (later.get(item.path) !== item.content) return item.path;
+    later.delete(item.path);
+  }
+  return later.keys().next().value || null;
+}
+
+function stageAtomicManifest(destination, manifest) {
+  const manifestFile = path.join(destination, ATOMIC_MANIFEST);
+  const temp = manifestFile + '.tmp-' + process.pid + '-' + crypto.randomBytes(6).toString('hex');
   try {
-    fs.renameSync(staged, destination);
+    fs.writeFileSync(temp, JSON.stringify(manifest, null, 2) + '\n');
+    return temp;
   } catch (error) {
     try {
-      fs.renameSync(previous, destination);
+      fs.rmSync(temp, { force: true });
     } catch (_) {
     }
     throw error;
   }
+}
+
+function replaceAtomicManifest(temp, manifestFile) {
   try {
-    fs.rmSync(previous, { recursive: true, force: true });
-  } catch (_) {
+    fs.renameSync(temp, manifestFile);
+  } catch (error) {
+    try {
+      fs.rmSync(temp, { force: true });
+    } catch (_) {
+    }
+    throw new Error('Could not replace ' + manifestFile + '. Rule files were left unchanged; retry live-rules sync. ' + error.message);
   }
 }
 
@@ -662,17 +680,25 @@ function syncAtomicRuleSet(projectDir) {
   }
   const lockPath = path.join(projectDir, '.claude', 'live-rules.write.lock');
   const result = migrationLock.withLock(lockPath, { locked: true }, () => {
-    const staged = writeAtomicDirectory(destination, listAtomicRuleFiles(destination));
-    try {
-      replaceAtomicDirectory(destination, staged.temp);
-      return { manifest: staged.manifest };
-    } catch (error) {
-      try {
-        fs.rmSync(staged.temp, { recursive: true, force: true });
-      } catch (_) {
+    let lastChanged = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const snapshot = listAtomicRuleFiles(destination);
+      const manifest = createManifest(snapshot);
+      const temp = stageAtomicManifest(destination, manifest);
+      let changed = changedRulePath(snapshot, listAtomicRuleFiles(destination));
+      if (changed) {
+        lastChanged = changed;
+        fs.rmSync(temp, { force: true });
+        if (attempt === 1) break;
+        continue;
       }
-      throw error;
+      replaceAtomicManifest(temp, getManifestFile(projectDir));
+      changed = changedRulePath(snapshot, listAtomicRuleFiles(destination));
+      if (!changed) return { manifest };
+      lastChanged = changed;
+      if (attempt === 1) break;
     }
+    throw new Error((lastChanged || 'An atomic rule file') + ' changed while generating the manifest. Wait for rule edits to finish, then run live-rules sync again.');
   });
   if (result.locked) throw new Error(lockPath + ' is held by another live-rules update. Wait for it to finish, then run live-rules sync again.');
   return result.manifest;

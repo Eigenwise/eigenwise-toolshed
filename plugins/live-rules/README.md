@@ -37,7 +37,7 @@ New workspaces keep one frontmatter-plus-body Markdown rule under `.claude/live-
 node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-It derives paths, SHA-256 hashes, and rule metadata from the files on disk, stages a complete replacement, and uses a writer lock before swapping it into place. Never hand-author `.claude/live-rules/manifest.json`. A stale or mistyped manifest is repaired from the rule files when sync runs; an invalid rule file fails with its exact path and the next action. Hooks still verify content hashes while reading as defense in depth.
+It derives paths, SHA-256 hashes, and rule metadata from the files on disk, validates a stable read, and atomically replaces only the generated manifest. Rule files stay authoritative and sync never rewrites, replaces, or deletes them. Never hand-author `.claude/live-rules/manifest.json`. A stale or mistyped manifest is repaired from the rule files when sync runs; an invalid or concurrently changing rule file fails with its exact path and the next action. Hooks still verify content hashes while reading as defense in depth.
 
 Projects using the old `.claude/live-rules.md` format remain readable. The maintenance path can call `migrateLegacyRules(projectDir)` to write the atomic copy without deleting the original, then commit the new directory after checking the generated rules.
 

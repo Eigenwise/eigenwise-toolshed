@@ -25,7 +25,7 @@ For new workspaces, keep each rule in `.claude/live-rules/rules/<stable-name>.md
 node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-It derives every manifest hash and metadata field from the rule files, validates the staged replacement, and swaps the directory under a writer lock. Never author or repair `.claude/live-rules/manifest.json` by hand. If sync fails, fix the exact file it names, then run the same command again. Keep the old `.claude/live-rules.md` format only for existing projects until it has been migrated.
+It derives every manifest hash and metadata field from the rule files, validates a stable read, and atomically replaces only the generated manifest under a writer lock. Rule files remain authoritative and are never rewritten by sync. Never author or repair `.claude/live-rules/manifest.json` by hand. If sync fails, fix the exact file it names, then run the same command again. Keep the old `.claude/live-rules.md` format only for existing projects until it has been migrated.
 
 ### Step 1 - Find the rules file
 

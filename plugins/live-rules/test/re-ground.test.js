@@ -219,3 +219,50 @@ test('atomic sync leaves the manifest intact when a partial rule file is invalid
   assert.throws(() => rules.syncAtomicRuleSet(dir), /rules\/001\.md must contain exactly one rule.*run live-rules sync again/);
   assert.strictEqual(fs.readFileSync(manifestPath, 'utf8'), before);
 });
+
+test('atomic sync retries after a concurrent rule edit without clobbering it', () => {
+  const dir = project();
+  atomic(dir, [{ data: { description: 'One' }, body: 'Before.' }]);
+  const target = path.join(dir, '.claude', 'live-rules', 'rules', '001.md');
+  const manifestPath = path.join(dir, '.claude', 'live-rules', 'manifest.json');
+  const originalRename = fs.renameSync;
+  let edited = false;
+  fs.renameSync = (from, to) => {
+    if (!edited && to === manifestPath && String(from).includes('manifest.json.tmp-')) {
+      edited = true;
+      fs.writeFileSync(target, '---\ndescription: One\n---\nConcurrent update.\n');
+    }
+    return originalRename(from, to);
+  };
+  try {
+    const manifest = rules.syncAtomicRuleSet(dir);
+    assert.strictEqual(edited, true);
+    assert.match(fs.readFileSync(target, 'utf8'), /Concurrent update/);
+    assert.strictEqual(manifest.rules[0].hash, rules.hashContent(fs.readFileSync(target, 'utf8')));
+  } finally {
+    fs.renameSync = originalRename;
+  }
+});
+
+test('failed manifest replacement leaves rule files unchanged and discoverable', () => {
+  const dir = project();
+  atomic(dir, [{ data: { description: 'One' }, body: 'Before.' }]);
+  const target = path.join(dir, '.claude', 'live-rules', 'rules', '001.md');
+  const manifestPath = path.join(dir, '.claude', 'live-rules', 'manifest.json');
+  const updated = '---\ndescription: One\n---\nStill discoverable.\n';
+  fs.writeFileSync(target, updated);
+  const originalRename = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    if (to === manifestPath && String(from).includes('manifest.json.tmp-')) throw new Error('simulated rename failure');
+    return originalRename(from, to);
+  };
+  try {
+    assert.throws(() => rules.syncAtomicRuleSet(dir), /Could not replace .*manifest.json.*Rule files were left unchanged/);
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), updated);
+    const loaded = rules.loadRuleSet(dir);
+    assert.strictEqual(loaded.rules[0].body, 'Still discoverable.');
+    assert.strictEqual(loaded.stale, true);
+  } finally {
+    fs.renameSync = originalRename;
+  }
+});
