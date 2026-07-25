@@ -297,6 +297,7 @@ test('refuses to generate a dashboard whose panels outlive their variables', () 
     panels: [{
       title: 'Tokens over time, by type',
       interval: '$bucket',
+      gridPos: { x: 0, y: 0, w: 24, h: 8 },
       targets: [{ expr: 'sum(increase(claude_code_token_usage_tokens_total{project_id=~"$project"}[$bucket]))' }],
     }],
   });
@@ -624,6 +625,48 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
   ]) {
     for (const target of byTitle.get(title).targets) assert.match(target.expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   }
+});
+
+function overlappingPanels(panels) {
+  const overlaps = [];
+  for (const [index, panel] of panels.entries()) {
+    for (const other of panels.slice(index + 1)) {
+      const horizontal = panel.gridPos.x < other.gridPos.x + other.gridPos.w && other.gridPos.x < panel.gridPos.x + panel.gridPos.w;
+      const vertical = panel.gridPos.y < other.gridPos.y + other.gridPos.h && other.gridPos.y < panel.gridPos.y + panel.gridPos.h;
+      if (horizontal && vertical) overlaps.push(`${panel.title} <> ${other.title}`);
+    }
+  }
+  return overlaps;
+}
+
+function bandWidths(panels) {
+  const bands = new Map();
+  for (const { gridPos } of panels) bands.set(gridPos.y, (bands.get(gridPos.y) || 0) + gridPos.w);
+  return [...bands].map(([y, width]) => `y=${y} spans ${width}`).filter((band) => !band.endsWith('spans 24'));
+}
+
+// Overlapping panels do not fail: Grafana silently shoves them somewhere else,
+// and a filtered-out panel leaves its hole behind. Both only show up on screen.
+test('every generated dashboard lays out in full-width bands with no overlaps or holes', () => {
+  const projects = [
+    { project_name: 'atlas', project_id: 'a'.repeat(64) },
+    { project_name: 'beacon', project_id: 'b'.repeat(64) },
+  ];
+  const dashboards = generatedDashboards(projects);
+  assert.equal(dashboards.length, 3);
+  for (const { fileName, dashboard } of dashboards) {
+    assert.deepEqual(overlappingPanels(dashboard.panels), [], `${fileName} has overlapping panels`);
+    assert.deepEqual(bandWidths(dashboard.panels), [], `${fileName} has a band that does not fill the grid`);
+    const ordered = dashboard.panels.map(({ gridPos }) => gridPos.y * 24 + gridPos.x);
+    assert.deepEqual(ordered, [...ordered].sort((left, right) => left - right), `${fileName} panels are out of layout order`);
+  }
+  const [, perProject] = dashboards;
+  const byTitle = new Map(perProject.dashboard.panels.map((panel) => [panel.title, panel]));
+  // 'Work moved off the Anthropic limit' sat between these two on the global
+  // dashboard; per-project they close over its slot instead of framing a gap.
+  assert.deepEqual(byTitle.get('Context spent per answer token (lower is better)').gridPos.w, 12);
+  assert.deepEqual(byTitle.get('Background/compaction cost by model and project').gridPos.x, 12);
+  assert.deepEqual(byTitle.get('Tokens over time, by model').gridPos.w, 24);
 });
 
 test('PostHog batches canonical events through an isolated receiver and retries atomically', async (t) => {

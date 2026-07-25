@@ -85,7 +85,37 @@ function assertVariablesResolve(dashboard) {
   return dashboard;
 }
 
-function filterDashboard(dashboard, projects) {
+const GRID_WIDTH = 24;
+
+// The template lays panels out in bands: every panel in a band shares its y and
+// the band spans the full grid width. Dropping a panel would leave a hole its
+// neighbours never fill — Grafana keeps the surviving coordinates and shows
+// dead space — so survivors stretch back across the band and the bands restack.
+function relayout(panels) {
+  const bands = [];
+  for (const panel of [...panels].sort((left, right) => left.gridPos.y - right.gridPos.y || left.gridPos.x - right.gridPos.x)) {
+    const band = bands.at(-1);
+    if (band && band.y === panel.gridPos.y) band.members.push(panel);
+    else bands.push({ y: panel.gridPos.y, members: [panel] });
+  }
+  let y = 0;
+  for (const { members } of bands) {
+    const span = members.reduce((total, { gridPos }) => total + gridPos.w, 0);
+    if (span > GRID_WIDTH) {
+      throw new Error(`Dashboard band at y=${members[0].gridPos.y} is ${span} columns wide, so its panels overlap`);
+    }
+    let x = 0;
+    members.forEach((panel, index) => {
+      const width = index === members.length - 1 ? GRID_WIDTH - x : Math.round((panel.gridPos.w / span) * GRID_WIDTH);
+      panel.gridPos = { x, y, w: width, h: panel.gridPos.h };
+      x += width;
+    });
+    y += Math.max(...members.map(({ gridPos }) => gridPos.h));
+  }
+  return bands.flatMap(({ members }) => members);
+}
+
+function filterDashboard(dashboard, projects, dropped = new Set()) {
   for (const panel of dashboard.panels) {
     for (const target of panel.targets || []) {
       if (typeof target.expr !== 'string') continue;
@@ -99,6 +129,7 @@ function filterDashboard(dashboard, projects) {
       target.expr = filterLoki(target.expr, projects);
     }
   }
+  dashboard.panels = relayout(dashboard.panels.filter(({ title }) => !dropped.has(title)));
   dashboard.templating = {
     list: dashboard.templating.list.filter(({ name }) => !BAKED_IN_VARIABLES.has(name)),
   };
@@ -113,10 +144,7 @@ function globalDashboard(template, projects) {
 const GLOBAL_ONLY_PANELS = new Set(['Usage by project', 'Cost over time, by project']);
 
 function perProjectDashboard(template, project) {
-  const dashboard = filterDashboard(template, [project]);
-  dashboard.panels = dashboard.panels.filter(
-    (panel) => !GLOBAL_ONLY_PANELS.has(panel.title) && !PROJECT_UNSCOPED_PANELS.has(panel.title),
-  );
+  const dashboard = filterDashboard(template, [project], new Set([...GLOBAL_ONLY_PANELS, ...PROJECT_UNSCOPED_PANELS]));
   dashboard.title = `Claude Code — ${project.project_name}`;
   dashboard.uid = `claude-code-${project.project_id.slice(0, 16)}`;
   return dashboard;
