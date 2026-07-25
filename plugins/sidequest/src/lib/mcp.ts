@@ -331,6 +331,23 @@ function mutationAck(project?: any, result?: any, changed?: any) {
   return Object.assign(out, changed || {});
 }
 
+// A stale integration branch is invisible until the next dispatch builds on it,
+// so the closure ack carries every outcome except the two that owed nothing.
+const QUIET_INTEGRATION_BRANCH_REASONS = ['remote_mode', 'already_integrated'];
+
+function integrationBranchAck(outcome?: any) {
+  if (!outcome || QUIET_INTEGRATION_BRANCH_REASONS.includes(outcome.reason)) return null;
+  return {
+    integrationBranch: {
+      branch: outcome.branch,
+      advanced: !!outcome.advanced,
+      reason: outcome.reason,
+      message: outcome.message,
+      ...(outcome.command ? { command: outcome.command } : {}),
+    },
+  };
+}
+
 const OUT_OF_SCOPE_COMMENT_MAX = 16000;
 
 function outOfScopeComment(paths: any[]) {
@@ -1029,18 +1046,28 @@ const TOOLS: ToolDefinition[] = [
       const res = store.completeTicketAsControlPlane(slug, args.ref, { by, reason, purpose });
       if (res.ok) closeDispatchExecutor(ticket);
       if (res.ok && args.integration) {
+        // Advance before sweeping: a local integration branch that just moved
+        // makes this ticket's worktree reachable, which the sweep collects on.
         try {
+          const integrationTarget = store.integrationTarget(slug);
+          res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
+            integrationTarget,
+            submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
+            submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null,
+          });
           res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
             execute: true,
             currentPath: store.nearestRepoRoot(process.cwd()),
-            integrationTarget: store.integrationTarget(slug),
+            integrationTarget,
             ticketRef: res.ticket.ref,
           });
         } catch (error: any) {
           res.worktreeSweep = { failures: [{ path: null, message: (error && error.message) || String(error) }] };
         }
       }
-      return mutationAck(slug, res, res.ok ? { completion: res.ticket.completion } : null);
+      return mutationAck(slug, res, res.ok
+        ? Object.assign({ completion: res.ticket.completion }, integrationBranchAck(res.integrationBranch))
+        : null);
     },
   },
   {

@@ -226,6 +226,19 @@ function mutationAck(project, result, changed) {
   if (result.advisory) out.advisory = result.advisory;
   return Object.assign(out, changed || {});
 }
+const QUIET_INTEGRATION_BRANCH_REASONS = ["remote_mode", "already_integrated"];
+function integrationBranchAck(outcome) {
+  if (!outcome || QUIET_INTEGRATION_BRANCH_REASONS.includes(outcome.reason)) return null;
+  return {
+    integrationBranch: {
+      branch: outcome.branch,
+      advanced: !!outcome.advanced,
+      reason: outcome.reason,
+      message: outcome.message,
+      ...outcome.command ? { command: outcome.command } : {}
+    }
+  };
+}
 const OUT_OF_SCOPE_COMMENT_MAX = 16e3;
 function outOfScopeComment(paths) {
   const prefix = "out-of-scope changes present: ";
@@ -914,17 +927,23 @@ const TOOLS = [
       if (res.ok) closeDispatchExecutor(ticket);
       if (res.ok && args.integration) {
         try {
+          const integrationTarget = store.integrationTarget(slug);
+          res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
+            integrationTarget,
+            submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
+            submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null
+          });
           res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
             execute: true,
             currentPath: store.nearestRepoRoot(process.cwd()),
-            integrationTarget: store.integrationTarget(slug),
+            integrationTarget,
             ticketRef: res.ticket.ref
           });
         } catch (error) {
           res.worktreeSweep = { failures: [{ path: null, message: error && error.message || String(error) }] };
         }
       }
-      return mutationAck(slug, res, res.ok ? { completion: res.ticket.completion } : null);
+      return mutationAck(slug, res, res.ok ? Object.assign({ completion: res.ticket.completion }, integrationBranchAck(res.integrationBranch)) : null);
     }
   },
   {

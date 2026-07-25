@@ -1067,6 +1067,17 @@ async function cmdDone(opts: any, positional: any) {
   else reportClaimFailure('complete', idOrRef, res, meta);
 }
 
+// A branch left behind is the whole defect this reports on, so anything short of
+// a clean advance prints as a refusal with the command that finishes the job.
+// Silence is reserved for the cases where nothing was owed.
+const QUIET_INTEGRATION_BRANCH_REASONS = ['remote_mode', 'already_integrated'];
+
+function reportIntegrationBranch(outcome: any) {
+  if (!outcome || QUIET_INTEGRATION_BRANCH_REASONS.includes(outcome.reason)) return;
+  console.log(outcome.advanced ? `  ${outcome.message}` : `  ! ${outcome.message}`);
+  if (outcome.command) console.log(`    run: ${outcome.command}`);
+}
+
 async function cmdGroomClose(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('groom-close: pass a ticket id or ref, e.g. sidequest groom-close SQ-3 --reason "Already shipped in abc1234."');
@@ -1079,11 +1090,19 @@ async function cmdGroomClose(opts: any, positional: any) {
   const res = store.completeTicketAsControlPlane(slug, idOrRef, { by, reason, purpose });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (res.ok && opts.integration) {
+    // Advance before sweeping: a local integration branch that just moved makes
+    // this ticket's worktree reachable, which is what the sweep collects on.
     try {
+      const integrationTarget = store.integrationTarget(slug);
+      res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
+        integrationTarget,
+        submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
+        submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null,
+      });
       res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
         execute: true,
         currentPath: store.nearestRepoRoot(process.cwd()),
-        integrationTarget: store.integrationTarget(slug),
+        integrationTarget,
         ticketRef: res.ticket.ref,
       });
     } catch (error: any) {
@@ -1098,6 +1117,7 @@ async function cmdGroomClose(opts: any, positional: any) {
   if (res.ok) {
     console.log(`✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
     if (res.advisory) console.log(`  advisory: ${res.advisory}`);
+    reportIntegrationBranch(res.integrationBranch);
   }
   else reportClaimFailure('groom-close', idOrRef, res, meta);
 }

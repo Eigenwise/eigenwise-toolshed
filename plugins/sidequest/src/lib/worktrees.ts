@@ -330,6 +330,243 @@ async function repositoryBusy(repo: string): Promise<boolean> {
   return states.some((state) => state.ok);
 }
 
+function shortCommit(commit: unknown): string {
+  return String(commit || '').slice(0, 12);
+}
+
+// Always quoted: these are printed for a human to paste, and a Windows repo path
+// with a space in it would otherwise hand them a broken command.
+function quoted(value: string): string {
+  return `"${value}"`;
+}
+
+function mergeCommand(repo: string, commit: string): string {
+  return `git -C ${quoted(repo)} merge --ff-only ${commit}`;
+}
+
+async function resolveCommit(repo: string, revision: string): Promise<string | null> {
+  const result = await git(repo, ['rev-parse', '--verify', '--quiet', `${revision}^{commit}`]);
+  return result.ok && /^[0-9a-f]{40}$/.test(result.stdout) ? result.stdout : null;
+}
+
+// Untracked files do not block a fast-forward: git itself refuses to clobber one,
+// and a repo with a stray .env would otherwise never advance.
+async function checkoutState(repo: string): Promise<{ branch: string | null; trackedClean: boolean }> {
+  const [head, status] = await Promise.all([
+    git(repo, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
+    git(repo, ['status', '--porcelain', '--untracked-files=no']),
+  ]);
+  return {
+    branch: head.ok && head.stdout ? head.stdout : null,
+    trackedClean: status.ok && status.stdout === '',
+  };
+}
+
+function advanceOutcome(fields: any): any {
+  return Object.assign({
+    attempted: true,
+    advanced: false,
+    mode: null,
+    branch: null,
+    from: null,
+    to: null,
+    reason: 'unknown',
+    message: '',
+    command: null,
+    candidates: [],
+  }, fields);
+}
+
+// Which commit did the integration land on? Every checkout of this repo is a
+// candidate except the ones the executor owned — advancing onto an executor's
+// own branch would skip the integration commits and leave the branch unable to
+// fast-forward again. A candidate only qualifies when it carries the closed
+// ticket's submitted work, so a stale feature branch can never be mistaken for
+// an integration.
+async function integrationCandidates(repo: string, options: any, branchHead: string, submissionCommit: string): Promise<any[]> {
+  const listed = await git(repo, ['worktree', 'list', '--porcelain']);
+  if (!listed.ok) throw new Error(listed.stderr || 'could not list git worktrees');
+  const executorWorktree = options.submissionWorktree ? normalize(options.submissionWorktree) : null;
+  const heads = new Map<string, string>();
+  for (const entry of parseWorktreeList(listed.stdout)) {
+    const commit = String(entry.head || '').trim();
+    if (!/^[0-9a-f]{40}$/.test(commit) || commit === branchHead) continue;
+    if (isAgentWorktree(repo, entry.worktree)) continue;
+    if (executorWorktree && normalize(entry.worktree) === executorWorktree) continue;
+    if (!heads.has(commit)) heads.set(commit, entry.worktree);
+  }
+  return Promise.all([...heads].map(async ([commit, worktree]) => {
+    const [fastForward, patch] = await Promise.all([
+      reachableFrom(repo, branchHead, commit),
+      patchEquivalence(repo, submissionCommit, commit),
+    ]);
+    return { commit, worktree, fastForward, carriesWork: patch.equivalent };
+  }));
+}
+
+// A local-mode integration branch only moves if something moves it, and nothing
+// did: every integration left the board's `main` one step further behind while
+// the next dispatch pinned its worktree base to that stale commit, so the user
+// closed the loop by hand (SQ-878). This closes it, and refuses loudly rather
+// than ever rewriting the default branch: fast-forward only, only onto a commit
+// that provably carries the closed ticket's work, only while the checkout sits
+// on that branch with clean tracked files, and never near a remote ref.
+async function advanceIntegrationBranch(repo: string, options: any = {}): Promise<any> {
+  try {
+    return await advanceLocalIntegrationBranch(repo, options);
+  } catch (error: any) {
+    const branch = String((options.integrationTarget || {}).branch || '').trim() || null;
+    return advanceOutcome({
+      branch,
+      reason: 'error',
+      message: `${branch || 'the integration branch'} was left unadvanced: ${(error && error.message) || error}.`,
+    });
+  }
+}
+
+async function advanceLocalIntegrationBranch(repo: string, options: any): Promise<any> {
+  const target = options.integrationTarget || {};
+  const mode = String(target.mode || '').trim();
+  const branch = String(target.branch || '').trim();
+  if (!branch) throw new Error('advancing the integration branch requires the board integration target.');
+  if (mode !== 'local') {
+    return advanceOutcome({
+      attempted: false,
+      mode,
+      branch,
+      reason: 'remote_mode',
+      message: `integration mode is "${mode || 'unset'}", so ${branch} advances by push and nothing is advanced locally.`,
+    });
+  }
+
+  const branchHead = await resolveCommit(repo, `refs/heads/${branch}`);
+  if (!branchHead) {
+    return advanceOutcome({
+      mode,
+      branch,
+      reason: 'branch_missing',
+      message: `local integration branch ${branch} does not exist in ${repo}, so the integrated commit has nothing to fast-forward.`,
+    });
+  }
+  const submitted = String(options.submissionCommit || '').trim().toLowerCase();
+  if (!submitted) {
+    return advanceOutcome({
+      mode,
+      branch,
+      from: branchHead,
+      reason: 'submission_commit_missing',
+      message: `${branch} was left at ${shortCommit(branchHead)}: this closure carries no submitted commit, so no integrated commit can be proven and the branch is not moved.`,
+    });
+  }
+  const submissionCommit = await resolveCommit(repo, submitted);
+  if (!submissionCommit) {
+    return advanceOutcome({
+      mode,
+      branch,
+      from: branchHead,
+      reason: 'submission_commit_unresolvable',
+      message: `${branch} was left at ${shortCommit(branchHead)}: submitted commit ${shortCommit(submitted)} is not in ${repo}, so which commit integrated it cannot be proven.`,
+      command: mergeCommand(repo, '<integrated-commit>'),
+    });
+  }
+  if ((await patchEquivalence(repo, submissionCommit, branchHead)).equivalent) {
+    return advanceOutcome({
+      mode,
+      branch,
+      from: branchHead,
+      to: branchHead,
+      reason: 'already_integrated',
+      message: `${branch} already carries ${shortCommit(submissionCommit)} at ${shortCommit(branchHead)}; nothing to advance.`,
+    });
+  }
+
+  const candidates = await integrationCandidates(repo, options, branchHead, submissionCommit);
+  const carrying = candidates.filter((candidate) => candidate.carriesWork);
+  const advanceable = carrying.filter((candidate) => candidate.fastForward);
+  if (!carrying.length) {
+    return advanceOutcome({
+      mode,
+      branch,
+      from: branchHead,
+      reason: 'no_integrated_commit',
+      candidates,
+      message: `${branch} was left at ${shortCommit(branchHead)}: no checkout of ${repo} holds a commit carrying submitted ${shortCommit(submissionCommit)}, so the integrated commit could not be identified.`,
+      command: mergeCommand(repo, '<integrated-commit>'),
+    });
+  }
+  if (!advanceable.length) {
+    const blocked = carrying.map((candidate) => shortCommit(candidate.commit)).join(', ');
+    return advanceOutcome({
+      mode,
+      branch,
+      from: branchHead,
+      reason: 'not_fast_forward',
+      candidates,
+      message: `${branch} was left at ${shortCommit(branchHead)}: the integrated commit(s) ${blocked} do not descend from it, so advancing would need a merge or a rewrite. Refusing — resolve the divergence by hand.`,
+    });
+  }
+  if (advanceable.length > 1) {
+    const listed = advanceable.map((candidate) => `${shortCommit(candidate.commit)} (${candidate.worktree})`).join(', ');
+    return advanceOutcome({
+      mode,
+      branch,
+      from: branchHead,
+      reason: 'ambiguous_integrated_commit',
+      candidates,
+      message: `${branch} was left at ${shortCommit(branchHead)}: ${advanceable.length} checkouts carry this work — ${listed} — so the integrated commit is ambiguous.`,
+      command: mergeCommand(repo, '<integrated-commit>'),
+    });
+  }
+
+  const to = advanceable[0]!.commit;
+  const common = { mode, branch, from: branchHead, to, candidates };
+  if (await repositoryBusy(repo)) {
+    return advanceOutcome(Object.assign({
+      reason: 'repository_busy',
+      message: `${branch} was left at ${shortCommit(branchHead)}: ${repo} is mid merge, rebase, cherry-pick or revert, so it must not be fast-forwarded to ${shortCommit(to)} now.`,
+      command: mergeCommand(repo, to),
+    }, common));
+  }
+  const state = await checkoutState(repo);
+  if (state.branch !== branch) {
+    const checkedOut = state.branch ? `"${state.branch}"` : 'a detached HEAD';
+    return advanceOutcome(Object.assign({
+      reason: 'branch_not_checked_out',
+      message: `${branch} was left at ${shortCommit(branchHead)}: ${repo} has ${checkedOut} checked out, not ${branch}, so it cannot be fast-forwarded to ${shortCommit(to)} here. Sidequest never checks out branches for you — advance it yourself once that checkout is free.`,
+      command: `git -C ${quoted(repo)} switch ${branch} && ${mergeCommand(repo, to)}`,
+    }, common));
+  }
+  if (!state.trackedClean) {
+    return advanceOutcome(Object.assign({
+      reason: 'checkout_dirty',
+      message: `${branch} was left at ${shortCommit(branchHead)}: ${repo} has modified tracked files, so fast-forwarding it to ${shortCommit(to)} could clobber them. Commit or stash them, then advance it yourself.`,
+      command: mergeCommand(repo, to),
+    }, common));
+  }
+
+  const merged = await git(repo, ['merge', '--ff-only', to]);
+  if (!merged.ok) {
+    return advanceOutcome(Object.assign({
+      reason: 'merge_failed',
+      message: `${branch} was left at ${shortCommit(branchHead)}: git refused to fast-forward it to ${shortCommit(to)} — ${merged.stderr || `exit ${merged.status}`}.`,
+      command: mergeCommand(repo, to),
+    }, common));
+  }
+  const landed = await resolveCommit(repo, `refs/heads/${branch}`);
+  if (landed !== to) {
+    return advanceOutcome(Object.assign({
+      reason: 'merge_incomplete',
+      message: `${branch} reports ${shortCommit(landed)} after fast-forwarding to ${shortCommit(to)}; treat the branch as unadvanced and check it by hand.`,
+      command: mergeCommand(repo, to),
+    }, common));
+  }
+  return advanceOutcome(Object.assign({
+    advanced: true,
+    reason: 'advanced',
+    message: `advanced ${branch} ${shortCommit(branchHead)} → ${shortCommit(to)} (fast-forward, ${repo}).`,
+  }, common));
+}
+
 async function sweep(repo: string, tickets: any[], options: any = {}): Promise<any> {
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0
     ? Number(options.minAgeMs)
@@ -445,4 +682,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { DEFAULT_MIN_AGE_MS, parseWorktreeList, isAgentWorktree, classifyWorktree, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, parseWorktreeList, isAgentWorktree, classifyWorktree, advanceIntegrationBranch, sweep };
