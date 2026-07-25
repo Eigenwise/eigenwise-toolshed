@@ -10,15 +10,19 @@ them my brain keeps producing things for the others:
 - "We should really fix that agent flow."
 - "I just remembered why the other project got stuck."
 
-Those thoughts are often useful. The problem is what happens next.
+Those thoughts are often useful, but usefulness is not even the immediate issue. When one
+appears, I need to get it out of my head before the next distraction overwrites it. An
+"oh, by the way..." is me externalizing the thought while I still have it. It is not a
+request to switch priorities or solve it right now.
 
-If I follow one immediately, I lose the thread of the thing I was already doing. If I
-don't follow it, I forget it. If I write it in a random note, the note becomes another
-place I have to remember to check. And if I switch to a different project to record it
-properly, I may spend twenty minutes reconstructing that project's state before I can
-even explain the thought.
+Without somewhere immediate to put it, I get two bad choices. If I follow it, I lose
+the thread of the thing I was already doing. If I try to hold it until later, I either
+forget it or keep rehearsing it in my head, which becomes its own distraction. A random
+note only moves the problem: the note becomes another place I have to remember to
+check. And if I switch to a different project to record it properly, I may spend twenty
+minutes reconstructing that project's state before I can even explain the thought.
 
-Sidequest is the third option: capture the thought where it happens, with enough context
+Sidequest is the third option: get the thought out immediately, attach enough context
 to make it real, then keep going.
 
 ## The original problem was continuity
