@@ -24,6 +24,20 @@ const {
   writeObservabilityConfig,
 } = require('../observability/sinks/index.js');
 
+function undeclaredVariables(dashboard) {
+  const declared = new Set(dashboard.templating.list.map(({ name }) => name));
+  const referenced = new Set();
+  for (const panel of dashboard.panels) {
+    for (const source of [panel.interval, ...(panel.targets || []).map(({ expr }) => expr)]) {
+      if (typeof source !== 'string') continue;
+      for (const [, name] of source.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)) {
+        if (!name.startsWith('__') && !declared.has(name)) referenced.add(name);
+      }
+    }
+  }
+  return [...referenced].sort();
+}
+
 function observation(sourceEventId = 'sink-test-event') {
   return {
     source: 'claude_code',
@@ -196,7 +210,21 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   const global = dashboards.find(({ fileName }) => fileName === 'claude-code-usage.json').dashboard;
   assert.equal(global.title, 'Claude Code Usage');
   assert.equal(global.uid, 'claude-code-usage');
-  assert.deepEqual(global.templating, { list: [] });
+  // Panel-level "interval": "$bucket" reaches Grafana verbatim, so dropping the
+  // variable fails every bucketed panel with "Invalid interval string" (SQ-854).
+  for (const { fileName, dashboard } of dashboards) {
+    assert.deepEqual(
+      dashboard.templating.list.map(({ name }) => name),
+      ['bucket'],
+      `${fileName} lost its bucket selector`,
+    );
+    const bucket = dashboard.templating.list[0];
+    assert.equal(bucket.type, 'interval');
+    assert.equal(bucket.auto, true);
+    assert.equal(bucket.query, '1m,5m,15m,1h,6h,1d');
+    assert.equal(bucket.current.value, '$__auto_interval_bucket');
+    assert.deepEqual(undeclaredVariables(dashboard), []);
+  }
   const projectUnscopedTitles = new Set(['MCP connection activity', 'Work moved off the Anthropic limit']);
   const regularPanels = global.panels
     .filter(({ title }) => !projectUnscopedTitles.has(title));
@@ -261,6 +289,33 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   assert.equal(empty.panels.length, global.panels.length);
   assert.ok(empty.panels.every(({ title }) => title !== 'Unattributed sessions'));
   assert.ok(empty.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr).every((expression) => !expression.includes('$project')));
+});
+
+test('refuses to generate a dashboard whose panels outlive their variables', () => {
+  const template = () => ({
+    templating: { list: [{ name: 'project' }, { name: 'bucket', type: 'interval' }] },
+    panels: [{
+      title: 'Tokens over time, by type',
+      interval: '$bucket',
+      targets: [{ expr: 'sum(increase(claude_code_token_usage_tokens_total{project_id=~"$project"}[$bucket]))' }],
+    }],
+  });
+  const projects = [{ project_name: 'atlas', project_id: 'a'.repeat(64) }];
+  assert.equal(generatedDashboards(projects, template()).length, 2);
+
+  const orphaned = template();
+  orphaned.panels[0].interval = '$window';
+  assert.throws(
+    () => generatedDashboards(projects, orphaned),
+    /references undeclared variables: window/,
+  );
+
+  const orphanedQuery = template();
+  orphanedQuery.panels[0].targets[0].expr = orphanedQuery.panels[0].targets[0].expr.replace('[$bucket]', '[$step]');
+  assert.throws(
+    () => generatedDashboards(projects, orphanedQuery),
+    /references undeclared variables: step/,
+  );
 });
 
 test('validates explicit generic OTLP egress and credentials', () => {

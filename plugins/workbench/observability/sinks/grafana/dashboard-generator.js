@@ -53,6 +53,38 @@ function filterLoki(expression, projects) {
 // MCP events have no project attribution; offload share measures board-wide routing.
 const PROJECT_UNSCOPED_PANELS = new Set(['MCP connection activity', 'Work moved off the Anthropic limit']);
 
+// The project selector is baked into every query, so its variable is dropped.
+// Every other declared variable has to survive generation.
+const BAKED_IN_VARIABLES = new Set(['project']);
+
+const VARIABLE_REFERENCE = /\$([A-Za-z_][A-Za-z0-9_]*)/g;
+
+function referencedVariables(dashboard) {
+  const referenced = new Set();
+  for (const panel of dashboard.panels) {
+    const sources = [panel.interval, ...(panel.targets || []).map(({ expr }) => expr)];
+    for (const source of sources) {
+      if (typeof source !== 'string') continue;
+      for (const [, name] of source.matchAll(VARIABLE_REFERENCE)) {
+        if (!name.startsWith('__')) referenced.add(name);
+      }
+    }
+  }
+  return referenced;
+}
+
+// A panel that survives generation while its variable does not reaches Grafana
+// with a literal "$bucket" range selector, which fails the whole panel with
+// "Invalid interval string" instead of degrading.
+function assertVariablesResolve(dashboard) {
+  const declared = new Set(dashboard.templating.list.map(({ name }) => name));
+  const undeclared = [...referencedVariables(dashboard)].filter((name) => !declared.has(name));
+  if (undeclared.length > 0) {
+    throw new Error(`Dashboard references undeclared variables: ${undeclared.sort().join(', ')}`);
+  }
+  return dashboard;
+}
+
 function filterDashboard(dashboard, projects) {
   for (const panel of dashboard.panels) {
     for (const target of panel.targets || []) {
@@ -67,8 +99,10 @@ function filterDashboard(dashboard, projects) {
       target.expr = filterLoki(target.expr, projects);
     }
   }
-  dashboard.templating = { list: [] };
-  return dashboard;
+  dashboard.templating = {
+    list: dashboard.templating.list.filter(({ name }) => !BAKED_IN_VARIABLES.has(name)),
+  };
+  return assertVariablesResolve(dashboard);
 }
 
 function globalDashboard(template, projects) {
