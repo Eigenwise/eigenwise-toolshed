@@ -169,9 +169,9 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   archive: "Archive one ticket, or every done ticket.",
   archive_board: "Archive an explicitly named board.",
   assign: "Set a ticket assignee.",
-  category_add: "Add a global or project category.",
+  category_add: "Add category.",
   category_detach: "Pin a board category to its current policy.",
-  category_edit: "Edit a global category or project policy.",
+  category_edit: "Edit category.",
   category_relink: "Reset a board category to the shared policy.",
   category_rm: "Remove a global or project category policy.",
   global_fallback: "Read or set the global routing fallback.",
@@ -281,7 +281,8 @@ function categoryListEntry(category, localRow, ticketCount, full) {
       description: description.text,
       descriptionLength: description.length,
       descriptionTruncated: description.truncated,
-      enabled: category.enabled
+      enabled: category.enabled,
+      readonly: category.readonly === true
     };
   }
   return Object.assign({}, category, {
@@ -583,7 +584,7 @@ const TOOLS = [
         changes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket changes." },
         consumes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket consumes." },
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
-        readonly: { type: "boolean", description: "Set false for a read-only category when the spike must execute modified code." },
+        readonly: { type: "boolean", description: "Closeout override." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
         storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
@@ -653,7 +654,7 @@ const TOOLS = [
         changes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket changes." },
         consumes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket consumes." },
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
-        readonly: { type: "boolean", description: "Set false for a read-only category when the spike must execute modified code." },
+        readonly: { type: "boolean", description: "Closeout override." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
         storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
@@ -1515,7 +1516,8 @@ const TOOLS = [
         routeEffort: { type: "string", enum: store.VALID_EFFORTS },
         fallbackModel: { type: "string" },
         fallbackEffort: { type: "string", enum: store.VALID_EFFORTS },
-        enabled: { type: "boolean" }
+        enabled: { type: "boolean" },
+        readonly: { type: "boolean", description: "Comment closeout." }
       },
       required: ["id", "name", "routeModel", "routeEffort"]
     },
@@ -1531,6 +1533,7 @@ const TOOLS = [
         artifactRoots: args.artifactRoots || [],
         route: { model: args.routeModel, effort: args.routeEffort },
         fallback: args.fallbackModel == null && args.fallbackEffort == null ? null : { model: args.fallbackModel, effort: args.fallbackEffort },
+        readonly: args.readonly === true,
         enabled: args.enabled !== false
       };
       if (target) {
@@ -1557,7 +1560,8 @@ const TOOLS = [
         routeEffort: { type: "string", enum: store.VALID_EFFORTS },
         fallbackModel: { type: "string" },
         fallbackEffort: { type: "string", enum: store.VALID_EFFORTS },
-        enabled: { type: "boolean" }
+        enabled: { type: "boolean" },
+        readonly: { type: "boolean", description: "Comment closeout." }
       },
       required: ["id"]
     },
@@ -1579,7 +1583,7 @@ const TOOLS = [
       const existing = args.project != null ? store.getCategory(id, { project: slug }) : store.routingProfileCategory(args.profile, id);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch = {};
-      for (const key of ["name", "description", "contract", "artifactRoots"]) if (args[key] !== void 0) patch[key] = args[key];
+      for (const key of ["name", "description", "contract", "artifactRoots", "readonly"]) if (args[key] !== void 0) patch[key] = args[key];
       if (args.routeModel !== void 0 || args.routeEffort !== void 0) patch.route = { model: args.routeModel === void 0 ? existing.route.model : args.routeModel, effort: args.routeEffort === void 0 ? existing.route.effort : args.routeEffort };
       if (args.fallbackModel !== void 0 || args.fallbackEffort !== void 0) patch.fallback = { model: args.fallbackModel === void 0 ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === void 0 ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
       if (args.project != null) {

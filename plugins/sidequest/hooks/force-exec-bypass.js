@@ -70,12 +70,6 @@ function runtimeModule(name) {
 
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
-var READ_ONLY_CATEGORY_IDS = Object.freeze([
-  "codebase-exploration",
-  "research",
-  "review-audit",
-  "spike-investigation"
-]);
 var AGENT_NAME_MAX_LENGTH = 64;
 var LAUNCH_SLUG_MAX_WORDS = 3;
 var LAUNCH_SLUG_MAX_LENGTH = 24;

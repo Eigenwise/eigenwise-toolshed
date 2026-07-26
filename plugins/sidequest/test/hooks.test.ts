@@ -1657,7 +1657,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
     const projectPath = store.readMeta(slug).path;
 
     for (const [category, model, effort, expectedExecutor] of cases) {
-      store.setCategory({ id: category, name: category, route: { model, effort }, fallback: null, enabled: true });
+      store.setCategory({ id: category, name: category, route: { model, effort }, fallback: null, readonly: true, enabled: true });
       const ticket = store.createTicket(slug, { title: `readonly ${category} hook fixture`, category, source: 'cli' });
       const sessionId = `readonly-${category}-${++sqSeq}`;
       const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
