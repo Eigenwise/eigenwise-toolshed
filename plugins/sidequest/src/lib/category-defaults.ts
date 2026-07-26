@@ -1,4 +1,4 @@
-export const ROUTING_PROFILE_SEED_REVISION = 3;
+export const ROUTING_PROFILE_SEED_REVISION = 4;
 
 export const DEFAULT_CATEGORIES = [
   {
@@ -20,6 +20,17 @@ export const DEFAULT_CATEGORIES = [
     fallback: { model: 'codex-gpt-5-6-terra', effort: 'high' },
     contract: 'Reproduce first; use a hypothesis loop and prove the fix.',
     artifactRoots: [],
+    enabled: true,
+  },
+  {
+    id: 'experiment',
+    name: 'Experiment',
+    description: 'Use ONLY when the verdict is a human\'s judgement and no offline metric has been shown to reproduce it. If a test can decide, it is coding or debugging.',
+    route: { model: 'opus', effort: 'high' },
+    fallback: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    contract: 'Read the experiment log fully before the first edit. Run one hypothesis per round. Always commit the candidate to sidequest/experiment/<ref> and pin refs/sidequest/<ref>/r<N>, even when it loses. Write the oracle ask as a blind ranked comparison. Never paraphrase the user\'s verdict. Hand off with release and the oracle ask.',
+    artifactRoots: [],
+    readonly: false,
     enabled: true,
   },
   {
