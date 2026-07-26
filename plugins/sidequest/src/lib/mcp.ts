@@ -235,7 +235,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   checkpoint: 'Record review candidate; retain claim.',
   sweepClaims: 'Release dead claims; live ones stay.',
   next: 'Claim the top available ticket.',
-  scopeRequest: 'Check scope or request uncovered paths while keeping claim active.',
+  scopeRequest: 'Check scope; auto-approve eligible plugin tests.',
   commit: 'Commit declared paths from claimed worktree.',
   submit: 'Submit verified work for integration.',
   comment: 'Add a durable handoff comment.',
@@ -1102,15 +1102,15 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Check candidate paths against declared scope. Covered paths return immediately; uncovered paths create a request that keeps the executor claim active. Isolated dispatches must pass their linked worktree so the pause survives.',
+    description: 'Check scope; auto-approves eligible plugin tests.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
         by: { type: 'string' },
-        files: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Repository-relative paths to check and, only when uncovered, request.' },
-        worktree: { type: 'string', description: 'Absolute linked worktree root for an isolated dispatch pause.' },
+        files: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        worktree: { type: 'string' },
       },
       required: ['ref', 'by', 'files'],
     },
@@ -1120,6 +1120,8 @@ const TOOLS: ToolDefinition[] = [
       const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp', worktree: args.worktree });
       return mutationAck(slug, res, res.ok ? {
         covered: res.covered || [],
+        approved: res.approved || [],
+        autoApproved: !!res.autoApproved,
         scopeRequest: res.scopeRequest,
         command: res.command,
       } : null);
@@ -1808,7 +1810,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'board_config',
-    description: 'Board name, scope, integration branch and mode, worktree isolation, and setup.',
+    description: 'Board settings.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1818,6 +1820,7 @@ const TOOLS: ToolDefinition[] = [
         integrationMode: { type: 'string', enum: ['auto', 'local', 'remote'], description: 'auto is local without origin; local does not push.' },
         integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },
         worktreeIsolation: { type: 'boolean', description: 'When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true.' },
+        autoApprovePluginTests: { type: 'boolean' },
         worktreeSetup: { type: ['string', 'null'], maxLength: 1000, pattern: '^[^\\r\\n]*$', description: 'One-line isolated-worktree setup; null clears it.' },
       },
     },
@@ -1829,6 +1832,7 @@ const TOOLS: ToolDefinition[] = [
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
       if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
+      if (args.autoApprovePluginTests !== undefined) patch.autoApprovePluginTests = args.autoApprovePluginTests;
       if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length
         ? store.setBoardConfig(slug, patch)
@@ -1910,7 +1914,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeSetup !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.autoApprovePluginTests !== undefined || args.worktreeSetup !== undefined;
   return false;
 }
 

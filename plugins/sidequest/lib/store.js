@@ -1401,6 +1401,11 @@ function normalizeWorktreeIsolation(value) {
   if (typeof value !== "boolean") throw new Error("worktreeIsolation must be a boolean.");
   return value;
 }
+function normalizeAutoApprovePluginTests(value) {
+  if (value == null) return true;
+  if (typeof value !== "boolean") throw new Error("autoApprovePluginTests must be a boolean.");
+  return value;
+}
 function normalizeWorktreeSetup(value) {
   if (value == null || String(value).trim() === "") return null;
   const setup = String(value);
@@ -1462,6 +1467,7 @@ function boardConfig(slug) {
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
+    autoApprovePluginTests: normalizeAutoApprovePluginTests(meta.autoApprovePluginTests),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
     profile: {
       id: selected.profile.id,
@@ -1497,6 +1503,9 @@ function setBoardConfig(slug, patch) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, "worktreeIsolation")) {
       meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "autoApprovePluginTests")) {
+      meta.autoApprovePluginTests = normalizeAutoApprovePluginTests(patch.autoApprovePluginTests);
     }
     if (Object.prototype.hasOwnProperty.call(patch, "worktreeSetup")) {
       meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
@@ -2332,6 +2341,21 @@ function scopeExpansionCommand(ticket, additions) {
 function scopeRequestMarkerFile(ticket) {
   return `scope-request-${String(ticket?.id || "ticket").replace(/[^a-z0-9_-]/gi, "_")}.json`;
 }
+function pluginRoot(file) {
+  const match = /^plugins\/([^/]+)(?:\/|$)/i.exec(String(file || "").replace(/\\/g, "/"));
+  return match ? `plugins/${match[1]}` : null;
+}
+function pluginTestDirectory(file) {
+  const match = /^(plugins\/[^/]+)\/test(?:\/|$)/i.exec(String(file || "").replace(/\\/g, "/"));
+  return match ? `${match[1]}/test` : null;
+}
+function autoApprovedPluginTestScope(ticket, requested, additions, slug) {
+  if (!boardConfig(slug)?.autoApprovePluginTests) return null;
+  const declaredRoots = new Set((ticket?.files || []).map(pluginRoot).filter(Boolean).map((root) => root.toLowerCase()));
+  const requestedTestDirectories = normalizeFiles(requested).map(pluginTestDirectory);
+  if (!requestedTestDirectories.length || requestedTestDirectories.some((directory) => !directory || !declaredRoots.has(pluginRoot(directory).toLowerCase()))) return null;
+  return normalizeFiles(normalizeFiles(additions).map(pluginTestDirectory).filter(Boolean));
+}
 function createScopeRequestMarker(ticket, request, worktree) {
   const dispatch = dispatchState(ticket);
   if (!dispatch || dispatch.sharedTree !== false) return { ok: true, markerWorktree: null };
@@ -2452,6 +2476,26 @@ function requestScope(slug, idOrRef, by, files, opts) {
       t.updatedAt = now;
       putTicket(slug, t);
       return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
+    }
+    const testDirectories = autoApprovedPluginTestScope(t, requested, additions, slug);
+    if (testDirectories) {
+      t.files = boundedFiles(scopeExpansionFiles(t, testDirectories));
+      const dispatch2 = dispatchState(t);
+      if (dispatch2 && !dispatch2.terminalAt) dispatch2.declaredFiles = t.files.slice();
+      if (!Array.isArray(t.comments)) t.comments = [];
+      const comment2 = createComment({
+        by: "board",
+        body: `Auto-approved test scope under board policy: ${testDirectories.join(", ")}.`,
+        kind: "comment",
+        source: "policy"
+      }, now);
+      t.comments.push(comment2);
+      t.lastEventType = "scope_auto_approved";
+      t.lastEventSource = "policy";
+      t.updatedAt = now;
+      putTicket(slug, t);
+      queueEventNotification(slug, t, "comment", comment2.source, { commentBody: comment2.body });
+      return { ok: true, ticket: t, covered, approved: testDirectories, autoApproved: true, scopeRequest: null, command: null, comment: comment2 };
     }
     const command = scopeExpansionCommand(t, additions);
     const request = { by, files: additions, at: now };

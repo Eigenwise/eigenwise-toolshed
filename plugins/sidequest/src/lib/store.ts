@@ -1659,6 +1659,12 @@ function normalizeWorktreeIsolation(value?: any) {
   return value;
 }
 
+function normalizeAutoApprovePluginTests(value?: any) {
+  if (value == null) return true;
+  if (typeof value !== 'boolean') throw new Error('autoApprovePluginTests must be a boolean.');
+  return value;
+}
+
 function normalizeWorktreeSetup(value?: any) {
   if (value == null || String(value).trim() === '') return null;
   const setup = String(value);
@@ -1725,6 +1731,7 @@ function boardConfig(slug?: any) {
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
+    autoApprovePluginTests: normalizeAutoApprovePluginTests(meta.autoApprovePluginTests),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
     profile: {
       id: selected.profile.id,
@@ -1761,6 +1768,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeIsolation')) {
       meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'autoApprovePluginTests')) {
+      meta.autoApprovePluginTests = normalizeAutoApprovePluginTests(patch.autoApprovePluginTests);
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeSetup')) {
       meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
@@ -2756,6 +2766,24 @@ function scopeRequestMarkerFile(ticket?: any) {
   return `scope-request-${String(ticket?.id || 'ticket').replace(/[^a-z0-9_-]/gi, '_')}.json`;
 }
 
+function pluginRoot(file?: any) {
+  const match = /^plugins\/([^/]+)(?:\/|$)/i.exec(String(file || '').replace(/\\/g, '/'));
+  return match ? `plugins/${match[1]}` : null;
+}
+
+function pluginTestDirectory(file?: any) {
+  const match = /^(plugins\/[^/]+)\/test(?:\/|$)/i.exec(String(file || '').replace(/\\/g, '/'));
+  return match ? `${match[1]}/test` : null;
+}
+
+function autoApprovedPluginTestScope(ticket?: any, requested?: any, additions?: any, slug?: any) {
+  if (!boardConfig(slug)?.autoApprovePluginTests) return null;
+  const declaredRoots = new Set((ticket?.files || []).map(pluginRoot).filter(Boolean).map((root: any) => root.toLowerCase()));
+  const requestedTestDirectories = normalizeFiles(requested).map(pluginTestDirectory);
+  if (!requestedTestDirectories.length || requestedTestDirectories.some((directory?: any) => !directory || !declaredRoots.has(pluginRoot(directory)!.toLowerCase()))) return null;
+  return normalizeFiles(normalizeFiles(additions).map(pluginTestDirectory).filter(Boolean));
+}
+
 function createScopeRequestMarker(ticket?: any, request?: any, worktree?: any) {
   const dispatch = dispatchState(ticket);
   if (!dispatch || dispatch.sharedTree !== false) return { ok: true, markerWorktree: null };
@@ -2873,6 +2901,27 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       t.updatedAt = now;
       putTicket(slug, t);
       return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
+    }
+    const testDirectories = autoApprovedPluginTestScope(t, requested, additions, slug);
+    if (testDirectories) {
+      // Test-only widening is audited here; publish reverify runs it before the integrated-diff review.
+      t.files = boundedFiles(scopeExpansionFiles(t, testDirectories));
+      const dispatch = dispatchState(t);
+      if (dispatch && !dispatch.terminalAt) dispatch.declaredFiles = t.files.slice();
+      if (!Array.isArray(t.comments)) t.comments = [];
+      const comment = createComment({
+        by: 'board',
+        body: `Auto-approved test scope under board policy: ${testDirectories.join(', ')}.`,
+        kind: 'comment',
+        source: 'policy',
+      }, now);
+      t.comments.push(comment);
+      t.lastEventType = 'scope_auto_approved';
+      t.lastEventSource = 'policy';
+      t.updatedAt = now;
+      putTicket(slug, t);
+      queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
+      return { ok: true, ticket: t, covered, approved: testDirectories, autoApproved: true, scopeRequest: null, command: null, comment };
     }
     const command = scopeExpansionCommand(t, additions);
     const request = { by, files: additions, at: now };
