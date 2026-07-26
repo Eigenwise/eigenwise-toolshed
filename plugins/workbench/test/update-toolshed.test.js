@@ -207,6 +207,97 @@ test('skips stale project installs without blocking local gateway migration', ()
   });
 });
 
+test('GCs only missing Sidequest agent worktree registry entries and preserves a backup', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-agent-worktree-'));
+  const missingAgentWorktree = path.join(root, '.claude', 'worktrees', 'agent-gone');
+  const liveAgentWorktree = path.join(root, '.claude', 'worktrees', 'agent-live');
+  const missingProject = path.join(root, 'deleted-project');
+  fs.mkdirSync(liveAgentWorktree, { recursive: true });
+
+  const configured = structuredClone(registry);
+  configured.plugins['sidequest@eigenwise-toolshed'].push(
+    { scope: 'local', projectPath: missingAgentWorktree, version: '1.0.0' },
+    { scope: 'local', projectPath: liveAgentWorktree, version: '1.0.0' },
+    { scope: 'project', projectPath: missingProject, version: '1.0.0' },
+  );
+
+  try {
+    withRegistry(configured, (registryFile) => {
+      const original = fs.readFileSync(registryFile, 'utf8');
+      const lines = [];
+      const result = runUpdate({
+        registryFile,
+        options: { claude: 'claude', dryRun: false, check: false },
+        run: () => ({ ok: true }),
+        report: (line) => lines.push(line),
+      });
+
+      const saved = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+      const paths = saved.plugins['sidequest@eigenwise-toolshed'].map((install) => install.projectPath);
+      assert.equal(result.registryGc.cleaned, true);
+      assert.equal(result.registryGc.entries.length, 1);
+      assert.equal(paths.includes(missingAgentWorktree), false);
+      assert.ok(paths.includes(liveAgentWorktree));
+      assert.ok(paths.includes(missingProject));
+      assert.ok(fs.existsSync(result.registryGc.backupPath));
+      assert.equal(fs.readFileSync(result.registryGc.backupPath, 'utf8'), original);
+      assert.match(lines.join('\n'), /Removed 1 stale Sidequest agent worktree plugin registry install/);
+      assert.match(lines.join('\n'), new RegExp(`Registry backup: ${result.registryGc.backupPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+      assert.match(lines.join('\n'), /Skipped 1 stale project install\(s\): directory no longer exists/);
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('check mode reports stale Sidequest agent worktree entries without changing the registry', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-agent-worktree-check-'));
+  const missingAgentWorktree = path.join(root, '.claude', 'worktrees', 'agent-gone');
+  const configured = structuredClone(registry);
+  configured.plugins['sidequest@eigenwise-toolshed'].push({ scope: 'local', projectPath: missingAgentWorktree, version: '1.0.0' });
+
+  try {
+    withRegistry(configured, (registryFile) => {
+      const original = fs.readFileSync(registryFile, 'utf8');
+      const lines = [];
+      const result = runUpdate({
+        registryFile,
+        options: { claude: 'claude', dryRun: false, check: true },
+        run: () => ({ ok: true }),
+        report: (line) => lines.push(line),
+      });
+
+      assert.equal(result.registryGc.cleaned, false);
+      assert.equal(result.registryGc.entries.length, 1);
+      assert.equal(fs.readFileSync(registryFile, 'utf8'), original);
+      assert.match(lines.join('\n'), /Found 1 stale Sidequest agent worktree plugin registry install/);
+      assert.match(lines.join('\n'), /Registry cleanup was not run in check mode/);
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('reports invalid plugin registries and leaves them untouched', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-invalid-registry-'));
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  fs.writeFileSync(registryFile, '{ not valid JSON');
+  const lines = [];
+
+  try {
+    assert.throws(() => runUpdate({
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false },
+      report: (line) => lines.push(line),
+    }));
+    assert.equal(fs.readFileSync(registryFile, 'utf8'), '{ not valid JSON');
+    assert.deepEqual(fs.readdirSync(directory), ['installed_plugins.json']);
+    assert.match(lines.join('\n'), /Registry GC skipped: .*Registry was left unchanged/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('local mode preserves global wiring when a recorded project fails', () => withRegistry(registry, (registryFile) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-local-wiring-failure-'));
   try {

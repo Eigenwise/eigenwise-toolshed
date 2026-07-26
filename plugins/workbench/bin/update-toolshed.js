@@ -54,6 +54,72 @@ function readRegistry(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function registryInstallEntries(registry) {
+  if (!isRecord(registry)) throw new Error('Plugin registry root is not an object');
+  if (!isRecord(registry.plugins)) throw new Error('Plugin registry has no plugins object');
+
+  const entries = [];
+  for (const [id, installs] of Object.entries(registry.plugins)) {
+    if (!Array.isArray(installs)) throw new Error(`Plugin registry entry ${id} is not an install list`);
+    installs.forEach((install, index) => {
+      if (!isRecord(install)) throw new Error(`Plugin registry entry ${id}[${index}] is not an install object`);
+      entries.push({ id, installs, install });
+    });
+  }
+  return entries;
+}
+
+function isStaleAgentWorktreeInstall(install) {
+  const projectPath = install.projectPath;
+  return typeof projectPath === 'string'
+    && /[\\/]\.claude[\\/]worktrees[\\/]agent-[^\\/]+[\\/]?$/i.test(projectPath)
+    && !fs.existsSync(projectPath);
+}
+
+function registryBackupPath(file, date = new Date()) {
+  return `${file}.${date.toISOString().replace(/[:.]/g, '-')}.bak`;
+}
+
+function reportAgentWorktreeEntries(entries, report, heading) {
+  report(`${heading} ${entries.length} stale Sidequest agent worktree plugin registry install(s):`);
+  for (const { id, install } of entries) report(`- ${id} (${install.scope ?? 'unknown'}, ${install.projectPath})`);
+}
+
+function cleanStaleAgentWorktreeInstalls(registryFile, registry, options, report) {
+  const entries = registryInstallEntries(registry);
+  const staleEntries = entries.filter(({ install }) => isStaleAgentWorktreeInstall(install));
+  if (staleEntries.length === 0) return { entries: [], backupPath: null, cleaned: false };
+
+  if (options.check) {
+    reportAgentWorktreeEntries(staleEntries, report, 'Found');
+    report('Registry cleanup was not run in check mode. Run /update-toolshed to remove these entries.');
+    return { entries: staleEntries, backupPath: null, cleaned: false };
+  }
+
+  const backupPath = registryBackupPath(registryFile);
+  if (options.dryRun) {
+    reportAgentWorktreeEntries(staleEntries, report, 'Would remove');
+    report(`Registry backup would be written to: ${backupPath}`);
+    return { entries: staleEntries, backupPath, cleaned: false };
+  }
+
+  fs.copyFileSync(registryFile, backupPath);
+  for (const [id, installs] of Object.entries(registry.plugins)) {
+    const remaining = installs.filter((install) => !isStaleAgentWorktreeInstall(install));
+    if (remaining.length === 0) delete registry.plugins[id];
+    else registry.plugins[id] = remaining;
+  }
+  fs.writeFileSync(registryFile, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
+
+  reportAgentWorktreeEntries(staleEntries, report, 'Removed');
+  report(`Registry backup: ${backupPath}`);
+  return { entries: staleEntries, backupPath, cleaned: true };
+}
+
 function workbenchStatuslinePin(command) {
   return /[\\/]plugins[\\/]cache[\\/]eigenwise-toolshed[\\/]workbench[\\/][^\\/]+[\\/]bin[\\/]workbench-statusline\.js/i.test(String(command || ''));
 }
@@ -338,16 +404,24 @@ function execute(command, options, run, report) {
 function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log }) {
   const modeWasConfigured = hasGatewayWiringMode(home);
   if (options.wiringMode && !options.check && !options.dryRun) setGatewayWiringMode(home, options.wiringMode);
-  const registry = readRegistry(registryFile);
+  let registry;
+  try {
+    registry = readRegistry(registryFile);
+    registryInstallEntries(registry);
+  } catch (error) {
+    report(`Registry GC skipped: ${error.message}. Registry was left unchanged.`);
+    throw error;
+  }
+  const registryGc = cleanStaleAgentWorktreeInstalls(registryFile, registry, options, report);
   let instances = toolshedPlugins(registry);
-  const staleInstances = staleProjectInstances(instances);
+  const staleInstances = staleProjectInstances(instances).filter((instance) => !isStaleAgentWorktreeInstall(instance));
   instances = activeProjectInstances(instances);
   const beforeUpdate = instances;
 
   reportStaleProjectInstances(staleInstances, report);
   if (instances.length === 0) {
     report(`No active user, project, or local Toolshed plugin installs found in ${registryFile}.`);
-    return { ok: true, instances, staleInstances, failures: [] };
+    return { ok: true, instances, staleInstances, registryGc, failures: [] };
   }
 
   const marketplaces = marketplacesFor(instances);
@@ -410,7 +484,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   for (const line of reloadAdvice(instances)) report(line);
   if (failures.length > 0) report(`\nCompleted with ${failures.length} failure(s): ${failures.join(', ')}`);
   else report('\nCompleted successfully.');
-  return { ok: failures.length === 0, instances, staleInstances, failures, healedGatewayWiring, healedStatuslines };
+  return { ok: failures.length === 0, instances, staleInstances, registryGc, failures, healedGatewayWiring, healedStatuslines };
 }
 
 function main() {
