@@ -143,7 +143,50 @@ function globalDashboard(template, projects) {
 // By-project breakdowns can only ever show the board's own project — global-only.
 const GLOBAL_ONLY_PANELS = new Set(['Usage by project', 'Cost over time, by project']);
 
+const EMPTY_STATE_TITLE = 'Telemetry in the selected range';
+const EMPTY_STATE_MESSAGE = 'No Claude Code metrics in this range. Sessions may be running in directories that never got the telemetry env: run /workbench:enable-project-telemetry in this repository, then restart Claude Code there.';
+
+// A project with no samples rendered exactly like an idle one, so a half-wired repository
+// read as "quiet" instead of broken. The empty state has to be said out loud on the one
+// dashboard that can tell the difference (SQ-883).
+function emptyStatePanel() {
+  const datasource = { type: 'prometheus', uid: 'prometheus' };
+  return {
+    id: 900,
+    title: EMPTY_STATE_TITLE,
+    description: EMPTY_STATE_MESSAGE,
+    type: 'stat',
+    datasource,
+    gridPos: { x: 0, y: -1, w: 24, h: 3 },
+    options: {
+      reduceOptions: { values: false, calcs: ['lastNotNull'], fields: '' },
+      orientation: 'horizontal',
+      colorMode: 'value',
+      graphMode: 'none',
+      textMode: 'value',
+      justifyMode: 'auto',
+    },
+    fieldConfig: {
+      defaults: {
+        noValue: EMPTY_STATE_MESSAGE,
+        mappings: [{
+          type: 'range',
+          options: { from: 1, to: null, result: { text: 'Receiving telemetry', color: 'green', index: 0 } },
+        }],
+      },
+      overrides: [],
+    },
+    targets: [{
+      refId: 'A',
+      datasource,
+      expr: 'count(count_over_time(claude_code_token_usage_tokens_total{project_id=~"$project"}[$__range]))',
+      instant: true,
+    }],
+  };
+}
+
 function perProjectDashboard(template, project) {
+  template.panels = [emptyStatePanel(), ...template.panels];
   const dashboard = filterDashboard(template, [project], new Set([...GLOBAL_ONLY_PANELS, ...PROJECT_UNSCOPED_PANELS]));
   dashboard.title = `Claude Code — ${project.project_name}`;
   dashboard.uid = `claude-code-${project.project_id.slice(0, 16)}`;
@@ -181,6 +224,7 @@ function provisionDashboards(dataDir, projects) {
 }
 
 module.exports = {
+  EMPTY_STATE_TITLE,
   GENERATED_DIRECTORY,
   generatedDashboards,
   provisionDashboards,

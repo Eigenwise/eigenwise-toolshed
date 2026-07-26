@@ -26,13 +26,72 @@ function identifier(value) {
   return typeof value === 'string' && SAFE_IDENTIFIER.test(value) ? value : null;
 }
 
+const REPOSITORY_ROOTS = new Map();
+// A hook process handles one event, but the observer, the CLIs and the tests are
+// long-lived, so the memo is capped rather than allowed to grow without limit.
+const REPOSITORY_ROOT_CAP = 256;
+
+function entryStat(target) {
+  return fs.statSync(target, { throwIfNoEntry: false });
+}
+
+// `.git` is a file in a linked worktree or a submodule and points at the real git
+// directory under the main worktree. Following it is what keeps agent worktrees under
+// .claude/worktrees/ from reporting as a project named after their own directory.
+function pointedWorktreeRoot(marker) {
+  const pointer = fs.readFileSync(marker, 'utf8').trim();
+  if (!pointer.startsWith('gitdir:')) return null;
+  const gitDir = path.resolve(path.dirname(marker), pointer.slice('gitdir:'.length).trim());
+  const commonFile = path.join(gitDir, 'commondir');
+  const commonStat = entryStat(commonFile);
+  let candidate = commonStat && commonStat.isFile()
+    ? path.resolve(gitDir, fs.readFileSync(commonFile, 'utf8').trim())
+    : gitDir;
+  while (path.basename(candidate) !== '.git') {
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return null;
+    candidate = parent;
+  }
+  const root = path.dirname(candidate);
+  const rootStat = entryStat(root);
+  return rootStat && rootStat.isDirectory() ? root : null;
+}
+
+function walkToRepositoryRoot(start) {
+  for (let directory = start; ;) {
+    const marker = path.join(directory, '.git');
+    const stat = entryStat(marker);
+    if (stat && stat.isDirectory()) return directory;
+    if (stat && stat.isFile()) return pointedWorktreeRoot(marker);
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+// Telemetry identity is per repository: every working directory inside one repo reports
+// as that repo, so a subdirectory session lands on the repo's dashboard instead of an
+// unregistered project nothing filters on. Plain fs only, since this runs per hook event.
+function repositoryRoot(cwd) {
+  if (typeof cwd !== 'string' || cwd.length === 0) return null;
+  let start = null;
+  try { start = path.resolve(cwd); } catch { return null; }
+  if (REPOSITORY_ROOTS.has(start)) return REPOSITORY_ROOTS.get(start);
+  let root = null;
+  try { root = walkToRepositoryRoot(start); } catch { root = null; }
+  if (REPOSITORY_ROOTS.size >= REPOSITORY_ROOT_CAP) REPOSITORY_ROOTS.clear();
+  REPOSITORY_ROOTS.set(start, root);
+  return root;
+}
+
 function projectMetadata(cwd) {
   if (typeof cwd !== 'string' || cwd.length === 0) return {};
-  const basename = cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  const root = repositoryRoot(cwd) || cwd;
+  const basename = root.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
   const projectName = basename.replace(/[^A-Za-z0-9_.:@-]/g, '-').slice(0, 64);
   if (!projectName || !/^[A-Za-z0-9]/.test(projectName)) return {};
   return {
-    project_id: crypto.createHash('sha256').update(cwd).digest('hex'),
+    project_id: crypto.createHash('sha256').update(root).digest('hex'),
     project_name: projectName,
   };
 }
@@ -216,4 +275,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { EVENT_MAP, buildObservation, defaultSpoolPath, projectMetadata, sendMessageRecipient, spool };
+module.exports = { EVENT_MAP, buildObservation, defaultSpoolPath, projectMetadata, repositoryRoot, sendMessageRecipient, spool };

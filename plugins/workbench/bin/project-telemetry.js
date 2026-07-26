@@ -2,9 +2,10 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { observabilityEnvironment, setupObservability } = require('./setup-observability.js');
-const { projectMetadata } = require('../hooks/observability.js');
+const { projectMetadata, repositoryRoot } = require('../hooks/observability.js');
 const {
   defaultConfigPath,
   defaultDataDir,
@@ -13,9 +14,83 @@ const {
 } = require('../observability/sinks/index.js');
 
 const STATE_FILE = 'settings.local.workbench-telemetry.json';
+const SKIPPED_DIRECTORIES = new Set(['node_modules', '.git']);
+const MAX_SCAN_DEPTH = 8;
+const MAX_SCAN_DIRECTORIES = 4096;
 
 function projectName(projectDir) {
   return projectMetadata(path.resolve(projectDir)).project_name;
+}
+
+function telemetryRoot(projectDir) {
+  const resolved = path.resolve(projectDir);
+  return repositoryRoot(resolved) || resolved;
+}
+
+function claudeProjectsDir(options = {}) {
+  if (options.projectsDir) return options.projectsDir;
+  const environment = options.environment || process.env;
+  return path.join(environment.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
+}
+
+// Claude Code names a session directory by replacing every non-alphanumeric character of
+// the absolute path with a dash. That is not reversible (a dash may be a separator or a
+// literal), so candidate directories are encoded and matched, never decoded.
+function encodedProjectDirectory(directory) {
+  return path.resolve(directory).replace(/[^A-Za-z0-9]/g, '-');
+}
+
+function repositorySubdirectories(root) {
+  const found = [];
+  const queue = [{ directory: root, depth: 0 }];
+  let visited = 0;
+  while (queue.length > 0 && visited < MAX_SCAN_DIRECTORIES) {
+    const { directory, depth } = queue.shift();
+    visited += 1;
+    let entries = [];
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.') || SKIPPED_DIRECTORIES.has(entry.name)) continue;
+      const child = path.join(directory, entry.name);
+      // The parent already resolved to this repository, so only a child carrying its own
+      // `.git` can belong somewhere else, and only that child is worth resolving.
+      const marker = fs.statSync(path.join(child, '.git'), { throwIfNoEntry: false });
+      if (marker && telemetryRoot(child) !== root) continue;
+      found.push(child);
+      if (depth + 1 < MAX_SCAN_DEPTH) queue.push({ directory: child, depth: depth + 1 });
+    }
+  }
+  return found.sort();
+}
+
+function hostedEncodings(options) {
+  const projects = claudeProjectsDir(options);
+  // Windows and macOS hand back paths whose case may differ from the one Claude Code
+  // encoded, and neither filesystem can hold two names that differ only by case.
+  const insensitive = process.platform === 'win32' || process.platform === 'darwin';
+  try {
+    return {
+      insensitive,
+      names: new Set(fs.readdirSync(projects, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => (insensitive ? entry.name.toLowerCase() : entry.name))),
+    };
+  } catch {
+    return { insensitive, names: new Set() };
+  }
+}
+
+// Claude Code reads OTEL_RESOURCE_ATTRIBUTES from the settings of the directory a session
+// started in and never walks up to the repository root, so the env has to physically exist
+// in every directory that hosts sessions.
+function sessionDirectories(projectDir, options = {}) {
+  const root = telemetryRoot(projectDir);
+  const { insensitive, names } = hostedEncodings(options);
+  const hosted = (directory) => {
+    const encoded = encodedProjectDirectory(directory);
+    return names.has(insensitive ? encoded.toLowerCase() : encoded);
+  };
+  return [root, ...repositorySubdirectories(root).filter(hosted)];
 }
 
 function registryEntry(projectDir, now = new Date()) {
@@ -68,6 +143,15 @@ function projectSettingsPath(projectDir) {
 
 function telemetryStatePath(projectDir) {
   return path.join(path.resolve(projectDir), '.claude', STATE_FILE);
+}
+
+function wiredProjectId(projectDir) {
+  try {
+    const settings = JSON.parse(fs.readFileSync(projectSettingsPath(projectDir), 'utf8'));
+    return parseResourceAttributes(settings?.env?.OTEL_RESOURCE_ATTRIBUTES).get('project.id') || null;
+  } catch {
+    return null;
+  }
 }
 
 function readJson(filePath, fallback = {}) {
@@ -151,18 +235,17 @@ function applyProjectTelemetry(projectDir, options = {}) {
   return { changed, settingsPath, statePath, settings: result.settings };
 }
 
-function disableProjectTelemetry(projectDir, options = {}) {
-  const registry = removeProjectRegistry(projectDir, options);
+function wiredDirectories(projectDir) {
+  const root = telemetryRoot(projectDir);
+  const wired = (directory) => Boolean(fs.statSync(telemetryStatePath(directory), { throwIfNoEntry: false }));
+  return [root, ...repositorySubdirectories(root).filter(wired)];
+}
+
+function unwireDirectory(projectDir) {
   const settingsPath = projectSettingsPath(projectDir);
   const statePath = telemetryStatePath(projectDir);
   const state = readJson(statePath, null);
-  if (!state?.added || !state?.previous) return {
-    changed: registry.changed,
-    settingsPath,
-    statePath,
-    registry,
-    reason: 'not_enabled',
-  };
+  if (!state?.added || !state?.previous) return { changed: false, settingsPath, statePath, reason: 'not_enabled' };
 
   const before = readJson(settingsPath);
   const next = structuredClone(before);
@@ -184,18 +267,48 @@ function disableProjectTelemetry(projectDir, options = {}) {
   const changed = JSON.stringify(before) !== JSON.stringify(next);
   if (changed) writePrivateJson(settingsPath, next);
   fs.rmSync(statePath, { force: true });
-  return { changed: changed || registry.changed, settingsPath, statePath, registry, settings: next };
+  return { changed, settingsPath, statePath, settings: next };
+}
+
+function disableProjectTelemetry(projectDir, options = {}) {
+  const root = telemetryRoot(projectDir);
+  const registry = removeProjectRegistry(root, options);
+  const directories = wiredDirectories(root).map((directory) => ({ directory, ...unwireDirectory(directory) }));
+  const [rootDirectory] = directories;
+  return {
+    changed: registry.changed || directories.some((entry) => entry.changed),
+    repositoryRoot: root,
+    directories,
+    settingsPath: rootDirectory.settingsPath,
+    statePath: rootDirectory.statePath,
+    settings: rootDirectory.settings,
+    registry,
+    ...(directories.every((entry) => entry.reason === 'not_enabled') ? { reason: 'not_enabled' } : {}),
+  };
 }
 
 async function enableProjectTelemetry(projectDir, options = {}) {
+  const root = telemetryRoot(projectDir);
   const runtime = await (options.prepareRuntime || setupObservability)({
     ...options,
-    projectDir,
+    projectDir: root,
     applyProjectSettings: false,
   });
   const ports = runtime.config.observability.ports;
-  const registry = updateProjectRegistry(projectDir, { ...options, configFile: runtime.observabilityConfig });
-  return { runtime, registry, ...applyProjectTelemetry(projectDir, { ports }) };
+  const registry = updateProjectRegistry(root, { ...options, configFile: runtime.observabilityConfig });
+  const directories = sessionDirectories(root, options)
+    .map((directory) => ({ directory, ...applyProjectTelemetry(directory, { ports }) }));
+  const [rootDirectory] = directories;
+  return {
+    runtime,
+    registry,
+    repositoryRoot: root,
+    directories,
+    changed: directories.some((entry) => entry.changed),
+    settingsPath: rootDirectory.settingsPath,
+    statePath: rootDirectory.statePath,
+    settings: rootDirectory.settings,
+  };
 }
 
 function parseArgs(argv) {
@@ -210,23 +323,42 @@ function parseArgs(argv) {
   return options;
 }
 
+function directoryReport(directories) {
+  return directories.map(({ directory }) => `  ${directory}\n`).join('');
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const projectDir = path.resolve(options.projectDir || process.cwd());
   if (options.disable) {
     const result = disableProjectTelemetry(projectDir);
-    process.stdout.write(result.changed ? `Project telemetry disabled in ${result.settingsPath}.\n` : 'Project telemetry was not enabled by Workbench.\n');
+    if (!result.changed) {
+      process.stdout.write('Project telemetry was not enabled by Workbench.\n');
+      return;
+    }
+    const unwired = result.directories.filter((entry) => entry.changed);
+    if (unwired.length === 0) {
+      process.stdout.write(`Removed ${projectName(result.repositoryRoot)} from the local registry; no wired directory remained.\n`);
+      return;
+    }
+    process.stdout.write(`Project telemetry disabled for ${projectName(result.repositoryRoot)} in ${unwired.length} director${unwired.length === 1 ? 'y' : 'ies'}:\n`);
+    process.stdout.write(directoryReport(unwired));
+    process.stdout.write('Restart Claude Code in each of them for the change to take effect.\n');
     return;
   }
   const result = await enableProjectTelemetry(projectDir, options);
-  process.stdout.write(`Project telemetry enabled for ${projectName(projectDir)} in ${result.settingsPath}. Restart Claude Code before sending telemetry.\n`);
+  process.stdout.write(`Project telemetry enabled for ${projectName(result.repositoryRoot)} (repository ${result.repositoryRoot}) in ${result.directories.length} director${result.directories.length === 1 ? 'y' : 'ies'}:\n`);
+  process.stdout.write(directoryReport(result.directories));
+  process.stdout.write('Every Claude Code session running in those directories must restart before its metrics appear.\n');
 }
 
 module.exports = {
   STATE_FILE,
   applyProjectTelemetry,
+  claudeProjectsDir,
   disableProjectTelemetry,
   enableProjectTelemetry,
+  encodedProjectDirectory,
   mergeTelemetrySettings,
   parseArgs,
   projectName,
@@ -234,9 +366,14 @@ module.exports = {
   registryEntry,
   registryConfigPath,
   removeProjectRegistry,
+  repositorySubdirectories,
+  sessionDirectories,
   telemetryEnvironment,
+  telemetryRoot,
   telemetryStatePath,
   updateProjectRegistry,
+  wiredDirectories,
+  wiredProjectId,
 };
 
 if (require.main === module) main().catch((error) => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });

@@ -12,7 +12,7 @@ const { openObservabilityStore } = require('../lib/observability/store.js');
 const { otlpToObservations } = require('../lib/observability/otlp.js');
 const { normalizeAssistantUsage, normalizeTerminalResult } = require('../lib/observability/sdk.js');
 const { ALLOWED_EVENTS, ALLOWED_MEASUREMENTS, ATTRIBUTE_SPECS } = require('../lib/observability/schema.js');
-const { generatedDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
+const { EMPTY_STATE_TITLE, generatedDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
 const { buildOtlpLogPayload, createGatewayUsageEmitter } = require('../../codex-gateway/lib/usage-observability.js');
 const { ticketObservation: nativeTicketObservation } = require('../../sidequest/lib/telemetry.js');
 
@@ -222,6 +222,21 @@ test('canonical project identity stays aligned across Workbench emitters and sel
   assert.equal(registry.project_name, identity.project_name);
   assert.equal(resourceAttributes.get('project.id'), identity.project_name);
   assert.ok(selectors.some((selector) => selector.includes(`project_id="${identity.project_name}"`)));
+});
+
+test('a per-project dashboard says so when its project has no samples in the range', () => {
+  const [global, perProject] = generatedDashboards([{ project_name: 'atlas', project_id: 'a'.repeat(64) }]);
+  const panel = perProject.dashboard.panels.find(({ title }) => title === EMPTY_STATE_TITLE);
+
+  assert.ok(panel, 'per-project dashboard lost its empty state');
+  assert.equal(panel.gridPos.y, 0, 'the empty state has to be the first thing on the board');
+  assert.match(panel.fieldConfig.defaults.noValue, /No Claude Code metrics in this range/);
+  assert.match(panel.fieldConfig.defaults.noValue, /enable-project-telemetry/);
+  assert.match(panel.targets[0].expr, /project_id="atlas"/);
+  assert.doesNotMatch(panel.targets[0].expr, /\$project/);
+  // The global dashboard already shows which projects reported; an empty state there
+  // would only ever mean "no projects at all".
+  assert.equal(global.dashboard.panels.some(({ title }) => title === EMPTY_STATE_TITLE), false);
 });
 
 test('native Sidequest identity joins the canonical project after ingest', () => {

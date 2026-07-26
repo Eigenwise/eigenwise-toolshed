@@ -28,7 +28,21 @@ node "${CLAUDE_PLUGIN_ROOT}/lib/observability/ensure.js" --health
 
 If it reports `configured: false`, observability was never consented to and needs no repair. If it reports `enabled: false`, say it is deliberately disabled. For an enabled record, report observer health, Collector listening state, selected sink, configured ports, and dashboard/Docker state. Treat a listening observer with a failed `/health` response as unhealthy, and a configured dashboard without Docker as optional/unavailable rather than a pipeline failure.
 
-When the observer is healthy, run the local report too:
+When the observer is healthy, audit project attribution. Hook events reach the observer from any directory,
+but the `claude_code_*` metrics only exist where Claude Code found the telemetry env in the settings of the
+directory the session started in. A project with observer events and no native samples in the same window is
+half-wired, and its dashboard reads empty rather than broken. This command is read-only:
+
+```sh
+node "${CLAUDE_PLUGIN_ROOT}/bin/verify-project-telemetry.js" --audit --project "<absolute-current-project-dir>"
+```
+
+Report every `UNWIRED` session directory by name, every `half-wired:` line, and the printed `fix:` command
+verbatim, adding that each affected session has to restart before its metrics appear. `native-samples=unknown`
+means Grafana was unreachable or unconfigured, so say the check could not run instead of calling it healthy. A
+`not opted in:` line is a hint, not a fault: those project names never opted in.
+
+Then run the local report too:
 
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/bin/token-usage-report.js" --format json

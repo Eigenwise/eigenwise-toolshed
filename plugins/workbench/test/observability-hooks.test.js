@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -9,7 +10,7 @@ const test = require('node:test');
 const { normalizeObservation } = require('../lib/observability/ingest.js');
 const { drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
-const { buildObservation, spool, EVENT_MAP } = require('../hooks/observability.js');
+const { buildObservation, projectMetadata, repositoryRoot, spool, EVENT_MAP } = require('../hooks/observability.js');
 const { buildStatuslineObservations } = require('../bin/workbench-statusline.js');
 
 const NOW = new Date('2026-07-19T10:00:00.000Z');
@@ -87,6 +88,66 @@ test('post-tool observations re-announce their project after an observer restart
   assert.equal(observation.attributes.project_name, 'eigenwise-toolshed');
   assert.match(observation.project_id, /^[0-9a-f]{64}$/);
   accept(observation);
+});
+
+function temporaryTree(t, name) {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-repo-identity-')));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  return path.join(directory, name);
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+test('every working directory inside one repository reports as that repository', (t) => {
+  const root = temporaryTree(t, 'sample-repo');
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  const nested = path.join(root, 'apps', 'gui');
+  fs.mkdirSync(nested, { recursive: true });
+
+  assert.equal(repositoryRoot(nested), root);
+  assert.deepEqual(projectMetadata(nested), projectMetadata(root));
+  assert.equal(projectMetadata(nested).project_name, 'sample-repo');
+  // A directory that is its own repository root keeps the identity it had before
+  // identity moved to the repository, so no registered project loses its dashboard.
+  assert.equal(projectMetadata(root).project_id, sha256(root));
+});
+
+test('a linked worktree or submodule reports as its main worktree, never as agent-<hash>', (t) => {
+  const root = temporaryTree(t, 'sample-repo');
+  const gitDir = path.join(root, '.git');
+  const worktreeGitDir = path.join(gitDir, 'worktrees', 'agent-ab53c815804ab49dd');
+  fs.mkdirSync(worktreeGitDir, { recursive: true });
+  fs.writeFileSync(path.join(worktreeGitDir, 'commondir'), '../..\n');
+  const worktree = path.join(root, '.claude', 'worktrees', 'agent-ab53c815804ab49dd');
+  fs.mkdirSync(worktree, { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${worktreeGitDir.replaceAll('\\', '/')}\n`);
+
+  assert.deepEqual(projectMetadata(worktree), projectMetadata(root));
+  assert.deepEqual(projectMetadata(path.join(worktree, 'plugins', 'workbench')), projectMetadata(root));
+
+  const submodule = path.join(root, 'vendor', 'shared');
+  fs.mkdirSync(path.join(gitDir, 'modules', 'shared'), { recursive: true });
+  fs.mkdirSync(submodule, { recursive: true });
+  fs.writeFileSync(path.join(submodule, '.git'), 'gitdir: ../../.git/modules/shared\n');
+  assert.deepEqual(projectMetadata(submodule), projectMetadata(root));
+});
+
+test('project identity falls back to the directory itself outside a readable repository', (t) => {
+  const loose = temporaryTree(t, 'loose-project');
+  fs.mkdirSync(loose, { recursive: true });
+  assert.equal(repositoryRoot(loose), null);
+  assert.deepEqual(projectMetadata(loose), { project_id: sha256(loose), project_name: 'loose-project' });
+
+  const broken = temporaryTree(t, 'broken-repo');
+  fs.mkdirSync(broken, { recursive: true });
+  fs.writeFileSync(path.join(broken, '.git'), 'this is not a gitdir pointer\n');
+  assert.deepEqual(projectMetadata(broken), { project_id: sha256(broken), project_name: 'broken-repo' });
+
+  assert.equal(repositoryRoot(path.join(broken, 'never', 'created')), null);
+  assert.deepEqual(projectMetadata(''), {});
+  assert.deepEqual(projectMetadata(undefined), {});
 });
 
 test('tool facets classify native vs MCP tools without capturing arguments', () => {
