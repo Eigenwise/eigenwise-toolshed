@@ -435,6 +435,54 @@ test('SSE capture merges usage without retaining stream content', () => {
   assert.equal(JSON.stringify(emitted).includes('private streamed content'), false);
 });
 
+// SQ-888: claude-code-proxy opens a Codex stream with an all-zero message_start
+// usage and defers the real counts to message_delta, where the Anthropic API puts
+// input and cache tokens up front. A capture that emitted per content block, or
+// that kept the message_start zeros, would report a request's tokens as 4x or 0x
+// its truth. Both readings were proposed as the cause of a 5x gateway overstatement
+// on the dashboard; the wire says one request means one record carrying the final
+// merged counts.
+test('a Codex stream emits one usage record per request, not one per content block', () => {
+  const emitted = [];
+  const capture = createUsageCapture({
+    payload,
+    requestHeaders: { 'x-claude-code-session-id': 'session-blocks', 'x-claude-code-agent-id': 'agent-blocks' },
+    route: { backend: 'codex', effectiveModel: 'gpt-5.6-terra', requestedModel: 'claude-codex-auto' },
+    emit(record) { emitted.push(record); },
+  });
+  capture.setResponse(200, {});
+  capture.observeEvent({
+    type: 'message_start',
+    message: { id: 'msg-blocks', model: 'gpt-5.6-terra', usage: { input_tokens: 0, output_tokens: 0 } },
+  });
+  ['thinking', 'thinking', 'text', 'tool_use'].forEach((type, index) => {
+    capture.observeEvent({ type: 'content_block_start', index, content_block: { type } });
+    capture.observeEvent({ type: 'content_block_delta', index, delta: { text: 'private streamed block' } });
+    capture.observeEvent({ type: 'content_block_stop', index });
+  });
+  capture.observeEvent({
+    type: 'message_delta',
+    delta: { stop_reason: 'tool_use' },
+    usage: { input_tokens: 64, output_tokens: 27, cache_read_input_tokens: 120000, cache_creation_input_tokens: 40 },
+  });
+  capture.observeEvent({ type: 'message_stop' });
+  capture.finish();
+
+  assert.equal(emitted.length, 1);
+  const [record] = emitted;
+  assert.equal(record.attributes.input_tokens, 64);
+  assert.equal(record.attributes.output_tokens, 27);
+  assert.equal(record.attributes.cache_read_tokens, 120000);
+  assert.equal(record.attributes.cache_creation_tokens, 40);
+  assert.equal(record.attributes.context_tokens, 120104);
+  assert.equal(record.attributes.request_sequence, null);
+  assert.equal(JSON.stringify(record).includes('private streamed block'), false);
+
+  // The client-visible stream ends once; a second finish must not double the request.
+  assert.equal(capture.finish(), null);
+  assert.equal(emitted.length, 1);
+});
+
 test('bounded JSON side buffers drop overflowed usage and failed responses emit limits only', () => {
   const emitted = [];
   const overflow = createUsageCapture({

@@ -212,6 +212,86 @@ test('gateway OTLP becomes authoritative first-class usage across observer views
   ]) assert.equal(persisted.includes(forbidden), false, `observer persisted ${forbidden}`);
 });
 
+// SQ-888: the dashboard's gateway panels sum context_tokens over
+// gateway.token.usage records, so the whole off-Anthropic share reading rests on
+// one record per API request. A live Codex stream opens with an all-zero
+// message_start usage and carries the real counts only in message_delta, and
+// Claude Code writes one subagent transcript record per content block. Counting
+// this stream per block would inflate a request 4x; keeping the message_start
+// zeros would erase it. The stored row has to be the final merged truth, once.
+test('a multi-block Codex stream stores one request row with the merged counts', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-blocks-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'));
+  const receiver = await startFakeOtlpReceiver();
+  const observer = createObserver({
+    port: 0,
+    store,
+    projectId: PROJECT_ID,
+    hookSpoolFile: path.join(directory, 'hook-spool.jsonl'),
+    sink: testSink(receiver.endpoint),
+  });
+  const address = await observer.start();
+  t.after(async () => {
+    await observer.close();
+    await receiver.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const emitted = [];
+  const capture = createUsageCapture({
+    payload: { model: 'claude-codex-auto', messages: [{ role: 'user', content: 'private streamed prompt' }] },
+    requestHeaders: {
+      'x-claude-code-session-id': 'session-blocks',
+      'x-claude-code-agent-id': 'agent-blocks',
+    },
+    route: { requestedModel: 'claude-codex-auto', effectiveModel: 'gpt-5.6-terra', backend: 'codex', effort: 'high' },
+    now: () => new Date('2026-07-26T09:00:00.000Z'),
+    emit(record) { emitted.push(record); },
+  });
+  capture.setResponse(200, { 'request-id': 'request-blocks' });
+  capture.observeEvent({
+    type: 'message_start',
+    message: { id: 'msg-blocks', model: 'gpt-5.6-terra', usage: { input_tokens: 0, output_tokens: 0 } },
+  });
+  ['thinking', 'thinking', 'text', 'tool_use'].forEach((type, index) => {
+    capture.observeEvent({ type: 'content_block_start', index, content_block: { type } });
+    capture.observeEvent({ type: 'content_block_stop', index });
+  });
+  capture.observeEvent({
+    type: 'message_delta',
+    delta: { stop_reason: 'tool_use' },
+    usage: { input_tokens: 64, output_tokens: 27, cache_read_input_tokens: 120000, cache_creation_input_tokens: 40 },
+  });
+  capture.finish();
+  assert.equal(emitted.length, 1);
+
+  for (const record of emitted) {
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(buildOtlpLogPayload(record)),
+    });
+    assert.equal(response.status, 200);
+  }
+
+  assert.equal(
+    store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'gateway.token.usage'").get().count,
+    1,
+  );
+  const requests = store.queryView('request_usage_resolved');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].request_id, 'request-blocks');
+  assert.equal(requests[0].input_tokens, 64);
+  assert.equal(requests[0].output_tokens, 27);
+  assert.equal(requests[0].cache_read_tokens, 120000);
+  assert.equal(requests[0].context_tokens, 120104);
+
+  const session = store.queryView('session_rollup')[0];
+  assert.equal(session.request_count, 1);
+  assert.equal(session.total_context_tokens, 120104);
+});
+
 test('gateway tool-result usage records land with their declared quality and no schema drops', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-toolresult-'));
   const store = openObservabilityStore(path.join(directory, 'observability.db'));

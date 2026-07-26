@@ -288,6 +288,61 @@ test('isolated SSE usage merges final counts and a slow collector cannot delay i
   assert.equal(received.body.includes('private SSE content'), false);
 });
 
+// SQ-888: this is the exact shape a live Codex stream has — one message_start
+// whose usage is all zeros, several content blocks, and the real counts only in
+// message_delta. Claude Code writes one subagent transcript record per block, so
+// that shape is what made a transcript-derived reading of gateway traffic look 5x
+// off. The gateway's own record is the wire truth the dashboard trusts: exactly
+// one per request, carrying the final merged counts.
+test('isolated multi-block Codex SSE emits one usage record per request', async (t) => {
+  const proxy = proxyServer((req, body, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`event: message_start\ndata: ${JSON.stringify({
+      type: 'message_start',
+      message: { id: 'msg-blocks', model: 'gpt-5.6-terra', usage: { input_tokens: 0, output_tokens: 0 } },
+    })}\n\n`);
+    ['thinking', 'thinking', 'text', 'tool_use'].forEach((type, index) => {
+      res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index, content_block: { type } })}\n\n`);
+      res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: 'private block content' } })}\n\n`);
+      res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index })}\n\n`);
+    });
+    res.write(`event: message_delta\ndata: ${JSON.stringify({
+      type: 'message_delta',
+      delta: { stop_reason: 'tool_use' },
+      usage: { input_tokens: 64, output_tokens: 27, cache_read_input_tokens: 120000, cache_creation_input_tokens: 40 },
+    })}\n\n`);
+    res.end(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const usageCollector = await collector(t);
+  const shimPort = await spawnShim(t, proxyPort, usageCollector.endpoint);
+
+  const response = await request(shimPort, dispatchBody(true), {
+    'x-claude-code-session-id': 'session-blocks',
+    'x-claude-code-agent-id': 'agent-blocks',
+  });
+  assert.equal(response.status, 200);
+
+  const usageRecords = () => usageCollector.received
+    .map(attributesFrom)
+    .filter(({ eventName }) => eventName === 'gateway.token.usage');
+  const received = await waitFor(() => usageRecords()[0], 'multi-block SSE usage log was not received');
+  // Every record of one request is scheduled together, so anything extra is already
+  // in flight by now; the settle only rules out a straggler.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(usageRecords().length, 1, 'gateway metered the stream per content block');
+
+  assert.equal(received.values.agent_role, 'executor');
+  assert.equal(received.values.response_mode, 'sse');
+  assert.equal(received.values.input_tokens, 64);
+  assert.equal(received.values.output_tokens, 27);
+  assert.equal(received.values.cache_read_tokens, 120000);
+  assert.equal(received.values.cache_creation_tokens, 40);
+  assert.equal(received.values.context_tokens, 120104);
+  assert.equal(usageCollector.received.some(({ body }) => body.includes('private block content')), false);
+});
+
 test('isolated throttled proxy emits header-only limit evidence', async (t) => {
   const proxy = proxyServer((req, body, res) => {
     res.writeHead(429, {
