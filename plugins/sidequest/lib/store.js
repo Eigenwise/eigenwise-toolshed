@@ -2212,7 +2212,7 @@ function createTicket(slug, fields) {
     description: String(fields.description || "").trim(),
     status,
     priority: coercePriority(fields.priority, "normal"),
-    labels: normalizeLabels(fields.labels),
+    labels: boundedLabels(fields.labels),
     highStakes: !!fields.highStakes,
     storyId: coerceStoryId(slug, fields.storyId),
     // the user story this ticket belongs to (null = none)
@@ -2221,9 +2221,9 @@ function createTicket(slug, fields) {
     // 1..10 score the routing is derived from (entry points require it)
     complexityWhy: String(fields.complexityWhy || "").trim().slice(0, 1e3),
     // the mandatory motivation for the score
-    files: normalizeFiles(fields.files),
+    files: boundedFiles(fields.files),
     // declared file scope, for parallel-wave planning
-    contracts: normalizeContracts(fields.contracts),
+    contracts: boundedContracts(fields.contracts),
     // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
     readonlyOverride: requestedReadonlyOverride(fields),
@@ -2285,7 +2285,7 @@ function normalizeLabels(labels) {
       out.push(v);
     }
   }
-  return out.slice(0, 12);
+  return out;
 }
 function normalizeFiles(files) {
   if (!files) return [];
@@ -2299,7 +2299,27 @@ function normalizeFiles(files) {
       out.push(v);
     }
   }
-  return out.slice(0, 20);
+  return out;
+}
+const DECLARED_FILES_MAX = 100;
+const CONTRACT_NAMES_MAX = 40;
+const LABELS_MAX = 24;
+function boundedList(values, max, label, guidance) {
+  if (values.length > max) {
+    throw new Error(`${label} accepts at most ${max} entries; this write declared ${values.length} (${values.length - max} over). ${guidance}`);
+  }
+  return values;
+}
+function boundedFiles(files) {
+  return boundedList(
+    normalizeFiles(files),
+    DECLARED_FILES_MAX,
+    "declared file scope",
+    "Re-scope with directory entries: a declared directory covers every path under it (e.g. plugins/sidequest/test instead of each test file)."
+  );
+}
+function boundedLabels(labels) {
+  return boundedList(normalizeLabels(labels), LABELS_MAX, "labels", "Labels route and filter work; drop the ones that do neither.");
 }
 function scopeExpansionFiles(ticket, additions) {
   return normalizeFiles([...Array.isArray(ticket?.files) ? ticket.files : [], ...normalizeFiles(additions)]);
@@ -2486,11 +2506,18 @@ function normalizeContractNames(values) {
       normalized.push(name);
     }
   }
-  return normalized.slice(0, 20);
+  return normalized;
 }
 function normalizeContracts(contracts) {
   const source = contracts && typeof contracts === "object" ? contracts : {};
   return Object.fromEntries(CONTRACT_EDGE_KINDS.map((kind) => [kind, normalizeContractNames(source[kind])]));
+}
+function boundedContracts(contracts) {
+  const normalized = normalizeContracts(contracts);
+  for (const kind of CONTRACT_EDGE_KINDS) {
+    boundedList(normalized[kind], CONTRACT_NAMES_MAX, `contract ${kind}`, "Name the shared interfaces the wave planner sequences on, not every symbol they touch.");
+  }
+  return normalized;
 }
 function contractNamesByLowerCase(values) {
   return new Map(normalizeContractNames(values).map((value) => [value.toLowerCase(), value]));
@@ -2624,7 +2651,7 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.description != null) t.description = String(patch.description).trim();
     if (patch.status != null) t.status = nextStatus;
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
-    if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
+    if (patch.labels != null) t.labels = boundedLabels(patch.labels);
     if (patch.highStakes !== void 0) t.highStakes = !!patch.highStakes;
     if (patch.storyId !== void 0) t.storyId = coerceStoryId(slug, patch.storyId);
     if (patch.category !== void 0) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
@@ -2634,7 +2661,7 @@ function updateTicket(slug, idOrRef, patch) {
     }
     if (patch.complexityWhy !== void 0 && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1e3);
     if (patch.files !== void 0) {
-      t.files = normalizeFiles(patch.files);
+      t.files = boundedFiles(patch.files);
       const request = t.scopeRequest;
       if (request && Array.isArray(request.files) && request.files.every((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
         clearScopeRequestMarker(t);
@@ -2647,7 +2674,7 @@ function updateTicket(slug, idOrRef, patch) {
         }
       }
     }
-    if (patch.contracts !== void 0) t.contracts = normalizeContracts(patch.contracts);
+    if (patch.contracts !== void 0) t.contracts = boundedContracts(patch.contracts);
     if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;
     if (patch.readonly !== void 0 || patch.readonlyOverride !== void 0) t.readonlyOverride = requestedReadonlyOverride(patch);
     if (patch.executorAnchors !== void 0) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors");
@@ -5348,6 +5375,9 @@ module.exports = {
   ROUTING_FALLBACK_DEFAULT,
   EXECUTOR_ANCHORS_MAX,
   EXECUTOR_VERIFY_MAX,
+  DECLARED_FILES_MAX,
+  CONTRACT_NAMES_MAX,
+  LABELS_MAX,
   DISPATCH_DESCRIPTION_MIN,
   dispatchDescriptionError,
   dispatchWarnings,

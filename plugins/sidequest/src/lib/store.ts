@@ -2627,14 +2627,14 @@ function createTicket(slug?: any, fields?: any) {
     description: String(fields.description || '').trim(),
     status,
     priority: coercePriority(fields.priority, 'normal'),
-    labels: normalizeLabels(fields.labels),
+    labels: boundedLabels(fields.labels),
     highStakes: !!fields.highStakes,
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
     category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
     complexityWhy: String(fields.complexityWhy || '').trim().slice(0, 1000), // the mandatory motivation for the score
-    files: normalizeFiles(fields.files),          // declared file scope, for parallel-wave planning
-    contracts: normalizeContracts(fields.contracts), // declared contract edges, for parallel-wave planning
+    files: boundedFiles(fields.files),          // declared file scope, for parallel-wave planning
+    contracts: boundedContracts(fields.contracts), // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
     readonlyOverride: requestedReadonlyOverride(fields),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
@@ -2695,11 +2695,14 @@ function normalizeLabels(labels?: any) {
       out.push(v);
     }
   }
-  return out.slice(0, 12);
+  return out;
 }
 
 // A ticket's declared file scope drives wave planning and gates repository commits
-// submitted through the Sidequest executor path.
+// submitted through the Sidequest executor path. Normalizing never drops entries:
+// a truncated scope silently un-approves paths the caller declared, and the commit
+// gate then refuses them as out of scope (SQ-900). List bounds belong on the write
+// path, where the caller can be told to re-scope.
 function normalizeFiles(files?: any) {
   if (!files) return [];
   const arr = Array.isArray(files) ? files : String(files).split(',');
@@ -2712,7 +2715,31 @@ function normalizeFiles(files?: any) {
       out.push(v);
     }
   }
-  return out.slice(0, 20);
+  return out;
+}
+
+const DECLARED_FILES_MAX = 100;
+const CONTRACT_NAMES_MAX = 40;
+const LABELS_MAX = 24;
+
+function boundedList(values?: any, max?: any, label?: any, guidance?: any) {
+  if (values.length > max) {
+    throw new Error(`${label} accepts at most ${max} entries; this write declared ${values.length} (${values.length - max} over). ${guidance}`);
+  }
+  return values;
+}
+
+function boundedFiles(files?: any) {
+  return boundedList(
+    normalizeFiles(files),
+    DECLARED_FILES_MAX,
+    'declared file scope',
+    'Re-scope with directory entries: a declared directory covers every path under it (e.g. plugins/sidequest/test instead of each test file).',
+  );
+}
+
+function boundedLabels(labels?: any) {
+  return boundedList(normalizeLabels(labels), LABELS_MAX, 'labels', 'Labels route and filter work; drop the ones that do neither.');
 }
 
 function scopeExpansionFiles(ticket?: any, additions?: any) {
@@ -2908,12 +2935,20 @@ function normalizeContractNames(values?: any) {
       normalized.push(name);
     }
   }
-  return normalized.slice(0, 20);
+  return normalized;
 }
 
 function normalizeContracts(contracts?: any) {
   const source = contracts && typeof contracts === 'object' ? contracts : {};
   return Object.fromEntries(CONTRACT_EDGE_KINDS.map((kind) => [kind, normalizeContractNames(source[kind])]));
+}
+
+function boundedContracts(contracts?: any) {
+  const normalized = normalizeContracts(contracts);
+  for (const kind of CONTRACT_EDGE_KINDS) {
+    boundedList(normalized[kind], CONTRACT_NAMES_MAX, `contract ${kind}`, 'Name the shared interfaces the wave planner sequences on, not every symbol they touch.');
+  }
+  return normalized;
 }
 
 function contractNamesByLowerCase(values?: any) {
@@ -3067,7 +3102,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.description != null) t.description = String(patch.description).trim();
     if (patch.status != null) t.status = nextStatus;
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
-    if (patch.labels != null) t.labels = normalizeLabels(patch.labels);
+    if (patch.labels != null) t.labels = boundedLabels(patch.labels);
     if (patch.highStakes !== undefined) t.highStakes = !!patch.highStakes;
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
     if (patch.category !== undefined) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
@@ -3076,7 +3111,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
     if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
     if (patch.files !== undefined) {
-      t.files = normalizeFiles(patch.files);
+      t.files = boundedFiles(patch.files);
       const request = t.scopeRequest;
       if (request && Array.isArray(request.files) && request.files.every((file?: any) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
         clearScopeRequestMarker(t);
@@ -3089,7 +3124,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
         }
       }
     }
-    if (patch.contracts !== undefined) t.contracts = normalizeContracts(patch.contracts);
+    if (patch.contracts !== undefined) t.contracts = boundedContracts(patch.contracts);
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;
     if (patch.readonly !== undefined || patch.readonlyOverride !== undefined) t.readonlyOverride = requestedReadonlyOverride(patch);
     if (patch.executorAnchors !== undefined) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors');
@@ -6473,6 +6508,9 @@ module.exports = {
   ROUTING_FALLBACK_DEFAULT,
   EXECUTOR_ANCHORS_MAX,
   EXECUTOR_VERIFY_MAX,
+  DECLARED_FILES_MAX,
+  CONTRACT_NAMES_MAX,
+  LABELS_MAX,
   DISPATCH_DESCRIPTION_MIN,
   dispatchDescriptionError,
   dispatchWarnings,

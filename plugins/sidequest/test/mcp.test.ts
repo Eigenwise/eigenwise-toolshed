@@ -223,6 +223,48 @@ test('add and update preserve descriptions and expose storyId explicitly', async
   assert.equal(tools.find((tool: any) => tool.name === 'add').inputSchema.properties.storyId.pattern, '^US-\\d+$');
 });
 
+// SQ-900: a 25- and then 28-entry files array both returned ok:true and persisted
+// only the first 20, so the executor's board commit refused paths the orchestrator
+// had already approved. A scope write now round-trips whole, or it is refused.
+test('add and update persist a declared scope past 20 entries and refuse an over-limit one', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-cap-'))).slug;
+  const scope = (count: number) => Array.from({ length: count }, (_, i) => `plugins/sidequest/src/lib/part-${String(i).padStart(3, '0')}.ts`);
+
+  const added = await callTool('add', { project, title: 'wide declared scope', files: scope(25), unclassified: true });
+  assert.deepEqual(store.getTicket(project, added.ref).files, scope(25));
+
+  await callTool('update', { project, ref: added.ref, files: scope(28) });
+  assert.deepEqual(store.getTicket(project, added.ref).files, scope(28));
+  const listed = (await callTool('list', { project, detail: true })).tickets.find((ticket: any) => ticket.ref === added.ref);
+  assert.deepEqual(listed.files, scope(28));
+
+  const rejected = await callToolRaw('update', { project, ref: added.ref, files: scope(store.DECLARED_FILES_MAX + 3) });
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.content[0].text, new RegExp(`at most ${store.DECLARED_FILES_MAX} entries.*${store.DECLARED_FILES_MAX + 3} \\(3 over\\)`));
+  assert.match(rejected.content[0].text, /directory entries/);
+  assert.deepEqual(store.getTicket(project, added.ref).files, scope(28), 'a refused write leaves the approved scope untouched');
+
+  const rejectedAdd = await callToolRaw('add', { project, title: 'too wide', unclassified: true, files: scope(store.DECLARED_FILES_MAX + 1) });
+  assert.equal(rejectedAdd.isError, true);
+  assert.match(rejectedAdd.content[0].text, /declared file scope accepts at most/);
+
+  const contracts = await callTool('add', {
+    project, title: 'wide contracts', unclassified: true,
+    produces: scope(24).map((file) => `Payload:${file}`), consumes: scope(23).map((file) => `Input:${file}`), changes: scope(22).map((file) => `Shape:${file}`),
+  });
+  const stored = store.getTicket(project, contracts.ref).contracts;
+  assert.deepEqual([stored.produces.length, stored.consumes.length, stored.changes.length], [24, 23, 22]);
+
+  const rejectedContract = await callToolRaw('add', { project, title: 'too many contracts', unclassified: true, produces: scope(store.CONTRACT_NAMES_MAX + 1).map((file) => `Payload:${file}`) });
+  assert.equal(rejectedContract.isError, true);
+  assert.match(rejectedContract.content[0].text, /contract produces accepts at most/);
+
+  const labels = Array.from({ length: store.LABELS_MAX + 1 }, (_, i) => `label-${i}`);
+  const rejectedLabels = await callToolRaw('add', { project, title: 'too many labels', unclassified: true, labels });
+  assert.equal(rejectedLabels.isError, true);
+  assert.match(rejectedLabels.content[0].text, /labels accepts at most/);
+});
+
 test('storyId rejects values outside the US-n format', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-id-'))).slug;
   const response = await mcp.handleRequest({

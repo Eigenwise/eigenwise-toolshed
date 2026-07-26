@@ -17,6 +17,9 @@ interface ScopeResult {
   unscopedPaths: string[];
 }
 
+process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-home-'));
+const store = require('../lib/store.js') as any;
+
 const commitScope = require('../lib/commit-scope.js') as {
   commitScoped(cwd: string, message: string, files: string[]): ScopeResult;
   commitPaths(cwd: string, commit: string): string[];
@@ -41,6 +44,53 @@ function repo(): string {
   git(root, ['commit', '-m', 'base']);
   return root;
 }
+
+// SQ-900: the store used to keep only the first 20 declared paths, so an approved
+// 28-path scope reached the commit gate 8 paths short and the executor's commit was
+// refused for work the orchestrator had signed off on.
+test('a declared scope beyond 20 entries survives the store and gates the commit it approved', () => {
+  const root = repo();
+  const slug = store.ensureProject(root, 'SQ-900 scope cap').slug;
+  const scope = Array.from({ length: 28 }, (_, i) => `plugins/sidequest/part-${String(i).padStart(2, '0')}.js`);
+  const ticket = store.createTicket(slug, {
+    title: 'wide declared scope',
+    files: scope.slice(0, 25),
+    complexity: 2,
+    complexityWhy: 'A declared scope wider than the old cap, approved in two passes like the real ticket.',
+  });
+  assert.deepEqual(ticket.files, scope.slice(0, 25));
+  assert.deepEqual(store.updateTicket(slug, ticket.ref, { files: scope }).files, scope);
+  assert.deepEqual(store.getTicket(slug, ticket.ref).files, scope, 'the approved scope round-trips whole');
+
+  const approved = store.effectiveScope(slug, store.getTicket(slug, ticket.ref).files);
+  const last = scope[scope.length - 1]!;
+  assert.ok(commitScope.isInScope(last, approved), 'the last approved path is in scope');
+  fs.writeFileSync(path.join(root, last), 'tail\n');
+  const committed = commitScope.commitScoped(root, 'tail of a wide scope', approved);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(committed.paths, [last]);
+});
+
+test('an over-limit declared scope is refused with the cap, the overflow and the directory-scope way out', () => {
+  const slug = store.ensureProject(repo(), 'SQ-900 over limit').slug;
+  const scope = (count: number) => Array.from({ length: count }, (_, i) => `plugins/sidequest/part-${String(i).padStart(3, '0')}.js`);
+  const ticket = store.createTicket(slug, {
+    title: 'scope ceiling',
+    files: scope(3),
+    complexity: 2,
+    complexityWhy: 'A ticket whose scope list is pushed past the declared ceiling on purpose.',
+  });
+
+  assert.throws(
+    () => store.updateTicket(slug, ticket.ref, { files: scope(store.DECLARED_FILES_MAX + 5) }),
+    (error: Error) => /accepts at most 100 entries; this write declared 105 \(5 over\)/.test(error.message) && /directory/.test(error.message),
+  );
+  assert.deepEqual(store.getTicket(slug, ticket.ref).files, scope(3), 'the refused write changed nothing');
+  assert.throws(
+    () => store.createTicket(slug, { title: 'born too wide', files: scope(store.DECLARED_FILES_MAX + 1), complexity: 2, complexityWhy: 'A create whose declared scope is one entry over the ceiling.' }),
+    /declared file scope accepts at most/,
+  );
+});
 
 test('missing declared paths warn while existing declared paths commit', () => {
   const root = repo();

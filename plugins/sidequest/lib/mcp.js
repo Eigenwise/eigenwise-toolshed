@@ -146,6 +146,9 @@ function requireKnownModel(action, value, ticket) {
   return exec.runsModel;
 }
 const PROJECT_PROP = { type: "string", description: "Board (current project)." };
+const FILES_PROP = { type: "array", items: { type: "string" }, description: "Declared file scope: paths, or directory prefixes covering everything under them." };
+const LABELS_PROP = { type: "array", items: { type: "string" } };
+const CONTRACT_PROP = (verb) => ({ type: "array", items: { type: "string" }, description: `Named contracts or interfaces this ticket ${verb}.` });
 const MODEL_FILTER_PROP = { type: "string", description: "Filter by resolved model slug." };
 const TOOL_DESCRIPTION_OVERRIDES = {
   pulse: "Liveness: status, claim, activity.",
@@ -578,11 +581,11 @@ const TOOLS = [
         description: { type: "string" },
         priority: { type: "string", enum: store.VALID_PRIORITY },
         highStakes: { type: "boolean" },
-        labels: { type: "array", items: { type: "string" } },
-        files: { type: "array", items: { type: "string" }, description: "Declared file scope (paths or dir prefixes)." },
-        produces: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket produces." },
-        changes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket changes." },
-        consumes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket consumes." },
+        labels: LABELS_PROP,
+        files: FILES_PROP,
+        produces: CONTRACT_PROP("produces"),
+        changes: CONTRACT_PROP("changes"),
+        consumes: CONTRACT_PROP("consumes"),
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         readonly: { type: "boolean", description: "Closeout override." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
@@ -648,11 +651,11 @@ const TOOLS = [
         priority: { type: "string", enum: store.VALID_PRIORITY },
         status: { type: "string", enum: store.VALID_STATUS },
         highStakes: { type: "boolean" },
-        labels: { type: "array", items: { type: "string" } },
-        files: { type: "array", items: { type: "string" }, description: "Declared file scope (paths or dir prefixes)." },
-        produces: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket produces." },
-        changes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket changes." },
-        consumes: { type: "array", items: { type: "string" }, description: "Named contracts or interfaces this ticket consumes." },
+        labels: LABELS_PROP,
+        files: FILES_PROP,
+        produces: CONTRACT_PROP("produces"),
+        changes: CONTRACT_PROP("changes"),
+        consumes: CONTRACT_PROP("consumes"),
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         readonly: { type: "boolean", description: "Closeout override." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },

@@ -219,6 +219,12 @@ function requireKnownModel(action?: any, value?: any, ticket?: any) {
  * ------------------------------------------------------------------ */
 
 const PROJECT_PROP = { type: 'string', description: 'Board (current project).' };
+// No maxItems here: compactSchema strips property descriptions and tools/list sits
+// exactly on its byte budget, so the bound would cost tokens no caller reads. The
+// store refuses an over-limit list and names the cap instead (SQ-900).
+const FILES_PROP = { type: 'array', items: { type: 'string' }, description: 'Declared file scope: paths, or directory prefixes covering everything under them.' };
+const LABELS_PROP = { type: 'array', items: { type: 'string' } };
+const CONTRACT_PROP = (verb: string) => ({ type: 'array', items: { type: 'string' }, description: `Named contracts or interfaces this ticket ${verb}.` });
 const MODEL_FILTER_PROP = { type: 'string', description: 'Filter by resolved model slug.' };
 
 const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
@@ -696,11 +702,11 @@ const TOOLS: ToolDefinition[] = [
         description: { type: 'string' },
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         highStakes: { type: 'boolean' },
-        labels: { type: 'array', items: { type: 'string' } },
-        files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes).' },
-        produces: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket produces.' },
-        changes: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket changes.' },
-        consumes: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket consumes.' },
+        labels: LABELS_PROP,
+        files: FILES_PROP,
+        produces: CONTRACT_PROP('produces'),
+        changes: CONTRACT_PROP('changes'),
+        consumes: CONTRACT_PROP('consumes'),
         contractWaiver: { type: 'boolean', description: 'Explicitly reviewed waiver for contract-edge wave sequencing.' },
         readonly: { type: 'boolean', description: 'Closeout override.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
@@ -766,11 +772,11 @@ const TOOLS: ToolDefinition[] = [
         priority: { type: 'string', enum: store.VALID_PRIORITY },
         status: { type: 'string', enum: store.VALID_STATUS },
         highStakes: { type: 'boolean' },
-        labels: { type: 'array', items: { type: 'string' } },
-        files: { type: 'array', items: { type: 'string' }, description: 'Declared file scope (paths or dir prefixes).' },
-        produces: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket produces.' },
-        changes: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket changes.' },
-        consumes: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket consumes.' },
+        labels: LABELS_PROP,
+        files: FILES_PROP,
+        produces: CONTRACT_PROP('produces'),
+        changes: CONTRACT_PROP('changes'),
+        consumes: CONTRACT_PROP('consumes'),
         contractWaiver: { type: 'boolean', description: 'Explicitly reviewed waiver for contract-edge wave sequencing.' },
         readonly: { type: 'boolean', description: 'Closeout override.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
