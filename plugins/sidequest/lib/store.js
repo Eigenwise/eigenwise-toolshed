@@ -3068,22 +3068,34 @@ function terminalDispatchForIdle(identity) {
   const agentName = String(identity?.agentName || "").trim();
   const executor = String(identity?.executor || "").trim();
   if (!agentId && !agentName) return null;
-  const matches = [];
+  const candidates = [];
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
       if (!state || !state.terminalAt || state.outcome === "scope_paused" || ticket.claim?.by) continue;
-      if (agentId) {
-        if (state.agentId !== agentId) continue;
-      } else {
-        if (agentName && state.agentName !== agentName) continue;
-        if (sessionId && state.sessionId !== sessionId) continue;
-        if (executor && state.executor !== executor) continue;
-      }
-      matches.push({ slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt });
+      const byId = Boolean(agentId && state.agentId && String(state.agentId) === agentId);
+      const byName = Boolean(agentName && state.agentName && String(state.agentName) === agentName);
+      if (!byId && !byName) continue;
+      candidates.push({
+        byId,
+        corroboration: (sessionId && String(state.sessionId || "") === sessionId ? 1 : 0) + (executor && String(state.executor || "") === executor ? 1 : 0),
+        match: { slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt }
+      });
     }
   }
-  return matches.length === 1 ? matches[0] : null;
+  const sole = soleIdleCandidate(candidates);
+  return sole ? sole.match : null;
+}
+function soleIdleCandidate(candidates) {
+  if (candidates.length < 2) return candidates[0] || null;
+  for (const pool of [candidates.filter((candidate) => candidate.byId), candidates]) {
+    if (!pool.length) continue;
+    if (pool.length === 1) return pool[0];
+    const best = pool.reduce((top, candidate) => Math.max(top, candidate.corroboration), 0);
+    const narrowed = pool.filter((candidate) => candidate.corroboration === best);
+    if (narrowed.length === 1) return narrowed[0];
+  }
+  return null;
 }
 function setDispatchTerminal(ticket, outcome, source) {
   const state = dispatchState(ticket);

@@ -3646,28 +3646,48 @@ function terminalDispatchTarget(agentName?: any) {
   return terminal;
 }
 
+// A TeammateIdle payload only ever carries `teammate_name`, plus a session id and
+// agent type belonging to the idle teammate rather than to the dispatching
+// session, and a large share of dispatches never bind an agent id at all. So no
+// field may veto a match: identity has to be proven positively by an exact agent
+// id or an exact agent name, with session and executor breaking ties only.
+// Anything other than one surviving candidate leaves the teammate alone.
 function terminalDispatchForIdle(identity?: any) {
   const sessionId = String(identity?.sessionId || '').trim();
   const agentId = String(identity?.agentId || '').trim();
   const agentName = String(identity?.agentName || '').trim();
   const executor = String(identity?.executor || '').trim();
   if (!agentId && !agentName) return null;
-  const matches: any[] = [];
+  const candidates: any[] = [];
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
       if (!state || !state.terminalAt || state.outcome === 'scope_paused' || ticket.claim?.by) continue;
-      if (agentId) {
-        if (state.agentId !== agentId) continue;
-      } else {
-        if (agentName && state.agentName !== agentName) continue;
-        if (sessionId && state.sessionId !== sessionId) continue;
-        if (executor && state.executor !== executor) continue;
-      }
-      matches.push({ slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt });
+      const byId = Boolean(agentId && state.agentId && String(state.agentId) === agentId);
+      const byName = Boolean(agentName && state.agentName && String(state.agentName) === agentName);
+      if (!byId && !byName) continue;
+      candidates.push({
+        byId,
+        corroboration: (sessionId && String(state.sessionId || '') === sessionId ? 1 : 0)
+          + (executor && String(state.executor || '') === executor ? 1 : 0),
+        match: { slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt },
+      });
     }
   }
-  return matches.length === 1 ? matches[0] : null;
+  const sole = soleIdleCandidate(candidates);
+  return sole ? sole.match : null;
+}
+
+function soleIdleCandidate(candidates: any[]) {
+  if (candidates.length < 2) return candidates[0] || null;
+  for (const pool of [candidates.filter((candidate?: any) => candidate.byId), candidates]) {
+    if (!pool.length) continue;
+    if (pool.length === 1) return pool[0];
+    const best = pool.reduce((top: number, candidate?: any) => Math.max(top, candidate.corroboration), 0);
+    const narrowed = pool.filter((candidate?: any) => candidate.corroboration === best);
+    if (narrowed.length === 1) return narrowed[0];
+  }
+  return null;
 }
 
 function setDispatchTerminal(ticket?: any, outcome?: any, source?: any) {

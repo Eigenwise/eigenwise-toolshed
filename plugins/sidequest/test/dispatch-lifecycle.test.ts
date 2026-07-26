@@ -414,4 +414,106 @@ test('a launch whose board record is unreachable still names itself after the re
   assert.equal(launch.hookSpecificOutput.updatedInput.name, 'sq-999999');
 });
 
+const TEAMMATE_IDLE = path.join(__dirname, '..', 'hooks', 'teammate-idle.js');
+
+// What the harness actually sends: base hook input plus `teammate_name` and
+// `team_name`, with no agent id, the idle teammate's own session, and an agent
+// type that is not the dispatch executor.
+function runTeammateIdle(teammateName?: any) {
+  const output = execFileSync(process.execPath, [TEAMMATE_IDLE], {
+    input: JSON.stringify({
+      session_id: 'the-teammate-own-session',
+      transcript_path: path.join(PROJECT, 'teammate.jsonl'),
+      cwd: PROJECT,
+      permission_mode: 'bypassPermissions',
+      agent_type: 'general-purpose',
+      hook_event_name: 'TeammateIdle',
+      teammate_name: teammateName,
+      team_name: 'sidequest',
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT },
+  });
+  return output.trim() ? JSON.parse(output) : null;
+}
+
+// Those same fields must not be able to veto a match: only an exact agent id or
+// an exact agent name may prove identity.
+function finishDispatch(title?: any, options: any = {}) {
+  const ticket = store.createTicket(slug, { title, category: 'dispatch.lifecycle', source: 'test' });
+  const sessionId = options.sessionId || `idle-${ticket.id}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  const agentName = options.agentName || `idle-teammate-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName }).ok, true);
+  if (options.agentId) assert.equal(store.bindDispatchAgent(sessionId, executor, options.agentId, agentName).ok, true);
+  const by = `idle-worker-${ticket.id}`;
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+  if (options.terminal !== false) {
+    const done = store.completeTicket(slug, ticket.ref, by, { sessionId });
+    assert.equal(done.ok, true, `completeTicket refused: ${done.reason}`);
+  }
+  return { ref: ticket.ref, sessionId, executor, agentName };
+}
+
+test('an unbound terminal dispatch is matched by teammate name alone', () => {
+  const dispatch = finishDispatch('unbound terminal dispatch');
+  assert.equal(store.pulsePayload(slug, dispatch.ref).dispatch.agentId, null);
+
+  const matched = store.terminalDispatchForIdle({
+    sessionId: 'the-teammate-own-session',
+    agentId: '',
+    agentName: dispatch.agentName,
+    executor: 'general-purpose',
+  });
+  assert.equal(matched?.ref, dispatch.ref);
+  assert.equal(matched.outcome, 'done');
+});
+
+test('a bound terminal dispatch still matches on agent id', () => {
+  const agentId = `bound-agent-${Date.now()}`;
+  const dispatch = finishDispatch('bound terminal dispatch', { agentId });
+  assert.equal(store.terminalDispatchForIdle({ sessionId: '', agentId, agentName: '', executor: '' })?.ref, dispatch.ref);
+});
+
+test('session and executor alone never identify a teammate', () => {
+  const dispatch = finishDispatch('terminal dispatch with no name evidence');
+  assert.equal(store.terminalDispatchForIdle({
+    sessionId: dispatch.sessionId,
+    agentId: 'some-unrelated-agent-id',
+    agentName: 'some-unrelated-teammate',
+    executor: dispatch.executor,
+  }), null);
+});
+
+test('an ambiguous teammate name leaves both teammates alone', () => {
+  const agentName = `shared-idle-name-${Date.now()}`;
+  finishDispatch('first dispatch sharing a name', { agentName });
+  finishDispatch('second dispatch sharing a name', { agentName });
+  assert.equal(store.terminalDispatchForIdle({ sessionId: '', agentId: '', agentName, executor: '' }), null);
+});
+
+test('a working dispatch is never matched, however well its identity lines up', () => {
+  const dispatch = finishDispatch('still working dispatch', { terminal: false });
+  assert.equal(store.terminalDispatchForIdle({
+    sessionId: dispatch.sessionId,
+    agentId: '',
+    agentName: dispatch.agentName,
+    executor: dispatch.executor,
+  }), null);
+});
+
+test('the harness TeammateIdle payload ends an unbound terminal executor', () => {
+  const dispatch = finishDispatch('unbound dispatch meeting the real payload');
+  assert.deepEqual(runTeammateIdle(dispatch.agentName), {
+    continue: false,
+    stopReason: `sidequest: ${dispatch.ref} is terminal (done); end this idle executor.`,
+  });
+});
+
+test('the harness TeammateIdle payload leaves a working executor alone', () => {
+  const dispatch = finishDispatch('working dispatch meeting the real payload', { terminal: false });
+  assert.equal(runTeammateIdle(dispatch.agentName), null);
+});
+
 export {};
