@@ -2,8 +2,8 @@
 
 Executors never publish. A repo-changing executor ends at a verified LOCAL commit in its isolated
 worktree, pins it to a durable ref (`refs/sidequest/<SQ-n>`), and parks the ticket
-ready-for-integration with `sidequest submit` (claim released, status stays `doing`, no push, no
-version bumps). Publishing — integrating those commits, assigning versions, reverifying, reviewing,
+ready-for-integration with `sidequest submit` (claim released, status stays `doing` and out of
+`ready`, no push, no version bumps). Publishing — integrating those commits, assigning versions, reverifying, reviewing,
 pushing main, marking done — is ONE serialized transaction owned by the orchestrator. This file is that
 transaction.
 
@@ -117,6 +117,14 @@ force-merged and never silently dropped:
   submitted commit + durable ref, and what the integrator may touch. Link it `blocks` the original.
 - Only when the fix requires REDOING the original work (not merging it) clear the submission so the
   ticket is claimable again: `sidequest submit <ref> --clear -s todo`.
+
+## Dead executor salvage
+
+A dead executor's `done` only proves the board transition, never that work shipped. Inspect its
+declared scope and publish anything uncommitted. For work it committed and verified but never
+submitted, recover `refs/sidequest/<ref>`, re-run the verify, release the dead claim, publish, then
+close it with the control-plane grooming closure citing the pushed commit. Never spawn an executor
+just to run `submit` or `done`.
 
 ## Crash recovery
 

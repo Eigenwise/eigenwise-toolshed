@@ -14,8 +14,8 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 - `references/orchestration.md` — decomposition depth, fan-out waves, checkpoints, background
   execution, cost levers, agent teams.
 - `references/publishing.md` — the serialized publish transaction.
-- `references/routing-details.md` — profiles, board rows, routes, fallbacks, spawn parameters.
-- `references/routing-guide.md` — profile-aware classification; workflow recipe wiring.
+- `references/routing-details.md`, `references/routing-guide.md` — profiles, board rows, routes,
+  fallbacks, spawn parameters; classification and workflow recipe wiring.
 - `references/high-stakes.md`
 - `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`
 
@@ -27,7 +27,7 @@ When a task is **more than a single small change**, do this **before writing any
    outcome → a **Sidequest story** first (`sidequest story add`, then `--story US-n` per piece). A story is Sidequest's own optional
    `US-n` grouping, not a Claude Code feature: use it when the
    shared outcome, dependencies, or waves need to stay visible together;
-   leave independent or small work as atomic tickets. Infer this yourself.
+   leave independent or small work as atomic tickets.
 1. **Decompose into bounded, independently checkable tickets** (`sidequest add ...`). One ticket
    = one piece a single agent can finish in a short bounded run and check on its own — a change with
    a verify command, or an investigation whose "done" is a concrete answer. Split only
@@ -40,16 +40,16 @@ When a task is **more than a single small change**, do this **before writing any
    store, CLI, MCP surface, skill/docs, and applicable full test directory. Declare each with
    `--file` (repeatable; dir prefixes cover subtrees). Depth:
    `references/orchestration.md`.
-2. **Link dependencies**: `sidequest link SQ-4 depends-on SQ-3`. Shape a story as design →
-   wave(s) → integrate so `ready` serializes the phases.
+2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
+   integrate so `ready` serializes the phases.
 3. **Execute proportionally** — "Route execution down" below.
 
-For a **complexity 4+** ticket, first make a planning pass: pin concrete scope, anchors, and
-the exact verify command. Wave tickets verify with a scoped test; full-suite
+A **complexity 4+** ticket gets a planning pass first: concrete scope, anchors, exact
+verify command. Wave tickets verify with a scoped test; full-suite
 green belongs to the integration or ship ticket. The board makes the plan survive context loss; a
 user-directed mechanical edit to one or two exact named files with stated content needs no ticket;
-any edit requiring other-file reading or investigation does. An external tracker (Jira/Linear/GitHub) owns the
-deliverable; sidequest stays the local execution ledger.
+any edit requiring other-file reading or investigation does. Coexisting with an external tracker:
+`references/external-trackers.md`.
 
 ## MCP is the executor board interface
 
@@ -67,8 +67,8 @@ stub, and a token. Pass every supplied `spawn` field (`name` and `description` t
 unchanged. The executor fetches its
 token-gated durable packet as the first action: full description, category route and contract, scope,
 state, comment metadata, and absolute attachment paths. It must inspect every readable
-attachment and report missing or unreadable ones, while the spawn keeps that content out of this transcript.
-Adopting sessions dispatch again for a fresh token. Never trust a worker's self-report — the
+attachment and report missing or unreadable ones, while the spawn keeps that content out of this
+transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
 **Workflow callers:** at workflow start, call `route_recipe` or `sidequest route <category> --json`,
@@ -88,8 +88,8 @@ rows. Mutations take exactly one of `--profile`/`--project`; see `references/rou
 ## Open the dashboard
 
 `sidequest dashboard` — idempotent; starts the server, opens the browser, prints the URL —
-**report it**. Binds to `127.0.0.1` only. Verify server changes on a test instance with a
-temporary `SIDEQUEST_HOME` and distinct port, never on the shared board.
+**report it**. Binds to `127.0.0.1` only. Verify server changes on a test instance (temporary
+`SIDEQUEST_HOME`, distinct port), never the shared board.
 
 ## File a ticket
 
@@ -109,9 +109,15 @@ anchors; **Contract** — behavior/edge cases or the question to answer; **Bound
 reproduction. **Scale the spec inversely to the executor's model** and **front-load everything
 you already know** — a weak executor fails on missing context; never file vague.
 
-Descriptions/comments render **full markdown** in the dashboard. **CRITICAL: use real newlines,
-never a literal `\n`** — multi-line `-d`/`-m` needs a heredoc or `$'...'`; MCP tools take plain
-strings with real newlines.
+**Route by remaining uncertainty, not original difficulty.** Investigation pays for the judgment
+once; a ticket whose exact edit is already settled drops tier (`coding.easy`, or `direct-ok` for a
+one-or-two-file mechanical edit), and `add`/`update` warn when it doesn't. The fix is never to thin
+the ticket: evidence, constraints, and anchors are what strong-model authorship contributes. A fully
+specified EDIT downgrades the category; rich context does not.
+
+Descriptions/comments render **full markdown**. **CRITICAL: use real newlines, never a literal
+`\n`** — multi-line `-d`/`-m` needs a heredoc or `$'...'`; MCP tools take plain strings with real
+newlines.
 
 Mid-task side issue? Don't stop: file it with `mcp__plugin_sidequest_board__add` (CLI if MCP
 is unavailable), attaching any pasted image path.
@@ -153,8 +159,8 @@ optionally `--status todo`).
   executor or polling for its artifact (a one-shot local readiness watch is fine).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
-`submit` (claim released, parked in `doing`, excluded from `ready`); the submission holds the full report,
-and the terminal comment keeps only the commit hash + verification. The orchestrator runs the publish
+`submit` (claim released, parked in `doing`); the submission holds the full report, and the
+terminal comment keeps only the commit hash + verification. The orchestrator runs the publish
 transaction (lock → integrate → central version → reverify → review → push → reachability → `done`):
 `references/publishing.md`.
 Before integrating or closing a submitted ticket, read
@@ -162,10 +168,8 @@ Before integrating or closing a submitted ticket, read
 **Green verification is necessary but never a review**: before pushing, review the diff (yourself
 for a small change, a dispatched `review-audit`/`security-audit` executor otherwise) and resolve
 or explicitly accept every finding. Never mark a submitted ticket done without integrating it;
-never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves the board transition:
-inspect declared scope and publish uncommitted work. For committed, verified but unsubmitted work,
-recover `refs/sidequest/<ref>`, verify, release the dead claim, publish, then use the control-plane grooming
-closure citing commit hash; never spawn an executor for `submit`/`done`.
+never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves the board
+transition, never that work shipped: salvage and close it per `references/publishing.md`.
 
 ## Route execution down; keep the loop tight
 
@@ -225,7 +229,7 @@ hand-pick either. Legacy complexity maps to bands at read time (1–3/4–6/7–
 **Comments are cross-actor handoffs, not diary entries**: decisions, constraints, ruled-out
 approaches, risks, exact verification command/result, concise findings — no progress narration.
 **Write findings back after an investigation** — root cause with evidence (`file:line`), the fix,
-verification; the comment is the durable record.
+verification.
 
 ## Link tickets
 
@@ -237,5 +241,4 @@ excluded from `ready`.
 
 **Act, then report** — run the command, tell the user the result (ref, status, or URL). **Keep
 titles tight**; detail goes in `-d`. **Don't invent tickets** — only file what the user raised.
-The dashboard is live. Reminders, stories, human assignment:
-`references/board-features.md`.
+Reminders, stories, human assignment: `references/board-features.md`.

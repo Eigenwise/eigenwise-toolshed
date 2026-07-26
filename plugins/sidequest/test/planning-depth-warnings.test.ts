@@ -123,6 +123,96 @@ test('add and update warn only for unknown mentioned ticket refs', () => {
   assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998, SQ-9999.']);
 });
 
+const PATCH_BLOCK = [
+  '```diff',
+  '--- a/lib/parser.js',
+  '+++ b/lib/parser.js',
+  '@@ -8,20 +8,24 @@',
+  " const shared = require('./shared');",
+  '',
+  '-function parseHeader(input) {',
+  "-  const parts = input.split(':');",
+  '-  return { name: parts[0], value: parts[1] };',
+  '-}',
+  '+function parseHeader(input) {',
+  "+  const parts = String(input || '').split(':');",
+  '+  if (parts.length < 2) return null;',
+  '+  return {',
+  '+    name: parts[0].trim(),',
+  "+    value: parts.slice(1).join(':').trim(),",
+  '+  };',
+  '+}',
+  '',
+  ' function parseBody(input) {',
+  '   return shared.body(input);',
+  ' }',
+  '',
+  ' module.exports = { parseHeader, parseBody };',
+  '```',
+].join('\n');
+
+// A crash log that carries a source excerpt: definition-shaped on its face, and
+// exactly the false positive the evidence gate has to swallow.
+const CRASH_LOG_BLOCK = [
+  '```',
+  '$ node scripts/reindex.js',
+  '/repo/lib/parser.js:12',
+  'function parseHeader(input) {',
+  '                    ^',
+  '',
+  'TypeError: input is not iterable',
+  '    at parseHeader (/repo/lib/parser.js:12:21)',
+  '    at Object.<anonymous> (/repo/scripts/reindex.js:8:1)',
+  '    at Module._compile (node:internal/modules/cjs/loader:1554:14)',
+  '    at Module._load (node:internal/modules/cjs/loader:1104:12)',
+  '    at node:internal/main/run_main_module:28:49',
+  '2026-07-26T09:14:02.113Z WARN reindex aborted after 3 batches',
+  '2026-07-26T09:14:02.114Z INFO batches ok 3 failed 1',
+  '> node --test test/parser.test.js',
+  'not ok 1 - parses a legacy header',
+  '  duration_ms 12.482',
+  'tests 1',
+  'pass 0',
+  'fail 1',
+  'npm ERROR code 1',
+  '```',
+].join('\n');
+
+const PRESOLVED_WARNING = 'Planning-depth warning: this description embeds what looks like a complete edit; route by remaining uncertainty, so a fully resolved approach belongs on coding.easy or direct-ok, not a judgment tier.';
+
+test('a judgment-tier ticket carrying a complete edit warns on add and update', () => {
+  const added = cliJson([
+    'add', '-t', 'pre-solved parser change', '--category', 'coding.normal',
+    '--description', `The parser fix is already settled.\n\n${PATCH_BLOCK}\n`,
+  ]);
+  assert.deepStrictEqual(added.warnings, [PRESOLVED_WARNING]);
+
+  const seeded = cliJson(['add', '-t', 'parser change', '--category', 'coding.normal', '--description', 'Work out how the parser should treat headers with no colon.']);
+  assert.deepStrictEqual(seeded.warnings, []);
+  const updated = cliJson(['update', seeded.ticket.ref, '--description', `Settled after the spike.\n\n${PATCH_BLOCK}\n`]);
+  assert.deepStrictEqual(updated.warnings, [PRESOLVED_WARNING]);
+});
+
+test('evidence blocks and cheap tiers never trip the pre-solved warning', () => {
+  const evidence = cliJson([
+    'add', '-t', 'reindex crashes on legacy headers', '--category', 'debugging',
+    '--description', `Reproduced on the shared board.\n\n${CRASH_LOG_BLOCK}\n`,
+  ]);
+  assert.deepStrictEqual(evidence.warnings, []);
+
+  const cheap = cliJson([
+    'add', '-t', 'apply the settled parser patch', '--category', 'coding.easy',
+    '--description', `Mechanical: apply this.\n\n${PATCH_BLOCK}\n`,
+  ]);
+  assert.deepStrictEqual(cheap.warnings, []);
+
+  const snippet = cliJson([
+    'add', '-t', 'short signature note', '--category', 'coding.normal',
+    '--description', 'Keep the signature:\n\n```js\nfunction parseHeader(input) {\n  return null;\n}\n```\n',
+  ]);
+  assert.deepStrictEqual(snippet.warnings, []);
+});
+
 test('coding.hard add warns only when the description prescribes a fix', () => {
   const prescriptive = cliJson(['add', '-t', 'prescriptive hard change', '--category', 'coding.hard', '--description', 'FIX: replace the legacy parser with the shared parser.']);
   assert.deepStrictEqual(prescriptive.warnings, [PRESCRIPTIVE_HARD_WARNING]);

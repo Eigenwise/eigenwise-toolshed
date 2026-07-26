@@ -2443,6 +2443,65 @@ function nonRepoExternalOutput(ticket?: any, files?: any) {
     && !readOnlyOverrideActive(ticket);
 }
 
+// Route by remaining uncertainty, not original difficulty: once an investigation has
+// settled the exact edit, the implementation ticket belongs on a cheap tier. A false
+// positive on an evidence block (log excerpt, test output, measured table) is worse
+// than a miss, so a block must read as an edit AND not read as a transcript.
+const JUDGMENT_TIER_CATEGORIES = ['coding.normal', 'coding.hard', 'debugging', 'plugin-dev', 'ui-frontend'];
+const PRESOLVED_BLOCK_MIN_LINES = 20;
+const PRESOLVED_BLOCK_MIN_CHARS = 1200;
+const EVIDENCE_SHARE = 0.25;
+const EVIDENCE_LINE = /^\s*(?:\||at\s+\S.*:\d+:\d+|(?:not )?ok\s|[#$>]\s|(?:npm|node|git|pwsh|PS|yarn|pnpm|cargo|python)\s|(?:\[[^\]]*\]\s*)?(?:ERROR|WARN|INFO|DEBUG|TRACE)\b|(?:pass|fail|tests|suites|skipped|todo|cancelled|duration_ms)\s+\d|[\w.]*(?:Error|Exception):)/;
+const EVIDENCE_TIMESTAMP = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+const DEFINITION_SHAPES = [
+  /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*[\w$]*\s*\(/m,
+  /^\s*(?:export\s+)?(?:abstract\s+)?class\s+[\w$]+/m,
+  /^\s*(?:export\s+)?(?:const|let|var)\s+[\w$]+[^=\n]*=\s*(?:async\s*)?(?:function\b|\([^)\n]*\)\s*=>|[\w$]+\s*=>)/m,
+  /^\s*def\s+[\w$]+\s*\(/m,
+  /^\s*(?:public|private|protected|internal)\s+(?:static\s+)?[\w<>\[\],\s]+\s+[\w$]+\s*\(/m,
+];
+
+function fencedBlocks(description?: any) {
+  const blocks: any[] = [];
+  const body = String(description || '');
+  const fence = /^[ \t]*```+[ \t]*([^\n`]*)\r?\n([\s\S]*?)^[ \t]*```+[ \t]*$/gm;
+  let match: any;
+  while ((match = fence.exec(body))) blocks.push({ info: String(match[1]).trim().toLowerCase(), body: String(match[2]) });
+  return blocks;
+}
+
+function diffShapedBlock(block?: any) {
+  if (/^(?:diff|patch)\b/.test(block.info)) return true;
+  if (/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(block.body)) return true;
+  if (/^--- .+\r?\n\+\+\+ /m.test(block.body)) return true;
+  const added = (block.body.match(/^\+(?!\+)\s*\S/gm) || []).length;
+  const removed = (block.body.match(/^-(?!-)\s*\S/gm) || []).length;
+  return added >= 2 && removed >= 2;
+}
+
+function evidenceShapedBlock(lines?: any) {
+  const filled = lines.filter((line?: any) => line.trim());
+  if (!filled.length) return true;
+  const evidence = filled.filter((line?: any) => EVIDENCE_LINE.test(line) || EVIDENCE_TIMESTAMP.test(line)).length;
+  return evidence / filled.length >= EVIDENCE_SHARE;
+}
+
+function embedsCompleteEdit(description?: any) {
+  for (const block of fencedBlocks(description)) {
+    const lines = block.body.split(/\r?\n/);
+    if (lines.length < PRESOLVED_BLOCK_MIN_LINES && block.body.length < PRESOLVED_BLOCK_MIN_CHARS) continue;
+    if (evidenceShapedBlock(lines)) continue;
+    if (diffShapedBlock(block) || DEFINITION_SHAPES.some((shape?: any) => shape.test(block.body))) return true;
+  }
+  return false;
+}
+
+function presolvedRoutingWarnings(ticket?: any) {
+  if (!JUDGMENT_TIER_CATEGORIES.includes(String(ticketCategory(ticket) || ''))) return [];
+  if (!embedsCompleteEdit(ticket && ticket.description)) return [];
+  return ['Planning-depth warning: this description embeds what looks like a complete edit; route by remaining uncertainty, so a fully resolved approach belongs on coding.easy or direct-ok, not a judgment tier.'];
+}
+
 function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
   if (!ticket) return [];
   const warnings: any[] = [];
@@ -2459,6 +2518,7 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
       warnings.push(`Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: ${missing.join(', ')}.`);
     }
   }
+  warnings.push(...presolvedRoutingWarnings(ticket));
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
   const absent = ticket.files.filter((file?: any) => !fs.existsSync(path.resolve(projectPath, file)));
   if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(', ')}.`);
