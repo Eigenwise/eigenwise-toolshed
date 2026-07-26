@@ -79,6 +79,8 @@ function effortFor(input, agentType) {
   const match = agentType.match(/-(low|medium|high|xhigh|max)$/);
   return match && isEffort(match[1] || "") ? match[1] : "medium";
 }
+var REWARN_EVERY = 4;
+var FINAL_BAND_RESERVE = 15;
 function main() {
   const input = readStdin();
   if (!input) return;
@@ -86,14 +88,29 @@ function main() {
   const agentId = stringField(input, "agent_id", "agentId");
   if (!agentType.startsWith("sidequest-") || !agentId) return;
   const effort = effortFor(input, agentType);
-  const threshold = Math.ceil(maxTurns(effort) * 0.8);
+  const cap = maxTurns(effort);
+  const soft = Math.ceil(cap * 0.8);
+  const finalBand = Math.max(soft + 1, cap - FINAL_BAND_RESERVE);
   import_node_fs2.default.mkdirSync(COUNTER_DIR, { recursive: true });
   const counterFile = import_node_path.default.join(COUNTER_DIR, encodeURIComponent(agentId));
-  const prior = import_node_fs2.default.existsSync(counterFile) ? Number(import_node_fs2.default.readFileSync(counterFile, "utf8")) || 0 : 0;
+  let prior = 0;
+  let lastFinalWarn = 0;
+  try {
+    const parts = import_node_fs2.default.readFileSync(counterFile, "utf8").split(/\s+/);
+    prior = Number(parts[0]) || 0;
+    lastFinalWarn = Number(parts[1]) || 0;
+  } catch (_) {
+  }
   const count = prior + 1;
-  import_node_fs2.default.writeFileSync(counterFile, String(count));
-  if (count !== threshold) return;
-  writeContext("PreToolUse", `sidequest: this executor has made ${count} tool calls, near its ${maxTurns(effort)}-turn backstop. Commit or publish any useful completed increment, then finish or release with findings if the briefing is larger than expected.`);
+  if (count >= finalBand && (lastFinalWarn === 0 || count - lastFinalWarn >= REWARN_EVERY)) {
+    import_node_fs2.default.writeFileSync(counterFile, `${count} ${count}`);
+    writeContext("PreToolUse", `sidequest: TURN CAP IMMINENT — ${count} tool calls against a ${cap}-turn hard cap. At the cap the harness terminates this executor and uncommitted work is lost with NO report. Stop implementing now: commit verified in-scope work, post a "Continuation checkpoint" comment (commit, files touched, next steps, verify status), then release to todo.`);
+    return;
+  }
+  import_node_fs2.default.writeFileSync(counterFile, `${count} ${lastFinalWarn}`);
+  if (prior < soft && count >= soft) {
+    writeContext("PreToolUse", `sidequest: this executor has made ${count} tool calls, near its ${cap}-turn backstop. Commit or publish any useful completed increment, then finish or release with findings if the briefing is larger than expected.`);
+  }
 }
 try {
   main();

@@ -327,17 +327,35 @@ test('task-output guard: executor identity variants bypass the main-thread guard
   }
 });
 
-test('pre-tool hook warns a sidequest executor once near its turn backstop', () => {
+test('pre-tool hook warns at the soft threshold, then escalates inside the final band', () => {
   const agentId = `near-cap-${Date.now()}`;
   const payload = { tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: agentId, effort: 'high' };
-  const first = execFileSync(process.execPath, [NEAR_TURN_CAP], {
+  const run = () => execFileSync(process.execPath, [NEAR_TURN_CAP], {
     input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
   });
-  const second = execFileSync(process.execPath, [NEAR_TURN_CAP], {
-    input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
+  // cap=1 → soft threshold 1, final band starts at 2, re-warn every 4 calls.
+  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /made 1 tool calls/);
+  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /TURN CAP IMMINENT/);
+  assert.equal(run(), '', 'call 3 is inside the re-warn cooldown');
+  assert.equal(run(), '', 'call 4 is inside the re-warn cooldown');
+  assert.equal(run(), '', 'call 5 is inside the re-warn cooldown');
+  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /TURN CAP IMMINENT/, 'the imperative repeats until the executor stops');
+});
+
+test('pre-tool hook soft warning fires on crossing the threshold, once', () => {
+  const agentId = `near-cap-cross-${Date.now()}`;
+  const counter = path.join(os.tmpdir(), 'sidequest-near-turn-cap', encodeURIComponent(agentId));
+  fs.mkdirSync(path.dirname(counter), { recursive: true });
+  const run = () => execFileSync(process.execPath, [NEAR_TURN_CAP], {
+    input: JSON.stringify({ tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: agentId, effort: 'high' }),
+    encoding: 'utf8', env: { ...process.env },
   });
-  assert.match(JSON.parse(first).hookSpecificOutput.additionalContext, /made 1 tool calls/);
-  assert.equal(second, '');
+  // high effort → cap 150, soft threshold 120, final band from 135.
+  fs.writeFileSync(counter, '119 0');
+  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /near its 150-turn backstop/);
+  assert.equal(run(), '', 'no duplicate soft warning after the crossing');
+  fs.writeFileSync(counter, '134 0');
+  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /TURN CAP IMMINENT — 135 tool calls against a 150-turn hard cap/);
 });
 
 test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', () => {
@@ -1367,7 +1385,7 @@ test('subagent-stop: an over-threshold claim reports a dead-claim verdict', () =
   backdateSessionClaims(sess, 28);
 
   const ctx = runHook(SUBAGENT_STOP, stop);
-  assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, then TaskStop it`);
+  assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: salvage uncommitted work from its worktree, then release + respawn and TaskStop it`);
   assert.ok(ctx.length <= BUDGET.longrun, `stop verdict is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
   assert.ok(ctx.indexOf('\n') === -1, 'the verdict must stay ONE line');
 });
@@ -1417,7 +1435,7 @@ test('subagent-stop: a repeated stop repeats the held-claim verdict until releas
   const t = addTicket('over-threshold claim reports every stop');
   const stop = claimStopTicket(t, sess, 'worker-dedupe');
   backdateSessionClaims(sess, 28);
-  const expected = `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: release + respawn, then TaskStop it`;
+  const expected = `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: salvage uncommitted work from its worktree, then release + respawn and TaskStop it`;
   assert.strictEqual(runHook(SUBAGENT_STOP, stop), expected);
   assert.strictEqual(runHook(SUBAGENT_STOP, stop), expected);
 });
@@ -1427,7 +1445,7 @@ test('subagent-stop: a stopped executor holding a fresh claim gets the dead-clai
   const t = addTicket('quick ticket, just claimed');
   const stop = claimStopTicket(t, sess, 'worker-fresh');
   const ctx = runHook(SUBAGENT_STOP, stop);
-  assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim \\(age 1m\\), likely dead: release \\+ respawn, then TaskStop it$`));
+  assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim \\(age 1m\\), likely dead: salvage uncommitted work from its worktree, then release \\+ respawn and TaskStop it$`));
 });
 
 test('subagent-stop: a completed executor reports a clean stop from its done comment', () => {

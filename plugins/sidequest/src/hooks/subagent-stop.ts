@@ -156,7 +156,7 @@ function stopVerdict(
     }
     const started = Date.parse(held.at || '');
     const minutes = Number.isFinite(started) ? Math.max(1, Math.round((now - started) / 60000)) : 0;
-    return `exec stopped HOLDING ${label} claim (age ${minutes}m), likely dead: release + respawn, then TaskStop it`;
+    return `exec stopped HOLDING ${label} claim (age ${minutes}m), likely dead: salvage uncommitted work from its worktree, then release + respawn and TaskStop it`;
   }
 
   if (dispatchStopped && classification.kind !== 'unknown') return 'exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec';
