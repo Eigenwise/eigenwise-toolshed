@@ -108,6 +108,8 @@ test('SessionStart scopes re-grounding to its source and preserves seen document
   assert.match(startup, /This is mandatory; do not silently skip it/);
   assert.match(startup, /only relevant map document\(s\)/);
   assert.match(startup, /Never re-read a document already read this session unless this hook names it as changed/);
+  assert.match(startup, /Do not ask the user whether to update the map or run this skill/);
+  assert.match(startup, /proceed immediately without waiting for a reply/);
   assert.strictEqual(hook(promptHook, directory, state, { session_id: 'one' }), '');
 
   assert.strictEqual(hook(startHook, directory, state, { session_id: 'one', source: 'resume' }), '');

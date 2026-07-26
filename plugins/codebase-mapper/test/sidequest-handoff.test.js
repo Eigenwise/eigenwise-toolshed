@@ -37,6 +37,9 @@ test('map handoff verifies artifacts and falls back only after one diagnosis-led
 
 test('incremental handoff keeps no-ops inline and uses the same artifact rules', () => {
   assert.match(updateSkill, /A true no-op stays inline/);
+  assert.match(updateSkill, /Do not ask the user whether to update the map, run this skill, or create a handoff/);
+  assert.match(updateSkill, /immediately perform the warranted\s+update or handoff without waiting for a reply/);
+  assert.match(updateSkill, /Creating and dispatching this ticket is the\s+required default for a meaningful refresh/);
   assert.match(updateSkill, /category_list/, 'checks the live category');
   assert.match(updateSkill, new RegExp(carveOut.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(updateSkill, new RegExp(artifactMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));

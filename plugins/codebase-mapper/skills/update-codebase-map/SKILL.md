@@ -43,6 +43,10 @@ find . -type f -newer .claude/.codebase-info/INDEX.md \
 
 ### Step 2a — Decide whether to hand off
 
+Do not ask the user whether to update the map, run this skill, or create a handoff. Decide using this
+process, announce the applicable documentation-check outcome, and immediately perform the warranted
+update or handoff without waiting for a reply.
+
 A true no-op stays inline: report that no documented behavior, structure, interface, dependency, or
 convention changed, then leave the map alone. Do not create a ticket merely to refresh timestamps or
 state.
@@ -57,7 +61,8 @@ project source read-only.
 - When Sidequest is present but the category is missing, disabled, or still read-only, continue inline
   and say: `Sidequest is loaded, but its live taxonomy cannot accept map artifacts yet.`
 - When it is ready, create one `codebase-exploration` artifact ticket with
-  `files: [".claude/.codebase-info/"]` and this exact clause:
+  `files: [".claude/.codebase-info/"]` and this exact clause. Creating and dispatching this ticket is the
+  required default for a meaningful refresh; do it immediately without checking in with the user:
   `Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.`
 
 The incremental ticket records the stored `gitCommit`, current `HEAD`, initial dirty-source status

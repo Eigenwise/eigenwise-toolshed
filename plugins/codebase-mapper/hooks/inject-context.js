@@ -30,7 +30,7 @@ function context(map, source) {
   return '<CODEBASE_MAP>\n' +
     'This repository has a maintained codebase map in .claude/.codebase-info/.\n\n' +
     'Before anything else in your first reply, and before starting the task, output exactly one acknowledgment line: "Codebase map: read <doc(s)>" after actually reading only relevant map document(s) from .claude/.codebase-info/, or "Codebase map: no read needed - <reason>" if the request needs no codebase knowledge. This is mandatory; do not silently skip it. Never re-read a document already read this session unless this hook names it as changed.\n\n' +
-    'After code changes, list modified files, assess whether the map needs an update, and end with either "Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation." or "Documentation check complete. No documentation updates needed because [reason]."\n' +
+    'After code changes, list modified files, assess whether the map needs an update, and end with either "Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation." or "Documentation check complete. No documentation updates needed because [reason]." Do not ask the user whether to update the map or run this skill. Decide using these criteria, announce the decision with the applicable line, and if updating, proceed immediately without waiting for a reply.\n' +
     '</CODEBASE_MAP>\n\n' +
     '=== CODEBASE MAP RE-GROUNDED AFTER SESSIONSTART (' + source + ') ===\n\n' +
     '--- ' + map.index.sourcePath + ' ---\n' + map.index.content.trim() + '\n' + manifestNote;
