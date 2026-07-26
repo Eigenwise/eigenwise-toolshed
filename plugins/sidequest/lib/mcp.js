@@ -1043,6 +1043,31 @@ const TOOLS = [
     }
   },
   {
+    name: "verdict",
+    description: "Record an oracle verdict.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        project: PROJECT_PROP,
+        text: { type: "string" },
+        outcome: { type: "string", enum: ["accepted", "rejected", "inconclusive"] },
+        why: { type: "string" },
+        constraint: { type: "string" }
+      },
+      required: ["ref", "text", "outcome"]
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      return mutationAck(slug, store.applyExperimentVerdict(slug, args.ref, {
+        text: args.text,
+        outcome: args.outcome,
+        why: args.why,
+        constraint: args.constraint
+      }));
+    }
+  },
+  {
     name: "scopeRequest",
     description: "Check scope; auto-approves eligible plugin tests.",
     inputSchema: {

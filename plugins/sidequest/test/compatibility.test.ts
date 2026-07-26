@@ -96,6 +96,31 @@ test('CLI representative bytes, statuses, and removed commands match goldens', (
   for (const [name, expected] of Object.entries(fixture)) assertCliGolden(name, expected, env);
 });
 
+test('CLI verdict records an awaiting oracle result', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cli-verdict-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cli-verdict-project-'));
+  const env = isolatedEnv(ROOT, home, project);
+  const seed = `
+    const store = require(${JSON.stringify(path.join(ROOT, 'lib', 'store.js'))});
+    const { slug } = store.ensureProject(${JSON.stringify(project)});
+    const ticket = store.createTicket(slug, { title: 'CLI verdict fixture', complexity: 2, complexityWhy: 'exercise the CLI oracle verdict command' });
+    store.appendExperimentEntry(slug, ticket.ref, { round: 1, headline: 'candidate', hypothesis: 'test it', change: 'rendered it', commit: 'abc1234', branch: 'sidequest/experiment/' + ticket.ref, measured: 'baseline 1, result 2', deliverable: 'comparison.wav', status: '' });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'cli-verdict' });
+    store.claimTicket(slug, ticket.ref, 'cli-verdict-worker', { token: prepared.token, executor: prepared.ticket.dispatchExecutor });
+    store.releaseTicket(slug, ticket.ref, 'cli-verdict-worker', { status: 'doing', oracle: 'Rank the candidates.', candidate: 'abc1234' });
+    process.stdout.write(ticket.ref);
+  `;
+  const seeded = spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8', env: { ...process.env, ...env } });
+  assert.equal(seeded.status, 0, seeded.stderr);
+  const ref = seeded.stdout;
+  const result = run(CLI, ['verdict', ref, '--text', 'Candidate B wins.', '--outcome', 'accepted', '--why', 'The transient is less sharp.', '--constraint', 'Keep the transient below the reference.', '--json'], env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).outcome, 'accepted');
+  const repeated = run(CLI, ['verdict', ref, '--text', 'Candidate B wins.', '--outcome', 'accepted'], env);
+  assert.equal(repeated.status, 1);
+  assert.match(repeated.stderr, /not awaiting an oracle verdict/i);
+});
+
 test('schema v7 rows reopen and preserve legacy question comments as plain comments', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-schema-golden-home-'));
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-schema-golden-project-'));

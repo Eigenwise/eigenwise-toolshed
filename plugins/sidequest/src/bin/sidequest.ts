@@ -1012,6 +1012,34 @@ function closeDispatchExecutor(ticket: any) {
   if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
 }
 
+async function cmdVerdict(opts: any, positional: any) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('verdict: pass a ticket ref, e.g. sidequest verdict SQ-3 --text "user words" --outcome accepted');
+  const text = opts.text;
+  const outcome = opts.outcome;
+  if (text == null) fail('verdict: --text is required and must contain the user\'s words verbatim.');
+  if (outcome == null) fail('verdict: --outcome is required: accepted, rejected, or inconclusive.');
+  const { slug, meta } = await resolveProject(opts);
+  let res;
+  try {
+    res = store.applyExperimentVerdict(slug, idOrRef, {
+      text,
+      outcome,
+      why: opts.why,
+      constraint: opts.constraint,
+    });
+  } catch (e: any) {
+    fail(`verdict: ${(e && e.message) || e}`);
+  }
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) console.log(`✓ recorded ${res.outcome} verdict for ${idOrRef} round ${res.round} — ${meta.name}`);
+  else fail(`verdict: ${res.message || `could not record a verdict for ${idOrRef}`}`);
+}
+
 async function cmdRelease(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('release: pass a ticket id or ref, e.g. sidequest release SQ-3');
@@ -2569,6 +2597,7 @@ const HELP_COMMANDS: any = {
   submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
+  verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]',
   'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]',
   assign: 'sidequest assign <id|SQ-n> [--to who=you]',
   unassign: 'sidequest unassign <id|SQ-n>',
@@ -2650,6 +2679,7 @@ Working the board safely (multi-agent):
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
   sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]   control-plane closure; --integration consumes a submitted ticket after publish
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] drop the claim without finishing
+  sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] record an oracle verdict
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request a scope expansion and pause with the claim held
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
@@ -2866,6 +2896,9 @@ async function main() {
       break;
     case 'publish':
       await cmdPublish(opts, positional);
+      break;
+    case 'verdict':
+      await cmdVerdict(opts, positional);
       break;
     case 'release':
     case 'unclaim':

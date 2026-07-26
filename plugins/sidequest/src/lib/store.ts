@@ -2366,6 +2366,86 @@ function appendExperimentEntry(slug?: any, idOrRef?: any, entry?: any) {
   });
 }
 
+function verdictOutcome(value?: any) {
+  const outcome = String(value == null ? '' : value).trim().toLowerCase();
+  if (!['accepted', 'rejected', 'inconclusive'].includes(outcome)) {
+    throw new Error('Verdict outcome must be accepted, rejected, or inconclusive.');
+  }
+  return outcome;
+}
+
+function verdictStatus(outcome?: any, candidate?: any) {
+  const suffix = nullableText(candidate) ? ` ${nullableText(candidate)}` : '';
+  if (outcome === 'accepted') return `accepted${suffix}`;
+  if (outcome === 'rejected') return `DO-NOT-MERGE${suffix}`;
+  return `inconclusive${suffix}`;
+}
+
+function replaceExperimentEntryField(block?: any, label?: any, value?: any, nextLabel?: any) {
+  const escaped = String(label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const nextEscaped = String(nextLabel || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = nextLabel
+    ? new RegExp(`^${escaped}:.*?(?=^${nextEscaped}:)`, 'ms')
+    : new RegExp(`^${escaped}:.*$`, 'm');
+  if (!pattern.test(String(block))) throw new Error(`Experiment round is missing its ${label} field.`);
+  return String(block).replace(pattern, `${label}: ${value}${nextLabel ? '\n' : ''}`);
+}
+
+function appendStandingConstraint(log?: any, round?: any, constraint?: any) {
+  if (!constraint) return String(log);
+  return String(log).replace(
+    /(^## Standing constraints\r?\n)([\s\S]*?)(?=^## R\d+\b|\s*$)/m,
+    (_all?: any, heading?: any, body?: any) => `${heading}${body.trimEnd()}${body.trim() ? '\n' : ''}- [R${round}] ${constraint}\n\n`,
+  );
+}
+
+function applyExperimentVerdict(slug?: any, idOrRef?: any, input?: any) {
+  const text = String(input?.text == null ? '' : input.text);
+  if (!text.trim()) throw new Error('Verdict text is required and must preserve the user\'s words.');
+  const outcome = verdictOutcome(input?.outcome);
+  const why = experimentText(input?.why);
+  const constraint = experimentText(input?.constraint);
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: 'not_found' };
+    const oracle = ticket.oracle;
+    if (!oracle) {
+      return {
+        ok: false,
+        reason: 'no_oracle',
+        message: `${ticket.ref} is not awaiting an oracle verdict. Release an active experiment round with --oracle before recording a verdict.`,
+      };
+    }
+    const existing = readExperimentLog(slug, ticket);
+    if (!existing) {
+      return {
+        ok: false,
+        reason: 'round_not_found',
+        message: `${ticket.ref} awaits an oracle verdict for round ${oracle.round}, but its experiment log has no round entry.`,
+      };
+    }
+    const entry = experimentEntries(existing.log).find((current?: any) => current.round === oracle.round);
+    if (!entry) {
+      return {
+        ok: false,
+        reason: 'round_not_found',
+        message: `${ticket.ref} awaits an oracle verdict for round ${oracle.round}, but that round is missing from its experiment log.`,
+      };
+    }
+    let block = replaceExperimentEntryField(entry.block, 'Verdict', `"${text}" — ${outcome}`, 'Why it failed');
+    block = replaceExperimentEntryField(block, 'Why it failed', why, 'Constraint bought');
+    block = replaceExperimentEntryField(block, 'Constraint bought', constraint, 'Status');
+    block = replaceExperimentEntryField(block, 'Status', verdictStatus(outcome, oracle.candidate));
+    let log = `${String(existing.log).slice(0, entry.start)}${block}\n${String(existing.log).slice(entry.end).trimStart()}`;
+    log = appendStandingConstraint(log, oracle.round, constraint);
+    clearOracleMarker(ticket);
+    const location = writeExperimentLog(slug, ticket, log);
+    return Object.assign({ ok: true, round: oracle.round, outcome }, location);
+  });
+}
+
 function appendOverturnLine(slug?: any, idOrRef?: any, priorRound?: any, overturningRound?: any, line?: any) {
   const options = priorRound && typeof priorRound === 'object' ? priorRound : null;
   const target = experimentRound(options ? (options.priorRound ?? options.targetRound ?? options.round) : priorRound);
@@ -7004,6 +7084,7 @@ module.exports = {
   saveAssetData,
   assetPath,
   appendExperimentEntry,
+  applyExperimentVerdict,
   appendOverturnLine,
   experimentPacket,
   listTickets,

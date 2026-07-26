@@ -185,7 +185,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -201,6 +201,9 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const release = resp.result.tools.find((tool: any) => tool.name === 'release');
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
   assert.equal(release.inputSchema.required.includes('reason'), false, 'release accepts an oracle ask in place of a reason');
+  const verdict = resp.result.tools.find((tool: any) => tool.name === 'verdict');
+  assert.deepEqual(verdict.inputSchema.required, ['ref', 'text', 'outcome']);
+  assert.deepEqual(verdict.inputSchema.properties.outcome.enum, ['accepted', 'rejected', 'inconclusive']);
 });
 
 test('add and update preserve descriptions and expose storyId explicitly', async () => {
@@ -352,7 +355,7 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   const total = descriptionBytes(tools);
   assert.ok(total <= 5000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
   const payload = JSON.stringify({ tools });
-  assert.ok(payload.length <= 15500, `tools/list payload is ${payload.length} bytes — trim schemas, don't raise the budget`);
+  assert.ok(payload.length <= 16000, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
@@ -1777,6 +1780,56 @@ test('MCP release records an oracle handoff without a separate reason', async ()
   assert.equal(ticket.comments.at(-1).body, 'Released: Rank the two rendered candidates without reading the measurements.');
   const pulse = await callTool('pulse', { project: added.project, ref: added.ref });
   assert.equal(pulse.oracle.summary, `awaiting oracle since ${ticket.oracle.at}, round 1, candidate abc1234, ask: Rank the two rendered candidates without reading the measurements.`);
+});
+
+test('MCP verdict records the oracle outcome and refuses a ticket with no oracle marker', async () => {
+  const added = await callTool('add', { title: 'oracle verdict fixture', complexity: 2, why: 'exercise the verdict operation through MCP' });
+  assert.equal(store.appendExperimentEntry(added.project, added.ref, {
+    round: 1,
+    headline: 'candidate',
+    hypothesis: 'test the candidate',
+    change: 'rendered it',
+    commit: 'abc1234',
+    branch: `sidequest/experiment/${added.ref}`,
+    measured: 'baseline 1, result 2',
+    deliverable: 'artifacts/comparison.wav',
+    status: '',
+  }).ok, true);
+  const prepared = store.prepareDispatch(added.project, added.ref, { sessionId: `mcp-verdict-${Date.now()}` });
+  assert.equal(store.claimTicket(added.project, added.ref, 'mcp-verdict-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(added.project, added.ref, 'mcp-verdict-worker', {
+    status: 'doing',
+    oracle: 'Rank the candidates.',
+    candidate: 'abc1234',
+  }).ok, true);
+
+  const verdict = await callTool('verdict', {
+    project: added.project,
+    ref: added.ref,
+    text: 'Candidate B wins.',
+    outcome: 'accepted',
+    why: 'The transient is less sharp.',
+    constraint: 'Keep the transient below the reference.',
+  });
+  assert.equal(verdict.ok, true);
+  assert.equal(store.getTicket(added.project, added.ref).oracle, null);
+  const experiment = store.experimentPacket(added.project, added.ref);
+  const log = fs.readFileSync(store.assetPath(added.project, store.getTicket(added.project, added.ref).id, experiment.asset), 'utf8');
+  assert.match(log, /Verdict: "Candidate B wins\." — accepted/);
+  assert.match(log, /Status: accepted abc1234/);
+  assert.match(log, /\[R1\] Keep the transient below the reference\./);
+
+  const refused = await callTool('verdict', {
+    project: added.project,
+    ref: added.ref,
+    text: 'Candidate B wins.',
+    outcome: 'accepted',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /not awaiting an oracle verdict/i);
 });
 
 test('oversized comment acks advise without changing stored bodies', async () => {

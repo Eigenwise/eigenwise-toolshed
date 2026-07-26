@@ -79,6 +79,50 @@ test('entries are append-only and an overturned entry gets one structural line',
   assert.match(log, /Status: DO-NOT-MERGE commit1\n> Overturned by R2: the ranking was measured backward\n## R2/m);
 });
 
+test('applyExperimentVerdict preserves the user words, clears the oracle, and records a constraint', () => {
+  const created = ticket();
+  assert.equal(store.appendExperimentEntry(slug, created.ref, round(1, {
+    verdict: '',
+    outcome: '',
+    whyItFailed: '',
+    constraintBought: '',
+    status: '',
+  })).ok, true);
+  const prepared = store.prepareDispatch(slug, created.ref, { sessionId: `experiment-verdict-${Date.now()}` });
+  assert.equal(store.claimTicket(slug, created.ref, 'experiment-verdict-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, created.ref, 'experiment-verdict-worker', {
+    status: 'doing',
+    oracle: 'Rank the candidates.',
+    candidate: 'abc1234',
+  }).ok, true);
+
+  const text = 'The attack is still too sharp.\nKeep row B above row C.';
+  const verdict = store.applyExperimentVerdict(slug, created.ref, {
+    text,
+    outcome: 'rejected',
+    why: 'The onset transient dominates the comparison.',
+    constraint: 'Rank row B above row C.',
+  });
+
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.round, 1);
+  const stored = store.getTicket(slug, created.ref);
+  assert.equal(stored.oracle, null);
+  const log = fs.readFileSync(store.assetPath(slug, created.id, verdict.asset), 'utf8');
+  assert.match(log, /Verdict: "The attack is still too sharp\.\nKeep row B above row C\." — rejected/);
+  assert.match(log, /Why it failed: The onset transient dominates the comparison\./);
+  assert.match(log, /Constraint bought: Rank row B above row C\./);
+  assert.match(log, /Status: DO-NOT-MERGE abc1234/);
+  assert.match(log, /## Standing constraints\n- \[R1\] Rank row B above row C\./);
+
+  const refused = store.applyExperimentVerdict(slug, created.ref, { text: 'again', outcome: 'accepted' });
+  assert.equal(refused.reason, 'no_oracle');
+  assert.match(refused.message, /not awaiting an oracle verdict/i);
+});
+
 test('experimentPacket keeps pinned sections, recent full rounds, and caps old headlines first', () => {
   const created = ticket();
   for (let index = 1; index <= 7; index++) {
