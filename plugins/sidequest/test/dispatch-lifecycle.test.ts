@@ -411,6 +411,30 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
   assert.equal(store.getTicket(slug, ticket.ref).lastEventType, 'dispatch');
 });
 
+test('oracle releases retain the round marker in pulse, changes, and brief list projections', () => {
+  const ticket = createFixture('oracle projection fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `oracle-projection-${Date.now()}` });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'oracle-projection-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'oracle-projection-worker', {
+    status: 'doing',
+    oracle: 'Rank the candidates best to worst.',
+    candidate: 'abc1234',
+    deliverable: 'artifacts/round-1.wav',
+    source: 'test',
+  }).ok, true);
+
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.oracle.round, 1);
+  const expected = `awaiting oracle since ${stored.oracle.at}, round 1, candidate abc1234, ask: Rank the candidates best to worst.`;
+  assert.equal(store.pulsePayload(slug, ticket.ref).oracle.summary, expected);
+  assert.equal(store.changesPayload(slug, new Date(0).toISOString()).tickets.find((entry?: any) => entry.ref === ticket.ref).oracle.summary, expected);
+  assert.equal(store.listPayload(slug, { brief: true, all: true }).tickets.find((entry?: any) => entry.ref === ticket.ref).oracle.summary, expected);
+});
+
 test('release and submission clear retain structured rework attempts', () => {
   const ticket = createFixture('structured rework fixture');
   const firstSession = `rework-first-${Date.now()}`;

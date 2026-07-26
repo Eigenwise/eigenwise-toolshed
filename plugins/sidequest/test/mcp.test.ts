@@ -198,7 +198,9 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(submit.inputSchema.properties.base, 'submit exposes an explicit base');
   assert.ok(submit.inputSchema.required.includes('body'), 'submit requires the final report');
   assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
-  assert.ok(resp.result.tools.find((tool: any) => tool.name === 'release').inputSchema.required.includes('reason'), 'release requires its reason');
+  const release = resp.result.tools.find((tool: any) => tool.name === 'release');
+  assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
+  assert.equal(release.inputSchema.required.includes('reason'), false, 'release accepts an oracle ask in place of a reason');
 });
 
 test('add and update preserve descriptions and expose storyId explicitly', async () => {
@@ -1743,6 +1745,38 @@ test('MCP done requires a final report and release records its reason', async ()
   assert.equal(afterRelease.claim, null);
   assert.equal(afterRelease.comments.at(-1).body, 'Released: Scope needs approval.');
   assert.equal(afterRelease.comments.at(-1).by, 'mcp-release-worker');
+});
+
+test('MCP release records an oracle handoff without a separate reason', async () => {
+  const added = await callTool('add', { title: 'oracle release fixture', complexity: 2, why: 'exercise the human verdict handoff through the MCP release surface' });
+  const prepared = store.prepareDispatch(added.project, added.ref, { sessionId: `oracle-release-${Date.now()}` });
+  assert.equal(store.claimTicket(added.project, added.ref, 'mcp-oracle-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+
+  await callTool('release', {
+    project: added.project,
+    ref: added.ref,
+    by: 'mcp-oracle-worker',
+    status: 'doing',
+    oracle: 'Rank the two rendered candidates without reading the measurements.',
+    candidate: 'abc1234',
+    deliverable: 'artifacts/comparison.wav',
+  });
+
+  const ticket = store.getTicket(added.project, added.ref);
+  assert.deepEqual(ticket.oracle, {
+    round: 1,
+    at: ticket.oracle.at,
+    candidate: 'abc1234',
+    deliverable: 'artifacts/comparison.wav',
+    ask: 'Rank the two rendered candidates without reading the measurements.',
+  });
+  assert.equal(ticket.claim, null);
+  assert.equal(ticket.comments.at(-1).body, 'Released: Rank the two rendered candidates without reading the measurements.');
+  const pulse = await callTool('pulse', { project: added.project, ref: added.ref });
+  assert.equal(pulse.oracle.summary, `awaiting oracle since ${ticket.oracle.at}, round 1, candidate abc1234, ask: Rank the two rendered candidates without reading the measurements.`);
 });
 
 test('oversized comment acks advise without changing stored bodies', async () => {

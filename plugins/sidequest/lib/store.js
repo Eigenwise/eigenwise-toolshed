@@ -4144,6 +4144,30 @@ function claimTicket(slug, idOrRef, by, opts) {
   }
   return result;
 }
+function nullableText(value) {
+  const text = value == null ? "" : String(value).trim();
+  return text || null;
+}
+function oracleMarker(dispatch, opts, at) {
+  const ask = nullableText(opts && opts.oracle);
+  if (!ask) return null;
+  const round = Number(dispatch && dispatch.launchSeq);
+  if (!Number.isInteger(round) || round < 1) {
+    throw new Error("oracle release requires an active dispatched round");
+  }
+  return {
+    round,
+    at,
+    candidate: nullableText(opts && opts.candidate),
+    deliverable: nullableText(opts && opts.deliverable),
+    ask
+  };
+}
+function clearOracleMarker(ticket) {
+  if (!ticket || !ticket.oracle) return false;
+  ticket.oracle = null;
+  return true;
+}
 function releaseTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
@@ -4199,6 +4223,14 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: "not_owner", ticket: t, claim: held };
     }
+    const oracleRequested = nullableText(opts.oracle);
+    if (oracleRequested && coerceStatus(opts.status || t.status, t.status) !== "doing") {
+      throw new Error("oracle release must keep the ticket in doing");
+    }
+    if (oracleRequested && t.oracle) {
+      throw new Error("ticket already awaits an oracle verdict");
+    }
+    if (oracleRequested) oracleMarker(dispatch, opts, null);
     if (opts.requireReleaseVerdict && !claimReleaseVerdict(t)) {
       return {
         ok: false,
@@ -4219,6 +4251,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     }
     clearScopeRequestMarker(t);
     t.scopeRequest = null;
+    if (oracleRequested) t.oracle = oracleMarker(dispatch, opts, now);
     t.claim = null;
     if (opts.claimRelease) {
       t.claimRelease = Object.assign({ by, at: now, source: opts.source || "store" }, opts.claimRelease);
@@ -4406,6 +4439,23 @@ function checkpointProjection(ticket, now) {
     verifyLength: verify.length,
     verifyTruncated: verify.truncated
   };
+}
+function oracleProjection(ticket) {
+  const oracle = ticket && ticket.oracle;
+  if (!oracle) return null;
+  const round = Number(oracle.round);
+  const at = nullableText(oracle.at);
+  const candidate = nullableText(oracle.candidate);
+  const deliverable = nullableText(oracle.deliverable);
+  const ask = nullableText(oracle.ask);
+  if (!Number.isInteger(round) || round < 1 || !at || !ask) return null;
+  const summary = [
+    `awaiting oracle since ${at}`,
+    `round ${round}`,
+    candidate ? `candidate ${candidate}` : null,
+    `ask: ${ask.replace(/\s+/g, " ")}`
+  ].filter(Boolean).join(", ");
+  return { round, at, candidate, deliverable, ask, summary };
 }
 function checkpointCommentBody(checkpoint) {
   const candidate = [
@@ -5029,6 +5079,7 @@ function briefTicket(slug, t, opts) {
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
     checkpoint: checkpointProjection(t),
+    oracle: oracleProjection(t),
     submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at } : null
   };
 }
@@ -5245,6 +5296,7 @@ function pulsePayload(slug, idOrRef) {
       outcome: dispatch.outcome || null
     } : null,
     checkpoint: checkpointProjection(ticket),
+    oracle: oracleProjection(ticket),
     ...storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {},
     submission: ticket.submission || null,
     git
@@ -5271,6 +5323,7 @@ function changesPayload(slug, since) {
     lastComment: latestCommentExcerpt(ticket),
     claim: claimPulse(ticket, nowMs),
     checkpoint: checkpointProjection(ticket, nowMs),
+    oracle: oracleProjection(ticket),
     ...storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {},
     updatedAt: ticket.updatedAt
   }));
@@ -5819,6 +5872,8 @@ module.exports = {
   makeWorkedBy,
   checkpointTicket,
   checkpointProjection,
+  oracleProjection,
+  clearOracleMarker,
   checkpointTtlMs,
   DEFAULT_CHECKPOINT_TTL_MIN,
   MAX_CHECKPOINT_TTL_MIN,

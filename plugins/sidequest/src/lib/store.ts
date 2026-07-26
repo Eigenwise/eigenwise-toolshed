@@ -4825,6 +4825,33 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   return result;
 }
 
+function nullableText(value?: any) {
+  const text = value == null ? '' : String(value).trim();
+  return text || null;
+}
+
+function oracleMarker(dispatch?: any, opts?: any, at?: any) {
+  const ask = nullableText(opts && opts.oracle);
+  if (!ask) return null;
+  const round = Number(dispatch && dispatch.launchSeq);
+  if (!Number.isInteger(round) || round < 1) {
+    throw new Error('oracle release requires an active dispatched round');
+  }
+  return {
+    round,
+    at,
+    candidate: nullableText(opts && opts.candidate),
+    deliverable: nullableText(opts && opts.deliverable),
+    ask,
+  };
+}
+
+function clearOracleMarker(ticket?: any) {
+  if (!ticket || !ticket.oracle) return false;
+  ticket.oracle = null;
+  return true;
+}
+
 // Release a claim. Only the owner (or a stale claim) may release unless
 // opts.force; opts.status optionally moves the ticket at the same time.
 function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -4902,6 +4929,14 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
+    const oracleRequested = nullableText(opts.oracle);
+    if (oracleRequested && coerceStatus(opts.status || t.status, t.status) !== 'doing') {
+      throw new Error('oracle release must keep the ticket in doing');
+    }
+    if (oracleRequested && t.oracle) {
+      throw new Error('ticket already awaits an oracle verdict');
+    }
+    if (oracleRequested) oracleMarker(dispatch, opts, null);
     // The sweep decides on an unlocked snapshot; re-check under the lock so a
     // claim that came back to life in between is never released out from under it.
     if (opts.requireReleaseVerdict && !claimReleaseVerdict(t)) {
@@ -4924,6 +4959,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     }
     clearScopeRequestMarker(t);
     t.scopeRequest = null;
+    if (oracleRequested) t.oracle = oracleMarker(dispatch, opts, now);
     t.claim = null;
     // Provenance for a claim taken away from its holder rather than handed back,
     // so a later closeout attempt can be refused with an actionable recovery.
@@ -5156,6 +5192,24 @@ function checkpointProjection(ticket?: any, now?: any) {
     verifyLength: verify.length,
     verifyTruncated: verify.truncated,
   };
+}
+
+function oracleProjection(ticket?: any) {
+  const oracle = ticket && ticket.oracle;
+  if (!oracle) return null;
+  const round = Number(oracle.round);
+  const at = nullableText(oracle.at);
+  const candidate = nullableText(oracle.candidate);
+  const deliverable = nullableText(oracle.deliverable);
+  const ask = nullableText(oracle.ask);
+  if (!Number.isInteger(round) || round < 1 || !at || !ask) return null;
+  const summary = [
+    `awaiting oracle since ${at}`,
+    `round ${round}`,
+    candidate ? `candidate ${candidate}` : null,
+    `ask: ${ask.replace(/\s+/g, ' ')}`,
+  ].filter(Boolean).join(', ');
+  return { round, at, candidate, deliverable, ask, summary };
 }
 
 function checkpointCommentBody(checkpoint?: any) {
@@ -5949,6 +6003,7 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
     checkpoint: checkpointProjection(t),
+    oracle: oracleProjection(t),
     submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at } : null,
   };
 }
@@ -6211,6 +6266,7 @@ function pulsePayload(slug?: any, idOrRef?: any) {
       outcome: dispatch.outcome || null,
     } : null,
     checkpoint: checkpointProjection(ticket),
+    oracle: oracleProjection(ticket),
     ...(storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {}),
     submission: ticket.submission || null,
     git,
@@ -6241,6 +6297,7 @@ function changesPayload(slug?: any, since?: any) {
       lastComment: latestCommentExcerpt(ticket),
       claim: claimPulse(ticket, nowMs),
       checkpoint: checkpointProjection(ticket, nowMs),
+      oracle: oracleProjection(ticket),
       ...(storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {}),
       updatedAt: ticket.updatedAt,
     }));
@@ -6978,6 +7035,8 @@ module.exports = {
   makeWorkedBy,
   checkpointTicket,
   checkpointProjection,
+  oracleProjection,
+  clearOracleMarker,
   checkpointTtlMs,
   DEFAULT_CHECKPOINT_TTL_MIN,
   MAX_CHECKPOINT_TTL_MIN,

@@ -276,7 +276,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   claim: 'Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.',
   dispatch: 'Prepare a ticket executor through its stable route.',
   done: 'Finish ticket with final report. Stamp actual model and effort.',
-  release: 'Release claim with durable reason.',
+  release: 'Release.',
   groomClose: 'Grooming closure; pass integration:true after a submission is integrated.',
   native_agent: 'Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.',
   archive: 'Archive one ticket, or every done ticket.',
@@ -504,6 +504,7 @@ function compactPulse(pulse?: any) {
     lastActivityAt: pulse.lastActivityAt,
     lastComment,
     checkpoint: pulse.checkpoint,
+    oracle: pulse.oracle,
     ...(Array.isArray(pulse.warnings) && pulse.warnings.length ? { warnings: pulse.warnings } : {}),
     dispatch: pulse.dispatch && {
       state: pulse.dispatch.state,
@@ -530,8 +531,10 @@ function requiredFinalReport(args?: any, action?: any) {
 
 function requiredReleaseReason(args?: any) {
   const reason = args && args.reason != null ? String(args.reason).trim() : '';
-  if (!reason) throw new Error('release: "reason" is required — explain why the claim is being released.');
-  return reason;
+  if (reason) return reason;
+  const oracle = args && args.oracle != null ? String(args.oracle).trim() : '';
+  if (oracle) return oracle;
+  throw new Error('release: "reason" is required — explain why the claim is being released. An oracle ask may stand in as the reason.');
 }
 
 function worktreeRoot(worktree?: any, action?: any) {
@@ -1143,18 +1146,21 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'release',
-    description: 'Drop a claim without finishing (optionally set status, e.g. back to todo). reason records why the claim is being released. by should match the claim.',
+    description: 'Release a claim; an oracle ask keeps the ticket doing for a verdict.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
         by: { type: 'string' },
-        reason: { type: 'string', description: 'Why this claim is released.' },
+        reason: { type: 'string' },
+        oracle: { type: 'string' },
+        candidate: {},
+        deliverable: {},
         status: { type: 'string', enum: store.VALID_STATUS },
         session: { type: 'string' },
       },
-      required: ['ref', 'by', 'reason'],
+      required: ['ref', 'by'],
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
@@ -1163,6 +1169,9 @@ const TOOLS: ToolDefinition[] = [
       const ticket = store.getTicket(slug, args.ref);
       const res = store.releaseTicket(slug, args.ref, by, {
         status: args.status,
+        oracle: args.oracle,
+        candidate: args.candidate,
+        deliverable: args.deliverable,
         releaseComment: { by, body: `Released: ${reason}`, kind: 'comment', source: 'mcp' },
         source: 'mcp',
         sessionId: sessionOf(args),

@@ -388,7 +388,9 @@ async function cmdList(opts: any) {
       const cmt = t.comments && t.comments.length ? `  \u{1F4AC}${t.comments.length}` : '';
       const files = t.files && t.files.length ? `  \u{1F4C1}${t.files.length}` : '';
       const readonly = t.readonlyOverride === false ? '  readonly:false' : '';
-      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${readonly}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}`);
+      const oracle = store.oracleProjection(t);
+      const awaitingOracle = oracle ? `  ${oracle.summary}` : '';
+      console.log(`    ${t.ref}${pr}  ${t.title}${labels}${imgs}${files}${readonly}${cmt}${lnk}${blk}${clm}${asn}${modelMark(t)}${awaitingOracle}`);
     }
   }
 }
@@ -1015,8 +1017,19 @@ async function cmdRelease(opts: any, positional: any) {
   if (!idOrRef) fail('release: pass a ticket id or ref, e.g. sidequest release SQ-3');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
+  const reason = String(opts.reason || opts.oracle || '').trim();
+  if (!reason) fail('release: pass --reason, or use --oracle with the human verdict ask.');
   const ticket = store.getTicket(slug, idOrRef);
-  const res = store.releaseTicket(slug, idOrRef, by, { force: !!opts.force, status: opts.status, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.releaseTicket(slug, idOrRef, by, {
+    force: !!opts.force,
+    status: opts.status,
+    oracle: opts.oracle,
+    candidate: opts.candidate,
+    deliverable: opts.deliverable,
+    releaseComment: { by, body: `Released: ${reason}`, kind: 'comment', source: opts.source || 'cli' },
+    source: opts.source || 'cli',
+    sessionId: sessionId(opts),
+  });
   if (res.ok) closeDispatchExecutor(ticket);
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
@@ -2553,7 +2566,7 @@ const HELP_COMMANDS: any = {
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
-  release: 'sidequest release <id|SQ-n> [--by who] [-s todo]',
+  release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]',
   assign: 'sidequest assign <id|SQ-n> [--to who=you]',
   unassign: 'sidequest unassign <id|SQ-n>',
@@ -2634,7 +2647,7 @@ Working the board safely (multi-agent):
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why no executor can do this"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
   sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]   control-plane closure; --integration consumes a submitted ticket after publish
-  sidequest release <id|SQ-n> [--by who] [-s todo] drop the claim without finishing
+  sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] drop the claim without finishing
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request a scope expansion and pause with the claim held
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
