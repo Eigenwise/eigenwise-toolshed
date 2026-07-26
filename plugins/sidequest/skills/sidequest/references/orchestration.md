@@ -206,6 +206,12 @@ and blocked work). These are event-driven checks, not a polling loop. File or re
 follow-up when something is off; do not let the main thread silently accumulate dead workers or stale
 board state.
 
+## Small-ticket touch budget
+
+For a small ticket, go file → dispatch → integrate in as few ref-named turns as possible, targeting
+10 or fewer. One orchestrator turn costs about 152k cache-read tokens, so 9–17 touches can cost the
+whole executor run. Dispatch immediately after filing: p75 queue time is 36.9 minutes of dead time.
+
 ## Orchestration cost: keep the lead cheap to wake
 
 Delegation stays the default. Routing execution down to cheaper models is the whole design, and the fix

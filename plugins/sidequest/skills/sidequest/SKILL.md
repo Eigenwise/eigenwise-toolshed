@@ -110,6 +110,10 @@ one-or-two-file mechanical edit), and `add`/`update` warn when it doesn't. The f
 the ticket: evidence, constraints, and anchors are what strong-model authorship contributes. A fully
 specified EDIT downgrades the category; rich context does not.
 
+Carry paid recon forward: every touched surface gets a `file:line` anchor and relevant excerpt, so the
+executor starts where you left off, never cold. Review-gated tickets also need adversarial acceptance
+criteria before their first dispatch. Details: `references/ticket-authoring.md`.
+
 Descriptions/comments render **full markdown**. **CRITICAL: use real newlines, never a literal
 `\n`** — multi-line `-d`/`-m` needs a heredoc or `$'...'`; MCP tools take plain strings with real
 newlines.
