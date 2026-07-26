@@ -40,6 +40,7 @@ export default defineConfig({
           items: [
             { label: 'Workbench', slug: 'getting-started/workbench' },
             { label: 'Sidequest', slug: 'getting-started/sidequest' },
+            { label: 'Experiment loops', slug: 'getting-started/experiments' },
             { label: 'Codex Gateway', slug: 'getting-started/codex-gateway' },
           ],
         },
