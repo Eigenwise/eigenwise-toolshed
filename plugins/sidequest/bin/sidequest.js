@@ -895,7 +895,6 @@ async function cmdRelease(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const reason = String(opts.reason || opts.oracle || "").trim();
-  if (!reason) fail("release: pass --reason, or use --oracle with the human verdict ask.");
   const ticket = store.getTicket(slug, idOrRef);
   const res = store.releaseTicket(slug, idOrRef, by, {
     force: !!opts.force,
@@ -903,7 +902,7 @@ async function cmdRelease(opts, positional) {
     oracle: opts.oracle,
     candidate: opts.candidate,
     deliverable: opts.deliverable,
-    releaseComment: { by, body: `Released: ${reason}`, kind: "comment", source: opts.source || "cli" },
+    ...reason ? { releaseComment: { by, body: `Released: ${reason}`, kind: "comment", source: opts.source || "cli" } } : {},
     source: opts.source || "cli",
     sessionId: sessionId(opts)
   });

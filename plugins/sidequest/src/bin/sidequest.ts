@@ -1017,8 +1017,10 @@ async function cmdRelease(opts: any, positional: any) {
   if (!idOrRef) fail('release: pass a ticket id or ref, e.g. sidequest release SQ-3');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
+  // The reason mandate is the MCP executor surface's contract (3.23.0); the CLI
+  // stays the human/admin fallback where forced ceremony on dead-claim cleanup
+  // would only get in the way. A given reason (or oracle ask) is still recorded.
   const reason = String(opts.reason || opts.oracle || '').trim();
-  if (!reason) fail('release: pass --reason, or use --oracle with the human verdict ask.');
   const ticket = store.getTicket(slug, idOrRef);
   const res = store.releaseTicket(slug, idOrRef, by, {
     force: !!opts.force,
@@ -1026,7 +1028,7 @@ async function cmdRelease(opts: any, positional: any) {
     oracle: opts.oracle,
     candidate: opts.candidate,
     deliverable: opts.deliverable,
-    releaseComment: { by, body: `Released: ${reason}`, kind: 'comment', source: opts.source || 'cli' },
+    ...(reason ? { releaseComment: { by, body: `Released: ${reason}`, kind: 'comment', source: opts.source || 'cli' } } : {}),
     source: opts.source || 'cli',
     sessionId: sessionId(opts),
   });

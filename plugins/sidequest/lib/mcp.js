@@ -373,7 +373,7 @@ function compactPulse(pulse) {
     lastActivityAt: pulse.lastActivityAt,
     lastComment,
     checkpoint: pulse.checkpoint,
-    oracle: pulse.oracle,
+    ...pulse.oracle ? { oracle: pulse.oracle } : {},
     ...Array.isArray(pulse.warnings) && pulse.warnings.length ? { warnings: pulse.warnings } : {},
     dispatch: pulse.dispatch && {
       state: pulse.dispatch.state,

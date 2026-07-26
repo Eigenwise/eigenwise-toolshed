@@ -5079,7 +5079,7 @@ function briefTicket(slug, t, opts) {
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
     checkpoint: checkpointProjection(t),
-    oracle: oracleProjection(t),
+    ...oracleProjection(t) ? { oracle: oracleProjection(t) } : {},
     submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at } : null
   };
 }
@@ -5296,7 +5296,7 @@ function pulsePayload(slug, idOrRef) {
       outcome: dispatch.outcome || null
     } : null,
     checkpoint: checkpointProjection(ticket),
-    oracle: oracleProjection(ticket),
+    ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
     ...storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {},
     submission: ticket.submission || null,
     git
@@ -5323,7 +5323,7 @@ function changesPayload(slug, since) {
     lastComment: latestCommentExcerpt(ticket),
     claim: claimPulse(ticket, nowMs),
     checkpoint: checkpointProjection(ticket, nowMs),
-    oracle: oracleProjection(ticket),
+    ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
     ...storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {},
     updatedAt: ticket.updatedAt
   }));
