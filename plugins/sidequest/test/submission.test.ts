@@ -84,6 +84,24 @@ test('CLI scope-request keeps the claim while update --files approves the additi
   assert.strictEqual(runCli(['release', t.ref, '--by', by]).status, 0);
 });
 
+test('CLI update reports a scope request that remains pending after a partial approval', () => {
+  const t = addTicket('partial scope update warning');
+  const by = 'partial-scope-worker';
+  assert.strictEqual(runCli(['claim', t.ref, '--by', by, '--direct', '--reason', 'The scope request fixture requires a local direct claim.']).status, 0);
+  assert.strictEqual(runCli(['scope-request', t.ref, '--by', by, '--files', 'lib/new.js,other/new.js']).status, 0);
+
+  const partial = runCli(['update', t.ref, '--files', 'lib/fixture.js,lib/new.js']);
+  assert.strictEqual(partial.status, 0, partial.stderr + partial.stdout);
+  assert.match(partial.stdout, /Scope request remains pending/);
+  assert.match(partial.stdout, /other\/new\.js/);
+  assert.match(partial.stdout, new RegExp(`sidequest update ${t.ref} --files`));
+  assert.deepStrictEqual(store.getTicket(slug, t.ref).scopeRequest.files, ['lib/new.js', 'other/new.js']);
+
+  assert.strictEqual(runCli(['update', t.ref, '--files', 'lib/fixture.js,lib/new.js,other/new.js']).status, 0);
+  assert.strictEqual(store.getTicket(slug, t.ref).scopeRequest, null);
+  assert.strictEqual(runCli(['release', t.ref, '--by', by]).status, 0);
+});
+
 test('submit requires a held claim, records the submission, and releases the claim in doing', () => {
   const t = addTicket('submit happy path');
 

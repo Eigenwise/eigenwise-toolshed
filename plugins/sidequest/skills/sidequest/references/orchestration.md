@@ -95,10 +95,12 @@ dispatch. Only the continuation flow releases during a healthy handoff.
 ### Scope expansion without a bounce
 
 When an executor needs an undeclared path, it calls `scope-request <ref> --file <path>` and pauses with
-its claim intact. The request records the additions and prints the exact `sidequest update <ref> --files ...`
-command for the orchestrator. Run that one update to approve the merged scope, then resume the same executor.
-Scope lint still rejects out-of-scope commits and submissions, and its refusal output carries the same update
-command. Do not release and redispatch a healthy executor just to add a path.
+its claim intact. The request records only the uncovered additions and prints the authoritative
+`sidequest update <ref> --files ...` approval command. Run that exact update to approve the full request,
+then resume the same executor. A plain `update --files` is also authoritative only when its resulting scope
+covers every pending requested path; otherwise Sidequest reports the request is still pending and prints the
+full command. Scope lint still rejects out-of-scope commits and submissions. Do not release and redispatch a
+healthy executor just to add a path.
 
 ## Fan-out mechanics
 
@@ -145,9 +147,10 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   `kind=question` needs, scope conflicts, and failures the board cannot express.
 - **Recover one dormant completion (SQ-715 findings comment).** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent once to continue, keeping its claim and token. A second silent stop means dead: salvage, release, fresh-dispatch, then spawn one new executor. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
 - **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
-  replacing it. Preserve a verified commit, or recover the declared-scope diff, then read the ticket and
-  its thread again before deciding whether a replacement is needed. Never overwrite stranded work by
-  blindly redispatching. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees; it only
+  replacing it. If an isolated worker's recorded worktree is gone, do not `SendMessage` it: redispatch after
+  reading the ticket instead, because a resumed agent must never fall back to the shared checkout. Preserve a
+  verified commit, or recover the declared-scope diff, then read the ticket and its thread again before deciding
+  whether a replacement is needed. Never overwrite stranded work by blindly redispatching. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees; it only
   removes worktrees that are clean, at least three hours old, and whose commits are patch-equivalent to
   `origin/main`. Pass `--yes` only after reviewing the list. When a natural wakeup shows that an executor has no claim and no commit past the
   2–3 minute grace period, stop it, then diagnose before retrying: `pulse <ref>` and read the denial or

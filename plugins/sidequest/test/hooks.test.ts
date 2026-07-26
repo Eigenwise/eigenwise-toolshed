@@ -635,6 +635,56 @@ test('peer-guard: terminal dispatch blocks delayed steering before delivery', ()
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /Redispatch/);
 });
 
+test('peer-guard: missing isolated worktree blocks a non-terminal resume only', () => {
+  const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-missing-worktree-'));
+  fs.writeFileSync(path.join(isolatedRoot, 'fixture.txt'), 'fixture\n');
+  gitFixture(['init'], isolatedRoot);
+  gitFixture(['config', 'user.email', 'sidequest@example.test'], isolatedRoot);
+  gitFixture(['config', 'user.name', 'Sidequest Test'], isolatedRoot);
+  gitFixture(['add', 'fixture.txt'], isolatedRoot);
+  gitFixture(['commit', '-m', 'fixture'], isolatedRoot);
+  const { slug: isolatedSlug } = store.ensureProject(isolatedRoot);
+  const category = 'general';
+  const isolated = store.createTicket(isolatedSlug, { title: 'missing worktree cannot be resumed', category, files: ['lib'], source: 'cli' });
+  const sessionId = `missing-worktree-${++sqSeq}`;
+  const prepared = store.prepareDispatch(isolatedSlug, isolated.ref, { sessionId, sharedTree: false });
+  assert.equal(prepared.ticket.dispatch.sharedTree, false);
+  const isolatedName = 'missing-worktree-worker';
+  const agentId = `missing-worktree-agent-${sqSeq}`;
+  assert.equal(store.recordDispatchLaunch(isolatedSlug, isolated.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName: isolatedName,
+  }).ok, true);
+  const worktree = path.join(isolatedRoot, '.claude', 'worktrees', `agent-${agentId}`);
+  fs.mkdirSync(worktree, { recursive: true });
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, isolatedName).ok, true);
+  assert.strictEqual(runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } }), null);
+  fs.rmSync(worktree, { recursive: true, force: true });
+
+  const blocked = runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } });
+  assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, new RegExp(isolated.ref));
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /worktree-isolated/);
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /Redispatch/);
+
+  const shared = store.createTicket(isolatedSlug, { title: 'shared worker remains reachable', category, files: ['lib'], source: 'cli' });
+  const sharedSession = `shared-worktree-${++sqSeq}`;
+  const sharedPrepared = store.prepareDispatch(isolatedSlug, shared.ref, { sessionId: sharedSession, sharedTree: true });
+  assert.equal(sharedPrepared.ticket.dispatch.sharedTree, true);
+  assert.equal(store.recordDispatchLaunch(isolatedSlug, shared.ref, {
+    sessionId: sharedSession,
+    token: sharedPrepared.token,
+    executor: sharedPrepared.ticket.dispatchExecutor,
+    agentName: 'shared-worktree-worker',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sharedSession, sharedPrepared.ticket.dispatchExecutor, `shared-agent-${sqSeq}`, 'shared-worktree-worker').ok, true);
+  assert.strictEqual(runGuardPeer({ tool_input: { to: 'shared-worktree-worker', message: 'continue' } }), null);
+  assert.equal(store.deleteProjectExact(isolatedSlug).ok, true);
+  fs.rmSync(isolatedRoot, { recursive: true, force: true });
+});
+
 test('teammate-idle: terminal dispatch ends its own idle executor', () => {
   const ticket = addEffortTicket('terminal teammate exits', 'high');
   const sessionId = `terminal-idle-${++sqSeq}`;

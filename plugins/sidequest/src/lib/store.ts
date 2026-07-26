@@ -2762,6 +2762,13 @@ function scopeExpansionCommand(ticket?: any, additions?: any) {
   return `sidequest update ${ref} --files ${JSON.stringify(scopeExpansionFiles(ticket, additions).join(','))}`;
 }
 
+function pendingScopeApprovalWarning(ticket?: any) {
+  const requested = normalizeFiles(ticket?.scopeRequest?.files);
+  if (!requested.length) return null;
+  const command = scopeExpansionCommand(ticket, requested);
+  return `Scope request remains pending for ${requested.join(', ')}. This update did not cover every requested path; approve the full request with \`${command}\`.`;
+}
+
 function scopeRequestMarkerFile(ticket?: any) {
   return `scope-request-${String(ticket?.id || 'ticket').replace(/[^a-z0-9_-]/gi, '_')}.json`;
 }
@@ -3829,6 +3836,24 @@ function pulseDispatchState(state?: any) {
   return state.outcome || 'prepared';
 }
 
+function isolatedDispatchWorktreeMissing(state?: any) {
+  const worktree = String(state?.worktree || '').trim();
+  return state?.sharedTree === false && Boolean(worktree) && !fs.existsSync(worktree);
+}
+
+function isolatedDispatchWithMissingWorktree(agentName?: any) {
+  const target = String(agentName || '').trim();
+  if (!target) return null;
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || state.agentName !== target || !isolatedDispatchWorktreeMissing(state)) continue;
+      return { slug: project.slug, id: ticket.id, ref: ticket.ref, worktree: state.worktree };
+    }
+  }
+  return null;
+}
+
 function terminalDispatchTarget(agentName?: any) {
   const target = String(agentName || '').trim();
   if (!target) return null;
@@ -4524,6 +4549,8 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
+    const currentDispatch = dispatchState(t);
+    if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: 'worktree_missing', ticket: t };
     // Submitted work awaits the orchestrator's publish transaction, not another
     // executor: re-claiming it would fork the already-verified commit. The
     // orchestrator clears the submission first when rework is genuinely wanted.
@@ -6686,6 +6713,7 @@ module.exports = {
   recoverDispatchQuotaFailure,
   bindDispatchAgent,
   dispatchIsolationExpectation,
+  isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
   terminalDispatchForIdle,
   markDispatchStopped,
@@ -6715,6 +6743,7 @@ module.exports = {
   normalizeFiles,
   scopeExpansionFiles,
   scopeExpansionCommand,
+  pendingScopeApprovalWarning,
   requestScope,
   normalizeContracts,
   contractCollisionReasons,

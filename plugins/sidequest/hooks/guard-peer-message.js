@@ -70,6 +70,14 @@ function runtimeModule(name) {
 }
 
 // src/hooks/guard-peer-message.ts
+function isolatedDispatchWithMissingWorktree(agentName) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.isolatedDispatchWithMissingWorktree(agentName);
+  } catch (_) {
+    return null;
+  }
+}
 function terminalDispatchTarget(agentName) {
   try {
     const store = require(runtimeModule("store"));
@@ -90,6 +98,13 @@ function main() {
       `sidequest: ${terminal.ref} is terminal (${terminal.outcome}) and executor "${to}" is closed. Drop this queued steering message so it cannot wake a finished executor. Redispatch the ticket for later work; TaskStop the mapped executor if it is still listed.`
     );
     return;
+  }
+  const missing = isolatedDispatchWithMissingWorktree(to);
+  if (missing) {
+    writeDeny(
+      "PreToolUse",
+      `sidequest: ${missing.ref} is worktree-isolated but its recorded worktree is gone. Do not resume this executor because it could write to the shared checkout. Redispatch the ticket instead.`
+    );
   }
 }
 try {

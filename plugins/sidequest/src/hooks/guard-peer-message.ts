@@ -8,6 +8,22 @@ interface TerminalDispatch {
   outcome: string;
 }
 
+interface MissingWorktreeDispatch {
+  ref: string;
+  worktree: string;
+}
+
+function isolatedDispatchWithMissingWorktree(agentName: string): MissingWorktreeDispatch | null {
+  try {
+    const store = require(runtimeModule('store')) as {
+      isolatedDispatchWithMissingWorktree: (agentName: string) => MissingWorktreeDispatch | null;
+    };
+    return store.isolatedDispatchWithMissingWorktree(agentName);
+  } catch (_) {
+    return null;
+  }
+}
+
 function terminalDispatchTarget(agentName: string): TerminalDispatch | null {
   try {
     const store = require(runtimeModule('store')) as {
@@ -32,6 +48,14 @@ function main(): void {
         'Drop this queued steering message so it cannot wake a finished executor. Redispatch the ticket for later work; TaskStop the mapped executor if it is still listed.',
     );
     return;
+  }
+  const missing = isolatedDispatchWithMissingWorktree(to);
+  if (missing) {
+    writeDeny(
+      'PreToolUse',
+      `sidequest: ${missing.ref} is worktree-isolated but its recorded worktree is gone. ` +
+        'Do not resume this executor because it could write to the shared checkout. Redispatch the ticket instead.',
+    );
   }
 }
 

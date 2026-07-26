@@ -829,6 +829,10 @@ const TOOLS: ToolDefinition[] = [
       const t = store.getTicket(slug, updated.ref) || updated;
       const warnings = store.ticketReferenceWarnings(slug, t.title, t.description);
       warnings.push(...store.ticketPlanningWarnings(t, meta.path));
+      if (patch.files !== undefined) {
+        const scopeWarning = store.pendingScopeApprovalWarning(t);
+        if (scopeWarning) warnings.push(scopeWarning);
+      }
       if (patch.category && !categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
       return mutationAck(slug, { ok: true, ticket: t }, warnings.length ? { warnings } : null);
     },

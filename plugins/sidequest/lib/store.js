@@ -2338,6 +2338,12 @@ function scopeExpansionCommand(ticket, additions) {
   if (!ref) return null;
   return `sidequest update ${ref} --files ${JSON.stringify(scopeExpansionFiles(ticket, additions).join(","))}`;
 }
+function pendingScopeApprovalWarning(ticket) {
+  const requested = normalizeFiles(ticket?.scopeRequest?.files);
+  if (!requested.length) return null;
+  const command = scopeExpansionCommand(ticket, requested);
+  return `Scope request remains pending for ${requested.join(", ")}. This update did not cover every requested path; approve the full request with \`${command}\`.`;
+}
 function scopeRequestMarkerFile(ticket) {
   return `scope-request-${String(ticket?.id || "ticket").replace(/[^a-z0-9_-]/gi, "_")}.json`;
 }
@@ -3227,6 +3233,22 @@ function pulseDispatchState(state) {
   if (state.launchedAt) return "launched";
   return state.outcome || "prepared";
 }
+function isolatedDispatchWorktreeMissing(state) {
+  const worktree = String(state?.worktree || "").trim();
+  return state?.sharedTree === false && Boolean(worktree) && !fs.existsSync(worktree);
+}
+function isolatedDispatchWithMissingWorktree(agentName) {
+  const target = String(agentName || "").trim();
+  if (!target) return null;
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || state.agentName !== target || !isolatedDispatchWorktreeMissing(state)) continue;
+      return { slug: project.slug, id: ticket.id, ref: ticket.ref, worktree: state.worktree };
+    }
+  }
+  return null;
+}
 function terminalDispatchTarget(agentName) {
   const target = String(agentName || "").trim();
   if (!target) return null;
@@ -3863,6 +3885,8 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (!opts.direct && t2.dispatchNonce && opts.executor !== t2.dispatchExecutor) return { ok: false, reason: "executor_mismatch", ticket: t2, expectedExecutor: t2.dispatchExecutor };
     if (!opts.direct && isRoutedTicket(t2) && !t2.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t2 };
     if (t2.status === "done") return { ok: false, reason: "done", ticket: t2 };
+    const currentDispatch = dispatchState(t2);
+    if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: "worktree_missing", ticket: t2 };
     if (pendingSubmission(t2) && !opts.force) return { ok: false, reason: "submitted", ticket: t2, submission: t2.submission };
     const held2 = t2.claim;
     if (held2 && held2.by && held2.by !== by && !claimReclaimable(t2) && !opts.force) {
@@ -5547,6 +5571,7 @@ module.exports = {
   recoverDispatchQuotaFailure,
   bindDispatchAgent,
   dispatchIsolationExpectation,
+  isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
   terminalDispatchForIdle,
   markDispatchStopped,
@@ -5576,6 +5601,7 @@ module.exports = {
   normalizeFiles,
   scopeExpansionFiles,
   scopeExpansionCommand,
+  pendingScopeApprovalWarning,
   requestScope,
   normalizeContracts,
   contractCollisionReasons,
