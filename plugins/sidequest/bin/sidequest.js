@@ -169,8 +169,10 @@ function contractWaiverFromOpts(opts) {
 }
 function readonlyFromOpts(opts) {
   if (opts.readonly === void 0) return void 0;
-  if (String(opts.readonly).toLowerCase() !== "false") fail("--readonly only accepts false; omit it to use the category default.");
-  return false;
+  const value = String(opts.readonly).toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  fail("--readonly accepts true or false.");
 }
 function highStakesFromOpts(opts) {
   if (opts["high-stakes"] === void 0) return void 0;
@@ -492,6 +494,7 @@ async function cmdCategory(opts, positional) {
     fallback: opts["no-fallback"] || opts["fallback-model"] === "none" ? null : opts["fallback-model"] != null || opts["fallback-effort"] != null ? { model: opts["fallback-model"], effort: opts["fallback-effort"] } : null,
     contract: opts.contract || "",
     artifactRoots: artifactRootsOption(),
+    readonly: readonlyFromOpts(opts) === true,
     enabled: !opts.disabled
   });
   const patchFor = (existing) => {
@@ -511,6 +514,7 @@ async function cmdCategory(opts, positional) {
     if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
     if (opts.contract != null) patch.contract = opts.contract;
     if (opts["artifact-roots"] != null) patch.artifactRoots = artifactRootsOption();
+    if (opts.readonly !== void 0) patch.readonly = readonlyFromOpts(opts);
     return patch;
   };
   if (action === "list" || action === "ls") {
@@ -540,7 +544,7 @@ async function cmdCategory(opts, positional) {
         continue;
       }
       const state = category.linkState === "overridden" || category.linkState === "detached" ? "  customized" : "";
-      console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  (${category.ticketCount} ticket${category.ticketCount === 1 ? "" : "s"})${state}`);
+      console.log(`${category.id}  ${category.name}  → ${category.resolved.model}·${category.resolved.effort}  ${category.readonly ? "read-only" : "write"}  (${category.ticketCount} ticket${category.ticketCount === 1 ? "" : "s"})${state}`);
       for (const warning of category.warnings) console.log(`  ! ${warning}`);
     }
     for (const warning of layer.warnings) {
@@ -2206,14 +2210,14 @@ async function cmdStop() {
   store.clearServerInfo();
 }
 const HELP_COMMANDS = {
-  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
+  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
   list: "sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)",
   pulse: "sidequest pulse <SQ-n> [--project <path-or-slug>]",
   changes: "sidequest changes [--since <iso>] [--project <path-or-slug>]",
-  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
   rm: "sidequest rm <id|SQ-n> [--force]",
   profile: "sidequest profile <hygiene|list|show|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]",
-  category: "sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--json]",
+  category: "sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--readonly true|false] [--json]",
   "global-fallback": "sidequest global-fallback [--model <model> --effort <effort>] [--json]",
   claim: 'sidequest claim <id|SQ-n> [--by who] [--token nonce] [--effort level] [--force] [--direct --reason "why"]',
   checkpoint: 'sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "command: result" [--ttl-minutes N] [--json]',
@@ -2302,13 +2306,13 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly false] [-i image]... [-s todo|doing|done]
+  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done]
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
+  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|create|edit|retire|use|repoint|promote|new-board ... [--json]
-  sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--json]
+  sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--readonly true|false] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n> [--force]
   sidequest projects [--archived] [--json]

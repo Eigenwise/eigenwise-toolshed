@@ -23,7 +23,7 @@ __export(category_defaults_exports, {
   STARTER_ROUTING_PROFILES: () => STARTER_ROUTING_PROFILES
 });
 module.exports = __toCommonJS(category_defaults_exports);
-const ROUTING_PROFILE_SEED_REVISION = 2;
+const ROUTING_PROFILE_SEED_REVISION = 3;
 const DEFAULT_CATEGORIES = [
   {
     id: "codebase-exploration",
@@ -33,6 +33,7 @@ const DEFAULT_CATEGORIES = [
     fallback: null,
     contract: "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact path under .claude/.codebase-info as its only write scope.",
     artifactRoots: [".claude/.codebase-info"],
+    readonly: true,
     enabled: true
   },
   {
@@ -83,6 +84,7 @@ const DEFAULT_CATEGORIES = [
     fallback: { model: "sonnet", effort: "medium" },
     contract: "Prefer primary sources and cross-check material claims; deliver a concise cited synthesis. For a bounded lookup, invoke the saved `web-research` Workflow with the ticket question as `args`. For a substantial question, fan out searches across angles and adversarially verify key claims against independent sources. No repository edits.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   },
   {
@@ -93,6 +95,7 @@ const DEFAULT_CATEGORIES = [
     fallback: { model: "sonnet", effort: "high" },
     contract: "Report concrete findings with evidence, confidence, and impact; do not edit unless asked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   },
   {
@@ -103,6 +106,7 @@ const DEFAULT_CATEGORIES = [
     fallback: { model: "codex-gpt-5-6-sol", effort: "high" },
     contract: "Timebox exploration; record what was tested, ruled out, and recommended. For design-direction work: state constraints, compare viable options, recommend one, and name tradeoffs.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   },
   {
@@ -153,6 +157,7 @@ const DEFAULT_CATEGORIES = [
     fallback: { model: "codex-gpt-5-6-terra", effort: "medium" },
     contract: "Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliverable is a prioritized findings comment on the ticket — worst problems first, each naming the exact panel/element and what a user would misunderstand.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   }
 ];

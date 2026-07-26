@@ -8,12 +8,10 @@ const {
   DISPATCH_PREFIX,
   READ_ONLY_CLAUDE_PREFIX,
   READ_ONLY_DISPATCH_PREFIX,
-  READ_ONLY_CATEGORY_IDS,
   EFFORTS,
   classify,
   dispatchLaunchName,
   isEffort,
-  isReadOnlyCategory,
   stableClaudeName,
   stableDispatchName,
   stableReadOnlyClaudeName,
@@ -25,12 +23,10 @@ const {
   DISPATCH_PREFIX: string;
   READ_ONLY_CLAUDE_PREFIX: string;
   READ_ONLY_DISPATCH_PREFIX: string;
-  READ_ONLY_CATEGORY_IDS: readonly string[];
   EFFORTS: readonly string[];
   classify(name: unknown): { kind: string; effort: string | null };
   dispatchLaunchName(ref: unknown, title?: unknown, sequence?: unknown): string;
   isEffort(value: unknown): boolean;
-  isReadOnlyCategory(categoryId: unknown): boolean;
   stableClaudeName(effort: string): string;
   stableDispatchName(effort: string): string;
   stableReadOnlyClaudeName(effort: string): string;
@@ -58,16 +54,9 @@ test('every stable kind round-trips through classify with its effort', () => {
   }
 });
 
-test('read-only category selection is explicit and stable', () => {
-  assert.deepStrictEqual(READ_ONLY_CATEGORY_IDS, [
-    'codebase-exploration',
-    'research',
-    'review-audit',
-    'spike-investigation',
-  ]);
-  for (const category of READ_ONLY_CATEGORY_IDS) assert.ok(isReadOnlyCategory(category));
-  assert.ok(!isReadOnlyCategory('coding.normal'));
-  assert.ok(!isReadOnlyCategory('visual-review'));
+test('read-only executor names remain stable without category policy', () => {
+  assert.strictEqual(READ_ONLY_CLAUDE_PREFIX, 'sidequest-exec-readonly-');
+  assert.strictEqual(READ_ONLY_DISPATCH_PREFIX, 'sidequest-exec-dispatch-readonly-');
 });
 
 test('dispatch is classified before the claude prefix it shares', () => {

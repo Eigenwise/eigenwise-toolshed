@@ -31,8 +31,8 @@ store.setCategory({
   enabled: true,
 });
 
-for (const id of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation']) {
-  store.setCategory({ id, name: id, route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
+for (const id of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation', 'visual-review']) {
+  store.setCategory({ id, name: id, route: { model: 'sonnet', effort: 'high' }, fallback: null, readonly: true, enabled: true });
 }
 
 function createFixture(title?: any, category = 'dispatch.lifecycle') {
@@ -97,9 +97,10 @@ test('batch launch records every prepared ticket and binds the shared native age
 });
 
 test('read-only category classes dispatch through restricted stable executors', () => {
-  for (const category of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation']) {
+  for (const category of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation', 'visual-review']) {
     const ticket = createFixture(`${category} fixture`, category);
     const prepared = store.prepareDispatch(slug, ticket.ref);
+    assert.equal(prepared.ticket.dispatch.readonly, true);
     assert.equal(prepared.ticket.dispatchExecutor, 'sidequest-exec-readonly-high');
     assert.equal(store.claimTicket(slug, ticket.ref, 'read-only-test-worker', {
       token: prepared.token,
@@ -127,6 +128,40 @@ test('read-only category classes dispatch through restricted stable executors', 
     source: 'test',
   }).ok, true);
   assert.equal(store.releaseTicket(slug, override.ref, 'override-test-worker', { source: 'test' }).ok, true);
+
+  const readOnlyOverride = store.createTicket(slug, {
+    title: 'read-only coding fixture',
+    category: 'coding.normal',
+    readonly: true,
+    source: 'test',
+  });
+  assert.equal(store.getTicket(slug, readOnlyOverride.ref).readonlyOverride, true);
+  const readOnlyOverridePrepared = store.prepareDispatch(slug, readOnlyOverride.ref);
+  assert.equal(readOnlyOverridePrepared.ticket.dispatch.readonly, true);
+  assert.match(readOnlyOverridePrepared.ticket.dispatchExecutor, /readonly/);
+  assert.match(store.dispatchWarnings(readOnlyOverridePrepared.ticket).join('\n'), /readonly override active/);
+  assert.equal(store.claimTicket(slug, readOnlyOverride.ref, 'read-only-override-worker', {
+    token: readOnlyOverridePrepared.token,
+    executor: readOnlyOverridePrepared.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, readOnlyOverride.ref, 'read-only-override-worker', { source: 'test' }).ok, true);
+
+  const contradiction = store.createTicket(slug, {
+    title: 'contradictory spike fixture',
+    category: 'spike-investigation',
+    files: ['tracked.js'],
+    source: 'test',
+  });
+  assert.match(store.ticketPlanningWarnings(store.getTicket(slug, contradiction.ref)).join('\n'), /Readonly category contradicts declared write intent/);
+  const contradictionPrepared = store.prepareDispatch(slug, contradiction.ref);
+  assert.match(store.dispatchWarnings(contradictionPrepared.ticket).join('\n'), /Readonly category contradicts declared write intent/);
+  assert.equal(store.claimTicket(slug, contradiction.ref, 'contradiction-worker', {
+    token: contradictionPrepared.token,
+    executor: contradictionPrepared.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, contradiction.ref, 'contradiction-worker', { source: 'test' }).ok, true);
 
   const updatedOverride = createFixture('updated mutable spike fixture', 'spike-investigation');
   assert.equal(store.updateTicket(slug, updatedOverride.ref, { readonly: false, source: 'test' }).readonlyOverride, false);

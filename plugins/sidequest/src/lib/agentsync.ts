@@ -426,9 +426,11 @@ function ticketRouteMarker(ticket?: any) {
 function ticketCloseout(ticket?: any) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   const effort = resolved && (resolved.effort || ticket.effort);
-  return resolved && effort
-    ? `Closeout: submit for repo work; otherwise done --model ${resolved.runsModel} --effort ${effort}. After submit, keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative. Non-repo done comments still carry the full report. Then stop without a routine SendMessage.`
-    : null;
+  if (!resolved || !effort) return null;
+  if (ticket?.dispatch?.readonly === true) {
+    return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
+  }
+  return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report. For non-repo output, close with done --model ${resolved.runsModel} --effort ${effort}. After submit, keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative. Non-repo done comments still carry the full report. Then stop without a routine SendMessage.`;
 }
 
 function ticketWorktreeSetup(ticket?: any, slug?: any) {

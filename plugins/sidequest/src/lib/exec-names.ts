@@ -8,13 +8,6 @@ export const READ_ONLY_DISPATCH_PREFIX = 'sidequest-exec-dispatch-readonly-';
 export const TICKET_PREFIX = 'sidequest-sq-';
 export const LEGACY_TICKET_PREFIX = 'sidequest-ticket-';
 
-export const READ_ONLY_CATEGORY_IDS = Object.freeze([
-  'codebase-exploration',
-  'research',
-  'review-audit',
-  'spike-investigation',
-]);
-
 export type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'ticket' | 'legacy_ticket' | 'unknown';
 export interface ExecutorClassification {
   kind: ExecutorKind;
@@ -101,10 +94,6 @@ export function stableReadOnlyClaudeName(effort: Effort): string {
 
 export function stableReadOnlyDispatchName(effort: Effort): string {
   return `${READ_ONLY_DISPATCH_PREFIX}${effort}`;
-}
-
-export function isReadOnlyCategory(categoryId: unknown): boolean {
-  return typeof categoryId === 'string' && (READ_ONLY_CATEGORY_IDS as readonly string[]).includes(categoryId);
 }
 
 export function classify(name: unknown): ExecutorClassification {

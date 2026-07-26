@@ -23,14 +23,12 @@ __export(exec_names_exports, {
   DISPATCH_PREFIX: () => DISPATCH_PREFIX,
   EFFORTS: () => EFFORTS,
   LEGACY_TICKET_PREFIX: () => LEGACY_TICKET_PREFIX,
-  READ_ONLY_CATEGORY_IDS: () => READ_ONLY_CATEGORY_IDS,
   READ_ONLY_CLAUDE_PREFIX: () => READ_ONLY_CLAUDE_PREFIX,
   READ_ONLY_DISPATCH_PREFIX: () => READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX: () => TICKET_PREFIX,
   classify: () => classify,
   dispatchLaunchName: () => dispatchLaunchName,
   isEffort: () => isEffort,
-  isReadOnlyCategory: () => isReadOnlyCategory,
   refSlug: () => refSlug,
   stableClaudeName: () => stableClaudeName,
   stableDispatchName: () => stableDispatchName,
@@ -46,12 +44,6 @@ const READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 const READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
 const TICKET_PREFIX = "sidequest-sq-";
 const LEGACY_TICKET_PREFIX = "sidequest-ticket-";
-const READ_ONLY_CATEGORY_IDS = Object.freeze([
-  "codebase-exploration",
-  "research",
-  "review-audit",
-  "spike-investigation"
-]);
 function isEffort(value) {
   return typeof value === "string" && EFFORTS.includes(value);
 }
@@ -134,9 +126,6 @@ function stableReadOnlyClaudeName(effort) {
 function stableReadOnlyDispatchName(effort) {
   return `${READ_ONLY_DISPATCH_PREFIX}${effort}`;
 }
-function isReadOnlyCategory(categoryId) {
-  return typeof categoryId === "string" && READ_ONLY_CATEGORY_IDS.includes(categoryId);
-}
 function classify(name) {
   if (typeof name !== "string" || !name) return { kind: "unknown", effort: null };
   if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
@@ -170,14 +159,12 @@ function classify(name) {
   DISPATCH_PREFIX,
   EFFORTS,
   LEGACY_TICKET_PREFIX,
-  READ_ONLY_CATEGORY_IDS,
   READ_ONLY_CLAUDE_PREFIX,
   READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX,
   classify,
   dispatchLaunchName,
   isEffort,
-  isReadOnlyCategory,
   refSlug,
   stableClaudeName,
   stableDispatchName,

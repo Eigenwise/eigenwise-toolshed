@@ -44,6 +44,22 @@ test('default categories match the current defaults contract', () => {
   assert.throws(() => store.setCategory('general', { enabled: false }), /cannot be disabled/);
 });
 
+test('category readonly is persisted and can be overridden per project', () => {
+  const { store, slug } = freshStore();
+  store.setCategory({
+    id: 'readonly-policy-test',
+    name: 'Readonly policy test',
+    route: { model: 'opus', effort: 'high' },
+    fallback: null,
+    readonly: true,
+    enabled: true,
+  });
+  assert.equal(store.getCategory('readonly-policy-test').readonly, true);
+
+  store.setProjectCategory(slug, 'readonly-policy-test', 'OVERRIDE', { readonly: false });
+  assert.equal(store.getCategory('readonly-policy-test', { project: slug }).readonly, false);
+});
+
 test('fallback chain resolves primary, category fallback, global fallback, and safety net', () => {
   const catalog = [{ slug: 'codex-gpt-test', id: 'gpt-test', label: 'GPT Test' }];
   const { store, slug, home } = freshStore({ catalog });

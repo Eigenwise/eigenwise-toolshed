@@ -29,11 +29,11 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { dispatchLaunchName, isReadOnlyCategory, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
+const { dispatchLaunchName, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const db = require('./db.js');
-const { ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('./category-defaults.js');
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels } = require('./discovery.js');
@@ -326,6 +326,39 @@ function refreshRoutingProfileSeeds(handle?: any) {
   });
 }
 
+function refreshReadonlyCategorySeeds(handle?: any) {
+  const readonlyIds = new Set([
+    ...DEFAULT_CATEGORIES.filter((category: any) => category.readonly === true).map((category: any) => category.id),
+    'hand-analysis',
+  ]);
+  const affected = new Set<string>();
+  let changed = false;
+  db.txn(handle, () => {
+    const updateProfileEntry = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
+    const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
+    const now = new Date().toISOString();
+    for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
+      let category: any;
+      try { category = JSON.parse(row.data); } catch (_: any) { continue; }
+      if (!readonlyIds.has(category?.id) || category.readonly !== undefined) continue;
+      category.readonly = true;
+      updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
+      for (const project of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) affected.add(String(project.project));
+      changed = true;
+    }
+    for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
+      let category: any;
+      try { category = JSON.parse(row.data); } catch (_: any) { continue; }
+      if (!readonlyIds.has(row.id) || category.readonly !== undefined) continue;
+      category.readonly = true;
+      updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
+      affected.add(String(row.project));
+      changed = true;
+    }
+    if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
+  });
+}
+
 function database() {
   const root = homeRoot();
   let handle = dbByHome.get(root);
@@ -333,6 +366,7 @@ function database() {
     handle = db.openDb(root);
     migrateIfNeeded(handle, root);
     refreshRoutingProfileSeeds(handle);
+    refreshReadonlyCategorySeeds(handle);
     dbByHome.set(root, handle);
   }
   return handle;
@@ -978,6 +1012,7 @@ function normalizeCategory(raw?: any) {
     fallback,
     contract: String(raw.contract || '').trim(),
     artifactRoots: normalizeArtifactRoots(raw.artifactRoots),
+    readonly: raw.readonly === true,
     enabled: raw.enabled !== false,
   };
 }
@@ -1076,7 +1111,7 @@ function setProjectCategory(project?: any, id?: any, kind?: any, data?: any) {
   } else if (normalizedKind === 'OVERRIDE') {
     if (!base) throw new Error(`Project category OVERRIDE "${normalizedId}" requires a profile category.`);
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Project category OVERRIDE requires a patch object.');
-    const allowed = new Set(['name', 'description', 'contract', 'artifactRoots', 'route', 'fallback']);
+    const allowed = new Set(['name', 'description', 'contract', 'artifactRoots', 'readonly', 'route', 'fallback']);
     for (const key of Object.keys(data)) if (!allowed.has(key)) throw new Error(`Project category OVERRIDE cannot patch "${key}".`);
     requireArtifactRoots(data.artifactRoots);
     if (data.route != null && !normalizeRoute(data.route)) throw new Error('Project category OVERRIDE route requires a valid model and effort.');
@@ -2365,6 +2400,14 @@ function ticketCategoryWarnings(ticket?: any) {
   return ['coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.'];
 }
 
+function readonlyCategoryWriteIntentWarning(ticket?: any) {
+  if (!categoryReadOnly(ticket)) return null;
+  const writesFiles = normalizeFiles(ticket.files).length > 0;
+  const writesContracts = (normalizeContracts(ticket.contracts).changes || []).length > 0;
+  if (!writesFiles && !writesContracts) return null;
+  return 'Readonly category contradicts declared write intent (files or changes). Resolve the category or set an explicit readonly override before dispatch.';
+}
+
 function dispatchDescriptionError(ticket?: any) {
   if (!ticket || !ticket.model || !ticket.effort) return null;
   if (String(ticket.description || '').trim().length >= DISPATCH_DESCRIPTION_MIN) return null;
@@ -2388,7 +2431,13 @@ function dispatchWarnings(ticket?: any, slug?: any) {
   if (claudeWebSearchUnavailable(ticket)) {
     warnings.push('Dispatch warning: WebSearch is unavailable on this Claude xhigh/max route. Put web research in a research-category ticket.');
   }
-  if (readOnlyOverrideActive(ticket)) warnings.push('readonly override active: this read-only category routes through the writing executor.');
+  if (readOnlyOverrideActive(ticket)) {
+    warnings.push(ticket.readonlyOverride
+      ? 'readonly override active: this ticket closes with done + comment despite its category default.'
+      : 'readonly override active: this read-only category routes through the writing executor.');
+  }
+  const contradiction = readonlyCategoryWriteIntentWarning(ticket);
+  if (contradiction) warnings.push(`Dispatch warning: ${contradiction}`);
   const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
   if (worktreeWarning) warnings.push(worktreeWarning);
   const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
@@ -2439,8 +2488,7 @@ function nonRepoExternalOutput(ticket?: any, files?: any) {
   const outside = externalDeclaredFiles(declaredFiles);
   return declaredFiles.length > 0
     && outside.length === declaredFiles.length
-    && isReadOnlyCategory(ticketCategory(ticket))
-    && !readOnlyOverrideActive(ticket);
+    && dispatchReadOnly(ticket);
 }
 
 // Route by remaining uncertainty, not original difficulty: once an investigation has
@@ -2519,6 +2567,8 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
     }
   }
   warnings.push(...presolvedRoutingWarnings(ticket));
+  const contradiction = readonlyCategoryWriteIntentWarning(ticket);
+  if (contradiction) warnings.push(contradiction);
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
   const absent = ticket.files.filter((file?: any) => !fs.existsSync(path.resolve(projectPath, file)));
   if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(', ')}.`);
@@ -2526,19 +2576,23 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
 }
 
 function normalizeReadonlyOverride(value?: any) {
-  return value === false ? false : null;
+  return typeof value === 'boolean' ? value : null;
 }
 
 function requestedReadonlyOverride(fields?: any) {
   return normalizeReadonlyOverride(fields?.readonlyOverride === undefined ? fields?.readonly : fields.readonlyOverride);
 }
 
+function categoryReadOnly(ticket?: any) {
+  return ticket?.category?.readonly === true;
+}
+
 function readOnlyOverrideActive(ticket?: any) {
-  return ticket?.readonlyOverride === false && isReadOnlyCategory(ticketCategory(ticket));
+  return typeof ticket?.readonlyOverride === 'boolean';
 }
 
 function dispatchReadOnly(ticket?: any) {
-  return isReadOnlyCategory(ticketCategory(ticket)) && !readOnlyOverrideActive(ticket);
+  return typeof ticket?.readonlyOverride === 'boolean' ? ticket.readonlyOverride : categoryReadOnly(ticket);
 }
 
 function createTicket(slug?: any, fields?: any) {

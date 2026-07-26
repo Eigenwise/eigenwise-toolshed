@@ -84,6 +84,10 @@ the installed plugin; SQLite data at `~/.claude/sidequest/sidequest.db` (overrid
 
 A board points at one profile (its full category set) plus local ADD/OVERRIDE/DETACH/DISABLE
 rows. Mutations take exactly one of `--profile`/`--project`; see `references/routing-details.md`.
+A category's `readonly` flag picks the restricted executor and its `done` closeout path. A ticket may
+pass `--readonly true|false` to override that category default for its prepared dispatch. Read-only
+categories that declare files or contract changes warn before dispatch; resolve the mismatch or set
+an explicit override.
 
 ## Open the dashboard
 

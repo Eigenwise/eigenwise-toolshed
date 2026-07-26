@@ -421,7 +421,7 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.ok(briefing.includes(`project: ${JSON.stringify('C:\\dev\\fixture')}`));
   assert.ok(briefing.includes('token: "instant-token-334"'));
   assert.match(briefing, /Do not pass `direct`\. Do not substitute the model slug for `executor`\./);
-  assert.match(briefing, /Closeout: submit for repo work; otherwise done --model codex-gpt-5-6-terra --effort high\./);
+  assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report\./);
   assert.match(briefing, /keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative/);
   assert.match(briefing, /Non-repo done comments still carry the full report/);
   assert.match(briefing, /Priority: urgent/);
@@ -527,8 +527,19 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
     dispatchExecutor: 'sidequest-exec-high', category: {},
   }, 'claude-token-347');
   assert.doesNotMatch(briefing, /\[sidequest-route model=/);
-  assert.match(briefing, /Closeout: submit for repo work; otherwise done --model opus --effort high\./);
+  assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report\./);
   assert.match(briefing, /reference to the submission instead of repeating its narrative/);
+});
+
+test('renderTicketBriefing makes the prepared read-only closeout path explicit', () => {
+  clearCatalog();
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-872', title: 'Read-only closeout', model: 'opus', effort: 'high',
+    dispatchExecutor: 'sidequest-exec-readonly-high', category: {}, dispatch: { readonly: true },
+  }, 'readonly-token-872');
+  assert.match(briefing, /Closeout: this prepared dispatch is read-only\./);
+  assert.match(briefing, /done --model opus --effort high/);
+  assert.match(briefing, /Do not commit or submit\./);
 });
 
 test('renderTicketBriefing omits closeout when the ticket route is unresolved', () => {
