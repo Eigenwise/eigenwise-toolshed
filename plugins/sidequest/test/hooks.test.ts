@@ -827,9 +827,49 @@ test('Bash Windows-path guard: allows a single-quoted backslash path', () => {
   assert.strictEqual(runBashWindowsPathGuard("node script.js 'C:\\Users\\kenny\\lookup4.err'"), null);
 });
 
-test('Bash Windows-path guard: denies a double-quoted backslash path', () => {
-  const out = runBashWindowsPathGuard('node script.js "C:\\Users\\kenny\\lookup4.err"');
+test('Bash Windows-path guard: allows a double-quoted backslash path', () => {
+  assert.strictEqual(runBashWindowsPathGuard('node script.js "C:\\Users\\kenny\\lookup4.err"'), null);
+});
+
+test('Bash Windows-path guard: denies a double-quoted path whose backslash escapes a dollar', () => {
+  const out = runBashWindowsPathGuard('node script.js "C:\\Users\\kenny\\$name\\lookup4.err"');
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /double quotes eat the backslash/);
+});
+
+test('Bash Windows-path guard: allows writing a scratch script through a heredoc', () => {
+  const command = [
+    'cat > "C:\\Users\\kenny\\AppData\\Local\\Temp\\claude\\scratch\\probe.js" <<\'EOF\'',
+    'const root = "C:\\dev\\eigenwise\\toolshed";',
+    'const raw = C:\\dev\\eigenwise\\toolshed;',
+    'console.log(root, raw);',
+    'EOF',
+  ].join('\n');
+  assert.strictEqual(runBashWindowsPathGuard(command), null);
+});
+
+test('Bash Windows-path guard: allows a plain-text heredoc append', () => {
+  const command = 'cat >> notes.md <<\'EOF\'\n## findings\n- one\n- two\nEOF\n';
+  assert.strictEqual(runBashWindowsPathGuard(command), null);
+});
+
+test('Bash Windows-path guard: allows a heredoc body inside a command substitution', () => {
+  const command = 'echo "$(cat <<\'EOF\'\nC:\\dev\\atomic-agents\\notes\nEOF\n)"';
+  assert.strictEqual(runBashWindowsPathGuard(command), null);
+});
+
+test('Bash Windows-path guard: a stray quote in a comment does not leak into a heredoc body', () => {
+  for (const comment of ['# writes the "notes" file', "# don't rewrite it"]) {
+    const command = `${comment}\ncat > notes.md <<'EOF'\nC:\\dev\\atomic-agents\\notes\nEOF\n`;
+    assert.strictEqual(runBashWindowsPathGuard(command), null, comment);
+  }
+});
+
+test('Bash Windows-path guard: denies an unquoted path on the heredoc-opening line', () => {
+  const token = 'C:\\Users\\kenny\\notes.md';
+  const out = runBashWindowsPathGuard(`cat > ${token} <<'EOF'\nplain body\nEOF\n`);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(token.replace(/\\/g, '\\\\')));
 });
 
 test('Bash Windows-path guard: still denies an unquoted path after a heredoc body', () => {

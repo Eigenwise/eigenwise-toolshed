@@ -61,6 +61,7 @@ function writeDeny(hookEventName, permissionDecisionReason) {
 }
 
 // src/hooks/guard-bash-windows-paths.ts
+var WINDOWS_PATH = /^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/;
 function hereDocAt(command, index) {
   let cursor = index + 2;
   const stripTabs = command[cursor] === "-";
@@ -95,9 +96,19 @@ function escapedNewline(command, index) {
   for (let cursor = index - 1; command[cursor] === "\\"; cursor -= 1) backslashes += 1;
   return backslashes % 2 === 1;
 }
-function unquotedWindowsPath(command) {
+function commentStart(command, index) {
+  if (command[index] !== "#") return false;
+  const previous = command[index - 1];
+  return previous === void 0 || /[\s;&|(]/.test(previous);
+}
+function mangledInsideDoubleQuotes(command, token, index) {
+  if (/\\\$/.test(token)) return true;
+  return token.endsWith("\\") && command[index + token.length] === "\n";
+}
+function windowsPath(command) {
   let quote = null;
   let hereDocs = [];
+  const substitutions = [];
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index];
     if (quote === "single") {
@@ -109,14 +120,30 @@ function unquotedWindowsPath(command) {
       hereDocs = [];
       continue;
     }
+    if (character === "$" && command[index + 1] === "(") {
+      substitutions.push(quote);
+      quote = null;
+      index += 1;
+      continue;
+    }
+    if (character === ")" && substitutions.length > 0) {
+      quote = substitutions.pop() ?? null;
+      continue;
+    }
     if (quote === "double") {
-      const token2 = command.slice(index).match(/^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/)?.[0];
-      if (token2) return token2;
+      const token2 = command.slice(index).match(WINDOWS_PATH)?.[0];
+      if (token2 && mangledInsideDoubleQuotes(command, token2, index)) return { token: token2, quoted: true };
       if (character === "\\") {
         index += 1;
       } else if (character === '"') {
         quote = null;
       }
+      continue;
+    }
+    if (commentStart(command, index)) {
+      const lineEnd = command.indexOf("\n", index);
+      if (lineEnd < 0) break;
+      index = lineEnd - 1;
       continue;
     }
     if (character === "'") {
@@ -135,8 +162,8 @@ function unquotedWindowsPath(command) {
         continue;
       }
     }
-    const token = command.slice(index).match(/^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/)?.[0];
-    if (token) return token;
+    const token = command.slice(index).match(WINDOWS_PATH)?.[0];
+    if (token) return { token, quoted: false };
   }
   return null;
 }
@@ -146,9 +173,9 @@ function main() {
   if (!input || stringField(input, "tool_name") !== "Bash") return;
   const toolInput = input.tool_input;
   const command = toolInput !== null && typeof toolInput === "object" && !Array.isArray(toolInput) ? String(toolInput.command || "") : "";
-  const token = unquotedWindowsPath(command);
-  if (!token) return;
-  writeDeny("PreToolUse", `sidequest: unquoted Windows path in a POSIX shell (${token}) - backslashes are eaten and the path collapses into a literal filename in cwd; quote the path or write it with forward slashes (C:/Users/...).`);
+  const found = windowsPath(command);
+  if (!found) return;
+  writeDeny("PreToolUse", found.quoted ? `sidequest: double quotes eat the backslash in this Windows path (${found.token}) - a backslash before $ or a line break is not literal there; single-quote it or write it with forward slashes (C:/Users/...).` : `sidequest: unquoted Windows path in a POSIX shell (${found.token}) - backslashes are eaten and the path collapses into a literal filename in cwd; quote the path or write it with forward slashes (C:/Users/...).`);
 }
 try {
   main();
