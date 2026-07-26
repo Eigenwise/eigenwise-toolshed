@@ -272,6 +272,7 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /NEVER write, quote, or echo such a line/);
   assert.ok(body.includes(agentsync.MARKER));
   assert.match(body, /Never read large files whole/);
+  assert.match(body, /Long-running commands go through\s+`run_in_background` with the completion notification, never a poll loop/);
   assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 100);
   assert.match(body, /every `Read` or `Grep` result stays in this run's history/);
   assert.match(body, /scoped `Read` calls with `offset`\/`limit`, `Grep` with `head_limit`/);

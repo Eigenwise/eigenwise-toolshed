@@ -31,6 +31,7 @@ const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_BASH_WINDOWS_PATHS = path.join(HOOKS, 'guard-bash-windows-paths.js');
 const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
+const REPEATED_COMMAND_WARN = path.join(HOOKS, 'repeated-command-warn.js');
 const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
 const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
@@ -361,6 +362,33 @@ test('pre-tool hook soft warning fires on crossing the threshold, once', () => {
 test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', () => {
   assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_id: 'main-thread' }), null);
   assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_type: 'explore', agent_id: 'other-agent' }), null);
+});
+
+test('pre-tool repeated-command hook ignores main-thread and unrelated subagent calls', () => {
+  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { tool_name: 'Bash', agent_id: 'main-thread', tool_input: { command: 'npm test' } }), null);
+  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { tool_name: 'Bash', agent_type: 'explore', agent_id: 'other-agent', tool_input: { command: 'npm test' } }), null);
+});
+
+test('pre-tool repeated-command hook warns on the third repeat and every fifth after', () => {
+  const agentId = `repeated-command-${Date.now()}`;
+  const payload = { tool_name: 'Bash', agent_type: 'sidequest-exec-high', agent_id: agentId, tool_input: { command: 'npm   run\n test' } };
+  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
+  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run test' } }), null);
+  const third = runHook(REPEATED_COMMAND_WARN, payload);
+  assert.equal(third, 'sidequest: you have run this exact command 3 times; if you are waiting on something, run it with run_in_background and let the completion notification wake you — polling burns ~14s and ~60k tokens per call');
+  for (let i = 0; i < 4; i += 1) assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
+  assert.match(runHook(REPEATED_COMMAND_WARN, payload), /you have run this exact command 3 times/);
+  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run typecheck' } }), null);
+  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run typecheck' } }), null);
+  assert.match(runHook(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run typecheck' } }), /you have run this exact command 3 times/);
+});
+
+test('pre-tool repeated-command hook warns for PowerShell commands', () => {
+  const agentId = `repeated-command-powershell-${Date.now()}`;
+  const payload = { tool_name: 'PowerShell', agent_type: 'sidequest-exec-high', agent_id: agentId, tool_input: { command: 'npm test' } };
+  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
+  assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
+  assert.match(runHook(REPEATED_COMMAND_WARN, payload), /polling burns ~14s and ~60k tokens per call/);
 });
 
 test('pre-tool inline-work hook records activity without injecting repeat reminders', () => {
@@ -1316,6 +1344,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'TaskOutput'
     && entry.hooks.some((hook?: any) => hook.command.includes('guard-task-output.js'))), 'the TaskOutput guard must be registered');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
+    && entry.hooks.some((hook?: any) => hook.command.includes('repeated-command-warn.js'))), 'the repeated-command warning must run for shell commands');
   assert.ok(config.hooks.TeammateIdle.some((entry?: any) => entry.hooks
     .some((hook?: any) => hook.command.includes('teammate-idle.js'))), 'terminal teammates must stop when idle');
 
