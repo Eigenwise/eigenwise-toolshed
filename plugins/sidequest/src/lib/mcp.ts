@@ -210,6 +210,38 @@ function requireKnownModel(action?: any, value?: any, ticket?: any) {
   return exec.runsModel;
 }
 
+const NO_OP_PATHS_SHOWN = 8;
+
+function pathList(paths?: any) {
+  const all = Array.isArray(paths) ? paths : [];
+  const shown = all.slice(0, NO_OP_PATHS_SHOWN).join(', ');
+  return all.length > NO_OP_PATHS_SHOWN ? `${shown} (+${all.length - NO_OP_PATHS_SHOWN} more)` : shown;
+}
+
+// A write-routed dispatch that produced nothing has no submission to hand in,
+// and no dispatch-time flag could have predicted that: whether a run writes is
+// an OUTCOME. So when the write-path guard refuses a done, go look. The board
+// already knows where this executor works, and a declared scope with nothing
+// uncommitted and nothing committed past the dispatch baseline is a refusal
+// with nothing behind it. Anything else stands (SQ-923).
+function provenNoOpCloseout(slug: any, ticket: any) {
+  const workspace = store.dispatchWorkspace(slug, ticket);
+  if (!workspace) {
+    return { ok: false as const, detail: 'The board cannot locate this dispatch\'s worktree, so it cannot confirm the run wrote nothing.' };
+  }
+  const scope = store.dispatchDeclaredFiles(ticket);
+  const pending = commitScope.scopedWorkPending(workspace.root, scope, { base: workspace.base });
+  if (!pending.ok) {
+    return { ok: false as const, detail: `Could not inspect the declared scope in ${workspace.root}: ${pending.message || pending.reason}.` };
+  }
+  if (!pending.pending) return { ok: true as const, root: workspace.root };
+  const detail = [
+    pending.working.length ? `uncommitted ${pathList(pending.working)}` : null,
+    pending.committed.length ? `committed but not submitted ${pathList(pending.committed)}` : null,
+  ].filter(Boolean).join('; ');
+  return { ok: false as const, detail: `Declared scope in ${workspace.root} is not a no-op: ${detail}.` };
+}
+
 /* ------------------------------------------------------------------ *
  *  Tools
  *
@@ -1044,7 +1076,19 @@ const TOOLS: ToolDefinition[] = [
       const body = requiredFinalReport(args, 'done');
       const ticket = store.getTicket(slug, args.ref);
       const model = requireKnownModel('done', args.model, ticket);
-      const res = store.completeTicket(slug, args.ref, by, { source: 'mcp', model, effort: args.effort, body, sessionId: sessionOf(args) });
+      const opts = { source: 'mcp', model, effort: args.effort, body, sessionId: sessionOf(args) };
+      let res = store.completeTicket(slug, args.ref, by, opts);
+      if (!res.ok && res.reason === 'submission_required') {
+        const noOp = provenNoOpCloseout(slug, res.ticket);
+        if (noOp.ok) {
+          res = store.completeTicket(slug, args.ref, by, Object.assign({}, opts, {
+            cleanDeclaredScope: true,
+            completionProvenance: { closeout: 'no-repo-changes', worktree: noOp.root },
+          }));
+        } else {
+          res.message = `${res.message} ${noOp.detail}`;
+        }
+      }
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);
     },

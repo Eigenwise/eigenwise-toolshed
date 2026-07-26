@@ -327,6 +327,56 @@ function isAncestor(cwd: string, ancestor: string, descendant: string): boolean 
   }
 }
 
+function parentCommits(cwd: string, commit: string): string[] {
+  const parents = gitResult(cwd, ['rev-list', '--parents', '-n', '1', commit]);
+  return parents.ok ? parents.value.trim().split(/\s+/).slice(1).filter(Boolean) : [];
+}
+
+// git's canonical empty tree. A repository's root commit has no parent to name
+// as a submission base, and the range metadata is a pair of hex object ids, so
+// the empty tree stands in for "everything before this commit" — `diff-tree
+// --root` already reads root commits, so the scoped paths still resolve.
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+function isEmptyTreeBase(value: unknown): boolean {
+  return String(value || '').trim().toLowerCase() === EMPTY_TREE;
+}
+
+export function headCommit(cwd: string): string | null {
+  const head = resolvedCommit(cwd, 'HEAD');
+  return head.ok ? head.value : null;
+}
+
+// What a done-time caller needs before it may claim a run wrote nothing: the
+// declared scope's uncommitted paths, plus the scoped paths this checkout has
+// already committed past `base`. Either one means the ticket owes a submission
+// rather than a closeout (SQ-923).
+export function scopedWorkPending(cwd: string, files: unknown, options?: unknown) {
+  const opts = isRecord(options) ? options : {};
+  const scopes = scopedPaths(files);
+  if (!scopes.length) return { ok: false as const, reason: 'missing_scope' };
+  const baseName = String(opts.base || '').trim();
+  if (!baseName) return { ok: false as const, reason: 'missing_base' };
+  try {
+    const root = repoRoot(cwd);
+    const working = workingPaths(root).filter((file) => isInScope(file, scopes));
+    const base = resolvedCommit(root, baseName);
+    if (!base.ok) return { ok: false as const, reason: 'missing_base', message: base.message };
+    const tip = resolvedCommit(root, 'HEAD');
+    if (!tip.ok) return { ok: false as const, reason: 'missing_commit', message: tip.message };
+    let committed: string[] = [];
+    if (base.value !== tip.value) {
+      const list = gitResult(root, ['rev-list', `${base.value}..${tip.value}`]);
+      if (!list.ok) return { ok: false as const, reason: 'git_error', message: list.message };
+      const commits = list.value ? list.value.split(/\r?\n/).filter(Boolean) : [];
+      if (commits.length) committed = rangePaths(root, commits).filter((file) => isInScope(file, scopes));
+    }
+    return { ok: true as const, root, working, committed, pending: working.length > 0 || committed.length > 0 };
+  } catch (error) {
+    return { ok: false as const, reason: 'git_error', message: errorMessage(error) };
+  }
+}
+
 export function submissionRange(cwd: string, options: unknown) {
   const opts = isRecord(options) ? options : {};
   const gitRef = String(opts.gitRef || '').trim();
@@ -352,7 +402,8 @@ export function submissionRange(cwd: string, options: unknown) {
   const mergeBase = gitResult(cwd, ['merge-base', currentUpstream.value, tip.value]);
   if (!mergeBase.ok || !mergeBase.value) return { ok: false, reason: 'unrelated_history', upstream, tip: tip.value, message: mergeBase.ok ? undefined : mergeBase.message };
 
-  const requestedBase = opts.base ? resolvedCommit(cwd, opts.base) : null;
+  const rootBase = isEmptyTreeBase(opts.base);
+  const requestedBase = opts.base && !rootBase ? resolvedCommit(cwd, opts.base) : null;
   if (requestedBase && !requestedBase.ok) return { ok: false, reason: 'missing_base', message: requestedBase.message };
   const integrationBranch = requestedBase ? resolvedCommit(cwd, opts.integrationBranch || upstream) : null;
   const baseIsOnTip = !!requestedBase && isAncestor(cwd, requestedBase.value, tip.value);
@@ -382,7 +433,7 @@ export function submissionRange(cwd: string, options: unknown) {
   }
 
   let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
-  if (!requestedBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
+  if (!requestedBase && !rootBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
     const candidates = new Set<string>();
     for (const name of opts.baseCandidates) {
       const candidate = resolvedCommit(cwd, name);
@@ -399,15 +450,43 @@ export function submissionRange(cwd: string, options: unknown) {
     }
   }
 
-  const commitList = gitResult(cwd, ['rev-list', '--reverse', `${effectiveBase}..${tip.value}`]);
-  if (!commitList.ok) return { ok: false, reason: 'git_error', message: commitList.message };
-  const commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
-  if (!commits.length) return { ok: false, reason: 'empty_range', base: effectiveBase, tip: tip.value };
+  let commits: string[];
+  let rootCommit = false;
+  if (rootBase) {
+    // Re-validating a stored root-commit submission: there is no parent range to
+    // walk, so confirm the tip really is parentless and take the commit itself.
+    if (parentCommits(cwd, tip.value).length) {
+      return { ok: false, reason: 'base_not_reachable', base: EMPTY_TREE, actualBase: mergeBase.value, upstream, tip: tip.value };
+    }
+    rootCommit = true;
+    effectiveBase = EMPTY_TREE;
+    commits = [tip.value];
+  } else {
+    const commitList = gitResult(cwd, ['rev-list', '--reverse', `${effectiveBase}..${tip.value}`]);
+    if (!commitList.ok) return { ok: false, reason: 'git_error', message: commitList.message };
+    commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
+    // An empty range does not mean nothing was done — it means the tip is not
+    // AHEAD of the integration branch, which is what happens whenever the scoped
+    // commit IS the branch tip: a greenfield repo whose first commit is the board
+    // commit, or a shared-tree dispatch whose commit advanced main. Merge-base and
+    // tip are then the same commit. Recover the way the orchestrator did by hand,
+    // submitting against the tip's own parent (SQ-923).
+    if (!commits.length && !requestedBase && effectiveBase === tip.value) {
+      const tipParents = parentCommits(cwd, tip.value);
+      if (tipParents.length > 1) return { ok: false, reason: 'merge_commit', commit: tip.value };
+      rootCommit = tipParents.length === 0;
+      effectiveBase = rootCommit ? EMPTY_TREE : tipParents[0]!;
+      commits = [tip.value];
+    }
+    if (!commits.length) return { ok: false, reason: 'empty_range', base: effectiveBase, tip: tip.value };
+  }
 
-  const parents = gitResult(cwd, ['rev-list', '--parents', `${effectiveBase}..${tip.value}`]);
-  if (!parents.ok) return { ok: false, reason: 'git_error', message: parents.message };
-  const mergeCommit = parents.value.split(/\r?\n/).find((line) => line.trim().split(/\s+/).length > 2);
-  if (mergeCommit) return { ok: false, reason: 'merge_commit', commit: mergeCommit.trim().split(/\s+/)[0] };
+  if (!rootCommit) {
+    const parents = gitResult(cwd, ['rev-list', '--parents', `${effectiveBase}..${tip.value}`]);
+    if (!parents.ok) return { ok: false, reason: 'git_error', message: parents.message };
+    const mergeCommit = parents.value.split(/\r?\n/).find((line) => line.trim().split(/\s+/).length > 2);
+    if (mergeCommit) return { ok: false, reason: 'merge_commit', commit: mergeCommit.trim().split(/\s+/)[0] };
+  }
 
   try {
     return {

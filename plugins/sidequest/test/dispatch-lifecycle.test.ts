@@ -721,4 +721,31 @@ test('the harness TeammateIdle payload leaves a working executor alone', () => {
   assert.equal(runTeammateIdle(dispatch.agentName), null);
 });
 
+// SQ-923: a shared-tree executor commits on the integration branch itself, so
+// "wrote nothing" and "committed and never submitted" look identical after the
+// fact unless the dispatch remembers where the run started.
+test('a prepared dispatch records the commit its run starts from, and where its executor works', () => {
+  const ticket = createFixture('dispatch baseline for closeout proof');
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'baseline-session' });
+  assert.equal(prepared.ticket.dispatch.baseCommit, head);
+
+  assert.equal(store.dispatchWorkspace(slug, prepared.ticket), null, 'an unbound isolated dispatch has no locatable worktree');
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: 'baseline-session',
+    agentName: 'baseline-agent',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent('baseline-session', prepared.ticket.dispatchExecutor, 'a923baseline', 'baseline-agent').ok, true);
+  const worktree = path.join(PROJECT, '.claude', 'worktrees', 'agent-a923baseline');
+  assert.equal(store.dispatchWorkspace(slug, store.getTicket(slug, ticket.ref)), null, 'a worktree that is not there is not a workspace');
+  execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'agent-a923baseline', worktree, 'HEAD'], { cwd: PROJECT });
+  assert.deepEqual(store.dispatchWorkspace(slug, store.getTicket(slug, ticket.ref)), { root: worktree, base: head });
+
+  const shared = createFixture('shared-tree dispatch baseline');
+  const preparedShared = store.prepareDispatch(slug, shared.ref, { sharedTree: true });
+  assert.deepEqual(store.dispatchWorkspace(slug, preparedShared.ticket), { root: PROJECT, base: head });
+});
+
 export {};

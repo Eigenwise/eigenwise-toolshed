@@ -526,6 +526,19 @@ function reportingModelForms(value?: any) {
   return Array.from(forms);
 }
 
+// An executor reports the model it actually ran as the runtime id it sees
+// ("claude-fable-5", "claude-opus-5[1m]"), not the board's tier name — and
+// BACKEND_SLUG_RE happily accepts that string, so it reaches the catalog lookup
+// and dies as "unknown model" on an otherwise correct closeout. Map the version
+// suffix off a reporting form and land back on the tier (SQ-923).
+function claudeRuntimeAlias(forms?: any) {
+  for (const form of forms) {
+    const runtime = String(form).replace(/-\d[\w.-]*$/, '');
+    if (CLAUDE_RUNTIMES.includes(runtime)) return runtime;
+  }
+  return null;
+}
+
 function normalizeReportedModel(model?: any) {
   const normalized = normalizeRouteModel(model);
   const direct = normalized && availableRoute(normalized);
@@ -537,7 +550,7 @@ function normalizeReportedModel(model?: any) {
       return entry.slug;
     }
   }
-  return null;
+  return claudeRuntimeAlias(forms);
 }
 
 function resolvedDispatchRoute(ticket?: any) {
@@ -4165,6 +4178,10 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       sharedTree,
       ...(worktreeWarning ? { worktreeWarning } : {}),
       declaredFiles,
+      // Where this run starts from, so a closeout can tell "wrote nothing" from
+      // "committed and never submitted" — in a shared tree the executor's branch
+      // IS the integration branch, so there is no other baseline (SQ-923).
+      baseCommit: commitScope.headCommit(readMeta(slug)?.path || ''),
       readonly,
       ...(nonRepoOutput ? { nonRepoOutput: true } : {}),
       artifactMode,
@@ -4365,6 +4382,29 @@ function dispatchIsolationExpectation(identity?: any) {
       ? path.join(expectation.projectPath, '.claude', 'worktrees', `agent-${agentId}`)
       : null,
   };
+}
+
+// Where this dispatch's executor is working and what its work is measured
+// against, by the same convention the isolation guard enforces: the board
+// checkout for a shared-tree dispatch, the agent's own linked worktree for an
+// isolated one. Null whenever either is unknowable — no bound runtime identity,
+// a worktree that is already gone, no recorded baseline — which is exactly when
+// a caller must not conclude that a run wrote nothing (SQ-923).
+function dispatchWorkspace(slug?: any, ticket?: any) {
+  const state = dispatchState(ticket);
+  const projectPath = readMeta(slug)?.path || null;
+  if (!state || !projectPath) return null;
+  const baseCommit = String(state.baseCommit || '').trim() || null;
+  if (state.sharedTree !== false) return baseCommit ? { root: projectPath, base: baseCommit } : null;
+  const agentId = String(state.agentId || '').trim();
+  if (!agentId) return null;
+  const root = path.join(projectPath, '.claude', 'worktrees', `agent-${agentId}`);
+  if (!fs.existsSync(root)) return null;
+  let base = baseCommit;
+  if (!base) {
+    try { base = integrationTarget(slug)?.upstream || null; } catch (_: any) { base = null; }
+  }
+  return base ? { root, base } : null;
 }
 
 function dispatchIdentityAmbiguous(matches: any[], agentName?: any) {
@@ -4661,11 +4701,18 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         claimRelease: t.claimRelease,
       };
     }
-    if (executorDone && dispatch && declaredFiles.length && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
+    // Whether a run produces a commit is an OUTCOME, and no dispatch-time flag
+    // predicts it: a read-only contract routed through a write-capable category
+    // (testing, review-audit, an investigation that declares files it only reads)
+    // records readonly:false correctly and then has nothing to hand in. The
+    // caller may prove that by inspecting the worktree; a proven no-op closes,
+    // anything uncommitted or committed in scope still owes a submission (SQ-923).
+    const provenNoOp = opts.cleanDeclaredScope === true;
+    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
       return {
         ok: false,
         reason: 'submission_required',
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. A run that changed nothing closes here by itself once the board can see its worktree, so this refusal means the change is real or the worktree is unreadable. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
         ticket: t,
       };
     }
@@ -6637,6 +6684,8 @@ module.exports = {
   LABELS_MAX,
   DISPATCH_DESCRIPTION_MIN,
   dispatchDescriptionError,
+  dispatchDeclaredFiles,
+  dispatchWorkspace,
   dispatchWarnings,
   ticketReferenceWarnings,
   ticketCategoryWarnings,

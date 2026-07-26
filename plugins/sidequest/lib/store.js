@@ -381,6 +381,13 @@ function reportingModelForms(value) {
   for (const form of Array.from(forms)) forms.add(form.replace(/\./g, "-"));
   return Array.from(forms);
 }
+function claudeRuntimeAlias(forms) {
+  for (const form of forms) {
+    const runtime = String(form).replace(/-\d[\w.-]*$/, "");
+    if (CLAUDE_RUNTIMES.includes(runtime)) return runtime;
+  }
+  return null;
+}
 function normalizeReportedModel(model) {
   const normalized = normalizeRouteModel(model);
   const direct = normalized && availableRoute(normalized);
@@ -392,7 +399,7 @@ function normalizeReportedModel(model) {
       return entry.slug;
     }
   }
-  return null;
+  return claudeRuntimeAlias(forms);
 }
 function resolvedDispatchRoute(ticket) {
   const route = ticket && ticket.dispatch && normalizeRoute(ticket.dispatch.route);
@@ -3538,6 +3545,10 @@ function prepareDispatch(slug, idOrRef, opts) {
       sharedTree,
       ...worktreeWarning ? { worktreeWarning } : {},
       declaredFiles,
+      // Where this run starts from, so a closeout can tell "wrote nothing" from
+      // "committed and never submitted" — in a shared tree the executor's branch
+      // IS the integration branch, so there is no other baseline (SQ-923).
+      baseCommit: commitScope.headCommit(readMeta(slug)?.path || ""),
       readonly,
       ...nonRepoOutput ? { nonRepoOutput: true } : {},
       artifactMode,
@@ -3717,6 +3728,26 @@ function dispatchIsolationExpectation(identity) {
     matchedBy: byAgent.length ? "agent" : "session",
     expectedWorktree: agentId && expectation.projectPath ? path.join(expectation.projectPath, ".claude", "worktrees", `agent-${agentId}`) : null
   };
+}
+function dispatchWorkspace(slug, ticket) {
+  const state = dispatchState(ticket);
+  const projectPath = readMeta(slug)?.path || null;
+  if (!state || !projectPath) return null;
+  const baseCommit = String(state.baseCommit || "").trim() || null;
+  if (state.sharedTree !== false) return baseCommit ? { root: projectPath, base: baseCommit } : null;
+  const agentId = String(state.agentId || "").trim();
+  if (!agentId) return null;
+  const root = path.join(projectPath, ".claude", "worktrees", `agent-${agentId}`);
+  if (!fs.existsSync(root)) return null;
+  let base = baseCommit;
+  if (!base) {
+    try {
+      base = integrationTarget(slug)?.upstream || null;
+    } catch (_) {
+      base = null;
+    }
+  }
+  return base ? { root, base } : null;
 }
 function dispatchIdentityAmbiguous(matches, agentName) {
   return matches.length > 1 && (!agentName || new Set(matches.map((match) => match.slug)).size > 1);
@@ -3975,11 +4006,12 @@ function releaseTicket(slug, idOrRef, by, opts) {
         claimRelease: t.claimRelease
       };
     }
-    if (executorDone && dispatch && declaredFiles.length && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
+    const provenNoOp = opts.cleanDeclaredScope === true;
+    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
       return {
         ok: false,
         reason: "submission_required",
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. A run that changed nothing closes here by itself once the board can see its worktree, so this refusal means the change is real or the worktree is unreadable. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
         ticket: t
       };
     }
@@ -5495,6 +5527,8 @@ module.exports = {
   LABELS_MAX,
   DISPATCH_DESCRIPTION_MIN,
   dispatchDescriptionError,
+  dispatchDeclaredFiles,
+  dispatchWorkspace,
   dispatchWarnings,
   ticketReferenceWarnings,
   ticketCategoryWarnings,

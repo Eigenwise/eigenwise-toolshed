@@ -30,11 +30,13 @@ var commit_scope_exports = {};
 __export(commit_scope_exports, {
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
+  headCommit: () => headCommit,
   isInScope: () => isInScope,
   linkedWorktree: () => linkedWorktree,
   rangePaths: () => rangePaths,
   repoRoot: () => repoRoot,
   scopedPaths: () => scopedPaths,
+  scopedWorkPending: () => scopedWorkPending,
   submissionRange: () => submissionRange,
   unscopedWorkingPaths: () => unscopedWorkingPaths,
   validateCommitRangeScope: () => validateCommitRangeScope,
@@ -313,6 +315,43 @@ function isAncestor(cwd, ancestor, descendant) {
     return false;
   }
 }
+function parentCommits(cwd, commit) {
+  const parents = gitResult(cwd, ["rev-list", "--parents", "-n", "1", commit]);
+  return parents.ok ? parents.value.trim().split(/\s+/).slice(1).filter(Boolean) : [];
+}
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+function isEmptyTreeBase(value) {
+  return String(value || "").trim().toLowerCase() === EMPTY_TREE;
+}
+function headCommit(cwd) {
+  const head = resolvedCommit(cwd, "HEAD");
+  return head.ok ? head.value : null;
+}
+function scopedWorkPending(cwd, files, options) {
+  const opts = isRecord(options) ? options : {};
+  const scopes = scopedPaths(files);
+  if (!scopes.length) return { ok: false, reason: "missing_scope" };
+  const baseName = String(opts.base || "").trim();
+  if (!baseName) return { ok: false, reason: "missing_base" };
+  try {
+    const root = repoRoot(cwd);
+    const working = workingPaths(root).filter((file) => isInScope(file, scopes));
+    const base = resolvedCommit(root, baseName);
+    if (!base.ok) return { ok: false, reason: "missing_base", message: base.message };
+    const tip = resolvedCommit(root, "HEAD");
+    if (!tip.ok) return { ok: false, reason: "missing_commit", message: tip.message };
+    let committed = [];
+    if (base.value !== tip.value) {
+      const list = gitResult(root, ["rev-list", `${base.value}..${tip.value}`]);
+      if (!list.ok) return { ok: false, reason: "git_error", message: list.message };
+      const commits = list.value ? list.value.split(/\r?\n/).filter(Boolean) : [];
+      if (commits.length) committed = rangePaths(root, commits).filter((file) => isInScope(file, scopes));
+    }
+    return { ok: true, root, working, committed, pending: working.length > 0 || committed.length > 0 };
+  } catch (error) {
+    return { ok: false, reason: "git_error", message: errorMessage(error) };
+  }
+}
 function submissionRange(cwd, options) {
   const opts = isRecord(options) ? options : {};
   const gitRef = String(opts.gitRef || "").trim();
@@ -334,7 +373,8 @@ function submissionRange(cwd, options) {
   }
   const mergeBase = gitResult(cwd, ["merge-base", currentUpstream.value, tip.value]);
   if (!mergeBase.ok || !mergeBase.value) return { ok: false, reason: "unrelated_history", upstream, tip: tip.value, message: mergeBase.ok ? void 0 : mergeBase.message };
-  const requestedBase = opts.base ? resolvedCommit(cwd, opts.base) : null;
+  const rootBase = isEmptyTreeBase(opts.base);
+  const requestedBase = opts.base && !rootBase ? resolvedCommit(cwd, opts.base) : null;
   if (requestedBase && !requestedBase.ok) return { ok: false, reason: "missing_base", message: requestedBase.message };
   const integrationBranch = requestedBase ? resolvedCommit(cwd, opts.integrationBranch || upstream) : null;
   const baseIsOnTip = !!requestedBase && isAncestor(cwd, requestedBase.value, tip.value);
@@ -359,7 +399,7 @@ function submissionRange(cwd, options) {
     }
   }
   let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
-  if (!requestedBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
+  if (!requestedBase && !rootBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
     const candidates = /* @__PURE__ */ new Set();
     for (const name of opts.baseCandidates) {
       const candidate = resolvedCommit(cwd, name);
@@ -375,14 +415,34 @@ function submissionRange(cwd, options) {
       }
     }
   }
-  const commitList = gitResult(cwd, ["rev-list", "--reverse", `${effectiveBase}..${tip.value}`]);
-  if (!commitList.ok) return { ok: false, reason: "git_error", message: commitList.message };
-  const commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
-  if (!commits.length) return { ok: false, reason: "empty_range", base: effectiveBase, tip: tip.value };
-  const parents = gitResult(cwd, ["rev-list", "--parents", `${effectiveBase}..${tip.value}`]);
-  if (!parents.ok) return { ok: false, reason: "git_error", message: parents.message };
-  const mergeCommit = parents.value.split(/\r?\n/).find((line) => line.trim().split(/\s+/).length > 2);
-  if (mergeCommit) return { ok: false, reason: "merge_commit", commit: mergeCommit.trim().split(/\s+/)[0] };
+  let commits;
+  let rootCommit = false;
+  if (rootBase) {
+    if (parentCommits(cwd, tip.value).length) {
+      return { ok: false, reason: "base_not_reachable", base: EMPTY_TREE, actualBase: mergeBase.value, upstream, tip: tip.value };
+    }
+    rootCommit = true;
+    effectiveBase = EMPTY_TREE;
+    commits = [tip.value];
+  } else {
+    const commitList = gitResult(cwd, ["rev-list", "--reverse", `${effectiveBase}..${tip.value}`]);
+    if (!commitList.ok) return { ok: false, reason: "git_error", message: commitList.message };
+    commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
+    if (!commits.length && !requestedBase && effectiveBase === tip.value) {
+      const tipParents = parentCommits(cwd, tip.value);
+      if (tipParents.length > 1) return { ok: false, reason: "merge_commit", commit: tip.value };
+      rootCommit = tipParents.length === 0;
+      effectiveBase = rootCommit ? EMPTY_TREE : tipParents[0];
+      commits = [tip.value];
+    }
+    if (!commits.length) return { ok: false, reason: "empty_range", base: effectiveBase, tip: tip.value };
+  }
+  if (!rootCommit) {
+    const parents = gitResult(cwd, ["rev-list", "--parents", `${effectiveBase}..${tip.value}`]);
+    if (!parents.ok) return { ok: false, reason: "git_error", message: parents.message };
+    const mergeCommit = parents.value.split(/\r?\n/).find((line) => line.trim().split(/\s+/).length > 2);
+    if (mergeCommit) return { ok: false, reason: "merge_commit", commit: mergeCommit.trim().split(/\s+/)[0] };
+  }
   try {
     return {
       ok: true,
@@ -447,11 +507,13 @@ function commitScoped(cwd, message, files) {
 0 && (module.exports = {
   commitPaths,
   commitScoped,
+  headCommit,
   isInScope,
   linkedWorktree,
   rangePaths,
   repoRoot,
   scopedPaths,
+  scopedWorkPending,
   submissionRange,
   unscopedWorkingPaths,
   validateCommitRangeScope,

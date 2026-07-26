@@ -145,6 +145,29 @@ function requireKnownModel(action, value, ticket) {
   }
   return exec.runsModel;
 }
+const NO_OP_PATHS_SHOWN = 8;
+function pathList(paths) {
+  const all = Array.isArray(paths) ? paths : [];
+  const shown = all.slice(0, NO_OP_PATHS_SHOWN).join(", ");
+  return all.length > NO_OP_PATHS_SHOWN ? `${shown} (+${all.length - NO_OP_PATHS_SHOWN} more)` : shown;
+}
+function provenNoOpCloseout(slug, ticket) {
+  const workspace = store.dispatchWorkspace(slug, ticket);
+  if (!workspace) {
+    return { ok: false, detail: "The board cannot locate this dispatch's worktree, so it cannot confirm the run wrote nothing." };
+  }
+  const scope = store.dispatchDeclaredFiles(ticket);
+  const pending = commitScope.scopedWorkPending(workspace.root, scope, { base: workspace.base });
+  if (!pending.ok) {
+    return { ok: false, detail: `Could not inspect the declared scope in ${workspace.root}: ${pending.message || pending.reason}.` };
+  }
+  if (!pending.pending) return { ok: true, root: workspace.root };
+  const detail = [
+    pending.working.length ? `uncommitted ${pathList(pending.working)}` : null,
+    pending.committed.length ? `committed but not submitted ${pathList(pending.committed)}` : null
+  ].filter(Boolean).join("; ");
+  return { ok: false, detail: `Declared scope in ${workspace.root} is not a no-op: ${detail}.` };
+}
 const PROJECT_PROP = { type: "string", description: "Board (current project)." };
 const FILES_PROP = { type: "array", items: { type: "string" }, description: "Declared file scope: paths, or directory prefixes covering everything under them." };
 const LABELS_PROP = { type: "array", items: { type: "string" } };
@@ -919,7 +942,19 @@ const TOOLS = [
       const body = requiredFinalReport(args, "done");
       const ticket = store.getTicket(slug, args.ref);
       const model = requireKnownModel("done", args.model, ticket);
-      const res = store.completeTicket(slug, args.ref, by, { source: "mcp", model, effort: args.effort, body, sessionId: sessionOf(args) });
+      const opts = { source: "mcp", model, effort: args.effort, body, sessionId: sessionOf(args) };
+      let res = store.completeTicket(slug, args.ref, by, opts);
+      if (!res.ok && res.reason === "submission_required") {
+        const noOp = provenNoOpCloseout(slug, res.ticket);
+        if (noOp.ok) {
+          res = store.completeTicket(slug, args.ref, by, Object.assign({}, opts, {
+            cleanDeclaredScope: true,
+            completionProvenance: { closeout: "no-repo-changes", worktree: noOp.root }
+          }));
+        } else {
+          res.message = `${res.message} ${noOp.detail}`;
+        }
+      }
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);
     }

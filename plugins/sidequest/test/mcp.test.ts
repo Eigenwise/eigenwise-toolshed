@@ -2245,4 +2245,126 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   assert.strictEqual(smallList.hint, undefined, 'no paging hint when there is no next page');
 });
 
+// SQ-923. Whether a run writes anything is an OUTCOME, so no dispatch-time flag
+// predicts it: a read-only contract routed through a write-capable category
+// records readonly:false correctly and then has nothing to hand in. 27 tickets
+// in three days died on that (the:SQ-48/49/54/178, bmr:SQ-95, eige:SQ-820),
+// each burning a release plus a re-dispatch. done now goes and looks.
+function isolatedDispatch(prefix: string, agentId: string, files: string[]) {
+  const repo = fs.realpathSync(committedRepo(prefix));
+  const project = store.ensureProject(repo, `SQ-923 ${agentId}`).slug;
+  const ticket = store.createTicket(project, {
+    title: `read-only outcome ${agentId}`,
+    description: 'A write-routed dispatch whose contract forbids repository edits, exactly like the audited bounces.',
+    category: 'debugging',
+    files,
+  });
+  const sessionId = `sq923-session-${agentId}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  assert.equal(prepared.ticket.dispatch.sharedTree, false, 'the fixture dispatch is isolated');
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName: agentId,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
+  const worktree = path.join(repo, '.claude', 'worktrees', `agent-${agentId}`);
+  gitAt(repo, ['worktree', 'add', '-q', '-b', `agent-${agentId}`, worktree, 'HEAD']);
+  assert.equal(store.claimTicket(project, ticket.ref, `by-${agentId}`, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  return { repo, project, ref: ticket.ref, by: `by-${agentId}`, worktree };
+}
+
+test('SQ-923: done closes a write-routed dispatch that provably wrote nothing', async () => {
+  const fixture = isolatedDispatch('sq-mcp-noop-', 'a923noop', ['src/engine.js']);
+  const baseCommit = store.getTicket(fixture.project, fixture.ref).dispatch.baseCommit;
+  assert.equal(baseCommit, gitAt(fixture.repo, ['rev-parse', 'HEAD']), 'the dispatch records where the run started');
+  // The write-path guard itself is untouched: it still refuses on the ticket
+  // alone. Only a caller that went and looked at the worktree may relax it.
+  assert.equal(store.completeTicket(fixture.project, fixture.ref, fixture.by, {}).reason, 'submission_required');
+
+  const closed = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'Read-only investigation complete; findings are in the thread and the repository is untouched.',
+  });
+  assert.equal(closed.ok, true, `done was refused: ${closed.message}`);
+  const done = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(done.status, 'done');
+  assert.equal(done.completion.closeout, 'no-repo-changes', 'the closeout records how it was proven');
+  assert.equal(done.completion.worktree, fixture.worktree);
+});
+
+test('SQ-923: done still refuses a write-routed dispatch that has work in its scope', async () => {
+  const dirty = isolatedDispatch('sq-mcp-dirty-', 'a923dirty', ['src']);
+  fs.mkdirSync(path.join(dirty.worktree, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dirty.worktree, 'src', 'engine.js'), 'real work\n');
+  const refusedDirty = await callToolRaw('done', {
+    project: dirty.project,
+    ref: dirty.ref,
+    by: dirty.by,
+    model: 'opus',
+    body: 'Claiming a no-op while the declared scope holds uncommitted work.',
+  });
+  const dirtyAck = JSON.parse(refusedDirty.content[0].text);
+  assert.equal(dirtyAck.ok, false);
+  assert.equal(dirtyAck.reason, 'submission_required');
+  assert.match(dirtyAck.message, /src\/engine\.js/, 'names the uncommitted path it found');
+  assert.equal(store.getTicket(dirty.project, dirty.ref).status, 'doing');
+
+  const committed = isolatedDispatch('sq-mcp-committed-', 'a923committed', ['src']);
+  fs.mkdirSync(path.join(committed.worktree, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(committed.worktree, 'src', 'engine.js'), 'real work\n');
+  gitAt(committed.worktree, ['add', '--', 'src/engine.js']);
+  gitAt(committed.worktree, ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '-q', '-m', 'scoped work']);
+  const refusedCommitted = await callToolRaw('done', {
+    project: committed.project,
+    ref: committed.ref,
+    by: committed.by,
+    model: 'opus',
+    body: 'Committed but never submitted, which is the case the guard exists for.',
+  });
+  const committedAck = JSON.parse(refusedCommitted.content[0].text);
+  assert.equal(committedAck.ok, false);
+  assert.equal(committedAck.reason, 'submission_required');
+  assert.match(committedAck.message, /committed but not submitted/);
+  assert.equal(store.getTicket(committed.project, committed.ref).status, 'doing');
+});
+
+// SQ-923: executors stamp the runtime id they can actually see. "claude-fable-5"
+// passes the backend slug pattern, so it reached the catalog lookup and died as
+// "unknown model" on an otherwise correct closeout (eige:SQ-828, eige:SQ-913).
+test('SQ-923: done accepts the runtime id an executor reports for a Claude tier', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-model-alias'), 'SQ-923 model alias').slug;
+  for (const [reported, expected] of [['claude-fable-5', 'fable'], ['claude-opus-5[1m]', 'opus'], ['sonnet-4-5', 'sonnet']]) {
+    const ticket = store.createTicket(project, { title: `reported as ${reported}` });
+    assert.equal(store.claimTicket(project, ticket.ref, 'alias-worker', { direct: true, reason: 'fixture claim for a provenance stamp' }).ok, true);
+    const closed = await callTool('done', {
+      project,
+      ref: ticket.ref,
+      by: 'alias-worker',
+      model: reported,
+      effort: 'high',
+      body: `Closed with the runtime id the executor actually sees: ${reported}.`,
+    });
+    assert.equal(closed.ok, true, `done refused ${reported}: ${closed.message}`);
+    assert.equal(store.getTicket(project, ticket.ref).workedBy.model, expected);
+  }
+  const unknown = await callToolRaw('done', {
+    project,
+    ref: store.createTicket(project, { title: 'genuinely unknown model' }).ref,
+    by: 'alias-worker',
+    model: 'gpt-9-imaginary',
+    body: 'A model nobody routes still has to be refused by name.',
+  });
+  assert.equal(unknown.isError, true, 'an unknown model is still refused');
+  assert.match(unknown.content[0].text, /unknown model "gpt-9-imaginary"/);
+});
+
 export {};
