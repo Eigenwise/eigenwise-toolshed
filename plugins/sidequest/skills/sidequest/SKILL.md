@@ -13,11 +13,11 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 
 - `references/orchestration.md` — decomposition depth, fan-out waves, checkpoints, background
   execution, cost levers, agent teams.
+- `references/experiment-loop.md` — oracle rounds, branches, verdicts, promotion.
 - `references/publishing.md` — the serialized publish transaction.
-- `references/routing-details.md`, `references/routing-guide.md` — profiles, board rows, routes,
-  fallbacks, spawn parameters; classification and workflow recipe wiring.
+- `references/routing-details.md`, `references/routing-guide.md` — routes and wiring.
 - `references/high-stakes.md`
-- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`, `references/ticket-authoring.md`
+- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`, `references/ticket-authoring.md`.
 
 ## Plan substantial work on the board first
 
