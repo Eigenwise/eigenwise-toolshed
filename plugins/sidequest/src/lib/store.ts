@@ -2227,6 +2227,189 @@ function saveAssetData(slug?: any, id?: any, name?: any, buffer?: any) {
   return path.basename(dest);
 }
 
+function experimentAssetName(ticket?: any) {
+  return `experiment-${String(ticket?.ref || ticket?.id || 'ticket').replace(/[^a-z0-9_-]/gi, '_')}.md`;
+}
+
+function experimentLogTemplate(ticket?: any) {
+  return `# Experiment log — ${ticket.ref}\n\n## Ruled out\n\n## Standing constraints\n`;
+}
+
+function experimentLine(value?: any, label?: any) {
+  const line = String(value == null ? '' : value).replace(/[\r\n]+/g, ' ').trim();
+  if (!line) throw new Error(`${label || 'Experiment value'} is required.`);
+  return line;
+}
+
+function experimentText(value?: any) {
+  return String(value == null ? '' : value).trim();
+}
+
+function experimentRound(value?: any) {
+  const round = Number(value);
+  if (!Number.isInteger(round) || round < 1) throw new Error('Experiment round must be a positive integer.');
+  return round;
+}
+
+function experimentLogForTicket(slug?: any, ticket?: any) {
+  const asset = experimentAssetName(ticket);
+  const file = assetPath(slug, ticket.id, asset);
+  return { asset, file };
+}
+
+function writeExperimentLog(slug?: any, ticket?: any, log?: any) {
+  const { asset, file } = experimentLogForTicket(slug, ticket);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, log);
+  if (!Array.isArray(ticket.assets)) ticket.assets = [];
+  if (!ticket.assets.includes(asset)) ticket.assets.push(asset);
+  ticket.updatedAt = new Date().toISOString();
+  putTicket(slug, ticket);
+  return { asset, file };
+}
+
+function readExperimentLog(slug?: any, ticket?: any) {
+  const { asset, file } = experimentLogForTicket(slug, ticket);
+  if (!fs.existsSync(file)) return null;
+  return { asset, file, log: fs.readFileSync(file, 'utf8') };
+}
+
+function experimentSections(log?: any) {
+  const source = String(log || '');
+  const ruledOut = source.match(/^## Ruled out\r?\n([\s\S]*?)(?=^## Standing constraints\r?$)/m);
+  const constraints = source.match(/^## Standing constraints\r?\n([\s\S]*?)(?=^## R\d+\b|\s*$)/m);
+  if (!ruledOut || !constraints) throw new Error('Experiment log is missing its pinned sections.');
+  return { ruledOut: (ruledOut[1] || '').trim(), constraints: (constraints[1] || '').trim() };
+}
+
+function experimentEntries(log?: any) {
+  const source = String(log || '');
+  const matches = [...source.matchAll(/^## R(\d+) — ([^\r\n]+)\r?$/gm)];
+  return matches.map((match, index) => {
+    const start = match.index ?? source.length;
+    const end = matches[index + 1]?.index ?? source.length;
+    return {
+      round: Number(match[1]),
+      headline: `R${match[1]} — ${match[2]}`,
+      start,
+      end,
+      block: source.slice(start, end).trim(),
+    };
+  });
+}
+
+function withExperimentLog(slug?: any, idOrRef?: any, change?: any) {
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: 'not_found' };
+    const existing = readExperimentLog(slug, ticket);
+    const log = existing ? existing.log : experimentLogTemplate(ticket);
+    const result = change(ticket, log);
+    if (!result || typeof result.log !== 'string') return result;
+    const location = writeExperimentLog(slug, ticket, result.log);
+    return Object.assign({ ok: true }, location, result.result || {});
+  });
+}
+
+function experimentLines(value?: any, map?: any) {
+  if (value == null) return [];
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.map(map).filter(Boolean);
+}
+
+function appendExperimentEntry(slug?: any, idOrRef?: any, entry?: any) {
+  entry = entry || {};
+  const round = experimentRound(entry.round);
+  const headline = experimentLine(entry.headline || entry.title, 'Experiment headline');
+  const date = experimentLine(entry.date || new Date().toISOString().slice(0, 10), 'Experiment date');
+  const hypothesis = experimentText(entry.hypothesis);
+  const change = experimentText(entry.change);
+  const commit = experimentText(entry.commit);
+  const branch = experimentText(entry.branch);
+  const measured = experimentText(entry.measured);
+  const deliverable = experimentText(entry.deliverable);
+  const verdict = experimentText(entry.verdict ?? entry.verdictText);
+  const outcome = experimentText(entry.outcome);
+  const whyItFailed = experimentText(entry.whyItFailed ?? entry.why);
+  const constraintBought = experimentText(entry.constraintBought ?? entry.constraint);
+  const status = experimentText(entry.status);
+  return withExperimentLog(slug, idOrRef, (_ticket?: any, log?: any) => {
+    if (experimentEntries(log).some((current?: any) => current.round === round)) {
+      return { ok: false, reason: 'round_exists' };
+    }
+    const ruledOut = experimentLines(entry.ruledOut, (item?: any) => {
+      if (typeof item === 'string') return `- ${experimentLine(item, 'Ruled-out entry')}`;
+      return `- ${experimentLine(item?.line ?? item?.value, 'Ruled-out entry')} — ${experimentLine(item?.why, 'Ruled-out reason')}`;
+    });
+    const constraints = experimentLines(entry.standingConstraints ?? entry.constraints, (item?: any) => {
+      if (typeof item === 'string') return `- [R${round}] ${experimentLine(item, 'Standing constraint')}`;
+      const boughtBy = experimentRound(item?.round ?? item?.boughtBy ?? round);
+      return `- [R${boughtBy}] ${experimentLine(item?.line ?? item?.value, 'Standing constraint')}`;
+    });
+    let next = String(log);
+    if (ruledOut.length) next = next.replace(/(^## Ruled out\r?\n)([\s\S]*?)(?=^## Standing constraints\r?$)/m, (_all?: any, heading?: any, body?: any) => `${heading}${body.trimEnd()}${body.trim() ? '\n' : ''}${ruledOut.join('\n')}\n`);
+    if (constraints.length) next = next.replace(/(^## Standing constraints\r?\n)([\s\S]*?)(?=^## R\d+\b|\s*$)/m, (_all?: any, heading?: any, body?: any) => `${heading}${body.trimEnd()}${body.trim() ? '\n' : ''}${constraints.join('\n')}\n\n`);
+    const block = [
+      `## R${round} — ${date} — ${headline}`,
+      `Hypothesis: ${hypothesis}`,
+      `Change: ${change} (commit ${commit}, branch ${branch})`,
+      `Measured: ${measured}`,
+      `Deliverable: ${deliverable}`,
+      `Verdict: "${verdict}" — ${outcome}`,
+      `Why it failed: ${whyItFailed}`,
+      `Constraint bought: ${constraintBought}`,
+      `Status: ${status}`,
+    ].join('\n');
+    return { log: `${next}\n\n${block}\n`, result: { round } };
+  });
+}
+
+function appendOverturnLine(slug?: any, idOrRef?: any, priorRound?: any, overturningRound?: any, line?: any) {
+  const options = priorRound && typeof priorRound === 'object' ? priorRound : null;
+  const target = experimentRound(options ? (options.priorRound ?? options.targetRound ?? options.round) : priorRound);
+  const overturning = experimentRound(options ? (options.overturningRound ?? options.byRound ?? options.overturnedBy) : overturningRound);
+  const text = experimentLine(options ? options.line : line, 'Overturn line');
+  return withExperimentLog(slug, idOrRef, (_ticket?: any, log?: any) => {
+    const entries = experimentEntries(log);
+    const entry = entries.find((current?: any) => current.round === target);
+    if (!entry) return { ok: false, reason: 'round_not_found' };
+    if (/^> Overturned by R\d+:/m.test(entry.block)) return { ok: false, reason: 'already_overturned' };
+    const insertion = `\n> Overturned by R${overturning}: ${text}`;
+    return { log: `${String(log).slice(0, entry.end).trimEnd()}${insertion}\n${String(log).slice(entry.end)}`, result: { priorRound: target, overturningRound: overturning } };
+  });
+}
+
+function experimentPacket(slug?: any, idOrRef?: any) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket) return null;
+  const existing = readExperimentLog(slug, ticket);
+  if (!existing) return null;
+  const sections = experimentSections(existing.log);
+  const entries = experimentEntries(existing.log);
+  const recent = entries.slice(-3);
+  let older = entries.slice(0, -3);
+  const build = () => [
+    `Experiment log: ${existing.file}`,
+    '## Ruled out',
+    sections.ruledOut || '(none)',
+    '## Standing constraints',
+    sections.constraints || '(none)',
+    ...(older.length ? ['## Earlier rounds', ...older.map((entry?: any) => `- ${entry.headline}`)] : []),
+    ...(recent.length ? ['## Recent rounds', ...recent.map((entry?: any) => entry.block)] : []),
+  ].join('\n\n').replace(/\n\n- /g, '\n- ');
+  let packet = build();
+  while (Buffer.byteLength(packet, 'utf8') > 12 * 1024 && older.length) {
+    older = older.slice(1);
+    packet = build();
+  }
+  if (Buffer.byteLength(packet, 'utf8') > 12 * 1024) {
+    packet = Buffer.from(packet, 'utf8').subarray(0, 12 * 1024).toString('utf8').replace(/[^\n]*$/, '').trimEnd();
+  }
+  return { asset: existing.asset, path: existing.file, packet };
+}
+
 /* ------------------------------------------------------------------ *
  *  Tickets
  * ------------------------------------------------------------------ */
@@ -6763,6 +6946,9 @@ module.exports = {
   copyAsset,
   saveAssetData,
   assetPath,
+  appendExperimentEntry,
+  appendOverturnLine,
+  experimentPacket,
   listTickets,
   worktreeGcTickets,
   worktreeGcProjects,
