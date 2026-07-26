@@ -106,7 +106,22 @@ function commitHash(comment) {
   const match = comment && String(comment.body || "").match(/\b[0-9a-f]{7,40}\b/i);
   return match ? match[0] || null : null;
 }
-function stopVerdict(store, claims, classification, dispatchStopped) {
+function terminalDispatchVerdict(tickets) {
+  for (const ticket of tickets) {
+    const submission = ticket?.submission;
+    if (submission?.commit && !submission.integratedAt) {
+      return `exec stopped clean: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
+    }
+    if (!ticket || ticket.status !== "done") continue;
+    const comment = doneComment(ticket);
+    if (!comment) continue;
+    const hash = commitHash(comment);
+    const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash ? " done WITHOUT commit hash" : ` done${hash ? ` (${hash})` : ""}`;
+    return `exec stopped clean: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
+  }
+  return null;
+}
+function stopVerdict(store, claims, classification, dispatchStopped, terminalTickets) {
   const now = Date.now();
   for (const claim of claims) {
     if (!claim || claim.status !== "done") continue;
@@ -129,6 +144,8 @@ function stopVerdict(store, claims, classification, dispatchStopped) {
     if (!ticket || !submission?.commit || submission.integratedAt) continue;
     return `exec stopped clean: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
   }
+  const terminal = terminalDispatchVerdict(terminalTickets);
+  if (terminal) return terminal;
   const held = claims.find((claim) => claim && claim.held && claim.status === "doing");
   if (held) {
     let ticket = null;
@@ -174,8 +191,11 @@ function main() {
     return;
   }
   let dispatchStopped = false;
+  let terminalTickets = [];
   try {
-    dispatchStopped = Boolean(store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null).ok);
+    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null);
+    dispatchStopped = Boolean(result.ok && result.stopped !== false);
+    terminalTickets = Array.isArray(result.tickets) ? result.tickets : [];
   } catch (_) {
   }
   let claims;
@@ -191,7 +211,7 @@ function main() {
   if (!Array.isArray(claims)) return;
   let verdict;
   try {
-    verdict = stopVerdict(store, claims, classification, dispatchStopped);
+    verdict = stopVerdict(store, claims, classification, dispatchStopped, terminalTickets);
   } catch (_) {
     return;
   }

@@ -83,9 +83,9 @@ function main() {
   const executor = stringField(data, "agent_type", "agentType", "subagent_type");
   const agentId = stringField(data, "agent_id", "agentId");
   const agentName = stringField(data, "agent_name", "agentName", "name");
-  if (!sessionId || !executor || !agentId || classifyExecutor(executor).kind === "unknown") return;
+  if (!sessionId || !executor || !agentId && !agentName || classifyExecutor(executor).kind === "unknown") return;
   const store = require(runtimeModule("store"));
-  store.bindDispatchAgent(sessionId, executor, agentId, agentName || null);
+  store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null);
 }
 try {
   main();

@@ -21,6 +21,8 @@ execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: PROJECT 
 
 const store = require('../lib/store.js');
 const FORCE_EXEC_BYPASS = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
+const SUBAGENT_START = path.join(__dirname, '..', 'hooks', 'subagent-start.js');
+const SUBAGENT_STOP = path.join(__dirname, '..', 'hooks', 'subagent-stop.js');
 const slug = store.ensureProject(PROJECT).slug;
 
 store.setCategory({
@@ -51,6 +53,24 @@ function runForceBypass(payload?: any) {
     env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT },
   });
   return output.trim() ? JSON.parse(output) : null;
+}
+
+function runLifecycleHook(hook?: any, payload?: any) {
+  const output = execFileSync(process.execPath, [hook], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT },
+  });
+  return output.trim() ? JSON.parse(output) : null;
+}
+
+function dispatchBindingCounts(refs: any[]) {
+  const launched = refs.map((ref) => store.getTicket(slug, ref).dispatch).filter((dispatch) => dispatch.launchedAt);
+  return {
+    launched: launched.length,
+    unbound: launched.filter((dispatch) => !dispatch.boundAt).length,
+    noAgentId: launched.filter((dispatch) => !dispatch.agentId).length,
+  };
 }
 
 test('batch launch records every prepared ticket and binds the shared native agent', () => {
@@ -85,6 +105,17 @@ test('batch launch records every prepared ticket and binds the shared native age
     assert.equal(ticket.lastEventType, 'dispatch');
   }
 
+  runLifecycleHook(SUBAGENT_START, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_name: 'batch-lifecycle-worker',
+  });
+  for (const ref of [first.ref, second.ref]) {
+    const dispatch = store.getTicket(slug, ref).dispatch;
+    assert.ok(dispatch.boundAt);
+    assert.equal(dispatch.agentId ?? null, null);
+  }
+
   const bound = store.bindDispatchAgent(sessionId, executor, 'native-batch-agent', 'batch-lifecycle-worker');
   assert.equal(bound.ok, true);
   assert.equal(bound.tickets.length, 2);
@@ -94,6 +125,145 @@ test('batch launch records every prepared ticket and binds the shared native age
     assert.ok(pulse.dispatch.boundAt);
     assert.equal(pulse.working, false);
   }
+});
+
+test('same-name launches on different projects remain ambiguous', () => {
+  const otherProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-other-project-'));
+  const otherSlug = store.ensureProject(otherProject).slug;
+  const first = store.createTicket(slug, { title: 'cross-project identity fixture', category: 'dispatch.lifecycle', source: 'test' });
+  const second = store.createTicket(otherSlug, { title: 'cross-project identity fixture', category: 'dispatch.lifecycle', source: 'test' });
+  const sessionId = `cross-project-${Date.now()}`;
+  const agentName = 'same-project-local-launch-name';
+  const firstPrepared = store.prepareDispatch(slug, first.ref, { sessionId, sharedTree: true });
+  const secondPrepared = store.prepareDispatch(otherSlug, second.ref, { sessionId, sharedTree: true });
+  const prepared: Array<[string, any]> = [
+    [slug, firstPrepared],
+    [otherSlug, secondPrepared],
+  ];
+  const executor = firstPrepared.ticket.dispatchExecutor;
+
+  for (const [projectSlug, launch] of prepared) {
+    assert.equal(launch.ticket.dispatchExecutor, executor);
+    assert.equal(store.recordDispatchLaunch(projectSlug, launch.ticket.ref, {
+      sessionId,
+      token: launch.token,
+      executor,
+      agentName,
+    }).ok, true);
+  }
+
+  runLifecycleHook(SUBAGENT_START, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_name: agentName,
+  });
+  assert.equal(store.bindDispatchAgent(sessionId, executor, null, agentName).reason, 'ambiguous');
+  assert.equal(store.markDispatchStopped(sessionId, executor, 'cross-project-agent', agentName).reason, 'ambiguous');
+  for (const [projectSlug, launch] of prepared) {
+    const dispatch = store.getTicket(projectSlug, launch.ticket.ref).dispatch;
+    assert.equal(dispatch.boundAt, null);
+    assert.equal(dispatch.agentId ?? null, null);
+    assert.equal(dispatch.outcome, 'launched');
+  }
+});
+
+test('shared-tree agents bind by name before SubagentStop supplies their id', () => {
+  const ticket = createFixture('shared-tree identity fallback fixture');
+  const sessionId = `shared-tree-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  const executor = prepared.ticket.dispatchExecutor;
+  const agentName = `shared-tree-agent-${ticket.id}`;
+  const agentId = `shared-tree-native-${ticket.id}`;
+  assert.equal(prepared.ticket.dispatch.sharedTree, true);
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor,
+    agentName,
+  }).ok, true);
+  assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 1, noAgentId: 1 });
+
+  runLifecycleHook(SUBAGENT_START, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_name: agentName,
+  });
+  let dispatch = store.getTicket(slug, ticket.ref).dispatch;
+  assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 0, noAgentId: 1 });
+  assert.ok(dispatch.boundAt);
+  assert.equal(dispatch.agentId ?? null, null);
+  assert.equal(dispatch.worktree, undefined);
+  const boundAt = dispatch.boundAt;
+
+  const by = `shared-tree-worker-${ticket.id}`;
+  assert.equal(store.claimTicket(slug, ticket.ref, by, {
+    sessionId,
+    token: prepared.token,
+    executor,
+  }).ok, true);
+  assert.equal(store.submitTicket(slug, ticket.ref, by, {
+    commit: 'abc1234def5678',
+    sessionId,
+    source: 'test',
+  }).ok, true);
+  dispatch = store.getTicket(slug, ticket.ref).dispatch;
+  assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 0, noAgentId: 1 });
+  assert.equal(dispatch.outcome, 'submitted');
+  assert.equal(dispatch.agentId ?? null, null);
+  const terminalAt = dispatch.terminalAt;
+  const terminalSource = dispatch.terminalSource;
+  assert.equal(store.markDispatchStopped(sessionId, executor, 'unrelated-id', 'unrelated-name').reason, 'not_found');
+  const verdict = runLifecycleHook(SUBAGENT_STOP, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_id: agentId,
+    agent_name: agentName,
+  });
+
+  dispatch = store.getTicket(slug, ticket.ref).dispatch;
+  assert.match(JSON.stringify(verdict), new RegExp(`${ticket.ref} READY_FOR_INTEGRATION`));
+  assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 0, noAgentId: 0 });
+  assert.equal(dispatch.agentId, agentId);
+  assert.equal(dispatch.boundAt, boundAt);
+  assert.equal(dispatch.outcome, 'submitted');
+  assert.equal(dispatch.terminalAt, terminalAt);
+  assert.equal(dispatch.terminalSource, terminalSource);
+});
+
+test('SubagentStop backfills identity and worktree for an isolated dispatch missed at start', () => {
+  const ticket = createFixture('isolated stop fallback fixture');
+  const sessionId = `isolated-stop-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  const executor = prepared.ticket.dispatchExecutor;
+  const agentName = `isolated-stop-agent-${ticket.id}`;
+  const agentId = `isolated-stop-native-${ticket.id}`;
+  assert.equal(prepared.ticket.dispatch.sharedTree, false);
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor,
+    agentName,
+  }).ok, true);
+  assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 1, noAgentId: 1 });
+  assert.equal(store.claimTicket(slug, ticket.ref, `isolated-stop-worker-${ticket.id}`, {
+    sessionId,
+    token: prepared.token,
+    executor,
+  }).ok, true);
+
+  runLifecycleHook(SUBAGENT_STOP, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_id: agentId,
+    agent_name: agentName,
+  });
+
+  const dispatch = store.getTicket(slug, ticket.ref).dispatch;
+  assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 0, noAgentId: 0 });
+  assert.equal(dispatch.agentId, agentId);
+  assert.ok(dispatch.boundAt);
+  assert.equal(dispatch.worktree, path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`));
+  assert.equal(dispatch.outcome, 'stopped_claimed');
 });
 
 test('read-only category classes dispatch through restricted stable executors', () => {

@@ -4342,19 +4342,44 @@ function dispatchIsolationExpectation(identity?: any) {
   };
 }
 
+function dispatchIdentityAmbiguous(matches: any[], agentName?: any) {
+  return matches.length > 1 && (!agentName || new Set(matches.map((match?: any) => match.slug)).size > 1);
+}
+
+function dispatchCanBindRuntimeIdentity(state?: any, sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
+  if (!state || state.sessionId !== sessionId || state.executor !== executor || state.outcome !== 'launched') return false;
+  if (agentName && state.agentName && state.agentName !== agentName) return false;
+  if (agentId) return !state.agentId || state.agentId === agentId;
+  return Boolean(agentName && state.agentName === agentName);
+}
+
+function recordDispatchRuntimeIdentity(slug?: any, state?: any, agentId?: any, agentName?: any, now?: any) {
+  if (agentId) state.agentId = agentId;
+  if (agentName) state.agentName = agentName;
+  if (state.sharedTree === false && agentId) {
+    const projectPath = readMeta(slug)?.path;
+    if (projectPath) state.worktree = path.join(projectPath, '.claude', 'worktrees', `agent-${agentId}`);
+  }
+  state.boundAt = state.boundAt || now || new Date().toISOString();
+}
+
 function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
-  if (!sessionId || !executor || !agentId) return { ok: false, reason: 'missing_identity' };
+  const normalizedSessionId = String(sessionId || '').trim();
+  const normalizedExecutor = String(executor || '').trim();
+  const normalizedAgentId = String(agentId || '').trim();
+  const normalizedAgentName = String(agentName || '').trim();
+  if (!normalizedSessionId || !normalizedExecutor || (!normalizedAgentId && !normalizedAgentName)) {
+    return { ok: false, reason: 'missing_identity' };
+  }
   const matches: any[] = [];
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
-      if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor) || state.outcome !== 'launched') continue;
-      if (agentName && state.agentName && state.agentName !== String(agentName)) continue;
-      if (state.agentId && state.agentId !== String(agentId)) continue;
+      if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
       matches.push({ slug: project.slug, id: ticket.id });
     }
   }
-  if (!matches.length || (matches.length > 1 && !agentName)) {
+  if (!matches.length || dispatchIdentityAmbiguous(matches, normalizedAgentName)) {
     return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
   }
   const tickets: any[] = [];
@@ -4362,17 +4387,11 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
     const result = withTicketLock(match.slug, match.id, () => {
       const t = getTicket(match.slug, match.id);
       const state = dispatchState(t);
-      if (!state || state.outcome !== 'launched' || state.sessionId !== String(sessionId) || state.executor !== String(executor)) {
+      if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) {
         return { ok: false };
       }
       const now = new Date().toISOString();
-      state.agentId = String(agentId);
-      state.agentName = agentName ? String(agentName) : state.agentName || null;
-      if (state.sharedTree === false) {
-        const projectPath = readMeta(match.slug)?.path;
-        if (projectPath) state.worktree = path.join(projectPath, '.claude', 'worktrees', `agent-${agentId}`);
-      }
-      state.boundAt = state.boundAt || now;
+      recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
       stampDispatchEvent(t, 'subagent-start', now);
       putTicket(match.slug, t);
       return { ok: true, ticket: t };
@@ -4383,51 +4402,63 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
   return { ok: true, ticket: tickets[0], tickets };
 }
 
+function dispatchMatchesStopIdentity(state?: any, sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
+  if (!state || state.sessionId !== sessionId || state.executor !== executor) return false;
+  if (agentName && state.agentName !== agentName) return false;
+  if (!agentId) return agentName ? state.agentName === agentName : true;
+  if (state.agentId) return state.agentId === agentId;
+  return Boolean(agentName && state.agentName === agentName);
+}
 function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
-  if (!sessionId || !executor) return { ok: false, reason: 'missing_identity' };
+  const normalizedSessionId = String(sessionId || '').trim();
+  const normalizedExecutor = String(executor || '').trim();
+  const normalizedAgentId = String(agentId || '').trim();
+  const normalizedAgentName = String(agentName || '').trim();
+  if (!normalizedSessionId || !normalizedExecutor) return { ok: false, reason: 'missing_identity' };
   const matches: any[] = [];
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
-      if (!state || state.sessionId !== String(sessionId) || state.executor !== String(executor)) continue;
-      if (agentId && state.agentId !== String(agentId)) continue;
-      if (agentName && state.agentName !== String(agentName)) continue;
-      if (state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed') {
-        matches.push({ slug: project.slug, id: ticket.id });
-      }
+      if (!dispatchMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
+      const active = state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed';
+      if (active || state.terminalAt) matches.push({ slug: project.slug, id: ticket.id });
     }
   }
-  if (!matches.length || (matches.length > 1 && !agentName)) {
+  if (!matches.length || dispatchIdentityAmbiguous(matches, normalizedAgentName)) {
     return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
   }
   const tickets: any[] = [];
+  let stopped = false;
   for (const match of matches) {
     const result = withTicketLock(match.slug, match.id, () => {
       const t = getTicket(match.slug, match.id);
       const state = dispatchState(t);
-      if (!state || !['prepared', 'launched', 'claimed'].includes(state.outcome) ||
-        state.sessionId !== String(sessionId) || state.executor !== String(executor) ||
-        (agentId && state.agentId !== String(agentId)) ||
-        (agentName && state.agentName !== String(agentName))) {
+      const active = Boolean(state && ['prepared', 'launched', 'claimed'].includes(state.outcome));
+      if (!state || (!active && !state.terminalAt) ||
+        !dispatchMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) {
         return { ok: false, reason: 'not_found' };
       }
       const now = new Date().toISOString();
-      if (agentId) state.agentId = String(agentId);
-      if (agentName) state.agentName = String(agentName);
-      if (t.scopeRequest) captureScopePauseRecovery(match.slug, t);
-      setDispatchTerminal(t, t.claim && t.claim.by ? (t.scopeRequest ? 'scope_paused' : 'stopped_claimed') : 'failed', 'subagent-stop');
-      if (!t.claim || !t.claim.by) {
-        t.dispatchNonce = null;
-        t.dispatchExecutor = null;
+      if (normalizedAgentId || normalizedAgentName) {
+        recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
+      }
+      if (active) {
+        if (t.scopeRequest) captureScopePauseRecovery(match.slug, t);
+        setDispatchTerminal(t, t.claim && t.claim.by ? (t.scopeRequest ? 'scope_paused' : 'stopped_claimed') : 'failed', 'subagent-stop');
+        if (!t.claim || !t.claim.by) {
+          t.dispatchNonce = null;
+          t.dispatchExecutor = null;
+        }
       }
       stampDispatchEvent(t, 'subagent-stop', now);
       putTicket(match.slug, t);
-      return { ok: true, ticket: t };
+      return { ok: true, ticket: t, stopped: active };
     });
     if (!result || !result.ok) return { ok: false, reason: 'not_found' };
+    stopped = stopped || result.stopped;
     tickets.push(result.ticket);
   }
-  return { ok: true, ticket: tickets[0], tickets };
+  return { ok: true, ticket: tickets[0], tickets, stopped };
 }
 
 function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
