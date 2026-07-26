@@ -292,6 +292,7 @@ const TICKET_COMMENTS_MAX_BYTES = 6 * 1024;
 const TICKET_COMMENT_BODY_MAX_BYTES = 768;
 const TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES = 4 * 1024;
 const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
+const EXPERIMENT_LOG_PACKET_MAX_BYTES = 12 * 1024;
 
 function byteLength(value?: any) {
   return Buffer.byteLength(String(value || ''), 'utf8');
@@ -416,6 +417,27 @@ function scopePauseRecoveryPacket(ticket?: any, slug?: any) {
   return `Scope-pause recovery: \`${patch}\` is an automatic snapshot of uncommitted work from a stopped executor. Stopped-agent messages are not a reliable recovery path, so a redispatch in a new worktree must apply this patch before implementation; do not apply it in the original paused worktree.`;
 }
 
+function experimentCheckoutTarget(ticket?: any) {
+  const round = Number(ticket?.dispatch?.launchSeq);
+  return Number.isInteger(round) && round > 1
+    ? `refs/sidequest/${ticket.ref}/r${round - 1} (continue from the prior round)`
+    : 'base (fresh direction)';
+}
+
+function experimentLogPacket(ticket?: any, slug?: any) {
+  if (!ticket || !slug) return null;
+  const experiment = store.experimentPacket(slug, ticket.id || ticket.ref);
+  if (!experiment) return null;
+  const storedPath = String(experiment.path || '').trim();
+  if (!storedPath) return null;
+  const logPath = path.resolve(storedPath);
+  return boundedPacket([
+    `Read the full log at \`${logPath}\` before the first edit.`,
+    `Round checkout target: ${experimentCheckoutTarget(ticket)}.`,
+    String(experiment.packet || ''),
+  ].join('\n\n'), EXPERIMENT_LOG_PACKET_MAX_BYTES, '\n\n[Experiment log packet truncated at 12 KB. Read the full log before the first edit.]');
+}
+
 function ticketRouteMarker(ticket?: any) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   return resolved && resolved.backend === 'codex' && resolved.dispatchModel
@@ -510,6 +532,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(', ') : '(No labels were recorded.)';
   const closeout = ticketCloseout(ticket);
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
+  const experimentLog = experimentLogPacket(ticket, slug);
   const contract = storyContractPacket(ticket, slug);
   const parts = [
     '',
@@ -525,6 +548,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     ...(worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : []),
     ...(ticketIsolationContract(ticket, project) || []),
     ...(scopePauseRecoveryPacket(ticket, slug) ? [scopePauseRecoveryPacket(ticket, slug)] : []),
+    ...(experimentLog ? [`Experiment log:\n${experimentLog}`] : []),
     `Declared files:\n${declaredFiles}`,
     'Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Keep your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.',
     `Contract metadata:\n${ticketContractsPacket(ticket)}`,

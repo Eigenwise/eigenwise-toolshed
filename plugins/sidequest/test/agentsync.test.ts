@@ -104,6 +104,38 @@ test('SQ-760: oversized briefing packets stay bounded and direct compact comment
   assert.match(briefing, /briefing\.png/);
 });
 
+test('SQ-929: experiment log briefings carry the bounded packet and the continuation target', () => {
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(tmpDir(), 'experiment briefing').slug;
+  const created = store.createTicket(slug, {
+    title: 'Experiment briefing fixture',
+    description: 'Run one hypothesis.',
+    category: 'coding.normal',
+    files: ['fixture.ts'],
+  });
+  for (let round = 1; round <= 4; round++) {
+    assert.equal(store.appendExperimentEntry(slug, created.ref, {
+      round,
+      headline: `round ${round}`,
+      measured: '測'.repeat(6_000),
+    }).ok, true);
+  }
+
+  const ticket = Object.assign({}, store.getTicket(slug, created.ref), {
+    dispatch: { launchSeq: 5 },
+  });
+  const briefing = agentsync.renderTicketBriefing(ticket, 'experiment-token', slug);
+  const section = briefing.match(/Experiment log:\n([\s\S]*?)\n\nDeclared files:/);
+
+  assert.ok(section);
+  assert.ok(Buffer.byteLength(section![1], 'utf8') <= 12 * 1024, `experiment packet is ${Buffer.byteLength(section![1], 'utf8')} bytes`);
+  assert.ok(section![1].includes(`Read the full log at \`${store.assetPath(slug, created.id, `experiment-${created.ref}.md`)}\` before the first edit.`));
+  assert.match(section![1], new RegExp(`Round checkout target: refs/sidequest/${created.ref}/r4 \\(continue from the prior round\\)\\.`));
+
+  const withoutLog = agentsync.renderTicketBriefing(Object.assign({}, ticket, { id: 'no-log', ref: 'SQ-no-log' }), 'experiment-token', slug);
+  assert.doesNotMatch(withoutLog, /Experiment log:/);
+});
+
 test('story execution contracts lead member briefings from their dispatch snapshot', () => {
   const ticket = {
     ref: 'SQ-750', title: 'Member scope', model: 'opus', effort: 'high', category: {},
