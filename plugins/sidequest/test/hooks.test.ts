@@ -949,6 +949,22 @@ test('session-start: keeps Explore narrow while rejecting generic implementation
   }
 });
 
+test('session-start: conditions checkpoint guidance on its optional model snapshot', () => {
+  const sonnet = runHook(SESSION, { session_id: 'checkpoint-sonnet', model: 'claude-sonnet-5' });
+  assert.match(sonnet, /CHECKPOINT MODE \(Sonnet\)/);
+  assert.match(sonnet, /category\/route rules, cross-project config, or a module boundary/);
+  assert.match(sonnet, /routine ticket filing, an exact user spec, or mechanical single-project work/);
+  const compact = runHook(SESSION, { session_id: 'checkpoint-compact', source: 'compact', model: 'claude-haiku-4-5' });
+  assert.match(compact, /CHECKPOINT MODE \(Haiku\)/);
+
+  for (const payload of [
+    { session_id: 'checkpoint-none' },
+    { session_id: 'checkpoint-opus', model: 'claude-opus-5' },
+  ]) {
+    assert.doesNotMatch(runHook(SESSION, payload), /CHECKPOINT MODE/, 'an absent or higher-tier model must not silently enable checkpoint mode');
+  }
+});
+
 test('session-start: carries runtime resource and worker reporting coordination', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   assert.match(ctx, /Before each wave, assess shared runtime resources/, 'must require pre-wave assessment');

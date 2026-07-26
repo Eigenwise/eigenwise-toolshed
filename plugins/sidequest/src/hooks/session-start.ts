@@ -114,6 +114,13 @@ function nudgeOff(): boolean {
   return value === 'off' || value === '0' || value === 'false' || value === 'no';
 }
 
+function checkpointingGuidance(data: HookInput): string {
+  const model = stringField(data, 'model').toLowerCase();
+  const tier = model.includes('haiku') ? 'Haiku' : model.includes('sonnet') ? 'Sonnet' : '';
+  if (!tier) return '';
+  return '\nCHECKPOINT MODE (' + tier + '): before encoding an incomplete-evidence judgment into shared state, ask when it is irreversible, cross-project, or broad: category/route rules, cross-project config, or a module boundary. Do not ask for routine ticket filing, an exact user spec, or mechanical single-project work. `references/orchestrator-checkpointing.md`.';
+}
+
 function emit(context: string, notice: string): void {
   const output = notice ? context + '\n' + notice : context;
   writeContext('SessionStart', withWorkforce(output));
@@ -149,7 +156,8 @@ async function main(): Promise<void> {
     emit(
       '=== sidequest (active — context restored) ===\n' +
         'ROLE: ORCHESTRATOR. Reload Sidequest. Agent launches use dispatch\'s executor/spawn. Ticket + dispatch BEFORE multi-file exploration. Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Routed direct:true needs `direct-ok` + a reason; invalid: loaded context, patch, or handoff cost. mcp__plugin_sidequest_board__list status=doing FIRST; CLI fallback: run `' + cli + ' list --status doing`; mcp__plugin_sidequest_board__* absent (not errors)? Ask USER to `/reload-plugins`.\n' +
-        'Native results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. one background timer, never foreground sleep loop.\n',
+        'Native results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. one background timer, never foreground sleep loop.\n' +
+        checkpointingGuidance(data),
       restartNotice,
     );
     return;
@@ -160,6 +168,8 @@ async function main(): Promise<void> {
       'REQUIRED: Substantive changes/investigations need tickets; fresh `dispatch` returns executor/spawn/token. Every Agent uses it.\n' +
       'Operational requests (run/build/test app; start/stop dev server; open dashboard; answer from visible context): act inline, without the Sidequest skill, category_list, or board reads.\n' +
       'ROLE: you are this project\'s ORCHESTRATOR; write tickets, offload work.\n' +
+      checkpointingGuidance(data) +
+      '\n' +
       'Reload the Sidequest skill before board work. Plan multi-part work as independently checkable ATOMIC tickets: one change, investigation, spike, or review. ' +
       'Specs need anchors, contract, bounds, decisions, and verify. ' +
       'several deliverables on one ticket is a smell: use a ticketed planning investigation that pins the shared contract, then a wave fanning the pieces out. An external tracker such as Jira still uses Sidequest.\n' +

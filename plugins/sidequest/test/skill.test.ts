@@ -9,6 +9,7 @@ const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 
 const routingGuide = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'routing-guide.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
 const ticketAuthoring = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'ticket-authoring.md'), 'utf8');
+const checkpointing = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'orchestrator-checkpointing.md'), 'utf8');
 
 // SKILL.md loads into the orchestrator (the priciest model) every session, so
 // its size is a budget like the hook byte budgets: detail belongs in
@@ -16,6 +17,14 @@ const ticketAuthoring = fs.readFileSync(path.join(__dirname, '..', 'skills', 'si
 test('SKILL.md stays inside its session-load byte budget', () => {
   assert.ok(Buffer.byteLength(skill, 'utf8') <= 16000,
     `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 16000 — move detail into references/`);
+});
+
+test('checkpointing reference documents model limits and narrow decision triggers', () => {
+  assert.match(checkpointing, /optional `SessionStart` input field/);
+  assert.match(checkpointing, /`UserPromptSubmit` does not receive a model field/);
+  assert.match(checkpointing, /`CLAUDE_CODE_SUBAGENT_MODEL` chooses a subagent model/);
+  assert.match(checkpointing, /irreversible, cross-project, or broadly scoped/);
+  assert.match(checkpointing, /routine ticket/);
 });
 
 test('workflow routing guidance uses the live recipe wiring surface', () => {
