@@ -71,29 +71,22 @@ attachment and report missing or unreadable ones, while the spawn keeps that con
 transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
-**Workflow callers:** at workflow start, call `route_recipe` or `sidequest route <category> --json`,
-then wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` into the Agent call.
-Do not manually translate route, gateway, virtual-model, marker, or effort fields; see
-`references/routing-guide.md`.
+**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Do not manually translate route, gateway, virtual-model, marker, or effort fields. See `references/routing-guide.md`.
 
-**Where things live** (never scan from root): CLI at `plugins/sidequest/bin/sidequest.js` under
-the installed plugin; SQLite data at `~/.claude/sidequest/sidequest.db` (override
-`SIDEQUEST_HOME`); attachments under `~/.claude/sidequest/projects/<slug>/assets/`.
+**Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
+(`SIDEQUEST_HOME`); attachments: `~/.claude/sidequest/projects/<slug>/assets/`. Never scan from root.
 
 ## Routing profiles
 
-A board points at one profile (its full category set) plus local ADD/OVERRIDE/DETACH/DISABLE
-rows. Mutations take exactly one of `--profile`/`--project`; see `references/routing-details.md`.
-A category's `readonly` flag picks the restricted executor and its `done` closeout path. A ticket may
-pass `--readonly true|false` to override that category default for its prepared dispatch. Read-only
-categories that declare files or contract changes warn before dispatch; resolve the mismatch or set
-an explicit override.
+A board selects one profile plus local ADD/OVERRIDE/DETACH/DISABLE rows. Mutations take one of
+`--profile`/`--project`; details: `references/routing-details.md`. Category `readonly` selects the
+restricted executor and `done` closeout. `--readonly true|false` overrides it for a prepared dispatch.
+Read-only files or changes warn before dispatch. Resolve or override.
 
 ## Open the dashboard
 
-`sidequest dashboard` — idempotent; starts the server, opens the browser, prints the URL —
-**report it**. Binds to `127.0.0.1` only. Verify server changes on a test instance (temporary
-`SIDEQUEST_HOME`, distinct port), never the shared board.
+`sidequest dashboard` starts the local server and prints the URL. Verify server changes in an isolated
+`SIDEQUEST_HOME` on a distinct port, never the shared board.
 
 ## File a ticket
 

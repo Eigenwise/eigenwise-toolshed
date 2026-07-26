@@ -243,9 +243,9 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   archive: 'Archive one ticket, or every done ticket.',
   archive_board: 'Archive an explicitly named board.',
   assign: 'Set a ticket assignee.',
-  category_add: 'Add a global or project category.',
+  category_add: 'Add category.',
   category_detach: 'Pin a board category to its current policy.',
-  category_edit: 'Edit a global category or project policy.',
+  category_edit: 'Edit category.',
   category_relink: 'Reset a board category to the shared policy.',
   category_rm: 'Remove a global or project category policy.',
   global_fallback: 'Read or set the global routing fallback.',
@@ -395,6 +395,7 @@ function categoryListEntry(category?: any, localRow?: any, ticketCount?: any, fu
       descriptionLength: description.length,
       descriptionTruncated: description.truncated,
       enabled: category.enabled,
+      readonly: category.readonly === true,
     };
   }
   return Object.assign({}, category, {
@@ -701,7 +702,7 @@ const TOOLS: ToolDefinition[] = [
         changes: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket changes.' },
         consumes: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket consumes.' },
         contractWaiver: { type: 'boolean', description: 'Explicitly reviewed waiver for contract-edge wave sequencing.' },
-        readonly: { type: 'boolean', description: 'Set false for a read-only category when the spike must execute modified code.' },
+        readonly: { type: 'boolean', description: 'Closeout override.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
         verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Exact verify command, verbatim in the task prompt.' },
         storyId: { type: 'string', pattern: '^US-\\d+$', description: 'A story ref (US-n) to file this ticket into.' },
@@ -771,7 +772,7 @@ const TOOLS: ToolDefinition[] = [
         changes: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket changes.' },
         consumes: { type: 'array', items: { type: 'string' }, description: 'Named contracts or interfaces this ticket consumes.' },
         contractWaiver: { type: 'boolean', description: 'Explicitly reviewed waiver for contract-edge wave sequencing.' },
-        readonly: { type: 'boolean', description: 'Set false for a read-only category when the spike must execute modified code.' },
+        readonly: { type: 'boolean', description: 'Closeout override.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
         verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Exact verify command, verbatim in the task prompt.' },
         storyId: { anyOf: [{ type: 'string', pattern: '^US-\\d+$' }, { const: 'none' }] },
@@ -1656,7 +1657,7 @@ const TOOLS: ToolDefinition[] = [
         id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
-        fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
+        fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' }, readonly: { type: 'boolean', description: 'Comment closeout.' },
       },
       required: ['id', 'name', 'routeModel', 'routeEffort'],
     },
@@ -1669,6 +1670,7 @@ const TOOLS: ToolDefinition[] = [
         artifactRoots: args.artifactRoots || [],
         route: { model: args.routeModel, effort: args.routeEffort },
         fallback: args.fallbackModel == null && args.fallbackEffort == null ? null : { model: args.fallbackModel, effort: args.fallbackEffort },
+        readonly: args.readonly === true,
         enabled: args.enabled !== false,
       };
       if (target) {
@@ -1687,7 +1689,7 @@ const TOOLS: ToolDefinition[] = [
         project: PROJECT_PROP, profile: { type: 'string' }, id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Replace shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
-        fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' },
+        fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' }, readonly: { type: 'boolean', description: 'Comment closeout.' },
       },
       required: ['id'],
     },
@@ -1709,7 +1711,7 @@ const TOOLS: ToolDefinition[] = [
       const existing: any = args.project != null ? store.getCategory(id, { project: slug }) : store.routingProfileCategory(args.profile, id);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch: any = {};
-      for (const key of ['name', 'description', 'contract', 'artifactRoots']) if (args[key] !== undefined) patch[key] = args[key];
+      for (const key of ['name', 'description', 'contract', 'artifactRoots', 'readonly']) if (args[key] !== undefined) patch[key] = args[key];
       if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
       if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
       if (args.project != null) {
