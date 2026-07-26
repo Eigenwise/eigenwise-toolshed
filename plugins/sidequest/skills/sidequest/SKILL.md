@@ -17,7 +17,7 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 - `references/routing-details.md`, `references/routing-guide.md` — profiles, board rows, routes,
   fallbacks, spawn parameters; classification and workflow recipe wiring.
 - `references/high-stakes.md`
-- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`
+- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`, `references/ticket-authoring.md`
 
 ## Plan substantial work on the board first
 
@@ -36,10 +36,8 @@ When a task is **more than a single small change**, do this **before writing any
    consumes its findings. Each ticket carries the context its agent needs — anchors, contract or
    question, bounds, settled decisions, exact verify; missing context → gather it first or split
    further.
-   Cut along affected surfaces, not convenient anchor files: a storage change usually includes its
-   store, CLI, MCP surface, skill/docs, and applicable full test directory. Declare each with
-   `--file` (repeatable; dir prefixes cover subtrees). Depth:
-   `references/orchestration.md`.
+   Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
+   Use directory scope where that absorbs the intended blast radius; details: `references/ticket-authoring.md`.
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
    integrate so `ready` serializes the phases.
 3. **Execute proportionally** — "Route execution down" below.

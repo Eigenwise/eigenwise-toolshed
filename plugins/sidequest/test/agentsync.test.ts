@@ -429,7 +429,10 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.match(briefing, /blocked-by: SQ-12/);
   assert.match(briefing, /docs\/briefing notes\.md/);
   assert.match(briefing, /A declared directory covers descendants/);
-  assert.match(briefing, /Only uncovered paths pause with your claim held/);
+  assert.match(briefing, /first uncovered scope miss/);
+  assert.match(briefing, /one consolidated request/);
+  assert.match(briefing, /tests, fixtures, goldens, and generated outputs/);
+  assert.match(briefing, /Keep your claim held/);
   assert.match(briefing, /pass the current linked worktree/);
   assert.match(briefing, /Do not release or weaken scope lint/);
   assert.match(briefing, /space file\.png/);

@@ -8,6 +8,7 @@ const path = require('path');
 const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'SKILL.md'), 'utf8');
 const routingGuide = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'routing-guide.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
+const ticketAuthoring = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'ticket-authoring.md'), 'utf8');
 
 // SKILL.md loads into the orchestrator (the priciest model) every session, so
 // its size is a budget like the hook byte budgets: detail belongs in
@@ -37,6 +38,19 @@ test('sidequest guidance makes changes the polling read and bans TaskOutput', ()
   assert.match(skill, /THE polling read: `changes --since`/);
   assert.match(skill, /`pulse <ref>` for liveness/);
   assert.match(skill, /`TaskStop` only after terminal evidence/);
+});
+
+test('ticket authoring uses directory scope for cross-cutting plugin changes', () => {
+  assert.match(skill, /references\/ticket-authoring\.md/);
+  assert.match(ticketAuthoring, /cross-cutting change inside one plugin/);
+  assert.match(ticketAuthoring, /`src\/lib`, `test`, and, where relevant, `hooks` directories/);
+  assert.match(ticketAuthoring, /file-granular scope for surgical work/);
+  assert.match(ticketAuthoring, /src\/lib\/store\.ts/);
+  assert.match(ticketAuthoring, /category-defaults\.json/,);
+  assert.match(ticketAuthoring, /mcp-tool-descriptors\.json/);
+  assert.match(ticketAuthoring, /cli-goldens\.json/);
+  assert.match(ticketAuthoring, /generated `hooks\/\*\.js`/);
+  assert.match(ticketAuthoring, /materialized profiles need a seed catch-up/);
 });
 
 test('sidequest guidance bans proxy waiters for executors', () => {
