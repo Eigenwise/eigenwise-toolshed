@@ -101,25 +101,22 @@ US-n` · `--anchors "file:line symbol"` / `--verify "exact command"` (seeded ver
 **Descriptions are developer-to-developer specs, never a PM summary. The executor's entire brief is this description:** **Where** — exact
 anchors; **Contract** — behavior/edge cases or the question to answer; **Bounds**;
 **Dependencies/decisions**; **Verify** — the exact command or answer shape. Bugs carry the
-reproduction. **Scale the spec inversely to the executor's model** and **front-load everything
-you already know** — a weak executor fails on missing context; never file vague.
+reproduction. **Scale the spec inversely to the executor's model; front-load everything you
+know** — never file vague.
 
 **Route by remaining uncertainty, not original difficulty.** Investigation pays for the judgment
 once; a ticket whose exact edit is already settled drops tier (`coding.easy`, or `direct-ok` for a
-one-or-two-file mechanical edit), and `add`/`update` warn when it doesn't. The fix is never to thin
-the ticket: evidence, constraints, and anchors are what strong-model authorship contributes. A fully
-specified EDIT downgrades the category; rich context does not.
-
-Carry paid recon forward: every touched surface gets a `file:line` anchor and relevant excerpt, so the
-executor starts where you left off, never cold. Review-gated tickets also need adversarial acceptance
-criteria before their first dispatch. Details: `references/ticket-authoring.md`.
+one-or-two-file mechanical edit), and `add`/`update` warn when it doesn't. Never thin the
+ticket: evidence, constraints, and anchors are what strong-model authorship contributes. A fully
+specified EDIT downgrades the category; rich context does not. Carry paid recon forward (anchors +
+excerpts per surface); review gates need adversarial criteria: `references/ticket-authoring.md`.
 
 Descriptions/comments render **full markdown**. **CRITICAL: use real newlines, never a literal
 `\n`** — multi-line `-d`/`-m` needs a heredoc or `$'...'`; MCP tools take plain strings with real
 newlines.
 
-Mid-task side issue? Don't stop: file it with `mcp__plugin_sidequest_board__add` (CLI if MCP
-is unavailable), attaching any pasted image path.
+Mid-task side issue? File it with `mcp__plugin_sidequest_board__add` (CLI fallback), attach
+any pasted image path, keep going.
 **Filing a ticket is not a request to work it.** "Make a ticket for X" means file and stop.
 
 ## List / update / close
