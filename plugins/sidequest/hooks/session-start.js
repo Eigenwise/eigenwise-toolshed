@@ -203,7 +203,7 @@ function workforceSection() {
         bounded.push(line);
       }
     }
-    const priority = /* @__PURE__ */ new Set(["codebase-exploration", "debugging", "spike-investigation", "deep-research", "web-research"]);
+    const priority = /* @__PURE__ */ new Set(["codebase-exploration", "debugging", "spike-investigation", "research"]);
     const preferred = [...entries.filter((entry) => priority.has(entry.id)), ...entries.filter((entry) => !priority.has(entry.id))];
     const descriptions = /* @__PURE__ */ new Map();
     for (const entry of preferred) {

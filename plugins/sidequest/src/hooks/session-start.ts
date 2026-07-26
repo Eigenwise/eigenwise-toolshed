@@ -66,7 +66,7 @@ function workforceSection(): string {
         bounded.push(line);
       }
     }
-    const priority = new Set(['codebase-exploration', 'debugging', 'spike-investigation', 'deep-research', 'web-research']);
+    const priority = new Set(['codebase-exploration', 'debugging', 'spike-investigation', 'research']);
     const preferred = [...entries.filter((entry) => priority.has(entry.id)), ...entries.filter((entry) => !priority.has(entry.id))];
     const descriptions = new Map<string, string>();
     for (const entry of preferred) {
