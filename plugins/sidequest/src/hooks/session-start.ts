@@ -118,7 +118,7 @@ function checkpointingGuidance(data: HookInput): string {
   const model = stringField(data, 'model').toLowerCase();
   const tier = model.includes('haiku') ? 'Haiku' : model.includes('sonnet') ? 'Sonnet' : '';
   if (!tier) return '';
-  return '\nCHECKPOINT MODE (' + tier + '): before encoding an incomplete-evidence judgment into shared state, ask when it is irreversible, cross-project, or broad: category/route rules, cross-project config, or a module boundary. Do not ask for routine ticket filing, an exact user spec, or mechanical single-project work. `references/orchestrator-checkpointing.md`.';
+  return '\nCHECKPOINT MODE (' + tier + '): state your read and proceed on cheap-to-reverse config, category, or route edits. Ask only before an incomplete-evidence judgment ships, deletes data or refs, spends irreversible quota, or locks in work others build on. Do not ask for routine ticket filing, an exact user spec, or mechanical single-project work. `references/orchestrator-checkpointing.md`.';
 }
 
 function emit(context: string, notice: string): void {

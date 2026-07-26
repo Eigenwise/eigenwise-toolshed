@@ -952,7 +952,8 @@ test('session-start: keeps Explore narrow while rejecting generic implementation
 test('session-start: conditions checkpoint guidance on its optional model snapshot', () => {
   const sonnet = runHook(SESSION, { session_id: 'checkpoint-sonnet', model: 'claude-sonnet-5' });
   assert.match(sonnet, /CHECKPOINT MODE \(Sonnet\)/);
-  assert.match(sonnet, /category\/route rules, cross-project config, or a module boundary/);
+  assert.match(sonnet, /state your read and proceed on cheap-to-reverse config, category, or route edits/);
+  assert.match(sonnet, /ships, deletes data or refs, spends irreversible quota, or locks in work others build on/);
   assert.match(sonnet, /routine ticket filing, an exact user spec, or mechanical single-project work/);
   const compact = runHook(SESSION, { session_id: 'checkpoint-compact', source: 'compact', model: 'claude-haiku-4-5' });
   assert.match(compact, /CHECKPOINT MODE \(Haiku\)/);

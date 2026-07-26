@@ -4,16 +4,23 @@ Use this when a session-start reminder enters checkpoint mode.
 
 ## The rule
 
-Ask before encoding a judgment call when both conditions hold:
+State your read and proceed by default when evidence is incomplete or a conclusion is inferred. Ask only before an inference would be expensive to reverse:
 
-1. The evidence is incomplete or the conclusion is inferred.
-2. The decision is irreversible, cross-project, or broadly scoped.
+- Shipping a user-facing behavior or public contract.
+- Deleting data, refs, or branches.
+- Spending money or quota that cannot be recovered.
+- Locking in a decision other work will build on before it can be revisited.
 
 Examples that should trigger a checkpoint:
 
-- Defining or changing category and route rules from partial codebase evidence.
-- Writing configuration that changes behavior in other projects.
-- Choosing a broad module boundary from names or a shallow scan.
+- Publishing an inferred change that alters user behavior.
+- Deleting refs or branches based on an incomplete cleanup scan.
+- Committing an inferred platform boundary that dependent work will immediately rely on.
+
+Examples that should state the assumption and proceed:
+
+- Updating a category description from a reasonable read of the current setup.
+- Changing a route assignment or config value that can be corrected in a follow-up.
 
 Examples that should not trigger one:
 
@@ -21,7 +28,7 @@ Examples that should not trigger one:
 - Executing an exact user specification.
 - A mechanical change contained in one project.
 
-State the evidence, the proposed decision, what remains uncertain, and the smallest confirmation needed. Keep delegating and working normally otherwise.
+When a confirmation is needed, state the evidence, the proposed decision, what remains uncertain, and the smallest confirmation needed. Keep delegating and working normally otherwise.
 
 ## Model signal and limits
 

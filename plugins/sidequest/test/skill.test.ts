@@ -23,7 +23,9 @@ test('checkpointing reference documents model limits and narrow decision trigger
   assert.match(checkpointing, /optional `SessionStart` input field/);
   assert.match(checkpointing, /`UserPromptSubmit` does not receive a model field/);
   assert.match(checkpointing, /`CLAUDE_CODE_SUBAGENT_MODEL` chooses a subagent model/);
-  assert.match(checkpointing, /irreversible, cross-project, or broadly scoped/);
+  assert.match(checkpointing, /State your read and proceed by default/);
+  assert.match(checkpointing, /expensive to reverse/);
+  assert.match(checkpointing, /Changing a route assignment or config value that can be corrected/);
   assert.match(checkpointing, /routine ticket/);
 });
 
