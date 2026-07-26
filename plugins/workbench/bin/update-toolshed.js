@@ -140,6 +140,25 @@ function toolshedPlugins(registry) {
   return installedPlugins(registry).filter((instance) => pluginIdParts(instance.id)?.marketplace === GATEWAY_MARKETPLACE);
 }
 
+function isStaleProjectInstance(instance) {
+  return instance.scope !== 'user' && Boolean(instance.projectPath) && !fs.existsSync(instance.projectPath);
+}
+
+function staleProjectInstances(instances) {
+  return instances.filter(isStaleProjectInstance);
+}
+
+function activeProjectInstances(instances) {
+  return instances.filter((instance) => !isStaleProjectInstance(instance));
+}
+
+function reportStaleProjectInstances(instances, report) {
+  if (instances.length === 0) return;
+  report(`Skipped ${instances.length} stale project install(s): directory no longer exists:`);
+  for (const instance of instances) report(`- ${instance.id} (${instance.scope}, ${instance.projectPath})`);
+  report('The plugin registry was left unchanged. Remove stale entries from /plugin if you no longer need them.');
+}
+
 function installKey(instance) {
   return [instance.id, instance.scope, instance.projectPath ?? ''].join('\u0000');
 }
@@ -190,7 +209,7 @@ function marketplaceCommand(marketplace, claude) {
 }
 
 function gatewayCommand(instances, action) {
-  const gateways = instances.filter((instance) => instance.id === `codex-gateway@${GATEWAY_MARKETPLACE}` && instance.installPath);
+  const gateways = activeProjectInstances(instances).filter((instance) => instance.id === `codex-gateway@${GATEWAY_MARKETPLACE}` && instance.installPath);
   if (gateways.length === 0) return null;
 
   const newest = gateways.sort((left, right) => String(right.lastUpdated ?? '').localeCompare(String(left.lastUpdated ?? '')))[0];
@@ -234,7 +253,7 @@ function gatewayWiringCommand(instances, scope, projectPath, remove = false) {
 }
 
 function recordedProjects(instances) {
-  return [...new Set(instances.map((instance) => instance.projectPath).filter(Boolean))];
+  return [...new Set(activeProjectInstances(instances).map((instance) => instance.projectPath).filter(Boolean))];
 }
 
 function healGatewayWiring(instances, options, run, report) {
@@ -321,11 +340,14 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   if (options.wiringMode && !options.check && !options.dryRun) setGatewayWiringMode(home, options.wiringMode);
   const registry = readRegistry(registryFile);
   let instances = toolshedPlugins(registry);
+  const staleInstances = staleProjectInstances(instances);
+  instances = activeProjectInstances(instances);
   const beforeUpdate = instances;
 
+  reportStaleProjectInstances(staleInstances, report);
   if (instances.length === 0) {
-    report(`No user, project, or local Toolshed plugin installs found in ${registryFile}.`);
-    return { ok: true, instances, failures: [] };
+    report(`No active user, project, or local Toolshed plugin installs found in ${registryFile}.`);
+    return { ok: true, instances, staleInstances, failures: [] };
   }
 
   const marketplaces = marketplacesFor(instances);
@@ -348,7 +370,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
     }
 
     if (!options.dryRun) {
-      instances = toolshedPlugins(readRegistry(registryFile));
+      instances = activeProjectInstances(toolshedPlugins(readRegistry(registryFile)));
       reportVersionTransitions(versionTransitions(beforeUpdate, instances), report);
     } else {
       report('Dry run cannot know version targets until Claude Code refreshes the marketplace. It will print the gateway restart warning before it would run setup.');
@@ -388,7 +410,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   for (const line of reloadAdvice(instances)) report(line);
   if (failures.length > 0) report(`\nCompleted with ${failures.length} failure(s): ${failures.join(', ')}`);
   else report('\nCompleted successfully.');
-  return { ok: failures.length === 0, instances, failures, healedGatewayWiring, healedStatuslines };
+  return { ok: failures.length === 0, instances, staleInstances, failures, healedGatewayWiring, healedStatuslines };
 }
 
 function main() {

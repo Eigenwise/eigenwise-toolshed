@@ -22,8 +22,8 @@ const registry = {
   plugins: {
     'sidequest@eigenwise-toolshed': [
       { scope: 'user', version: '1.0.0', gitCommitSha: 'user-sha' },
-      { scope: 'project', projectPath: 'C:/work/project', version: '1.0.0', installPath: 'C:/cache/sidequest', gitCommitSha: 'project-sha' },
-      { scope: 'local', projectPath: 'C:/work/local', version: '1.0.0', installPath: 'C:/cache/sidequest', gitCommitSha: 'local-sha' },
+      { scope: 'project', projectPath: os.tmpdir(), version: '1.0.0', installPath: 'C:/cache/sidequest', gitCommitSha: 'project-sha' },
+      { scope: 'local', projectPath: process.cwd(), version: '1.0.0', installPath: 'C:/cache/sidequest', gitCommitSha: 'local-sha' },
     ],
     'codex-gateway@eigenwise-toolshed': [
       { scope: 'user', installPath: 'C:/cache/codex-gateway/0.2.0', lastUpdated: '2026-07-17T12:00:00Z', gitCommitSha: 'gateway-sha' },
@@ -63,8 +63,8 @@ test('routes project and local updates through the recorded project directory', 
   const user = updateCommand({ id: 'sidequest@eigenwise-toolshed', scope: 'user' }, 'claude');
 
   assert.deepEqual(project.args, ['plugin', 'update', 'sidequest@eigenwise-toolshed', '--scope', 'project']);
-  assert.equal(project.cwd, 'C:/work/project');
-  assert.equal(local.cwd, 'C:/work/local');
+  assert.equal(project.cwd, registry.plugins['sidequest@eigenwise-toolshed'][1].projectPath);
+  assert.equal(local.cwd, registry.plugins['sidequest@eigenwise-toolshed'][2].projectPath);
   assert.equal(user.cwd, undefined);
 });
 
@@ -96,7 +96,7 @@ test('dry-run scopes the update plan to Toolshed and does not enumerate third-pa
   assert.match(lines.join('\n'), /marketplace.*update.*eigenwise-toolshed/);
   assert.doesNotMatch(lines.join('\n'), /another-marketplace|managed-marketplace|other@another-marketplace/);
   assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
-  assert.match(lines.join('\n'), /sidequest@eigenwise-toolshed \(project, C:\/work\/project\)/);
+  assert.ok(lines.some((line) => line.includes(`sidequest@eigenwise-toolshed (project, ${registry.plugins['sidequest@eigenwise-toolshed'][1].projectPath})`)));
   assert.match(lines.join('\n'), /codex-gateway setup/);
 }));
 
@@ -154,18 +154,65 @@ test('local mode wires recorded projects before removing the legacy global block
       ['env', '--write-project'],
       ['--write-user', '--remove'],
     ]);
-    assert.deepEqual(wiring.slice(0, 2).map((command) => command.cwd), ['C:/work/local', 'C:/work/project']);
+    assert.deepEqual(wiring.slice(0, 2).map((command) => command.cwd), [
+      registry.plugins['sidequest@eigenwise-toolshed'][2].projectPath,
+      registry.plugins['sidequest@eigenwise-toolshed'][1].projectPath,
+    ]);
     assert.equal(result.healedGatewayWiring.mode, 'local');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 }));
 
+test('skips stale project installs without blocking local gateway migration', () => {
+  const stalePath = path.join(os.tmpdir(), `toolshed-stale-project-${process.pid}-${Date.now()}`);
+  const configured = structuredClone(registry);
+  configured.plugins['sidequest@eigenwise-toolshed'].push({
+    scope: 'local',
+    projectPath: stalePath,
+    version: '1.0.0',
+    installPath: 'C:/cache/sidequest',
+    gitCommitSha: 'stale-sha',
+  });
+
+  return withRegistry(configured, (registryFile) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-stale-wiring-'));
+    try {
+      const calls = [];
+      const lines = [];
+      const result = runUpdate({
+        home,
+        registryFile,
+        options: { claude: 'claude', dryRun: false, check: false },
+        run: (command) => {
+          calls.push(command);
+          return { ok: true };
+        },
+        report: (line) => lines.push(line),
+      });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.failures, []);
+      assert.equal(result.staleInstances.length, 1);
+      assert.equal(calls.some((command) => command.cwd === stalePath), false);
+      assert.equal(calls.some((command) => command.args.includes('--remove')), true);
+      assert.match(lines.join('\n'), /Skipped 1 stale project install\(s\): directory no longer exists/);
+      assert.match(lines.join('\n'), /The plugin registry was left unchanged/);
+      assert.doesNotMatch(lines.join('\n'), /Completed with \d+ failure/);
+      const saved = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+      assert.ok(saved.plugins['sidequest@eigenwise-toolshed'].some((install) => install.projectPath === stalePath));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 test('local mode preserves global wiring when a recorded project fails', () => withRegistry(registry, (registryFile) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-local-wiring-failure-'));
   try {
     const calls = [];
-    runUpdate({
+    const lines = [];
+    const result = runUpdate({
       home,
       registryFile,
       options: { claude: 'claude', dryRun: false, check: false },
@@ -173,9 +220,12 @@ test('local mode preserves global wiring when a recorded project fails', () => w
         calls.push(command);
         return { ok: !command.args.includes('--write-project') };
       },
-      report: () => {},
+      report: (line) => lines.push(line),
     });
 
+    assert.equal(result.ok, false);
+    assert.ok(result.failures.some((failure) => failure.includes('codex-gateway wire project')));
+    assert.match(lines.join('\n'), /Gateway local wiring kept legacy global settings because one or more recorded projects could not be wired/);
     assert.equal(calls.some((command) => command.args.includes('--remove')), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
