@@ -160,13 +160,14 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   next: "Claim the top available ticket.",
   scopeRequest: "Check scope; auto-approve eligible plugin tests.",
   commit: "Commit declared paths from claimed worktree.",
-  submit: "Submit verified work for integration.",
+  submit: "Submit verified work and final report.",
   comment: "Add a durable handoff comment.",
   link: "Relate tickets; inverse automatic.",
   remove: "Delete a ticket. Claims need force:true.",
   claim: "Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.",
   dispatch: "Prepare a ticket executor through its stable route.",
-  done: "Finish ticket and release its claim. Stamp the actual model and effort.",
+  done: "Finish ticket with final report. Stamp actual model and effort.",
+  release: "Release claim with durable reason.",
   groomClose: "Grooming closure; pass integration:true after a submission is integrated.",
   native_agent: "Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.",
   archive: "Archive one ticket, or every done ticket.",
@@ -362,6 +363,18 @@ function requiredText(args, key, action) {
   const value = args && args[key] != null ? String(args[key]).trim() : "";
   if (!value) throw new Error(`${action}: "${key}" is required.`);
   return value;
+}
+function requiredFinalReport(args, action) {
+  const body = args && args.body != null ? String(args.body) : "";
+  if (!body.trim()) {
+    throw new Error(`${action}: "body" is required — the completion comment carries the full final report (changed paths, verification evidence, and anything skipped).`);
+  }
+  return body;
+}
+function requiredReleaseReason(args) {
+  const reason = args && args.reason != null ? String(args.reason).trim() : "";
+  if (!reason) throw new Error('release: "reason" is required — explain why the claim is being released.');
+  return reason;
 }
 function worktreeRoot(worktree, action) {
   const supplied = requiredText({ worktree }, "worktree", action);
@@ -886,7 +899,7 @@ const TOOLS = [
   },
   {
     name: "done",
-    description: "Finish claimed non-repo or active artifact work; repo work submits, released work uses control-plane grooming. Stamp actual model and effort.",
+    description: "Finish claimed non-repo or active artifact work; repo work submits, released work uses control-plane grooming. body carries the final report. Stamp actual model and effort.",
     inputSchema: {
       type: "object",
       properties: {
@@ -895,17 +908,18 @@ const TOOLS = [
         by: { type: "string" },
         model: { type: "string", description: "Concrete runtime model that actually worked this ticket (provenance)." },
         effort: { type: "string", enum: store.VALID_EFFORTS },
-        body: { type: "string" },
+        body: { type: "string", description: "Final report stored as the completion comment." },
         session: { type: "string" }
       },
-      required: ["ref", "by"]
+      required: ["ref", "by", "body"]
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, "done");
+      const body = requiredFinalReport(args, "done");
       const ticket = store.getTicket(slug, args.ref);
       const model = requireKnownModel("done", args.model, ticket);
-      const res = store.completeTicket(slug, args.ref, by, { source: "mcp", model, effort: args.effort, body: args.body, sessionId: sessionOf(args) });
+      const res = store.completeTicket(slug, args.ref, by, { source: "mcp", model, effort: args.effort, body, sessionId: sessionOf(args) });
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);
     }
@@ -956,23 +970,30 @@ const TOOLS = [
   },
   {
     name: "release",
-    description: "Drop a claim without finishing (optionally set status, e.g. back to todo). by should match the claim.",
+    description: "Drop a claim without finishing (optionally set status, e.g. back to todo). reason records why the claim is being released. by should match the claim.",
     inputSchema: {
       type: "object",
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
         by: { type: "string" },
+        reason: { type: "string", description: "Why this claim is released." },
         status: { type: "string", enum: store.VALID_STATUS },
         session: { type: "string" }
       },
-      required: ["ref", "by"]
+      required: ["ref", "by", "reason"]
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, "release");
+      const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
-      const res = store.releaseTicket(slug, args.ref, by, { status: args.status, source: "mcp", sessionId: sessionOf(args) });
+      const res = store.releaseTicket(slug, args.ref, by, {
+        status: args.status,
+        releaseComment: { by, body: `Released: ${reason}`, kind: "comment", source: "mcp" },
+        source: "mcp",
+        sessionId: sessionOf(args)
+      });
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);
     }
@@ -1066,7 +1087,7 @@ const TOOLS = [
   },
   {
     name: "submit",
-    description: "Submit a verified scoped commit range for integration and release the claim.",
+    description: "Submit a verified scoped commit range for integration and release the claim. body carries the final report: paths, verification, and skips.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1078,14 +1099,15 @@ const TOOLS = [
         verify: { type: "string" },
         gitRef: { type: "string" },
         worktree: { type: "string", description: "Absolute path to this executor’s git worktree root. Required for isolated worktrees." },
-        body: { type: "string", description: "Optional durable verification evidence." },
+        body: { type: "string", description: "Final report: paths, verification, and skips." },
         session: { type: "string" }
       },
-      required: ["ref", "by", "commit"]
+      required: ["ref", "by", "commit", "body"]
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, "submit");
+      const body = requiredFinalReport(args, "submit");
       const commit = requiredText(args, "commit", "submit");
       if (!/^[0-9a-f]{7,64}$/i.test(commit)) {
         throw new Error(`invalid commit "${commit}" — pass the verified commit's hex hash (7-64 chars)`);
@@ -1132,14 +1154,10 @@ const TOOLS = [
         verify: args.verify,
         worktree: args.worktree,
         unscopedPaths,
+        submissionComment: { body, by, kind: "comment", source: "mcp" },
         source: "mcp",
         sessionId: sessionOf(args)
       });
-      if (res.ok && args.body != null) {
-        const comment = store.addComment(slug, args.ref, { body: String(args.body), by, kind: "comment", source: "mcp" });
-        if (!comment.ok) throw new Error(`submit: recorded ${ticket.ref}, but could not add evidence comment: ${comment.reason}`);
-        if (comment.advisory) res.advisory = comment.advisory;
-      }
       if (res.ok) closeDispatchExecutor(ticket);
       return mutationAck(slug, res);
     }

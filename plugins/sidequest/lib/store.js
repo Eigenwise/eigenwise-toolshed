@@ -3935,6 +3935,8 @@ function claimTicket(slug, idOrRef, by, opts) {
 function releaseTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
+  const releaseComment = opts.releaseComment ? prepareComment(opts.releaseComment) : null;
+  if (releaseComment && !releaseComment.ok) throw new Error(`release comment ${releaseComment.reason}`);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: "not_found" };
   return withTicketLock(slug, found.id, () => {
@@ -3997,6 +3999,11 @@ function releaseTicket(slug, idOrRef, by, opts) {
     const previousStatus = t.status;
     if (resumableScopePause(t)) captureScopePauseRecovery(slug, t);
     let comment = null;
+    if (releaseComment) {
+      if (!Array.isArray(t.comments)) t.comments = [];
+      comment = createComment(releaseComment, now);
+      t.comments.push(comment);
+    }
     clearScopeRequestMarker(t);
     t.scopeRequest = null;
     t.claim = null;
@@ -4275,6 +4282,8 @@ function submissionGitRef(ticket) {
 function submitTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
+  const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
+  if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
   const commit = String(opts.commit || "").trim().toLowerCase();
   if (!SUBMISSION_COMMIT_RE.test(commit)) {
     throw new Error(`invalid commit "${opts.commit}" — pass the verified commit's hex hash (7-64 chars)`);
@@ -4301,9 +4310,16 @@ function submitTicket(slug, idOrRef, by, opts) {
         ...t.claimRelease ? { claimRelease: t.claimRelease, message: autoReleasedClaimMessage(t.ref, t.claimRelease) } : {}
       };
     }
+    const submittedAt = (/* @__PURE__ */ new Date()).toISOString();
+    let comment = null;
+    if (submissionComment) {
+      if (!Array.isArray(t.comments)) t.comments = [];
+      comment = createComment(submissionComment, submittedAt);
+      t.comments.push(comment);
+    }
     t.submission = Object.assign({
       by,
-      at: (/* @__PURE__ */ new Date()).toISOString(),
+      at: submittedAt,
       commit,
       gitRef: gitRef || submissionGitRef(t),
       verify,
@@ -4329,7 +4345,8 @@ function submitTicket(slug, idOrRef, by, opts) {
     putTicket(slug, t);
     if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
-    return { ok: true, ticket: t };
+    if (comment) queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
+    return { ok: true, ticket: t, comment, ...submissionComment?.advisory ? { advisory: submissionComment.advisory } : {} };
   });
 }
 function clearSubmission(slug, idOrRef, opts) {

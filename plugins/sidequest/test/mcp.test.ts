@@ -196,6 +196,9 @@ test('tools/list advertises the board tools with input schemas', async () => {
   }
   const submit = resp.result.tools.find((tool: any) => tool.name === 'submit');
   assert.ok(submit.inputSchema.properties.base, 'submit exposes an explicit base');
+  assert.ok(submit.inputSchema.required.includes('body'), 'submit requires the final report');
+  assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
+  assert.ok(resp.result.tools.find((tool: any) => tool.name === 'release').inputSchema.required.includes('reason'), 'release requires its reason');
 });
 
 test('add and update preserve descriptions and expose storyId explicitly', async () => {
@@ -901,6 +904,13 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   assert.equal(gitAt(worktree, ['diff', '--cached', '--name-only']), 'foreign.js', 'foreign staging remains intact');
   gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
 
+  const missingReport = await callToolRaw('submit', {
+    project, ref: ticket.ref, by, commit: committed.commit, worktree: explicitPath,
+  });
+  assert.ok(missingReport.isError, 'submit refuses a missing final report');
+  assert.match(missingReport.content[0].text, /"body" is required.*final report/i);
+  assert.ok(store.getTicket(project, ticket.ref).claim, 'a missing report keeps the claim');
+
   const submitted = await callTool('submit', {
     project, ref: ticket.ref, by, commit: committed.commit,
     worktree: explicitPath, verify: 'node --test plugins/sidequest/test/mcp.test.js',
@@ -919,7 +929,7 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
     complexityWhy: 'confirm malformed MCP submission input preserves the ticket claim',
   });
   assert.equal((await callTool('claim', { project, ref: malformed.ref, by: 'mcp-bad-worker', direct: true, reason: 'The malformed submission fixture requires a direct claim.' })).ok, true);
-  const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree });
+  const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree, body: 'Malformed submission evidence' });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
 });
@@ -981,7 +991,7 @@ test('MCP submit accepts a known submitted commit as an explicit base', async ()
   gitAt(worktree, ['commit', '-m', 'MCP explicit base ancestor']);
   const firstTip = gitAt(worktree, ['rev-parse', 'HEAD']);
   gitAt(worktree, ['update-ref', `refs/sidequest/${first.ref}`, firstTip]);
-  assert.equal((await callTool('submit', { project, ref: first.ref, by: 'mcp-base-worker', commit: firstTip, worktree })).ok, true);
+  assert.equal((await callTool('submit', { project, ref: first.ref, by: 'mcp-base-worker', commit: firstTip, worktree, body: 'MCP explicit-base evidence' })).ok, true);
 
   const second = store.createTicket(project, {
     title: 'MCP explicit dependent range', files: ['lib/second.js'], complexity: 3,
@@ -995,7 +1005,7 @@ test('MCP submit accepts a known submitted commit as an explicit base', async ()
   gitAt(worktree, ['update-ref', `refs/sidequest/${second.ref}`, secondTip]);
 
   const submitted = await callTool('submit', {
-    project, ref: second.ref, by: 'mcp-dependent-worker', commit: secondTip, base: firstTip, worktree,
+    project, ref: second.ref, by: 'mcp-dependent-worker', commit: secondTip, base: firstTip, worktree, body: 'MCP dependent-range evidence',
   });
   assert.equal(submitted.ok, true);
   const submission = store.getTicket(project, second.ref).submission;
@@ -1101,7 +1111,7 @@ test('MCP submit refuses out-of-scope committed ranges', async () => {
   gitAt(worktree, ['commit', '-m', 'foreign work']);
   const commit = gitAt(worktree, ['rev-parse', 'HEAD']);
   gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, commit]);
-  const refused = await callTool('submit', { project, ref: ticket.ref, by, commit, worktree });
+  const refused = await callTool('submit', { project, ref: ticket.ref, by, commit, worktree, body: 'MCP scope refusal evidence' });
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'outside_scope');
   assert.match(refused.message, new RegExp(`sidequest update ${ticket.ref} --files`));
@@ -1700,9 +1710,39 @@ test('claim -> comment -> done return compact acknowledgements', async () => {
   const stored = store.getTicket(added.project, ref).comments.at(-1);
   assert.strictEqual(stored.source, 'mcp', 'MCP actions are tagged as background (not dashboard)');
 
-  const done = await callTool('done', { ref, by: 'mcp-worker-1', model: ticket.model, effort: ticket.effort });
+  const done = await callTool('done', { ref, by: 'mcp-worker-1', model: ticket.model, effort: ticket.effort, body: 'MCP completion evidence' });
   assert.deepStrictEqual(Object.keys(done).sort(), ['ok', 'project', 'ref', 'status']);
   assert.strictEqual(done.status, 'done');
+});
+
+test('MCP done requires a final report and release records its reason', async () => {
+  const added = await callTool('add', { title: 'required final report', complexity: 2, why: 'exercise final-report validation and durable release reasons', labels: ['direct-ok'] });
+  const ticket = store.getTicket(added.project, added.ref);
+  await callTool('claim', { ref: added.ref, by: 'mcp-report-worker', direct: true, reason: 'The required-report fixture needs a direct claim.' });
+
+  const missing = await callToolRaw('done', { ref: added.ref, by: 'mcp-report-worker', model: ticket.model, effort: ticket.effort });
+  assert.ok(missing.isError, 'done refuses a missing final report');
+  assert.match(missing.content[0].text, /"body" is required.*completion comment.*full final report/i);
+  const blank = await callToolRaw('done', { ref: added.ref, by: 'mcp-report-worker', model: ticket.model, effort: ticket.effort, body: ' \n\t ' });
+  assert.ok(blank.isError, 'done refuses a blank final report');
+  assert.match(blank.content[0].text, /"body" is required.*full final report/i);
+  assert.ok(store.getTicket(added.project, added.ref).claim, 'report validation keeps the claim');
+
+  await callTool('done', { ref: added.ref, by: 'mcp-report-worker', model: ticket.model, effort: ticket.effort, body: 'Changed mcp.ts; tests passed.' });
+  const completed = store.getTicket(added.project, added.ref);
+  assert.ok(completed.completion.commentId, 'done stores the completion comment id');
+  assert.equal(completed.comments.at(-1).body, 'Changed mcp.ts; tests passed.');
+
+  const released = await callTool('add', { title: 'required release reason', complexity: 2, why: 'exercise durable release-reason validation', labels: ['direct-ok'] });
+  await callTool('claim', { ref: released.ref, by: 'mcp-release-worker', direct: true, reason: 'The release-reason fixture needs a direct claim.' });
+  const missingReason = await callToolRaw('release', { ref: released.ref, by: 'mcp-release-worker' });
+  assert.ok(missingReason.isError, 'release refuses a missing reason');
+  assert.match(missingReason.content[0].text, /"reason" is required.*why.*released/i);
+  await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope needs approval.', status: 'todo' });
+  const afterRelease = store.getTicket(released.project, released.ref);
+  assert.equal(afterRelease.claim, null);
+  assert.equal(afterRelease.comments.at(-1).body, 'Released: Scope needs approval.');
+  assert.equal(afterRelease.comments.at(-1).by, 'mcp-release-worker');
 });
 
 test('oversized comment acks advise without changing stored bodies', async () => {
@@ -2026,7 +2066,7 @@ test('done stamps workedBy with a discovered Codex slug', async () => {
     const added = await callTool('add', { title: 'codex provenance', category: 'provenance-codex' });
     const ref = added.ref;
     await callTool('claim', { ref, by: 'mcp-w-codex' });
-    const done = await callTool('done', { ref, by: 'mcp-w-codex', model: 'codex-terra', effort: 'high' });
+    const done = await callTool('done', { ref, by: 'mcp-w-codex', model: 'codex-terra', effort: 'high', body: 'Codex completion evidence' });
     assert.strictEqual(done.ok, true);
     assert.strictEqual(store.getTicket(added.project, ref).workedBy.model, 'codex-terra');
   } finally {
@@ -2051,7 +2091,7 @@ test('reporting aliases resolve to catalog slugs and dispatched done defaults pr
       const prepared = await callTool('dispatch', { ref: added.ref, full: true });
       const by = `mcp-alias-${added.ref}`;
       await callTool('claim', { ref: added.ref, by, executor: prepared.agent, effort: 'high', token: prepared.token });
-      await callTool('done', { ref: added.ref, by, ...(model == null ? {} : { model, effort: 'high' }) });
+      await callTool('done', { ref: added.ref, by, body: 'Alias completion evidence', ...(model == null ? {} : { model, effort: 'high' }) });
       return store.getTicket(added.project, added.ref);
     };
 
@@ -2082,7 +2122,7 @@ test('reporting aliases resolve to catalog slugs and dispatched done defaults pr
       verify: 'node --test test/mcp.test.js',
     });
     const prepared = await callTool('dispatch', { ref: added.ref, full: true });
-    const unknown = await callToolRaw('done', { ref: added.ref, by: 'mcp-alias-unknown', model: 'claude-codex-auto' });
+    const unknown = await callToolRaw('done', { ref: added.ref, by: 'mcp-alias-unknown', model: 'claude-codex-auto', body: 'Unknown-model completion evidence' });
     assert.ok(unknown.isError);
     assert.match(unknown.content[0].text, /expected for .*: codex-gpt-5-6-terra-fast/);
     assert.equal(store.getTicket(added.project, added.ref).dispatchNonce, prepared.token);
