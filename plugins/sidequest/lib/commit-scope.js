@@ -484,7 +484,7 @@ function validateStoredSubmissionRange(cwd, submissionValue) {
       message: "submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason."
     });
   }
-  const scopeValidation = validatePaths(admittedScope, range.changedPaths);
+  const scopeValidation = validatePaths(admittedScope, range.changedPaths || []);
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, { admittedScope });
 }
