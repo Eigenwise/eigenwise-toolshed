@@ -49,7 +49,9 @@ Protocol for each ticket:
    not touch files. Report the refusal and move to the next batch ref or stop.
 2. **Read the ticket and comment thread** with `mcp__plugin_sidequest_board__comments` using the default read; elided old bodies are recoverable with `full:true` only when they matter, including linked
    ticket threads when relevant.
-3. **Do only the ticket work.** Comments are handoffs, not a diary. Record decisions, constraints,
+3. **Do only the ticket work.** Comments are handoffs, not a diary. Story members append durable
+   cross-ticket findings to the story log with `story_log`, one line prefixed `DECISION:`, `CONSTRAINT:`,
+   or `DISCOVERY:`, rather than leaving them only in a ticket comment. Record decisions, constraints,
    risks, verification evidence, or concise findings with `mcp__plugin_sidequest_board__comment`.
 4. **Verify** with the ticket's exact repo-relative command.
    High-stakes tickets keep their routed model and effort. They require every changed surface's consumers and suites checked, then a review-audit before integration.

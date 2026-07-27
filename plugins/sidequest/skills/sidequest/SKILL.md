@@ -32,10 +32,10 @@ For substantial work:
 1. **Ticket shape.** If a written spec pins shared types/interfaces, file boundaries, and
    per-piece verification, 3+ independently checkable pieces use contract-first fan-out: pin the
    contract in ticket descriptions or a short planning ticket, then one parallel wave on
-   category-appropriate cheaper models and integrate once per wave. Several tickets sharing one outcome → a **Sidequest story** first
-   (`sidequest story add`, then `--story US-n` per piece). A story is Sidequest's own optional
-   `US-n` grouping, not a Claude Code feature. Use it for a shared outcome, dependencies, or waves;
-   leave independent or small work as atomic tickets. Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
+   category-appropriate cheaper models and integrate once per wave. **Wave mode REQUIRES a Sidequest story** first
+   (`sidequest story add`, then `--story US-n` per piece): file the complete backlog under it and pin
+   the execution contract on it. A story is Sidequest's own `US-n` grouping, not a Claude Code feature.
+   One-ticket mode stays story-less; use stories for shared outcomes or dependencies. Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
    Tickets carry anchors, contract, and exact verify. Use directory scope for the blast radius; details:
    `references/ticket-authoring.md`.
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →

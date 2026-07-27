@@ -13,7 +13,9 @@ sidequest story add -t "Checkout revamp" [-d "..."] [--color teal]   # prints it
 sidequest story list                                                  # stories + color + ticket count
 sidequest story show US-1                                             # the story and its tickets
 sidequest story update US-1 -t "New title" [--color "#7a5ba8"]        # rename / recolor
-sidequest story rm US-1                                               # delete (member tickets detached)
+sidequest story contract US-1 [-m "..."] [--body-file path]             # frozen execution contract
+sidequest story log US-1 [-m "..."] [--body-file path] [--ref SQ-n] [--by who] [--clear]
+sidequest story rm US-1                                                   # delete (member tickets detached)
 ```
 
 - Attach a ticket at creation (`sidequest add ... --story US-1`) or later
