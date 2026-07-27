@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.244.0 (2026-07-27)
+
+### sidequest 3.26.3 → 3.26.4
+
+#### Fixes
+
+- Bookend supervision: two touches per ticket, integrate by oracle, never by reading the diff (SQ-944) [`9992e18`](https://github.com/Eigenwise/eigenwise-toolshed/commit/9992e18c9a48d6b9fad9a2272bc76c003433a1df)
+
 ## v3.243.0 (2026-07-27)
 
 ### sidequest 3.26.2 → 3.26.3
