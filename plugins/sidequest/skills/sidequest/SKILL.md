@@ -21,19 +21,20 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 
 ## Plan substantial work on the board first
 
-When a task is **more than a single small change**, do this **before writing any code**:
+For substantial work:
 
-0. **Apply the solo-fit gate.** If the whole request fits one executor comfortably — one
-   coherent spec, no context-window risk, and no more than about two genuinely parallel streams —
-   file **one ticket** and dispatch one executor. Decompose only when
-   the work exceeds one context or the parallel streams are real.
-1. **Choose the ticket shape.** Several tickets sharing one outcome → a **Sidequest story** first
+0. **solo-fit gate.** **SOLO-FIT picks one-executor vs wave; it NEVER means you implement
+   inline.** Small coherent work gets **one ticket** and one executor; use it too when the contract
+   cannot be pinned without doing the work.
+1. **Ticket shape.** If a written spec pins shared types/interfaces, file boundaries, and
+   per-piece verification, 3+ independently checkable pieces use contract-first fan-out: pin the
+   contract in ticket descriptions or a short planning ticket, then one parallel wave on
+   category-appropriate cheaper models and integrate once per wave. Several tickets sharing one outcome → a **Sidequest story** first
    (`sidequest story add`, then `--story US-n` per piece). A story is Sidequest's own optional
-   `US-n` grouping, not a Claude Code feature: use it when shared outcome, dependencies, or waves need to
-   stay visible; leave independent or small work as atomic tickets. Each ticket carries anchors, contract, and
-   exact verify; gather missing context before dispatch.
-   Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
-   Use directory scope where that absorbs the intended blast radius; details: `references/ticket-authoring.md`.
+   `US-n` grouping, not a Claude Code feature. Use it for a shared outcome, dependencies, or waves;
+   leave independent or small work as atomic tickets. Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
+   Tickets carry anchors, contract, and exact verify. Use directory scope for the blast radius; details:
+   `references/ticket-authoring.md`.
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
    integrate so `ready` serializes the phases.
 3. **Execute proportionally** — "Route execution down" below.

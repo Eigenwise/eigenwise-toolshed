@@ -9,17 +9,21 @@ in the main skill — this file is the detail on the bigger shapes.
 
 ### Solo-fit gate before decomposition
 
-Before filing several tickets, estimate whether the whole request fits one executor comfortably. File
-**one ticket and dispatch one executor** when it is greenfield or otherwise one coherent spec, has no
-context-window risk, and has no more than about two genuinely parallel streams. Keep that ticket whole
-when the work must land and verify together. Delegation still stays the default: this right-sizes the
-unit of delegation rather than pulling substantial work inline.
+Before filing several tickets, use solo-fit only to choose the dispatch shape. **SOLO-FIT picks
+one-executor vs wave; it NEVER means you implement inline.** File **one ticket and dispatch one
+executor** when the work is small and coherent enough for one executor to finish comfortably in one
+context, or its contract cannot be pinned without doing the work. Keep that ticket whole when the work
+must land and verify together.
 
-Decompose when the work exceeds one executor's context or independently checkable streams genuinely
-parallelize. One ticket then equals one bounded, independently checkable piece: a code change with a
-verify command, or an investigation, spike, or review whose "done" is a concrete answer or artifact.
-Cut along real independent surfaces, not merely a list of deliverables. Several named pieces can still
-be one feature with a shared contract; split them only when they can progress and verify independently.
+When a written spec can pin shared types/interfaces, file boundaries, and per-piece verification, and
+there are 3+ independently checkable pieces, prefer a contract-first fan-out: put the contract directly
+in the ticket descriptions or create one short planning ticket, then dispatch one parallel wave to
+category-appropriate cheaper models and integrate once per wave. Decompose for this shape or when the
+work exceeds one executor's context. One ticket still equals one bounded, independently checkable piece:
+a code change with a verify command, or an investigation, spike, or review whose "done" is a concrete
+answer or artifact. Cut along real independent surfaces, not merely a list of deliverables. Several named
+pieces can still be one feature with a shared contract; split them only when they can progress and verify
+independently.
 
 When decomposition is warranted, use a story for a shared outcome. A planning investigation can pin
 shared decisions and anchors before a wave starts. Put frozen decisions, invariants, acceptance evidence,

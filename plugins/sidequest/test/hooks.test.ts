@@ -1055,9 +1055,10 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /Operational requests \(run\/build\/test app; start\/stop dev server; open dashboard; answer from visible context\): act inline, without the Sidequest skill, category_list, or board reads\./);
   assert.match(ctx, /Reload the Sidequest skill before board work/);
   assert.match(ctx, /sidequest \(active\)/);
-  assert.match(ctx, /SOLO-FIT FIRST/, 'must check whether the whole request fits one executor first');
-  assert.match(ctx, /coherent, context-safe work with up to two real streams/);
-  assert.match(ctx, /Otherwise use checkable ATOMIC tickets/);
+  assert.match(ctx, /SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline/, 'solo-fit must choose a dispatch shape, never inline work');
+  assert.match(ctx, /Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor/);
+  assert.match(ctx, /contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once/);
+  assert.match(ctx, /substantive actions are BLOCKED until claim/);
   assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
   assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
   assert.match(ctx, /WebSearch is executor-only: file and dispatch a research ticket/);
@@ -1110,11 +1111,15 @@ test('session-start: carries runtime resource and worker reporting coordination'
   assert.match(ctx, /Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup/, 'must define worker reporting and ownership');
 });
 
-test('session-start: applies solo-fit before the deliverables smell rule', () => {
+test('session-start: makes solo-fit a dispatch-only gate and prefers contract-first waves', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /SOLO-FIT FIRST: coherent, context-safe work/);
-  assert.match(ctx, /Otherwise use checkable ATOMIC tickets with anchors, contract, bounds, decisions, and verify; several deliverables are a smell/);
-  assert.match(ctx, /plan then wave/);
+  assert.match(ctx, /SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline/);
+  assert.match(ctx, /Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor/);
+  assert.match(ctx, /shared types\/interfaces, file bounds, and per-piece verifies/);
+  assert.match(ctx, /3\+ independently checkable pieces use contract-first/);
+  assert.match(ctx, /pin contract, one parallel wave to category-appropriate cheaper models, integrate once/);
+  assert.match(ctx, /substantive actions are BLOCKED until claim/);
+  assert.match(ctx, /Otherwise use checkable ATOMIC tickets; several deliverables are a smell/);
   assert.match(ctx, /Passing done-oracle skips audit\/fix unless high-stakes; full suite once\/wave/);
 });
 
