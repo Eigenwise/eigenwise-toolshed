@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.247.0 (2026-07-28)
+
+### sidequest 3.26.5 → 3.27.0
+
+#### Features
+
+- Story decision log: executor-appendable shared memory per story, story-first wave orchestration, scope-expansion control-plane gate (US-27) [`619e96b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/619e96bd149c8f1ce517ba5cd29aa8531cee7f91)
+
+### workbench 0.68.0 → 0.68.1
+
+#### Fixes
+
+- retro files an improvement story instead of applying fix lists inline when a board is active (SQ-951) [`619e96b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/619e96bd149c8f1ce517ba5cd29aa8531cee7f91)
+
 ## v3.246.0 (2026-07-27)
 
 ### sidequest 3.26.4 → 3.26.5
