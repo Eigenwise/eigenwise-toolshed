@@ -149,6 +149,43 @@ test('story execution contracts lead member briefings from their dispatch snapsh
   assert.ok(briefing.indexOf('Invariant: do not rebrief claimed work.') < briefing.indexOf('Ref: SQ-750'));
 });
 
+test('story decision logs render live after frozen contract snapshots', () => {
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(tmpDir(), 'story decision log briefing').slug;
+  const story = store.createStory(slug, { title: 'Live log', executionContract: 'Current contract body.' });
+  const created = store.createTicket(slug, { title: 'Log member', storyId: story.id });
+  const ticket = Object.assign({}, store.getTicket(slug, created.ref), {
+    model: 'opus', effort: 'high', category: {},
+    dispatch: { storyContract: { revision: 3, body: 'Frozen contract snapshot.' } },
+  });
+
+  const before = agentsync.renderTicketBriefing(ticket, 'story-log-token', slug);
+  assert.doesNotMatch(before, /## Story decision log/);
+  assert.match(before, /Frozen contract snapshot\./);
+  assert.doesNotMatch(before, /Current contract body\./);
+
+  assert.equal(store.claimTicket(slug, created.ref, 'exec-a').ok, true);
+  store.appendStoryLogEntry(slug, story.ref, {
+    ref: created.ref, by: 'exec-a', kind: 'DISCOVERY', text: 'Render from the live story record.',
+  });
+  store.appendStoryLogEntry(slug, story.ref, {
+    ref: created.ref, by: 'exec-a', kind: 'CONSTRAINT', text: 'Keep the dispatch contract frozen.',
+  });
+
+  const after = agentsync.renderTicketBriefing(ticket, 'story-log-token', slug);
+  const packet = after.match(/## Story decision log[\s\S]*?(?=\n\n## This ticket)/);
+  assert.ok(packet);
+  assert.ok(Buffer.byteLength(packet![0], 'utf8') <= 4 * 1024);
+  assert.match(packet![0], new RegExp(`## Story decision log \\(${story.ref}, 2 entries through #2\\)`));
+  assert.match(packet![0], new RegExp(`#1 DISCOVERY \\(${created.ref}, exec-a\\): Render from the live story record\\.`));
+  assert.match(packet![0], new RegExp(`#2 CONSTRAINT \\(${created.ref}, exec-a\\): Keep the dispatch contract frozen\\.`));
+  assert.ok(packet![0].indexOf('#1 DISCOVERY') < packet![0].indexOf('#2 CONSTRAINT'));
+  assert.ok(after.indexOf('## Story execution contract') < after.indexOf('## Story decision log'));
+  assert.ok(after.indexOf('## Story decision log') < after.indexOf('## This ticket'));
+  assert.match(after, /Frozen contract snapshot\./);
+  assert.doesNotMatch(after, /Current contract body\./);
+});
+
 test('generation-two marker cannot be mistaken for the legacy marker', () => {
   assert.ok(!agentsync.MARKER.includes(agentsync.LEGACY_MARKER));
 });
