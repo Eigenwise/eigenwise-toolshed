@@ -4934,11 +4934,11 @@ function normalizeStoryLogEntry(value) {
   let text = String(raw == null ? "" : raw).replace(/\s*[\r\n]+\s*/g, " ").trim();
   const prefixed = text.match(/^(DECISION|CONSTRAINT|DISCOVERY)\s*:\s*/i);
   const explicitKind = value && typeof value === "object" && value.kind != null ? String(value.kind).trim().toUpperCase() : null;
-  const kind = explicitKind || (prefixed ? prefixed[1].toUpperCase() : null);
+  const kind = explicitKind || (prefixed?.[1]?.toUpperCase() ?? null);
   if (!kind || !STORY_LOG_KINDS.has(kind)) {
     throw new Error("story log entry kind must be DECISION, CONSTRAINT, or DISCOVERY.");
   }
-  if (prefixed && (!explicitKind || explicitKind === prefixed[1].toUpperCase())) {
+  if (prefixed && (!explicitKind || explicitKind === prefixed?.[1]?.toUpperCase())) {
     text = text.slice(prefixed[0].length).trim();
   }
   if (!text) throw new Error("story log entry text is required.");
@@ -4961,10 +4961,11 @@ function storyDecisionLogEntries(story) {
 function renderStoryDecisionLog(story, entries) {
   const log = entries || storyDecisionLogEntries(story);
   if (!log.length) return "";
-  const lastSeq = Number(story && story.logRevision) || log[log.length - 1].seq;
+  const lastEntry = log[log.length - 1];
+  const lastSeq = Number(story && story.logRevision) || lastEntry?.seq;
   const countLabel = `${log.length} ${log.length === 1 ? "entry" : "entries"}`;
   return [
-    `## Story decision log (${story.ref}, ${countLabel} through #${lastSeq})`,
+    `## Story decision log (${story?.ref}, ${countLabel} through #${lastSeq})`,
     "Findings appended by sibling executors on this story. The contract above outranks these.",
     ...log.map((entry) => `- #${entry.seq} ${entry.kind} (${entry.ref || "orchestrator"}, ${entry.by}): ${entry.text}`)
   ].join("\n");
