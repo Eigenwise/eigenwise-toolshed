@@ -135,7 +135,7 @@ test('rendered decision log refuses entries beyond 4096 bytes without eviction',
   const stored = store.getStory(slug, createdStory.ref);
   const log = store.storyDecisionLog(stored);
   assert.match(
-    refusal.message,
+    refusal?.message || '',
     new RegExp(`^story log: ${createdStory.ref} decision log is full \\(4096 bytes, ${log.entries.length} entries\\)\\. Condense it into the story execution contract with story_contract, then clear with story_log --clear\\.$`),
   );
   assert.ok(log.bytes <= store.STORY_DECISION_LOG_MAX_BYTES);
