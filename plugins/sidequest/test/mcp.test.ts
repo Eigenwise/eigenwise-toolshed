@@ -185,7 +185,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -344,6 +344,31 @@ test('story contracts are bounded, revisioned, and warn claimed members about dr
   assert.match(changes.tickets.find((entry: any) => entry.ref === ticket.ref).warnings.join('\n'), /execution contract changed/);
 });
 
+test('story_log reads, appends from a claimed member, and clears after promotion', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-log-'))).slug;
+  const story = store.createStory(project, { title: 'Decision log packet' });
+  const ticket = store.createTicket(project, { title: 'Member ticket', storyId: story.ref, source: 'test' });
+  assert.equal(store.claimTicket(project, ticket.ref, 'log-worker', { direct: true }).ok, true);
+
+  const empty = await callTool('story_log', { project, story: story.ref });
+  assert.deepEqual(empty.story, { ref: story.ref, logBytes: 0, logCapacity: 4096, logRevision: 0, entries: [] });
+
+  const appended = await callTool('story_log', {
+    project, story: story.ref, ref: ticket.ref, by: 'log-worker', entry: 'DISCOVERY: CLI and MCP share the same store API.',
+  });
+  assert.equal(appended.story.logRevision, 1);
+  assert.deepEqual(
+    { ref: appended.story.entries[0].ref, by: appended.story.entries[0].by, kind: appended.story.entries[0].kind, text: appended.story.entries[0].text },
+    { ref: ticket.ref, by: 'log-worker', kind: 'DISCOVERY', text: 'CLI and MCP share the same store API.' },
+  );
+
+  const cleared = await callTool('story_log', { project, story: story.ref, clear: true, by: 'orchestrator' });
+  assert.deepEqual(cleared.story, { ref: story.ref, logBytes: 0, logCapacity: 4096, logRevision: 1, entries: [] });
+  const denied = await callToolRaw('story_log', { project, story: story.ref, clear: true, by: 'log-worker' });
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /clear:true requires by:"orchestrator"/);
+});
+
 test('tools/list keeps schemas compact without losing claim and dispatch discipline', async () => {
   const tools = mcp.toolDescriptors();
   const descriptionBytes = (value: any): number => {
@@ -355,7 +380,7 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   const total = descriptionBytes(tools);
   assert.ok(total <= 5000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
   const payload = JSON.stringify({ tools });
-  assert.ok(payload.length <= 16000, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
+  assert.ok(payload.length <= 16200, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);

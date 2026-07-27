@@ -264,6 +264,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   changes: 'THE polling read.',
   ready: 'Unclaimed, unblocked tickets in safe waves.',
   story: 'Manage stories.',
+  story_log: 'Story log.',
   checkpoint: 'Record review candidate; retain claim.',
   sweepClaims: 'Release dead claims; live ones stay.',
   next: 'Claim the top available ticket.',
@@ -720,6 +721,43 @@ const TOOLS: ToolDefinition[] = [
         : store.updateStory(slug, args.story, { executionContract: args.contract });
       if (!story) throw new Error(`story_contract: no story "${args.story}" in ${meta.name}`);
       return { ok: true, project: slug, projectName: meta.name, story };
+    },
+  },
+  {
+    name: 'story_log',
+    description: 'Read, append, or clear a story decision log.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: PROJECT_PROP,
+        story: { type: 'string', description: 'Story ref or id.' },
+        entry: { type: 'string', description: 'Decision log entry, prefixed with DECISION, CONSTRAINT, or DISCOVERY.' },
+        ref: { type: 'string', description: 'Claimed member ticket ref for an append.' },
+        by: { type: 'string', description: 'Claim owner for an append, or orchestrator to clear.' },
+        clear: { type: 'boolean', description: 'Clear after durable entries are promoted to the execution contract.' },
+      },
+      required: ['story'],
+    },
+    handler(args) {
+      const { slug, meta } = resolveProject(args.project);
+      if (args.clear && args.entry !== undefined) throw new Error('story_log: pass an entry or clear:true, not both.');
+      let story;
+      if (args.clear) {
+        if (args.by !== 'orchestrator') throw new Error('story_log: clear:true requires by:"orchestrator".');
+        story = store.clearStoryLog(slug, args.story);
+      } else if (args.entry === undefined) {
+        story = store.getStory(slug, args.story);
+      } else {
+        story = store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
+      }
+      if (!story) throw new Error(`story_log: no story "${args.story}" in ${meta.name}`);
+      const log = store.storyDecisionLog(story);
+      return {
+        ok: true,
+        project: slug,
+        projectName: meta.name,
+        story: { ref: story.ref, logBytes: log.bytes, logCapacity: log.capacity, logRevision: log.revision, entries: log.entries },
+      };
     },
   },
   {
