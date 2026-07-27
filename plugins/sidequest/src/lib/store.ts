@@ -3418,6 +3418,35 @@ function updateDoneRefusal(ticket?: any) {
   return null;
 }
 
+function sameFiles(left?: any, right?: any) {
+  const normalizedLeft = normalizeFiles(left);
+  const normalizedRight = normalizeFiles(right);
+  const rightFiles = new Set(normalizedRight.map((file: any) => file.toLowerCase()));
+  return normalizedLeft.length === normalizedRight.length
+    && normalizedLeft.every((file: any) => rightFiles.has(file.toLowerCase()));
+}
+
+function activeClaimScopeRefusal(ticket?: any, files?: any, patch?: any) {
+  if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
+  const current = normalizeFiles(ticket.files);
+  const next = boundedFiles(files);
+  if (sameFiles(current, next)) return null;
+  const request = ticket.scopeRequest;
+  if (request && sameFiles(next, scopeExpansionFiles(ticket, request.files))) return null;
+  const caller = String(patch?.by || '').trim();
+  if (caller && caller !== ticket.claim.by) return null;
+  const claimedSession = String(dispatchState(ticket)?.sessionId || '').trim();
+  const callerSession = String(patch?.sessionId || '').trim();
+  if (callerSession && claimedSession && callerSession !== claimedSession) return null;
+  const currentFiles = new Set(current.map((file: any) => file.toLowerCase()));
+  const nextFiles = new Set(next.map((file: any) => file.toLowerCase()));
+  const refused = [
+    ...next.filter((file: any) => !currentFiles.has(file.toLowerCase())),
+    ...current.filter((file: any) => !nextFiles.has(file.toLowerCase())),
+  ];
+  return `${ticket.ref}: refusing active-claim scope change for ${refused.join(', ')}. Use \`sidequest scope-request ${ticket.ref} --file <path> --by ${ticket.claim.by}\` to request approval.`;
+}
+
 // Apply a partial update. Only known fields are written; unknown keys ignored.
 // Locked (like every other mutator) so a concurrent comment/claim/link append
 // can never be silently overwritten by an update whose read predates it.
@@ -3443,6 +3472,8 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
     if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
     if (patch.files !== undefined) {
+      const scopeRefusal = activeClaimScopeRefusal(t, patch.files, patch);
+      if (scopeRefusal) throw new Error(scopeRefusal);
       t.files = boundedFiles(patch.files);
       const request = t.scopeRequest;
       if (request && Array.isArray(request.files) && request.files.every((file?: any) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {

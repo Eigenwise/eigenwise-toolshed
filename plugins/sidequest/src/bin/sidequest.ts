@@ -443,6 +443,7 @@ async function cmdUpdate(opts: any, positional: any) {
   }
   if (opts.story != null) patch.storyId = opts.story; // link (US-n / raw id) or clear ("none"/null)
   if (opts.category != null) patch.category = opts.category === 'none' ? null : categoryIdOrFail(slug, opts.category);
+  if (opts.by != null) patch.by = opts.by;
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
   const saved = store.updateTicket(slug, idOrRef, patch);
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
@@ -2612,7 +2613,7 @@ const HELP_COMMANDS: any = {
   list: 'sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
-  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"]',
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"] [--by who]',
   rm: 'sidequest rm <id|SQ-n> [--force]',
   profile: 'sidequest profile <hygiene|list|show|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
   category: 'sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--readonly true|false] [--json]',

@@ -90,7 +90,7 @@ test('CLI update reports a scope request that remains pending after a partial ap
   assert.strictEqual(runCli(['claim', t.ref, '--by', by, '--direct', '--reason', 'The scope request fixture requires a local direct claim.']).status, 0);
   assert.strictEqual(runCli(['scope-request', t.ref, '--by', by, '--files', 'lib/new.js,other/new.js']).status, 0);
 
-  const partial = runCli(['update', t.ref, '--files', 'lib/fixture.js,lib/new.js']);
+  const partial = runCli(['update', t.ref, '--by', 'scope-approval-orchestrator', '--files', 'lib/fixture.js,lib/new.js']);
   assert.strictEqual(partial.status, 0, partial.stderr + partial.stdout);
   assert.match(partial.stdout, /Scope request remains pending/);
   assert.match(partial.stdout, /other\/new\.js/);

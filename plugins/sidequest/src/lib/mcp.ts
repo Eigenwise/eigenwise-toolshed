@@ -862,6 +862,7 @@ const TOOLS: ToolDefinition[] = [
         highStakes: { type: 'boolean' },
         labels: LABELS_PROP,
         files: FILES_PROP,
+        by: { type: 'string', description: 'Control-plane identity when approving an active claim scope request; it must differ from the claiming executor.' },
         produces: CONTRACT_PROP('produces'),
         changes: CONTRACT_PROP('changes'),
         consumes: CONTRACT_PROP('consumes'),
@@ -882,7 +883,8 @@ const TOOLS: ToolDefinition[] = [
         throw new Error('update: re-scoring complexity needs a fresh why (min 20 chars).');
       }
       const { slug, meta } = resolveProject(args.project);
-      const patch: any = { source: 'mcp' };
+      const patch: any = { source: 'mcp', sessionId: sessionOf(args) };
+      if (args.by !== undefined) patch.by = args.by;
       for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'complexity']) {
         if (args[k] !== undefined) patch[k] = args[k];
       }
