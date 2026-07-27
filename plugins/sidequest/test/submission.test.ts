@@ -22,6 +22,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-test
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const { makeCliRunner } = require('./_helpers.js');
 
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-project-'));
@@ -54,6 +55,19 @@ const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR }, { cwd: PROJECT_DIR });
 
 const COMMIT = 'abc1234def5678abc1234def5678abc1234def56';
+
+function persist(ticket?: any) {
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id,
+    project: slug,
+    ref: ticket.ref,
+    status: ticket.status,
+    archived: ticket.archived ? 1 : 0,
+    ord: ticket.order,
+    claim_by: ticket.claim ? ticket.claim.by : null,
+    data: ticket,
+  });
+}
 
 function addTicket(title?: any, extra?: any) {
   return store.createTicket(slug, Object.assign({
@@ -168,17 +182,19 @@ test('submitted tickets leave the ready pool and refuse claims until cleared', (
   assert.strictEqual(store.clearSubmission(slug, t.ref, {}).reason, 'no_submission');
 });
 
-test('integration closure consumes a routed submission with control-plane provenance', () => {
-  const t = addTicket('integration consumes submission', { category: 'codebase-exploration' });
-  const prepared = store.prepareDispatch(slug, t.ref, { sharedTree: false });
-  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', {
-    token: prepared.token,
-    executor: prepared.ticket.dispatchExecutor,
-    source: 'mcp',
-  }).ok, true);
-  assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
+test('integration closure consumes an in-scope submission with control-plane provenance', () => {
+  cleanBranch();
+  const t = addTicket('integration consumes submission', { files: ['lib/integrates.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'worker-a', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'integrates.js'), 'integrated\n');
+  git(['add', 'lib/integrates.js']);
+  git(['commit', '-m', 'integration candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'worker-a', '--commit', commit]).status, 0);
 
-  const completed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${COMMIT} into main.`]);
+  const completed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into main.`]);
   assert.strictEqual(completed.status, 0, completed.stderr + completed.stdout);
   const after = store.getTicket(slug, t.ref);
   assert.strictEqual(after.status, 'done');
@@ -187,6 +203,61 @@ test('integration closure consumes a routed submission with control-plane proven
   assert.ok(after.submission.integratedAt, 'integration closure stamps the submission integrated');
   assert.strictEqual(store.pendingSubmission(after), false);
   assert.ok(!store.submissionsPayload(slug).tickets.some((x?: any) => x.ref === t.ref));
+});
+
+test('legacy submission scope overrides require an explicit flag and retain its reason', () => {
+  cleanBranch();
+  const t = addTicket('legacy scope snapshot', { files: ['lib/legacy.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'legacy-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'legacy.js'), 'legacy\n');
+  git(['add', 'lib/legacy.js']);
+  git(['commit', '-m', 'legacy scope candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'legacy-worker', '--commit', commit]).status, 0);
+  const legacy = store.getTicket(slug, t.ref);
+  delete legacy.submission.admittedScope;
+  persist(legacy);
+
+  const queued = cliJson(['publish', 'queue', '--json']).tickets.find((entry?: any) => entry.ref === t.ref);
+  assert.strictEqual(queued.rangeValidation.reason, 'missing_scope_snapshot');
+  const refused = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', 'Legacy handoff was integrated before scope snapshots shipped.']);
+  assert.strictEqual(refused.status, 1);
+  assert.match(refused.stderr + refused.stdout, /no admitted scope snapshot/);
+
+  const overridden = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--override-legacy-scope', '--reason', 'Legacy handoff was integrated before scope snapshots shipped.']);
+  assert.strictEqual(overridden.status, 0, overridden.stderr + overridden.stdout);
+  const after = store.getTicket(slug, t.ref);
+  assert.strictEqual(after.completion.legacyScopeOverride.reason, 'Legacy handoff was integrated before scope snapshots shipped.');
+  assert.match(after.comments.at(-1).body, /Legacy handoff was integrated before scope snapshots shipped/);
+});
+
+test('scope snapshots refuse changed paths at queue and integration after ticket scope changes', () => {
+  cleanBranch();
+  const t = addTicket('immutable admitted scope', { files: ['lib/snapshotted.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'snapshot-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'snapshotted.js'), 'snapshotted\n');
+  git(['add', 'lib/snapshotted.js']);
+  git(['commit', '-m', 'snapshotted scope candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'snapshot-worker', '--commit', commit]).status, 0);
+  assert.deepStrictEqual(store.getTicket(slug, t.ref).submission.admittedScope, ['lib/snapshotted.js']);
+
+  store.updateTicket(slug, t.ref, { files: ['lib'] });
+  assert.deepStrictEqual(store.getTicket(slug, t.ref).submission.admittedScope, ['lib/snapshotted.js']);
+  const malformed = store.getTicket(slug, t.ref);
+  malformed.submission.admittedScope = ['lib/rewritten.js'];
+  persist(malformed);
+
+  const queued = cliJson(['publish', 'queue', '--json']).tickets.find((entry?: any) => entry.ref === t.ref);
+  assert.strictEqual(queued.rangeValidation.reason, 'outside_scope');
+  assert.deepStrictEqual(queued.rangeValidation.outside, ['lib/snapshotted.js']);
+  const refused = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into main.`]);
+  assert.strictEqual(refused.status, 1);
+  assert.match(refused.stderr + refused.stdout, /lib\/snapshotted\.js/);
 });
 
 test('brief and pulse surface a pending submission', () => {

@@ -47,10 +47,7 @@ board (submissions stay parked — fail closed).
    wakeup. `--steal` only when `publish status` shows the holder stale (TTL expired or dead pid).
    Re-acquiring from the same session refreshes the lock — that is the crash-recovery path for your
    own interrupted transaction.
-2. **Read the queue**: `sidequest publish queue --json` — each entry carries the durable ref,
-   submission base, expected upstream, ordered commit range, full changed-path union, declared files,
-   and the verify command the executor ran. A legacy entry without range metadata stays parked until
-   its executor resubmits it; never guess a range from a tip hash.
+2. **Read the queue**: `sidequest publish queue --json`. Queue admission mechanically revalidates each durable range and its submit-time admitted scope snapshot. Rejected entries name their offending paths and stay parked. A legacy entry without a scope snapshot stays parked until its executor resubmits it. Use `groom-close --integration --override-legacy-scope --reason "..."` only when the legacy handoff is already integrated and the reason belongs in the ticket record.
 3. **Read each submitted handoff**: before integrating or closing a ticket, run
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
@@ -60,14 +57,15 @@ board (submissions stay parked — fail closed).
    Install the touched plugin's dependencies before reverifying, for this repo:
    `cd <worktree>/plugins/<name> && npm ci`. Never integrate in the shared session tree — pre-staged
    or dirty files there are exactly the contamination this flow exists to prevent.
-5. **Reconstruct and admit each submission before integration**. Resolve its durable ref and require
+5. **Reconstruct each admitted submission before integration**. Resolve its durable ref and require
    it still points to the submitted tip. Require the recorded upstream commit to remain reachable from
    current `origin/main`, then require the stored base to lie on the tip's history at or after their
    merge-base. A prior submission's original commit can be a valid base even when integration
    cherry-picked it to a new hash. Compare `git rev-list --reverse <base>..<tip>` to the queue's ordered
-   `commits` array exactly. Reject an empty range, merge commit, divergent or unrelated history, a range
-   containing a commit from another queued ticket, or a changed-path union outside the ticket scope.
-   Leave rejected submissions parked.
+   `commits` array exactly. Reject an empty range, merge commit, divergent or unrelated history, or a
+   range containing a commit from another queued ticket. Scope admission is already mechanical at queue
+   read and again at integration closure, against the immutable submit-time snapshot. Leave rejected
+   submissions parked.
 6. **Integrate each admitted range**, oldest first: `git cherry-pick <commit-1> ... <commit-n>`. The
    durable tip ref keeps every ancestor in that range reachable. Save `git diff --binary <base> <tip>`
    before cherry-picking, then run `git apply --check --reverse <saved-patch>` in the integration worktree

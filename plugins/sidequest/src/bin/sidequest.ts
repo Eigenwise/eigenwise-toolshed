@@ -82,7 +82,7 @@ function parseArgs(argv: any) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'contract-waiver', 'full', 'worktree-isolation', 'auto-approve-plugin-tests', 'high-stakes']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'override-legacy-scope', 'contract-waiver', 'full', 'worktree-isolation', 'auto-approve-plugin-tests', 'high-stakes']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -1143,7 +1143,12 @@ async function cmdGroomClose(opts: any, positional: any) {
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
   const purpose = opts.integration ? 'integration' : 'grooming';
-  const res = store.completeTicketAsControlPlane(slug, idOrRef, { by, reason, purpose });
+  const res = store.completeTicketAsControlPlane(slug, idOrRef, {
+    by,
+    reason,
+    purpose,
+    overrideLegacyScope: !!(opts['override-legacy-scope'] || opts.overrideLegacyScope),
+  });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (res.ok && opts.integration) {
     // Advance before sweeping: a local integration branch that just moved makes
@@ -1413,9 +1418,16 @@ async function cmdPublish(opts: any, positional: any) {
     const payload = store.submissionsPayload(slug);
     const releaseWindow = await publish.releaseWindow(meta.path, store.boardConfig(slug).integrationBranch);
     for (const ticket of payload.tickets) {
-      ticket.rangeValidation = ticket.submission.base
-        ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission)
-        : { ok: false, reason: 'legacy_submission' };
+      const admittedScope = Array.isArray(ticket.submission.admittedScope) ? ticket.submission.admittedScope : [];
+      ticket.rangeValidation = !admittedScope.length
+        ? {
+          ok: false,
+          reason: 'missing_scope_snapshot',
+          message: 'submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason.',
+        }
+        : ticket.submission.base
+          ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission)
+          : { ok: false, reason: 'legacy_submission' };
     }
     const queuePayload = releaseWindow
       ? Object.assign({ project: slug, releaseWindow }, payload)
@@ -1438,7 +1450,12 @@ async function cmdPublish(opts: any, positional: any) {
       console.log(`  ${t.ref}  ${commits.length} commit(s), tip ${t.submission.commit.slice(0, 12)} @ ${t.submission.gitRef}  (by ${t.submission.by}, ${t.submission.at})`);
       console.log(`      commits: ${commits.map((commit: any) => commit.slice(0, 12)).join(', ')}`);
       console.log(`      paths: ${paths.join(', ') || '(legacy submission: unavailable)'}`);
-      if (!t.rangeValidation.ok) console.log(`      REJECTED: ${t.rangeValidation.reason}`);
+      if (!t.rangeValidation.ok) {
+        const outside = Array.isArray(t.rangeValidation.outside) && t.rangeValidation.outside.length
+          ? `: ${t.rangeValidation.outside.join(', ')}`
+          : '';
+        console.log(`      REJECTED: ${t.rangeValidation.reason}${outside}`);
+      }
       if (t.submission.verify) console.log(`      verify: ${t.submission.verify}`);
     }
     return;
@@ -2625,7 +2642,7 @@ const HELP_COMMANDS: any = {
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: 'sidequest work|drain',
-  'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]',
+  'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration] [--override-legacy-scope]',
   done: 'sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]',
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
@@ -2711,7 +2728,7 @@ Working the board safely (multi-agent):
   sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record a live review candidate while the claim and dispatch stay active
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why no executor can do this"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
-  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration]   control-plane closure; --integration consumes a submitted ticket after publish
+  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration] [--override-legacy-scope]   control-plane closure; --integration consumes a submitted ticket after publish, and the override permits only legacy submissions without a scope snapshot
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] drop the claim without finishing
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] record an oracle verdict
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request a scope expansion and pause with the claim held

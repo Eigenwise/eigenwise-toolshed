@@ -1012,7 +1012,8 @@ const TOOLS = [
         project: PROJECT_PROP,
         by: { type: "string" },
         reason: { type: "string" },
-        integration: { type: "boolean" }
+        integration: { type: "boolean" },
+        overrideLegacyScope: { type: "boolean", description: "Permit only a legacy submission without an admitted scope snapshot; the required reason is recorded on the ticket." }
       },
       required: ["ref", "by", "reason"]
     },
@@ -1023,7 +1024,12 @@ const TOOLS = [
       if (!reason) throw new Error("groomClose: reason is required.");
       const ticket = store.getTicket(slug, args.ref);
       const purpose = args.integration ? "integration" : "grooming";
-      const res = store.completeTicketAsControlPlane(slug, args.ref, { by, reason, purpose });
+      const res = store.completeTicketAsControlPlane(slug, args.ref, {
+        by,
+        reason,
+        purpose,
+        overrideLegacyScope: args.overrideLegacyScope === true
+      });
       if (res.ok) closeDispatchExecutor(ticket);
       if (res.ok && args.integration) {
         try {

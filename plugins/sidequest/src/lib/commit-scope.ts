@@ -516,13 +516,23 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
   if (!range.ok) return range;
   const storedCommits = Array.isArray(submission.commits) ? submission.commits : [];
   if (storedCommits.length && JSON.stringify(storedCommits) !== JSON.stringify(range.commits)) {
-    return Object.assign({ ok: false, reason: 'range_changed', storedCommits }, range);
+    return Object.assign({}, range, { ok: false, reason: 'range_changed', storedCommits });
   }
   const storedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths : [];
   if (storedPaths.length && JSON.stringify(storedPaths) !== JSON.stringify(range.changedPaths)) {
-    return Object.assign({ ok: false, reason: 'changed_paths_changed', storedPaths }, range);
+    return Object.assign({}, range, { ok: false, reason: 'changed_paths_changed', storedPaths });
   }
-  return range;
+  const admittedScope = scopedPaths(submission.admittedScope);
+  if (!admittedScope.length) {
+    return Object.assign({}, range, {
+      ok: false,
+      reason: 'missing_scope_snapshot',
+      message: 'submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason.',
+    });
+  }
+  const scopeValidation = validatePaths(admittedScope, range.changedPaths);
+  if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
+  return Object.assign({}, range, { admittedScope });
 }
 
 export function commitScoped(cwd: string, message: unknown, files: unknown) {

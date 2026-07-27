@@ -316,6 +316,7 @@ test('SQ-923: a greenfield root commit submits against the empty tree instead of
     base: range.base,
     commits: range.commits,
     changedPaths: range.changedPaths,
+    admittedScope: ['src'],
   };
   const revalidated = commitScope.validateStoredSubmissionRange(root, stored);
   assert.equal(revalidated.ok, true, `stored root-commit submission failed revalidation: ${revalidated.reason}`);

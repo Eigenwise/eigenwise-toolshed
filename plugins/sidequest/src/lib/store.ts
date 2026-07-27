@@ -5230,6 +5230,19 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   if (!reason) return { ok: false, reason: 'evidence_required', ticket };
   const by = String(opts.by || '').trim();
   if (!by) return { ok: false, reason: 'identity_required', ticket };
+  let legacyScopeOverride = false;
+  if (purpose === 'integration') {
+    const project = readMeta(slug);
+    const scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission);
+    legacyScopeOverride = opts.overrideLegacyScope === true && scopeValidation.reason === 'missing_scope_snapshot';
+    if (!scopeValidation.ok && !legacyScopeOverride) {
+      const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
+      const message = scopeValidation.reason === 'missing_scope_snapshot'
+        ? `${ticket.ref} submission has no admitted scope snapshot. Re-submit it, or pass the explicit legacy scope override with a recorded reason.`
+        : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(', ')}.`;
+      return { ok: false, reason: scopeValidation.reason, message, outside, scopeValidation, ticket };
+    }
+  }
   const advisory = purpose === 'integration' && ticket.highStakes && !recordedReviewPass(ticket)
     ? HIGH_STAKES_REVIEW_WARNING
     : null;
@@ -5237,7 +5250,10 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     body: reason,
     source: `control-plane-${purpose}`,
     completionAuthority: CONTROL_PLANE_COMPLETION,
-    completionProvenance: { authority: 'control-plane', purpose, reason },
+    completionProvenance: Object.assign(
+      { authority: 'control-plane', purpose, reason },
+      legacyScopeOverride ? { legacyScopeOverride: { reason } } : {},
+    ),
   }));
   return advisory ? Object.assign(result, { advisory }) : result;
 }
@@ -5476,6 +5492,7 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       gitRef: gitRef || submissionGitRef(t),
       verify,
       worktree,
+      admittedScope: effectiveScope(slug, t.files),
       unscopedPaths: submissionUnscopedPaths(opts.unscopedPaths),
       integratedAt: null,
     }, range || {});
