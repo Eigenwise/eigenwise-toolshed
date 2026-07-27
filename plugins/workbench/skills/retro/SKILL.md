@@ -53,6 +53,10 @@ process — reach for the heavier fix only when the lighter one can't hold the l
 - **Show the user the list first**: each friction, the proposed fix, and where it lands. Keep it tight
   — a few high-value items beat a long wish-list.
 - Let the user approve, drop, or adjust. Don't apply a pile of workspace changes unannounced.
+- When a Sidequest board is active and more than one fix is approved, turn the approved list into an
+  improvement story before applying anything: run `story add -t "Retro fixes <date>"`, file one ticket
+  per fix under it with declared files and a verify command, then dispatch the tickets. Don't apply the
+  list inline. A single approved fix in one or two exact named files can stay a direct edit.
 - **Apply the approved ones**, each as its own small step (and its own commit if the user commits as
   you go). Use the owning tool: `add-rule` / edit `live-rules.md` for rules, `update-codebase-map` for
   the map, `skill-creator` for a new skill, a direct edit for `CLAUDE.md`.
@@ -78,5 +82,7 @@ now start better — that's the loop paying off.
 - [ ] Session reviewed; friction listed concretely (or a clean "nothing recurring" verdict)
 - [ ] Each real pattern mapped to the cheapest durable fix and its location
 - [ ] Proposals shown to the user before applying
+- [ ] When a board is active and more than one fix is approved, an improvement story is filed with one
+      ticket per fix before dispatch; a single fix in one or two exact named files stays a direct edit
 - [ ] Approved fixes applied via the owning tool and verified
 - [ ] User told what changed and that rule/map edits apply next prompt
