@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const ROOT = path.resolve(__dirname, '..');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-high-stakes-home-'));
@@ -33,6 +33,41 @@ function runCli(args: string[]) {
     env: { ...process.env, SIDEQUEST_HOME: home, CLAUDE_PROJECT_DIR: projectPath },
     windowsHide: true,
   });
+}
+
+function git(args: string[], cwd: string) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function submitIntegrationFixture(title: string, reviewed = false) {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-high-stakes-integration-'));
+  git(['init'], repo);
+  git(['config', 'user.name', 'Sidequest Test'], repo);
+  git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+  fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
+  git(['add', 'README.md'], repo);
+  git(['commit', '-m', 'base'], repo);
+  git(['branch', '-M', 'main'], repo);
+  const slug = store.ensureProject(repo).slug;
+  const ticket = store.createTicket(slug, { title, highStakes: true, files: ['feature.txt'] });
+  if (reviewed) assert.equal(store.addComment(slug, ticket.ref, { by: 'reviewer', body: 'reviewed-by: reviewer', source: 'test' }).ok, true);
+  fs.writeFileSync(path.join(repo, 'feature.txt'), 'fixture\n');
+  git(['add', 'feature.txt'], repo);
+  git(['commit', '-m', 'feature'], repo);
+  const commit = git(['rev-parse', 'HEAD'], repo);
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  git(['update-ref', gitRef, commit], repo);
+  const target = store.integrationTarget(slug);
+  const range = require('../lib/commit-scope.js').submissionRange(repo, {
+    commit,
+    gitRef,
+    upstream: target.upstream,
+    integrationBranch: target.branch,
+  });
+  assert.equal(range.ok, true, JSON.stringify(range));
+  assert.equal(store.claimTicket(slug, ticket.ref, 'worker', { direct: true }).ok, true);
+  assert.equal(store.submitTicket(slug, ticket.ref, 'worker', { commit, gitRef, range, source: 'test' }).ok, true);
+  return { slug, ticket };
 }
 
 test('highStakes round-trips through CLI and MCP without changing the coding.normal route', async () => {
@@ -67,21 +102,15 @@ test('only high-stakes briefings require expanded verification', () => {
 });
 
 test('high-stakes integration warns until a review is recorded', async () => {
-  const slug = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-high-stakes-integration-'))).slug;
-  const unreviewed = store.createTicket(slug, { title: 'Unreviewed', highStakes: true });
-  assert.equal(store.claimTicket(slug, unreviewed.ref, 'worker', { direct: true }).ok, true);
-  assert.equal(store.submitTicket(slug, unreviewed.ref, 'worker', { commit: 'abc1234', source: 'test' }).ok, true);
+  const unreviewed = submitIntegrationFixture('Unreviewed');
   const warned = await callTool('groomClose', {
-    project: slug, ref: unreviewed.ref, by: 'integrator', reason: 'Integrated test fixture.', integration: true,
+    project: unreviewed.slug, ref: unreviewed.ticket.ref, by: 'integrator', reason: 'Integrated test fixture.', integration: true,
   });
   assert.equal(warned.ok, true);
   assert.equal(warned.advisory, 'high-stakes ticket integrated without a recorded review pass');
 
-  const reviewed = store.createTicket(slug, { title: 'Reviewed', highStakes: true });
-  assert.equal(store.addComment(slug, reviewed.ref, { by: 'reviewer', body: 'reviewed-by: reviewer', source: 'test' }).ok, true);
-  assert.equal(store.claimTicket(slug, reviewed.ref, 'worker', { direct: true }).ok, true);
-  assert.equal(store.submitTicket(slug, reviewed.ref, 'worker', { commit: 'def5678', source: 'test' }).ok, true);
-  const closed = store.completeTicketAsControlPlane(slug, reviewed.ref, {
+  const reviewed = submitIntegrationFixture('Reviewed', true);
+  const closed = store.completeTicketAsControlPlane(reviewed.slug, reviewed.ticket.ref, {
     purpose: 'integration', by: 'integrator', reason: 'Integrated test fixture.',
   });
   assert.equal(closed.ok, true);

@@ -12,6 +12,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-advance-home-')
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const commitScope = require('../lib/commit-scope.js');
 const worktrees = require('../lib/worktrees.js');
 const { makeCliRunner } = require('./_helpers.js');
 
@@ -70,6 +71,26 @@ function advance(fixture: any, overrides: any = {}) {
     submissionCommit: fixture.submitted,
     submissionWorktree: fixture.executor,
   }, overrides));
+}
+
+function submitFixture(slug: string, ticket: any, fixture: any) {
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  git(['update-ref', gitRef, fixture.submitted], fixture.executor);
+  const target = store.integrationTarget(slug);
+  const range = commitScope.submissionRange(fixture.executor, {
+    commit: fixture.submitted,
+    gitRef,
+    upstream: target.upstream,
+    integrationBranch: target.branch,
+  });
+  assert.equal(range.ok, true, JSON.stringify(range));
+  assert.equal(store.submitTicket(slug, ticket.ref, 'fixture-worker', {
+    commit: fixture.submitted,
+    gitRef,
+    range,
+    worktree: fixture.executor,
+    force: true,
+  }).ok, true);
 }
 
 test('a clean fast-forward advances the local integration branch to the integrated commit', async () => {
@@ -275,11 +296,7 @@ test('groom-close --integration advances local main and reports it', async () =>
     description: 'A fixture ticket whose integration should advance local main.',
     files: ['feature.txt'],
   });
-  assert.equal(store.submitTicket(slug, ticket.ref, 'fixture-worker', {
-    commit: fixture.submitted,
-    worktree: fixture.executor,
-    force: true,
-  }).ok, true);
+  submitFixture(slug, ticket, fixture);
 
   const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
   const result = runCli(['groom-close', ticket.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${fixture.integrated}.`]);
@@ -300,11 +317,7 @@ test('groom-close --integration prints the refusal loudly when the checkout is n
     description: 'A fixture ticket whose integration cannot advance local main.',
     files: ['feature.txt'],
   });
-  assert.equal(store.submitTicket(slug, ticket.ref, 'fixture-worker', {
-    commit: fixture.submitted,
-    worktree: fixture.executor,
-    force: true,
-  }).ok, true);
+  submitFixture(slug, ticket, fixture);
 
   const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
   const result = runCli(['groom-close', ticket.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${fixture.integrated}.`, '--json']);

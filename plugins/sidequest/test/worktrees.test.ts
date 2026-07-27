@@ -12,6 +12,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-home-
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const commitScope = require('../lib/commit-scope.js');
 const { makeCliRunner } = require('./_helpers.js');
 
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-project-'));
@@ -76,12 +77,12 @@ store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', eff
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT }, { cwd: PROJECT });
 
-function dispatchedTicket(agentId: string, project: string = slug) {
+function dispatchedTicket(agentId: string, project: string = slug, files = ['fixture.txt']) {
   const ticket = store.createTicket(project, {
     title: `worktree fixture ${agentId}`,
     category: 'codebase-exploration',
     description: 'A fixture that binds a dispatch agent to an isolated worktree.',
-    files: ['fixture.txt'],
+    files,
   });
   const sessionId = `session-${agentId}`;
   const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: false, sessionId });
@@ -100,7 +101,17 @@ function submitFixture(ticket: any, worktree: string, commit: string, project: s
     token: ticket.dispatchNonce,
     executor: ticket.dispatchExecutor,
   }).ok, true);
-  assert.equal(store.submitTicket(project, ticket.ref, 'fixture-worker', { commit, worktree }).ok, true);
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  git(['update-ref', gitRef, commit], worktree);
+  const target = store.integrationTarget(project);
+  const range = commitScope.submissionRange(worktree, {
+    commit,
+    gitRef,
+    upstream: target.upstream,
+    integrationBranch: target.branch,
+  });
+  assert.equal(range.ok, true, JSON.stringify(range));
+  assert.equal(store.submitTicket(project, ticket.ref, 'fixture-worker', { commit, gitRef, range, worktree }).ok, true);
 }
 
 void slug;
@@ -185,7 +196,7 @@ test('groom-close integration sweeps the dispatched worktree immediately', () =>
   const agentId = 'integrated-close';
   const worktree = agentWorktree(agentId);
   const commit = makeCommit(worktree, 'integrated-close.txt');
-  const ticket = dispatchedTicket(agentId);
+  const ticket = dispatchedTicket(agentId, slug, ['integrated-close.txt']);
   submitFixture(ticket, worktree, commit);
   integrate(commit);
 
@@ -199,9 +210,11 @@ test('groom-close integration sweeps the dispatched worktree immediately', () =>
 test('a dirty completed worktree is backed up before removal', () => {
   const agentId = 'dirty-completed';
   const worktree = agentWorktree(agentId);
-  const ticket = dispatchedTicket(agentId);
+  const commit = makeCommit(worktree, 'dirty-completed.txt');
+  const ticket = dispatchedTicket(agentId, slug, ['dirty-completed.txt']);
+  submitFixture(ticket, worktree, commit);
+  integrate(commit);
   fs.writeFileSync(path.join(worktree, 'recovery.txt'), 'recover this diff\n');
-  submitFixture(ticket, worktree, git(['rev-parse', 'HEAD']));
 
   const closed = cliJson(['groom-close', ticket.ref, '--by', 'integrator', '--integration', '--reason', 'Integrated the fixture state into main.', '--json']);
   assert.equal(closed.worktreeSweep.backups.length, 1);
@@ -240,12 +253,11 @@ test('sweep resolves completed dispatches from another board in the same Sideque
   const agentId = 'cross-project-fixture';
   const worktree = agentWorktree(agentId);
   const ticket = dispatchedTicket(agentId, foreignSlug);
-  submitFixture(ticket, worktree, git(['rev-parse', 'HEAD']), foreignSlug);
-  assert.equal(store.completeTicketAsControlPlane(foreignSlug, ticket.ref, {
-    by: 'integrator',
-    purpose: 'integration',
-    reason: 'Integrated the cross-board fixture state.',
+  assert.equal(store.claimTicket(foreignSlug, ticket.ref, 'fixture-worker', {
+    token: ticket.dispatchNonce,
+    executor: ticket.dispatchExecutor,
   }).ok, true);
+  assert.equal(store.completeTicket(foreignSlug, ticket.ref, 'fixture-worker', { source: 'mcp' }).ok, true);
 
   const swept = cliJson(['worktrees', 'sweep', '--yes', '--json']);
   assert.equal(entryFor(swept, worktree).reason, 'ticket_done');
