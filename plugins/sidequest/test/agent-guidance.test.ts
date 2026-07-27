@@ -41,10 +41,11 @@ test('executor completion reports land on the board without a routine message', 
   assert.match(orchestration, /Do not expect or request a routine\n  `SendMessage` report/);
 });
 
-test('planning guidance keeps Sidequest stories optional and distinct from Claude Code', () => {
-  assert.match(skill, /Sidequest's own optional\n\s+`US-n` grouping, not a Claude Code feature/);
-  assert.match(skill, /shared outcome, dependencies, or waves/);
-  assert.match(skill, /leave independent or small work as atomic tickets/);
+test('planning guidance requires stories for waves and keeps one-ticket work story-less', () => {
+  assert.match(skill, /Wave mode REQUIRES a Sidequest story/);
+  assert.match(skill, /file the complete backlog under it and pin\n\s+the execution contract on it/);
+  assert.match(skill, /Sidequest's own `US-n` grouping, not a Claude Code feature/);
+  assert.match(skill, /One-ticket mode stays story-less/);
 });
 
 test('dispatch guidance uses stable executors and fresh adoption dispatches', () => {

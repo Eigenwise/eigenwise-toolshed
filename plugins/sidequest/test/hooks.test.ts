@@ -1059,7 +1059,7 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor/);
   assert.match(ctx, /contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once/);
   assert.match(ctx, /Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence\. Plan first when unsure\./, 'the unpinnable-contract branch must be evidence-gated');
-  assert.match(ctx, /Wave mode: BEFORE dispatch, file the COMPLETE planned backlog: all waves’ tickets, declared files, dependency links, per-ticket verify\. Dispatch the ready wave in parallel; never drip-file\/dispatch\/wait\. Discoveries still file mid-run\./, 'wave mode must file the planned backlog before dispatch');
+  assert.match(ctx, /Wave mode: pre-dispatch, file COMPLETE backlog under a story; pin its contract: all tickets, declared files, dependencies, per-ticket verify\. Dispatch the ready wave in parallel; never drip-file\/dispatch\/wait\. Discoveries still file mid-run\./, 'wave mode must file its planned backlog under a story before dispatch');
   assert.match(ctx, /substantive actions are BLOCKED until claim/);
   assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
   assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
@@ -1285,7 +1285,7 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket\/dispatch/);
     assert.match(ctx, /Need other-file reading\? Ticket it/);
     assert.match(ctx, /Ticket \+ dispatch BEFORE multi-file exploration/);
-    assert.match(ctx, /Routed direct:true needs `direct-ok` \+ a reason/);
+    assert.match(ctx, /`direct:true` needs `direct-ok` \+ reason/);
     assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'));
     assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
     assert.ok(ctx.includes('never TaskOutput'), `${source} must ban native Agent TaskOutput polling`);
@@ -1294,7 +1294,7 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     assert.match(ctx, /never blind respawn/);
     assert.match(ctx, /Two failures: comment evidence \+ surface user/);
     assert.match(ctx, /BOOKEND dispatch→submission/, `${source} must carry bookend supervision`);
-    assert.ok(ctx.includes('list --status doing'), `${source} must retain the CLI fallback`);
+    assert.ok(/list --status(?: |=)doing/.test(ctx), `${source} must retain the CLI fallback`);
     assert.match(ctx, /mcp__plugin_sidequest_board__\* absent \(not errors\)\? Ask USER to `\/reload-plugins`/);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
     assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `${source} block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);

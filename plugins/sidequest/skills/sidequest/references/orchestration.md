@@ -34,13 +34,15 @@ the entire ready wave in parallel. Filing one ticket, dispatching, waiting, then
 serializes work and hides the plan until the user cannot steer it. Later discoveries still become normal
 mid-run tickets.
 
-When decomposition is warranted, use a story for a shared outcome. A planning investigation can pin
-shared decisions and anchors before a wave starts. Put frozen decisions, invariants, acceptance evidence,
-and durable artifact links in the story execution contract once (`story contract US-n --body-file path`
-or MCP `story_contract`) rather than repeating them in steering messages. It is capped at 4 KiB and
-arrives before ticket scope in every member briefing. If it changes after a member is claimed,
-`pulse`/`changes` and the next dispatch warn about revision drift. This keeps context completeness
-cheap without the orchestrator rediscovering the codebase inline.
+Wave mode files its complete backlog under a story. A planning investigation can pin shared decisions and
+anchors before a wave starts. Put frozen orchestrator decisions, invariants, acceptance evidence, and
+durable artifact links in the story execution contract once (`story contract US-n --body-file path` or
+MCP `story_contract`) rather than repeating them in steering messages. The contract is capped at 4 KiB
+and arrives before ticket scope in every member briefing. The `story log` is the executor-to-executor
+channel for live cross-ticket discoveries; at integration, the orchestrator promotes durable entries into
+the contract, then clears the log. If the contract changes after a member is claimed, `pulse`/`changes` and the next dispatch warn
+about revision drift. This keeps context completeness cheap without the orchestrator rediscovering the
+codebase inline.
 
 **The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket:
 direct `Read`/`Glob`/`Grep` when the affected surfaces are obvious; when they are unfamiliar, a
