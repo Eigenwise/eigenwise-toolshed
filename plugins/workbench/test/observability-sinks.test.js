@@ -202,7 +202,10 @@ test('Grafana replaces a stale managed container and can delete its data volume'
   assert.ok(run.includes('dev.eigenwise.workbench.version=0.20.0'));
   assert.ok(run.includes(`dev.eigenwise.workbench.lgtm-config-version=${grafana.MANAGED_CONFIG_VERSION}`));
   assert.ok(run.some((value) => /managed[\\/]loki-config\.yaml:\/otel-lgtm\/loki-config\.yaml:ro$/.test(value)));
-  assert.ok(run.some((value) => /managed[\\/]run-prometheus\.sh:\/otel-lgtm\/run-prometheus\.sh:ro$/.test(value)));
+  assert.ok(run.some((value) => /managed[\\/]run-prometheus\.sh:\/workbench-managed\/run-prometheus\.sh:ro$/.test(value)));
+  assert.ok(run.includes('--entrypoint'));
+  assert.ok(run.includes('/bin/bash'));
+  assert.ok(run.includes('cp /workbench-managed/run-prometheus.sh /otel-lgtm/run-prometheus.sh && chmod +x /otel-lgtm/run-prometheus.sh && exec /otel-lgtm/run-all.sh'));
 
   const teardownCalls = [];
   const removed = grafana.teardown(config, {

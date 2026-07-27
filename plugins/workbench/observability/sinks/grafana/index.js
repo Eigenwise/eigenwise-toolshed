@@ -133,13 +133,19 @@ function setup(config = {}, context = {}) {
     '--publish', `${LOOPBACK}:${runtime.grafanaPort}:3000`, '--publish', `${LOOPBACK}:${runtime.otlpPort}:4318`,
     '--volume', `${DATA_VOLUME}:/data`,
     '--volume', `${path.join(managedDir, 'loki-config.yaml')}:/otel-lgtm/loki-config.yaml:ro`,
-    '--volume', `${path.join(managedDir, 'run-prometheus.sh')}:/otel-lgtm/run-prometheus.sh:ro`,
+    '--volume', `${path.join(managedDir, 'run-prometheus.sh')}:/workbench-managed/run-prometheus.sh:ro`,
     '--volume', `${provisioningDir}:${provisioningTarget}:ro`,
     '--volume', `${dashboardDir}:${dashboardsTarget}:ro`,
   ];
   if (context.pluginVersion) args.push('--label', `${VERSION_LABEL}=${context.pluginVersion}`);
   args.push('--label', `${CONFIG_VERSION_LABEL}=${managedConfigVersion(context)}`);
-  args.push(IMAGE);
+  args.push(
+    '--entrypoint',
+    '/bin/bash',
+    IMAGE,
+    '-c',
+    'cp /workbench-managed/run-prometheus.sh /otel-lgtm/run-prometheus.sh && chmod +x /otel-lgtm/run-prometheus.sh && exec /otel-lgtm/run-all.sh',
+  );
   const result = spawn(docker, args, { encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) {
     throw new Error('Docker could not start the pinned loopback-only dashboard container.');
