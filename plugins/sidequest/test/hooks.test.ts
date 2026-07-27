@@ -1062,11 +1062,14 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
   assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
   assert.match(ctx, /WebSearch is executor-only: file and dispatch a research ticket/);
-  assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket\/dispatch/);
+  assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket\/dispatch/);
   assert.match(ctx, /Need other-file reading\? Ticket it/);
   assert.match(ctx, /Ticket \+ dispatch MUST precede multi-file exploration/);
   assert.match(ctx, /Native results: never TaskOutput/);
   assert.match(ctx, /pulse ref \/ changes --since; TaskStop only after terminal board evidence/);
+  assert.match(ctx, /never proxy-wait via shell\/Monitor\/cron polls or blocking TaskOutput/, 'the proxy-wait ban must survive rewording');
+  assert.match(ctx, /direct:true claims need user `direct-ok` \+ reason/, 'direct claims stay user-gated');
+  assert.match(ctx, /Use `bypassPermissions`; never `native_agent`/, 'dispatch mechanics line must survive rewording');
   assert.match(ctx, /ONE diagnose-first retry/);
   assert.match(ctx, /never blind respawn/);
   assert.match(ctx, /Two failures: comment evidence \+ surface user/);
@@ -1077,7 +1080,7 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
 
 test('session-start: keeps Explore narrow while rejecting generic implementation agents', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /`Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities/);
+  assert.match(ctx, /`Explore`\/`claude-code-guide`\/`statusline-setup`: narrow harness recon/);
   const pluginRoot = path.join(__dirname, '..');
   const forceBypass = fs.readFileSync(path.join(HOOKS, 'force-exec-bypass.js'), 'utf8');
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
@@ -1277,7 +1280,7 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     assert.match(ctx, /ROLE: ORCHESTRATOR/);
     assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
     assert.match(ctx, /WebSearch is executor-only: file and dispatch a research ticket/);
-    assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, stated mechanical content, no investigation: Edit inline, no ticket\/dispatch/);
+    assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket\/dispatch/);
     assert.match(ctx, /Need other-file reading\? Ticket it/);
     assert.match(ctx, /Ticket \+ dispatch BEFORE multi-file exploration/);
     assert.match(ctx, /Routed direct:true needs `direct-ok` \+ a reason/);
