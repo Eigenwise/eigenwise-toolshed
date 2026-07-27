@@ -187,6 +187,7 @@ const TICKET_COMMENT_BODY_MAX_BYTES = 768;
 const TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES = 4 * 1024;
 const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
 const EXPERIMENT_LOG_PACKET_MAX_BYTES = 12 * 1024;
+const STORY_DECISION_LOG_PACKET_MAX_BYTES = 4 * 1024;
 function byteLength(value) {
   return Buffer.byteLength(String(value || ""), "utf8");
 }
@@ -336,6 +337,18 @@ function storyContractPacket(ticket, slug) {
   return `## Story execution contract (revision ${Number(snapshot.revision) || 1})
 ${snapshot.body}`;
 }
+function storyDecisionLogPacket(ticket, slug) {
+  const story = ticket && ticket.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
+  const entries = Array.isArray(story && story.decisionLog) ? story.decisionLog.slice().sort((left, right) => Number(left.seq) - Number(right.seq)) : [];
+  if (!entries.length) return null;
+  const revision = Number(story.logRevision) || Number(entries[entries.length - 1].seq) || 0;
+  const packet = [
+    `## Story decision log (${story.ref}, ${entries.length} ${entries.length === 1 ? "entry" : "entries"} through #${revision})`,
+    "Findings appended by sibling executors on this story. The contract above outranks these.",
+    ...entries.map((entry) => `- #${entry.seq} ${entry.kind} (${entry.ref || "orchestrator"}, ${entry.by}): ${entry.text}`)
+  ].join("\n");
+  return boundedPacket(packet, STORY_DECISION_LOG_PACKET_MAX_BYTES, "\n\n[Story decision log truncated at 4 KB. Read the live story log before acting.]");
+}
 function ticketContractsPacket(ticket) {
   const contracts = store.normalizeContracts(ticket && ticket.contracts);
   const entries = [
@@ -384,9 +397,11 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
   const contract = storyContractPacket(ticket, slug);
+  const decisionLog = storyDecisionLogPacket(ticket, slug);
   const parts = [
     "",
     ...contract ? [contract] : [],
+    ...decisionLog ? [decisionLog] : [],
     "## This ticket",
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || "(Untitled ticket)"}`,
