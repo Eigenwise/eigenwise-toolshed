@@ -29,6 +29,7 @@ const {
 } = require('../bin/setup-observability.js');
 
 const GRAFANA_SINK_DIR = path.join(path.resolve(__dirname, '..'), 'observability', 'sinks', 'grafana');
+const { MANAGED_CONFIG_VERSION } = require('../observability/sinks/grafana/index.js');
 
 test('bundles a valid Grafana provider for the Claude Code Usage dashboard', () => {
   const provisioning = fs.readFileSync(path.join(GRAFANA_SINK_DIR, 'provisioning', 'workbench.yaml'), 'utf8');
@@ -197,7 +198,7 @@ test('plans current-user application data and only starts LGTM on request', () =
   assert.ok(runArgs.includes(`${path.join(GRAFANA_SINK_DIR, 'provisioning')}:/otel-lgtm/grafana/conf/provisioning/dashboards:ro`));
   assert.ok(runArgs.includes(`${path.join(GRAFANA_SINK_DIR, 'dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
   const resumed = [];
-  startLgtm(plan.dataDir, { spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: 'true' }; } });
+  startLgtm(plan.dataDir, { spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: `true|||${MANAGED_CONFIG_VERSION}|null` }; } });
   assert.equal(resumed.length, 1);
 });
 

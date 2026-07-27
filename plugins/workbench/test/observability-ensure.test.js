@@ -9,6 +9,7 @@ const test = require('node:test');
 const setup = require('../bin/setup-observability.js');
 const {
   ensureObservability,
+  healthSnapshot,
   launchEnsure,
   startManagedProcess,
 } = require('../lib/observability/ensure.js');
@@ -123,6 +124,35 @@ test('ensure is idempotent while both managed ports are healthy', async (t) => {
   assert.deepEqual(result.started, []);
 });
 
+test('health reports whether the dashboard supports project-data deletes', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const config = enabledConfig();
+  config.observability.sink = 'grafana-lgtm';
+  config.observability.dashboard = true;
+  config.observability.sinks = {
+    'grafana-lgtm': { container: 'workbench-otel-lgtm', grafanaPort: 15433, otlpPort: 15434 },
+  };
+  writeObservabilityConfig(configFile, config);
+
+  const snapshot = await healthSnapshot({
+    dataDir,
+    configFile,
+    dockerAvailable: true,
+    healthTimeoutMs: 25,
+    spawnSync(command, args) {
+      assert.equal(command, 'docker');
+      assert.equal(args[0], 'inspect');
+      return {
+        status: 0,
+        stdout: `true|${setup.LGTM_IMAGE}|${setup.pluginVersion()}|${require('../observability/sinks/grafana/index.js').MANAGED_CONFIG_VERSION}|null`,
+      };
+    },
+  });
+
+  assert.deepEqual(snapshot.dashboard.deletes, { prometheus: true, loki: true });
+});
+
 test('plugin version drift replaces both managed processes and updates the marker', async (t) => {
   const dataDir = temporaryDirectory(t);
   const configFile = path.join(dataDir, 'observability.json');
@@ -208,6 +238,10 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
   assert.deepEqual(dockerCalls.map((call) => call[1][0]), ['inspect', 'rm', 'run']);
   assert.ok(dockerCalls[2][1].includes(`${path.join(dataDir, 'grafana-dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
   assert.equal(readObservabilityConfig(configFile).observability.dashboardVersion, setup.pluginVersion());
+  assert.equal(
+    readObservabilityConfig(configFile).observability.dashboardConfigVersion,
+    require('../observability/sinks/grafana/index.js').MANAGED_CONFIG_VERSION,
+  );
 });
 
 test('start records the managed process provenance next to its PID', (t) => {

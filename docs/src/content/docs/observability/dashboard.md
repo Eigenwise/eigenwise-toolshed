@@ -36,3 +36,16 @@ MCP connection activity counts connection attempts by server and status. Claude 
 ![Gateway activity](../../../assets/screenshots/observability-mcp.png)
 
 These are counts and derived cost estimates from local records. They are for finding patterns, not billing statements.
+
+## Deleting project data
+
+Delete telemetry only when you mean it. It is permanent. Replace `project-id` and the Loki start time with the project and oldest data you want gone.
+
+```sh
+docker exec workbench-otel-lgtm curl -X POST -g 'http://127.0.0.1:9090/api/v1/admin/tsdb/delete_series?match[]={project_id=~"project-id"}'
+docker exec workbench-otel-lgtm curl -X POST http://127.0.0.1:9090/api/v1/admin/tsdb/clean_tombstones
+```
+
+```sh
+docker exec workbench-otel-lgtm curl -X POST -g 'http://127.0.0.1:3100/loki/api/v1/delete?query={project_id="project-id"}&start=2026-01-01T00:00:00Z'
+```

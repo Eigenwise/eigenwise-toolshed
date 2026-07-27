@@ -158,12 +158,29 @@ test('Grafana adopts the managed live container and honors configured loopback p
     pluginVersion: '0.19.0',
     spawnSync(command, args) {
       calls.push([command, args]);
-      return { status: 0, stdout: `true|${grafana.IMAGE}|<no value>|${bindings}` };
+      return { status: 0, stdout: `true|${grafana.IMAGE}|<no value>|${grafana.MANAGED_CONFIG_VERSION}|${bindings}` };
     },
   });
   assert.equal(result.container, 'workbench-otel-lgtm');
   assert.equal(calls.length, 1);
   assert.throws(() => grafana.runtimeConfig({ container: '../bad' }), /Invalid dashboard container name/);
+});
+
+test('Grafana replaces a container missing the managed delete configuration', () => {
+  const calls = [];
+  const bindings = JSON.stringify({
+    '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '13000' }],
+    '4318/tcp': [{ HostIp: '127.0.0.1', HostPort: '14300' }],
+  });
+  grafana.setup({ container: 'workbench-otel-lgtm', grafanaPort: 13000, otlpPort: 14300 }, {
+    pluginVersion: '0.20.0',
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      if (args[0] === 'inspect') return { status: 0, stdout: `true|${grafana.IMAGE}|0.20.0|<no value>|${bindings}` };
+      return { status: 0, stdout: '' };
+    },
+  });
+  assert.deepEqual(calls.map((call) => call[1][0]), ['inspect', 'rm', 'run']);
 });
 
 test('Grafana replaces a stale managed container and can delete its data volume', () => {
@@ -183,6 +200,9 @@ test('Grafana replaces a stale managed container and can delete its data volume'
   assert.ok(run.includes('127.0.0.1:13000:3000'));
   assert.ok(run.includes('127.0.0.1:14300:4318'));
   assert.ok(run.includes('dev.eigenwise.workbench.version=0.20.0'));
+  assert.ok(run.includes(`dev.eigenwise.workbench.lgtm-config-version=${grafana.MANAGED_CONFIG_VERSION}`));
+  assert.ok(run.some((value) => /managed[\\/]loki-config\.yaml:\/otel-lgtm\/loki-config\.yaml:ro$/.test(value)));
+  assert.ok(run.some((value) => /managed[\\/]run-prometheus\.sh:\/otel-lgtm\/run-prometheus\.sh:ro$/.test(value)));
 
   const teardownCalls = [];
   const removed = grafana.teardown(config, {

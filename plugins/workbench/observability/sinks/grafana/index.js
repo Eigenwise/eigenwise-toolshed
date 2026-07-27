@@ -12,6 +12,8 @@ const GRAFANA_PORT = 3000;
 const CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const DATA_VOLUME = 'workbench-lgtm-demo-data';
 const VERSION_LABEL = 'dev.eigenwise.workbench.version';
+const CONFIG_VERSION_LABEL = 'dev.eigenwise.workbench.lgtm-config-version';
+const MANAGED_CONFIG_VERSION = '1';
 
 function port(value, fallback, name) {
   const resolved = value === undefined ? fallback : Number(value);
@@ -57,11 +59,32 @@ function resolve(config = {}) {
 }
 
 function parseInspection(output) {
-  const [running, image, rawVersion, bindingsJson] = String(output || '').trim().split('|', 4);
+  const [running, image, rawVersion, rawConfigVersion, bindingsJson] = String(output || '').trim().split('|', 5);
   let bindings = null;
   try { bindings = bindingsJson ? JSON.parse(bindingsJson) : null; } catch {}
   const version = rawVersion && rawVersion !== '<no value>' ? rawVersion : null;
-  return { running: running === 'true', image: image || null, version, bindings };
+  const configVersion = rawConfigVersion && rawConfigVersion !== '<no value>' ? rawConfigVersion : null;
+  return { running: running === 'true', image: image || null, version, configVersion, bindings };
+}
+
+function managedConfigVersion(context = {}) {
+  return context.managedConfigVersion || MANAGED_CONFIG_VERSION;
+}
+
+function inspect(config = {}, context = {}) {
+  const docker = context.docker || 'docker';
+  const spawn = context.spawnSync || spawnSync;
+  const runtime = runtimeConfig(config);
+  const format = `{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels "${VERSION_LABEL}"}}|{{index .Config.Labels "${CONFIG_VERSION_LABEL}"}}|{{json .HostConfig.PortBindings}}`;
+  const result = spawn(docker, ['inspect', '--format', format, runtime.container], { encoding: 'utf8', windowsHide: true });
+  if (result.error || result.status !== 0) return null;
+  return parseInspection(result.stdout);
+}
+
+function deleteStatus(config = {}, context = {}) {
+  const state = inspect(config, context);
+  const available = Boolean(state?.running && state.configVersion === managedConfigVersion(context));
+  return { running: Boolean(state?.running), deletes: { prometheus: available, loki: available } };
 }
 
 function bindingMatches(bindings, containerPort, hostPort) {
@@ -76,13 +99,12 @@ function setup(config = {}, context = {}) {
   const spawn = context.spawnSync || spawnSync;
   const dataDir = context.dataDir;
   const runtime = runtimeConfig(config);
-  const format = `{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels "${VERSION_LABEL}"}}|{{json .HostConfig.PortBindings}}`;
-  const inspected = spawn(docker, ['inspect', '--format', format, runtime.container], { encoding: 'utf8', windowsHide: true });
-  if (inspected.status === 0) {
-    const state = parseInspection(inspected.stdout);
+  const state = inspect(config, context);
+  if (state) {
     const current = context.forceRecreate !== true
       && (!state.image || state.image === IMAGE)
       && (!context.pluginVersion || !state.version || state.version === context.pluginVersion)
+      && state.configVersion === managedConfigVersion(context)
       && bindingMatches(state.bindings, 3000, runtime.grafanaPort)
       && bindingMatches(state.bindings, 4318, runtime.otlpPort);
     if (current && state.running) {
@@ -103,15 +125,20 @@ function setup(config = {}, context = {}) {
 
   const provisioningTarget = '/otel-lgtm/grafana/conf/provisioning/dashboards';
   const dashboardsTarget = '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards';
+  const provisioningDir = context.provisioningDir || path.join(__dirname, 'provisioning');
+  const managedDir = context.managedDir || path.join(__dirname, 'managed');
   const dashboardDir = context.dashboardDir || path.join(__dirname, 'dashboards');
   const args = [
     'run', '--detach', '--name', runtime.container, '--restart', 'unless-stopped',
     '--publish', `${LOOPBACK}:${runtime.grafanaPort}:3000`, '--publish', `${LOOPBACK}:${runtime.otlpPort}:4318`,
     '--volume', `${DATA_VOLUME}:/data`,
-    '--volume', `${path.join(__dirname, 'provisioning')}:${provisioningTarget}:ro`,
+    '--volume', `${path.join(managedDir, 'loki-config.yaml')}:/otel-lgtm/loki-config.yaml:ro`,
+    '--volume', `${path.join(managedDir, 'run-prometheus.sh')}:/otel-lgtm/run-prometheus.sh:ro`,
+    '--volume', `${provisioningDir}:${provisioningTarget}:ro`,
     '--volume', `${dashboardDir}:${dashboardsTarget}:ro`,
   ];
   if (context.pluginVersion) args.push('--label', `${VERSION_LABEL}=${context.pluginVersion}`);
+  args.push('--label', `${CONFIG_VERSION_LABEL}=${managedConfigVersion(context)}`);
   args.push(IMAGE);
   const result = spawn(docker, args, { encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) {
@@ -146,12 +173,15 @@ function teardown(config = {}, context = {}) {
 }
 
 module.exports = {
+  CONFIG_VERSION_LABEL,
   CONTAINER,
   DATA_VOLUME,
   GRAFANA_PORT,
   ID,
   IMAGE,
+  MANAGED_CONFIG_VERSION,
   OTLP_PORT,
+  deleteStatus,
   resolve,
   runtimeConfig,
   setup,

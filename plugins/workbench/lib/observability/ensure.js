@@ -258,6 +258,7 @@ async function ensureObservability(options = {}) {
     const pluginDrift = Boolean(state.managedVersion && state.managedVersion !== currentPluginVersion);
     const collectorDrift = Boolean(state.collectorVersion && state.collectorVersion !== setup.COLLECTOR_VERSION);
     const dashboardDrift = Boolean(state.dashboardVersion && state.dashboardVersion !== currentPluginVersion);
+    const dashboardConfigDrift = Boolean(state.dashboard && state.dashboardConfigVersion !== grafanaLgtm.MANAGED_CONFIG_VERSION);
     const collectorBinary = setup.resolveCollectorBinary(dataDir, options.environment);
     const binaryMissing = !fs.existsSync(collectorBinary);
     const sink = resolveSink(config);
@@ -279,7 +280,7 @@ async function ensureObservability(options = {}) {
           dataDir,
           dashboardDir,
           pluginVersion: currentPluginVersion,
-          forceRecreate: pluginDrift || dashboardDrift,
+          forceRecreate: pluginDrift || dashboardDrift || dashboardConfigDrift,
         });
       } else {
         dashboardSkipped = true;
@@ -331,9 +332,13 @@ async function ensureObservability(options = {}) {
     }
 
     const dashboardVersion = state.dashboard && dashboard ? currentPluginVersion : state.dashboardVersion;
+    const dashboardConfigVersion = state.dashboard && dashboard
+      ? grafanaLgtm.MANAGED_CONFIG_VERSION
+      : state.dashboardConfigVersion;
     if (state.managedVersion !== currentPluginVersion
       || state.collectorVersion !== setup.COLLECTOR_VERSION
-      || state.dashboardVersion !== dashboardVersion) {
+      || state.dashboardVersion !== dashboardVersion
+      || state.dashboardConfigVersion !== dashboardConfigVersion) {
       config = normalizeManagedConfig({
         ...config,
         observability: {
@@ -341,11 +346,21 @@ async function ensureObservability(options = {}) {
           managedVersion: currentPluginVersion,
           collectorVersion: setup.COLLECTOR_VERSION,
           dashboardVersion,
+          dashboardConfigVersion,
         },
       });
       writeObservabilityConfig(configFile, config);
     }
-    return { enabled: true, started, dashboard, dashboardSkipped, pluginDrift, collectorDrift, dashboardDrift };
+    return {
+      enabled: true,
+      started,
+      dashboard,
+      dashboardSkipped,
+      pluginDrift,
+      collectorDrift,
+      dashboardDrift,
+      dashboardConfigDrift,
+    };
   } finally {
     releaseLock(lock);
   }
@@ -392,12 +407,22 @@ async function healthSnapshot(options = {}) {
     const docker = setup.dockerAvailable(options);
     const runtime = grafanaLgtm.runtimeConfig(state.sinks[DEFAULT_SINK] || {});
     if (docker) {
-      const inspected = (options.spawnSync || spawnSync)(options.docker || 'docker', [
-        'inspect', '--format', '{{.State.Running}}', runtime.container,
-      ], { encoding: 'utf8', timeout: 1500, windowsHide: true });
-      dashboard = { configured: true, docker: true, running: inspected.status === 0 && String(inspected.stdout).trim() === 'true', container: runtime.container };
+      const deleteStatus = grafanaLgtm.deleteStatus(state.sinks[DEFAULT_SINK] || {}, options);
+      dashboard = {
+        configured: true,
+        docker: true,
+        running: deleteStatus.running,
+        container: runtime.container,
+        deletes: deleteStatus.deletes,
+      };
     } else {
-      dashboard = { configured: true, docker: false, running: false, container: runtime.container };
+      dashboard = {
+        configured: true,
+        docker: false,
+        running: false,
+        container: runtime.container,
+        deletes: { prometheus: false, loki: false },
+      };
     }
   }
   return {
