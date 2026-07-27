@@ -413,6 +413,7 @@ test('a claimed ticket cannot be rewritten and redispatched into artifact mode',
   store.updateTicket(slug, created.ref, {
     description: store.SHARED_TREE_ARTIFACT_MARKER,
     files: ['.claude/.codebase-info/'],
+    by: 'control-plane',
   });
 
   assert.throws(
@@ -432,10 +433,15 @@ test('description and files mutations after dispatch do not flip pinned artifact
   });
   const ordinaryDispatch = store.prepareDispatch(slug, ordinary.ref, { sharedTree: true });
   assert.strictEqual(claim(ordinaryDispatch, 'ordinary-mutation-worker').ok, true);
-  store.updateTicket(slug, ordinary.ref, {
+  const ordinaryPatch = {
     description: store.SHARED_TREE_ARTIFACT_MARKER,
     files: [],
-  });
+  };
+  assert.throws(
+    () => store.updateTicket(slug, ordinary.ref, ordinaryPatch),
+    new RegExp(`${ordinary.ref}: refusing active-claim scope change for \\.claude/\\.codebase-info\\. Use \`sidequest scope-request ${ordinary.ref} --file <path> --by ordinary-mutation-worker\` to request approval\\.`),
+  );
+  store.updateTicket(slug, ordinary.ref, { ...ordinaryPatch, by: 'control-plane' });
   const mutatedOrdinary = store.getTicket(slug, ordinary.ref);
   assert.strictEqual(store.sharedTreeArtifactMode(mutatedOrdinary), false);
   assert.strictEqual(store.completeTicket(slug, ordinary.ref, 'ordinary-mutation-worker', { source: 'mcp' }).reason, 'submission_required');
@@ -444,10 +450,15 @@ test('description and files mutations after dispatch do not flip pinned artifact
   const artifactDispatch = store.prepareDispatch(slug, artifact.ref, { sharedTree: true });
   assert.strictEqual(claim(artifactDispatch, 'artifact-mutation-worker').ok, true);
   writeProjectFile('.claude/.codebase-info/pinned.md', 'pinned authority\n');
-  store.updateTicket(slug, artifact.ref, {
+  const artifactPatch = {
     description: 'The marker was removed after dispatch.',
     files: [],
-  });
+  };
+  assert.throws(
+    () => store.updateTicket(slug, artifact.ref, artifactPatch),
+    new RegExp(`${artifact.ref}: refusing active-claim scope change for \\.claude/\\.codebase-info\\. Use \`sidequest scope-request ${artifact.ref} --file <path> --by artifact-mutation-worker\` to request approval\\.`),
+  );
+  store.updateTicket(slug, artifact.ref, { ...artifactPatch, by: 'control-plane' });
   const mutatedArtifact = store.getTicket(slug, artifact.ref);
   assert.strictEqual(store.sharedTreeArtifactMode(mutatedArtifact), true);
   assert.strictEqual(store.completeTicket(slug, artifact.ref, 'artifact-mutation-worker', { source: 'mcp' }).ok, true);
