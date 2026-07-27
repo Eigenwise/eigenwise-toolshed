@@ -22,6 +22,16 @@ test('comment guidance makes durable handoffs concise and consumable', () => {
   assert.match(publishing, /Do not cherry-pick until the thread is understood/);
 });
 
+test('mid-task sub-delegation uses cheap scoped helpers', () => {
+  assert.match(executorTemplate, /Mid-task sub-delegation/);
+  assert.match(executorTemplate, /explicitly cheap model/);
+  assert.match(executorTemplate, /`web-researcher` with a Claude-side haiku\/sonnet-class model/);
+  assert.match(executorTemplate, /never a gateway-model web-research subspawn because gateway WebSearch is unreliable/);
+  assert.match(executorTemplate, /Explore or a general subagent pinned through the Agent `model` argument/);
+  assert.match(executorTemplate, /helpers stay inside the declared scope and are throwaway, not sub-tickets/);
+  assert.match(executorTemplate, /work that grows scope goes back to the board as a filed ticket/);
+});
+
 test('executor completion reports land on the board without a routine message', () => {
   assert.match(executorTemplate, /full final report: changed paths, verification evidence, commit hash/);
   assert.match(executorTemplate, /keep the terminal board comment to the commit\n   hash, verify evidence, and a reference to the submission instead of repeating its narrative/);
