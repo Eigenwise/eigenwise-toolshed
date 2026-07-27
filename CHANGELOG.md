@@ -7,3 +7,11 @@ under `plugins/<name>/CHANGELOG.md`.
 Releases before v3.208.0 predate this file and are not backfilled; `git log` is the record for
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
+
+## v3.241.0 (2026-07-27)
+
+### sidequest 3.26.0 → 3.26.1
+
+#### Fixes
+
+- Right-size ticket decomposition: solo-fit gate, deterministic-verify audit skip, wave-batched integration (SQ-938) [`d0ca9d9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d0ca9d958c556debc49eff898a95a3947e615908)
