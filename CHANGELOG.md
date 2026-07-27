@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.242.0 (2026-07-27)
+
+### sidequest 3.26.1 → 3.26.2
+
+#### Fixes
+
+- Solo-fit gate v2: never-inline invariant, contract-first parallel waves, restored economy guards (SQ-941) [`1849c79`](https://github.com/Eigenwise/eigenwise-toolshed/commit/1849c7952febb11daf75bbe78b236c5c36c9e9ef)
+
 ## v3.241.0 (2026-07-27)
 
 ### sidequest 3.26.0 → 3.26.1
