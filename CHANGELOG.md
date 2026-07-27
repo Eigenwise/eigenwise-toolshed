@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.246.0 (2026-07-27)
+
+### sidequest 3.26.4 → 3.26.5
+
+#### Fixes
+
+- Executor briefings: mid-task cheap sub-work goes to explicitly cheap subagents, never gateway web research (SQ-945) [`678da44`](https://github.com/Eigenwise/eigenwise-toolshed/commit/678da440f729c2dd3906a00e75f910da4ef90347)
+
 ## v3.245.0 (2026-07-27)
 
 ### workbench 0.67.0 → 0.68.0
