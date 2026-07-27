@@ -2023,6 +2023,38 @@ async function cmdStory(opts, positional) {
       console.log(`✓ ${story.ref} execution contract revision ${story.contractRevision || 0} — ${meta.name}`);
       return;
     }
+    case "log": {
+      if (!idOrRef) fail("story log: pass a story ref, e.g. sidequest story log US-1 [--body-file path]");
+      const entry = await bodyFromOpts(opts, "story log");
+      if (opts.clear && entry !== void 0) fail("story log: pass an entry or --clear, not both");
+      const by = workerId(opts);
+      let story;
+      if (opts.clear) {
+        if (by !== "orchestrator") fail("story log: --clear requires --by orchestrator");
+        story = store.clearStoryLog(slug, idOrRef);
+      } else if (entry === void 0) {
+        story = store.getStory(slug, idOrRef);
+      } else {
+        story = store.appendStoryLogEntry(slug, idOrRef, { entry, ref: opts.ref, by });
+      }
+      if (!story) fail(`story log: no story "${idOrRef}" in ${meta.name}`);
+      const log = store.storyDecisionLog(story);
+      const payload = {
+        ok: true,
+        project: slug,
+        projectName: meta.name,
+        story: { ref: story.ref, logBytes: log.bytes, logCapacity: log.capacity, logRevision: log.revision, entries: log.entries }
+      };
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+        return;
+      }
+      console.log(`${story.ref} decision log revision ${log.revision} (${log.entries.length} entries)`);
+      for (const item of log.entries) {
+        console.log(`- #${item.seq} ${item.kind} (${item.ref || "orchestrator"}, ${item.by}): ${item.text}`);
+      }
+      return;
+    }
     case "update":
     case "edit":
     case "set": {
@@ -2056,7 +2088,7 @@ async function cmdStory(opts, positional) {
       return;
     }
     default:
-      fail(`story: unknown action "${positional[0] || ""}". Use add | list | show | update | rm. Run "sidequest help".`);
+      fail(`story: unknown action "${positional[0] || ""}". Use add | list | show | contract | log | update | rm. Run "sidequest help".`);
   }
 }
 let PLUGIN_VERSION = null;
@@ -2467,6 +2499,7 @@ User stories (a lightweight grouping tickets can belong to):
   sidequest story list                             list stories with their color and ticket count
   sidequest story show US-n                         show a story and the tickets in it
   sidequest story contract US-n [-m text|--body-file path]  read or set its execution contract
+  sidequest story log US-n [-m text|--body-file path] [--ref SQ-n] [--by who] [--clear]  read, append, or clear its decision log
   sidequest story update US-n [-t] [-d] [--color]  edit a story
   sidequest story rm US-n                           delete a story (member tickets are detached)
   sidequest add ... --story <US-n>                 file a ticket straight into a story

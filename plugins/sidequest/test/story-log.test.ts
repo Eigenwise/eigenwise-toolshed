@@ -12,6 +12,9 @@ const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-story-log-project-
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const { makeCliRunner } = require('./_helpers.js');
+const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
+const { cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR });
 const { slug } = store.ensureProject(PROJECT_DIR);
 
 function story(title = 'Decision log fixture') {
@@ -47,6 +50,23 @@ test('append normalizes a one-line entry and records ticket attribution', () => 
     { seq: 1, by: 'store-worker', ref: ticket.ref, kind: 'DISCOVERY', text: 'first line second line' },
   );
   assert.match(log.entries[0].at, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test('CLI story log reads, appends a body file, and clears after promotion', () => {
+  const createdStory = story('CLI surface');
+  const ticket = member(createdStory.ref);
+  claim(ticket.ref, 'cli-worker');
+  const entryFile = path.join(SIDEQUEST_HOME, 'story-log-entry.txt');
+  fs.writeFileSync(entryFile, 'DISCOVERY: first line\nsecond line', 'utf8');
+
+  const appended = cliJson(['story', 'log', createdStory.ref, '--body-file', entryFile, '--ref', ticket.ref, '--by', 'cli-worker', '--json']);
+  assert.equal(appended.story.logRevision, 1);
+  assert.equal(appended.story.entries[0].text, 'first line second line');
+
+  const read = cliJson(['story', 'log', createdStory.ref, '--json']);
+  assert.equal(read.story.entries.length, 1);
+  const cleared = cliJson(['story', 'log', createdStory.ref, '--clear', '--by', 'orchestrator', '--json']);
+  assert.deepEqual(cleared.story, { ref: createdStory.ref, logBytes: 0, logCapacity: 4096, logRevision: 1, entries: [] });
 });
 
 test('append refuses unclaimed, wrong-owner, and non-member ticket attribution', () => {
