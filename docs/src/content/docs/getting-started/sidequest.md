@@ -21,6 +21,23 @@ Preview a ticket before writing it with `sidequest add -t "title" --category <id
 
 Manage user stories through `sidequest story add|list|show|update|rm` or the compact MCP `story` tool. Pass `action: "add" | "list" | "show" | "update" | "rm"`; `show`, `update`, and `rm` take a story `ref` or `id` in `story`. The MCP `story_contract` tool reads or updates execution contracts separately.
 
+### Story contracts and decision logs
+
+A multi-ticket wave starts with a story: file the backlog under it and pin an execution contract before dispatching the work. The contract sets the rules for the wave and outranks later log entries.
+
+Executors can leave short findings for later waves with the story decision log:
+
+```text
+sidequest story log US-27
+sidequest story log US-27 -m "DECISION: Keep the MCP surface separate from story CRUD" --ref SQ-952 --by executor-1
+sidequest story log US-27 --body-file finding.txt --ref SQ-952 --by executor-1
+sidequest story log US-27 --clear
+```
+
+Without an entry or `--clear`, the command reads the log. Entries are one-line `DECISION:`, `CONSTRAINT:`, or `DISCOVERY:` findings. Use `-m` or `--body-file`, and attach `--ref` and `--by` when recording work. The `story_log` MCP tool provides the same read, append, and clear operations.
+
+Later-wave briefings include the live log automatically. Keep entries under 280 bytes, with a 4 KiB limit for the whole rendered packet. A full log refuses new entries, so fold durable findings into the story contract at integration, then clear the log.
+
 ## Board display names
 
 A board has a stable board ID and an editable display name. The display name is for people and can change; the board ID, repository path, ticket refs, claims, and links stay the same. Use the CLI to set or view the name:
