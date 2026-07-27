@@ -1058,7 +1058,7 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline/, 'solo-fit must choose a dispatch shape, never inline work');
   assert.match(ctx, /Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor/);
   assert.match(ctx, /contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once/);
-  assert.match(ctx, /Written spec \+ executable done-oracle: contract-first default\. Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence\. Plan first when unsure\./, 'the unpinnable-contract branch must be evidence-gated');
+  assert.match(ctx, /Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence\. Plan first when unsure\./, 'the unpinnable-contract branch must be evidence-gated');
   assert.match(ctx, /Wave mode: BEFORE dispatch, file the COMPLETE planned backlog: all waves’ tickets, declared files, dependency links, per-ticket verify\. Dispatch the ready wave in parallel; never drip-file\/dispatch\/wait\. Discoveries still file mid-run\./, 'wave mode must file the planned backlog before dispatch');
   assert.match(ctx, /substantive actions are BLOCKED until claim/);
   assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
@@ -1075,8 +1075,7 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /ONE diagnose-first retry/);
   assert.match(ctx, /never blind respawn/);
   assert.match(ctx, /Two failures: comment evidence \+ surface user/);
-  assert.match(ctx, /one background timer, never foreground sleep loop/);
-  assert.match(ctx, /BOOKEND no ticket read\/pulse\/worktree peek\. Green report\+verify\+wave suite integrates, oracle, no diff\./, 'integration must use the executable oracle rather than re-reviewing executor work');
+  assert.match(ctx, /BOOKEND: between dispatch and submission, no unprompted ticket reads, pulses, or worktree peeks\. Integrate by oracle: verify \+ wave suite \+ submit report; never re-review diffs or source\./, 'integration must use the executable oracle rather than re-reviewing executor work');
   assert.ok(ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'));
   assert.match(ctx, /tools are absent \(not errors\), ask USER to run `\/reload-plugins`/);
 });
@@ -1294,7 +1293,7 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     assert.match(ctx, /ONE diagnose-first retry/);
     assert.match(ctx, /never blind respawn/);
     assert.match(ctx, /Two failures: comment evidence \+ surface user/);
-    assert.match(ctx, /one background timer, never foreground sleep loop/);
+    assert.match(ctx, /BOOKEND dispatch→submission/, `${source} must carry bookend supervision`);
     assert.ok(ctx.includes('list --status doing'), `${source} must retain the CLI fallback`);
     assert.match(ctx, /mcp__plugin_sidequest_board__\* absent \(not errors\)\? Ask USER to `\/reload-plugins`/);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
