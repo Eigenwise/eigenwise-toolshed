@@ -16,7 +16,8 @@ test('comment guidance makes durable handoffs concise and consumable', () => {
   assert.match(executorTemplate, /Comments are handoffs, not a diary/);
   assert.match(executorTemplate, /Record decisions, constraints,\n\s+risks/);
   assert.match(executorTemplate, /short\n   relevant excerpt/);
-  assert.match(skill, /Before integrating or closing a submitted ticket, read\n`sidequest comments <ref> --json`/);
+  assert.match(skill, /BOOKEND SUPERVISION/);
+  assert.match(skill, /read the submit report, run its verify command/);
   assert.match(publishing, /Read each submitted handoff/);
   assert.match(publishing, /Do not cherry-pick until the thread is understood/);
 });
@@ -67,14 +68,12 @@ test('dormant executors resume once before replacement', () => {
   assert.match(orchestration, /Never respawn beside a live claim or `TaskStop` without terminal board evidence/);
 });
 
-test('post-wave integration batches verification and keeps audits conditional', () => {
+test('post-wave integration judges the oracle instead of re-reviewing executor work', () => {
   assert.match(orchestration, /Integrate and verify by wave/);
   assert.match(orchestration, /Each executor runs its scoped verification before submission/);
-  assert.match(orchestration, /full suite once for the combined wave, not once per ticket/);
-  assert.match(orchestration, /combined diff\/stat for cross-ticket seams/);
-  assert.match(orchestration, /A passing\s+deterministic done-oracle with no high-stakes flag ends there/);
-  assert.match(orchestration, /narrowly scoped\n  review-audit for the affected files/);
-  assert.match(orchestration, /do not reopen completed tickets or rerun every ticket's\n  verification/);
+  assert.match(orchestration, /read each submit report, run each ticket's exact verify command, then run the\n  full suite once for the combined wave/);
+  assert.match(orchestration, /The oracle is the review: never open source\n  or inspect diffs to re-review executor work/);
+  assert.match(orchestration, /dispatch a\n  `review-audit` for the affected files/);
 });
 
 

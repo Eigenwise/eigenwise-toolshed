@@ -149,13 +149,13 @@ optionally `--status todo`).
 terminal comment keeps only the commit hash + verification. The orchestrator runs the publish
 transaction (lock → integrate → central version → reverify → review → push → reachability → `done`):
 `references/publishing.md`.
-Before integrating or closing a submitted ticket, read
-`sidequest comments <ref> --json` and resolve any unresolved risk.
-**Green verification is necessary.** Review the diff before pushing (yourself for a small change, a
-dispatched `review-audit`/`security-audit` executor only when no deterministic done-oracle exists or
-high-stakes flags require it), then resolve or explicitly accept every finding. Never mark a submitted ticket done without integrating it;
-never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves the board
-transition, never that work shipped: salvage and close it per `references/publishing.md`.
+**BOOKEND SUPERVISION.** Between dispatch and submission, do nothing with that ticket: no pulses,
+comment reads, or worktree peeks. At integration, read the submit report, run its verify command and
+the wave seam check (full suite once per wave), then integrate on green. Judge by that oracle, never
+by opening source or reviewing diffs. A human-grade review need is a separately routed `review-audit`
+(or `security-audit`) ticket, never orchestrator re-review. Never mark a submitted ticket done without
+integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
+the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
 
 ## Route execution down; keep the loop tight
 

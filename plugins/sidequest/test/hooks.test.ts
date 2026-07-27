@@ -1076,6 +1076,7 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /never blind respawn/);
   assert.match(ctx, /Two failures: comment evidence \+ surface user/);
   assert.match(ctx, /one background timer, never foreground sleep loop/);
+  assert.match(ctx, /BOOKEND no ticket read\/pulse\/worktree peek\. Green report\+verify\+wave suite integrates, oracle, no diff\./, 'integration must use the executable oracle rather than re-reviewing executor work');
   assert.ok(ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'));
   assert.match(ctx, /tools are absent \(not errors\), ask USER to run `\/reload-plugins`/);
 });
