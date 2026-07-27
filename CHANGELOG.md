@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.243.0 (2026-07-27)
+
+### sidequest 3.26.2 → 3.26.3
+
+#### Fixes
+
+- Upfront backlog before first dispatch; evidence-gated unpinnable-contract branch (SQ-943) [`0b598be`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0b598be477a6619a87cbb539ed90f384c2a02064)
+
 ## v3.242.0 (2026-07-27)
 
 ### sidequest 3.26.1 → 3.26.2
