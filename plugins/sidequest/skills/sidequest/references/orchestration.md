@@ -7,30 +7,27 @@ in the main skill — this file is the detail on the bigger shapes.
 
 ## Decomposition in depth
 
-The main skill's planning rules, expanded. One ticket = one piece a single agent can finish in a
-short bounded run and check on its own. User-directed mechanical edits to one or two exact named
-files with stated content use `Edit` inline; needing other-file reading or investigation means a ticket. That's often a code change with a verify command, but just
-as often an investigation, spike, or review whose "done" is a concrete answer or artifact, not a
-diff — don't force every ticket into an implementation shape. The reason to split is parallelism as
-much as cost: independent tickets fan out to sub-agents that run at the same time, so cut where the
-pieces are genuinely independent (several files to probe, several questions to answer, several
-changes that don't touch each other). Split work with multiple independently checkable outcomes or
-that would make an agent broadly rediscover the codebase; keep tightly coupled work that must land
-and resolve together in one ticket.
+### Solo-fit gate before decomposition
 
-**Enumerated deliverables are a decomposition smell.** When one ticket would "own" several named
-pieces (e.g. CLI + wiring + script + state metadata + tests), that enumeration is the tell that
-it's a feature pivoting on one shared contract, not a single atomic change — prefer the story
-shape: file a cheap ticketed planning investigation that pins the shared contract and anchors, then
-an independent wave that fans the deliverables out to parallel sub-agents. Put frozen decisions,
-invariants, acceptance evidence, and durable artifact links in the story execution contract once
-(`story contract US-n --body-file path` or MCP `story_contract`) rather than repeating them in
-steering messages. It is capped at 4 KiB and arrives before ticket scope in every member briefing.
-If it changes after a member is claimed, pulse/changes and the next dispatch warn about the revision
-drift. Keep them bundled in one ticket only when the pieces genuinely cannot
-verify independently. This is also how context-completeness stays cheap: don't pay for it with
-orchestrator tokens by investigating inline on the pricey thread — pay for it with the planning
-investigation whose output the wave consumes, instead of the orchestrator re-deriving it.
+Before filing several tickets, estimate whether the whole request fits one executor comfortably. File
+**one ticket and dispatch one executor** when it is greenfield or otherwise one coherent spec, has no
+context-window risk, and has no more than about two genuinely parallel streams. Keep that ticket whole
+when the work must land and verify together. Delegation still stays the default: this right-sizes the
+unit of delegation rather than pulling substantial work inline.
+
+Decompose when the work exceeds one executor's context or independently checkable streams genuinely
+parallelize. One ticket then equals one bounded, independently checkable piece: a code change with a
+verify command, or an investigation, spike, or review whose "done" is a concrete answer or artifact.
+Cut along real independent surfaces, not merely a list of deliverables. Several named pieces can still
+be one feature with a shared contract; split them only when they can progress and verify independently.
+
+When decomposition is warranted, use a story for a shared outcome. A planning investigation can pin
+shared decisions and anchors before a wave starts. Put frozen decisions, invariants, acceptance evidence,
+and durable artifact links in the story execution contract once (`story contract US-n --body-file path`
+or MCP `story_contract`) rather than repeating them in steering messages. It is capped at 4 KiB and
+arrives before ticket scope in every member briefing. If it changes after a member is claimed,
+`pulse`/`changes` and the next dispatch warn about revision drift. This keeps context completeness
+cheap without the orchestrator rediscovering the codebase inline.
 
 **The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket:
 direct `Read`/`Glob`/`Grep` when the affected surfaces are obvious; when they are unfamiliar, a
@@ -50,22 +47,24 @@ in the spec, or split it further.
 
 **Non-repo deliverables need a durable rendezvous.** A report, analysis, or dataset must land on an agent-independent surface: the ticket comment thread when it fits the comment cap, a declared artifact root under the project (for example `.claude/.codebase-info`) for larger artifacts, or a user-named absolute path outside any session temp tree. Never pin a session scratchpad path in a ticket as the deliverable location or its verify command, because different agents resolve different scratchpad roots for the same project. Put the durable location and the exact verification step in the ticket before dispatch.
 
-## Acceptance evidence before fix chains
+## Acceptance evidence and audit gates
 
-Product rework gets expensive when a chain proves individual patches before it proves the system
-behavior it needs. Set the acceptance boundary before splitting fixes:
+Set the acceptance boundary before splitting fixes:
 
-- **Front-load the adversarial evidence.** Before filing behavior patches, build and freeze the
+- **Front-load adversarial evidence.** Before filing behavior patches, build and freeze the
   acceptance matrix or lifecycle-acceptance ticket that can reject the whole behavior. Do not run a
-  pitch patch chain before its benchmark exists, or split UI identity, teardown, resize, and reopen
-  into separate tickets before one matrix covers the lifecycle.
-- **Keep one implementation ticket open through independent review.** Review remains a separate
-  ticket, but attach its findings as comments on the open implementation claim and correct them
-  there. Submit that implementation only after the review is clean, rather than closing each narrow
-  step and filing a follow-up fix chain.
-- **Record stable facts once.** Put facts such as local-only git, artifact lifecycle, and frozen
-  acceptance wording in the ticket or board record that owns them. Executors should consume that
-  source instead of receiving the same steering repeatedly.
+  patch chain before its benchmark exists, or split UI identity, teardown, resize, and reopen into
+  separate tickets before one matrix covers the lifecycle.
+- **Skip an audit wave when the done-oracle is deterministic.** If the ticket's executable
+  acceptance commands or test suite pass, do not append a `review-audit` + fix wave by default.
+  Audit when the work has no deterministic done-oracle or high-stakes flags demand independent
+  scrutiny. A normal integration diff review still checks the combined change.
+- **Keep one implementation ticket open through a required independent review.** Attach findings as
+  comments on the open implementation claim and correct them there. Submit only after that required
+  review is clean, rather than closing each narrow step and filing a follow-up fix chain.
+- **Record stable facts once.** Put local-only git, artifact lifecycle, and frozen acceptance wording
+  in the ticket or board record that owns them. Executors consume that source instead of receiving
+  the same steering repeatedly.
 
 ### Live review checkpoints
 
@@ -129,12 +128,13 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   server lifecycle (started, reused, or stopped), files changed, blockers, cleanup performed, and
   verification output. Tickets with no declared scope never mechanically conflict, so eyeball whether
   they'd edit the same files before parallelizing them.
-- **Review seams once after a wave closes.** At the next natural wakeup, inspect one combined diff/stat
-  for the wave and only its cross-ticket seams: overlapping edits, shared interfaces/contracts, duplicate
-  implementations, and incompatible assumptions. If none exists, proceed without a broad review. If one
-  does, file a narrowly scoped review-audit follow-up for the affected files; do not reopen completed
-  tickets or rerun every ticket's verification. Keep this a short event-driven inspection, not a second
-  review pass.
+- **Integrate and verify by wave.** Each executor runs its scoped verification before submission.
+  When the quiet wave lands, run the full suite once for the combined wave, not once per ticket.
+  Then inspect one combined diff/stat for cross-ticket seams: overlapping edits, shared
+  interfaces/contracts, duplicate implementations, and incompatible assumptions. A passing
+  deterministic done-oracle with no high-stakes flag ends there. Otherwise file a narrowly scoped
+  review-audit for the affected files; do not reopen completed tickets or rerun every ticket's
+  verification. Keep this event-driven inspection short, not a second review pass.
 - **Executor prompts stay lean and cannot narrow the ticket**: add only the ref, worker id, claim/done commands, stamped effort/model, and logistics the ticket does not carry. The ticket contract is authoritative and must travel in full, unchanged scope. If the plan changed, update the ticket before dispatching. **Anti-pattern: dispatch narrower than ticket.** In Cantizans SQ-87, the ticket required extracting the done block across every lesson route and two commits, while the dispatch limited work to intervals as a reference. The executor bounced correctly, then the orchestrator had to re-plan. Never create that contradiction.
 - **Read bounded briefing comments from the newest end.** A brief can carry a compact newest-first comment packet instead of the full thread. Read compact `comments` pages first, following their cursor only when needed. Read the full chronological thread only when the brief flags a decision or constraint in omitted history; otherwise the latest packet and compact pages carry the current handoff.
 - **Resume Continuation checkpoints with a fresh dispatch.** Executors create a Continuation checkpoint around 100 tool rounds by committing verified declared-scope work, writing a `Continuation checkpoint` comment with the commit, files touched, next steps, and verification state, then releasing to `todo`. On a natural wakeup, use `pulse` and the latest comment to confirm that header, commit, and no live claim. Read the checkpoint before `dispatch <ref>`, then spawn its returned continuation unchanged so it gets a fresh token and context. A live claim means the checkpoint has not completed, so do not launch beside it; use the normal salvage path if that worker stopped.

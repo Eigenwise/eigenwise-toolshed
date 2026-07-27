@@ -23,28 +23,25 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 
 When a task is **more than a single small change**, do this **before writing any code**:
 
-0. **Decide the shape.** One cohesive change → a single ticket. Several tickets sharing one
-   outcome → a **Sidequest story** first (`sidequest story add`, then `--story US-n` per piece). A story is Sidequest's own optional
-   `US-n` grouping, not a Claude Code feature: use it when the
-   shared outcome, dependencies, or waves need to stay visible together;
-   leave independent or small work as atomic tickets.
-1. **Decompose into bounded, independently checkable tickets** (`sidequest add ...`). One ticket
-   = one piece a single agent can finish in a short bounded run and check on its own — a change with
-   a verify command, or an investigation whose "done" is a concrete answer. Split only
-   genuinely independent pieces. **Enumerated deliverables are a decomposition smell** — prefer
-   the story shape: a planning-investigation ticket pins the shared contract, then a wave
-   consumes its findings. Each ticket carries the context its agent needs — anchors, contract or
-   question, bounds, settled decisions, exact verify; missing context → gather it first or split
-   further.
+0. **Apply the solo-fit gate.** If the whole request fits one executor comfortably — one
+   coherent spec, no context-window risk, and no more than about two genuinely parallel streams —
+   file **one ticket** and dispatch one executor. Decompose only when
+   the work exceeds one context or the parallel streams are real.
+1. **Choose the ticket shape.** Several tickets sharing one outcome → a **Sidequest story** first
+   (`sidequest story add`, then `--story US-n` per piece). A story is Sidequest's own optional
+   `US-n` grouping, not a Claude Code feature: use it when shared outcome, dependencies, or waves need to
+   stay visible; leave independent or small work as atomic tickets. Each ticket carries anchors, contract, and
+   exact verify; gather missing context before dispatch.
    Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
    Use directory scope where that absorbs the intended blast radius; details: `references/ticket-authoring.md`.
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
    integrate so `ready` serializes the phases.
 3. **Execute proportionally** — "Route execution down" below.
 
-A **complexity 4+** ticket gets a planning pass first: concrete scope, anchors, exact
-verify command. Wave tickets verify with a scoped test; full-suite
-green belongs to the integration or ship ticket. The board makes the plan survive context loss; a
+A complexity 4+ ticket gets a planning pass first: concrete scope, anchors, exact
+verify command. Wave tickets verify with a scoped test; run the full suite once when integrating the
+wave. A passing executable done-oracle needs no review-audit + fix wave unless the work lacks a
+deterministic oracle or carries high-stakes flags. The board makes the plan survive context loss; a
 user-directed mechanical edit to one or two exact named files with stated content needs no ticket;
 any edit requiring other-file reading or investigation does. Coexisting with an external tracker:
 `references/external-trackers.md`.
@@ -161,9 +158,9 @@ transaction (lock → integrate → central version → reverify → review → 
 `references/publishing.md`.
 Before integrating or closing a submitted ticket, read
 `sidequest comments <ref> --json` and resolve any unresolved risk.
-**Green verification is necessary but never a review**: before pushing, review the diff (yourself
-for a small change, a dispatched `review-audit`/`security-audit` executor otherwise) and resolve
-or explicitly accept every finding. Never mark a submitted ticket done without integrating it;
+**Green verification is necessary.** Review the diff before pushing (yourself for a small change, a
+dispatched `review-audit`/`security-audit` executor only when no deterministic done-oracle exists or
+high-stakes flags require it), then resolve or explicitly accept every finding. Never mark a submitted ticket done without integrating it;
 never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves the board
 transition, never that work shipped: salvage and close it per `references/publishing.md`.
 
@@ -178,8 +175,8 @@ as comments, not transcripts. Routed implementation agents use a freshly dispatc
 delegated implementation or investigation work needs a ticketed route.
 
 **The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
-submit verified commits → read each thread, re-run the verify, publish the wave in one
-transaction, re-plan, spawn the next. Don't accept a file list as proof of coverage. Prevent
+submit verified commits → read each thread, use scoped verification for each ticket, then run the
+full suite once while publishing the wave in one transaction → re-plan, spawn the next. Don't accept a file list as proof of coverage. Prevent
 executor mini-sessions from the spawn side: **the ticket is the spec** (the cheaper the model,
 the more patch-level the detail); **scope the spawn prompt only with logistics**, the ticket
 contract traveling in full and unnarrowed;

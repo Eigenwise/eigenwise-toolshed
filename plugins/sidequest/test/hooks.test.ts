@@ -1055,9 +1055,9 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /Operational requests \(run\/build\/test app; start\/stop dev server; open dashboard; answer from visible context\): act inline, without the Sidequest skill, category_list, or board reads\./);
   assert.match(ctx, /Reload the Sidequest skill before board work/);
   assert.match(ctx, /sidequest \(active\)/);
-  assert.ok(ctx.includes('ATOMIC'), 'must demand atomic tickets (stuck executors come from oversized scope)');
-  assert.match(ctx, /independently checkable/, 'must split independently checkable pieces');
-  assert.match(ctx, /investigation, spike, or review/, 'a ticket can be investigation, not only a code change');
+  assert.match(ctx, /SOLO-FIT FIRST/, 'must check whether the whole request fits one executor first');
+  assert.match(ctx, /coherent, context-safe work with up to two real streams/);
+  assert.match(ctx, /Otherwise use checkable ATOMIC tickets/);
   assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
   assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
   assert.match(ctx, /WebSearch is executor-only: file and dispatch a research ticket/);
@@ -1110,11 +1110,12 @@ test('session-start: carries runtime resource and worker reporting coordination'
   assert.match(ctx, /Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup/, 'must define worker reporting and ownership');
 });
 
-test('session-start: flags enumerated deliverables as a decomposition smell (design→wave)', () => {
+test('session-start: applies solo-fit before the deliverables smell rule', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /several deliverables .* is a smell/, 'a ticket owning several enumerated deliverables must read as a smell');
-  assert.match(ctx, /ticketed planning investigation that pins the shared contract/, 'must use a ticketed investigation to pin the shared contract');
-  assert.match(ctx, /wave fanning the pieces out/, 'then a wave that fans the deliverables out to parallel sub-agents');
+  assert.match(ctx, /SOLO-FIT FIRST: coherent, context-safe work/);
+  assert.match(ctx, /Otherwise use checkable ATOMIC tickets with anchors, contract, bounds, decisions, and verify; several deliverables are a smell/);
+  assert.match(ctx, /plan then wave/);
+  assert.match(ctx, /Passing done-oracle skips audit\/fix unless high-stakes; full suite once\/wave/);
 });
 
 test('session-start: says sidequest coexists with an external tracker (Jira)', () => {

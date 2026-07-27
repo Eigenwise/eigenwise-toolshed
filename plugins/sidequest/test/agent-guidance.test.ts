@@ -67,13 +67,14 @@ test('dormant executors resume once before replacement', () => {
   assert.match(orchestration, /Never respawn beside a live claim or `TaskStop` without terminal board evidence/);
 });
 
-test('post-wave seam review stays scoped and event-driven', () => {
-  assert.match(orchestration, /Review seams once after a wave closes/);
-  assert.match(orchestration, /next natural wakeup, inspect one combined diff\/stat/);
-  assert.match(orchestration, /overlapping edits, shared interfaces\/contracts, duplicate\n  implementations, and incompatible assumptions/);
-  assert.match(orchestration, /proceed without a broad review/);
-  assert.match(orchestration, /narrowly scoped review-audit follow-up for the affected files/);
-  assert.match(orchestration, /do not reopen completed\n  tickets or rerun every ticket's verification/);
+test('post-wave integration batches verification and keeps audits conditional', () => {
+  assert.match(orchestration, /Integrate and verify by wave/);
+  assert.match(orchestration, /Each executor runs its scoped verification before submission/);
+  assert.match(orchestration, /full suite once for the combined wave, not once per ticket/);
+  assert.match(orchestration, /combined diff\/stat for cross-ticket seams/);
+  assert.match(orchestration, /A passing\s+deterministic done-oracle with no high-stakes flag ends there/);
+  assert.match(orchestration, /narrowly scoped\n  review-audit for the affected files/);
+  assert.match(orchestration, /do not reopen completed tickets or rerun every ticket's\n  verification/);
 });
 
 

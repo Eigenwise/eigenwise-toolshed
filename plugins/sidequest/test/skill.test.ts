@@ -71,3 +71,11 @@ test('sidequest guidance bans proxy waiters for executors', () => {
   assert.match(orchestration, /Bash, PowerShell,\s+`Monitor`, or cron/);
   assert.match(orchestration, /one-shot readiness watch/);
 });
+
+test('sidequest guidance right-sizes ticket decomposition', () => {
+  assert.match(skill, /solo-fit gate/);
+  assert.match(orchestration, /Solo-fit gate before decomposition/);
+  assert.match(orchestration, /Skip an audit wave when the done-oracle is deterministic/);
+  assert.match(orchestration, /Integrate and verify by wave/);
+  assert.match(orchestration, /full suite once for the combined wave/);
+});
