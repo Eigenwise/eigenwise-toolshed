@@ -4864,6 +4864,10 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     }
     const now = new Date().toISOString();
     t.claim = { by, at: now };
+    if (t.storyId) {
+      const story = getStory(slug, t.storyId);
+      if (story) t.storyLogSeenSeq = Number(story.logRevision) || 0;
+    }
     t.claimRelease = null; // a fresh claim supersedes any auto-release provenance
     if (opts.direct && isRoutedTicket(t)) {
       t.directClaim = {
@@ -5732,6 +5736,9 @@ function coerceStoryId(slug?: any, val?: any) {
 }
 
 const STORY_EXECUTION_CONTRACT_MAX_BYTES = 4 * 1024;
+const STORY_DECISION_LOG_MAX_BYTES = 4 * 1024;
+const STORY_LOG_ENTRY_TEXT_MAX_BYTES = 280;
+const STORY_LOG_KINDS = new Set(['DECISION', 'CONSTRAINT', 'DISCOVERY']);
 
 function normalizeStoryExecutionContract(value?: any) {
   if (value == null) return null;
@@ -5750,6 +5757,136 @@ function storyExecutionContract(story?: any) {
     revision: Number(story.contractRevision) || 1,
     body: String(story.executionContract),
   };
+}
+
+function normalizeStoryLogEntry(value?: any) {
+  const raw = value && typeof value === 'object'
+    ? value.text ?? value.entry ?? value.body
+    : value;
+  let text = String(raw == null ? '' : raw).replace(/\s*[\r\n]+\s*/g, ' ').trim();
+  const prefixed = text.match(/^(DECISION|CONSTRAINT|DISCOVERY)\s*:\s*/i);
+  const explicitKind = value && typeof value === 'object' && value.kind != null
+    ? String(value.kind).trim().toUpperCase()
+    : null;
+  const kind = explicitKind || (prefixed ? prefixed[1].toUpperCase() : null);
+  if (!kind || !STORY_LOG_KINDS.has(kind)) {
+    throw new Error('story log entry kind must be DECISION, CONSTRAINT, or DISCOVERY.');
+  }
+  if (prefixed && (!explicitKind || explicitKind === prefixed[1].toUpperCase())) {
+    text = text.slice(prefixed[0].length).trim();
+  }
+  if (!text) throw new Error('story log entry text is required.');
+  if (Buffer.byteLength(text, 'utf8') > STORY_LOG_ENTRY_TEXT_MAX_BYTES) {
+    throw new Error(`story log entry text exceeds the ${STORY_LOG_ENTRY_TEXT_MAX_BYTES}-byte limit.`);
+  }
+  return { kind, text };
+}
+
+function storyDecisionLogEntries(story?: any) {
+  if (!story || !Array.isArray(story.decisionLog)) return [];
+  return story.decisionLog
+    .filter((entry?: any) => entry && Number.isInteger(Number(entry.seq)) && STORY_LOG_KINDS.has(String(entry.kind)))
+    .map((entry?: any) => ({
+      seq: Number(entry.seq),
+      at: String(entry.at),
+      by: String(entry.by),
+      ref: entry.ref == null ? null : String(entry.ref),
+      kind: String(entry.kind),
+      text: String(entry.text),
+    }));
+}
+
+function renderStoryDecisionLog(story?: any, entries?: any) {
+  const log = entries || storyDecisionLogEntries(story);
+  if (!log.length) return '';
+  const lastSeq = Number(story && story.logRevision) || log[log.length - 1].seq;
+  const countLabel = `${log.length} ${log.length === 1 ? 'entry' : 'entries'}`;
+  return [
+    `## Story decision log (${story.ref}, ${countLabel} through #${lastSeq})`,
+    'Findings appended by sibling executors on this story. The contract above outranks these.',
+    ...log.map((entry?: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
+  ].join('\n');
+}
+
+function storyDecisionLog(story?: any) {
+  const entries = storyDecisionLogEntries(story);
+  return {
+    revision: Number(story && story.logRevision) || 0,
+    entries,
+    bytes: Buffer.byteLength(renderStoryDecisionLog(story, entries), 'utf8'),
+    capacity: STORY_DECISION_LOG_MAX_BYTES,
+  };
+}
+
+function storyLogClaimRefusal(story?: any, ticketRef?: any, by?: any) {
+  return `story log: ${ticketRef} is not claimed by "${by}", or it is not a member of ${story.ref}. Append from a ticket you hold, or use story_contract.`;
+}
+
+function appendStoryLogEntry(slug?: any, storyRef?: any, value?: any) {
+  const normalized = normalizeStoryLogEntry(value);
+  return transaction(() => {
+    const story = getStory(slug, storyRef);
+    if (!story) throw new Error(`story log: ${storyRef} was not found.`);
+    const by = String(value && typeof value === 'object' ? value.by || '' : '').trim();
+    const requestedRef = value && typeof value === 'object' && value.ref != null
+      ? String(value.ref).trim()
+      : '';
+    let ticketRef = null;
+    if (!requestedRef) {
+      if (by !== 'orchestrator') throw new Error(storyLogClaimRefusal(story, 'SQ-n', by));
+    } else {
+      const ticket = getTicket(slug, requestedRef);
+      ticketRef = ticket ? ticket.ref : requestedRef;
+      if (!ticket || ticket.storyId !== story.id || !ticket.claim || ticket.claim.by !== by || claimReclaimable(ticket)) {
+        throw new Error(storyLogClaimRefusal(story, ticketRef, by));
+      }
+    }
+    const entries = storyDecisionLogEntries(story);
+    const seq = (Number(story.logRevision) || 0) + 1;
+    const entry = {
+      seq,
+      at: new Date().toISOString(),
+      by,
+      ref: ticketRef,
+      kind: normalized.kind,
+      text: normalized.text,
+    };
+    const nextEntries = [...entries, entry];
+    if (Buffer.byteLength(renderStoryDecisionLog(Object.assign({}, story, { logRevision: seq }), nextEntries), 'utf8') > STORY_DECISION_LOG_MAX_BYTES) {
+      throw new Error(`story log: ${story.ref} decision log is full (${STORY_DECISION_LOG_MAX_BYTES} bytes, ${entries.length} entries). Condense it into the story execution contract with story_contract, then clear with story_log --clear.`);
+    }
+    story.decisionLog = nextEntries;
+    story.logRevision = seq;
+    story.updatedAt = entry.at;
+    putStory(slug, story);
+    return story;
+  });
+}
+
+function clearStoryLog(slug?: any, storyRef?: any) {
+  return transaction(() => {
+    const story = getStory(slug, storyRef);
+    if (!story) return null;
+    story.decisionLog = [];
+    story.updatedAt = new Date().toISOString();
+    putStory(slug, story);
+    return story;
+  });
+}
+
+function storyDecisionLogWarnings(ticket?: any, slug?: any) {
+  if (!ticket || !ticket.storyId || !slug) return [];
+  const story = getStory(slug, ticket.storyId);
+  if (!story) return [];
+  const seenSeq = Number(ticket.storyLogSeenSeq) || 0;
+  const lastSeq = Number(story.logRevision) || 0;
+  if (lastSeq <= seenSeq) return [];
+  const gained = lastSeq - seenSeq;
+  const firstSeq = seenSeq + 1;
+  const range = firstSeq === lastSeq ? `#${firstSeq}` : `#${firstSeq}-#${lastSeq}`;
+  const noun = gained === 1 ? 'entry' : 'entries';
+  const pronoun = gained === 1 ? 'it is' : 'they are';
+  return [`Dispatch warning: ${story.ref} decision log gained ${gained} ${noun} (${range}) since ${ticket.ref} was claimed; ${pronoun} not in its briefing.`];
 }
 
 function markStoryContractDrift(slug?: any, story?: any, fromRevision?: any, changedAt?: any) {
@@ -5784,6 +5921,8 @@ function createStory(slug?: any, fields?: any) {
       color: parseStoryColor(fields.color) || autoStoryColor(seq - 1),
       executionContract,
       contractRevision: executionContract ? 1 : 0,
+      decisionLog: [],
+      logRevision: 0,
       createdAt: now,
       updatedAt: now,
       order: Date.now(),
@@ -6316,6 +6455,7 @@ function pulsePayload(slug?: any, idOrRef?: any) {
   const git = gitPulse(meta && meta.path, ticket.files);
   const activity = claimActivityPulse(ticket, git);
   const dispatch = dispatchState(ticket);
+  const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
   return {
     ref: ticket.ref,
     title: ticket.title,
@@ -6347,7 +6487,7 @@ function pulsePayload(slug?: any, idOrRef?: any) {
     } : null,
     checkpoint: checkpointProjection(ticket),
     ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
-    ...(storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {}),
+    ...(warnings.length ? { warnings } : {}),
     submission: ticket.submission || null,
     git,
   };
@@ -6368,19 +6508,22 @@ function changesPayload(slug?: any, since?: any) {
   const tickets = listTickets(slug)
     .filter((ticket?: any) => changedAt(ticket) > afterMs)
     .sort((a?: any, b?: any) => changedAt(a) - changedAt(b))
-    .map((ticket?: any) => ({
-      ref: ticket.ref,
-      title: ticket.title,
-      status: ticket.status,
-      lastEventType: ticket.lastEventType || null,
-      lastEventSource: ticket.lastEventSource || null,
-      lastComment: latestCommentExcerpt(ticket),
-      claim: claimPulse(ticket, nowMs),
-      checkpoint: checkpointProjection(ticket, nowMs),
-      ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
-      ...(storyContractDriftWarnings(ticket).length ? { warnings: storyContractDriftWarnings(ticket) } : {}),
-      updatedAt: ticket.updatedAt,
-    }));
+    .map((ticket?: any) => {
+      const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
+      return {
+        ref: ticket.ref,
+        title: ticket.title,
+        status: ticket.status,
+        lastEventType: ticket.lastEventType || null,
+        lastEventSource: ticket.lastEventSource || null,
+        lastComment: latestCommentExcerpt(ticket),
+        claim: claimPulse(ticket, nowMs),
+        checkpoint: checkpointProjection(ticket, nowMs),
+        ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
+        ...(warnings.length ? { warnings } : {}),
+        updatedAt: ticket.updatedAt,
+      };
+    });
   return { since: after, serverTime, tickets };
 }
 
@@ -7142,7 +7285,14 @@ module.exports = {
   STORY_PALETTE,
   STORY_COLOR_NAMES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,
+  STORY_DECISION_LOG_MAX_BYTES,
+  STORY_LOG_ENTRY_TEXT_MAX_BYTES,
   storyExecutionContract,
+  normalizeStoryLogEntry,
+  storyDecisionLog,
+  appendStoryLogEntry,
+  clearStoryLog,
+  storyDecisionLogWarnings,
   listStories,
   getStory,
   createStory,
