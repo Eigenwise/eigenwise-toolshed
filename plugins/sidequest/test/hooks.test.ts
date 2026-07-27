@@ -34,12 +34,14 @@ const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
 const REPEATED_COMMAND_WARN = path.join(HOOKS, 'repeated-command-warn.js');
 const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
 const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
+const BOARD_RECONCILIATION_REMINDER = path.join(HOOKS, 'board-reconciliation-reminder.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 
 const BUDGET = {
   session: 4700,
   compact: 2900,
   workforce: 1800,
+  reconciliation: 360,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
 
@@ -1048,6 +1050,44 @@ test('session-end sweeps old patch-equivalent worktrees and stays fail-soft', ()
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
 });
 
+test('stop reminder: names this session\'s doing tickets and pending submissions within its byte budget', () => {
+  const sessionId = `reconcile-${++sqSeq}`;
+  const doing = addTicket('needs reconciliation');
+  const submitted = addTicket('pending integration');
+  claimStopTicket(doing, sessionId, 'reconcile-doing');
+  claimStopTicket(submitted, sessionId, 'reconcile-submitted');
+  assert.equal(store.getTicket(slug, doing.ref).dispatch.sessionId, sessionId);
+  assert.equal(store.getTicket(slug, submitted.ref).dispatch.sessionId, sessionId);
+  assert.equal(store.findProject(BOARD_PATH).slug, slug);
+  assert.equal(store.submitTicket(slug, submitted.ref, 'reconcile-submitted', {
+    commit: 'abc1234',
+    sessionId,
+  }).ok, true);
+
+  const reminder = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }, {
+    CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..'),
+  }).systemMessage;
+  assert.match(reminder, /1 ticket in doing/);
+  assert.match(reminder, /1 submission pending integration/);
+  assert.match(reminder, /Update or close them before finishing/);
+  assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
+});
+
+test('stop reminder: stays silent for a quiet session and when nudges are off', () => {
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, {
+    session_id: `reconcile-quiet-${++sqSeq}`,
+    cwd: BOARD_PATH,
+  }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }), null);
+
+  const sessionId = `reconcile-off-${++sqSeq}`;
+  const ticket = addTicket('nudge disabled');
+  claimStopTicket(ticket, sessionId, 'reconcile-off');
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, {
+    session_id: sessionId,
+    cwd: BOARD_PATH,
+  }, { SIDEQUEST_NUDGE: 'off' }), null);
+});
+
 test('session-start: carries evidence-first advisory routing guidance', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
   const substantiveMandate = 'REQUIRED: Substantive changes/investigations need tickets; fresh `dispatch` returns executor/spawn/token. Every Agent uses it.';
@@ -1348,6 +1388,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
   assert.ok(config.hooks.UserPromptSubmit.some((entry?: any) => entry.hooks
     .some((hook?: any) => hook.command.includes('board-first-reminder.js'))), 'the board-first reminder must run for user prompts');
+  assert.ok(config.hooks.Stop.some((entry?: any) => entry.hooks
+    .some((hook?: any) => hook.command.includes('board-reconciliation-reminder.js'))), 'the reconciliation reminder must run before a session stops');
   assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === '*'
     && entry.hooks.some((hook?: any) => hook.command.includes('inline-work-nudge.js'))), 'the inline-work reminder must be registered for every tool');
