@@ -25,7 +25,10 @@ For substantial work:
 
 0. **solo-fit gate.** **SOLO-FIT picks one-executor vs wave; it NEVER means you implement
    inline.** Small coherent work gets **one ticket** and one executor; use it too when the contract
-   cannot be pinned without doing the work.
+   cannot be pinned without doing the work. With a written spec and executable done-oracle,
+   contract-first wave is the default. Claiming the contract is unpinnable needs either a completed
+   exploration/planning ticket that tried and names the interface that resisted a written contract, or no written
+   contract surface in the request. “Feels coupled” is not evidence: when unsure, file planning first.
 1. **Ticket shape.** If a written spec pins shared types/interfaces, file boundaries, and
    per-piece verification, 3+ independently checkable pieces use contract-first fan-out: pin the
    contract in ticket descriptions or a short planning ticket, then one parallel wave on
@@ -37,7 +40,12 @@ For substantial work:
    `references/ticket-authoring.md`.
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
    integrate so `ready` serializes the phases.
-3. **Execute proportionally** — "Route execution down" below.
+3. **File the whole planned wave backlog before dispatching.** After solo-fit chooses wave mode, put every
+   planned ticket for every wave on the board, with declared files, dependency links, and per-ticket verify;
+   then dispatch the entire ready wave in parallel. Drip-filing, dispatching, waiting, then filing the next
+   ticket serializes work and hides the plan until the user cannot steer it. Later discoveries still become
+   normal mid-run tickets.
+4. **Execute proportionally** — "Route execution down" below.
 
 A complexity 4+ ticket gets a planning pass first: concrete scope, anchors, exact
 verify command. Wave tickets verify with a scoped test; run the full suite once when integrating the
@@ -86,36 +94,20 @@ Read-only files or changes warn before dispatch. Resolve or override.
 
 ## File a ticket
 
-`sidequest add -t "Contact form does not send" -d "..." -p high -l bug --category <id>` — read
-the live taxonomy (`category_list` MCP / `sidequest category list --json`), pick the narrowest
-category by its description, never its name, stamp it with `--category` (a project-scoped match beats a global row;
-classify by the deliverable; never copy category tables into prompts). Too underspecified
-→ the taxonomy's fallback; reclassify once evidence exists.
-`--complexity 1-10` + `--why` is the legacy fallback for ambiguity — never set
-`--model`/`--effort`. Also: `-s` status · `-i` image · `--file` scope (repeatable) · `--story
-US-n` · `--anchors "file:line symbol"` / `--verify "exact command"` (seeded verbatim; anchors
-<4k, verify <1k).
+`sidequest add -t "Contact form does not send" -d "..." -p high -l bug --category <id>` — read the
+live taxonomy (`category_list` MCP / `sidequest category list --json`), choose by description, and
+stamp `--category`; use its fallback only when no category fits. `--complexity` is legacy ambiguity
+fallback; never set `--model`/`--effort`. Use `--file`, `--story`, `--anchors`, and exact `--verify` as
+needed; scope and authoring details: `references/ticket-authoring.md`.
 
-**Descriptions are developer-to-developer specs, never a PM summary. The executor's entire brief is this description:** **Where** — exact
-anchors; **Contract** — behavior/edge cases or the question to answer; **Bounds**;
-**Dependencies/decisions**; **Verify** — the exact command or answer shape. Bugs carry the
-reproduction. **Scale the spec inversely to the executor's model; front-load everything you
-know** — never file vague.
+**Descriptions are developer-to-developer specs, never PM summaries.** Include anchors, behavior and
+edge cases (or the question), bounds, dependencies/decisions, and the exact verify command; bugs include
+a reproduction. Front-load known evidence, especially for cheaper executors. Route by remaining
+uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy` or user-labeled
+`direct-ok`; keep the paid recon in the ticket.
 
-**Route by remaining uncertainty, not original difficulty.** Investigation pays for the judgment
-once; a ticket whose exact edit is already settled drops tier (`coding.easy`, or `direct-ok` for a
-one-or-two-file mechanical edit), and `add`/`update` warn when it doesn't. Never thin the
-ticket: evidence, constraints, and anchors are what strong-model authorship contributes. A fully
-specified EDIT downgrades the category; rich context does not. Carry paid recon forward (anchors +
-excerpts per surface); review gates need adversarial criteria: `references/ticket-authoring.md`.
-
-Descriptions/comments render **full markdown**. **CRITICAL: use real newlines, never a literal
-`\n`** — multi-line `-d`/`-m` needs a heredoc or `$'...'`; MCP tools take plain strings with real
-newlines.
-
-Mid-task side issue? File it with `mcp__plugin_sidequest_board__add` (CLI fallback), attach
-any pasted image path, keep going.
-**Filing a ticket is not a request to work it.** "Make a ticket for X" means file and stop.
+Descriptions/comments render markdown. Use real newlines, never literal `\n`. Mid-task side issue? File
+it with `mcp__plugin_sidequest_board__add`, then keep going. Filing a ticket is not a request to work it.
 
 ## List / update / close
 

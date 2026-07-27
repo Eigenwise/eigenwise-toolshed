@@ -18,12 +18,21 @@ must land and verify together.
 When a written spec can pin shared types/interfaces, file boundaries, and per-piece verification, and
 there are 3+ independently checkable pieces, prefer a contract-first fan-out: put the contract directly
 in the ticket descriptions or create one short planning ticket, then dispatch one parallel wave to
-category-appropriate cheaper models and integrate once per wave. Decompose for this shape or when the
-work exceeds one executor's context. One ticket still equals one bounded, independently checkable piece:
-a code change with a verify command, or an investigation, spike, or review whose "done" is a concrete
-answer or artifact. Cut along real independent surfaces, not merely a list of deliverables. Several named
-pieces can still be one feature with a shared contract; split them only when they can progress and verify
-independently.
+category-appropriate cheaper models and integrate once per wave. With a written spec and executable
+done-oracle, this is the presumptive default. Claiming the contract cannot be pinned requires either a
+completed exploration/planning ticket that tried and names the specific interface resisting a written
+contract, or a request with no written contract surface. “Feels coupled” is not evidence: when unsure,
+file the short planning ticket first, then decide from its report. One ticket still equals one bounded,
+independently checkable piece: a code change with a verify command, or an investigation, spike, or
+review whose "done" is a concrete answer or artifact. Cut along real independent surfaces, not merely a
+list of deliverables. Several named pieces can still be one feature with a shared contract; split them
+only when they can progress and verify independently.
+
+After solo-fit chooses wave mode, file the complete planned backlog before dispatching: every planned
+ticket for every wave, each with declared files, dependency links, and per-ticket verify. Then dispatch
+the entire ready wave in parallel. Filing one ticket, dispatching, waiting, then filing the next
+serializes work and hides the plan until the user cannot steer it. Later discoveries still become normal
+mid-run tickets.
 
 When decomposition is warranted, use a story for a shared outcome. A planning investigation can pin
 shared decisions and anchors before a wave starts. Put frozen decisions, invariants, acceptance evidence,
