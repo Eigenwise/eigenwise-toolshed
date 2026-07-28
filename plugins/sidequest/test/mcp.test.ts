@@ -639,7 +639,7 @@ test('dispatch warns about declared scopes held by in-flight tickets', async () 
 
   const dispatched = await callTool('dispatch', { project, ref: target.ref, full: true });
   assert.deepEqual(dispatched.warnings, [
-    `Dispatch warning: ${target.ref} overlaps in-flight ${inFlight.ref} at src/lib.rs.`,
+    `Dispatch warning: ${target.ref} overlaps in-flight ${inFlight.ref} at src/lib.rs — parallel is fine in isolated worktrees unless the same symbols/regions change; assess.`,
   ]);
 });
 
@@ -663,7 +663,7 @@ test('dispatch identifies lockfile-only scope overlaps', async () => {
 
   const dispatched = await callTool('dispatch', { project, ref: target.ref, full: true });
   assert.deepEqual(dispatched.warnings, [
-    `Dispatch warning: ${target.ref} overlaps in-flight ${inFlight.ref} at Cargo.lock. Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.`,
+    `Dispatch warning: ${target.ref} overlaps in-flight ${inFlight.ref} at Cargo.lock — parallel is fine in isolated worktrees unless the same symbols/regions change; assess. Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.`,
   ]);
 });
 
