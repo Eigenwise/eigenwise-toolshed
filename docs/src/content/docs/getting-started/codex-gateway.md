@@ -7,10 +7,10 @@ Codex Gateway runs a local proxy and puts `claude-codex-*` models in Claude Code
 
 ```text
 /plugin install codex-gateway@eigenwise-toolshed --scope user
-/codex-gateway:codex-gateway setup
+/model-gateway:model-gateway setup
 ```
 
-The setup skill installs or updates the proxy, checks authentication, and starts the local gateway. Gateway updates replace the worker behind a listener that stays bound, so open sessions keep their connection while an in-flight request drains or retries. Use `/codex-gateway:codex-gateway doctor` when the picker is missing models or the gateway port is unavailable. Once it is healthy, choose a `claude-codex-*` model with `/model`; regular Claude model ids continue to use the Anthropic API.
+The setup skill installs or updates the proxy, checks authentication, and starts the local gateway. Gateway updates replace the worker behind a listener that stays bound, so open sessions keep their connection while an in-flight request drains or retries. Use `/model-gateway:model-gateway doctor` when the picker is missing models or the gateway port is unavailable. Once it is healthy, choose a `claude-codex-*` model with `/model`; regular Claude model ids continue to use the Anthropic API.
 
 ### Add Grok subscription models
 
@@ -24,4 +24,4 @@ The gateway pins Claude's Opus, Sonnet, and Fable aliases to their shipped 1M mo
 
 `/compact` on a Codex model used to fail with `websocket_missing_terminal` or "Server error mid-response" while the same conversation compacted fine on a Claude model. The proxy streams over a WebSocket that can only recover from a dropped connection before its first chunk of output, and a compaction turn spends minutes past that point. The gateway now buffers the translated stream for compaction requests only and retries the whole turn on the same model if it ends without a terminal event, so a failed attempt never reaches your session. Normal turns keep streaming live. If retries run out you get the real upstream error rather than a truncated summary presented as a complete one. Set `CODEX_GATEWAY_COMPACT_STREAM_RETRIES` to change the retry count (default 2) or `CODEX_GATEWAY_COMPACT_STREAM_GUARD=0` to turn it off; `/healthz` reports the live settings under `compaction`.
 
-Claude Code Remote Control cannot use a local `ANTHROPIC_BASE_URL` in the same way. Run `/codex-gateway:remote-control-compatibility` to safely switch compatibility mode on or off before using Remote Control, then restore gateway mode when you return.
+Claude Code Remote Control cannot use a local `ANTHROPIC_BASE_URL` in the same way. Run `/model-gateway:remote-control-compatibility` to safely switch compatibility mode on or off before using Remote Control, then restore gateway mode when you return.
