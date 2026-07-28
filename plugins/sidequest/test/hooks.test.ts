@@ -1269,7 +1269,7 @@ test('session-start: says sidequest coexists with an external tracker (Jira)', (
 
 test('session-start: shows the live investigation workforce within its cap', () => {
   for (const source of ['', 'compact', 'resume']) {
-    const ctx = runHook(SESSION, { session_id: `workforce-${source || 'startup'}`, source });
+    const ctx = runHook(SESSION, { session_id: `workforce-${source || 'startup'}`, source }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
     const start = ctx.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:');
     assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
     const workforce = ctx.slice(start);
@@ -1291,14 +1291,14 @@ test('session-start: bounds oversized workforces and reports omitted categories'
       enabled: true,
     });
   }
-  const output = JSON.parse(runSessionWithHome(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project') }));
+  const output = JSON.parse(runSessionWithHome(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project'), CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }));
   const workforce = output.hookSpecificOutput.additionalContext.slice(output.hookSpecificOutput.additionalContext.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:'));
   assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `oversized workforce is ${Buffer.byteLength(workforce)} bytes`);
   assert.match(workforce, /… \d+ more enabled categories\./);
 });
 
 test('session-start: stays inside its byte budget and off the retired doctrine', () => {
-  const ctx = runHook(SESSION, { session_id: 'test' });
+  const ctx = runHook(SESSION, { session_id: 'test' }, { CLAUDE_PLUGIN_ROOT: 'C:/plugins/sidequest' });
   assert.ok(
     ctx.length <= BUDGET.session,
     `session block is ${ctx.length} chars — budget is ${BUDGET.session}; trim it, don't raise the budget`
@@ -1468,7 +1468,7 @@ test('session-start reports an unavailable integration target with the repair co
 
 test('session-start: compact and resume preserve evidence-first routing guidance', () => {
   for (const source of ['compact', 'resume']) {
-    const ctx = runHook(SESSION, { session_id: 't', source });
+    const ctx = runHook(SESSION, { session_id: 't', source }, { CLAUDE_PLUGIN_ROOT: 'C:/plugins/sidequest' });
     assert.match(ctx, /sidequest \(active — context restored\)/);
     assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
     assert.match(ctx, /ROLE: ORCHESTRATOR/);
