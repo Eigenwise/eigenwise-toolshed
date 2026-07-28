@@ -70,6 +70,8 @@ test('prices every active model label and token type from one table', () => {
     'claude-sonnet-5[1m]',
     'claude-fable-5',
     'claude-fable-5[1m]',
+    'claude-haiku-4-5',
+    'claude-haiku-4-5-20251001',
     'claude-codex-gpt-5.6-luna',
     'claude-codex-gpt-5.6-sol',
     'claude-codex-gpt-5.6-terra',
@@ -79,6 +81,8 @@ test('prices every active model label and token type from one table', () => {
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-sol'], { input: 5, cacheRead: 0.5, cacheCreation: 5, output: 30 });
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-terra'], { input: 2.5, cacheRead: 0.25, cacheCreation: 2.5, output: 15 });
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-luna'], { input: 1, cacheRead: 0.1, cacheCreation: 1, output: 6 });
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-haiku-4-5'], { input: 1, cacheRead: 0.1, cacheCreation: 1.25, output: 5 });
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-haiku-4-5-20251001'], { input: 1, cacheRead: 0.1, cacheCreation: 1.25, output: 5 });
   const target = modelCostTargets().find(({ legendFormat }) => legendFormat === 'claude-codex-gpt-5.6-terra');
   assert.match(target.expr, /type="input"/);
   assert.match(target.expr, /type="cacheRead"/);
