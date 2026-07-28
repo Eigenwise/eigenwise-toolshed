@@ -14,6 +14,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const store = require('../lib/store.js');
 const commitScope = require('../lib/commit-scope.js');
 const { makeCliRunner } = require('./_helpers.js');
+const worktrees = require('../lib/worktrees.js');
 
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-project-'));
 const REMOTE = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-remote-'));
@@ -115,6 +116,13 @@ function submitFixture(ticket: any, worktree: string, commit: string, project: s
 }
 
 void slug;
+
+test('worktree sweep caps orphan branch candidates', async () => {
+  const branches = ['worktree-agent-000-cap-a', 'worktree-agent-000-cap-b', 'worktree-agent-000-cap-c'];
+  for (const branch of branches) git(['branch', branch]);
+  const result = await worktrees.sweep(PROJECT, [], { maxCandidates: 2, upstream: 'origin/main' });
+  assert.deepEqual(result.orphanBranches.map((entry: any) => entry.branch), branches.slice(0, 2));
+});
 
 test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees', () => {
   const equivalentOld = agentWorktree('equivalent-old');
