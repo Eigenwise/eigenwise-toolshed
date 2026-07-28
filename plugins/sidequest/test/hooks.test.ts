@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
 // A throwaway store home so the SubagentStop hook (which loads lib/store.js as a
@@ -45,6 +46,39 @@ const BUDGET = {
   reconciliation: 360,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
+const PLUGIN_ROOT = fs.realpathSync(path.join(__dirname, '..'));
+const PINNED_ROOT_NAME_LENGTH = 'sq-plugin-root'.length;
+const PINNED_ROOT_NAME = crypto
+  .createHash('sha256')
+  .update(PLUGIN_ROOT)
+  .digest('hex')
+  .slice(0, PINNED_ROOT_NAME_LENGTH);
+const FIXED_PLUGIN_ROOT = path.join(os.tmpdir(), PINNED_ROOT_NAME);
+
+function ensurePinnedPluginRoot() {
+  let currentTarget;
+  let pinnedRootExists = false;
+  try {
+    fs.lstatSync(FIXED_PLUGIN_ROOT);
+    pinnedRootExists = true;
+    currentTarget = fs.realpathSync(FIXED_PLUGIN_ROOT);
+  } catch (error) {
+    if ((error as any)?.code !== 'ENOENT') throw error;
+  }
+  if (pinnedRootExists && currentTarget !== PLUGIN_ROOT) {
+    fs.rmSync(FIXED_PLUGIN_ROOT, { recursive: true, force: true });
+  }
+  if (currentTarget !== PLUGIN_ROOT) {
+    try {
+      fs.symlinkSync(PLUGIN_ROOT, FIXED_PLUGIN_ROOT, 'junction');
+    } catch (error) {
+      if ((error as any)?.code !== 'EEXIST') throw error;
+    }
+  }
+  assert.equal(fs.realpathSync(FIXED_PLUGIN_ROOT), PLUGIN_ROOT);
+}
+
+ensurePinnedPluginRoot();
 
 const RETIRED_SCOUT = `sidequest-${'scout'}`;
 
@@ -72,6 +106,27 @@ function runSessionWithHome(home?: any, envOverrides?: any) {
     env: { ...process.env, SIDEQUEST_HOME: home, ...(envOverrides || {}) },
   });
 }
+
+function runHookOutputForBudget(script?: any, payload?: any, envOverrides?: any) {
+  return runHookOutput(script, payload, { ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
+}
+
+function runHookForBudget(script?: any, payload?: any, envOverrides?: any) {
+  return runHook(script, payload, { ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
+}
+
+function runSessionWithHomeForBudget(home?: any, envOverrides?: any) {
+  return runSessionWithHome(home, { ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
+}
+
+test('budget pin resolves to this checkout and isolates its fixed-length path', () => {
+  assert.equal(path.basename(FIXED_PLUGIN_ROOT).length, PINNED_ROOT_NAME_LENGTH);
+  assert.equal(fs.realpathSync(FIXED_PLUGIN_ROOT), PLUGIN_ROOT);
+
+  const otherPluginRoot = `${PLUGIN_ROOT}-other`;
+  const otherName = crypto.createHash('sha256').update(otherPluginRoot).digest('hex').slice(0, PINNED_ROOT_NAME_LENGTH);
+  assert.notEqual(otherName, PINNED_ROOT_NAME);
+});
 
 function writeCategory(home?: any, category?: any) {
   const database = db.openDb(home);
@@ -1154,7 +1209,7 @@ test('stop reminder: names this session\'s doing tickets and pending submissions
     sessionId,
   }).ok, true);
 
-  const reminder = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }, {
+  const reminder = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }, {
     CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..'),
   }).systemMessage;
   assert.match(reminder, /1 ticket in doing/);
@@ -1269,7 +1324,7 @@ test('session-start: says sidequest coexists with an external tracker (Jira)', (
 
 test('session-start: shows the live investigation workforce within its cap', () => {
   for (const source of ['', 'compact', 'resume']) {
-    const ctx = runHook(SESSION, { session_id: `workforce-${source || 'startup'}`, source }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+    const ctx = runHookForBudget(SESSION, { session_id: `workforce-${source || 'startup'}`, source }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
     const start = ctx.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:');
     assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
     const workforce = ctx.slice(start);
@@ -1291,14 +1346,14 @@ test('session-start: bounds oversized workforces and reports omitted categories'
       enabled: true,
     });
   }
-  const output = JSON.parse(runSessionWithHome(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project'), CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }));
+  const output = JSON.parse(runSessionWithHomeForBudget(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project') }));
   const workforce = output.hookSpecificOutput.additionalContext.slice(output.hookSpecificOutput.additionalContext.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:'));
   assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `oversized workforce is ${Buffer.byteLength(workforce)} bytes`);
   assert.match(workforce, /… \d+ more enabled categories\./);
 });
 
 test('session-start: stays inside its byte budget and off the retired doctrine', () => {
-  const ctx = runHook(SESSION, { session_id: 'test' }, { CLAUDE_PLUGIN_ROOT: 'C:/plugins/sidequest' });
+  const ctx = runHookForBudget(SESSION, { session_id: 'test' });
   assert.ok(
     ctx.length <= BUDGET.session,
     `session block is ${ctx.length} chars — budget is ${BUDGET.session}; trim it, don't raise the budget`
@@ -1468,7 +1523,7 @@ test('session-start reports an unavailable integration target with the repair co
 
 test('session-start: compact and resume preserve evidence-first routing guidance', () => {
   for (const source of ['compact', 'resume']) {
-    const ctx = runHook(SESSION, { session_id: 't', source }, { CLAUDE_PLUGIN_ROOT: 'C:/plugins/sidequest' });
+    const ctx = runHookForBudget(SESSION, { session_id: 't', source });
     assert.match(ctx, /sidequest \(active — context restored\)/);
     assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
     assert.match(ctx, /ROLE: ORCHESTRATOR/);
@@ -1497,11 +1552,10 @@ test('session-start: compact and resume preserve evidence-first routing guidance
 });
 
 test('session-start: embeds the expanded plugin path in CLI fallbacks', () => {
-  const pluginRoot = 'C:/plugins/sidequest';
-  const ctx = runHook(
+  const pluginRoot = FIXED_PLUGIN_ROOT;
+  const ctx = runHookForBudget(
     SESSION,
-    { session_id: 't', source: 'compact' },
-    { CLAUDE_PLUGIN_ROOT: pluginRoot }
+    { session_id: 't', source: 'compact' }
   );
   assert.ok(ctx.includes(`node "${pluginRoot}/bin/sidequest.js"`), 'CLI fallback must embed the hook runtime plugin path');
   assert.ok(!ctx.includes('${CLAUDE_PLUGIN_ROOT}'), 'CLI fallback must not rely on an unset shell variable');
@@ -1664,7 +1718,7 @@ test('subagent-stop: an over-threshold claim reports a dead-claim verdict', () =
   const stop = claimStopTicket(t, sess, 'worker-long');
   backdateSessionClaims(sess, 28);
 
-  const ctx = runHook(SUBAGENT_STOP, stop);
+  const ctx = runHookForBudget(SUBAGENT_STOP, stop);
   assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: salvage uncommitted work from its worktree, then release + respawn and TaskStop it`);
   assert.ok(ctx.length <= BUDGET.longrun, `stop verdict is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
   assert.ok(ctx.indexOf('\n') === -1, 'the verdict must stay ONE line');
