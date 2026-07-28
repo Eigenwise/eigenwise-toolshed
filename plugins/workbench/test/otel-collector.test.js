@@ -34,6 +34,12 @@ test('the default collector config is valid, loopback-only, and commits to the o
   assert.deepEqual(config.service.pipelines.metrics.processors, REQUIRED_METRICS_PROCESSOR_ORDER);
 });
 
+test('the committed sample config keeps the installer log filter in sync', () => {
+  const sample = fs.readFileSync(path.join(__dirname, '..', 'observability', 'otel-collector', 'config.yaml'), 'utf8');
+  const generatedFilter = renderCollectorYaml().split('\n').find((line) => line.includes('log_record'));
+  assert.equal(generatedFilter, sample.split('\n').find((line) => line.includes('log_record')));
+});
+
 test('fans every redacted signal out to an explicitly declared sink', () => {
   const sinkExporter = {
     endpoint: 'https://otlp.example.test',
