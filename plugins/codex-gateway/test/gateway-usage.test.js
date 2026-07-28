@@ -75,6 +75,20 @@ function proxyServer(onMessage) {
   });
 }
 
+async function stopChild(child) {
+  if (child.exitCode === null && child.signalCode === null) child.kill();
+  if (!child.closed) await once(child, 'close');
+}
+
+function removeTempDirectory(directory) {
+  try {
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 async function collector(t, delayMs = 0) {
   const received = [];
   const server = http.createServer((req, res) => {
@@ -120,11 +134,8 @@ async function spawnShim(t, proxyPort, usageEndpoint, anthropicUpstream = undefi
     stdio: 'ignore',
   });
   t.after(async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill();
-      await once(child, 'exit');
-    }
-    fs.rmSync(directory, { recursive: true, force: true });
+    await stopChild(child);
+    removeTempDirectory(directory);
   });
   await waitFor(async () => {
     try {
