@@ -3,7 +3,7 @@ import { readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeContext } from './shared/output.js';
 import { pluginRoot, runtimeModule } from './shared/paths.js';
 import { initializeCompactionState, isPrimarySession } from './shared/compaction.js';
-import { sweepWorktrees } from './shared/worktree-sweep.js';
+import { runSweep } from './shared/sweep-handoff.js';
 
 const MAX_WORKFORCE_BYTES = 1800;
 const MAX_WORKFORCE_DESCRIPTION = 90;
@@ -138,7 +138,7 @@ async function main(): Promise<void> {
   const lostLaunches = reconcileLostLaunches(data);
   let sweepNotices: string[] = [];
   try {
-    sweepNotices = await sweepWorktrees(data, true);
+    sweepNotices = await runSweep(data);
   } catch (error: any) {
     sweepNotices = [`sidequest: worktree sweep failed: ${(error && error.message) || error}`];
   }

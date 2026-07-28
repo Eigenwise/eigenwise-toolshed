@@ -114,60 +114,82 @@ function initializeCompactionState(sessionId, transcriptPath) {
   writeState(sessionId, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
-// src/hooks/shared/worktree-sweep.ts
-var import_promises = require("node:fs/promises");
+// src/hooks/shared/sweep-handoff.ts
+var import_node_child_process = require("node:child_process");
+var import_node_crypto = __toESM(require("node:crypto"));
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_os2 = __toESM(require("node:os"));
 var import_node_path3 = __toESM(require("node:path"));
-var MAX_PROJECTS_PER_START = 3;
-var MAX_CANDIDATES_PER_PROJECT = 8;
-function projectCommand(project) {
-  return `node "${pluginRoot()}/bin/sidequest.js" board-config --project "${project.path}" --integration-branch <branch>`;
+var DEFAULT_DEADLINE_MS = 2500;
+var DEFERRAL_NOTICE = "sidequest: worktree sweep exceeded its SessionStart budget and is still running in the background. Its report arrives on the next session start.";
+var HANDOFF_FAILED_NOTICE = "sidequest: worktree sweep could not run, so stale agent worktrees were not collected this session.";
+function deadlineMs() {
+  const raw = Number(process.env.SIDEQUEST_SWEEP_DEADLINE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_DEADLINE_MS;
 }
-function currentProject(data, store) {
-  const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const currentPath = store.nearestRepoRoot(start);
-  const found = store.findProject(currentPath);
-  return {
-    project: found.ok && found.slug && found.meta?.path ? { slug: found.slug, path: found.meta.path } : null,
-    currentPath
-  };
+function stateDirectory2() {
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path3.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
+  return import_node_path3.default.join(home, "sweep-reports");
 }
-async function sweepWorktrees(data, includeKnownProjects) {
-  const store = require(runtimeModule("store"));
-  const { project: current, currentPath } = currentProject(data, store);
-  if (!current) return [];
-  const projects = includeKnownProjects ? store.worktreeGcProjects(current.slug, MAX_PROJECTS_PER_START) : [current];
-  const notices = [];
-  const worktrees = require(runtimeModule("worktrees"));
-  for (const project of projects) {
-    try {
-      await (0, import_promises.stat)(import_node_path3.default.join(project.path, ".git"));
-    } catch (_) {
-      notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the project directory is unavailable or is not a git worktree.`);
-      continue;
-    }
-    try {
-      const target = store.integrationTarget(project.slug);
-      if (!target) {
-        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: no integration target. Configure one with ${projectCommand(project)}.`);
-        continue;
-      }
-      const result = await worktrees.sweep(project.path, store.worktreeGcTickets(), {
-        execute: true,
-        currentPath: current?.slug === project.slug ? currentPath : "",
-        integrationTarget: target,
-        maxCandidates: MAX_CANDIDATES_PER_PROJECT
-      });
-      if (result.skipped === "repository_busy") {
-        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the repository has an in-progress git operation.`);
-      }
-      for (const failure of result.failures || []) {
-        notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not remove ${failure.path || "a git entry"}: ${failure.message}`);
-      }
-    } catch (error) {
-      notices.push(`sidequest: worktree sweep failed for ${project.name || project.slug}: ${error && error.message || error}. Check the repository is available, then run ${projectCommand(project)}.`);
-    }
+function reportFile(cwd) {
+  const key = import_node_crypto.default.createHash("sha1").update(import_node_path3.default.resolve(cwd || ".")).digest("hex").slice(0, 16);
+  return import_node_path3.default.join(stateDirectory2(), `${key}.json`);
+}
+function drainReport(cwd) {
+  const file = reportFile(cwd);
+  let raw;
+  try {
+    raw = import_node_fs3.default.readFileSync(file, "utf8");
+  } catch (_) {
+    return null;
   }
-  return notices;
+  import_node_fs3.default.rmSync(file, { force: true });
+  try {
+    const parsed = JSON.parse(raw);
+    const notices = parsed?.notices;
+    return Array.isArray(notices) ? notices.map((notice) => String(notice)).filter(Boolean) : [];
+  } catch (_) {
+    return [];
+  }
+}
+function sweepCwd(data) {
+  return stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+async function runSweep(data) {
+  const cwd = sweepCwd(data);
+  const carried = drainReport(cwd) || [];
+  const budget = deadlineMs();
+  let child;
+  try {
+    child = (0, import_node_child_process.spawn)(process.execPath, [
+      import_node_path3.default.join(pluginRoot(), "hooks", "sweep-worktrees.js"),
+      "--cwd",
+      cwd,
+      "--session",
+      stringField(data, "session_id", "sessionId")
+    ], { detached: true, stdio: "ignore", windowsHide: true });
+  } catch (_) {
+    return [...carried, HANDOFF_FAILED_NOTICE];
+  }
+  const outcome = await new Promise((resolve) => {
+    if (budget === 0) return resolve("deferred");
+    const timer = setTimeout(() => resolve("deferred"), budget);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve("exited");
+    });
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve("failed");
+    });
+  });
+  if (outcome === "failed") return [...carried, HANDOFF_FAILED_NOTICE];
+  if (outcome === "deferred") {
+    child.unref();
+    return [...carried, DEFERRAL_NOTICE];
+  }
+  const report = drainReport(cwd);
+  return report === null ? [...carried, HANDOFF_FAILED_NOTICE] : [...carried, ...report];
 }
 
 // src/hooks/session-start.ts
@@ -267,7 +289,7 @@ async function main() {
   const lostLaunches = reconcileLostLaunches(data);
   let sweepNotices = [];
   try {
-    sweepNotices = await sweepWorktrees(data, true);
+    sweepNotices = await runSweep(data);
   } catch (error) {
     sweepNotices = [`sidequest: worktree sweep failed: ${error && error.message || error}`];
   }
