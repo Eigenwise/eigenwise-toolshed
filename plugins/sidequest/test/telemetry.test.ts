@@ -68,7 +68,7 @@ test('seed telemetry fixture', () => {
 
 test('CLI and MCP pulse return the compact liveness shape with git activity', async () => {
   const pulse = cliJson<Pulse>(['pulse', ref]);
-  assert.deepStrictEqual(Object.keys(pulse).sort(), ['checkpoint', 'claim', 'comments', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastActivityAt', 'lastComment', 'project', 'projectName', 'ref', 'status', 'submission', 'title', 'working']);
+  assert.deepStrictEqual(Object.keys(pulse).sort(), ['checkpoint', 'claim', 'comments', 'delivery', 'direct', 'dispatch', 'dispatchExecutor', 'git', 'lastActivityAt', 'lastComment', 'project', 'projectName', 'ref', 'status', 'submission', 'title', 'working']);
   assert.deepStrictEqual(Object.keys(pulse.claim).sort(), ['ageMs', 'at', 'by', 'idleMs', 'reclaimable']);
   assert.strictEqual(pulse.claim.reclaimable, null, 'a working claim is never reclaimable');
   assert.strictEqual(pulse.comments, 1);
