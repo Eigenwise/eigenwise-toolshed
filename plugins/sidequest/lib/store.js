@@ -2373,6 +2373,12 @@ function readonlyCategoryWriteIntentWarning(ticket) {
   if (!writesFiles && !writesContracts) return null;
   return "Readonly category contradicts declared write intent (files or changes). Resolve the category or set an explicit readonly override before dispatch.";
 }
+function noDeclaredScopeWarning(ticket) {
+  if (dispatchReadOnly(ticket)) return null;
+  if (Array.isArray(ticket.files) && ticket.files.length) return null;
+  if (Number(ticket?.complexity) >= 4) return null;
+  return "Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.";
+}
 function dispatchDescriptionError(ticket) {
   if (!ticket || !ticket.model || !ticket.effort) return null;
   if (String(ticket.description || "").trim().length >= DISPATCH_DESCRIPTION_MIN) return null;
@@ -2511,6 +2517,8 @@ function ticketPlanningWarnings(ticket, projectPath) {
   warnings.push(...presolvedRoutingWarnings(ticket));
   const contradiction = readonlyCategoryWriteIntentWarning(ticket);
   if (contradiction) warnings.push(contradiction);
+  const noScope = noDeclaredScopeWarning(ticket);
+  if (noScope) warnings.push(noScope);
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
   const absent = ticket.files.filter((file) => !fs.existsSync(path.resolve(projectPath, file)));
   if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(", ")}.`);

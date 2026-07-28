@@ -12,6 +12,7 @@ const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const WARNING = 'Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: executor anchors, verify command, file scope.';
 const MISSING_SCOPE_WARNING = 'Planning-depth warning: declared file scope does not exist in the repo: missing/scope.js.';
+const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.';
 const PRESCRIPTIVE_HARD_WARNING = 'coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.';
 
 function cliJson(args?: any) {
@@ -117,10 +118,10 @@ test('claim echoes outside-worktree output guidance for dispatch visibility', ()
 test('add and update warn only for unknown mentioned ticket refs', () => {
   const known = cliJson(['add', '-t', 'known ref', '--unclassified']);
   const added = cliJson(['add', '-t', `follow ${known.ticket.ref}`, '--description', 'also check SQ-9999', '--unclassified']);
-  assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.']);
+  assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.', NO_SCOPE_WARNING]);
 
   const updated = cliJson(['update', added.ticket.ref, '--title', `follow ${known.ticket.ref} and SQ-9998`]);
-  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998, SQ-9999.']);
+  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998, SQ-9999.', NO_SCOPE_WARNING]);
 });
 
 const PATCH_BLOCK = [
@@ -185,12 +186,12 @@ test('a judgment-tier ticket carrying a complete edit warns on add and update', 
     'add', '-t', 'pre-solved parser change', '--category', 'coding.normal',
     '--description', `The parser fix is already settled.\n\n${PATCH_BLOCK}\n`,
   ]);
-  assert.deepStrictEqual(added.warnings, [PRESOLVED_WARNING]);
+  assert.deepStrictEqual(added.warnings, [PRESOLVED_WARNING, NO_SCOPE_WARNING]);
 
   const seeded = cliJson(['add', '-t', 'parser change', '--category', 'coding.normal', '--description', 'Work out how the parser should treat headers with no colon.']);
-  assert.deepStrictEqual(seeded.warnings, []);
+  assert.deepStrictEqual(seeded.warnings, [NO_SCOPE_WARNING]);
   const updated = cliJson(['update', seeded.ticket.ref, '--description', `Settled after the spike.\n\n${PATCH_BLOCK}\n`]);
-  assert.deepStrictEqual(updated.warnings, [PRESOLVED_WARNING]);
+  assert.deepStrictEqual(updated.warnings, [PRESOLVED_WARNING, NO_SCOPE_WARNING]);
 });
 
 test('evidence blocks and cheap tiers never trip the pre-solved warning', () => {
@@ -198,30 +199,45 @@ test('evidence blocks and cheap tiers never trip the pre-solved warning', () => 
     'add', '-t', 'reindex crashes on legacy headers', '--category', 'debugging',
     '--description', `Reproduced on the shared board.\n\n${CRASH_LOG_BLOCK}\n`,
   ]);
-  assert.deepStrictEqual(evidence.warnings, []);
+  assert.deepStrictEqual(evidence.warnings, [NO_SCOPE_WARNING]);
 
   const cheap = cliJson([
     'add', '-t', 'apply the settled parser patch', '--category', 'coding.easy',
     '--description', `Mechanical: apply this.\n\n${PATCH_BLOCK}\n`,
   ]);
-  assert.deepStrictEqual(cheap.warnings, []);
+  assert.deepStrictEqual(cheap.warnings, [NO_SCOPE_WARNING]);
 
   const snippet = cliJson([
     'add', '-t', 'short signature note', '--category', 'coding.normal',
     '--description', 'Keep the signature:\n\n```js\nfunction parseHeader(input) {\n  return null;\n}\n```\n',
   ]);
-  assert.deepStrictEqual(snippet.warnings, []);
+  assert.deepStrictEqual(snippet.warnings, [NO_SCOPE_WARNING]);
 });
 
 test('coding.hard add warns only when the description prescribes a fix', () => {
   const prescriptive = cliJson(['add', '-t', 'prescriptive hard change', '--category', 'coding.hard', '--description', 'FIX: replace the legacy parser with the shared parser.']);
-  assert.deepStrictEqual(prescriptive.warnings, [PRESCRIPTIVE_HARD_WARNING]);
+  assert.deepStrictEqual(prescriptive.warnings, [PRESCRIPTIVE_HARD_WARNING, NO_SCOPE_WARNING]);
 
   const openEnded = cliJson(['add', '-t', 'open hard change', '--category', 'coding.hard', '--description', 'Investigate the competing persistence designs and recommend a safe migration path.']);
-  assert.deepStrictEqual(openEnded.warnings, []);
+  assert.deepStrictEqual(openEnded.warnings, [NO_SCOPE_WARNING]);
 
   const normal = cliJson(['add', '-t', 'prescriptive normal change', '--category', 'coding.normal', '--description', 'FIX: replace the legacy parser with the shared parser.']);
-  assert.deepStrictEqual(normal.warnings, []);
+  assert.deepStrictEqual(normal.warnings, [NO_SCOPE_WARNING]);
+});
+
+test('add warns for a write-scope ticket with no declared files, not when files are declared or the category is readonly', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'existing.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'existing\n');
+
+  const noFiles = cliJson(['add', '-t', 'no scope declared', '--category', 'coding.normal', '--description', 'Add a thing.']);
+  assert.deepStrictEqual(noFiles.warnings, [NO_SCOPE_WARNING]);
+
+  const withFiles = cliJson(['add', '-t', 'scope declared', '--category', 'coding.normal', '--description', 'Add a thing.', '--file', 'lib/existing.js']);
+  assert.deepStrictEqual(withFiles.warnings, []);
+
+  const readonly = cliJson(['add', '-t', 'readonly ticket', '--category', 'research', '--description', 'Look something up.']);
+  assert.deepStrictEqual(readonly.warnings, []);
 });
 
 export {};

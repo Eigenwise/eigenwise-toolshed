@@ -45,6 +45,7 @@ const mcp = require('../lib/mcp.js');
 const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
+const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.';
 
 // Write a fake model-gateway catalog (mirrors test/discovery.test.js) so a
 // discovered+enabled custom slug can be exercised over the MCP surface.
@@ -1553,7 +1554,9 @@ test('add rejects incomplete routing inputs', async () => {
 });
 test('add returns a compact acknowledgement', async () => {
   const out = await callTool('add', { title: 'MCP add works', complexity: 3, why: 'a real motivation referencing the actual single-file change' });
-  assert.deepStrictEqual(Object.keys(out).sort(), ['ok', 'project', 'ref', 'status']);
+  // Complexity 3 and no declared files trips the no-declared-scope warning, so
+  // "compact" still carries a warnings key here.
+  assert.deepStrictEqual(Object.keys(out).sort(), ['ok', 'project', 'ref', 'status', 'warnings']);
   assert.match(out.ref, /^SQ-\d+$/);
   assert.strictEqual(out.status, 'todo');
 });
@@ -1581,7 +1584,10 @@ test('MCP add warns when coding.hard already prescribes a fix', async () => {
     category: 'coding.hard',
     description: 'FIX: replace the legacy parser with the shared parser.',
   });
-  assert.deepStrictEqual(added.warnings, ['coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.']);
+  assert.deepStrictEqual(added.warnings, [
+    'coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.',
+    NO_SCOPE_WARNING,
+  ]);
 });
 
 test('category stamps warn until category_list is served by the MCP session', async () => {
@@ -1589,14 +1595,17 @@ test('category stamps warn until category_list is served by the MCP session', as
   const slug = store.ensureProject(PROJ).slug;
   const existing = store.createTicket(slug, { title: 'update without category', category: 'coding.easy' });
   const unchangedCategory = await callToolOn(session, 'update', { ref: existing.ref, title: 'update without a category stamp' });
-  assert.equal(unchangedCategory.warnings, undefined);
+  assert.deepEqual(unchangedCategory.warnings, [NO_SCOPE_WARNING]);
 
   const warned = await callToolOn(session, 'add', { title: 'category stamped before read', category: 'coding.easy' });
-  assert.deepEqual(warned.warnings, ['Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.']);
+  assert.deepEqual(warned.warnings, [
+    NO_SCOPE_WARNING,
+    'Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.',
+  ]);
 
   await callToolOn(session, 'category_list', {});
   const acknowledged = await callToolOn(session, 'add', { title: 'category stamped after read', category: 'coding.easy' });
-  assert.equal(acknowledged.warnings, undefined);
+  assert.deepEqual(acknowledged.warnings, [NO_SCOPE_WARNING]);
 
   await callTool('category_list', {});
 });
@@ -1636,17 +1645,18 @@ test('update returns a compact acknowledgement', async () => {
   store.setCategory({ id: 'mcp-update-echo', name: 'MCP update echo', route: { model: 'opus', effort: 'high' } });
   const added = await callTool('add', { title: 'MCP update echo', category: 'coding.easy' });
   const updated = await callTool('update', { ref: added.ref, category: 'mcp-update-echo' });
-  assert.deepStrictEqual(Object.keys(updated).sort(), ['ok', 'project', 'ref', 'status']);
+  // Still no declared files on this ticket, so the no-declared-scope warning rides along.
+  assert.deepStrictEqual(Object.keys(updated).sort(), ['ok', 'project', 'ref', 'status', 'warnings']);
   assert.equal(store.getTicket(added.project, added.ref).categoryId, 'mcp-update-echo');
 });
 
 test('add and update attach unknown ticket-ref warnings to compact acknowledgements', async () => {
   const known = await callTool('add', { title: 'known ticket', unclassified: true });
   const added = await callTool('add', { title: `use ${known.ref} and SQ-9999`, unclassified: true });
-  assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.']);
+  assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.', NO_SCOPE_WARNING]);
 
   const updated = await callTool('update', { ref: added.ref, description: 'now use SQ-9998' });
-  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9999, SQ-9998.']);
+  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9999, SQ-9998.', NO_SCOPE_WARNING]);
 });
 
 test('status validation fails loudly and directs deletion to remove', async () => {
