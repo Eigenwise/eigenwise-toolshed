@@ -4,6 +4,10 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
   site: 'https://eigenwise.github.io',
   base: '/eigenwise-toolshed',
+  redirects: {
+    '/getting-started/codex-gateway': '/getting-started/model-gateway',
+    '/reference/codex-gateway': '/reference/model-gateway',
+  },
   integrations: [
     starlight({
       title: 'Eigenwise Toolshed',
@@ -41,7 +45,7 @@ export default defineConfig({
             { label: 'Workbench', slug: 'getting-started/workbench' },
             { label: 'Sidequest', slug: 'getting-started/sidequest' },
             { label: 'Experiment loops', slug: 'getting-started/experiments' },
-            { label: 'Codex Gateway', slug: 'getting-started/codex-gateway' },
+            { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
           ],
         },
         {
