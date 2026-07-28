@@ -2822,7 +2822,10 @@ function runWorker() {
         upstream.on('data', (chunk) => chunks.push(chunk));
         upstream.on('end', () => {
           let detail = `Grok upstream returned ${upstream.statusCode}`;
-          try { detail = JSON.parse(Buffer.concat(chunks).toString()).error?.message || detail; } catch {}
+          try {
+            const parsed = JSON.parse(Buffer.concat(chunks).toString());
+            detail = parsed?.error?.message || (typeof parsed?.error === 'string' ? parsed.error : detail);
+          } catch {}
           const errorBody = JSON.stringify({ type: 'error', error: { type: upstream.statusCode === 401 ? 'authentication_error' : 'api_error', message: `codex-gateway: ${detail}` } });
           clientRes.writeHead(upstream.statusCode, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(errorBody) });
           clientRes.end(errorBody);
