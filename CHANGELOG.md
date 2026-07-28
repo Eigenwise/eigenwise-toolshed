@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.261.0 (2026-07-28)
+
+### sidequest 3.37.0 → 3.37.1
+
+#### Fixes
+
+- Worktree sweep bounds its orphan-branch scan (SQ-990) [`cf04a72`](https://github.com/Eigenwise/eigenwise-toolshed/commit/cf04a72)
+
 ## v3.260.0 (2026-07-28)
 
 ### sidequest 3.36.0 → 3.37.0
