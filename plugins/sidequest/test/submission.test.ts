@@ -224,6 +224,97 @@ test('SQ-971: rejected range submission is quarantined and clean rebase resubmit
   assert.equal(after.submission.base, git(['rev-parse', 'origin/main']));
 });
 
+test('SQ-971: an unavailable recorded integration target still quarantines verified work', async () => {
+  cleanBranch();
+  const t = addTicket('missing integration target preservation', { files: ['lib/missing-target.js'] });
+  const by = 'missing-target-worker';
+  assert.equal(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  const claimed = store.getTicket(slug, t.ref);
+  claimed.dispatch = {
+    integrationTarget: {
+      mode: 'local',
+      upstream: 'missing-feature-target',
+      branch: 'missing-feature-target',
+    },
+  };
+  persist(claimed);
+
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'missing-target.js'), 'verified work\n');
+  git(['add', 'lib/missing-target.js']);
+  git(['commit', '-m', 'verified work for deleted target']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+
+  const rejected = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
+    commit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'Changed lib/missing-target.js. Scoped submission test passed. Nothing skipped.',
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'integration_target_unavailable');
+  assert.match(rejected.message, /Fetch or recreate missing-feature-target/);
+  assert.match(rejected.message, /rebase refs\/sidequest\/SQ-\d+ onto that target, and resubmit/);
+  assert.match(rejected.message, /orchestrator can cherry-pick/);
+  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), commit);
+  const preserved = store.getTicket(slug, t.ref);
+  assert.equal(preserved.claim.by, by);
+  assert.equal(preserved.checkpoint.kind, 'submission_rejected');
+  assert.equal(preserved.checkpoint.failure.reason, 'integration_target_unavailable');
+  assert.match(preserved.checkpoint.failure.message, /does not exist locally/);
+});
+
+test('SQ-971: checkpoint failure reports the already-written quarantine ref', async () => {
+  cleanBranch();
+  const t = addTicket('checkpoint failure after quarantine', { files: ['lib/checkpoint-failure.js'] });
+  const by = 'checkpoint-failure-worker';
+  assert.equal(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'parent.js'), 'unrecognized parent\n');
+  git(['add', 'parent.js']);
+  git(['commit', '-m', 'checkpoint failure parent']);
+  const parent = git(['rev-parse', 'HEAD']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'checkpoint-failure.js'), 'verified work\n');
+  git(['add', 'lib/checkpoint-failure.js']);
+  git(['commit', '-m', 'verified work before checkpoint failure']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+
+  const originalCheckpointTicket = store.checkpointTicket;
+  store.checkpointTicket = () => {
+    throw new Error(`forced checkpoint write failure ${'x'.repeat(5000)}`);
+  };
+  let rejected: any;
+  try {
+    rejected = await callMcp('submit', {
+      project: PROJECT_DIR,
+      ref: t.ref,
+      by,
+      commit,
+      base: parent,
+      verify: 'npm run test:files -- test/submission.test.ts',
+      worktree: PROJECT_DIR,
+      body: 'Changed lib/checkpoint-failure.js. Scoped submission test passed. Nothing skipped.',
+    });
+  } finally {
+    store.checkpointTicket = originalCheckpointTicket;
+  }
+
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'unrecognized_base');
+  assert.match(rejected.message, new RegExp(`Preserved ${commit} at refs/sidequest/${t.ref}-rejected`));
+  assert.match(rejected.message, /recovery checkpoint failed: checkpoint_error: forced checkpoint write failure/);
+  assert.ok(rejected.message.length < 2000, 'checkpoint failure text is bounded');
+  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), commit);
+  const preserved = store.getTicket(slug, t.ref);
+  assert.equal(preserved.claim.by, by);
+  assert.equal(preserved.checkpoint, null);
+});
+
 test('submitted tickets leave the ready pool and refuse claims until cleared', () => {
   const t = addTicket('submitted leaves ready');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);

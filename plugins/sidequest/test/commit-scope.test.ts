@@ -430,6 +430,24 @@ test('SQ-971: a dispatch baseline excludes merge commits from parent history', (
   const tip = git(root, ['rev-parse', 'HEAD']);
   pin(root, 'refs/sidequest/SQ-971', tip);
 
+  git(root, ['checkout', '-q', main]);
+  fs.mkdirSync(path.join(root, 'plugins', 'other-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'target.js'), 'target advanced after dispatch\n');
+  git(root, ['add', '--', 'plugins/other-plugin/target.js']);
+  git(root, ['commit', '-m', 'advance rewritten integration target']);
+  const targetTip = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['branch', '-f', 'feature-integration', targetTip]);
+  git(root, ['checkout', '-q', 'ticket-work']);
+
+  const withoutDispatchBase = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-971',
+    upstream: 'feature-integration',
+    integrationBranch: 'feature-integration',
+  });
+  assert.equal(withoutDispatchBase.ok, false, 'the rewritten target must expose the parent merge without the recorded baseline');
+  assert.equal(withoutDispatchBase.reason, 'merge_commit');
+
   const range = commitScope.submissionRange(root, {
     commit: tip,
     gitRef: 'refs/sidequest/SQ-971',
@@ -446,6 +464,7 @@ test('SQ-971: a dispatch baseline excludes merge commits from parent history', (
   assert.equal(preserved.ok, true, preserved.reason || 'commit was not preserved');
   assert.equal(git(root, ['rev-parse', 'refs/sidequest/SQ-971-rejected']), tip);
   assert.notEqual(dispatchBase, git(root, ['merge-base', main, tip]));
+  assert.notEqual(dispatchBase, git(root, ['merge-base', targetTip, tip]));
 });
 
 // SQ-923. `done` on a write-routed dispatch that produced nothing used to be a
