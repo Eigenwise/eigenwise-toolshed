@@ -190,7 +190,13 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   added them, then redispatch once. If that fails too, start a new top-level session with only the concise
   task and filesystem paths. Surface the failure after that one compact-and-redispatch attempt.
 - **Use steerable background execution by default.** Executors are background teammates, so `TaskOutput`
-  cannot resolve their names (`No task found`) and polling is banned regardless. After spawning, end the
+  cannot resolve their names (`No task found`) and polling is banned regardless. When
+  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is enabled, PREFER the teammate shape for executor dispatches: a
+  teammate stays resident through pauses — a scope request becomes a live mailbox exchange instead of
+  stop → worktree sweep → redispatch — and its worktree survives idle waits. The costs to keep honest:
+  idle notifications wake the lead at full context, and teams-style flows can run several times the
+  token spend of plain subagents, so answer executor questions promptly and end idle executors on
+  terminal tickets (the TeammateIdle hook does this). After spawning, end the
   turn. Its stop notification is the only wakeup. On the next natural wakeup, whether a stop notification,
   user message, or other task notification, make opportunistic liveness checks for work that has run about
   5–8 minutes or longer. Never hold a session open with foreground or background `sleep`, blocking
