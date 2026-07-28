@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
@@ -61,18 +61,28 @@ export function suiteEnvironment(base = process.env) {
   return env;
 }
 
-export function defaultSuiteRunner(repoRoot, { log = console.log } = {}) {
+export function defaultSuiteRunner(repoRoot, { log = console.log, tag = 'release' } = {}) {
   return (suite) => {
     const command = suite.setup ? `${suite.setup} && ${suite.command}` : suite.command;
+    const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+    const logRelative = path.join('.release', 'logs', `${tag}-${suite.plugin}-${timestamp}.log`);
+    const logPath = resolveInRepo(repoRoot, logRelative, `suite log for "${suite.plugin}"`);
     log(`running ${suite.plugin}: ${command}`);
     const result = spawnSync(command, {
       cwd: resolveInRepo(repoRoot, suite.cwd, `suite directory for "${suite.plugin}"`),
       shell: true,
-      stdio: 'inherit',
+      stdio: ['inherit', 'pipe', 'pipe'],
       windowsHide: true,
       env: suiteEnvironment(),
+      encoding: 'utf8',
     });
-    return { code: result.status ?? 1, command };
+    const stdout = result.stdout ?? '';
+    const stderr = result.stderr ?? '';
+    process.stdout.write(stdout);
+    process.stderr.write(stderr);
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    writeFileSync(logPath, stdout + stderr);
+    return { code: result.status ?? 1, command, logPath: logRelative };
   };
 }
 
@@ -136,7 +146,6 @@ export async function cut(options = {}) {
 
   if (!repoRoot) throw new UsageError('cut() needs a repoRoot');
   const git = options.git ?? createGit({ cwd: repoRoot, dryRun });
-  const runSuite = options.runSuite ?? defaultSuiteRunner(repoRoot, { log });
 
   const loadManifest = (source) => {
     const loaded = readManifest(source, repoRoot);
@@ -278,10 +287,14 @@ export async function cut(options = {}) {
   plan.commit = commit;
 
   const failures = [];
+  const runSuite = options.runSuite ?? defaultSuiteRunner(repoRoot, { log, tag: plan.tag });
   if (!skipTests) {
     for (const suite of plan.suites) {
       const result = runSuite(suite);
-      if (result.code !== 0) failures.push(`${suite.plugin}: ${result.command} exited ${result.code}`);
+      if (result.code !== 0) {
+        const logNotice = result.logPath ? ` (log: ${result.logPath})` : '';
+        failures.push(`${suite.plugin}: ${result.command} exited ${result.code}${logNotice}`);
+      }
     }
   }
   if (failures.length > 0) {

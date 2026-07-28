@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { cut } from '../cut.mjs';
+import { cut, defaultSuiteRunner } from '../cut.mjs';
 import { readValue } from '../lib/jsonedit.mjs';
 import { makeGitRepo } from './realrepo.mjs';
 
@@ -263,4 +263,33 @@ test('a failing suite leaves the release local and says so', async (t) => {
   );
 
   assert.deepEqual(context.remoteRefs(), before);
+});
+
+test('a failing default suite writes its output and names the log', async (t) => {
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate');
+  const runner = defaultSuiteRunner(context.root, { log: () => {}, tag: 'v-test' });
+  let failure;
+
+  await assert.rejects(
+    () => cut({
+      repoRoot: context.root,
+      log: () => {},
+      runSuite: (suite) => runner({
+        ...suite,
+        cwd: 'plugins/sidequest',
+        setup: null,
+        command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('suite stdout'); process.stderr.write('suite stderr'); process.exit(1)"`,
+      }),
+    }),
+    (error) => {
+      failure = error;
+      return /release suites failed, nothing was published/.test(error.message);
+    },
+  );
+
+  const match = failure.message.match(/log: (\.release.*\.log)/);
+  assert.ok(match, `the failure names the suite log: ${failure.message}`);
+  assert.equal(context.read(match[1]), 'suite stdoutsuite stderr');
 });
