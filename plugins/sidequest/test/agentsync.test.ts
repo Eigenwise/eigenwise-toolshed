@@ -584,7 +584,7 @@ test('artifact lifecycle marker appears only for a validated shared-tree artifac
     dispatch: { sharedTree: true, artifactMode: true, artifactRoot: '.claude/.codebase-info', artifactScope: '.claude/.codebase-info' },
   }), 'artifact-token');
   assert.ok(active.includes(agentsync.ARTIFACT_LIFECYCLE_MARKER));
-  assert.match(active, /Do not commit or submit it/);
+  assert.match(active, /Do not apply the linked-worktree self-check, commit, or submit/);
 
   for (const dispatch of [
     { sharedTree: true, artifactMode: false },
