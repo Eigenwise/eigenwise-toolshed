@@ -8,6 +8,29 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.272.0 (2026-07-29)
+
+### model-gateway 0.38.1 → 0.39.0
+
+#### Features
+
+- Streamline gateway model IDs (SQ-1004) [`e675027`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e675027)
+  Advertises claude-gpt-* and claude-grok-4.5 while preserving legacy IDs and existing Sidequest catalog slugs.
+
+### sidequest 3.38.2 → 3.38.3
+
+#### Fixes
+
+- Streamline gateway model IDs (SQ-1004) [`e675027`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e675027)
+  Advertises claude-gpt-* and claude-grok-4.5 while preserving legacy IDs and existing Sidequest catalog slugs.
+
+### workbench 0.70.0 → 0.70.1
+
+#### Fixes
+
+- Streamline gateway model IDs (SQ-1004) [`e675027`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e675027)
+  Advertises claude-gpt-* and claude-grok-4.5 while preserving legacy IDs and existing Sidequest catalog slugs.
+
 ## v3.271.0 (2026-07-29)
 
 ### sidequest 3.38.1 → 3.38.2
