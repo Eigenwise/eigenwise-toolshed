@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.263.0 (2026-07-28)
+
+### codex-gateway 0.36.0 → 0.36.1
+
+#### Fixes
+
+- Fix Grok 422 on transcripts containing tool calls (SQ-994) [`29afd90`](https://github.com/Eigenwise/eigenwise-toolshed/commit/29afd9017ef22ef2bbf6e4da43aa1f0fa5018861)
+
 ## v3.262.0 (2026-07-28)
 
 ### codex-gateway 0.35.1 → 0.36.0
