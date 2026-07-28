@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.258.0 (2026-07-28)
+
+### workbench 0.69.1 → 0.69.2
+
+#### Fixes
+
+- otel-collector sample config includes gateway logs (SQ-985) [`4b030a9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/4b030a9)
+
 ## v3.257.0 (2026-07-28)
 
 ### workbench 0.69.0 → 0.69.1
