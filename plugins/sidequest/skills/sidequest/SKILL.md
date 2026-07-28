@@ -202,7 +202,10 @@ message** when the wave justifies it.
 --brief` lists exactly this set, partitioned into **parallel-safe waves** by declared file scope.
 Fan out one wave at a time; worktrees isolate files, not runtime resources (ports, servers,
 databases), so serialize those collisions even inside a wave. A claim under a `--by` you don't
-recognize means another session may be working the board; flag it first. Wave mechanics,
+recognize means another session may be working the board; flag it first. With
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` on, executors ARE teammates — use the teammate
+affordances, don't ignore them: answer scope requests over the mailbox, steer and resume with
+`SendMessage`, and never stop→redispatch work a message can fix. Wave mechanics,
 liveness, salvage, cost levers, agent teams:
 `references/orchestration.md`.
 

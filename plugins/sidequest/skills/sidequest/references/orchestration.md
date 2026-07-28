@@ -205,9 +205,12 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   task and filesystem paths. Surface the failure after that one compact-and-redispatch attempt.
 - **Use steerable background execution by default.** Executors are background teammates, so `TaskOutput`
   cannot resolve their names (`No task found`) and polling is banned regardless. When
-  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is enabled, PREFER the teammate shape for executor dispatches: a
+  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is enabled, the teammate shape IS how executors run — treat it
+  as the required dispatch shape, not a preference to weigh, and actively use its affordances: a
   teammate stays resident through pauses — a scope request becomes a live mailbox exchange instead of
-  stop → worktree sweep → redispatch — and its worktree survives idle waits. The costs to keep honest:
+  stop → worktree sweep → redispatch — and its worktree survives idle waits. Resolving a blocked
+  executor with anything heavier than a `SendMessage` (releasing, sweeping, redispatching) is a
+  process failure, not caution. The costs to keep honest:
   idle notifications wake the lead at full context, and teams-style flows can run several times the
   token spend of plain subagents, so answer executor questions promptly and end idle executors on
   terminal tickets (the TeammateIdle hook does this). After spawning, end the
@@ -321,7 +324,10 @@ remain governed by their Workflow contract.
 
 ## Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
 
-With agent teams on (a **per-user** flag), parallel workers spawn as manageable teammates. The routing
+With agent teams on (a **per-user** flag), parallel workers spawn as manageable teammates — this is
+the default execution shape, not an opt-in experiment, and an orchestrator that dispatches as if
+teammates were plain fire-and-forget tasks is leaving the feature's main value (live steering,
+pause-surviving claims) unused. The routing
 rules do not change, and one thing is critical: a teammate is a real sidequest executor **only if it
 has BOTH the correct agent type AND a unique `name`** — spawn the ticket's `sidequest-exec-<effort>`
 type with `model: <model>`, `mode: "bypassPermissions"`, plus the name, exactly as you would a
