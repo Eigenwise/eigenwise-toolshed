@@ -28,6 +28,8 @@ review whose "done" is a concrete answer or artifact. Cut along real independent
 list of deliverables. Several named pieces can still be one feature with a shared contract; split them
 only when they can progress and verify independently.
 
+**Maximize the ready set.** Decompose to maximize the ready set: prefer cuts along disjoint surfaces so more tickets can dispatch together. A cut that forces a serial chain needs a stated reason. In isolated worktrees, same-file overlap alone is not a conflict. Serialize only when tickets change the same functions, constants, or regions; share a runtime resource; or semantically couple because one defines what another consumes. Otherwise dispatch them in parallel and resolve the rare merge conflict at integration.
+
 After solo-fit chooses wave mode, file the complete planned backlog before dispatching: every planned
 ticket for every wave, each with declared files, dependency links, and per-ticket verify. Then dispatch
 the entire ready wave in parallel. Filing one ticket, dispatching, waiting, then filing the next

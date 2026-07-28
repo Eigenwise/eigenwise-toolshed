@@ -2815,7 +2815,7 @@ function dispatchWarnings(ticket?: any, slug?: any) {
       const lockfileGuidance = lockfilesOnly
         ? ' Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.'
         : '';
-      warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(', ')}.${lockfileGuidance}`);
+      warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(', ')} — parallel is fine in isolated worktrees unless the same symbols/regions change; assess.${lockfileGuidance}`);
     }
     for (const collision of contractReasons) {
       warnings.push(`Dispatch warning: contract edge with in-flight ${sibling.ref}: ${collision.message} Serialize unless a reviewed contract waiver applies.`);
