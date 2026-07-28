@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.250.0 (2026-07-28)
+
+### sidequest 3.29.0 → 3.30.0
+
+#### Features
+
+- Board-config generatedPairs: declared sources auto-pair their tracked compiled outputs across all scope gates (SQ-958) [`190684d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/190684dfa9eb964d67a9dd7eef9e18c1ac926c3c)
+
 ## v3.249.0 (2026-07-28)
 
 ### sidequest 3.28.0 → 3.29.0
