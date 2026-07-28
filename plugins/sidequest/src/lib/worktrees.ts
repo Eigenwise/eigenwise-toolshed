@@ -301,12 +301,13 @@ async function backupDirtyOrphanDirectory(entry: any, options: any): Promise<str
   return destination;
 }
 
-async function findOrphanBranches(repo: string, checkedOutBranches: Set<string>, upstream: string): Promise<any[]> {
+async function findOrphanBranches(repo: string, checkedOutBranches: Set<string>, upstream: string, maxCandidates: number): Promise<any[]> {
   const result = await git(repo, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/worktree-agent-*']);
   if (!result.ok) throw new Error(result.stderr || 'could not list worktree branches');
   const branches = result.stdout ? result.stdout.split(/\r?\n/).filter(Boolean) : [];
   return Promise.all(branches
     .filter((branch) => !checkedOutBranches.has(branch))
+    .slice(0, maxCandidates)
     .map(async (branch) => {
       const patch = await patchEquivalence(repo, branch, upstream);
       const reachable = await reachableFrom(repo, branch, upstream);
@@ -653,7 +654,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const checkedOutBranches = new Set<string>(remainingWorktrees
     .map((entry) => localBranchName(entry.branch))
     .filter((branch): branch is string => !!branch));
-  const orphanBranches = options.ticketRef ? [] : await findOrphanBranches(repo, checkedOutBranches, upstream);
+  const orphanBranches = options.ticketRef ? [] : await findOrphanBranches(repo, checkedOutBranches, upstream, maxCandidates);
   if (execute) {
     for (const entry of orphanBranches.filter((candidate) => candidate.action === 'prune')) {
       const deleted = await git(repo, ['branch', '-D', '--', entry.branch]);
