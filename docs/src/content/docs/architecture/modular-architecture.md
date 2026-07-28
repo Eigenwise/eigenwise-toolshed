@@ -6,7 +6,7 @@ description: The small integration points that let Toolshed plugins work togethe
 Each plugin owns its behavior and can run alone. Cooperation uses explicit local boundaries.
 
 - Workbench hooks write metadata-only lifecycle observations. Its observer and Collector stay on loopback, and Grafana reads the local store.
-- Codex Gateway keeps the API boundary in one place. Its shim selects the local proxy for `claude-codex-*` ids and leaves other model ids on their normal API path.
+- Codex Gateway keeps the API boundary in one place. Its shim selects the local proxy for `claude-gpt-*` and `claude-grok-*` ids and leaves other model ids on their normal API path.
 - Sidequest owns tickets, routing profiles, categories, dispatch, and executor evidence. Each board points to one complete profile, and its local ADD, OVERRIDE, DETACH, or DISABLE rows apply on top. Profile edits propagate to pointing boards; local rows preserve their provenance. The model-availability fallback remains global and is evaluated after the category route and category fallback.
 - Plugins can advertise small registry records under `~/.claude/toolshed/registry/`. Consumers validate the shape instead of walking plugin caches.
 
