@@ -270,6 +270,51 @@ test('pre-tool hook: executor callers can fan out generic agents with bounded gu
   assert.match(mainThread.hookSpecificOutput.permissionDecisionReason, /generic Agent, not a Sidequest ticket executor/);
 });
 
+test('pre-tool hook: helper writes inherit the active parent ticket scope', () => {
+  const ticket = addStopTicket('helper scope capability', { files: ['lib/allowed.js'] });
+  const parent = claimStopTicket(ticket, `helper-scope-${++sqSeq}`, 'helper-parent');
+  const helper = {
+    session_id: parent.session_id,
+    agent_id: `helper-child-${sqSeq}`,
+    agent_type: 'general-purpose',
+    cwd: BOARD_PATH,
+  };
+  const inside = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(BOARD_PATH, 'lib', 'allowed.js') },
+  });
+  assert.equal(inside, null);
+
+  const outside = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(BOARD_PATH, 'lib', 'outside.js') },
+  });
+  assert.equal(outside.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(outside.hookSpecificOutput.permissionDecisionReason, /lib[\\/]outside\.js/);
+  assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
+  assert.match(outside.hookSpecificOutput.permissionDecisionReason, /scope request or file a new ticket/);
+
+  const read = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Read',
+    tool_input: { file_path: path.join(BOARD_PATH, 'lib', 'outside.js') },
+  });
+  assert.equal(read, null);
+});
+
+test('pre-tool hook: ordinary subagents without a dispatch stay outside the helper scope guard', () => {
+  const out = runHookOutput(FORCE_BYPASS, {
+    session_id: `ordinary-${++sqSeq}`,
+    agent_id: `ordinary-helper-${sqSeq}`,
+    agent_type: 'general-purpose',
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(BOARD_PATH, 'outside.js') },
+  });
+  assert.equal(out, null);
+});
+
 test('pre-tool hook: a marked arbitrary agent is still denied', () => {
   const marked = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
@@ -1437,6 +1482,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('inline-work-nudge.js'))), 'the inline-work reminder must be registered for every tool');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Agent'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Edit|Write|MultiEdit|NotebookEdit'
+    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the helper write guard must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'TaskOutput'
     && entry.hooks.some((hook?: any) => hook.command.includes('guard-task-output.js'))), 'the TaskOutput guard must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'

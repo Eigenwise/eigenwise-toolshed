@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { isRecord, readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeDeny, writeJson } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
@@ -27,12 +28,16 @@ interface ResolveResult {
 interface Ticket {
   ref?: string;
   title?: string;
+  files?: unknown;
+  claim?: { by?: string };
   exec?: { model?: string };
   dispatchNonce?: string;
   dispatch?: {
     description?: string;
     launchName?: string;
     launchSeq?: number;
+    sessionId?: string;
+    terminalAt?: string | null;
     route?: { model?: string; effort?: string; marker?: string };
   };
 }
@@ -52,7 +57,19 @@ interface Store {
   findProject: (project: string) => { ok: boolean; slug?: string };
   getTicket: (slug: string, ref: string) => Ticket | null;
   recordDispatchLaunch: (slug: string, ref: string, options: Record<string, unknown>) => unknown;
+  listProjects: (options: { all: boolean }) => Array<{ slug: string }>;
+  listTickets: (slug: string) => Ticket[];
+  readMeta: (slug: string) => { path?: string } | null;
+  effectiveScope: (slug: string, files: unknown) => string[];
 }
+
+interface HelperScope {
+  ref: string;
+  projectPath: string;
+  files: string[];
+}
+
+const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 function fallbackClassify(type: string): ExecutorClassification {
   const readOnlyDispatch = /^sidequest-exec-dispatch-readonly-(low|medium|high|xhigh|max)$/.exec(type);
@@ -296,9 +313,76 @@ function denyReason(result: ResolveResult, type: string): string {
   }
 }
 
+function helperScopes(input: HookInput): HelperScope[] {
+  const agentId = stringField(input, 'agent_id', 'agentId');
+  const type = stringField(input, 'agent_type', 'agentType', 'subagent_type');
+  const sessionId = stringField(input, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+  if (!agentId || !type || !sessionId || isCurrentExecutor(classifyExecutor(type))) return [];
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    const matches: HelperScope[] = [];
+    for (const project of store.listProjects({ all: true })) {
+      const projectPath = String(store.readMeta(project.slug)?.path || '').trim();
+      if (!projectPath) continue;
+      for (const ticket of store.listTickets(project.slug)) {
+        if (!ticket.claim?.by || ticket.dispatch?.terminalAt || ticket.dispatch?.sessionId !== sessionId || !ticket.ref) continue;
+        matches.push({ ref: ticket.ref, projectPath, files: store.effectiveScope(project.slug, ticket.files) });
+      }
+    }
+    return matches;
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeTarget(input: HookInput): string {
+  const toolInput = toolInputOf(input);
+  if (!toolInput) return '';
+  const raw = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
+  if (raw == null || !String(raw).trim()) return '';
+  const cwd = stringField(input, 'cwd') || process.cwd();
+  return path.resolve(cwd, String(raw));
+}
+
+function projectRelative(target: string, projectPath: string): string | null {
+  const relative = path.relative(projectPath, target).replace(/\\/g, '/');
+  return !relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative) ? null : relative;
+}
+
+function inScope(target: string, scope: HelperScope): boolean {
+  const relative = projectRelative(target, scope.projectPath);
+  if (!relative) return false;
+  const key = process.platform === 'win32' ? relative.toLowerCase() : relative;
+  return scope.files.some((file) => {
+    const normalized = String(file || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    const scopeKey = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+    return key === scopeKey || key.startsWith(`${scopeKey}/`);
+  });
+}
+
+function guardHelperWrite(input: HookInput): void {
+  const scopes = helperScopes(input);
+  if (!scopes.length) return;
+  const target = writeTarget(input);
+  if (!target || scopes.some((scope) => inScope(target, scope))) return;
+  const refs = [...new Set(scopes.map((scope) => scope.ref))];
+  const projectScope = scopes.find((scope) => projectRelative(target, scope.projectPath) !== null);
+  const display = projectScope ? projectRelative(target, projectScope.projectPath)! : target;
+  writeDeny(
+    'PreToolUse',
+    `sidequest: refusing helper write to ${display}. It is outside ${refs.join(', ')}'s effective scope. Route this path through the parent executor as a scope request or file a new ticket.`,
+  );
+}
+
 function main(): void {
   const input = readStdin();
   if (!input) return;
+  const toolName = stringField(input, 'tool_name');
+  if (WRITE_TOOLS.has(toolName)) {
+    guardHelperWrite(input);
+    return;
+  }
+  if (toolName !== 'Agent') return;
   const toolInput = toolInputOf(input);
   if (!toolInput) return;
   const type = String(toolInput.subagent_type || '');

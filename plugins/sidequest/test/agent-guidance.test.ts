@@ -28,7 +28,9 @@ test('mid-task sub-delegation uses cheap scoped helpers', () => {
   assert.match(executorTemplate, /`web-researcher` with a Claude-side haiku\/sonnet-class model/);
   assert.match(executorTemplate, /never a gateway-model web-research subspawn because gateway WebSearch is unreliable/);
   assert.match(executorTemplate, /Explore or a general subagent pinned through the Agent `model` argument/);
-  assert.match(executorTemplate, /helpers stay inside the declared scope and are throwaway, not sub-tickets/);
+  assert.match(executorTemplate, /Helper writes are mechanically limited to the parent ticket's effective scope/);
+  assert.match(executorTemplate, /route an outside path through the parent as a scope request or new ticket/);
+  assert.match(executorTemplate, /Helpers are throwaway, not sub-tickets/);
   assert.match(executorTemplate, /work that grows scope goes back to the board as a filed ticket/);
 });
 
