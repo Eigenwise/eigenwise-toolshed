@@ -24,7 +24,7 @@ Use the **Bucket** dropdown to change the aggregation window. It is a Grafana dr
 ## Efficiency
 
 - **Context spent per answer token (lower is better)** shows input and cache tokens processed for every output token. Fresh executors normally use less context than the long-running orchestrator. A widening gap means the orchestrator is waking up with too much context.
-- **Work moved off the Anthropic limit** is the share of list-price-equivalent work routed through codex-gateway to Codex models. Higher means the second subscription pool is doing more work. The dollar figures are comparisons, not charges.
+- **Work moved off the Anthropic limit** is the share of list-price-equivalent work routed through model-gateway to Codex models. Higher means the second subscription pool is doing more work. The dollar figures are comparisons, not charges.
 - **Background/compaction cost by model and project** ranks compaction, summaries, and other auxiliary work. A small amount is normal. Bursts are overhead rather than task output.
 
 MCP connection activity counts connection attempts by server and status. Claude Code names only plugin-hosted servers on that event, so IDE and user-configured servers are grouped as “unnamed (non-plugin server)” instead of being dropped. That event carries no project, so the panel is board-wide and shows up on the global dashboard only, not on the per-project ones.
