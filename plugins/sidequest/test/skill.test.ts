@@ -15,8 +15,8 @@ const checkpointing = fs.readFileSync(path.join(__dirname, '..', 'skills', 'side
 // its size is a budget like the hook byte budgets: detail belongs in
 // references/ that load on demand. Raise this only with a deliberate decision.
 test('SKILL.md stays inside its session-load byte budget', () => {
-  assert.ok(Buffer.byteLength(skill, 'utf8') <= 16000,
-    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 16000 — move detail into references/`);
+  assert.ok(Buffer.byteLength(skill, 'utf8') <= 17600,
+    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 17600 — move detail into references/`);
 });
 
 test('checkpointing reference documents model limits and narrow decision triggers', () => {

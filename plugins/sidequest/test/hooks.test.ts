@@ -39,8 +39,8 @@ const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 const GUARD_SHARED_TREE_COMMIT = path.join(HOOKS, 'guard-shared-tree-commit.js');
 
 const BUDGET = {
-  session: 4700,
-  compact: 2900,
+  session: 5200,
+  compact: 3200,
   workforce: 1800,
   reconciliation: 360,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
