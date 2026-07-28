@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.270.0 (2026-07-29)
+
+### sidequest 3.38.0 → 3.38.1
+
+#### Fixes
+
+- Executor stops after Monitor timeout while its required background job keeps running (SQ-1016) [`41459b5`](https://github.com/Eigenwise/eigenwise-toolshed/commit/41459b5b2504e302db3b917c51f874bc3e0722d4)
+
 ## v3.269.0 (2026-07-28)
 
 ### sidequest 3.37.1 → 3.38.0
