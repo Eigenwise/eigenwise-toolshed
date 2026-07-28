@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
 // A throwaway store home so the SubagentStop hook (which loads lib/store.js as a
@@ -46,12 +47,39 @@ const BUDGET = {
   reconciliation: 360,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
-const FIXED_PLUGIN_ROOT = path.join(os.tmpdir(), 'sq-plugin-root');
-try {
-  fs.symlinkSync(path.join(__dirname, '..'), FIXED_PLUGIN_ROOT, 'junction');
-} catch (error) {
-  if (!fs.existsSync(FIXED_PLUGIN_ROOT)) throw error;
+const PLUGIN_ROOT = fs.realpathSync(path.join(__dirname, '..'));
+const PINNED_ROOT_NAME_LENGTH = 'sq-plugin-root'.length;
+const PINNED_ROOT_NAME = crypto
+  .createHash('sha256')
+  .update(PLUGIN_ROOT)
+  .digest('hex')
+  .slice(0, PINNED_ROOT_NAME_LENGTH);
+const FIXED_PLUGIN_ROOT = path.join(os.tmpdir(), PINNED_ROOT_NAME);
+
+function ensurePinnedPluginRoot() {
+  let currentTarget;
+  let pinnedRootExists = false;
+  try {
+    fs.lstatSync(FIXED_PLUGIN_ROOT);
+    pinnedRootExists = true;
+    currentTarget = fs.realpathSync(FIXED_PLUGIN_ROOT);
+  } catch (error) {
+    if ((error as any)?.code !== 'ENOENT') throw error;
+  }
+  if (pinnedRootExists && currentTarget !== PLUGIN_ROOT) {
+    fs.rmSync(FIXED_PLUGIN_ROOT, { recursive: true, force: true });
+  }
+  if (currentTarget !== PLUGIN_ROOT) {
+    try {
+      fs.symlinkSync(PLUGIN_ROOT, FIXED_PLUGIN_ROOT, 'junction');
+    } catch (error) {
+      if ((error as any)?.code !== 'EEXIST') throw error;
+    }
+  }
+  assert.equal(fs.realpathSync(FIXED_PLUGIN_ROOT), PLUGIN_ROOT);
 }
+
+ensurePinnedPluginRoot();
 
 const RETIRED_SCOUT = `sidequest-${'scout'}`;
 
@@ -104,6 +132,15 @@ test('budget assertions must use a fixed plugin root', () => {
 
   const fixture = "test('fixture', () => { const ctx = runHook(SESSION); assert.ok(ctx.length <= BUDGET.session); });";
   assert.equal(unpinnedBudgetTests(fixture).length, 1, 'the guard must reject an unpinned budget assertion');
+});
+
+test('budget pin resolves to this checkout and isolates its fixed-length path', () => {
+  assert.equal(path.basename(FIXED_PLUGIN_ROOT).length, PINNED_ROOT_NAME_LENGTH);
+  assert.equal(fs.realpathSync(FIXED_PLUGIN_ROOT), PLUGIN_ROOT);
+
+  const otherPluginRoot = `${PLUGIN_ROOT}-other`;
+  const otherName = crypto.createHash('sha256').update(otherPluginRoot).digest('hex').slice(0, PINNED_ROOT_NAME_LENGTH);
+  assert.notEqual(otherName, PINNED_ROOT_NAME);
 });
 
 function writeCategory(home?: any, category?: any) {
@@ -1531,8 +1568,7 @@ test('session-start: embeds the expanded plugin path in CLI fallbacks', () => {
   const pluginRoot = FIXED_PLUGIN_ROOT;
   const ctx = runHookForBudget(
     SESSION,
-    { session_id: 't', source: 'compact' },
-    { CLAUDE_PLUGIN_ROOT: pluginRoot }
+    { session_id: 't', source: 'compact' }
   );
   assert.ok(ctx.includes(`node "${pluginRoot}/bin/sidequest.js"`), 'CLI fallback must embed the hook runtime plugin path');
   assert.ok(!ctx.includes('${CLAUDE_PLUGIN_ROOT}'), 'CLI fallback must not rely on an unset shell variable');
