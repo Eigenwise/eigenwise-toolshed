@@ -172,8 +172,20 @@ function translateInput(payload) {
     ? system.filter((block) => block?.type === 'text').map((block) => block.text).join('\n') : '';
   if (systemText) input.push({ role: 'developer', content: [inputText(systemText)] });
   for (const message of Array.isArray(payload?.messages) ? payload.messages : []) {
-    const content = translateContent(message);
-    if (content.length) input.push({ role: message.role === 'assistant' ? 'assistant' : 'user', content });
+    const role = message.role === 'assistant' ? 'assistant' : 'user';
+    const content = [];
+    const flushContent = () => {
+      if (content.length) input.push({ role, content: content.splice(0) });
+    };
+    for (const item of translateContent(message)) {
+      if (item.type === 'function_call' || item.type === 'function_call_output') {
+        flushContent();
+        input.push(item);
+      } else {
+        content.push(item);
+      }
+    }
+    flushContent();
   }
   return input;
 }
