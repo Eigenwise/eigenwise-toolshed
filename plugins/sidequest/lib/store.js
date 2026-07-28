@@ -17,6 +17,7 @@ const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
 const SHARED_TREE_ARTIFACT_MARKER = "Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.";
 const CONTROL_PLANE_COMPLETION = /* @__PURE__ */ Symbol("sidequest.control-plane-completion");
+const DELIVERY_MODES = ["merge", "replay", "apply"];
 function descriptionField(...candidates) {
   for (const candidate of candidates) {
     const value = String(candidate == null ? "" : candidate).replace(/[\s\[\]]+/g, " ").trim();
@@ -1444,6 +1445,13 @@ function defaultAlwaysInScope(absPath) {
     return [];
   }
 }
+function normalizeDeliveryMode(mode) {
+  const value = String(mode || "merge").trim().toLowerCase();
+  if (!DELIVERY_MODES.includes(value)) {
+    throw new Error('delivery must be "merge", "replay", or "apply".');
+  }
+  return value;
+}
 function normalizeIntegrationMode(mode) {
   const value = String(mode || "auto").trim().toLowerCase();
   if (!["auto", "local", "remote"].includes(value)) {
@@ -1530,6 +1538,7 @@ function boardConfig(slug) {
     generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
+    delivery: normalizeDeliveryMode(meta.delivery),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
     autoApprovePluginTests: normalizeAutoApprovePluginTests(meta.autoApprovePluginTests),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
@@ -1567,6 +1576,9 @@ function setBoardConfig(slug, patch) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, "integrationBranch")) {
       meta.integrationBranch = normalizeIntegrationBranch(patch.integrationBranch);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "delivery")) {
+      meta.delivery = normalizeDeliveryMode(patch.delivery);
     }
     if (Object.prototype.hasOwnProperty.call(patch, "worktreeIsolation")) {
       meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
@@ -4636,14 +4648,9 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   if (!by) return { ok: false, reason: "identity_required", ticket };
   let legacyScopeOverride = false;
   if (purpose === "integration") {
-    const project = readMeta(slug);
-    const scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission);
-    legacyScopeOverride = opts.overrideLegacyScope === true && scopeValidation.reason === "missing_scope_snapshot";
-    if (!scopeValidation.ok && !legacyScopeOverride) {
-      const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
-      const message = scopeValidation.reason === "missing_scope_snapshot" ? `${ticket.ref} submission has no admitted scope snapshot. Re-submit it, or pass the explicit legacy scope override with a recorded reason.` : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(", ")}.`;
-      return { ok: false, reason: scopeValidation.reason, message, outside, scopeValidation, ticket };
-    }
+    const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
+    if (!admitted.ok) return admitted;
+    legacyScopeOverride = !!admitted.legacyScopeOverride;
   }
   const advisory = purpose === "integration" && ticket.highStakes && !recordedReviewPass(ticket) ? HIGH_STAKES_REVIEW_WARNING : null;
   const result = completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
@@ -4821,6 +4828,157 @@ function pendingSubmission(t) {
 function submissionGitRef(ticket) {
   return `refs/sidequest/${ticket.ref}`;
 }
+function integrationGit(repo, args) {
+  return execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+function integrationGitError(error) {
+  return String(error?.stderr || error?.message || error || "").trim();
+}
+function changedIntegrationPaths(repo, submission) {
+  if (Array.isArray(submission.changedPaths) && submission.changedPaths.length) return submission.changedPaths.slice();
+  return integrationGit(repo, ["diff", "--name-only", submission.base, submission.commit]).split(/\r?\n/).filter(Boolean);
+}
+function validateIntegrationSubmission(slug, idOrRef, opts) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket) return { ok: false, reason: "not_found" };
+  if (!pendingSubmission(ticket)) {
+    return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no submission to integrate.` };
+  }
+  const project = readMeta(slug);
+  const scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission);
+  const legacyScopeOverride = opts?.overrideLegacyScope === true && scopeValidation.reason === "missing_scope_snapshot";
+  if (!scopeValidation.ok && !legacyScopeOverride) {
+    const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
+    return {
+      ok: false,
+      reason: scopeValidation.reason,
+      outside,
+      ticket,
+      scopeValidation,
+      message: scopeValidation.reason === "missing_scope_snapshot" ? `${ticket.ref} submission has no admitted scope snapshot. Re-submit it, or pass the explicit legacy scope override with a recorded reason.` : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(", ")}.`
+    };
+  }
+  return { ok: true, ticket, scopeValidation, legacyScopeOverride };
+}
+function updateSubmissionIntegration(slug, id, patch) {
+  return withTicketLock(slug, id, () => {
+    const ticket = getTicket(slug, id);
+    if (!ticket || !ticket.submission) return { ok: false, reason: "submission_required", ticket };
+    ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, patch);
+    ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    putTicket(slug, ticket);
+    queueEventNotification(slug, ticket, "status", "integration");
+    return { ok: true, ticket };
+  });
+}
+function integrationFailure(slug, ticket, patch) {
+  updateSubmissionIntegration(slug, ticket.id, Object.assign({ outcome: "failed", completedAt: (/* @__PURE__ */ new Date()).toISOString() }, patch));
+  return Object.assign({ ok: false, ticket: getTicket(slug, ticket.id) }, patch);
+}
+function integrateSubmission(slug, idOrRef, opts) {
+  opts = opts || {};
+  const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
+  if (!admitted.ok) return admitted;
+  const ticket = admitted.ticket;
+  const project = readMeta(slug);
+  const repo = project?.path;
+  const mode = normalizeDeliveryMode(opts.mode);
+  const target = opts.target;
+  if (!repo || !target || !target.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
+  const submission = ticket.submission;
+  const gitRef = String(submission.gitRef || submissionGitRef(ticket));
+  let pinnedCommit;
+  let changedPaths;
+  try {
+    pinnedCommit = integrationGit(repo, ["rev-parse", "--verify", `${gitRef}^{commit}`]).toLowerCase();
+    if (pinnedCommit !== String(submission.commit).toLowerCase()) {
+      return { ok: false, reason: "pinned_ref_mismatch", ticket, message: `${gitRef} points to ${pinnedCommit}, not submitted ${submission.commit}.` };
+    }
+    changedPaths = changedIntegrationPaths(repo, submission);
+  } catch (error) {
+    return { ok: false, reason: "pinned_ref_missing", ticket, message: `${gitRef} is unavailable: ${integrationGitError(error)}` };
+  }
+  const recorded = updateSubmissionIntegration(slug, ticket.id, {
+    mode,
+    targetBranch: target.branch,
+    targetUpstream: target.upstream,
+    pinnedRef: gitRef,
+    pinnedCommit,
+    changedPaths,
+    recordedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    outcome: "pending"
+  });
+  if (!recorded.ok) return recorded;
+  try {
+    const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
+    if (currentBranch !== target.branch) {
+      return integrationFailure(slug, ticket, { reason: "branch_not_checked_out", message: `${target.branch} must be checked out before integration; currently on ${currentBranch || "detached HEAD"}.` });
+    }
+    const dirty = integrationGit(repo, ["diff", "--name-only"]).split(/\r?\n/).filter(Boolean);
+    const staged = integrationGit(repo, ["diff", "--cached", "--name-only"]).split(/\r?\n/).filter(Boolean);
+    const untracked = integrationGit(repo, ["ls-files", "--others", "--exclude-standard"]).split(/\r?\n/).filter(Boolean);
+    const dirtyPaths = Array.from(/* @__PURE__ */ new Set([...dirty, ...staged]));
+    if (mode === "apply") {
+      const overlap = Array.from(/* @__PURE__ */ new Set([...dirtyPaths, ...untracked])).filter((entry) => changedPaths.includes(entry));
+      if (overlap.length) {
+        return integrationFailure(slug, ticket, { reason: "dirty_overlap", dirtyPaths: overlap, message: `apply refused; uncommitted changes overlap submitted paths: ${overlap.join(", ")}.` });
+      }
+    } else if (dirtyPaths.length) {
+      return integrationFailure(slug, ticket, { reason: "checkout_dirty", dirtyPaths, message: `${mode} refused; the integration checkout has uncommitted changes: ${dirtyPaths.join(", ")}.` });
+    }
+    const before = integrationGit(repo, ["rev-parse", "HEAD"]);
+    const commits = Array.isArray(submission.commits) && submission.commits.length ? submission.commits : [submission.commit];
+    if (mode === "merge") {
+      try {
+        integrationGit(repo, ["merge", "--no-ff", "--no-edit", pinnedCommit]);
+      } catch (error) {
+        try {
+          integrationGit(repo, ["merge", "--abort"]);
+        } catch (_) {
+        }
+        return integrationFailure(slug, ticket, { reason: "merge_failed", message: integrationGitError(error), before });
+      }
+    } else {
+      for (const commit of commits) {
+        try {
+          integrationGit(repo, ["cherry-pick", ...mode === "apply" ? ["--no-commit"] : [], commit]);
+        } catch (error) {
+          try {
+            integrationGit(repo, ["cherry-pick", "--abort"]);
+          } catch (_) {
+          }
+          if (mode === "replay") {
+            try {
+              integrationGit(repo, ["reset", "--hard", before]);
+            } catch (_) {
+            }
+          }
+          return integrationFailure(slug, ticket, {
+            reason: `${mode}_failed`,
+            failedCommit: commit,
+            before,
+            message: integrationGitError(error)
+          });
+        }
+      }
+    }
+    const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]);
+    const deliveredFiles = mode === "apply" ? Array.from(/* @__PURE__ */ new Set([
+      ...integrationGit(repo, ["diff", "--name-only"]).split(/\r?\n/).filter(Boolean),
+      ...integrationGit(repo, ["diff", "--cached", "--name-only"]).split(/\r?\n/).filter(Boolean)
+    ])) : changedPaths;
+    const result = updateSubmissionIntegration(slug, ticket.id, {
+      outcome: "delivered",
+      deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
+      resultingHead,
+      dirtyFiles: mode === "apply" ? deliveredFiles : [],
+      deliveredFiles
+    });
+    return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : result;
+  } catch (error) {
+    return integrationFailure(slug, ticket, { reason: "integration_error", message: integrationGitError(error) });
+  }
+}
 function submitTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
@@ -4943,7 +5101,7 @@ function submissionsPayload(slug) {
     executorVerify: t.executorVerify || null,
     submission: t.submission
   }));
-  return { tickets, count: tickets.length };
+  return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
 }
 function sweepStaleDispatches(opts) {
   opts = opts || {};
@@ -5698,6 +5856,7 @@ function pulsePayload(slug, idOrRef) {
     ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
     ...warnings.length ? { warnings } : {},
     submission: ticket.submission || null,
+    delivery: boardConfig(slug)?.delivery || "merge",
     git
   };
 }
@@ -6229,6 +6388,9 @@ module.exports = {
   boardConfig,
   setBoardConfig,
   integrationTarget,
+  normalizeDeliveryMode,
+  validateIntegrationSubmission,
+  integrateSubmission,
   effectiveScope,
   listProjects,
   findProject,

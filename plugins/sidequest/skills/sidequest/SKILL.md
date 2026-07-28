@@ -14,7 +14,7 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 - `references/orchestration.md` — decomposition depth, fan-out waves, checkpoints, background
   execution, cost levers, agent teams.
 - `references/experiment-loop.md` — oracle rounds, branches, verdicts, promotion.
-- `references/publishing.md` — the serialized publish transaction.
+- `references/publishing.md` — delivery modes, publish transaction.
 - `references/routing-details.md`, `references/routing-guide.md` — routes and wiring.
 - `references/high-stakes.md`
 - `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`, `references/ticket-authoring.md`.
@@ -166,8 +166,9 @@ optionally `--status todo`).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
 `submit` (claim released, parked in `doing`); the submission holds the full report, and the
-terminal comment keeps only the commit hash + verification. The orchestrator runs the publish
-transaction (lock → integrate → central version → reverify → review → push → reachability → `done`):
+terminal comment keeps only the commit hash + verification. The orchestrator is the integrator: choose
+`sidequest integrate <ref> --by <who> --mode apply|replay|merge` from the board default, then run the
+publish transaction (lock → delivery → central version → reverify → review → push → reachability → `done`):
 `references/publishing.md`.
 **BOOKEND SUPERVISION.** Between dispatch and submission, do nothing with that ticket: no pulses,
 comment reads, or worktree peeks. At integration, read the submit report, run its verify command and

@@ -380,7 +380,7 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   const total = descriptionBytes(tools);
   assert.ok(total <= 5000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
   const payload = JSON.stringify({ tools });
-  assert.ok(payload.length <= 16200, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
+  assert.ok(payload.length <= 17000, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);

@@ -331,3 +331,71 @@ test('groom-close --integration prints the refusal loudly when the checkout is n
   assert.match(payload.integrationBranch.command, /merge --ff-only/);
   assert.equal(head(fixture.repo, 'refs/heads/main'), git(['rev-parse', 'main'], fixture.repo));
 });
+
+function deliveryTicket(label: string) {
+  const fixture = makeRepo(label);
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: `delivery ${label}`,
+    category: 'codebase-exploration',
+    description: 'A submitted fixture delivered through the integrator command.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, ticket, fixture);
+  const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
+  return { fixture, slug, ticket, runCli: runner.runCli };
+}
+
+for (const mode of ['merge', 'replay', 'apply']) {
+  test(`integrate ${mode} delivers a ready submission and preserves its pinned ref`, () => {
+    const { fixture, slug, ticket, runCli } = deliveryTicket(mode);
+    const before = head(fixture.repo);
+    const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', mode, '--json']);
+
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.delivery.mode, mode);
+    assert.equal(payload.delivery.pinnedRef, `refs/sidequest/${ticket.ref}`);
+    assert.equal(payload.delivery.pinnedCommit, fixture.submitted);
+    assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
+    assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+    if (mode === 'apply') {
+      assert.equal(head(fixture.repo), before);
+      assert.deepEqual(payload.delivery.dirtyFiles, ['feature.txt']);
+      assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+    } else {
+      assert.notEqual(head(fixture.repo), before);
+      assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+    }
+  });
+}
+
+test('replay conflict aborts, restores HEAD, and keeps the pinned ref', () => {
+  const { fixture, slug, ticket, runCli } = deliveryTicket('replay-conflict');
+  const before = commitFile(fixture.repo, 'feature.txt', 'conflicting local work\n');
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'replay', '--json']);
+
+  assert.equal(result.status, 1);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), '');
+  assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'doing');
+  assert.equal(stored.submission.integration.failedCommit, fixture.submitted);
+});
+
+test('apply refuses an overlapping dirty path and names it without dropping the pinned ref', () => {
+  const { fixture, slug, ticket, runCli } = deliveryTicket('apply-overlap');
+  fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'user edit\n');
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'apply', '--json']);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /apply refused; uncommitted changes overlap submitted paths: feature\.txt/);
+  assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'doing');
+  assert.deepEqual(stored.submission.integration.dirtyPaths, ['feature.txt']);
+});

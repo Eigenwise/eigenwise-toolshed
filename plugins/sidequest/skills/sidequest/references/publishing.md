@@ -34,6 +34,26 @@ Batch deliberately: when a wave is mid-flight, let its remaining executors finis
 wave's submissions in one transaction — one lock hold, one version assignment, one seam check, one
 push — instead of one transaction per ticket. Don't wait on work that isn't in flight.
 
+## Delivery modes
+
+The orchestrator is the integrator. A submitted range stays pinned at `refs/sidequest/<SQ-n>` and
+`sidequest integrate <ref> --by <who> --mode <merge|replay|apply>` records that recoverable hash before
+it touches the checkout. It validates the submitted range and admitted scope again, names any stray
+paths, and never deletes the pinned ref.
+
+- `merge` is the default for release-pipeline repos such as Toolshed. It merges the submitted tip into
+  the configured integration branch.
+- `replay` cherry-picks the submitted commits in order, keeping atomic history. A conflict aborts the
+  cherry-pick and restores the prior HEAD.
+- `apply` materializes the range without a commit so the user can review it in their changes view. It
+  refuses overlapping uncommitted paths and names them. Its delivery record plus pinned ref is enough
+  to close the ticket, no user-side commit is required.
+
+Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
+usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.
+If a publish lock is active, acquire it before delivery. `integrate` closes the delivered ticket with the
+same control-plane integration bookkeeping as `groom-close --integration`.
+
 ## Local-only repositories
 
 `board-config --integration-mode local` records ranges against local `main`; `auto` chooses that mode when
