@@ -157,6 +157,10 @@ Sidequest also refuses `git reset --hard`, `git clean -f`, a whole-tree `checkou
 
 A scoped commit commits its declared paths even when another changed file is outside the ticket. Sidequest reports those paths in the commit result, records a ticket comment, and carries them in the submission as `unscopedPaths`; make a second scoped commit after widening scope, or discard them. Missing declared paths are warnings when other declared paths can be committed.
 
+`sidequest submit` refuses outright when `unscopedPaths` are still on the submission, instead of letting a partial commit through as ready. The refusal names every blocked path and says what to do: get the scope request approved, put every blocked path in a complete commit, then submit again. A submission that already carries `unscopedPaths` still can't integrate: `sidequest integrate` and `sidequest publish queue` mark it `readiness: partial`, and `queue` prints `REJECTED: unscoped_paths` with the blocked paths listed. `subagent-stop` reports the same state to the executor, `PARTIAL_SUBMISSION ... do not integrate it`, instead of the `READY_FOR_INTEGRATION` verdict a clean submission gets.
+
+Fix it with scope, not force. Declare `files` on the ticket up front so an executor isn't inferring scope from its first write, or approve the scope request it filed. Nothing pushes a partial submission through.
+
 Run `sidequest worktrees --sweep` from a board repo to inspect stale executor worktrees. It only plans removals by default. `--yes` removes finished, integrated, or already-merged clean `agent-*` worktrees, then prunes Git's worktree registry. Dirty, ahead, locked, and current worktrees stay put, and so does any worktree whose ticket still holds a live claim: a ticket can reach a final board state while its executor is still working in that tree.
 
 ![Sidequest kanban board](../../../assets/screenshots/sidequest-kanban.png)
