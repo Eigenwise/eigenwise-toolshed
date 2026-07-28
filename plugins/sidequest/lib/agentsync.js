@@ -296,6 +296,13 @@ function scopePauseRecoveryPacket(ticket, slug) {
   const patch = path.resolve(store.assetPath(slug, ticket.id, asset));
   return `Scope-pause recovery: \`${patch}\` is an automatic snapshot of uncommitted work from a stopped executor. Stopped-agent messages are not a reliable recovery path, so a redispatch in a new worktree must apply this patch before implementation; do not apply it in the original paused worktree.`;
 }
+function planDocumentPacket(ticket, slug) {
+  if (!ticket || !slug) return null;
+  const plan = store.ticketPlanInfo(slug, ticket.id || ticket.ref);
+  if (!plan) return null;
+  const planPath = path.resolve(plan.path);
+  return `Plan document: \`${planPath}\` (revision ${plan.revision}, ${plan.by}, ${plan.at}). Read it with \`Read\` and offset/limit on demand; it is never inlined here.`;
+}
 function experimentCheckoutTarget(ticket) {
   const round = Number(ticket?.dispatch?.launchSeq);
   return Number.isInteger(round) && round > 1 ? `refs/sidequest/${ticket.ref}/r${round - 1} (continue from the prior round)` : "base (fresh direction)";
@@ -379,6 +386,12 @@ function ticketIsolationContract(ticket, projectPath) {
     `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`
   ].join("\n")];
 }
+const DEPENDENCY_LINK_TYPES = /* @__PURE__ */ new Set(["blocks", "blocked-by"]);
+function linkedPlanSuffix(link, slug) {
+  if (!slug || !link || !DEPENDENCY_LINK_TYPES.has(String(link.type))) return "";
+  const plan = link.ref ? store.ticketPlanInfo(slug, link.ref) : null;
+  return plan ? ` (plan: ${path.resolve(plan.path)})` : "";
+}
 function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const category = ticket.category || {};
   const project = String(projectPath || slug && store.readMeta(slug)?.path || "").trim();
@@ -395,7 +408,7 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   ].join("\n");
   const comments = ticketCommentsPacket(ticket.comments);
   const commentHeading = comments.includes("[Comment packet truncated.") ? "Comment packet (newest-first excerpts; read full history only when flagged below):" : "Complete comment thread (chronological, inspect every entry before implementation):";
-  const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}`).join("\n") : "(No ticket dependencies were recorded.)";
+  const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
   const declared = Array.isArray(ticket.files) ? ticket.files : [];
   const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
   const effectiveFiles = store.effectiveScope(slug, declared);
@@ -410,6 +423,7 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const closeout = ticketCloseout(ticket);
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
+  const planDocument = planDocumentPacket(ticket, slug);
   const contract = storyContractPacket(ticket, slug);
   const decisionLog = storyDecisionLogPacket(ticket, slug);
   const parts = [
@@ -436,6 +450,7 @@ ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
     ...scopePauseRecoveryPacket(ticket, slug) ? [scopePauseRecoveryPacket(ticket, slug)] : [],
     ...experimentLog ? [`Experiment log:
 ${experimentLog}`] : [],
+    ...planDocument ? [planDocument] : [],
     `Declared files:
 ${declaredFiles}`,
     ...generatedFiles.length ? [`Auto-paired tracked generated files:

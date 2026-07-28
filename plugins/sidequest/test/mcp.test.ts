@@ -185,7 +185,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'commit', 'submit', 'comment', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'commit', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -1965,6 +1965,37 @@ test('SQ-404: long handoff comments are stored whole and still have a clear cap'
   assert.strictEqual(rejected.reason, 'too_long');
   assert.strictEqual(rejected.max, 16000, 'the error names the expanded cap');
   assert.strictEqual(rejected.length, 16001, 'the error names the actual length');
+});
+
+test('SQ-1015: plan writes replace-whole-document, past the 16K comment cap, and reject oversized bodies', async () => {
+  const added = await callTool('add', { title: 'plan document fixture', complexity: 1, why: 'exercise the plan MCP verb round trip' });
+  const ref = added.ref;
+
+  const first = `# Plan\n\n${'x'.repeat(60_000)}`;
+  const written = await callTool('plan', { ref, body: first, by: 'planner-1' });
+  assert.strictEqual(written.ok, true);
+  assert.strictEqual(written.revision, 1);
+  assert.ok(written.path, 'the write ack names the stored path');
+  assert.strictEqual(fs.readFileSync(written.path, 'utf8'), first, 'the plan asset holds the full body, unbounded by the comment cap');
+
+  const second = '# Replaced plan\n\nEntirely different content.';
+  const replaced = await callTool('plan', { ref, body: second, by: 'planner-2' });
+  assert.strictEqual(replaced.ok, true);
+  assert.strictEqual(replaced.revision, 2, 'a rewrite bumps the revision rather than appending');
+  assert.strictEqual(fs.readFileSync(replaced.path, 'utf8'), second, 'the document is replaced whole, not appended to');
+  assert.strictEqual(replaced.path, written.path, 'the plan lives at one stable path across revisions');
+
+  const tooLong = 'x'.repeat(256 * 1024 + 1);
+  const rejected = await callTool('plan', { ref, body: tooLong });
+  assert.strictEqual(rejected.ok, false);
+  assert.strictEqual(rejected.reason, 'too_long');
+  assert.strictEqual(rejected.max, 256 * 1024);
+  assert.strictEqual(rejected.length, 256 * 1024 + 1);
+  assert.strictEqual(fs.readFileSync(replaced.path, 'utf8'), second, 'a rejected oversized write leaves the prior revision untouched');
+
+  const empty = await callTool('plan', { ref, body: '   ' });
+  assert.strictEqual(empty.ok, false);
+  assert.strictEqual(empty.reason, 'empty');
 });
 
 test('claim requires a worker id (no shared-identity default)', async () => {

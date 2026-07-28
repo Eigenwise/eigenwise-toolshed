@@ -2305,6 +2305,70 @@ function saveAssetData(slug?: any, id?: any, name?: any, buffer?: any) {
   return path.basename(dest);
 }
 
+/* ------------------------------------------------------------------ *
+ *  Plan document (SQ-1015)
+ *
+ *  A ticket asset with a reserved filename, so it inherits the existing
+ *  asset machinery for free: project-move copy, delete cleanup, briefing
+ *  attachment listing. Replace-whole-document, one current revision, no
+ *  history — supersession is what a plan needs and what a comment thread
+ *  cannot do without a second full copy declaring itself the replacement.
+ * ------------------------------------------------------------------ */
+
+const PLAN_ASSET_NAME = 'plan.md';
+// Large on purpose: nothing reads this eagerly (see ticketPlanInfo below and
+// agentsync's briefing wiring), so a generous cap costs nothing at rest. Do
+// not shrink this to "encourage" shorter plans — the read path already
+// enforces the token diet; the write cap only has to stop abuse.
+const PLAN_BODY_MAX_BYTES = 256 * 1024;
+
+function planAssetPath(slug?: any, ticket?: any) {
+  return assetPath(slug, ticket.id, PLAN_ASSET_NAME);
+}
+
+// Never inlined into a briefing at any size (SQ-1015): the read path is
+// `Read` with offset/limit on demand. Do not add a "small plans can be
+// inlined under N bytes" threshold here or in agentsync — that recreates the
+// exact eager-injection failure this replaces and gives authors a size to
+// write to.
+function writeTicketPlan(slug?: any, idOrRef?: any, by?: any, body?: any) {
+  const text = stripControlChars(String(body == null ? '' : body)).trim();
+  if (!text) return { ok: false, reason: 'empty' };
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > PLAN_BODY_MAX_BYTES) {
+    return { ok: false, reason: 'too_long', max: PLAN_BODY_MAX_BYTES, length: bytes };
+  }
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: 'not_found' };
+    fs.mkdirSync(assetsDir(slug, ticket.id), { recursive: true });
+    fs.writeFileSync(planAssetPath(slug, ticket), text);
+    if (!Array.isArray(ticket.assets)) ticket.assets = [];
+    if (!ticket.assets.includes(PLAN_ASSET_NAME)) ticket.assets.push(PLAN_ASSET_NAME);
+    const revision = (Number(ticket.plan && ticket.plan.revision) || 0) + 1;
+    const at = new Date().toISOString();
+    ticket.plan = { revision, by: String(by || 'agent'), at };
+    ticket.updatedAt = at;
+    putTicket(slug, ticket);
+    return { ok: true, ticket, plan: ticket.plan, path: planAssetPath(slug, ticket) };
+  });
+}
+
+// Path plus revision metadata for a ticket's current plan, or null when none
+// exists. The revision/by/at always reflect the live ticket record (nothing
+// caches this at dispatch time), which is what makes a stale reader
+// detectable: compare against a previously-seen revision rather than trusting
+// a snapshot, mirroring contractRevision / storyContractDrift.
+function ticketPlanInfo(slug?: any, idOrRef?: any) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket || !ticket.plan || !ticket.plan.revision) return null;
+  const file = planAssetPath(slug, ticket);
+  if (!fs.existsSync(file)) return null;
+  return { path: file, revision: ticket.plan.revision, by: ticket.plan.by, at: ticket.plan.at };
+}
+
 function experimentAssetName(ticket?: any) {
   return `experiment-${String(ticket?.ref || ticket?.id || 'ticket').replace(/[^a-z0-9_-]/gi, '_')}.md`;
 }
@@ -7639,6 +7703,10 @@ module.exports = {
   copyAsset,
   saveAssetData,
   assetPath,
+  PLAN_ASSET_NAME,
+  PLAN_BODY_MAX_BYTES,
+  writeTicketPlan,
+  ticketPlanInfo,
   appendExperimentEntry,
   applyExperimentVerdict,
   appendOverturnLine,

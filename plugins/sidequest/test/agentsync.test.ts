@@ -159,6 +159,58 @@ test('SQ-929: experiment log briefings carry the bounded packet and the continua
   assert.doesNotMatch(withoutLog, /Experiment log:/);
 });
 
+test('SQ-1015: a plan document briefing carries only the path, never the body, and grows by roughly one line', () => {
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(tmpDir(), 'plan briefing').slug;
+  const upstream = store.getTicket(slug, store.createTicket(slug, {
+    title: 'Upstream plan ticket', description: 'Has a plan.', category: 'coding.normal', files: ['fixture.ts'],
+  }).ref);
+
+  const beforeBriefing = agentsync.renderTicketBriefing(upstream, 'plan-token', slug);
+  assert.doesNotMatch(beforeBriefing, /Plan document:/);
+
+  // writeTicketPlan trims like a comment does, so end the fixture on a
+  // non-whitespace character to compare the stored body byte-for-byte.
+  const planBody = `# Plan\n\n${'測試 '.repeat(20_000)}x`;
+  assert.ok(Buffer.byteLength(planBody, 'utf8') > 50 * 1024, 'fixture plan exceeds 50 KB');
+  const written = store.writeTicketPlan(slug, upstream.ref, 'planner', planBody);
+  assert.equal(written.ok, true);
+  assert.strictEqual(fs.readFileSync(written.path, 'utf8'), planBody);
+
+  // Re-render with the same (stale) ticket object: everything else in the
+  // packet is byte-identical, so any growth is isolated to the plan line.
+  const afterBriefing = agentsync.renderTicketBriefing(upstream, 'plan-token', slug);
+  const grown = Buffer.byteLength(afterBriefing, 'utf8') - Buffer.byteLength(beforeBriefing, 'utf8');
+  assert.ok(grown > 0 && grown < 500, `briefing grew by ${grown} bytes, expected roughly one path line, not the ~50 KB body`);
+  assert.ok(afterBriefing.includes(`Plan document: \`${written.path}\``));
+  assert.match(afterBriefing, /revision 1, planner,/);
+  assert.doesNotMatch(afterBriefing, /測試 測試 測試/, 'the plan body itself is never inlined into a briefing');
+});
+
+test('SQ-1015: a dependency line carries the upstream plan path on blocks/blocked-by edges, not on related', () => {
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(tmpDir(), 'plan dependency briefing').slug;
+  const upstream = store.createTicket(slug, { title: 'Upstream', category: 'coding.normal', files: ['fixture.ts'] });
+  const dependent = store.createTicket(slug, { title: 'Dependent', category: 'coding.normal', files: ['fixture.ts'] });
+  const sibling = store.createTicket(slug, { title: 'Sibling', category: 'coding.normal', files: ['fixture.ts'] });
+
+  const written = store.writeTicketPlan(slug, upstream.ref, 'planner', '# Upstream plan\n\nContext for dependents.');
+  assert.equal(written.ok, true);
+
+  store.linkTickets(slug, dependent.ref, 'depends-on', upstream.ref);
+  store.linkTickets(slug, sibling.ref, 'related', upstream.ref);
+
+  const dependentBriefing = agentsync.renderTicketBriefing(store.getTicket(slug, dependent.ref), 'plan-token', slug);
+  assert.match(dependentBriefing, new RegExp(`- blocked-by: ${upstream.ref} \\(plan: ${written.path.replace(/[\\.]/g, '\\$&')}\\)`));
+
+  const siblingBriefing = agentsync.renderTicketBriefing(store.getTicket(slug, sibling.ref), 'plan-token', slug);
+  assert.match(siblingBriefing, new RegExp(`- related: ${upstream.ref}$`, 'm'));
+  assert.doesNotMatch(siblingBriefing, /related:[^\n]*\(plan:/, 'a related link carries no ordering relationship, so no plan pointer');
+
+  const upstreamBriefing = agentsync.renderTicketBriefing(store.getTicket(slug, upstream.ref), 'plan-token', slug);
+  assert.match(upstreamBriefing, new RegExp(`- blocks: ${dependent.ref}$`, 'm'), 'the upstream side has no plan of its own to point at');
+});
+
 test('story execution contracts lead member briefings from their dispatch snapshot', () => {
   const ticket = {
     ref: 'SQ-750', title: 'Member scope', model: 'opus', effort: 'high', category: {},
