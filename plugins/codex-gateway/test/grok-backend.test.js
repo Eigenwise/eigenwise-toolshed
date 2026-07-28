@@ -12,8 +12,8 @@ test('translates Anthropic messages, tools, and effort to Responses input', () =
     system: [{ type: 'text', text: 'Be useful.' }],
     messages: [
       { role: 'user', content: 'hello' },
-      { role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'lookup', input: { q: 'x' } }] },
-      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'found' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'I will look that up.' }, { type: 'tool_use', id: 'call_1', name: 'lookup', input: { q: 'x' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'found' }, { type: 'text', text: 'Use this result.' }] },
     ],
     tools: [{ name: 'lookup', description: 'Find things', input_schema: { type: 'object', properties: { q: { type: 'string' } } } }],
     output_config: { effort: 'high' },
@@ -26,9 +26,20 @@ test('translates Anthropic messages, tools, and effort to Responses input', () =
   assert.equal(request.reasoning.effort, 'high');
   assert.deepEqual(request.input[0], { role: 'developer', content: [{ type: 'input_text', text: 'Be useful.' }] });
   assert.deepEqual(request.input[1], { role: 'user', content: [{ type: 'input_text', text: 'hello' }] });
-  assert.deepEqual(request.input[2].content[0], { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' });
-  assert.deepEqual(request.input[3].content[0], { type: 'function_call_output', call_id: 'call_1', output: 'found' });
+  assert.deepEqual(request.input[2], { role: 'assistant', content: [{ type: 'output_text', text: 'I will look that up.' }] });
+  assert.deepEqual(request.input[3], { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' });
+  assert.deepEqual(request.input[4], { type: 'function_call_output', call_id: 'call_1', output: 'found' });
+  assert.deepEqual(request.input[5], { role: 'user', content: [{ type: 'input_text', text: 'Use this result.' }] });
+  assert.equal(request.input.some((item) => item.content?.some((part) => part.type === 'function_call' || part.type === 'function_call_output')), false);
   assert.equal(request.tools[0].type, 'function');
+});
+
+test('omits empty assistant messages for tool-only turns', () => {
+  const request = grok.translateRequest({
+    messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'lookup', input: {} }] }],
+  }, 'grok-4.5');
+
+  assert.deepEqual(request.input, [{ type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{}' }]);
 });
 
 test('refreshes fixture auth without exposing it in return values', async (t) => {
