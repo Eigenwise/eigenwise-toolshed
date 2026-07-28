@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.267.0 (2026-07-28)
+
+### model-gateway 0.37.0 → 0.38.0
+
+#### Features
+
+- Renamed the codex-gateway plugin to model-gateway (SQ-1001) [`19e36c0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/19e36c0987cad1b1b341eb5d5f2cfa154de68885)
+
 ## v3.266.0 (2026-07-28)
 
 ### codex-gateway 0.36.3 → 0.37.0
