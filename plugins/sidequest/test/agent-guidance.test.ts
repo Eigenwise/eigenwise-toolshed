@@ -108,6 +108,7 @@ test('executor guidance keeps board lifecycle MCP-only and protects shared trees
   assert.match(executorTemplate, /git diff --cached --name-only/);
   assert.match(executorTemplate, /Foreign staged paths or unexplained in-scope changes mean report and release/);
   assert.match(executorTemplate, /Out-of-scope changes are normal: commit what is declared/);
+  assert.match(executorTemplate, /report every refused or unscoped path in the final report, never call partial work ready for integration/);
   assert.match(executorTemplate, /never release verified work over scope friction/);
   assert.match(executorTemplate, /NEVER edit or commit `\.claude-plugin\/plugin\.json` or `\.claude-plugin\/marketplace\.json`/);
   assert.match(executorTemplate, /orchestrator assigns release versions centrally/);

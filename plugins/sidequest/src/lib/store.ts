@@ -5579,6 +5579,23 @@ function submissionUnscopedPaths(paths?: any) {
     .filter(Boolean)));
 }
 
+function submissionReadiness(submission?: any) {
+  const unscopedPaths = submissionUnscopedPaths(submission?.unscopedPaths);
+  if (!unscopedPaths.length) return { ok: true, state: 'ready', reason: null, unscopedPaths };
+  return {
+    ok: false,
+    state: 'partial',
+    reason: 'unscoped_paths',
+    unscopedPaths,
+    message: `PARTIAL: scope-gated paths remain outside this submission: ${unscopedPaths.join(', ')}.`,
+  };
+}
+
+function submissionProjection(submission?: any) {
+  if (!submission) return null;
+  return Object.assign({}, submission, { readiness: submissionReadiness(submission) });
+}
+
 function submissionRangeMetadata(range?: any, commit?: any) {
   if (!range) return null;
   const base = String(range.base || '').trim().toLowerCase();
@@ -5628,6 +5645,16 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
   if (!ticket) return { ok: false, reason: 'not_found' };
   if (!pendingSubmission(ticket)) {
     return { ok: false, reason: 'submission_required', ticket, message: `${ticket.ref} has no submission to integrate.` };
+  }
+  const readiness = submissionReadiness(ticket.submission);
+  if (!readiness.ok) {
+    return {
+      ok: false,
+      reason: readiness.reason,
+      ticket,
+      submissionReadiness: readiness,
+      message: `${ticket.ref} integration refused; ${readiness.message}`,
+    };
   }
   const project = readMeta(slug);
   const scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission);
@@ -5801,6 +5828,16 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         ...(t.claimRelease ? { claimRelease: t.claimRelease, message: autoReleasedClaimMessage(t.ref, t.claimRelease) } : {}),
       };
     }
+    const readiness = submissionReadiness({ unscopedPaths: opts.unscopedPaths });
+    if (!readiness.ok) {
+      return {
+        ok: false,
+        reason: readiness.reason,
+        ticket: t,
+        submissionReadiness: readiness,
+        message: `submit: refused ${t.ref}; ${readiness.message} Request scope, include every blocked path in a complete commit, then submit again.`,
+      };
+    }
     const submittedAt = new Date().toISOString();
     let comment = null;
     if (submissionComment) {
@@ -5902,7 +5939,7 @@ function submissionsPayload(slug?: any) {
       status: t.status,
       files: Array.isArray(t.files) ? t.files : [],
       executorVerify: t.executorVerify || null,
-      submission: t.submission,
+      submission: submissionProjection(t.submission),
     }));
   return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || 'merge' };
 }
@@ -6593,7 +6630,9 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
     checkpoint: checkpointProjection(t),
     ...(oracleProjection(t) ? { oracle: oracleProjection(t) } : {}),
-    submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at } : null,
+    submission: pendingSubmission(t)
+      ? { commit: t.submission.commit, at: t.submission.at, readiness: submissionReadiness(t.submission) }
+      : null,
   };
 }
 
@@ -6858,7 +6897,7 @@ function pulsePayload(slug?: any, idOrRef?: any) {
     checkpoint: checkpointProjection(ticket),
     ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
     ...(warnings.length ? { warnings } : {}),
-    submission: ticket.submission || null,
+    submission: submissionProjection(ticket.submission),
     delivery: boardConfig(slug)?.delivery || 'merge',
     git,
   };
@@ -7642,6 +7681,7 @@ module.exports = {
   submitTicket,
   clearSubmission,
   pendingSubmission,
+  submissionReadiness,
   submissionBaseCandidates,
   submissionsPayload,
   claimNext,

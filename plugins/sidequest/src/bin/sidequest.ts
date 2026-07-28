@@ -1466,16 +1466,19 @@ async function cmdPublish(opts: any, positional: any) {
     const payload = store.submissionsPayload(slug);
     const releaseWindow = await publish.releaseWindow(meta.path, store.boardConfig(slug).integrationBranch);
     for (const ticket of payload.tickets) {
+      const readiness = store.submissionReadiness(ticket.submission);
       const admittedScope = Array.isArray(ticket.submission.admittedScope) ? ticket.submission.admittedScope : [];
-      ticket.rangeValidation = !admittedScope.length
-        ? {
-          ok: false,
-          reason: 'missing_scope_snapshot',
-          message: 'submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason.',
-        }
-        : ticket.submission.base
-          ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission)
-          : { ok: false, reason: 'legacy_submission' };
+      ticket.rangeValidation = !readiness.ok
+        ? readiness
+        : !admittedScope.length
+          ? {
+            ok: false,
+            reason: 'missing_scope_snapshot',
+            message: 'submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason.',
+          }
+          : ticket.submission.base
+            ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission)
+            : { ok: false, reason: 'legacy_submission' };
     }
     const queuePayload = releaseWindow
       ? Object.assign({ project: slug, releaseWindow }, payload)
@@ -1500,10 +1503,11 @@ async function cmdPublish(opts: any, positional: any) {
       console.log(`      commits: ${commits.map((commit: any) => commit.slice(0, 12)).join(', ')}`);
       console.log(`      paths: ${paths.join(', ') || '(legacy submission: unavailable)'}`);
       if (!t.rangeValidation.ok) {
-        const outside = Array.isArray(t.rangeValidation.outside) && t.rangeValidation.outside.length
-          ? `: ${t.rangeValidation.outside.join(', ')}`
-          : '';
-        console.log(`      REJECTED: ${t.rangeValidation.reason}${outside}`);
+        const rejectedPaths = Array.isArray(t.rangeValidation.unscopedPaths) && t.rangeValidation.unscopedPaths.length
+          ? t.rangeValidation.unscopedPaths
+          : Array.isArray(t.rangeValidation.outside) ? t.rangeValidation.outside : [];
+        const pathSuffix = rejectedPaths.length ? `: ${rejectedPaths.join(', ')}` : '';
+        console.log(`      REJECTED: ${t.rangeValidation.reason}${pathSuffix}`);
       }
       if (t.submission.verify) console.log(`      verify: ${t.submission.verify}`);
     }

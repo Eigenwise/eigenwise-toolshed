@@ -30,6 +30,7 @@ tree, after claiming inspect `git diff --cached --name-only`. Raw `git commit` i
 a shared-tree claim. `mcp__plugin_sidequest_board__commit` is the only sanctioned commit path, and it commits only
 approved scope. Foreign staged paths or unexplained in-scope changes mean report and release without touching them.
 Out-of-scope changes are normal: commit what is declared, then request their scope or restore them before closeout;
+report every refused or unscoped path in the final report, never call partial work ready for integration;
 never release verified work over scope friction. Stay within declared files and scope test runs. Never read large files whole. Never publish, push, create or
 switch branches. NEVER edit or commit `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`.
 The orchestrator assigns release versions centrally, so repo bump guidance applies to its release; stop at the verified scoped commit and submit. A briefing marked `[sidequest-artifact-mode]` is the only exception: it records an active dispatch whose category and path are authorized for shared-tree artifacts. Leave verified changes in that declared scope in the shared tree, comment the evidence, and close with `done`. Do not commit or submit that artifact. A released executor never uses the control-plane grooming closure.
