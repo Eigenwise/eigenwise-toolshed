@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.259.0 (2026-07-28)
+
+### sidequest 3.35.1 → 3.36.0
+
+#### Features
+
+- Integrator delivery modes: merge, replay, apply (SQ-980) [`dcbe1a7`](https://github.com/Eigenwise/eigenwise-toolshed/commit/dcbe1a7)
+
+### workbench 0.69.2 → 0.70.0
+
+#### Features
+
+- Honest dispatch cost: codex-auto exclusion and gateway cost panel (SQ-984) [`dcbe1a7`](https://github.com/Eigenwise/eigenwise-toolshed/commit/dcbe1a7)
+
 ## v3.258.0 (2026-07-28)
 
 ### workbench 0.69.1 → 0.69.2
