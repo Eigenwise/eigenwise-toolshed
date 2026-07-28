@@ -64,14 +64,14 @@ test('init-workspace offers Git before writing greenfield workspace artifacts', 
 
 test('Workbench skills hand off gateway mode commands to the installed gateway skill', () => {
   for (const document of [skill, telemetrySkill]) {
-    assert.match(document, /invoke `\/codex-gateway:codex-gateway` and use its `env --show-mode` command/);
+    assert.match(document, /invoke `\/model-gateway:model-gateway` and use its `env --show-mode` command/);
     assert.match(document, /installed plugin command is not on PATH/);
     assert.match(document, /through that skill with its `env --mode global` or `env --mode local` command/);
     assert.doesNotMatch(document, /`codex-gateway env --/);
   }
   assert.match(skill, /Global \(all projects wired automatically via user settings\) or per-project \(each project opts in via its private settings\.local\.json — recommended\)\?/);
   assert.match(skill, /do not ask again once a mode exists/);
-  assert.match(skill, /wiring mode defaulted to per-project; use \/codex-gateway:codex-gateway to run its env --mode global command to change/);
+  assert.match(skill, /wiring mode defaulted to per-project; use \/model-gateway:model-gateway to run its env --mode global command to change/);
 });
 
 test('init-workspace starts with telemetry consent, project intent, then the live plugin picker', () => {
