@@ -1389,6 +1389,65 @@ test('session-start sweeps an old removable worktree to completion', () => {
   assert.ok(!fs.existsSync(old), 'SessionStart awaits the sweep until the worktree is gone');
 });
 
+// The sweep's cost is bimodal, so the hook hands it to a detached worker and waits
+// only up to a deadline. These pin the deadline path: a slow sweep must cost the
+// session its notices, never its whole injected context.
+function sweepReportFile(home: string, cwd: string): string {
+  const key = require('node:crypto').createHash('sha1').update(path.resolve(cwd)).digest('hex').slice(0, 16);
+  return path.join(home, 'sweep-reports', `${key}.json`);
+}
+
+test('session-start: a sweep past its deadline still injects the full block and says so', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-deadline-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-deadline-cwd-'));
+  const context = runHook(
+    SESSION,
+    { session_id: 'sweep-deadline', source: 'startup', cwd },
+    { SIDEQUEST_HOME: home, SIDEQUEST_SWEEP_DEADLINE_MS: '0', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }
+  );
+  assert.match(context, /worktree sweep exceeded its SessionStart budget/);
+  assert.match(context, /arrives on the next session start/);
+  assert.ok(context.includes('=== sidequest (active) ==='), 'a deferred sweep must not cost the session its orchestrator block');
+  assert.ok(context.includes('YOUR EXECUTORS'), 'a deferred sweep must not cost the session its workforce');
+});
+
+test('session-start: a deferred sweep report is drained into the next session', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-drain-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-drain-cwd-'));
+  const report = sweepReportFile(home, cwd);
+  fs.mkdirSync(path.dirname(report), { recursive: true });
+  fs.writeFileSync(report, JSON.stringify({ notices: ['sidequest: carried sweep notice from last session'] }));
+
+  const context = runHook(
+    SESSION,
+    { session_id: 'sweep-drain', source: 'startup', cwd },
+    { SIDEQUEST_HOME: home, SIDEQUEST_SWEEP_DEADLINE_MS: '0', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }
+  );
+  assert.match(context, /carried sweep notice from last session/);
+  assert.ok(!fs.existsSync(report), 'a drained report must be cleared so it is not replayed forever');
+});
+
+test('sweep worker: records its notices for the next session instead of dropping them', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-worker-home-'));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-worker-'));
+  gitFixture(['init'], repo);
+  gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
+  gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+  fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
+  gitFixture(['add', 'README.md'], repo);
+  gitFixture(['commit', '-m', 'base'], repo);
+  gitFixture(['branch', '-M', 'main'], repo);
+  const boardHome = db.openDb(home);
+  assert.ok(boardHome, 'fixture home must open');
+  execFileSync(process.execPath, [path.join(HOOKS, 'sweep-worktrees.js'), '--cwd', repo, '--session', 'worker'], {
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME: home, CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') },
+  });
+  const report = sweepReportFile(home, repo);
+  assert.ok(fs.existsSync(report), 'the worker must always leave a report, so a crashed sweep is distinguishable from a quiet one');
+  assert.ok(Array.isArray(JSON.parse(fs.readFileSync(report, 'utf8')).notices));
+});
+
 test('session-start reports an unavailable integration target with the repair command', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-target-'));
   gitFixture(['init'], repo);
