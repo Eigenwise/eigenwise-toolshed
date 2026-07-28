@@ -43,6 +43,7 @@ const commitScope = require('../lib/commit-scope.js') as {
   validateStoredSubmissionRange(cwd: string, submission: unknown): RangeResult;
   scopedWorkPending(cwd: string, files: unknown, opts?: unknown): any;
   headCommit(cwd: string): string | null;
+  preserveCommitRef(cwd: string, commit: string, gitRef: string): { ok: boolean; reason?: string; commit?: string; gitRef?: string };
 };
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -403,6 +404,48 @@ test('SQ-923: the empty-range recovery never invents a range for a merge tip or 
   const merged = commitScope.submissionRange(root, { commit: mergeTip, gitRef: 'refs/sidequest/SQ-4', upstream: main });
   assert.equal(merged.ok, false, 'a merge tip is never rewritten into a one-commit range');
   assert.equal(merged.reason, 'merge_commit');
+});
+
+test('SQ-971: a dispatch baseline excludes merge commits from parent history', () => {
+  const root = repo();
+  const main = branchOf(root);
+  git(root, ['checkout', '-q', '-b', 'feature-parent']);
+  git(root, ['checkout', '-q', '-b', 'feature-side']);
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'side.js'), 'side\n');
+  git(root, ['add', '--', 'plugins/other-plugin/side.js']);
+  git(root, ['commit', '-m', 'feature side']);
+  git(root, ['checkout', '-q', 'feature-parent']);
+  fs.mkdirSync(path.join(root, 'plugins', 'other-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'parent.js'), 'parent\n');
+  git(root, ['add', '--', 'plugins/other-plugin/parent.js']);
+  git(root, ['commit', '-m', 'feature parent']);
+  git(root, ['merge', '--no-ff', '-m', 'merge feature side', 'feature-side']);
+  const dispatchBase = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['branch', 'feature-integration', dispatchBase]);
+  git(root, ['checkout', '-q', '-b', 'ticket-work']);
+  fs.mkdirSync(path.join(root, 'plugins', 'sidequest'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'ticket.js'), 'ticket\n');
+  git(root, ['add', '--', 'plugins/sidequest/ticket.js']);
+  git(root, ['commit', '-m', 'ticket work']);
+  const tip = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/SQ-971', tip);
+
+  const range = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-971',
+    upstream: 'feature-integration',
+    integrationBranch: 'feature-integration',
+    dispatchBase,
+  });
+  assert.equal(range.ok, true, `parent-history merge was refused: ${range.reason}`);
+  assert.equal(range.base, dispatchBase);
+  assert.deepEqual(range.commits, [tip]);
+  assert.deepEqual(range.changedPaths, ['plugins/sidequest/ticket.js']);
+
+  const preserved = commitScope.preserveCommitRef(root, tip, 'refs/sidequest/SQ-971-rejected');
+  assert.equal(preserved.ok, true, preserved.reason || 'commit was not preserved');
+  assert.equal(git(root, ['rev-parse', 'refs/sidequest/SQ-971-rejected']), tip);
+  assert.notEqual(dispatchBase, git(root, ['merge-base', main, tip]));
 });
 
 // SQ-923. `done` on a write-routed dispatch that produced nothing used to be a

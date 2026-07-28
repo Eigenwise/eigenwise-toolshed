@@ -11,7 +11,15 @@ transaction.
 tip, so a dependent commit on a shared linear history does not reclaim its integrated ancestor. Pass
 `--base <commit>` (or MCP `base`) when an existing submitted or integrated ticket marks the intended
 boundary but automatic selection cannot identify it. Arbitrary commits are rejected as bases, so the
-remaining range still has to satisfy the current ticket's declared scope and ownership checks.
+remaining range still has to satisfy the current ticket's declared scope and ownership checks. For an
+executor based on a feature branch, pass that branch as MCP dispatch `integrationBranch`. The dispatch
+records that target and its starting commit. Merge commits before the starting commit stay in parent history; the submitted range itself
+remains linear.
+
+A range refusal with verification evidence pins the commit at
+`refs/sidequest/<SQ-n>-rejected`, records the exact failure in a recovery checkpoint, and keeps the claim.
+Rebase onto the dispatch's current integration target, update `refs/sidequest/<SQ-n>`, and resubmit. The
+orchestrator can instead cherry-pick the quarantine ref when it records the range override on the ticket.
 
 ## When to run it (event-driven, never polled)
 
@@ -59,11 +67,13 @@ board (submissions stay parked — fail closed).
    or dirty files there are exactly the contamination this flow exists to prevent.
 5. **Reconstruct each admitted submission before integration**. Resolve its durable ref and require
    it still points to the submitted tip. Require the recorded upstream commit to remain reachable from
-   current `origin/main`, then require the stored base to lie on the tip's history at or after their
-   merge-base. A prior submission's original commit can be a valid base even when integration
-   cherry-picked it to a new hash. Compare `git rev-list --reverse <base>..<tip>` to the queue's ordered
-   `commits` array exactly. Reject an empty range, merge commit, divergent or unrelated history, or a
-   range containing a commit from another queued ticket. Scope admission is already mechanical at queue
+   the current recorded integration target, then require the stored base to lie on the tip's history and
+   either follow their merge-base or already be reachable from that integration target. A prior
+   submission's original commit can be a valid base even when integration cherry-picked it to a new
+   hash. Compare `git rev-list --reverse <base>..<tip>` to the queue's ordered `commits` array exactly.
+   Reject an empty range, a merge commit inside that submitted range, divergent or unrelated history,
+   or a range containing a commit from another queued ticket. Merge commits before `<base>` are parent
+   history and do not belong to the submitted range. Scope admission is already mechanical at queue
    read and again at integration closure, against the immutable submit-time snapshot. Leave rejected
    submissions parked.
 6. **Integrate each admitted range**, oldest first: `git cherry-pick <commit-1> ... <commit-n>`. The

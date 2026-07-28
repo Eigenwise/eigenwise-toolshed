@@ -745,6 +745,33 @@ test('the harness TeammateIdle payload leaves a working executor alone', () => {
   assert.equal(runTeammateIdle(dispatch.agentName), null);
 });
 
+test('SQ-971: TeammateIdle leaves a claimed rejected-submission checkpoint active', () => {
+  const ticket = createFixture('rejected submission idle checkpoint');
+  const sessionId = `rejected-idle-${ticket.id}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  const agentName = `rejected-idle-agent-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName }).ok, true);
+  const by = `rejected-idle-worker-${ticket.id}`;
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  execFileSync('git', ['update-ref', `refs/sidequest/${ticket.ref}-rejected`, commit], { cwd: PROJECT });
+  assert.equal(store.checkpointTicket(slug, ticket.ref, by, {
+    commit,
+    worktree: PROJECT,
+    verify: 'npm test passed',
+    kind: 'submission_rejected',
+    gitRef: `refs/sidequest/${ticket.ref}-rejected`,
+    failure: { reason: 'base_not_reachable', message: 'fixture' },
+  }).ok, true);
+
+  assert.equal(runTeammateIdle(agentName), null);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.claim.by, by);
+  assert.equal(after.dispatch.terminalAt, null);
+  assert.equal(after.checkpoint.kind, 'submission_rejected');
+});
+
 // SQ-923: a shared-tree executor commits on the integration branch itself, so
 // "wrote nothing" and "committed and never submitted" look identical after the
 // fact unless the dispatch remembers where the run started.
@@ -770,6 +797,23 @@ test('a prepared dispatch records the commit its run starts from, and where its 
   const shared = createFixture('shared-tree dispatch baseline');
   const preparedShared = store.prepareDispatch(slug, shared.ref, { sharedTree: true });
   assert.deepEqual(store.dispatchWorkspace(slug, preparedShared.ticket), { root: PROJECT, base: head });
+});
+
+test('SQ-971: a dispatch records its feature integration target separately from board config', () => {
+  const branch = `feature-target-${Date.now()}`;
+  execFileSync('git', ['branch', branch, 'HEAD'], { cwd: PROJECT });
+  const ticket = createFixture('feature integration target');
+  const prepared = store.prepareDispatch(slug, ticket.ref, {
+    sessionId: 'feature-target-session',
+    integrationBranch: branch,
+    integrationMode: 'local',
+  });
+  assert.deepEqual(prepared.ticket.dispatch.integrationTarget, {
+    mode: 'local',
+    upstream: branch,
+    branch,
+  });
+  assert.notEqual(store.boardConfig(slug).integrationBranch, branch);
 });
 
 export {};

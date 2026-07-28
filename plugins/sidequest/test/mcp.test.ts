@@ -1312,7 +1312,7 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['full', 'project', 'ref', 'sharedTree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['full', 'integrationBranch', 'project', 'ref', 'sharedTree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
