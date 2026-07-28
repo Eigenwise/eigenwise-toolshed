@@ -197,10 +197,10 @@ test('flags a codex proxy version below its bundled floor', () => {
   const result = audit(fixture({
     registry: {
       plugins: {
-        'codex-gateway@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0', installPath: 'C:/gateway' }],
+        'model-gateway@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0', installPath: 'C:/gateway' }],
       },
     },
-    manifestFor: () => ({ plugins: [{ name: 'codex-gateway', version: '1.0.0' }] }),
+    manifestFor: () => ({ plugins: [{ name: 'model-gateway', version: '1.0.0' }] }),
     checkGateway: () => ({
       available: true,
       proxyVersion: '0.1.13',
@@ -211,7 +211,7 @@ test('flags a codex proxy version below its bundled floor', () => {
     }),
   }));
 
-  assert.match(result.problems.join('\n'), /codex-gateway proxy 0.1.13 is below required 0.1.14/);
+  assert.match(result.problems.join('\n'), /model-gateway proxy 0.1.13 is below required 0.1.14/);
 });
 
 test('stays silent for a healthy fleet', () => {

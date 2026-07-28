@@ -12,9 +12,9 @@ const emptyDiscovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-routing-empty-'
 process.env.SIDEQUEST_DISCOVERY_DIRS = emptyDiscovery;
 const store = require('../lib/store.js');
 
-function seedCatalog(models?: any, catalog: any = { schemaVersion: 3, source: 'codex-gateway' }) {
+function seedCatalog(models?: any, catalog: any = { schemaVersion: 3, source: 'model-gateway' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-routing-catalog-'));
-  const dir = path.join(root, 'codex-gateway');
+  const dir = path.join(root, 'model-gateway');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ ...catalog, models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
@@ -45,7 +45,7 @@ test('resolveExec is keyed directly by concrete model and effort', () => {
 
 test('v2 catalog migration still discovers concrete routes', () => {
   seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }], {
-    schema: 2, source: 'codex-gateway',
+    schema: 2, source: 'model-gateway',
   });
   assert.ok(store.getModelVocab().models.includes('codex-gpt-test'));
   assert.equal(store.resolveExec('codex-gpt-test', 'high').runsModel, 'codex-gpt-test');

@@ -13,7 +13,7 @@ const { otlpToObservations } = require('../lib/observability/otlp.js');
 const { normalizeAssistantUsage, normalizeTerminalResult } = require('../lib/observability/sdk.js');
 const { ALLOWED_EVENTS, ALLOWED_MEASUREMENTS, ATTRIBUTE_SPECS } = require('../lib/observability/schema.js');
 const { EMPTY_STATE_TITLE, generatedDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
-const { buildOtlpLogPayload, createGatewayUsageEmitter } = require('../../codex-gateway/lib/usage-observability.js');
+const { buildOtlpLogPayload, createGatewayUsageEmitter } = require('../../model-gateway/lib/usage-observability.js');
 const { ticketObservation: nativeTicketObservation } = require('../../sidequest/lib/telemetry.js');
 
 // Hooks hash the cwd Claude Code hands them, project-telemetry hashes path.resolve of its

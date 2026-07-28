@@ -11,11 +11,11 @@ const path = require('node:path');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-quota-fallback-home-'));
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-quota-fallback-project-'));
 const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-quota-fallback-catalog-'));
-const catalogDir = path.join(DISCOVERY, 'codex-gateway');
+const catalogDir = path.join(DISCOVERY, 'model-gateway');
 fs.mkdirSync(catalogDir, { recursive: true });
 fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
-  source: 'codex-gateway',
+  source: 'model-gateway',
   models: [{
     slug: 'codex-gpt-5-6-sol',
     id: 'claude-codex-gpt-5.6-sol[1m]',

@@ -34,7 +34,7 @@ process.env.CLAUDE_PROJECT_DIR = PROJ;
 const MCP_SESSION_ID = `mcp-test-session-${process.pid}`;
 process.env.CLAUDE_CODE_SESSION_ID = MCP_SESSION_ID;
 // Start with no discovery root at all — a real machine (e.g. this one, with
-// codex-gateway installed) can have a genuine ~/.claude/codex-gateway/catalog.json,
+// model-gateway installed) can have a genuine ~/.claude/model-gateway/catalog.json,
 // which would otherwise leak real discovered slugs into these tests. The
 // SQ-162 tests below point SIDEQUEST_DISCOVERY_DIRS at their own fake catalog.
 const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-nocatalog-'));
@@ -45,15 +45,15 @@ const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 
-// Write a fake codex-gateway catalog (mirrors test/discovery.test.js) so a
+// Write a fake model-gateway catalog (mirrors test/discovery.test.js) so a
 // discovered+enabled custom slug can be exercised over the MCP surface.
 function writeCatalogRaw(dir?: any, body?: any) {
-  fs.mkdirSync(path.join(dir, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'codex-gateway', 'catalog.json'), body);
+  fs.mkdirSync(path.join(dir, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'model-gateway', 'catalog.json'), body);
 }
 function seedCatalog(models?: any) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-catalog-'));
-  writeCatalogRaw(dir, JSON.stringify({ schemaVersion: 3, source: 'codex-gateway', updatedAt: new Date().toISOString(), models }));
+  writeCatalogRaw(dir, JSON.stringify({ schemaVersion: 3, source: 'model-gateway', updatedAt: new Date().toISOString(), models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
   return dir;
 }

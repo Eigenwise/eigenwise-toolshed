@@ -25,8 +25,8 @@ const registry = {
       { scope: 'project', projectPath: os.tmpdir(), version: '1.0.0', installPath: 'C:/cache/sidequest', gitCommitSha: 'project-sha' },
       { scope: 'local', projectPath: process.cwd(), version: '1.0.0', installPath: 'C:/cache/sidequest', gitCommitSha: 'local-sha' },
     ],
-    'codex-gateway@eigenwise-toolshed': [
-      { scope: 'user', installPath: 'C:/cache/codex-gateway/0.2.0', lastUpdated: '2026-07-17T12:00:00Z', gitCommitSha: 'gateway-sha' },
+    'model-gateway@eigenwise-toolshed': [
+      { scope: 'user', installPath: 'C:/cache/model-gateway/0.2.0', lastUpdated: '2026-07-17T12:00:00Z', gitCommitSha: 'gateway-sha' },
     ],
     'other@another-marketplace': [{ scope: 'user', installPath: 'C:/cache/other', gitCommitSha: 'other-sha' }],
     'managed@managed-marketplace': [{ scope: 'managed', installPath: 'C:/cache/managed', gitCommitSha: 'managed-sha' }],
@@ -50,7 +50,7 @@ test('enumerates every user, project, and local install across marketplaces', ()
   assert.deepEqual(marketplacesFor(registry), ['another-marketplace', 'eigenwise-toolshed', 'managed-marketplace']);
   assert.deepEqual(installs.map((install) => install.id), [
     'other@another-marketplace',
-    'codex-gateway@eigenwise-toolshed',
+    'model-gateway@eigenwise-toolshed',
     'sidequest@eigenwise-toolshed',
     'sidequest@eigenwise-toolshed',
     'sidequest@eigenwise-toolshed',
@@ -68,13 +68,13 @@ test('routes project and local updates through the recorded project directory', 
   assert.equal(user.cwd, undefined);
 });
 
-test('uses the installed codex-gateway setup and doctor commands', () => {
+test('uses the installed model-gateway setup and doctor commands', () => {
   const installs = installedPlugins(registry);
   const setup = gatewayCommand(installs, 'setup');
   const doctor = gatewayCommand(installs, 'doctor');
 
   assert.equal(setup.args.at(-1), 'setup');
-  assert.equal(setup.args.at(-2), path.join('C:/cache/codex-gateway/0.2.0', 'bin', 'codex-gateway.js'));
+  assert.equal(setup.args.at(-2), path.join('C:/cache/model-gateway/0.2.0', 'bin', 'model-gateway.js'));
   assert.equal(doctor.args.at(-1), 'doctor');
 });
 
@@ -97,7 +97,7 @@ test('dry-run scopes the update plan to Toolshed and does not enumerate third-pa
   assert.doesNotMatch(lines.join('\n'), /another-marketplace|managed-marketplace|other@another-marketplace/);
   assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
   assert.ok(lines.some((line) => line.includes(`sidequest@eigenwise-toolshed (project, ${registry.plugins['sidequest@eigenwise-toolshed'][1].projectPath})`)));
-  assert.match(lines.join('\n'), /codex-gateway setup/);
+  assert.match(lines.join('\n'), /model-gateway setup/);
 }));
 
 test('update and check modes touch only Toolshed installs', () => withRegistry(registry, (registryFile) => {
@@ -315,7 +315,7 @@ test('local mode preserves global wiring when a recorded project fails', () => w
     });
 
     assert.equal(result.ok, false);
-    assert.ok(result.failures.some((failure) => failure.includes('codex-gateway wire project')));
+    assert.ok(result.failures.some((failure) => failure.includes('model-gateway wire project')));
     assert.match(lines.join('\n'), /Gateway local wiring kept legacy global settings because one or more recorded projects could not be wired/);
     assert.equal(calls.some((command) => command.args.includes('--remove')), false);
   } finally {
@@ -326,7 +326,7 @@ test('local mode preserves global wiring when a recorded project fails', () => w
 test('global mode writes only user settings', () => withRegistry(registry, (registryFile) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-global-wiring-'));
   try {
-    const config = path.join(home, '.claude', 'codex-gateway', 'wiring.json');
+    const config = path.join(home, '.claude', 'model-gateway', 'wiring.json');
     fs.mkdirSync(path.dirname(config), { recursive: true });
     fs.writeFileSync(config, JSON.stringify({ mode: 'global' }));
     assert.equal(gatewayWiringMode(home), 'global');
@@ -439,21 +439,21 @@ test('continues after failures and returns every failed operation', () => withRe
   assert.equal(failed.failures.length, 6);
   assert.match(failed.failures.join('\n'), /eigenwise-toolshed marketplace/);
   assert.doesNotMatch(failed.failures.join('\n'), /another-marketplace|other@another-marketplace/);
-  assert.match(failed.failures.join('\n'), /codex-gateway setup/);
+  assert.match(failed.failures.join('\n'), /model-gateway setup/);
 }));
 
 test('reports version transitions and gateway interruption before setup', () => withRegistry(registry, (registryFile) => {
   const configured = structuredClone(registry);
-  configured.plugins['codex-gateway@eigenwise-toolshed'][0].version = '0.2.0';
+  configured.plugins['model-gateway@eigenwise-toolshed'][0].version = '0.2.0';
   fs.writeFileSync(registryFile, JSON.stringify(configured));
   const lines = [];
   runUpdate({
     registryFile,
     options: { claude: 'claude', dryRun: false, check: false },
     run: (command) => {
-      if (command.args.join(' ') === 'plugin update codex-gateway@eigenwise-toolshed --scope user') {
+      if (command.args.join(' ') === 'plugin update model-gateway@eigenwise-toolshed --scope user') {
         const next = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
-        next.plugins['codex-gateway@eigenwise-toolshed'][0].version = '0.3.0';
+        next.plugins['model-gateway@eigenwise-toolshed'][0].version = '0.3.0';
         fs.writeFileSync(registryFile, JSON.stringify(next));
       }
       return { ok: true };
@@ -461,7 +461,7 @@ test('reports version transitions and gateway interruption before setup', () => 
     report: (line) => lines.push(line),
   });
 
-  assert.match(lines.join('\n'), /codex-gateway@eigenwise-toolshed 0\.2\.0 -> 0\.3\.0/);
+  assert.match(lines.join('\n'), /model-gateway@eigenwise-toolshed 0\.2\.0 -> 0\.3\.0/);
   assert.match(lines.join('\n'), /Live Claude Code sessions using Codex stay connected/);
   assert.match(lines.join('\n'), /cannot reliably list commit subjects/);
 }));

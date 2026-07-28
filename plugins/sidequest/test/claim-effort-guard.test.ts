@@ -10,10 +10,10 @@ const { spawnSync } = require('node:child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-test-'));
 const DISCOVERY_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-catalog-'));
-const catalogDir = path.join(DISCOVERY_ROOT, 'codex-gateway');
+const catalogDir = path.join(DISCOVERY_ROOT, 'model-gateway');
 fs.mkdirSync(catalogDir, { recursive: true });
 fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
-  schemaVersion: 3, source: 'codex-gateway',
+  schemaVersion: 3, source: 'model-gateway',
   models: [{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }],
 }));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;

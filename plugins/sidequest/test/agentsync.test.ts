@@ -31,8 +31,8 @@ function git(dir: string, args: string[]) { return spawnSync('git', args, { cwd:
 function readDir(dir?: any) { return fs.readdirSync(dir).filter((file: string) => file.endsWith('.md')).sort(); }
 function seedCatalog(models?: any) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-'));
-  fs.mkdirSync(path.join(dir, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'codex-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'codex-gateway', models }));
+  fs.mkdirSync(path.join(dir, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
 }
 function clearCatalog() { process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR; }

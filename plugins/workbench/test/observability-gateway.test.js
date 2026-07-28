@@ -13,7 +13,7 @@ const { startFakeOtlpReceiver, testSink } = require('./observability-test-suppor
 const {
   buildOtlpLogPayload,
   createUsageCapture,
-} = require('../../codex-gateway/lib/usage-observability.js');
+} = require('../../model-gateway/lib/usage-observability.js');
 
 const PROJECT_ID = 'a'.repeat(64);
 

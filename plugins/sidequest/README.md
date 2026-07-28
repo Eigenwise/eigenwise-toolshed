@@ -137,7 +137,7 @@ story keeps its tickets — they're just detached.
 
 Categories choose a concrete model and reasoning effort for each ticket. The shipped taxonomy covers
 coding, debugging, reviews, testing, research, docs, UI work, and a required `general` fallback. Routes
-can name Claude runtimes or Codex models discovered through [codex-gateway](../codex-gateway).
+can name Claude runtimes or Codex models discovered through [model-gateway](../model-gateway).
 
 ```bash
 sidequest category list

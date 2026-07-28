@@ -30,7 +30,7 @@ export interface ExternalModel {
 }
 
 export const CATALOG_SOURCES: readonly CatalogSource[] = [
-  { source: 'codex-gateway', relPath: path.join('codex-gateway', 'catalog.json'), schemas: new Set([2, 3]) },
+  { source: 'model-gateway', relPath: path.join('model-gateway', 'catalog.json'), schemas: new Set([2, 3]) },
 ];
 
 function discoveryRoots(): string[] {

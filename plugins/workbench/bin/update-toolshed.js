@@ -40,7 +40,7 @@ Refreshes the eigenwise-toolshed marketplace, then updates every recorded Toolsh
 plugin install at user, project, and local scope. Project and local installs run from
 their recorded project directory so Claude Code updates the right scope.
 
-  --check       Read installed versions and run codex-gateway doctor without updating
+  --check       Read installed versions and run model-gateway doctor without updating
   --dry-run     Print every command without running it
   --claude      Claude Code command to run (default: claude)
   --wiring-mode Switch Codex gateway wiring and migrate recorded projects`;
@@ -275,21 +275,21 @@ function marketplaceCommand(marketplace, claude) {
 }
 
 function gatewayCommand(instances, action) {
-  const gateways = activeProjectInstances(instances).filter((instance) => instance.id === `codex-gateway@${GATEWAY_MARKETPLACE}` && instance.installPath);
+  const gateways = activeProjectInstances(instances).filter((instance) => instance.id === `model-gateway@${GATEWAY_MARKETPLACE}` && instance.installPath);
   if (gateways.length === 0) return null;
 
   const newest = gateways.sort((left, right) => String(right.lastUpdated ?? '').localeCompare(String(left.lastUpdated ?? '')))[0];
   return {
     command: process.execPath,
-    args: [path.join(newest.installPath, 'bin', 'codex-gateway.js'), action],
+    args: [path.join(newest.installPath, 'bin', 'model-gateway.js'), action],
     cwd: newest.scope === 'user' ? undefined : newest.projectPath,
-    label: `codex-gateway ${action}`,
+    label: `model-gateway ${action}`,
   };
 }
 
 function gatewayWiringMode(home = os.homedir()) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'wiring.json'), 'utf8')).mode === 'global'
+    return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'wiring.json'), 'utf8')).mode === 'global'
       ? 'global'
       : 'local';
   } catch { return 'local'; }
@@ -297,12 +297,12 @@ function gatewayWiringMode(home = os.homedir()) {
 
 function hasGatewayWiringMode(home = os.homedir()) {
   try {
-    return ['local', 'global'].includes(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-gateway', 'wiring.json'), 'utf8')).mode);
+    return ['local', 'global'].includes(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'wiring.json'), 'utf8')).mode);
   } catch { return false; }
 }
 
 function setGatewayWiringMode(home, mode) {
-  const file = path.join(home, '.claude', 'codex-gateway', 'wiring.json');
+  const file = path.join(home, '.claude', 'model-gateway', 'wiring.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify({ mode }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
 }
@@ -314,7 +314,7 @@ function gatewayWiringCommand(instances, scope, projectPath, remove = false) {
     ...gateway,
     args: [...gateway.args, scope === 'project' ? '--write-project' : '--write-user', ...(remove ? ['--remove'] : [])],
     cwd: scope === 'project' ? projectPath : undefined,
-    label: remove ? 'codex-gateway remove legacy global wiring' : `codex-gateway wire ${scope}${projectPath ? ` (${projectPath})` : ''}`,
+    label: remove ? 'model-gateway remove legacy global wiring' : `model-gateway wire ${scope}${projectPath ? ` (${projectPath})` : ''}`,
   };
 }
 
@@ -337,7 +337,7 @@ function healGatewayWiring(instances, options, run, report) {
   }
 
   if (projects.length === 0) {
-    report('Gateway local wiring: no recorded projects found. Legacy global wiring was left in place. Wire a new project with: codex-gateway env --write-project');
+    report('Gateway local wiring: no recorded projects found. Legacy global wiring was left in place. Wire a new project with: model-gateway env --write-project');
     return { mode, results: [], failures: [] };
   }
 
