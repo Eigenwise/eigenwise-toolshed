@@ -950,6 +950,8 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   assert.ok(missingReport.isError, 'submit refuses a missing final report');
   assert.match(missingReport.content[0].text, /"body" is required.*final report/i);
   assert.ok(store.getTicket(project, ticket.ref).claim, 'a missing report keeps the claim');
+  gitAt(worktree, ['reset', '--', 'foreign.js']);
+  fs.unlinkSync(path.join(worktree, 'foreign.js'));
 
   const submitted = await callTool('submit', {
     project, ref: ticket.ref, by, commit: committed.commit,

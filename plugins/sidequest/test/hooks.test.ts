@@ -1748,6 +1748,23 @@ test('subagent-stop: a completed file ticket without a hash is flagged', () => {
   assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec stopped clean: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
+test('subagent-stop: a legacy partial submission is not reported ready for integration', () => {
+  const sess = `sess-partial-${++sqSeq}`;
+  const t = addStopTicket('partial submission awaiting scope', { files: ['docs/'] });
+  const stop = claimStopTicket(t, sess, 'worker-partial');
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-partial', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
+  const partial = store.getTicket(slug, t.ref);
+  partial.submission.unscopedPaths = ['plugins/model-gateway/bin/model-gateway.js'];
+  db.putRow(database, 'tickets', {
+    id: partial.id, project: slug, ref: partial.ref, status: partial.status,
+    archived: partial.archived ? 1 : 0, ord: partial.order, claim_by: null, data: partial,
+  });
+  assert.strictEqual(
+    runHook(SUBAGENT_STOP, stop),
+    `exec stopped with PARTIAL_SUBMISSION: ${t.ref} has scope-gated paths (plugins/model-gateway/bin/model-gateway.js); do not integrate it`
+  );
+});
+
 test('subagent-stop: a submitted executor reports READY_FOR_INTEGRATION, not a dead claim', () => {
   const sess = `sess-submitted-${++sqSeq}`;
   const t = addStopTicket('submitted ticket awaiting the publish transaction', { files: ['lib/fixture.js'] });

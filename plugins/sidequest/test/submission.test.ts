@@ -449,26 +449,56 @@ test('CLI: scoped commit excludes a foreign staged path and keeps it staged', ()
   git(['reset', '--', 'foreign.js']);
 });
 
-test('board always-in-scope paths commit and submit without ticket declaration', () => {
-  cleanBranch();
-  store.setBoardConfig(slug, { alwaysInScope: ['docs'] });
-  const t = addTicket('always-in-scope docs', { files: ['lib/fixture.js'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'docs-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
-  fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
-  fs.writeFileSync(path.join(PROJECT_DIR, 'docs', 'guide.md'), 'guide\n');
-  git(['add', 'docs/guide.md']);
+test('SQ-1008: scope-gated submission is refused and legacy partial records stay visibly blocked', () => {
+  const unscopedPaths = [
+    'plugins/model-gateway/bin/model-gateway.js',
+    'plugins/model-gateway/test/context-window.test.js',
+    'plugins/workbench/skills/enable-project-telemetry/SKILL.md',
+    'plugins/workbench/skills/init-workspace/SKILL.md',
+    'plugins/workbench/test/init-workspace-skill.test.js',
+  ];
+  const changedPaths = ['docs/src/content/docs/getting-started/codex-gateway.md'];
+  const t = addTicket('SQ-1003 partial submission fixture', { files: ['docs/'] });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'docs-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
 
-  const committed = cliJson(['commit', t.ref, '--by', 'docs-worker', '--message', 'docs fixture', '--json']);
-  assert.deepStrictEqual(committed.paths, ['docs/guide.md']);
-  const commit = committed.commit;
-  pin(t, commit);
-  fs.writeFileSync(path.join(PROJECT_DIR, 'foreign.js'), 'foreign\n');
-  const submitted = runCli(['submit', t.ref, '--by', 'docs-worker', '--commit', commit]);
-  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
-  const after = store.getTicket(slug, t.ref);
-  assert.deepStrictEqual(after.submission.unscopedPaths, ['foreign.js']);
-  assert.deepStrictEqual(store.pulsePayload(slug, t.ref).submission.unscopedPaths, ['foreign.js']);
-  store.setBoardConfig(slug, { alwaysInScope: [] });
+  const refused = store.submitTicket(slug, t.ref, 'docs-worker', { commit: COMMIT, unscopedPaths });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'unscoped_paths');
+  assert.match(refused.message, /PARTIAL/);
+  assert.deepStrictEqual(store.getTicket(slug, t.ref).claim.by, 'docs-worker');
+  assert.strictEqual(store.getTicket(slug, t.ref).submission, undefined);
+
+  const legacy = store.getTicket(slug, t.ref);
+  legacy.claim = null;
+  legacy.submission = {
+    commit: COMMIT,
+    gitRef: `refs/sidequest/${t.ref}`,
+    admittedScope: ['docs/'],
+    unscopedPaths,
+    changedPaths,
+    integratedAt: null,
+  };
+  persist(legacy);
+
+  assert.deepStrictEqual(store.submissionReadiness(legacy.submission), {
+    ok: false,
+    state: 'partial',
+    reason: 'unscoped_paths',
+    unscopedPaths,
+    message: `PARTIAL: scope-gated paths remain outside this submission: ${unscopedPaths.join(', ')}.`,
+  });
+  assert.strictEqual(store.briefTicket(slug, legacy).submission.readiness.state, 'partial');
+  assert.strictEqual(store.pulsePayload(slug, t.ref).submission.readiness.state, 'partial');
+  assert.strictEqual(store.submissionsPayload(slug).tickets.find((entry?: any) => entry.ref === t.ref).submission.readiness.state, 'partial');
+
+  const queued = cliJson(['publish', 'queue', '--json']).tickets.find((entry?: any) => entry.ref === t.ref);
+  assert.strictEqual(queued.rangeValidation.reason, 'unscoped_paths');
+  assert.deepStrictEqual(queued.rangeValidation.unscopedPaths, unscopedPaths);
+
+  const integration = store.integrateSubmission(slug, t.ref, {});
+  assert.strictEqual(integration.ok, false);
+  assert.strictEqual(integration.reason, 'unscoped_paths');
+  assert.match(integration.message, /PARTIAL/);
 });
 
 

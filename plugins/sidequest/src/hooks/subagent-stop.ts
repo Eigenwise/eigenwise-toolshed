@@ -32,11 +32,16 @@ interface Ticket {
   comments?: TicketComment[];
   files?: string[];
   scopeRequest?: { files?: string[] } | null;
-  submission?: { commit?: string; integratedAt?: string };
+  submission?: { commit?: string; integratedAt?: string; unscopedPaths?: string[] };
   effort?: string;
+}
+interface SubmissionReadiness {
+  ok: boolean;
+  unscopedPaths?: string[];
 }
 interface Store {
   getTicket: (slug: string, ticketId: string) => Ticket | null;
+  submissionReadiness: (submission?: Ticket['submission']) => SubmissionReadiness;
   markDispatchStopped: (sessionId: string, executor: string, agentId: string | null, agentName: string | null) => {
     ok?: boolean;
     stopped?: boolean;
@@ -90,12 +95,20 @@ function commitHash(comment: TicketComment | null): string | null {
   return match ? match[0] || null : null;
 }
 
-function terminalDispatchVerdict(tickets: Ticket[]): string | null {
+function submissionVerdict(store: Store, ticket: Ticket): string | null {
+  const submission = ticket?.submission;
+  if (!submission?.commit || submission.integratedAt) return null;
+  const readiness = store.submissionReadiness(submission);
+  if (!readiness.ok) {
+    return `exec stopped with PARTIAL_SUBMISSION: ${ticket.ref} has scope-gated paths (${(readiness.unscopedPaths || []).join(', ')}); do not integrate it`;
+  }
+  return `exec stopped clean: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
+}
+
+function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null {
   for (const ticket of tickets) {
-    const submission = ticket?.submission;
-    if (submission?.commit && !submission.integratedAt) {
-      return `exec stopped clean: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
-    }
+    const submissionVerdictText = submissionVerdict(store, ticket);
+    if (submissionVerdictText) return submissionVerdictText;
     if (!ticket || ticket.status !== 'done') continue;
     const comment = doneComment(ticket);
     if (!comment) continue;
@@ -136,12 +149,12 @@ function stopVerdict(
     } catch (_) {
       continue;
     }
-    const submission = ticket?.submission;
-    if (!ticket || !submission?.commit || submission.integratedAt) continue;
-    return `exec stopped clean: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
+    const submissionVerdictText = ticket && submissionVerdict(store, ticket);
+    if (!submissionVerdictText) continue;
+    return submissionVerdictText;
   }
 
-  const terminal = terminalDispatchVerdict(terminalTickets);
+  const terminal = terminalDispatchVerdict(store, terminalTickets);
   if (terminal) return terminal;
 
   const held = claims.find((claim) => claim && claim.held && claim.status === 'doing');
