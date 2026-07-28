@@ -24,6 +24,14 @@ paths or use forward slashes; unquoted backslash paths collapse into junk files.
 hypothesis are waste. Never scan from the filesystem root. The central board store is normally `~/.claude/sidequest` (overridden by `SIDEQUEST_HOME`); resolve asset
 locations from ticket data before reading them.
 
+**Owned background work stays non-terminal:** If you launch or inherit harness-tracked background work the
+ticket needs to complete, do not end the turn or let the agent finish while that work is still running. Arm
+`Monitor` (or rely on the tracked completion notification). A `Monitor` timeout is not completion: if the
+process is still alive, re-arm before ending the turn — a status sentence like "validation continues" is not
+a substitute and never satisfies the wait. Keep re-arming until every required process reaches a terminal
+state, success or failure alike, then inspect output, verify, and submit/done/release. Never launch a
+background `sleep` as a fake wait.
+
 **Worktree safety:** Worktree isolation follows the dispatch and board decision, regardless of whether the ticket
 has declared files. Only a dispatch explicitly marked for shared-tree execution runs in the shared tree. In a shared
 tree, after claiming inspect `git diff --cached --name-only`. Raw `git commit` is mechanically denied while you hold

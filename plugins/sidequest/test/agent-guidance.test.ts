@@ -120,6 +120,15 @@ test('executor guidance keeps board lifecycle MCP-only and protects shared trees
   assert.doesNotMatch(orchestration, /It carries the full ticket contract/);
 });
 
+test('owned background work stays non-terminal through Monitor timeouts', () => {
+  assert.match(executorTemplate, /Owned background work stays non-terminal/);
+  assert.match(executorTemplate, /do not end the turn or let the agent finish while that work is still running/);
+  assert.match(executorTemplate, /A `Monitor` timeout is not completion: if the\nprocess is still alive, re-arm before ending the turn/);
+  assert.match(executorTemplate, /a status sentence like "validation continues" is not\na substitute and never satisfies the wait/);
+  assert.match(executorTemplate, /Keep re-arming until every required process reaches a terminal\nstate, success or failure alike/);
+  assert.match(executorTemplate, /Never launch a\nbackground `sleep` as a fake wait/);
+});
+
 test('inline-safe guidance names allowed work and exploit-resistant negatives', () => {
   for (const source of [skill, orchestration]) {
     assert.match(source, /INLINE-SAFE|Inline-safe/);
