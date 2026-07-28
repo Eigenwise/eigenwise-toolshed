@@ -190,14 +190,23 @@ function translateInput(payload) {
   return input;
 }
 
+function isWebSearchTool(tool) {
+  return (typeof tool?.type === 'string' && tool.type.startsWith('web_search'))
+    || (tool?.name === 'web_search' && !tool.input_schema);
+}
+
 function translateTools(tools) {
   if (!Array.isArray(tools)) return undefined;
-  return tools.filter((tool) => tool?.name).map((tool) => ({
-    type: 'function',
-    name: tool.name,
-    description: tool.description || undefined,
-    parameters: tool.input_schema || { type: 'object', properties: {} },
-  }));
+  return tools.flatMap((tool) => {
+    if (isWebSearchTool(tool)) return [{ type: 'web_search' }];
+    if (!tool?.name) return [];
+    return [{
+      type: 'function',
+      name: tool.name,
+      description: tool.description || undefined,
+      parameters: tool.input_schema || { type: 'object', properties: {} },
+    }];
+  });
 }
 
 function translateRequest(payload, model) {
@@ -222,6 +231,22 @@ function anthropicUsage(usage) {
   };
 }
 
+function webSearchBlocks(item) {
+  const action = item?.action && typeof item.action === 'object' ? item.action : {};
+  const input = { ...action };
+  delete input.sources;
+  const sources = Array.isArray(action.sources) ? action.sources : [];
+  const id = item?.id || `web_search_${Date.now()}`;
+  return [
+    { type: 'server_tool_use', id, name: 'web_search', input },
+    {
+      type: 'web_search_tool_result',
+      tool_use_id: id,
+      content: sources.filter((source) => typeof source?.url === 'string').map((source) => ({ type: 'web_search_result', title: source.title || source.url, url: source.url })),
+    },
+  ];
+}
+
 function responseContent(response) {
   const content = [];
   for (const item of Array.isArray(response?.output) ? response.output : []) {
@@ -230,6 +255,7 @@ function responseContent(response) {
         if (part?.type === 'output_text') content.push({ type: 'text', text: part.text || '' });
       }
     }
+    if (item?.type === 'web_search_call') content.push(...webSearchBlocks(item));
     if (item?.type === 'function_call') {
       let input = {};
       try { input = JSON.parse(item.arguments || '{}'); } catch {}
@@ -298,6 +324,13 @@ function createGrokSseTransformer(write, model) {
     toolBlocks.set(itemId, tool);
     return tool;
   }
+  function webSearchBlock(item = {}) {
+    const [use, result] = webSearchBlocks(item);
+    const useBlock = startBlock(`web_search_use:${use.id}`, undefined, use);
+    stopBlock(useBlock);
+    const resultBlock = startBlock(`web_search_result:${use.id}`, undefined, result);
+    stopBlock(resultBlock);
+  }
   function stop(usage, reason = 'end_turn') {
     if (stopped) return;
     stopped = true;
@@ -331,6 +364,11 @@ function createGrokSseTransformer(write, model) {
         start(response);
         const tool = toolBlock(event);
         if (!tool.sawArgumentDelta) write(sseFrame({ type: 'content_block_delta', index: tool.block.index, delta: { type: 'input_json_delta', partial_json: event.arguments || '' } }));
+        return;
+      }
+      if (event?.type === 'response.output_item.done' && event.item?.type === 'web_search_call') {
+        start(response);
+        webSearchBlock(event.item);
         return;
       }
       if (event?.type === 'response.output_item.done') {
