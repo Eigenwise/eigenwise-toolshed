@@ -1200,7 +1200,10 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /Native results: never TaskOutput/);
   assert.match(ctx, /pulse ref \/ changes --since; TaskStop only after terminal board evidence/);
   assert.match(ctx, /never proxy-wait via shell\/Monitor\/cron polls or blocking TaskOutput/, 'the proxy-wait ban must survive rewording');
-  assert.match(ctx, /direct:true claims need user `direct-ok` \+ reason/, 'direct claims stay user-gated');
+  assert.match(ctx, /direct:true claims need a recorded inline-safe reason, not `direct-ok`/);
+  assert.match(ctx, /pinpointed integration mechanical fix, release bookkeeping, or the user-directed 1–2 named-file carve-out/);
+  assert.match(ctx, /investigation or other-file reading, new behavior\/API, or an unpinpointed failing test is never inline/);
+  assert.match(ctx, /"context already loaded", "small change", and "faster myself" do not qualify/);
   assert.match(ctx, /Use `bypassPermissions`; never `native_agent`/, 'dispatch mechanics line must survive rewording');
   assert.match(ctx, /ONE diagnose-first retry/);
   assert.match(ctx, /never blind respawn/);
@@ -1415,7 +1418,10 @@ test('session-start: compact and resume preserve evidence-first routing guidance
     assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket\/dispatch/);
     assert.match(ctx, /Need other-file reading\? Ticket it/);
     assert.match(ctx, /Ticket \+ dispatch BEFORE multi-file exploration/);
-    assert.match(ctx, /`direct:true` needs `direct-ok` \+ reason/);
+    assert.match(ctx, /`direct:true` needs a 20\+ character inline-safe reason, not `direct-ok`/);
+    assert.match(ctx, /pinpointed integration mechanical fixes, release bookkeeping, or the user-directed 1–2 named-file carve-out qualify/);
+    assert.match(ctx, /investigation or other-file reading, new behavior\/API, or an unpinpointed failing test is never inline/);
+    assert.match(ctx, /"context already loaded", "small change", and "faster myself" do not/);
     assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'));
     assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
     assert.ok(ctx.includes('never TaskOutput'), `${source} must ban native Agent TaskOutput polling`);

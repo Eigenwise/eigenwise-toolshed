@@ -4975,8 +4975,18 @@ function directReason(reason?: any) {
   return value.length >= DIRECT_REASON_MIN_LENGTH ? value : null;
 }
 
-function hasDirectPermission(ticket?: any) {
-  return Array.isArray(ticket?.labels) && ticket.labels.some((label?: any) => String(label).toLowerCase() === 'direct-ok');
+const INVALID_DIRECT_REASON_PATTERNS = [
+  /context already loaded/i,
+  /small change/i,
+  /faster (?:myself|to do (?:it )?myself)/i,
+  /(?:handoff|transfer) cost/i,
+  /(?:needs?|requires?) (?:investigation|other[- ]file reading)/i,
+  /(?:new behavior|new API(?: surface)?)/i,
+  /failing test (?:does not|doesn't) pinpoint/i,
+];
+
+function directReasonAllowed(reason?: any) {
+  return !INVALID_DIRECT_REASON_PATTERNS.some((pattern) => pattern.test(String(reason || '')));
 }
 
 function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -4989,8 +4999,9 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (!t) return { ok: false, reason: 'not_found' };
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
-    if (opts.direct && isRoutedTicket(t) && !hasDirectPermission(t)) return { ok: false, reason: 'direct_not_allowed', ticket: t, expectedExecutor: t.dispatchExecutor || t.exec?.agent || null };
-    if (opts.direct && isRoutedTicket(t) && !directReason(opts.reason)) return { ok: false, reason: 'direct_reason_required', ticket: t };
+    const directClaimReason = directReason(opts.reason);
+    if (opts.direct && isRoutedTicket(t) && !directClaimReason) return { ok: false, reason: 'direct_reason_required', ticket: t };
+    if (opts.direct && isRoutedTicket(t) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: 'direct_not_allowed', ticket: t, expectedExecutor: t.dispatchExecutor || t.exec?.agent || null };
     if (opts.direct && t.dispatchNonce) return { ok: false, reason: 'direct_conflict', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
