@@ -34,7 +34,7 @@ function normalizedPath(value) {
 }
 
 function proxyVersionFloor(gateway) {
-  const source = readText(path.join(gateway.installPath || '', 'bin', 'codex-gateway.js'));
+  const source = readText(path.join(gateway.installPath || '', 'bin', 'model-gateway.js'));
   return source?.match(/MIN_PROXY_VERSION\s*=\s*['"]([^'"]+)['"]/)?.[1] || '0.1.14';
 }
 
@@ -57,7 +57,7 @@ function runVersion(command, args, timeout = 1000) {
 
 function localGatewayCheck(gateway) {
   if (!gateway?.installPath) return { available: false };
-  const gatewayScript = path.join(gateway.installPath, 'bin', 'codex-gateway.js');
+  const gatewayScript = path.join(gateway.installPath, 'bin', 'model-gateway.js');
   if (!fs.existsSync(gatewayScript)) return { available: false };
   const output = runVersion(process.execPath, [gatewayScript, 'doctor'], 3000);
   if (!output) return { available: false };
@@ -177,17 +177,17 @@ function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshn
 }
 
 function gatewayFreshness(instances, checkGateway) {
-  const gateway = instances.find((instance) => instance.id === 'codex-gateway@eigenwise-toolshed');
+  const gateway = instances.find((instance) => instance.id === 'model-gateway@eigenwise-toolshed');
   if (!gateway) return [];
   const check = checkGateway(gateway);
-  if (!check?.available) return ['codex-gateway local health check is unavailable'];
+  if (!check?.available) return ['model-gateway local health check is unavailable'];
 
   const problems = [];
   const floor = check.minProxyVersion || proxyVersionFloor(gateway);
-  if (!semver(check.proxyVersion)) problems.push('codex-gateway proxy is missing or has no readable version');
-  else if (compareVersions(check.proxyVersion, floor) === -1) problems.push(`codex-gateway proxy ${check.proxyVersion} is below required ${floor}`);
-  if (check.auth === false) problems.push('codex-gateway is not authenticated');
-  if (check.proxy === false || check.shim === false) problems.push('codex-gateway proxy or router is down');
+  if (!semver(check.proxyVersion)) problems.push('model-gateway proxy is missing or has no readable version');
+  else if (compareVersions(check.proxyVersion, floor) === -1) problems.push(`model-gateway proxy ${check.proxyVersion} is below required ${floor}`);
+  if (check.auth === false) problems.push('model-gateway is not authenticated');
+  if (check.proxy === false || check.shim === false) problems.push('model-gateway proxy or router is down');
   return problems;
 }
 

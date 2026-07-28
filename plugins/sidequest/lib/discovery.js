@@ -37,7 +37,7 @@ var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 const CATALOG_SOURCES = [
-  { source: "codex-gateway", relPath: import_node_path.default.join("codex-gateway", "catalog.json"), schemas: /* @__PURE__ */ new Set([2, 3]) }
+  { source: "model-gateway", relPath: import_node_path.default.join("model-gateway", "catalog.json"), schemas: /* @__PURE__ */ new Set([2, 3]) }
 ];
 function discoveryRoots() {
   const override = process.env.SIDEQUEST_DISCOVERY_DIRS;

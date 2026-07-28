@@ -13,10 +13,10 @@ const BIN = path.join(ROOT, 'bin', 'sidequest.js');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-route-recipe-'));
 const project = path.join(home, 'project');
 const discovery = path.join(home, 'discovery');
-fs.mkdirSync(path.join(discovery, 'codex-gateway'), { recursive: true });
-fs.writeFileSync(path.join(discovery, 'codex-gateway', 'catalog.json'), JSON.stringify({
+fs.mkdirSync(path.join(discovery, 'model-gateway'), { recursive: true });
+fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
-  source: 'codex-gateway',
+  source: 'model-gateway',
   models: [{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra' }],
 }));
 const env = Object.assign({}, process.env, {

@@ -1337,8 +1337,8 @@ test('session-start: provisions the shared dispatch executor and prunes legacy p
   const legacyFile = path.join(agents, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
   fs.writeFileSync(legacyFile, '<!-- generated-by: sidequest-agentsync -->\nold');
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
-  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'codex-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
+  fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(!fs.existsSync(legacyFile), 'legacy per-combo Codex executor must be pruned by session sync');
   assert.ok(fs.existsSync(path.join(agents, 'sidequest-exec-dispatch-high.md')), 'reachable Codex route must provision the shared dispatch executor');
@@ -1358,8 +1358,8 @@ test('session-start: category-route sync ignores retired prefs data', () => {
   });
   db.openDb(home).prepare("INSERT INTO globals (key, data) VALUES ('model-prefs', '{')").run();
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
-  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'codex-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
+  fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
 });
@@ -1795,10 +1795,10 @@ test('subagent-stop: long-run threshold settings do not suppress a held-claim ve
 // the taxonomy line inside earlier byte-budget assertions.
 test('pre-tool hook: dispatch executor rejects conflicting route markers and ignores prose sibling refs', () => {
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-dispatch-catalog-'));
-  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({
+  fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
-    source: 'codex-gateway',
+    source: 'model-gateway',
     models: [
       { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' },
       { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]' },
@@ -1843,10 +1843,10 @@ test('pre-tool hook: dispatch executor rejects a route marker with different eff
 
 test('pre-tool hook: prepared codex dispatch accepts the gateway-form route marker (SQ-753)', () => {
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-marker-form-'));
-  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({
+  fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
-    source: 'codex-gateway',
+    source: 'model-gateway',
     models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }],
   }));
   const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
@@ -2004,10 +2004,10 @@ test('dispatch ledger records an authoritative launch, agent bind, and claim ack
 
 test('readonly category executors pass spawn correction, start binding, and stop verdict hooks', () => {
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-readonly-catalog-'));
-  fs.mkdirSync(path.join(catalog, 'codex-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'codex-gateway', 'catalog.json'), JSON.stringify({
+  fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
-    source: 'codex-gateway',
+    source: 'model-gateway',
     models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]' }],
   }));
   const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;

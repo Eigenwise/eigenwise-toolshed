@@ -31,9 +31,9 @@ const store = require('../lib/store.js') as {
   classifyModelFilter(model: string): string;
 };
 
-function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = { schemaVersion: 3, source: 'codex-gateway' }) {
+function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = { schemaVersion: 3, source: 'model-gateway' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-'));
-  const dir = path.join(root, 'codex-gateway');
+  const dir = path.join(root, 'model-gateway');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ ...catalog, models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
@@ -42,8 +42,8 @@ function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = { schemaV
 test('missing and malformed catalogs fail soft', () => {
   assert.deepEqual(discovery.discoverExternalModels(), []);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-bad-'));
-  fs.mkdirSync(path.join(root, 'codex-gateway'));
-  fs.writeFileSync(path.join(root, 'codex-gateway', 'catalog.json'), '{bad');
+  fs.mkdirSync(path.join(root, 'model-gateway'));
+  fs.writeFileSync(path.join(root, 'model-gateway', 'catalog.json'), '{bad');
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
   assert.deepEqual(discovery.discoverExternalModels(), []);
 });
@@ -55,18 +55,18 @@ test('discovery validates concrete catalog identity and drops routing hints', ()
     { slug: 'missing-id' },
   ]);
   assert.deepEqual(discovery.discoverExternalModels(), [{
-    slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', source: 'codex-gateway',
+    slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', source: 'model-gateway',
   }]);
 });
 
 test('discovery accepts catalog v2 migration input', () => {
   writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }], {
     schema: 2,
-    source: 'codex-gateway',
+    source: 'model-gateway',
     updatedAt: new Date().toISOString(),
   });
   assert.deepEqual(discovery.discoverExternalModels(), [{
-    slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', source: 'codex-gateway',
+    slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', source: 'model-gateway',
   }]);
 });
 

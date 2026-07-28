@@ -10,12 +10,12 @@ const path = require('node:path');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-rederive-home-'));
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-rederive-project-'));
 const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-rederive-catalog-'));
-const catalogDir = path.join(DISCOVERY, 'codex-gateway');
+const catalogDir = path.join(DISCOVERY, 'model-gateway');
 const catalogPath = path.join(catalogDir, 'catalog.json');
 fs.mkdirSync(catalogDir, { recursive: true });
 
 function writeCatalog(models?: any) {
-  fs.writeFileSync(catalogPath, JSON.stringify({ schemaVersion: 3, source: 'codex-gateway', models }));
+  fs.writeFileSync(catalogPath, JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models }));
 }
 
 writeCatalog([]);
