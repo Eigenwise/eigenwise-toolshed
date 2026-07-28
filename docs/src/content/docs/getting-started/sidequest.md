@@ -90,6 +90,14 @@ On the first prompt in each session, an active routed board adds one advisory re
 
 Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
 
+### Dispatch needs this session's board MCP, not just an install
+
+A dispatched native Agent inherits the parent Claude Code session's connected MCP snapshot, not a fresh lookup of Claude Code's plugin registry. Installing Sidequest for a project, or reinstalling it mid-session, does not reach a conversation that is already open — a freshly spawned Agent can still come up with zero board tools even though the install itself is fine. Never assume a fresh Agent independently discovers a newly installed MCP server.
+
+Dispatch also confirms the target project has a runnable Sidequest install before it touches any ticket state: a `.claude/settings.json` entry alone is not proof. A missing or stale install refuses with the exact repair command and tells you to start a new session or run `/reload-plugins`.
+
+Board MCP dispatch (the `dispatch`/`native_agent` MCP tools) is the normal path, because reaching that handler at all is proof this session already has the board MCP connected. A `sidequest dispatch` run from the CLI inside Claude Code can't offer that proof, so it refuses before any ticket-state change and tells you to run `/reload-plugins`, then dispatch again through the board MCP tool. A CLI run intentionally outside Claude Code can pass `--unverified-transport` to proceed anyway, but that flag proves nothing about any session's board MCP availability.
+
 ### How a launch shows up in the agent list
 
 Dispatch builds the launch's `spawn.name` from the board, not from a random id: the ticket ref plus a short slug of its title, like `sq-843-release-engine`. Redispatching the same ticket after something already launched counts up (`sq-843-release-engine-2`), so a reworked or resumed run never shadows a live sibling. That name is what the fleet view filters on (`a:<name>`) and what `SendMessage` resumes.
