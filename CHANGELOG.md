@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.256.0 (2026-07-28)
+
+### sidequest 3.35.0 → 3.35.1
+
+#### Fixes
+
+- Stronger agent-teams usage directive (SQ-979) [`7b99395`](https://github.com/Eigenwise/eigenwise-toolshed/commit/7b99395)
+
 ## v3.255.0 (2026-07-28)
 
 ### sidequest 3.34.0 → 3.35.0
