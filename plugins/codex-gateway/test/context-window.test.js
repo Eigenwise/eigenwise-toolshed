@@ -127,16 +127,18 @@ test('Codex discovery advertises context metadata but keeps the local model id u
   await waitForShim(shimPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
-  assert.deepEqual(models.data.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
+  const codexModels = models.data.filter(({ id }) => id.startsWith('claude-codex-'));
+  assert.deepEqual(codexModels.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
     { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 370000 },
     { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 370000 },
     { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 370000 },
   ]);
+  assert.ok(models.data.some(({ id }) => id === 'claude-grok-4-5'));
   // 370000 = the measured backend input ceiling. Claude Code 2.1.207 still
   // hardwires 200k for claude-codex-* ids, so this value is inert for
   // compaction and advertised only for honesty/future-proofing. See
   // CODEX_COMPACT_CONTEXT_WINDOW.
-  assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 370000), true);
+  assert.equal(codexModels.every(({ max_input_tokens }) => max_input_tokens === 370000), true);
   assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
@@ -177,7 +179,7 @@ test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', a
   await waitForShim(shimPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
-  assert.equal(models.data.every(({ max_input_tokens }) => max_input_tokens === 200000), true);
+  assert.equal(models.data.filter(({ id }) => id.startsWith('claude-codex-')).every(({ max_input_tokens }) => max_input_tokens === 200000), true);
 });
 
 test('default request route logging records Fable metadata but never prompt data', async (t) => {

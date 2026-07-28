@@ -39,6 +39,7 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { createGatewayUsageEmitter } = require('../lib/usage-observability.js');
+const grokBackend = require('../lib/grok-backend.js');
 
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'codex-gateway');
@@ -51,6 +52,8 @@ const PUBLIC_SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
 const SHIM_PORT = Number(process.env.CODEX_GATEWAY_WORKER_PORT || PUBLIC_SHIM_PORT);
 const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
 const PREFIX = 'claude-codex-';
+const GROK_PREFIX = 'claude-grok-';
+const GROK_ENDPOINT = process.env.CODEX_GATEWAY_GROK_ENDPOINT || grokBackend.GROK_ENDPOINT;
 const REPO = 'raine/claude-code-proxy';
 // Earliest claude-code-proxy release that maps a context overflow to HTTP 413
 // request_too_large (commit 968cbe2, first tagged in v0.1.14; v0.1.13 has none).
@@ -1202,6 +1205,12 @@ async function doctor() {
     const a = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
     log(`codex auth: ${((a.stdout || '') + (a.stderr || '')).trim().split('\n')[0] || '(no output)'}`);
   }
+  try {
+    grokBackend.readGrokAuth();
+    log(`grok auth: present (${grokBackend.readGrokVersion()})`);
+  } catch (error) {
+    log(`grok auth: ${error.message}`);
+  }
   const ok = await statusReport();
   const catalog = readCatalog();
   log(catalog && Array.isArray(catalog.models)
@@ -1251,7 +1260,8 @@ async function doctor() {
 // The sidequest agent NAME (sidequest-exec-codex-gpt-5-6-terra-*) carries the
 // true runtime, so don't chase the badge by editing display_name — it's a dead
 // end. See SQ-202.
-function displayName(id) {
+function displayName(id, backend = 'codex') {
+  if (backend === 'grok') return id.replace(/^grok-/, 'Grok ').replace(/-/g, ' ');
   return id.replace(/^gpt-/, 'GPT-').replace(/\[1m\]$/, '') + ' (Codex)';
 }
 
@@ -1265,6 +1275,7 @@ const DEFAULT_MODELS = [
   'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini',
   'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
+const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS.map((model) => model.id);
 
 // Advertised to Claude Code as max_input_tokens for Codex models.
 //
@@ -1380,12 +1391,16 @@ function noteCompactEvent(attempt, event) {
   if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
 }
 
-function gatewayModel(id) {
+function gatewayModel(id, backend = 'codex') {
+  const prefix = backend === 'grok' ? GROK_PREFIX : PREFIX;
+  const context = backend === 'grok'
+    ? (grokBackend.GROK_MODELS.find((model) => model.id === id)?.context || 131072)
+    : CODEX_COMPACT_CONTEXT_WINDOW;
   return {
-    id: `${PREFIX}${id}`,
-    display_name: id === 'auto' ? 'Sidequest Dispatch (Codex)' : displayName(id),
+    id: `${prefix}${backend === 'grok' ? grokBackend.grokPickerId(id) : id}`,
+    display_name: id === 'auto' ? 'Sidequest Dispatch (Codex)' : displayName(id, backend),
     type: 'model',
-    max_input_tokens: CODEX_COMPACT_CONTEXT_WINDOW,
+    max_input_tokens: context,
   };
 }
 
@@ -1932,7 +1947,7 @@ function runWorker() {
     at: 0,
     data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
   };
-  const counters = { models: 0, codex: 0, anthropic: 0 };
+  const counters = { models: 0, codex: 0, grok: 0, anthropic: 0 };
   const dispatchRoutes = new DispatchSessionRouteCache({ cachePath: DISPATCH_ROUTE_CACHE_PATH });
   const usageEmitter = createGatewayUsageEmitter();
   const settingsWiring = wiredMode();
@@ -2100,9 +2115,13 @@ function runWorker() {
       try { ids = JSON.parse(fs.readFileSync(path.join(STATE, 'models.json'), 'utf8')); } catch { /* absent */ }
     }
     if (!Array.isArray(ids) || !ids.length) ids = DEFAULT_MODELS;
+    const grokIds = grokBackend.grokModelIdsFromCache();
     modelCache = {
       at: Date.now(),
-      data: [...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
+      data: [
+        ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map((id) => gatewayModel(id)),
+        ...[...(grokIds.length ? grokIds : DEFAULT_GROK_MODELS)].map((id) => gatewayModel(id, 'grok')),
+      ],
     };
   }
   refreshModels();
@@ -2659,6 +2678,107 @@ function runWorker() {
     else clientReq.pipe(upReq);
   }
 
+  async function forwardGrok(clientReq, clientRes, payload, model, advertisedModel, routeTelemetry, usageCapture) {
+    let token;
+    try {
+      token = await grokBackend.grokAccessToken();
+    } catch (error) {
+      const body = JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: `codex-gateway: ${error.message}` } });
+      routeTelemetry?.finish(401, 'authentication_error');
+      clientRes.writeHead(401, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+      clientRes.end(body);
+      return;
+    }
+    const upstreamPayload = grokBackend.translateRequest(payload, model);
+    const body = JSON.stringify(upstreamPayload);
+    const target = new URL(GROK_ENDPOINT);
+    const transport = target.protocol === 'https:' ? https : http;
+    const request = transport.request(target, {
+      method: 'POST',
+      headers: { ...grokBackend.grokHeaders(token, model), 'content-length': Buffer.byteLength(body) },
+      agent: target.protocol === 'https:' ? httpsAgent : httpAgent,
+    }, (upstream) => {
+      const responseHeaders = { ...upstream.headers };
+      for (const header of ['transfer-encoding', 'connection', 'keep-alive']) delete responseHeaders[header];
+      const streamed = String(upstream.headers['content-type'] || '').toLowerCase().includes('text/event-stream');
+      usageCapture?.setResponse(upstream.statusCode, upstream.headers);
+      upstream.once('end', () => routeTelemetry?.finish(upstream.statusCode));
+      upstream.once('error', () => routeTelemetry?.finish(upstream.statusCode, 'upstream_error'));
+      if (upstream.statusCode === 426) {
+        const chunks = [];
+        upstream.on('data', (chunk) => chunks.push(chunk));
+        upstream.on('end', () => {
+          const message = 'codex-gateway: Grok CLI version header is outdated. Update the grok CLI, then retry.';
+          const errorBody = JSON.stringify({ type: 'error', error: { type: 'api_error', message } });
+          clientRes.writeHead(426, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(errorBody) });
+          clientRes.end(errorBody);
+        });
+        return;
+      }
+      if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+        const chunks = [];
+        upstream.on('data', (chunk) => chunks.push(chunk));
+        upstream.on('end', () => {
+          let detail = `Grok upstream returned ${upstream.statusCode}`;
+          try { detail = JSON.parse(Buffer.concat(chunks).toString()).error?.message || detail; } catch {}
+          const errorBody = JSON.stringify({ type: 'error', error: { type: upstream.statusCode === 401 ? 'authentication_error' : 'api_error', message: `codex-gateway: ${detail}` } });
+          clientRes.writeHead(upstream.statusCode, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(errorBody) });
+          clientRes.end(errorBody);
+        });
+        return;
+      }
+      delete responseHeaders['content-length'];
+      if (streamed) {
+        clientRes.writeHead(upstream.statusCode, { ...responseHeaders, 'content-type': 'text/event-stream' });
+        const decoder = new StringDecoder('utf8');
+        let pending = '';
+        const transformer = grokBackend.createGrokSseTransformer((frame) => clientRes.write(frame), advertisedModel);
+        const consume = (chunk) => {
+          usageCapture?.noteResponseBytes(chunk.length);
+          pending += decoder.write(chunk);
+          for (;;) {
+            const match = /\r?\n\r?\n/.exec(pending);
+            if (!match) break;
+            const frame = pending.slice(0, match.index);
+            pending = pending.slice(match.index + match[0].length);
+            const data = frame.split(/\r?\n/).find((line) => line.startsWith('data:'))?.slice(5).trim();
+            if (!data || data === '[DONE]') continue;
+            try {
+              const event = JSON.parse(data);
+              transformer.event(event);
+              if (event?.response?.usage) usageCapture?.observeEvent({ type: 'message_delta', usage: grokBackend.anthropicUsage(event.response.usage) });
+            } catch {}
+          }
+        };
+        upstream.on('data', consume);
+        upstream.on('end', () => { pending += decoder.end(); transformer.end(); clientRes.end(); });
+        upstream.on('error', () => clientRes.destroy());
+        return;
+      }
+      const chunks = [];
+      upstream.on('data', (chunk) => { usageCapture?.noteResponseBytes(chunk.length); chunks.push(chunk); });
+      upstream.on('end', () => {
+        let response;
+        try { response = JSON.parse(Buffer.concat(chunks).toString()); } catch { response = null; }
+        const translated = grokBackend.translateResponse(response, advertisedModel);
+        const translatedBody = Buffer.from(JSON.stringify(translated));
+        usageCapture?.observeJson(translatedBody);
+        clientRes.writeHead(upstream.statusCode, { ...responseHeaders, 'content-type': 'application/json', 'content-length': translatedBody.length });
+        clientRes.end(translatedBody);
+      });
+      upstream.on('error', () => clientRes.destroy());
+    });
+    request.setTimeout(3600000, () => request.destroy(new Error('Grok upstream timeout')));
+    request.on('error', (error) => {
+      routeTelemetry?.finish(502, 'upstream_error');
+      if (clientRes.headersSent) return clientRes.destroy();
+      const errorBody = JSON.stringify({ type: 'error', error: { type: 'api_error', message: `codex-gateway: Grok upstream failed: ${error.message}` } });
+      clientRes.writeHead(502, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(errorBody) });
+      clientRes.end(errorBody);
+    });
+    request.end(body);
+  }
+
   function handleRequest(req, res) {
     const pathOnly = req.url.split('?')[0];
 
@@ -2832,6 +2952,37 @@ function runWorker() {
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
               forwardedBody, AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, routeTelemetry,
               usageCapture, 0, compactGuard);
+          }
+        } catch { /* not JSON; fall through to passthrough */ }
+      }
+      if (raw && pathOnly.startsWith('/v1/messages')) {
+        try {
+          const parsed = JSON.parse(raw.toString());
+          if (typeof parsed.model === 'string' && parsed.model.startsWith(GROK_PREFIX)) {
+            const advertisedModel = parsed.model;
+            const pickerId = parsed.model.slice(GROK_PREFIX.length).replace(/\[1m\]$/, '');
+            const cachedGrokModels = grokBackend.grokModelIdsFromCache();
+            const model = grokBackend.grokModelFromPicker(pickerId, cachedGrokModels.length ? cachedGrokModels : DEFAULT_GROK_MODELS);
+            const effort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : null;
+            counters.grok = (counters.grok || 0) + 1;
+            requestRouteLog(req, 'grok', model, pathOnly, 'direct', effort);
+            routeTelemetry.setRoute({
+              selectedModel: advertisedModel,
+              effectiveModel: model,
+              backend: 'grok',
+              effort,
+              fallback: false,
+              via: 'direct',
+            });
+            const usageCapture = usageEmitter.enabled
+              ? usageEmitter.start({
+                payload: parsed,
+                requestBodyBytes: raw.length,
+                requestHeaders: req.headers,
+                route: { requestedModel: advertisedModel, effectiveModel: model, backend: 'grok', effort, via: 'direct' },
+              })
+              : null;
+            return forwardGrok(req, res, parsed, model, advertisedModel, routeTelemetry, usageCapture);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }
