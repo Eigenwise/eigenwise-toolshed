@@ -5071,12 +5071,10 @@ function appendStoryLogEntry(slug, storyRef, value) {
   return transaction(() => {
     const story = getStory(slug, storyRef);
     if (!story) throw new Error(`story log: ${storyRef} was not found.`);
-    const by = String(value && typeof value === "object" ? value.by || "" : "").trim();
+    const by = String(value && typeof value === "object" ? value.by || "orchestrator" : "orchestrator").trim() || "orchestrator";
     const requestedRef = value && typeof value === "object" && value.ref != null ? String(value.ref).trim() : "";
     let ticketRef = null;
-    if (!requestedRef) {
-      if (by !== "orchestrator") throw new Error(storyLogClaimRefusal(story, "SQ-n", by));
-    } else {
+    if (requestedRef) {
       const ticket = getTicket(slug, requestedRef);
       ticketRef = ticket ? ticket.ref : requestedRef;
       if (!ticket || ticket.storyId !== story.id || !ticket.claim || ticket.claim.by !== by || claimReclaimable(ticket)) {

@@ -93,16 +93,27 @@ test('append refuses unclaimed, wrong-owner, and non-member ticket attribution',
   assert.equal(store.storyDecisionLog(store.getStory(slug, createdStory.ref)).entries.length, 0);
 });
 
-test('orchestrator may append without a member ticket ref', () => {
+test('orchestrator appends without a member ticket ref through the CLI', () => {
   const createdStory = story('Orchestrator append');
-  const updated = store.appendStoryLogEntry(slug, createdStory.ref, {
-    by: 'orchestrator',
-    entry: 'CONSTRAINT: preserve the public contract',
-  });
+  const explicit = cliJson([
+    'story', 'log', createdStory.ref, '-m', 'CONSTRAINT: preserve the public contract', '--by', 'story-planner', '--json',
+  ]);
   assert.deepEqual(
-    { by: updated.decisionLog[0].by, ref: updated.decisionLog[0].ref, kind: updated.decisionLog[0].kind },
-    { by: 'orchestrator', ref: null, kind: 'CONSTRAINT' },
+    { by: explicit.story.entries[0].by, ref: explicit.story.entries[0].ref, kind: explicit.story.entries[0].kind },
+    { by: 'story-planner', ref: null, kind: 'CONSTRAINT' },
   );
+
+  const defaulted = cliJson(['story', 'log', createdStory.ref, '-m', 'DISCOVERY: default attribution works', '--json']);
+  assert.ok(defaulted.story.entries[1].by);
+  assert.equal(defaulted.story.entries[1].ref, null);
+
+  const read = cliJson(['story', 'log', createdStory.ref, '--json']);
+  assert.deepEqual(read.story.entries, defaulted.story.entries);
+
+  const briefing = require('../lib/agentsync.js').renderTicketBriefing({
+    ref: 'SQ-briefing', title: 'Briefing member', model: 'opus', effort: 'high', category: {}, storyId: createdStory.id,
+  }, 'story-log-token', slug);
+  assert.match(briefing, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
 });
 
 test('entry text over 280 UTF-8 bytes is refused rather than truncated', () => {
