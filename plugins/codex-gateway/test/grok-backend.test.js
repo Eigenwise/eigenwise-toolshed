@@ -102,6 +102,59 @@ test('translates Responses completions and stream events to Anthropic messages',
   assert.match(frames.join(''), /"type":"message_stop"/);
 });
 
+test('translates Anthropic web search server tools and Grok web search calls', () => {
+  const request = grok.translateRequest({
+    tools: [
+      { type: 'web_search_20250305', name: 'web_search' },
+      { name: 'lookup', input_schema: { type: 'object', properties: {} } },
+    ],
+  }, 'grok-4.5');
+  assert.deepEqual(request.tools, [
+    { type: 'web_search' },
+    { type: 'function', name: 'lookup', description: undefined, parameters: { type: 'object', properties: {} } },
+  ]);
+
+  const response = {
+    output: [{
+      type: 'web_search_call',
+      id: 'ws_1',
+      action: {
+        type: 'search',
+        query: 'Tokyo population',
+        sources: [{ type: 'url', url: 'https://example.com/tokyo', title: 'Tokyo data' }],
+      },
+    }],
+  };
+  assert.deepEqual(grok.translateResponse(response, 'claude-grok-4-5').content, [
+    { type: 'server_tool_use', id: 'ws_1', name: 'web_search', input: { type: 'search', query: 'Tokyo population' } },
+    { type: 'web_search_tool_result', tool_use_id: 'ws_1', content: [{ type: 'web_search_result', title: 'Tokyo data', url: 'https://example.com/tokyo' }] },
+  ]);
+  assert.equal(grok.translateResponse(response, 'claude-grok-4-5').stop_reason, 'end_turn');
+});
+
+test('streams Grok web search calls as server tool blocks', () => {
+  const frames = [];
+  const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4-5');
+  const item = {
+    type: 'web_search_call',
+    id: 'ws_1',
+    action: { type: 'search', query: 'Tokyo population', sources: [{ type: 'url', url: 'https://example.com/tokyo' }] },
+  };
+  stream.event({ type: 'response.created', response: { id: 'resp_fixture' } });
+  stream.event({ type: 'response.output_item.added', output_index: 0, item, response: { id: 'resp_fixture' } });
+  stream.event({ type: 'response.output_item.done', output_index: 0, item, response: { id: 'resp_fixture' } });
+  stream.event({ type: 'response.completed', response: { id: 'resp_fixture', output: [item] } });
+
+  const events = sseEvents(frames);
+  const starts = events.filter((event) => event.type === 'content_block_start');
+  assert.deepEqual(starts.map((event) => event.content_block), [
+    { type: 'server_tool_use', id: 'ws_1', name: 'web_search', input: { type: 'search', query: 'Tokyo population' } },
+    { type: 'web_search_tool_result', tool_use_id: 'ws_1', content: [{ type: 'web_search_result', title: 'https://example.com/tokyo', url: 'https://example.com/tokyo' }] },
+  ]);
+  assert.equal(events.some((event) => event.content_block?.type === 'tool_use'), false);
+  assertWellFormedContentBlocks(events);
+});
+
 function sseEvents(frames) {
   return frames.map((frame) => JSON.parse(frame.split('\n')[1].slice('data: '.length)));
 }
