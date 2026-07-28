@@ -38,6 +38,7 @@ const BOARD_RECONCILIATION_REMINDER = path.join(HOOKS, 'board-reconciliation-rem
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 const GUARD_SHARED_TREE_COMMIT = path.join(HOOKS, 'guard-shared-tree-commit.js');
 
+// Budget tests pin the plugin root because the nudge embeds it in CLI fallbacks.
 const BUDGET = {
   session: 5200,
   compact: 3200,
@@ -45,6 +46,12 @@ const BUDGET = {
   reconciliation: 360,
   longrun: 400, // SubagentStop runaway note — one short line, like the standing reminder
 };
+const FIXED_PLUGIN_ROOT = path.join(os.tmpdir(), 'sq-plugin-root');
+try {
+  fs.symlinkSync(path.join(__dirname, '..'), FIXED_PLUGIN_ROOT, 'junction');
+} catch (error) {
+  if (!fs.existsSync(FIXED_PLUGIN_ROOT)) throw error;
+}
 
 const RETIRED_SCOUT = `sidequest-${'scout'}`;
 
@@ -72,6 +79,32 @@ function runSessionWithHome(home?: any, envOverrides?: any) {
     env: { ...process.env, SIDEQUEST_HOME: home, ...(envOverrides || {}) },
   });
 }
+
+function runHookOutputForBudget(script?: any, payload?: any, envOverrides?: any) {
+  return runHookOutput(script, payload, { ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
+}
+
+function runHookForBudget(script?: any, payload?: any, envOverrides?: any) {
+  return runHook(script, payload, { ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
+}
+
+function runSessionWithHomeForBudget(home?: any, envOverrides?: any) {
+  return runSessionWithHome(home, { ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
+}
+
+function unpinnedBudgetTests(source?: any) {
+  return source
+    .split(/\n(?=test\()/)
+    .filter((block?: any) => block.includes('BUDGET.') && !block.includes('budget assertions must use a fixed plugin root') && !block.includes('runHookForBudget') && !block.includes('runHookOutputForBudget') && !block.includes('runSessionWithHomeForBudget'));
+}
+
+test('budget assertions must use a fixed plugin root', () => {
+  const source = fs.readFileSync(__filename, 'utf8');
+  assert.deepStrictEqual(unpinnedBudgetTests(source), [], 'budget assertions must use a budget helper that pins CLAUDE_PLUGIN_ROOT');
+
+  const fixture = "test('fixture', () => { const ctx = runHook(SESSION); assert.ok(ctx.length <= BUDGET.session); });";
+  assert.equal(unpinnedBudgetTests(fixture).length, 1, 'the guard must reject an unpinned budget assertion');
+});
 
 function writeCategory(home?: any, category?: any) {
   const database = db.openDb(home);
@@ -1154,9 +1187,7 @@ test('stop reminder: names this session\'s doing tickets and pending submissions
     sessionId,
   }).ok, true);
 
-  const reminder = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }, {
-    CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..'),
-  }).systemMessage;
+  const reminder = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }).systemMessage;
   assert.match(reminder, /1 ticket in doing/);
   assert.match(reminder, /1 submission pending integration/);
   assert.match(reminder, /Update or close them before finishing/);
@@ -1269,7 +1300,7 @@ test('session-start: says sidequest coexists with an external tracker (Jira)', (
 
 test('session-start: shows the live investigation workforce within its cap', () => {
   for (const source of ['', 'compact', 'resume']) {
-    const ctx = runHook(SESSION, { session_id: `workforce-${source || 'startup'}`, source }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+    const ctx = runHookForBudget(SESSION, { session_id: `workforce-${source || 'startup'}`, source });
     const start = ctx.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:');
     assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
     const workforce = ctx.slice(start);
@@ -1291,14 +1322,14 @@ test('session-start: bounds oversized workforces and reports omitted categories'
       enabled: true,
     });
   }
-  const output = JSON.parse(runSessionWithHome(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project'), CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }));
+  const output = JSON.parse(runSessionWithHomeForBudget(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project') }));
   const workforce = output.hookSpecificOutput.additionalContext.slice(output.hookSpecificOutput.additionalContext.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:'));
   assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `oversized workforce is ${Buffer.byteLength(workforce)} bytes`);
   assert.match(workforce, /… \d+ more enabled categories\./);
 });
 
 test('session-start: stays inside its byte budget and off the retired doctrine', () => {
-  const ctx = runHook(SESSION, { session_id: 'test' }, { CLAUDE_PLUGIN_ROOT: 'C:/plugins/sidequest' });
+  const ctx = runHookForBudget(SESSION, { session_id: 'test' });
   assert.ok(
     ctx.length <= BUDGET.session,
     `session block is ${ctx.length} chars — budget is ${BUDGET.session}; trim it, don't raise the budget`
@@ -1468,7 +1499,7 @@ test('session-start reports an unavailable integration target with the repair co
 
 test('session-start: compact and resume preserve evidence-first routing guidance', () => {
   for (const source of ['compact', 'resume']) {
-    const ctx = runHook(SESSION, { session_id: 't', source }, { CLAUDE_PLUGIN_ROOT: 'C:/plugins/sidequest' });
+    const ctx = runHookForBudget(SESSION, { session_id: 't', source });
     assert.match(ctx, /sidequest \(active — context restored\)/);
     assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
     assert.match(ctx, /ROLE: ORCHESTRATOR/);
@@ -1497,8 +1528,8 @@ test('session-start: compact and resume preserve evidence-first routing guidance
 });
 
 test('session-start: embeds the expanded plugin path in CLI fallbacks', () => {
-  const pluginRoot = 'C:/plugins/sidequest';
-  const ctx = runHook(
+  const pluginRoot = FIXED_PLUGIN_ROOT;
+  const ctx = runHookForBudget(
     SESSION,
     { session_id: 't', source: 'compact' },
     { CLAUDE_PLUGIN_ROOT: pluginRoot }
@@ -1664,7 +1695,7 @@ test('subagent-stop: an over-threshold claim reports a dead-claim verdict', () =
   const stop = claimStopTicket(t, sess, 'worker-long');
   backdateSessionClaims(sess, 28);
 
-  const ctx = runHook(SUBAGENT_STOP, stop);
+  const ctx = runHookForBudget(SUBAGENT_STOP, stop);
   assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: salvage uncommitted work from its worktree, then release + respawn and TaskStop it`);
   assert.ok(ctx.length <= BUDGET.longrun, `stop verdict is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
   assert.ok(ctx.indexOf('\n') === -1, 'the verdict must stay ONE line');
