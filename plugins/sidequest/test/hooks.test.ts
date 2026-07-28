@@ -1189,7 +1189,7 @@ test('session-start: carries evidence-first advisory routing guidance', () => {
   assert.match(ctx, /Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor/);
   assert.match(ctx, /contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once/);
   assert.match(ctx, /Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence\. Plan first when unsure\./, 'the unpinnable-contract branch must be evidence-gated');
-  assert.match(ctx, /Wave mode: pre-dispatch, file COMPLETE backlog under a story; pin its contract: all tickets, declared files, dependencies, per-ticket verify\. Dispatch the ready wave in parallel; never drip-file\/dispatch\/wait\. Discoveries still file mid-run\./, 'wave mode must file its planned backlog under a story before dispatch');
+  assert.match(ctx, /Wave mode: pre-dispatch, file COMPLETE backlog under a story; pin its contract: all tickets, declared files, dependencies, per-ticket verify\. Dispatch every dependency-ready ticket in parallel; same-file overlap in isolated worktrees needs assessment, not auto-serialization; never drip-file\/dispatch\/wait\. Discoveries still file mid-run\./, 'wave mode must file its planned backlog under a story before dispatch');
   assert.match(ctx, /substantive actions are BLOCKED until claim/);
   assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
   assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);

@@ -9,6 +9,7 @@ const ROOT = path.join(__dirname, '..');
 const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
 const skill = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
+const store = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'store.ts'), 'utf8');
 const publishing = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'publishing.md'), 'utf8');
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 
@@ -48,6 +49,15 @@ test('planning guidance requires stories for waves and keeps one-ticket work sto
   assert.match(skill, /file the complete backlog under it and pin\n\s+the execution contract on it/);
   assert.match(skill, /Sidequest's own `US-n` grouping, not a Claude Code feature/);
   assert.match(skill, /One-ticket mode stays story-less/);
+});
+
+test('wave guidance maximizes ready work and assesses isolated overlap', () => {
+  assert.match(orchestration, /Decompose to maximize the ready set/);
+  assert.match(orchestration, /A cut that forces a serial chain needs a stated reason/);
+  assert.match(orchestration, /same-file overlap alone is not a conflict/);
+  assert.match(orchestration, /same functions, constants, or regions; share a runtime resource; or semantically couple/);
+  assert.match(skill, /Dispatch everything whose dependencies are met, always;\n\s+assess same-file overlap in isolated worktrees, never auto-serialize it/);
+  assert.match(store, /parallel is fine in isolated worktrees unless the same symbols\/regions change; assess/);
 });
 
 test('dispatch guidance uses stable executors and fresh adoption dispatches', () => {

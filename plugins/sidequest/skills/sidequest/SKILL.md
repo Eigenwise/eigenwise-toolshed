@@ -42,7 +42,8 @@ For substantial work:
    integrate so `ready` serializes the phases.
 3. **File the whole planned wave backlog before dispatching.** After solo-fit chooses wave mode, put every
    planned ticket for every wave on the board, with declared files, dependency links, and per-ticket verify;
-   then dispatch the entire ready wave in parallel. Drip-filing, dispatching, waiting, then filing the next
+   then dispatch the entire ready wave in parallel. Dispatch everything whose dependencies are met, always;
+   assess same-file overlap in isolated worktrees, never auto-serialize it. Drip-filing, dispatching, waiting, then filing the next
    ticket serializes work and hides the plan until the user cannot steer it. Later discoveries still become
    normal mid-run tickets.
 4. **Execute proportionally** — "Route execution down" below.
