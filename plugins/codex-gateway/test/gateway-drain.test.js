@@ -10,6 +10,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const CLI = path.join(__dirname, '..', 'bin', 'codex-gateway.js');
+const gateway = require(CLI);
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
@@ -212,4 +213,88 @@ test('supervisor drains a planned worker restart without refusing connections', 
   release();
   assert.equal((await inFlight).status, 200);
   assert.equal((await health).status, 200);
+});
+
+test('a second supervisor exits when the singleton listener is already owned', async (t) => {
+  const firstHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-singleton-'));
+  const secondHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-singleton-'));
+  t.after(() => fs.rmSync(firstHome, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(secondHome, { recursive: true, force: true }));
+  const shimPort = await freePort();
+  const first = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: { ...process.env, HOME: firstHome, USERPROFILE: firstHome, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
+    stdio: 'ignore',
+  });
+  t.after(() => first.kill());
+  await waitFor(shimPort, 200);
+
+  const second = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+      env: { ...process.env, HOME: secondHome, USERPROFILE: secondHome, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let text = '';
+    child.stdout.on('data', (chunk) => { text += chunk; });
+    child.stderr.on('data', (chunk) => { text += chunk; });
+    child.once('error', reject);
+    child.once('exit', (code) => resolve({ code, text }));
+  });
+
+  assert.equal(second.code, 1);
+  assert.match(second.text, /shim supervisor cannot bind/);
+  assert.equal((await request(shimPort, 'GET', '/healthz')).status, 200);
+});
+
+test('version mismatch replaces the supervisor instead of draining its worker', async () => {
+  const calls = [];
+  const result = await gateway.restartShimIfOutdated({
+    fetchHealth: async () => ({ version: '0.0.0', supervisorVersion: '0.0.0' }),
+    restartWorker: async () => { calls.push('worker'); return { ok: true }; },
+    restartSupervisor: async () => { calls.push('supervisor'); return { ok: true }; },
+  });
+
+  assert.deepEqual(calls, ['supervisor']);
+  assert.deepEqual(result, { ok: true });
+});
+
+test('same-version health keeps the supervisor and worker running', async () => {
+  const calls = [];
+  const result = await gateway.restartShimIfOutdated({
+    fetchHealth: async () => ({ version: gateway.PLUGIN_VERSION, supervisorVersion: gateway.PLUGIN_VERSION }),
+    restartWorker: async () => { calls.push('worker'); return { ok: true }; },
+    restartSupervisor: async () => { calls.push('supervisor'); return { ok: true }; },
+  });
+
+  assert.equal(result, null);
+  assert.deepEqual(calls, []);
+});
+
+test('doctor reports a serving version mismatch and the ensure remedy', async (t) => {
+  const shim = http.createServer((req, res) => {
+    if (req.url === '/healthz') return res.end(JSON.stringify({ ok: true, version: '0.0.0', supervisorVersion: '0.0.0' }));
+    if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [] }));
+    res.statusCode = 404;
+    res.end();
+  });
+  const shimPort = await listen(shim);
+  t.after(() => shim.close());
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-gateway-doctor-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  const output = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, 'doctor'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let text = '';
+    child.stdout.on('data', (chunk) => { text += chunk; });
+    child.stderr.on('data', (chunk) => { text += chunk; });
+    child.once('error', reject);
+    child.once('exit', (code) => resolve({ code, text }));
+  });
+
+  assert.equal(output.code, 1);
+  assert.match(output.text, /serving shim version: 0\.0\.0/);
+  assert.match(output.text, new RegExp(`VERSION MISMATCH: CLI ${gateway.PLUGIN_VERSION.replaceAll('.', '\\.')}, serving shim 0\\.0\\.0`));
+  assert.match(output.text, new RegExp(`Run node "${CLI.replace(/[\\/]/g, '[\\\\/]')}" ensure`));
 });
