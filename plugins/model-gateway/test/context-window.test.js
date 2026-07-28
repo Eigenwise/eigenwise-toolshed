@@ -81,7 +81,7 @@ function usageSse(usage) {
 }
 
 const codexBody = JSON.stringify({
-  model: 'claude-codex-gpt-5.6-sol',
+  model: 'claude-gpt-5.6-sol',
   max_tokens: 1,
   messages: [{ role: 'user', content: 'test' }],
 });
@@ -127,22 +127,22 @@ test('Codex discovery advertises context metadata but keeps the local model id u
   await waitForShim(shimPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
-  const codexModels = models.data.filter(({ id }) => id.startsWith('claude-codex-'));
+  const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
   assert.deepEqual(codexModels.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
-    { id: 'claude-codex-gpt-5.6-sol', max_input_tokens: 370000 },
-    { id: 'claude-codex-gpt-5.6-terra', max_input_tokens: 370000 },
-    { id: 'claude-codex-gpt-5.6-luna', max_input_tokens: 370000 },
+    { id: 'claude-gpt-5.6-sol', max_input_tokens: 370000 },
+    { id: 'claude-gpt-5.6-terra', max_input_tokens: 370000 },
+    { id: 'claude-gpt-5.6-luna', max_input_tokens: 370000 },
   ]);
-  assert.ok(models.data.some(({ id }) => id === 'claude-grok-4-5'));
+  assert.ok(models.data.some(({ id }) => id === 'claude-grok-4.5'));
   // 370000 = the measured backend input ceiling. Claude Code 2.1.207 still
-  // hardwires 200k for claude-codex-* ids, so this value is inert for
+  // hardwires 200k for claude-* ids, so this value is inert for
   // compaction and advertised only for honesty/future-proofing. See
   // CODEX_COMPACT_CONTEXT_WINDOW.
   assert.equal(codexModels.every(({ max_input_tokens }) => max_input_tokens === 370000), true);
   assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
-    model: 'claude-codex-gpt-5.6-sol[1m]',
+    model: 'claude-gpt-5.6-sol[1m]',
     max_tokens: 1,
     messages: [{ role: 'user', content: 'legacy session' }],
   }));
@@ -179,7 +179,7 @@ test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', a
   await waitForShim(shimPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
-  assert.equal(models.data.filter(({ id }) => id.startsWith('claude-codex-')).every(({ max_input_tokens }) => max_input_tokens === 200000), true);
+  assert.equal(models.data.filter(({ id }) => id.startsWith('claude-gpt-')).every(({ max_input_tokens }) => max_input_tokens === 200000), true);
 });
 
 test('default request route logging records Fable metadata but never prompt data', async (t) => {
@@ -439,7 +439,7 @@ test('retries transient Codex WebSocket upgrade rejections before returning the 
 
   const response = await request(shimPort, 'POST', '/v1/messages', codexBody);
   assert.equal(response.status, 200);
-  assert.equal(JSON.parse(response.body).model, 'claude-codex-gpt-5.6-sol');
+  assert.equal(JSON.parse(response.body).model, 'claude-gpt-5.6-sol');
   assert.equal(forwarded, 3);
 });
 
@@ -503,7 +503,7 @@ test('an old-proxy context error is normalized to HTTP 413 request_too_large', a
   await waitForShim(shimPort);
 
   const response = await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
-    model: 'claude-codex-gpt-5.6-sol',
+    model: 'claude-gpt-5.6-sol',
     max_tokens: 1,
     messages: [{ role: 'user', content: 'oversized' }],
   }));
@@ -545,7 +545,7 @@ test('an upstream 413 with parseable token counts passes through untouched', asy
   await waitForShim(shimPort);
 
   const response = await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
-    model: 'claude-codex-gpt-5.6-sol',
+    model: 'claude-gpt-5.6-sol',
     max_tokens: 1,
     messages: [{ role: 'user', content: 'oversized' }],
   }));
@@ -609,10 +609,10 @@ test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', asy
   t.after(() => child.kill());
   await waitForShim(shimPort);
 
-  const body = JSON.stringify({ model: 'claude-codex-gpt-5.6-sol', max_tokens: 1, messages: [] });
+  const body = JSON.stringify({ model: 'claude-gpt-5.6-sol', max_tokens: 1, messages: [] });
   const jsonResponse = await request(shimPort, 'POST', '/v1/messages', body);
   const json = JSON.parse(jsonResponse.body);
-  assert.equal(json.model, 'claude-codex-gpt-5.6-sol');
+  assert.equal(json.model, 'claude-gpt-5.6-sol');
   assert.deepEqual(json.content, [{ type: 'text', text: 'keep' }]);
   assert.equal(json.stop_reason, 'end_turn');
 
@@ -625,7 +625,7 @@ test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', asy
     .filter((line) => line.startsWith('data: '))
     .map((line) => JSON.parse(line.slice(6)));
   const start = data.find((event) => event.type === 'message_start');
-  assert.equal(start.message.model, 'claude-codex-gpt-5.6-sol');
+  assert.equal(start.message.model, 'claude-gpt-5.6-sol');
   const bashStart = data.find((event) => event.type === 'content_block_start' && event.content_block?.name === 'Bash');
   assert.equal(bashStart.index, 1);
   assert.equal(data.find((event) => event.type === 'content_block_delta' && event.delta?.partial_json)?.index, 1);
@@ -646,7 +646,7 @@ test('SessionStart cleanup migrates an already-wired install', () => {
   const gatewayCache = path.join(claudeDir, 'cache', 'gateway-models.json');
   fs.writeFileSync(gatewayCache, JSON.stringify({
     baseUrl: 'http://127.0.0.1:18764',
-    models: [{ id: 'claude-codex-gpt-5.6-sol[1m]' }],
+    models: [{ id: 'claude-gpt-5.6-sol[1m]' }],
   }));
 
   spawnSync(process.execPath, [CLI, 'ensure', '--quiet'], {
@@ -660,7 +660,7 @@ test('SessionStart cleanup migrates an already-wired install', () => {
   assert.equal(settings.env.USER_SETTING, 'keep-me');
   const migratedCache = JSON.parse(fs.readFileSync(gatewayCache, 'utf8'));
   assert.equal(migratedCache.baseUrl, 'http://127.0.0.1:18764');
-  assert.equal(migratedCache.models[0].id, 'claude-codex-gpt-5.6-sol');
+  assert.equal(migratedCache.models[0].id, 'claude-gpt-5.6-sol');
 });
 
 test('SessionStart cleanup leaves unrelated gateway caches alone', () => {
@@ -670,7 +670,7 @@ test('SessionStart cleanup leaves unrelated gateway caches alone', () => {
   const gatewayCache = path.join(cacheDir, 'gateway-models.json');
   const original = JSON.stringify({
     baseUrl: 'http://other-gateway.example',
-    models: [null, { id: 'claude-codex-gpt-5.6-sol[1m]' }],
+    models: [null, { id: 'claude-gpt-5.6-sol[1m]' }],
   });
   fs.writeFileSync(gatewayCache, original);
 
@@ -1018,7 +1018,7 @@ test('count_tokens for a Codex model still routes to the proxy', async (t) => {
   await waitForShim(shimPort);
 
   const response = await request(shimPort, 'POST', '/v1/messages/count_tokens', JSON.stringify({
-    model: 'claude-codex-gpt-5.6-sol',
+    model: 'claude-gpt-5.6-sol',
     messages: [{ role: 'user', content: 'count me' }],
   }));
   assert.equal(response.status, 200);
@@ -1058,7 +1058,7 @@ test('Codex SSE sends heartbeat comments while upstream is silent', async (t) =>
   await waitForShim(shimPort);
 
   const response = await requestStream(shimPort, JSON.stringify({
-    model: 'claude-codex-gpt-5.6-terra',
+    model: 'claude-gpt-5.6-terra',
     max_tokens: 1,
     messages: [{ role: 'user', content: 'stream' }],
   }));

@@ -47,7 +47,7 @@ test('re-dispatch re-derives an unlaunched prepared route after model availabili
 
   writeCatalog([{
     slug: 'codex-gpt-recovered',
-    id: 'claude-codex-gpt-recovered',
+    id: 'claude-gpt-recovered',
     label: 'Recovered Codex model',
   }]);
 

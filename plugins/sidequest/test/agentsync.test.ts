@@ -14,9 +14,9 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
 const agentsync = require('../lib/agentsync.js');
 
-const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' };
-const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' };
-const PROJECT_ONLY = { slug: 'codex-gpt-5-6-project-only', id: 'claude-codex-gpt-5.6-project-only[1m]', label: 'GPT-5.6 Project Only' };
+const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' };
+const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' };
+const PROJECT_ONLY = { slug: 'codex-gpt-5-6-project-only', id: 'claude-gpt-5.6-project-only[1m]', label: 'GPT-5.6 Project Only' };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const STABLE_EXECUTORS = EFFORTS.flatMap((effort) => [
@@ -719,6 +719,20 @@ test('workflow recipes use the dispatch pin and normalized catalog marker for Co
     effortCarrier: 'marker',
     warnings: [],
   });
+});
+
+// SQ-1004: a catalog.json left behind by a pre-3.x gateway still carries
+// claude-codex- ids. Deriving the marker from it must land on the same backend
+// id, or every dispatch on the board breaks until the catalog is rewritten.
+test('workflow recipes derive the same marker from a pre-rename catalog', () => {
+  seedCatalog([{ slug: TERRA.slug, id: 'claude-codex-gpt-5.6-terra[1m]', label: TERRA.label }]);
+  const store = require('../lib/store.js');
+  configure(store, 'workflow-legacy-codex', { model: TERRA.slug, effort: 'medium' });
+  const category = Object.assign(store.getCategory('workflow-legacy-codex'), { project: 'recipe-project' });
+
+  const recipe = agentsync.workflowRecipe(category, store.resolveCategoryRoute(category));
+  assert.equal(recipe.agent.model, agentsync.DISPATCH_MODEL_ID);
+  assert.equal(recipe.agent.promptPrefix, '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n');
 });
 
 test('workflow recipes use the Claude runtime alias without a prompt prefix', () => {

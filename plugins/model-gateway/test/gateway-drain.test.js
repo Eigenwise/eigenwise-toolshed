@@ -118,7 +118,7 @@ test('draining shim finishes an in-flight request before it exits', async (t) =>
   await waitFor(shimPort, 200);
 
   const inFlight = request(shimPort, 'POST', '/v1/messages', {
-    model: 'claude-codex-gpt-5.6-terra', messages: [], max_tokens: 1,
+    model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1,
   });
   await received;
   const draining = await request(shimPort, 'POST', '/drain', {});
@@ -168,7 +168,7 @@ test('supervisor keeps its listener available while a hard-killed worker restart
   await waitFor(shimPort, 200);
 
   const requestPromise = request(shimPort, 'POST', '/v1/messages', {
-    model: 'claude-codex-gpt-5.6-terra', messages: [], max_tokens: 1,
+    model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1,
   });
   while (requests === 0) await new Promise((resolve) => setTimeout(resolve, 10));
   const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
@@ -206,7 +206,7 @@ test('supervisor drains a planned worker restart without refusing connections', 
   t.after(() => child.kill());
   await waitFor(shimPort, 200);
 
-  const inFlight = request(shimPort, 'POST', '/v1/messages', { model: 'claude-codex-gpt-5.6-terra', messages: [], max_tokens: 1 });
+  const inFlight = request(shimPort, 'POST', '/v1/messages', { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 });
   while (!release) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal((await request(shimPort, 'POST', '/restart', {})).status, 202);
   const health = request(shimPort, 'GET', '/healthz');

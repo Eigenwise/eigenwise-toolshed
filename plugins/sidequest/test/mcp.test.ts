@@ -1323,7 +1323,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['full', 'integrationBranch', 'project', 'ref', 'sharedTree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
-  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
+  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
   store.setCategory({ id: 'dispatch-codex', name: 'Dispatch Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const slug = store.ensureProject(PROJ).slug;
 
@@ -1332,7 +1332,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(instant.mode, 'instant');
   assert.deepEqual(instant.exec, {
     agent: 'sidequest-exec-dispatch-high', model: null, backend: 'codex',
-    runsModel: 'codex-gpt-5-6-terra', apiModel: 'claude-codex-gpt-5.6-terra',
+    runsModel: 'codex-gpt-5-6-terra', apiModel: 'claude-gpt-5.6-terra',
     runsLabel: 'Terra', dispatch: 'native-agent',
   });
   assert.equal(instant.agent, 'sidequest-exec-dispatch-high');
@@ -1489,7 +1489,7 @@ test('MCP shared-tree dispatch activates the bounded artifact lifecycle', async 
 });
 
 test('native_agent carries ticket anchors and verify command through its stable fallback', async () => {
-  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
+  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
   try {
     store.setCategory({ id: 'native-codex', name: 'Native Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
     const added = await callTool('add', {
@@ -1532,7 +1532,7 @@ test('native_agent returns a complete Claude worktree spawn spec', async () => {
 });
 
 test('native_agent isolates declared-file tickets unless shared-tree is requested', async () => {
-  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra', label: 'Terra' }]);
+  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
   try {
     store.setCategory({ id: 'native-worktree', name: 'Native Worktree', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
     const added = await callTool('add', { title: 'worktree dispatch', category: 'native-worktree', files: ['plugins/sidequest'] });
@@ -2021,7 +2021,7 @@ test('claim requires a worker id (no shared-identity default)', async () => {
 });
 
 test('MCP claim passes prepared dispatch token and executor through to the store', async () => {
-  seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
+  seedCatalog([{ id: 'claude-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
   store.setCategory({ id: 'mcp-dispatch-claim', name: 'MCP dispatch claim', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const added = await callTool('add', { title: 'nonce through MCP', category: 'mcp-dispatch-claim' });
   const slug = store.ensureProject(PROJ).slug;
@@ -2074,7 +2074,7 @@ test('MCP direct claim refuses rationalizations outside the inline-safe allowlis
 });
 
 test('MCP claim rejects a generic executor for a Codex route', async () => {
-  seedCatalog([{ id: 'claude-codex-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
+  seedCatalog([{ id: 'claude-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
   try {
     store.setCategory({ id: 'claim-codex', name: 'Claim Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
     const added = await callTool('add', { title: 'Codex executor guard', category: 'claim-codex' });
@@ -2214,7 +2214,7 @@ test('the real stdio server frames newline-delimited JSON-RPC', async () => {
 });
 
 test('models reports concrete routes and no grade output', async () => {
-  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra' }]);
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'Codex Terra' }]);
   try {
     store.setCategory({ id: 'model-codex', name: 'Model Codex', route: { model: 'codex-terra', effort: 'high' }, fallback: { model: 'opus', effort: 'high' } });
     const out = await callHandler('models', {});
@@ -2229,7 +2229,7 @@ test('models reports concrete routes and no grade output', async () => {
 });
 
 test('route_recipe resolves a live route and makes category errors explicit', async () => {
-  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra' }]);
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'Codex Terra' }]);
   try {
     store.setCategory({ id: 'recipe-codex', name: 'Recipe Codex', route: { model: 'codex-terra', effort: 'high' } });
     const recipe = await callTool('route_recipe', { category: 'recipe-codex' });
@@ -2265,7 +2265,7 @@ test('route_recipe resolves a live route and makes category errors explicit', as
 });
 
 test('done stamps workedBy with a discovered Codex slug', async () => {
-  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }]);
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]' }]);
   try {
     store.setCategory({ id: 'provenance-codex', name: 'Provenance Codex', route: { model: 'codex-terra', effort: 'high' } });
     const added = await callTool('add', { title: 'codex provenance', category: 'provenance-codex' });
@@ -2281,8 +2281,8 @@ test('done stamps workedBy with a discovered Codex slug', async () => {
 
 test('reporting aliases resolve to catalog slugs and dispatched done defaults provenance', async () => {
   seedCatalog([
-    { slug: 'codex-gpt-5-6-terra-fast', id: 'claude-codex-gpt-5.6-terra-fast[1m]' },
-    { slug: 'codex-gpt-5-6-luna-fast', id: 'claude-codex-gpt-5.6-luna-fast[1m]' },
+    { slug: 'codex-gpt-5-6-terra-fast', id: 'claude-gpt-5.6-terra-fast[1m]' },
+    { slug: 'codex-gpt-5-6-luna-fast', id: 'claude-gpt-5.6-luna-fast[1m]' },
   ]);
   try {
     store.setCategory({ id: 'alias-codex', name: 'Alias Codex', route: { model: 'codex-gpt-5-6-terra-fast', effort: 'high' } });
@@ -2300,12 +2300,12 @@ test('reporting aliases resolve to catalog slugs and dispatched done defaults pr
       return store.getTicket(added.project, added.ref);
     };
 
-    for (const alias of ['gpt-5.6-terra-fast', 'claude-codex-gpt-5.6-terra-fast[1m]', 'CLAUDE-CODEX-GPT-5.6-TERRA-FAST']) {
+    for (const alias of ['gpt-5.6-terra-fast', 'claude-gpt-5.6-terra-fast[1m]', 'CLAUDE-CODEX-GPT-5.6-TERRA-FAST']) {
       const ticket = await complete(`alias ${alias}`, alias);
       assert.equal(ticket.workedBy.model, 'codex-gpt-5-6-terra-fast');
     }
     assert.equal(store.classifyModelFilter('gpt-5.6-terra-fast'), 'codex-gpt-5-6-terra-fast');
-    assert.equal(store.classifyModelFilter('claude-codex-gpt-5.6-terra-fast'), 'codex-gpt-5-6-terra-fast');
+    assert.equal(store.classifyModelFilter('claude-gpt-5.6-terra-fast'), 'codex-gpt-5-6-terra-fast');
     assert.throws(() => store.setCategory({
       id: 'alias-route-rejected',
       name: 'Alias Route Rejected',
@@ -2344,7 +2344,7 @@ test('ready with an unrecognized model errors instead of silently meaning "no fi
 });
 
 test('claim guard refusal names the Codex-backed executor for a concrete route', async () => {
-  seedCatalog([{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }]);
+  seedCatalog([{ slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]' }]);
   try {
     store.setCategory({ id: 'guard-codex', name: 'Guard Codex', route: { model: 'codex-terra', effort: 'high' } });
     const added = await callTool('add', { title: 'codex guard', category: 'guard-codex' });

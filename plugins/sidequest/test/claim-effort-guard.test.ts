@@ -14,7 +14,7 @@ const catalogDir = path.join(DISCOVERY_ROOT, 'model-gateway');
 fs.mkdirSync(catalogDir, { recursive: true });
 fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
   schemaVersion: 3, source: 'model-gateway',
-  models: [{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }],
+  models: [{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }],
 }));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY_ROOT;

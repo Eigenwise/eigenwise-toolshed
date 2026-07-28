@@ -118,7 +118,7 @@ function truncatedStream() {
 
 function compactBody(extra = {}) {
   return JSON.stringify({
-    model: 'claude-codex-gpt-5.6-sol',
+    model: 'claude-gpt-5.6-sol',
     max_tokens: 512,
     stream: true,
     system: [{ type: 'text', text: COMPACT_PROMPT }],
@@ -129,7 +129,7 @@ function compactBody(extra = {}) {
 
 function normalBody() {
   return JSON.stringify({
-    model: 'claude-codex-gpt-5.6-sol',
+    model: 'claude-gpt-5.6-sol',
     max_tokens: 512,
     stream: true,
     system: [{ type: 'text', text: 'You are Claude Code.' }],
@@ -409,7 +409,7 @@ test('20 compaction requests whose first upstream attempt dies all come back com
   const shimPort = await spawnShim(t, proxyPort);
 
   const responses = await Promise.all(Array.from({ length: 20 }, (_, i) => postStream(shimPort, JSON.stringify({
-    model: 'claude-codex-gpt-5.6-sol',
+    model: 'claude-gpt-5.6-sol',
     max_tokens: 512,
     stream: true,
     system: [{ type: 'text', text: COMPACT_PROMPT }],

@@ -19,11 +19,11 @@ fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
   source: 'model-gateway',
   models: [{
     slug: 'codex-gpt-5-6-sol',
-    id: 'claude-codex-gpt-5.6-sol[1m]',
+    id: 'claude-gpt-5.6-sol[1m]',
     label: 'GPT-5.6 Sol',
   }, {
     slug: 'codex-gpt-5-6-terra',
-    id: 'claude-codex-gpt-5.6-terra[1m]',
+    id: 'claude-gpt-5.6-terra[1m]',
     label: 'GPT-5.6 Terra',
   }],
 }));

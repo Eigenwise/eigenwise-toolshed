@@ -31,7 +31,7 @@ function terminalResult(overrides = {}) {
       cache_creation_input_tokens: 64,
     },
     modelUsage: {
-      'claude-codex-gpt-5.6-sol': {
+      'claude-gpt-5.6-sol': {
         inputTokens: 1000,
         outputTokens: 300,
         cacheReadInputTokens: 800,
@@ -67,7 +67,7 @@ function errorResult(overrides = {}) {
       output_tokens: 900,
     },
     modelUsage: {
-      'claude-codex-gpt-5.6-sol': { inputTokens: 4000, outputTokens: 900, costUSD: 0.1337 },
+      'claude-gpt-5.6-sol': { inputTokens: 4000, outputTokens: 900, costUSD: 0.1337 },
     },
     // Content that must never be captured:
     errors: [{ message: 'private error detail that must not leak' }],
@@ -153,7 +153,7 @@ test('normalizeTerminalResult emits acceptable terminal + per-model observations
 
   assert.equal(models.length, 2);
   const perModel = models.map((m) => m.attributes.model).sort();
-  assert.deepEqual(perModel, ['claude-codex-gpt-5.6-sol', 'claude-haiku-4-5']);
+  assert.deepEqual(perModel, ['claude-gpt-5.6-sol', 'claude-haiku-4-5']);
   for (const observation of observations) {
     assert.equal(observation.event_name === 'agent_sdk.assistant_usage'
       ? observation.measurements.every((m) => m.scope === 'run')

@@ -10,10 +10,11 @@ description: >-
 Two local processes give Claude Code native access to the user's ChatGPT subscription models:
 `claude-code-proxy` (does OpenAI OAuth and translates Anthropic Messages API to the Codex
 backend) and a shim router this plugin owns. `ANTHROPIC_BASE_URL` points at the shim: requests
-for `claude-codex-*` models are un-prefixed and go to the proxy, everything else passes through
+for `claude-gpt-*` models are un-prefixed and go to the proxy, everything else passes through
 to api.anthropic.com with the user's normal claude.ai login. The shim's `/v1/models` advertises
-Codex models with the `claude-codex-` prefix because Claude Code's model discovery drops ids
-that don't start with `claude`/`anthropic`.
+Codex models with a `claude-` prefix because Claude Code's model discovery drops ids that don't
+start with `claude`/`anthropic`. That prefix is shared with the real Anthropic ids, so the route
+is decided by the backend family segment (`claude-gpt-*`, `claude-grok-*`), never by the prefix.
 
 All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" <command>`
 
@@ -52,12 +53,12 @@ back, or you kill the session that was about to use it.
 ## Selecting models
 
 - `/model` picker: rows like "GPT-5.6-sol (Codex)".
-- Typed: `/model claude-codex-gpt-5.6-sol` (any string passes through on a custom base URL).
+- Typed: `/model claude-gpt-5.6-sol` (any string passes through on a custom base URL).
 - Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to,
   not the pay-per-token API) has a measured 370k input ceiling. The shim advertises `370000` as
   `max_input_tokens` by default; override it with `CODEX_GATEWAY_CONTEXT_WINDOW` when tuning a
   machine-specific setup. That advertised value is inert: Claude Code hardwires its own 200k gateway
-  budget for discovered `claude-codex-*` rows. The backend's HTTP 413 `request_too_large` response is
+  budget for discovered `claude-gpt-*` rows. The backend's HTTP 413 `request_too_large` response is
   the recovery signal for context overflow. Legacy typed Codex ids ending in `[1m]` still route, but
   they retain a 1M client budget for that open session: switch to the unsuffixed picker row and
   restart Claude Code after upgrading from 0.4.1.

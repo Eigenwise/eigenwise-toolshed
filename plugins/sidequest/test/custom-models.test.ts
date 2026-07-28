@@ -21,7 +21,7 @@ function seedCatalog(models?: any, catalog: any = { schemaVersion: 3, source: 'm
 }
 
 test('model vocabulary contains Claude runtimes and discovered concrete models', () => {
-  seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }]);
+  seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }]);
   assert.deepEqual(store.getModelVocab().models, ['haiku', 'sonnet', 'opus', 'fable', 'codex-gpt-test']);
   assert.equal(store.classifyModelFilter('opus'), 'opus');
   assert.equal(store.classifyModelFilter('codex-gpt-test'), 'codex-gpt-test');
@@ -29,7 +29,7 @@ test('model vocabulary contains Claude runtimes and discovered concrete models',
 });
 
 test('resolveExec is keyed directly by concrete model and effort', () => {
-  seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }]);
+  seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }]);
   assert.deepEqual(store.resolveExec('opus', 'high'), {
     agent: 'sidequest-exec-high', model: 'opus', spawnId: 'opus', backend: 'claude', slug: 'opus',
     runsModel: 'opus', apiModel: 'opus', runsLabel: 'Claude Opus', dispatch: 'native-agent',
@@ -37,14 +37,14 @@ test('resolveExec is keyed directly by concrete model and effort', () => {
   const codex = store.resolveExec('codex-gpt-test', 'xhigh');
   assert.equal(codex.agent, 'sidequest-exec-dispatch-xhigh');
   assert.equal(codex.model, null);
-  assert.equal(codex.spawnId, 'claude-codex-test');
+  assert.equal(codex.spawnId, 'claude-test');
   assert.equal(codex.dispatchModel, 'test');
   assert.equal(codex.runsModel, 'codex-gpt-test');
-  assert.equal(codex.apiModel, 'claude-codex-test');
+  assert.equal(codex.apiModel, 'claude-test');
 });
 
 test('v2 catalog migration still discovers concrete routes', () => {
-  seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }], {
+  seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }], {
     schema: 2, source: 'model-gateway',
   });
   assert.ok(store.getModelVocab().models.includes('codex-gpt-test'));
@@ -52,7 +52,7 @@ test('v2 catalog migration still discovers concrete routes', () => {
 });
 
 test('models payload contains resolved category policy without grade vocabulary', () => {
-  seedCatalog([{ slug: 'codex-gpt-5-6-luna', id: 'claude-codex-luna', label: 'Luna' }]);
+  seedCatalog([{ slug: 'codex-gpt-5-6-luna', id: 'claude-luna', label: 'Luna' }]);
   const payload = store.modelsPayload();
   assert.ok(payload.categories.length);
   assert.deepEqual(payload.globalFallback, { label: 'availability fallback', model: 'sonnet', effort: 'high' });

@@ -114,7 +114,7 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
   await waitForHealthz(shimPort);
 
   const models = JSON.parse((await request(shimPort, '/v1/models')).body).data;
-  assert.ok(models.some(({ id }) => id === 'claude-codex-gpt-5.6-sol'));
+  assert.ok(models.some(({ id }) => id === 'claude-gpt-5.6-sol'));
 
   const tools = [
     tool('ToolSearch'),
@@ -123,7 +123,7 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
     tool('mcp__sidequest_board__comments', true),
   ];
   const initial = JSON.stringify({
-    model: 'claude-codex-gpt-5.6-sol',
+    model: 'claude-gpt-5.6-sol',
     max_tokens: 32,
     messages: [{ role: 'user', content: 'Find the board list tool' }],
     tools,
@@ -133,7 +133,7 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
   assert.equal(forwardedToCodex[0].tools.some((entry) => 'defer_loading' in entry), false);
 
   const followUpBody = {
-    model: 'claude-codex-gpt-5.6-sol',
+    model: 'claude-gpt-5.6-sol',
     max_tokens: 32,
     messages: [
       { role: 'user', content: 'Find the board list tool' },

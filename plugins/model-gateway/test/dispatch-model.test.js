@@ -349,12 +349,12 @@ test('dispatch route ignores markers echoed through tool_result blocks end-to-en
 test('buildCatalog publishes the v3 concrete-model contract without routing policy', () => {
   const catalog = gw.buildCatalog([
     'claude-codex-auto',
-    'claude-codex-gpt-5.6-sol',
-    'claude-codex-gpt-5.6-terra',
-    'claude-codex-gpt-5.6-luna',
-    'claude-codex-gpt-5.6-sol-fast',
-    'claude-codex-gpt-5.6-terra-fast',
-    'claude-codex-gpt-5.6-luna-fast',
+    'claude-gpt-5.6-sol',
+    'claude-gpt-5.6-terra',
+    'claude-gpt-5.6-luna',
+    'claude-gpt-5.6-sol-fast',
+    'claude-gpt-5.6-terra-fast',
+    'claude-gpt-5.6-luna-fast',
   ]);
   assert.equal(catalog.schemaVersion, 3);
   assert.equal(catalog.source, 'model-gateway');
@@ -362,32 +362,32 @@ test('buildCatalog publishes the v3 concrete-model contract without routing poli
   assert.deepEqual(catalog.models, [
     {
       slug: 'codex-gpt-5-6-sol',
-      id: 'claude-codex-gpt-5.6-sol',
+      id: 'claude-gpt-5.6-sol',
       label: 'GPT-5.6 Sol',
     },
     {
       slug: 'codex-gpt-5-6-terra',
-      id: 'claude-codex-gpt-5.6-terra',
+      id: 'claude-gpt-5.6-terra',
       label: 'GPT-5.6 Terra',
     },
     {
       slug: 'codex-gpt-5-6-luna',
-      id: 'claude-codex-gpt-5.6-luna',
+      id: 'claude-gpt-5.6-luna',
       label: 'GPT-5.6 Luna',
     },
     {
       slug: 'codex-gpt-5-6-sol-fast',
-      id: 'claude-codex-gpt-5.6-sol-fast',
+      id: 'claude-gpt-5.6-sol-fast',
       label: 'GPT-5.6 Sol Fast',
     },
     {
       slug: 'codex-gpt-5-6-terra-fast',
-      id: 'claude-codex-gpt-5.6-terra-fast',
+      id: 'claude-gpt-5.6-terra-fast',
       label: 'GPT-5.6 Terra Fast',
     },
     {
       slug: 'codex-gpt-5-6-luna-fast',
-      id: 'claude-codex-gpt-5.6-luna-fast',
+      id: 'claude-gpt-5.6-luna-fast',
       label: 'GPT-5.6 Luna Fast',
     },
   ]);
@@ -398,17 +398,17 @@ test('writeCatalogFile preserves missing models from a same-schema subset write'
   const file = path.join(dir, 'catalog.json');
   try {
     const existing = gw.buildCatalog([
-      'claude-codex-gpt-5.6-terra',
-      'claude-codex-gpt-5.6-sol',
+      'claude-gpt-5.6-terra',
+      'claude-gpt-5.6-sol',
     ]);
-    const subset = gw.buildCatalog(['claude-codex-gpt-5.6-terra']);
+    const subset = gw.buildCatalog(['claude-gpt-5.6-terra']);
     fs.writeFileSync(file, JSON.stringify(existing));
 
     const written = gw.writeCatalogFile(file, subset);
 
     assert.deepEqual(written.models.map((model) => model.id), [
-      'claude-codex-gpt-5.6-terra',
-      'claude-codex-gpt-5.6-sol',
+      'claude-gpt-5.6-terra',
+      'claude-gpt-5.6-sol',
     ]);
     assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), written);
   } finally {
@@ -420,10 +420,10 @@ test('writeCatalogFile replaces a catalog when the fetched set contains a new mo
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-superset-write-'));
   const file = path.join(dir, 'catalog.json');
   try {
-    fs.writeFileSync(file, JSON.stringify(gw.buildCatalog(['claude-codex-gpt-5.6-terra'])));
+    fs.writeFileSync(file, JSON.stringify(gw.buildCatalog(['claude-gpt-5.6-terra'])));
     const replacement = gw.buildCatalog([
-      'claude-codex-gpt-5.6-terra',
-      'claude-codex-gpt-5.6-sol',
+      'claude-gpt-5.6-terra',
+      'claude-gpt-5.6-sol',
     ]);
 
     const written = gw.writeCatalogFile(file, replacement);
@@ -463,8 +463,82 @@ test('writeCatalogFile refuses to replace a future schema', () => {
   const file = path.join(dir, 'catalog.json');
   fs.writeFileSync(file, JSON.stringify({ schemaVersion: 4, models: [] }));
   assert.throws(
-    () => gw.writeCatalogFile(file, gw.buildCatalog(['claude-codex-gpt-5.6-terra'])),
+    () => gw.writeCatalogFile(file, gw.buildCatalog(['claude-gpt-5.6-terra'])),
     /refusing to overwrite catalog schema 4.*supports schema 3.*upgrade required/,
   );
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { schemaVersion: 4, models: [] });
+});
+
+// SQ-1004: the advertised ids lost their backend segment, so `claude-` is no
+// longer a route discriminator — the whole Anthropic catalog shares it.
+test('codexBaseFromId claims only gateway ids', () => {
+  assert.equal(gw.codexBaseFromId('claude-gpt-5.6-sol'), 'gpt-5.6-sol');
+  assert.equal(gw.codexBaseFromId('claude-gpt-5.6-sol[1m]'), 'gpt-5.6-sol');
+  assert.equal(gw.codexBaseFromId('claude-codex-gpt-5.6-sol'), 'gpt-5.6-sol');
+  assert.equal(gw.codexBaseFromId('claude-codex-auto'), 'auto');
+  for (const passthrough of ['claude-opus-5', 'claude-opus-5[1m]', 'claude-sonnet-4-5', 'claude-fable-5', 'claude-haiku-4-5', 'claude-grok-4.5', 'claude-', 'gpt-5.6-sol', null]) {
+    assert.equal(gw.codexBaseFromId(passthrough), null, `${passthrough} must not be claimed by the Codex route`);
+  }
+  assert.equal(gw.isGatewayModelId('claude-grok-4.5'), true);
+  assert.equal(gw.isGatewayModelId('claude-opus-5'), false);
+});
+
+test('the shim keeps Claude ids on the Anthropic path and claims both id forms for Codex', async (t) => {
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const toCodex = [];
+  const toAnthropic = [];
+  const proxy = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
+      toCodex.push(JSON.parse(Buffer.concat(chunks).toString()).model);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-terra', content: [] }));
+    });
+  });
+  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  t.after(() => proxy.close());
+
+  const anthropic = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      toAnthropic.push(JSON.parse(Buffer.concat(chunks).toString()).model);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ type: 'message', model: 'claude-opus-5', content: [] }));
+    });
+  });
+  const anthropicPort = await new Promise((resolve) => {
+    anthropic.listen(0, '127.0.0.1', () => resolve(anthropic.address().port));
+  });
+  t.after(() => anthropic.close());
+
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+      CODEX_GATEWAY_SENTRY: '0',
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForHealthz(shimPort);
+
+  const models = JSON.parse((await request(shimPort, '/v1/models')).body).data.map(({ id }) => id);
+  assert.ok(models.includes('claude-gpt-5.6-terra'), `advertised: ${models.join(', ')}`);
+  assert.ok(models.includes('claude-grok-4.5'), `advertised: ${models.join(', ')}`);
+  assert.ok(models.every((id) => id.startsWith('claude-')), 'discovery drops ids that do not start with claude');
+
+  for (const model of ['claude-gpt-5.6-terra', 'claude-codex-gpt-5.6-terra', 'claude-opus-5[1m]', 'claude-sonnet-4-5', 'claude-haiku-4-5']) {
+    const response = await request(shimPort, '/v1/messages', JSON.stringify({ model, max_tokens: 1, messages: [] }));
+    assert.equal(response.status, 200, `${model} returned ${response.status}`);
+  }
+
+  assert.deepEqual(toCodex, ['gpt-5.6-terra', 'gpt-5.6-terra']);
+  assert.deepEqual(toAnthropic, ['claude-opus-5[1m]', 'claude-sonnet-4-5', 'claude-haiku-4-5']);
 });

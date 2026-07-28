@@ -1407,7 +1407,7 @@ test('session-start: provisions the shared dispatch executor and prunes legacy p
   fs.writeFileSync(legacyFile, '<!-- generated-by: sidequest-agentsync -->\nold');
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(!fs.existsSync(legacyFile), 'legacy per-combo Codex executor must be pruned by session sync');
   assert.ok(fs.existsSync(path.join(agents, 'sidequest-exec-dispatch-high.md')), 'reachable Codex route must provision the shared dispatch executor');
@@ -1428,7 +1428,7 @@ test('session-start: category-route sync ignores retired prefs data', () => {
   db.openDb(home).prepare("INSERT INTO globals (key, data) VALUES ('model-prefs', '{')").run();
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }] }));
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
 });
@@ -1885,8 +1885,8 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
     schemaVersion: 3,
     source: 'model-gateway',
     models: [
-      { slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' },
-      { slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]' },
+      { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' },
+      { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' },
     ],
   }));
   const a = fixtureTicket('SQ-347 dispatch batch A', 'codex-gpt-5-6-terra', 'high');
@@ -1932,7 +1932,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
     source: 'model-gateway',
-    models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-codex-gpt-5.6-terra[1m]' }],
+    models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }],
   }));
   const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
   process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
@@ -2093,7 +2093,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
     source: 'model-gateway',
-    models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-codex-gpt-5.6-sol[1m]' }],
+    models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' }],
   }));
   const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
   process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;

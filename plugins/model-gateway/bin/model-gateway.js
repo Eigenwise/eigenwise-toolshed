@@ -8,12 +8,12 @@
  *   1. claude-code-proxy (raine/claude-code-proxy) translates the Anthropic
  *      Messages API to the Codex subscription backend. It owns the OAuth.
  *   2. This file's `serve-shim` mode, a router in front of it. Claude Code's
- *      ANTHROPIC_BASE_URL points HERE. Requests for `claude-codex-*` models
+ *      ANTHROPIC_BASE_URL points HERE. Requests for `claude-gpt-*` models
  *      are un-prefixed and sent to the proxy; everything else passes through
  *      to api.anthropic.com untouched (claude.ai login keeps working). The
- *      shim's /v1/models advertises the proxy's Codex models under the
- *      `claude-codex-` prefix because Claude Code's gateway model discovery
- *      drops ids that don't start with "claude" or "anthropic".
+ *      shim's /v1/models advertises the proxy's Codex models under a bare
+ *      `claude-` prefix because Claude Code's gateway model discovery drops
+ *      ids that don't start with "claude" or "anthropic".
  *
  * Default mode above is zero-admin and always available, but Claude Code's
  * built-in /remote-control only lights up when ANTHROPIC_BASE_URL is exactly
@@ -52,8 +52,27 @@ const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-cod
 const PUBLIC_SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
 const SHIM_PORT = Number(process.env.CODEX_GATEWAY_WORKER_PORT || PUBLIC_SHIM_PORT);
 const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
-const PREFIX = 'claude-codex-';
+// Advertised ids are `claude-` + the backend's own id (`claude-gpt-5.6-sol`,
+// `claude-grok-4.5`). The `claude-` part is not decoration: Claude Code's
+// gateway model discovery drops every id that doesn't start with claude/
+// anthropic, so an unprefixed id vanishes from /model.
+//
+// Real Anthropic ids share that prefix, so PREFIX alone can NEVER decide a
+// route — matching on it would send claude.ai traffic to the Codex proxy. The
+// backend family segment decides: `gpt-*` is Codex, `grok-*` is Grok, anything
+// else passes through untouched.
+const PREFIX = 'claude-';
 const GROK_PREFIX = 'claude-grok-';
+const CODEX_FAMILY_RE = /^gpt-/;
+// Pre-3.x advertised the backend name too (`claude-codex-gpt-5.6-sol`). Claude
+// Code persists the selected model per project, so those ids outlive the
+// upgrade in every already-wired project; keep resolving them.
+const LEGACY_CODEX_PREFIX = 'claude-codex-';
+// Sidequest's virtual dispatch pin, resolved from the conversation's route
+// marker rather than from the id itself. It keeps the backend name because
+// `codex` here IS the backend (it owns the proxy's OAuth), and because the id
+// is persisted in generated agent defs and board dispatch records.
+const DISPATCH_MODEL_ID = 'claude-codex-auto';
 const GROK_ENDPOINT = process.env.CODEX_GATEWAY_GROK_ENDPOINT || grokBackend.GROK_ENDPOINT;
 const REPO = 'raine/claude-code-proxy';
 // Earliest claude-code-proxy release that maps a context overflow to HTTP 413
@@ -75,6 +94,23 @@ const ROUTE_TELEMETRY_ENABLED = process.env.CLAUDE_CODE_PROPAGATE_TRACEPARENT ==
 const ROUTE_TELEMETRY_TIMEOUT_MS = 500;
 const TRACE_HEADERS = ['traceparent', 'tracestate', 'baggage'];
 const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cookie'];
+
+// The backend id behind an advertised Codex id, or null when the id isn't ours.
+// Null is the passthrough answer, so every caller that routes must go through
+// here rather than testing a prefix.
+function codexBaseFromId(id) {
+  if (typeof id !== 'string') return null;
+  const bare = id.replace(/\[1m\]$/, '');
+  if (bare === DISPATCH_MODEL_ID) return 'auto';
+  const base = bare.startsWith(LEGACY_CODEX_PREFIX) ? bare.slice(LEGACY_CODEX_PREFIX.length)
+    : bare.startsWith(PREFIX) ? bare.slice(PREFIX.length)
+      : null;
+  return base && CODEX_FAMILY_RE.test(base) ? base : null;
+}
+
+function isGatewayModelId(id) {
+  return codexBaseFromId(id) != null || (typeof id === 'string' && id.startsWith(GROK_PREFIX));
+}
 
 // ---------------------------------------------------- RC-compatibility mode
 //
@@ -683,9 +719,9 @@ function cleanLegacyGatewayModelCache() {
   try { cache = JSON.parse(fs.readFileSync(GATEWAY_MODELS_CACHE, 'utf8')); } catch { return false; }
   if (!ourBaseUrls().includes(cache.baseUrl) || !Array.isArray(cache.models)) return false;
   if (!cache.models.some((m) => m && typeof m.id === 'string'
-    && m.id.startsWith(PREFIX) && /\[1m\]$/.test(m.id))) return false;
+    && isGatewayModelId(m.id) && /\[1m\]$/.test(m.id))) return false;
   cache.models = cache.models.map((m) => {
-    if (!m || typeof m.id !== 'string' || !m.id.startsWith(PREFIX)) return m;
+    if (!m || typeof m.id !== 'string' || !isGatewayModelId(m.id)) return m;
     return { ...m, id: m.id.replace(/\[1m\]$/, '') };
   });
   try {
@@ -1354,7 +1390,7 @@ async function doctor() {
 // for ids starting with claude-/anthropic-), where it shows correctly as e.g.
 // "GPT-5.6 Terra (Codex)". It does NOT reach the running-subagent CARD: that
 // surface resolves the model label internally and maps an unrecognized claude-*
-// id (like claude-codex-gpt-5.6-terra) to a Claude family name — it renders
+// id (like claude-gpt-5.6-terra) to a Claude family name — it renders
 // "Fable 5" for a Terra run. Nothing we return here overrides that (verified:
 // the response model field is "gpt-5.6-terra" and the model self-reports GPT-5,
 // so the RUN is correct — only the card label lies). Native subagent model
@@ -1385,7 +1421,7 @@ const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS.map((model) => model.id);
 // context-window resolver (eyc/sT in claude.exe) never reads a discovered
 // model's max_input_tokens for a `claude-`prefixed id — it hardwires 200000
 // (PPr). The CLAUDE_CODE_MAX_CONTEXT_TOKENS escape hatch is gated behind
-// `!startsWith("claude-")`, and our ids are `claude-codex-*` (discovery drops
+// `!startsWith("claude-")`, and our ids are `claude-*` (discovery drops
 // non-claude ids, so we can't drop the prefix). Net: Claude Code uses a 200k
 // window for every Codex model no matter what we advertise, proactive
 // auto-compaction is OFF (window source is "auto"), and the only recovery is
@@ -1498,8 +1534,11 @@ function gatewayModel(id, backend = 'codex') {
   const context = backend === 'grok'
     ? (grokBackend.GROK_MODELS.find((model) => model.id === id)?.context || 131072)
     : CODEX_COMPACT_CONTEXT_WINDOW;
+  const advertised = backend === 'grok'
+    ? `${prefix}${grokBackend.grokPickerId(id)}`
+    : id === 'auto' ? DISPATCH_MODEL_ID : `${prefix}${id}`;
   return {
-    id: `${prefix}${backend === 'grok' ? grokBackend.grokPickerId(id) : id}`,
+    id: advertised,
     display_name: id === 'auto' ? 'Sidequest Dispatch (Codex)' : displayName(id, backend),
     type: 'model',
     max_input_tokens: context,
@@ -1697,10 +1736,10 @@ const CATALOG_FAMILY = new Set([
   'gpt-5.6-luna-fast',
 ]);
 
-function baseFromId(id) {
-  return id.slice(PREFIX.length).replace(/\[1m\]$/, '');
-}
-
+// Slugs keep the `codex-` backend name and so survive the id rename byte for
+// byte: the board's route table pins slugs, and re-slugging would break every
+// persisted route at once.
+//
 // "codex-" + base, dots→dashes, kept inside ^[a-z0-9][a-z0-9-]{1,31}$; on
 // collision (or an over-length base) fall back to a short deterministic hash
 // so the slug stays unique without depending on iteration order.
@@ -1742,9 +1781,9 @@ function labelFor(base) {
 function buildCatalog(ids) {
   const used = new Set();
   const models = ids
-    .filter((id) => CATALOG_FAMILY.has(baseFromId(id)))
+    .filter((id) => CATALOG_FAMILY.has(codexBaseFromId(id)))
     .map((id) => {
-      const base = baseFromId(id);
+      const base = codexBaseFromId(id);
       return { slug: slugFor(base, used), id, label: labelFor(base) };
     });
   return {
@@ -1807,7 +1846,7 @@ async function fetchShimModelIds() {
   for (let attempt = 0; attempt < 2; attempt++) {
     const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
     if (r.status !== 200) throw new Error(`shim /v1/models returned ${r.status}`);
-    const ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => id.startsWith(PREFIX));
+    const ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => codexBaseFromId(id) != null);
     if (ids.length || attempt === 1) return ids;
     await new Promise((res) => setTimeout(res, 300));
   }
@@ -2216,6 +2255,9 @@ function runWorker() {
     if (!ids) {
       try { ids = JSON.parse(fs.readFileSync(path.join(STATE, 'models.json'), 'utf8')); } catch { /* absent */ }
     }
+    // Advertising an id the router can't claim back would hand it to
+    // api.anthropic.com, so a local models.json is held to the same family rule.
+    if (Array.isArray(ids)) ids = ids.filter((id) => typeof id === 'string' && (id === 'auto' || CODEX_FAMILY_RE.test(id)));
     if (!Array.isArray(ids) || !ids.length) ids = DEFAULT_MODELS;
     const grokIds = grokBackend.grokModelIdsFromCache();
     modelCache = {
@@ -2951,9 +2993,9 @@ function runWorker() {
           parsedPayload = parsed;
           requestedModel = typeof parsed.model === 'string' ? parsed.model : null;
           requestedEffort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : null;
-          if (typeof parsed.model === 'string' && parsed.model.startsWith(PREFIX)) {
+          const requestedBase = codexBaseFromId(parsed.model);
+          if (requestedBase) {
             const advertisedModel = parsed.model;
-            const requestedBase = parsed.model.slice(PREFIX.length).replace(/\[1m\]$/, '');
             let dispatchRoute = null;
             let dispatchVia = null;
             let dispatchIdentity = null;
@@ -3438,6 +3480,8 @@ module.exports = {
   PLUGIN_VERSION,
   MIN_PROXY_VERSION,
   CATALOG_SCHEMA_VERSION,
+  codexBaseFromId,
+  isGatewayModelId,
   buildCatalog,
   writeCatalogFile,
   DispatchSessionRouteCache,

@@ -408,12 +408,18 @@ function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
   });
 }
 
+// The advertised id is `claude-` + this, so `grok-4.5` shows up as
+// `claude-grok-4.5`. Version dots are kept: the Codex rows spell theirs out
+// (`claude-gpt-5.6-sol`) and Claude Code's discovery is fine with them.
 function grokPickerId(model) {
-  return String(model || '').replace(/^grok-/, '').replace(/\./g, '-');
+  return String(model || '').replace(/^grok-/, '');
 }
 
+// Pre-3.x flattened the dots (`claude-grok-4-5`), and Claude Code persists the
+// selected model per project, so match on the flattened form too.
 function grokModelFromPicker(id, models = GROK_MODELS.map((model) => model.id)) {
-  const match = models.find((model) => grokPickerId(model) === id);
+  const flattened = String(id || '').replace(/\./g, '-');
+  const match = models.find((model) => grokPickerId(model).replace(/\./g, '-') === flattened);
   return match || `grok-${id}`;
 }
 

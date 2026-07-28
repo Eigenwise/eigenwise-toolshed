@@ -17,7 +17,7 @@ fs.mkdirSync(path.join(discovery, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
   source: 'model-gateway',
-  models: [{ slug: 'codex-terra', id: 'claude-codex-gpt-5.6-terra[1m]', label: 'Codex Terra' }],
+  models: [{ slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'Codex Terra' }],
 }));
 const env = Object.assign({}, process.env, {
   SIDEQUEST_HOME: home,

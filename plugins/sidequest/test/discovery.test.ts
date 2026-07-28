@@ -50,28 +50,28 @@ test('missing and malformed catalogs fail soft', () => {
 
 test('discovery validates concrete catalog identity and drops routing hints', () => {
   writeCatalog([
-    { slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', suggestedTier: 'ignored' },
+    { slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', suggestedTier: 'ignored' },
     { slug: 'Bad Slug', id: 'bad' },
     { slug: 'missing-id' },
   ]);
   assert.deepEqual(discovery.discoverExternalModels(), [{
-    slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', source: 'model-gateway',
+    slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', source: 'model-gateway',
   }]);
 });
 
 test('discovery accepts catalog v2 migration input', () => {
-  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }], {
+  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }], {
     schema: 2,
     source: 'model-gateway',
     updatedAt: new Date().toISOString(),
   });
   assert.deepEqual(discovery.discoverExternalModels(), [{
-    slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test', source: 'model-gateway',
+    slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', source: 'model-gateway',
   }]);
 });
 
 test('discovery ignores future catalog schemas', () => {
-  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }], { schemaVersion: 4 });
+  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }], { schemaVersion: 4 });
   assert.deepEqual(discovery.discoverExternalModels(), []);
 });
 
@@ -86,7 +86,7 @@ test('Claude runtimes resolve to their stable executor at every stamped effort',
 });
 
 test('concrete discovered route resolves while an absent route is unavailable', () => {
-  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-codex-test', label: 'GPT Test' }]);
+  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }]);
   assert.equal(store.resolveExec('codex-gpt-test', 'high')!.runsModel, 'codex-gpt-test');
   assert.equal(store.resolveExec('missing-model', 'high'), null);
   assert.equal(store.classifyModelFilter('missing-model'), 'unknown');

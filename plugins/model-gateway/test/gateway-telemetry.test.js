@@ -123,7 +123,7 @@ function spanFrom(received) {
 const linkedTraceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
 
 const directBody = JSON.stringify({
-  model: 'claude-codex-gpt-5.6-sol',
+  model: 'claude-gpt-5.6-sol',
   max_tokens: 1,
   output_config: { effort: 'high' },
   messages: [{ role: 'user', content: 'prompt-secret-must-not-enter-telemetry' }],
@@ -176,7 +176,7 @@ test('emits a linked metadata-only route span and strips trace and auth before C
   assert.notEqual(span.spanId, span.parentSpanId);
   assert.equal(attributes.trace_linked, true);
   assert.equal(attributes.session_id, 'session-telemetry-1');
-  assert.equal(attributes.selected_model, 'claude-codex-gpt-5.6-sol');
+  assert.equal(attributes.selected_model, 'claude-gpt-5.6-sol');
   assert.equal(attributes.effective_model, 'gpt-5.6-sol');
   assert.equal(attributes.backend, 'codex');
   assert.equal(attributes.effort, 'high');

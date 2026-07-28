@@ -17,15 +17,24 @@ const ANTHROPIC_PRICES_PER_MILLION = {
 const CODEX_PRICES_PER_MILLION = {
   // OpenAI publishes fresh input, cached input, and output prices, but no cache-write price.
   // Claude Code can report cacheCreation for these routes, so price it as fresh input.
-  'claude-codex-gpt-5.6-sol': { input: 5, cacheRead: 0.5, cacheCreation: 5, output: 30 },
-  'claude-codex-gpt-5.6-terra': { input: 2.5, cacheRead: 0.25, cacheCreation: 2.5, output: 15 },
-  'claude-codex-gpt-5.6-luna': { input: 1, cacheRead: 0.1, cacheCreation: 1, output: 6 },
+  'claude-gpt-5.6-sol': { input: 5, cacheRead: 0.5, cacheCreation: 5, output: 30 },
+  'claude-gpt-5.6-terra': { input: 2.5, cacheRead: 0.25, cacheCreation: 2.5, output: 15 },
+  'claude-gpt-5.6-luna': { input: 1, cacheRead: 0.1, cacheCreation: 1, output: 6 },
+};
+
+// SQ-1004 renamed the advertised ids. Roughly half a million telemetry rows
+// carry the old labels, so they stay priced instead of falling into the
+// unpriced-models panel.
+const LEGACY_CODEX_PRICES_PER_MILLION = {
+  'claude-codex-gpt-5.6-sol': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-sol'],
+  'claude-codex-gpt-5.6-terra': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-terra'],
+  'claude-codex-gpt-5.6-luna': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-luna'],
 };
 
 const GATEWAY_RESOLVED_MODEL_ALIASES = {
-  'gpt-5.6-sol': CODEX_PRICES_PER_MILLION['claude-codex-gpt-5.6-sol'],
-  'gpt-5.6-terra': CODEX_PRICES_PER_MILLION['claude-codex-gpt-5.6-terra'],
-  'gpt-5.6-luna': CODEX_PRICES_PER_MILLION['claude-codex-gpt-5.6-luna'],
+  'gpt-5.6-sol': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-sol'],
+  'gpt-5.6-terra': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-terra'],
+  'gpt-5.6-luna': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-luna'],
 };
 
 const MODEL_PRICES_PER_MILLION = {
@@ -35,6 +44,7 @@ const MODEL_PRICES_PER_MILLION = {
   'claude-sonnet-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-sonnet-5'],
   'claude-fable-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-fable-5'],
   ...CODEX_PRICES_PER_MILLION,
+  ...LEGACY_CODEX_PRICES_PER_MILLION,
   ...GATEWAY_RESOLVED_MODEL_ALIASES,
 };
 
@@ -63,8 +73,12 @@ function clientModelPriceEntries() {
   return Object.entries(MODEL_PRICES_PER_MILLION).filter(([model]) => !Object.hasOwn(GATEWAY_RESOLVED_MODEL_ALIASES, model));
 }
 
+// Gateway records carry the model the backend actually ran, so the client-side
+// advertised ids are excluded by name. A prefix test can't do that any more:
+// the advertised ids now start with plain `claude-`, same as the Anthropic ones.
 function gatewayModelPriceEntries() {
-  return Object.entries(MODEL_PRICES_PER_MILLION).filter(([model]) => !model.includes('[1m]') && !model.startsWith('claude-codex-'));
+  const clientOnly = new Set([...Object.keys(CODEX_PRICES_PER_MILLION), ...Object.keys(LEGACY_CODEX_PRICES_PER_MILLION)]);
+  return Object.entries(MODEL_PRICES_PER_MILLION).filter(([model]) => !model.includes('[1m]') && !clientOnly.has(model));
 }
 
 function modelCostTargets() {

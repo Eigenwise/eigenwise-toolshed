@@ -20,7 +20,7 @@ claude.ai login. Both subscriptions, one harness.
 ```
 Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
                                         │
-                     model claude-codex-* ──▶ claude-code-proxy (:18765) ──▶ Codex backend
+                     model claude-gpt-* ──▶ claude-code-proxy (:18765) ──▶ Codex backend
                      everything else ───────▶ api.anthropic.com (untouched passthrough)
 ```
 
@@ -31,7 +31,7 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
 - The **shim** (this plugin, one dependency-free node file) is what gets you the picker.
   Claude Code's [gateway model discovery](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery)
   can populate `/model` from a gateway's `/v1/models`, but it drops ids that don't start with
-  `claude` or `anthropic`. So the shim advertises the proxy's models as `claude-codex-<id>`
+  `claude` or `anthropic`. So the shim advertises the proxy's models as `claude-<id>`
   with readable display names, strips the prefix on the way through, and passes every
   non-Codex request to api.anthropic.com byte-for-byte (your claude.ai auth, prompt caching,
   and beta headers are untouched). The built-in picker catalog includes `gpt-5.6-sol`,
@@ -87,7 +87,7 @@ node <plugin>/bin/model-gateway.js models
 
 `doctor` should show the proxy binary, a successful Codex auth status, both local ports, a written
 catalog, the active wiring mode, and local `.claude/settings.local.json` wiring (or global user
-settings if selected). `models` should return `claude-codex-*` rows. Then
+settings if selected). `models` should return `claude-gpt-*` rows. Then
 open `/model` and select a row labeled `From gateway`. If the rows are missing, check that Claude
 Code is v2.1.129 or newer, restart once more, and run `models` to confirm the shim has a catalog.
 
@@ -207,7 +207,7 @@ note for the routing side.
   gateway routes to, not the pay-per-token API) has a measured 370k input ceiling. The shim advertises
   `370000` as `max_input_tokens` by default; override it with `CODEX_GATEWAY_CONTEXT_WINDOW` when
   tuning a machine-specific setup. That advertised value is inert: Claude Code hardwires its own 200k
-  gateway budget for discovered `claude-codex-*` rows. The backend's HTTP 413 `request_too_large`
+  gateway budget for discovered `claude-gpt-*` rows. The backend's HTTP 413 `request_too_large`
   response is the recovery signal for context overflow. A genuine upstream 413 has no token counts, so
   the sentry appends its recorded usage before passing it to Claude Code. The shim normalizes older
   proxy context errors to the same 413 (proxy 0.1.14+ emits it
@@ -235,7 +235,7 @@ note for the routing side.
   route, but new sessions should select the unsuffixed picker rows. Loading a huge reference skill
   (e.g. `claude-api`, ~800k chars) in a single turn can spike Codex context past the point compaction
   can recover from, so pull large references incrementally on Codex models.
-- **Model quality of life**: typed selection works too: `/model claude-codex-gpt-5.4`, any string
+- **Model quality of life**: typed selection works too: `/model claude-gpt-5.4`, any string
   passes through on a custom base URL. The advertised list itself is yours to edit:
   `~/.claude/model-gateway/models.json`, one id per array entry. The proxy has no `/v1/models`
   route of its own; the shim owns discovery and prefers a future proxy route automatically.

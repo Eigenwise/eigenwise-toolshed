@@ -88,12 +88,12 @@ test('translates Responses completions and stream events to Anthropic messages',
     output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }],
     usage: { input_tokens: 10, output_tokens: 5, output_tokens_details: { reasoning_tokens: 2 } },
   };
-  const translated = grok.translateResponse(response, 'claude-grok-4-5');
+  const translated = grok.translateResponse(response, 'claude-grok-4.5');
   assert.deepEqual(translated.content, [{ type: 'text', text: 'hi' }]);
   assert.equal(translated.usage.output_tokens_details.reasoning_tokens, 2);
 
   const frames = [];
-  const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4-5');
+  const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4.5');
   stream.event({ type: 'response.created', response });
   stream.event({ type: 'response.output_text.delta', delta: 'hi', response });
   stream.event({ type: 'response.completed', response });
@@ -125,16 +125,16 @@ test('translates Anthropic web search server tools and Grok web search calls', (
       },
     }],
   };
-  assert.deepEqual(grok.translateResponse(response, 'claude-grok-4-5').content, [
+  assert.deepEqual(grok.translateResponse(response, 'claude-grok-4.5').content, [
     { type: 'server_tool_use', id: 'ws_1', name: 'web_search', input: { type: 'search', query: 'Tokyo population' } },
     { type: 'web_search_tool_result', tool_use_id: 'ws_1', content: [{ type: 'web_search_result', title: 'Tokyo data', url: 'https://example.com/tokyo' }] },
   ]);
-  assert.equal(grok.translateResponse(response, 'claude-grok-4-5').stop_reason, 'end_turn');
+  assert.equal(grok.translateResponse(response, 'claude-grok-4.5').stop_reason, 'end_turn');
 });
 
 test('streams Grok web search calls as server tool blocks', () => {
   const frames = [];
-  const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4-5');
+  const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4.5');
   const item = {
     type: 'web_search_call',
     id: 'ws_1',
@@ -178,7 +178,7 @@ test('streams Grok function calls with their added-item identity', () => {
     output: [{ type: 'function_call', id: 'fc_resp_0', call_id: 'call_fixture_0', name: 'Read', arguments: '{"file_path":"config.toml"}' }],
   };
   const frames = [];
-  const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4-5');
+  const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4.5');
   stream.event({ type: 'response.created', response });
   stream.event({ type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'fc_resp_0', call_id: 'call_fixture_0', name: 'Read', arguments: '', status: 'in_progress' }, response });
   stream.event({ type: 'response.function_call_arguments.delta', item_id: 'fc_resp_0', output_index: 1, delta: '{"file_path":"config.toml"}', response });
@@ -222,7 +222,7 @@ test('streams text and tool blocks in either order', () => {
 
   for (const { events: upstreamEvents, expectedTypes } of streams) {
     const frames = [];
-    const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4-5');
+    const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4.5');
     stream.event({ type: 'response.created', response });
     for (const event of upstreamEvents) stream.event({ ...event, response });
     stream.event({ type: 'response.completed', response });

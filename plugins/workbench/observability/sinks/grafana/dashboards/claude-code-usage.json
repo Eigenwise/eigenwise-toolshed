@@ -717,8 +717,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "claude-codex-gpt-5.6-sol"
+              "id": "byRegexp",
+              "options": "/^claude-(codex-)?gpt-5\\.6-sol$/"
             },
             "properties": [
               {
@@ -732,8 +732,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "claude-codex-gpt-5.6-terra"
+              "id": "byRegexp",
+              "options": "/^claude-(codex-)?gpt-5\\.6-terra$/"
             },
             "properties": [
               {
@@ -747,8 +747,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "claude-codex-gpt-5.6-luna"
+              "id": "byRegexp",
+              "options": "/^claude-(codex-)?gpt-5\\.6-luna$/"
             },
             "properties": [
               {
@@ -1264,7 +1264,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(100 * sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-codex-.*\"}[$__range])) / sum(increase(claude_code_cost_usage_USD_total[$__range]))) and (sum(increase(claude_code_cost_usage_USD_total[$__range])) > 0)",
+          "expr": "(100 * sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-(codex-)?gpt-.*\"}[$__range])) / sum(increase(claude_code_cost_usage_USD_total[$__range]))) and (sum(increase(claude_code_cost_usage_USD_total[$__range])) > 0)",
           "legendFormat": "Share routed to Codex",
           "instant": true
         },
@@ -1274,7 +1274,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-codex-.*\"}[$__range]))",
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-(codex-)?gpt-.*\"}[$__range]))",
           "legendFormat": "Codex list-price equivalent",
           "instant": true
         },

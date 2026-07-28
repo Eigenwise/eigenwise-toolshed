@@ -560,12 +560,16 @@ function resolvedDispatchRoute(ticket?: any) {
   return route && availableRoute(route.model) ? route : null;
 }
 
-// The id the codex-gateway shim forwards upstream for a discovered backend: its
-// advertised id minus the local claude-codex- discovery prefix and any [1m]
-// suffix. Dispatch briefings embed it as the [sidequest-route model=...] marker
-// that resolves the shared executors' virtual claude-codex-auto pin (SQ-347).
+// The id the model-gateway shim forwards upstream for a discovered backend: its
+// advertised id minus the local claude- discovery prefix and any [1m] suffix.
+// Dispatch briefings embed it as the [sidequest-route model=...] marker that
+// resolves the shared executors' virtual claude-codex-auto pin (SQ-347).
+//
+// The optional codex- segment covers a catalog.json written by a pre-3.x
+// gateway: a stale catalog would otherwise emit markers the shim can't resolve
+// and take every dispatch on the board down at once (SQ-1004).
 function dispatchModelFor(id?: any) {
-  return String(id || '').replace(/^claude-codex-/, '').replace(/\[1m\]$/, '');
+  return String(id || '').replace(/^claude-(?:codex-)?/, '').replace(/\[1m\]$/, '');
 }
 
 // The marker rides along so the spawn gate can compare like with like: the

@@ -408,7 +408,7 @@ function resolvedDispatchRoute(ticket) {
   return route && availableRoute(route.model) ? route : null;
 }
 function dispatchModelFor(id) {
-  return String(id || "").replace(/^claude-codex-/, "").replace(/\[1m\]$/, "");
+  return String(id || "").replace(/^claude-(?:codex-)?/, "").replace(/\[1m\]$/, "");
 }
 function dispatchRouteState(model, effort, exec) {
   return {
