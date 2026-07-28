@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { observabilityEnvironment, setupObservability } = require('./setup-observability.js');
 const { projectMetadata, repositoryRoot } = require('../hooks/observability.js');
+const { mergeProjectEnvironment, projectSettingsPath, writeProjectSettings } = require('../lib/project-settings.js');
 const {
   defaultConfigPath,
   defaultDataDir,
@@ -137,10 +138,6 @@ function removeProjectRegistry(projectDir, options = {}) {
   return { changed: true, configFile };
 }
 
-function projectSettingsPath(projectDir) {
-  return path.join(path.resolve(projectDir), '.claude', 'settings.local.json');
-}
-
 function telemetryStatePath(projectDir) {
   return path.join(path.resolve(projectDir), '.claude', STATE_FILE);
 }
@@ -205,8 +202,7 @@ function telemetryEnvironment(projectDir, ports) {
 }
 
 function mergeTelemetrySettings(settings, projectDir, options = {}) {
-  const next = structuredClone(settings || {});
-  const existingEnvironment = next.env || {};
+  const existingEnvironment = settings?.env || {};
   const addedEnvironment = telemetryEnvironment(projectDir, options.ports);
   const previous = Object.fromEntries(Object.keys(addedEnvironment).map((name) => [
     name,
@@ -216,7 +212,7 @@ function mergeTelemetrySettings(settings, projectDir, options = {}) {
   attributes.set('project.id', projectName(projectDir));
   attributes.set('service.name', 'claude-code');
   addedEnvironment.OTEL_RESOURCE_ATTRIBUTES = serializeResourceAttributes(attributes);
-  next.env = { ...existingEnvironment, ...addedEnvironment };
+  const next = mergeProjectEnvironment(settings, addedEnvironment);
   return { settings: next, state: { version: 1, previous, added: addedEnvironment } };
 }
 
@@ -230,7 +226,7 @@ function applyProjectTelemetry(projectDir, options = {}) {
     ? { ...currentState, added: result.state.added }
     : result.state;
   const changed = JSON.stringify(before) !== JSON.stringify(result.settings);
-  if (changed) writePrivateJson(settingsPath, result.settings);
+  if (changed) writeProjectSettings(projectDir, result.settings);
   writePrivateJson(statePath, state);
   return { changed, settingsPath, statePath, settings: result.settings };
 }
@@ -265,7 +261,7 @@ function unwireDirectory(projectDir) {
   if (Object.keys(environment).length > 0) next.env = environment;
   else delete next.env;
   const changed = JSON.stringify(before) !== JSON.stringify(next);
-  if (changed) writePrivateJson(settingsPath, next);
+  if (changed) writeProjectSettings(projectDir, next);
   fs.rmSync(statePath, { force: true });
   return { changed, settingsPath, statePath, settings: next };
 }

@@ -42,6 +42,14 @@ verbatim, adding that each affected session has to restart before its metrics ap
 means Grafana was unreachable or unconfigured, so say the check could not run instead of calling it healthy. A
 `not opted in:` line is a hint, not a fault: those project names never opted in.
 
+Then check whether a project-level `env` block masks the global agent-teams setting. This is read-only and prints nothing when the project has no `env` block or already enables teams:
+
+```sh
+node -e "const { agentTeamsWarning } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); const warning = agentTeamsWarning(process.cwd()); if (warning) console.log(warning);"
+```
+
+If it prints a warning, report it with the one-line remedy verbatim. Do not fix it from the doctor.
+
 Then run the local report too:
 
 ```sh

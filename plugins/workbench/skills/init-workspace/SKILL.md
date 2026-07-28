@@ -225,6 +225,14 @@ records, and only non-plugin settings to merge.
   entries and the helper verifies the CLI inventory afterwards. After a successful install, merge only
   the plan's non-plugin settings and portable marketplace declarations that the CLI did not make
   project-visible. Preserve every existing setting and never duplicate or contradict the CLI's output.
+  Enable agent teams in the project's `.claude/settings.local.json` with the merge-safe helper:
+
+  ```sh
+  node -e "const { enableAgentTeams } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); enableAgentTeams(process.cwd());"
+  ```
+
+  This adds `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"` without replacing existing `env` keys. Never
+  write it to shared `.claude/settings.json`.
 
 Run the helper's read-only pass first, then show the user the install delta. The LSP checks already run
 in Phase 1, so use their results to settle any missing-binary choice before the install:
