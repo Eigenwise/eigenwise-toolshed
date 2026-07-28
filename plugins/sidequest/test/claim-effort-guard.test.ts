@@ -20,8 +20,39 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY_ROOT;
 
 const store = require('../lib/store.js');
+const dispatchPreflight = require('../lib/dispatch-preflight.js');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const PROJ = path.join(os.tmpdir(), 'sq-claim-effort-fixtures', 'board');
+
+// SQ-1017: dispatch and native-agent now refuse before spawning unless
+// Claude Code's plugin registry has a runnable, board-MCP-capable
+// sidequest@eigenwise-toolshed install for the target project. This file
+// dispatches PROJ throughout, so it needs its own isolated
+// SIDEQUEST_CLAUDE_HOME with an exact-project-scoped install registered for
+// PROJ — distinct from the other suites' shared 'user'-scope stub
+// (test/_sidequest-install-fixture.ts) so the tests below in this file can
+// also exercise the exact-match, stale, and unreadable-registry refusal
+// paths against a registry they control.
+const CLAUDE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-claude-home-'));
+process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+const REGISTRY_PATH = path.join(CLAUDE_HOME, 'plugins', 'installed_plugins.json');
+
+function writeRegistry(installs?: any) {
+  fs.mkdirSync(path.dirname(REGISTRY_PATH), { recursive: true });
+  fs.writeFileSync(REGISTRY_PATH, JSON.stringify({ plugins: { 'sidequest@eigenwise-toolshed': installs } }));
+}
+
+function fakeInstall(withBoardMcp = true) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-install-'));
+  if (withBoardMcp) {
+    fs.writeFileSync(path.join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } } }));
+  }
+  return dir;
+}
+
+// A valid project-scoped install for PROJ, so the pre-existing dispatch
+// tests below (which predate SQ-1017) keep exercising the happy path.
+writeRegistry([{ scope: 'project', projectPath: PROJ, installPath: fakeInstall(), version: '9.9.9' }]);
 
 store.setCategory({
   id: 'guard.codex', name: 'Codex guard',
@@ -369,7 +400,10 @@ test('serialized dispatch spawn stays below the launch ceiling while briefing ke
   ];
   for (const body of comments) assert.equal(store.addComment(slug, created.ref, { by: 'packet-worker', body }).ok, true);
 
-  const dispatched = cliJson(['dispatch', created.ref]);
+  // These pre-SQ-1017 tests exercise CLI dispatch's spawn/payload shape, not
+  // the transport gate, so they use the escape hatch to keep the CLI path
+  // exercised without simulating a real MCP-connected session.
+  const dispatched = cliJson(['dispatch', created.ref, '--unverified-transport']);
   const serializedSpawn = JSON.stringify(dispatched.spawn);
   const spawnBytes = Buffer.byteLength(serializedSpawn, 'utf8');
   const launchPayloadCeiling = 32 * 1024 * 1024;
@@ -392,7 +426,7 @@ test('serialized dispatch spawn stays below the launch ceiling while briefing ke
 
 test('instant dispatch returns a stable executor, fetch stub, and token', () => {
   const ref = seed('guard.codex');
-  const dispatched = cliJson(['dispatch', ref]);
+  const dispatched = cliJson(['dispatch', ref, '--unverified-transport']);
   assert.equal(dispatched.ref, ref);
   assert.equal(dispatched.mode, 'instant');
   assert.equal(dispatched.agent, 'sidequest-exec-dispatch-high');
@@ -411,7 +445,7 @@ test('instant dispatch returns a stable executor, fetch stub, and token', () => 
 test('dispatch always returns the stable executor and does not write a ticket definition', () => {
   const ref = seed('guard.codex');
   const agents = path.join(SIDEQUEST_HOME, 'agents');
-  const dispatched = cliJson(['dispatch', ref]);
+  const dispatched = cliJson(['dispatch', ref, '--unverified-transport']);
   assert.equal(dispatched.mode, 'instant');
   assert.equal(dispatched.agent, 'sidequest-exec-dispatch-high');
   assert.equal(ticket(ref).dispatchExecutor, dispatched.agent);
@@ -421,7 +455,7 @@ test('dispatch always returns the stable executor and does not write a ticket de
 
 test('instant dispatch sends Haiku through its stable executor with a Haiku spawn model', () => {
   const ref = seed('guard.haiku');
-  const dispatched = cliJson(['dispatch', ref]);
+  const dispatched = cliJson(['dispatch', ref, '--unverified-transport']);
   assert.equal(dispatched.mode, 'instant');
   assert.equal(dispatched.agent, 'sidequest-exec-medium');
   assert.equal(dispatched.spawn.subagent_type, 'sidequest-exec-medium');
@@ -456,6 +490,227 @@ test('a concrete Haiku category keeps its configured effort guard', () => {
   assert.notEqual(wrong.status, 0);
   store.updateTicket(store.ensureProject(PROJ).slug, ref, { labels: ['direct-ok'] });
   assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct', '--reason', 'The fixture validates direct effort handling.']).ok, true);
+});
+
+// SQ-1017 regression matrix: dispatch/native-agent must refuse before
+// mutating ticket state when the target project has no runnable,
+// board-MCP-capable Sidequest install, and must say so instead of silently
+// handing back a claim-first spawn spec nothing can execute.
+
+test('SQ-1017: dispatch refuses when the target project has no Sidequest install registered anywhere', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-missing-claude-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-missing-project-'));
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome; // no plugins/installed_plugins.json at all
+  try {
+    const slug = store.ensureProject(project).slug;
+    const ref = cliJson(['add', '-t', 'no install fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse dispatch cleanly. Verify: inspect the thrown message.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    assert.throws(
+      () => store.prepareDispatch(slug, ref),
+      (err?: any) => {
+        assert.match(err.message, /no install/i);
+        assert.match(err.message, /claude plugin install sidequest@eigenwise-toolshed --scope project/);
+        assert.match(err.message, /reload-plugins|start a new session/);
+        return true;
+      },
+    );
+    assert.equal(store.getTicket(slug, ref).dispatchNonce, null, 'a refused preflight must not mutate the ticket');
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('SQ-1017: dispatch succeeds once an exact-project install advertising the board MCP is registered', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-ok-claude-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-ok-project-'));
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(), version: '9.9.9' }] },
+  }));
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const slug = store.ensureProject(project).slug;
+    const ref = cliJson(['add', '-t', 'good install fixture', '-d', 'Where: SQ-1017 fixture. Contract: allow dispatch through. Verify: inspect the prepared token.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    const prepared = store.prepareDispatch(slug, ref);
+    assert.equal(prepared.ok, true);
+    assert.ok(prepared.token);
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('SQ-1017: dispatch refuses a stale registry entry whose install path no longer exists', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-stale-claude-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-stale-project-'));
+  const goneInstall = fakeInstall();
+  fs.rmSync(goneInstall, { recursive: true, force: true });
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: goneInstall, version: '9.9.9' }] },
+  }));
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const slug = store.ensureProject(project).slug;
+    const ref = cliJson(['add', '-t', 'stale install fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse a dangling install path. Verify: inspect the thrown message.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    assert.throws(() => store.prepareDispatch(slug, ref), /claude plugin install sidequest@eigenwise-toolshed --scope project/);
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('SQ-1017: dispatch refuses an install whose manifest no longer declares the board MCP server', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-nomcp-claude-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-nomcp-project-'));
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(false), version: '9.9.9' }] },
+  }));
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const slug = store.ensureProject(project).slug;
+    const ref = cliJson(['add', '-t', 'no mcp fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse an install with no board MCP. Verify: inspect the thrown message.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    assert.throws(() => store.prepareDispatch(slug, ref), /board MCP server/);
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('SQ-1017: dispatch fails loud, naming the registry path, when the registry cannot be parsed', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-corrupt-claude-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-corrupt-project-'));
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
+  fs.writeFileSync(registryPath, '{ not json');
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const slug = store.ensureProject(project).slug;
+    const ref = cliJson(['add', '-t', 'corrupt registry fixture', '-d', 'Where: SQ-1017 fixture. Contract: fail loud on an unreadable registry. Verify: inspect the thrown message.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    assert.throws(
+      () => store.prepareDispatch(slug, ref),
+      (err?: any) => {
+        assert.match(err.message, new RegExp(registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        return true;
+      },
+    );
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('SQ-1017: native-agent refuses the same way dispatch does when the project has no Sidequest install', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-native-claude-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-native-project-'));
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const ref = cliJson(['add', '-t', 'native-agent fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse native-agent cleanly. Verify: inspect the CLI stderr.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_CLAUDE_HOME: claudeHome, CLAUDE_PROJECT_DIR: project });
+    const result = spawnSync(process.execPath, [BIN, 'native-agent', ref, '--project', project], { encoding: 'utf8', env });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout + result.stderr, /claude plugin install sidequest@eigenwise-toolshed --scope project/);
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+// SQ-1017 correction: a registered install only proves a FUTURE fresh
+// session would get the board MCP. It does not prove THIS invocation's
+// session has it connected — the second SQ-1016 dispatch attempt showed a
+// project install registered mid-conversation still handed a fresh native
+// Agent zero board tools. So CLI transport must refuse even when the
+// install check above passes, unless the caller explicitly acknowledges the
+// gap; MCP transport is trusted because reaching the MCP handler is itself
+// proof the board MCP is connected in this session.
+
+function goodTransportRegistry(project?: any) {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-transport-claude-home-'));
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(), version: '9.9.9' }] },
+  }));
+  return claudeHome;
+}
+
+test('SQ-1017: CLI dispatch refuses unverified transport even when the target project has a valid install', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-transport-project-'));
+  const claudeHome = goodTransportRegistry(project);
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const slug = store.ensureProject(project).slug;
+    const ref = cliJson(['add', '-t', 'transport fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse unverified CLI transport. Verify: inspect the CLI stderr.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_CLAUDE_HOME: claudeHome, CLAUDE_PROJECT_DIR: project });
+    const refused = spawnSync(process.execPath, [BIN, 'dispatch', ref, '--project', project], { encoding: 'utf8', env });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stdout + refused.stderr, /unverified-transport/);
+    assert.match(refused.stdout + refused.stderr, /reload-plugins/);
+    assert.equal(store.getTicket(slug, ref).dispatchNonce, null, 'a refused CLI transport preflight must not mutate the ticket');
+
+    const allowed = spawnSync(process.execPath, [BIN, 'dispatch', ref, '--project', project, '--unverified-transport', '--json'], { encoding: 'utf8', env });
+    assert.equal(allowed.status, 0, allowed.stderr + allowed.stdout);
+    const payload = JSON.parse(allowed.stdout);
+    assert.ok(payload.token);
+    assert.ok(Array.isArray(payload.warnings) && payload.warnings.some((w: any) => /unverified-transport/.test(w)));
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('SQ-1017: store.prepareDispatch succeeds for MCP transport against the same registry that refuses unverified CLI transport', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-mcp-transport-project-'));
+  const claudeHome = goodTransportRegistry(project);
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const slug = store.ensureProject(project).slug;
+    const ref = cliJson(['add', '-t', 'mcp transport fixture', '-d', 'Where: SQ-1017 fixture. Contract: MCP transport is trusted. Verify: inspect the prepared token.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    assert.throws(() => store.prepareDispatch(slug, ref, { transport: 'cli' }), /unverified-transport/);
+    const prepared = store.prepareDispatch(slug, ref, { transport: 'mcp' });
+    assert.equal(prepared.ok, true);
+    assert.ok(prepared.token);
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('SQ-1017: CLI native-agent refuses unverified transport even when the target project has a valid install', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-native-transport-project-'));
+  const claudeHome = goodTransportRegistry(project);
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const ref = cliJson(['add', '-t', 'native-agent transport fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse unverified CLI transport. Verify: inspect the CLI stderr.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_CLAUDE_HOME: claudeHome, CLAUDE_PROJECT_DIR: project });
+    const refused = spawnSync(process.execPath, [BIN, 'native-agent', ref, '--project', project], { encoding: 'utf8', env });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stdout + refused.stderr, /unverified-transport/);
+    assert.match(refused.stdout + refused.stderr, /reload-plugins/);
+
+    const allowed = spawnSync(process.execPath, [BIN, 'native-agent', ref, '--project', project, '--unverified-transport', '--json'], { encoding: 'utf8', env });
+    assert.equal(allowed.status, 0, allowed.stderr + allowed.stdout);
+    const payload = JSON.parse(allowed.stdout);
+    assert.ok(Array.isArray(payload.warnings) && payload.warnings.some((w: any) => /unverified-transport/.test(w)));
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('assertDispatchTransport is directly usable: cli refuses without the escape hatch, mcp and the escape hatch both pass', () => {
+  assert.throws(() => dispatchPreflight.assertDispatchTransport('cli'), /unverified-transport/);
+  assert.doesNotThrow(() => dispatchPreflight.assertDispatchTransport('cli', { allowUnverifiedTransport: true }));
+  assert.doesNotThrow(() => dispatchPreflight.assertDispatchTransport('mcp'));
+  assert.doesNotThrow(() => dispatchPreflight.assertDispatchTransport());
+});
+
+test('checkSidequestInstall is directly usable for a pure ok:true/false check without throwing', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-pure-check-'));
+  const missing = dispatchPreflight.checkSidequestInstall('/nowhere/at/all', { claudeHome });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, 'missing');
+
+  const installPath = fakeInstall();
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: '/nowhere/at/all', installPath, version: '1.0.0' }] },
+  }));
+  const found = dispatchPreflight.checkSidequestInstall('/nowhere/at/all', { claudeHome });
+  assert.equal(found.ok, true);
+  assert.equal(found.installPath, installPath);
 });
 
 export {};

@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 
 // SQ-826. An executor dispatched with worktree isolation paused for a scope

@@ -39,6 +39,7 @@ const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { routingDisabledMessage } = require('./refusal-guidance.js');
+const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight.js');
 
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
@@ -4461,6 +4462,18 @@ function worktreeIsolationWarning(slug?: any) {
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
+  // A fresh native Agent session resolves plugins from Claude Code's registry
+  // independently of whatever MCP roster this conversation happens to have
+  // loaded, so a claim-first spawn spec is worthless unless the target
+  // project actually has a runnable, board-MCP-capable install (SQ-1017).
+  const projectPath = readMeta(slug)?.path;
+  if (projectPath) assertSidequestInstall(projectPath);
+  // Registry install proves a future session; it does not prove THIS
+  // invocation's session has the board MCP connected (SQ-1017 correction).
+  // Only CLI transport needs to prove anything here — omitted/'mcp' callers
+  // are trusted, matching every direct `prepareDispatch` caller that predates
+  // this transport concept.
+  assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   return withTicketLock(slug, found.id, () => {

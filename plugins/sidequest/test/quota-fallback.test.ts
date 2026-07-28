@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 
 const test = require('node:test');
@@ -197,7 +198,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
   assert.match(hookOutput.hookSpecificOutput.additionalContext, /configured fallback dispatch/);
   assert.match(hookOutput.hookSpecificOutput.additionalContext, new RegExp(ticket.ref));
 
-  const cli = spawnSync(process.execPath, [BIN, 'dispatch', ticket.ref, '--project', PROJECT, '--session', 'quota-cli-adopted', '--json'], {
+  const cli = spawnSync(process.execPath, [BIN, 'dispatch', ticket.ref, '--project', PROJECT, '--session', 'quota-cli-adopted', '--unverified-transport', '--json'], {
     encoding: 'utf8',
     env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT, SIDEQUEST_DISCOVERY_DIRS: DISCOVERY },
   });

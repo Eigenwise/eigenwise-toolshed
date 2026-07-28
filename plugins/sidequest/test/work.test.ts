@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 /** Behavioral regression coverage for SQ-213 native-only routed work. */
 const test = require('node:test');
@@ -95,7 +96,7 @@ test('CLI dispatch exposes the routed executor API model', () => {
     category: 'api-model-dispatch',
     description: 'Where: API model dispatch fixture. Contract: expose the routed executor model through CLI dispatch. Verify: inspect the JSON response.',
   });
-  const res = runCli(['dispatch', t.ref]);
+  const res = runCli(['dispatch', t.ref, '--unverified-transport']);
   assert.strictEqual(res.status, 0, res.stderr);
   const dispatched = JSON.parse(res.stdout);
   assert.equal(dispatched.exec.runsModel, 'opus');

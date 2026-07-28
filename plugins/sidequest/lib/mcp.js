@@ -9,6 +9,7 @@ const commitScope = require("./commit-scope");
 const publish = require("./publish");
 const execNames = require("./exec-names");
 const { claimRefusalMessage } = require("./refusal-guidance");
+const { assertSidequestInstall, assertDispatchTransport } = require("./dispatch-preflight");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const CATEGORY_TAXONOMY_WARNING = "Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.";
@@ -1561,7 +1562,10 @@ const TOOLS = [
       const prepared = store.prepareDispatch(slug, args.ref, {
         sessionId: requireDispatchSession(),
         sharedTree: !!args.sharedTree,
-        integrationBranch: args.integrationBranch
+        integrationBranch: args.integrationBranch,
+        // Reaching this handler is itself proof the board MCP is connected
+        // in this session (SQ-1017); CLI transport carries no such proof.
+        transport: "mcp"
       });
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
@@ -1613,6 +1617,10 @@ const TOOLS = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      if (meta.path) {
+        assertSidequestInstall(meta.path);
+        assertDispatchTransport("mcp");
+      }
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
       if (!ticket.model || !ticket.effort) throw new Error(`native_agent: ${ticket.ref} has no routable model and effort.`);

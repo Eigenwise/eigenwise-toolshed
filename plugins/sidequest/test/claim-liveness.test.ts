@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 /**
  * Claim liveness: observed death decides, the clock never does (SQ-820).

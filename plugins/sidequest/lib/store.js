@@ -12,6 +12,7 @@ const { migrateIfNeeded } = require("./migrate.js");
 const { discoverExternalModels } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
 const { routingDisabledMessage } = require("./refusal-guidance.js");
+const { assertSidequestInstall, assertDispatchTransport } = require("./dispatch-preflight.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
@@ -3821,6 +3822,9 @@ function worktreeIsolationWarning(slug) {
 function prepareDispatch(slug, idOrRef, opts) {
   opts = opts || {};
   if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
+  const projectPath = readMeta(slug)?.path;
+  if (projectPath) assertSidequestInstall(projectPath);
+  assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   return withTicketLock(slug, found.id, () => {

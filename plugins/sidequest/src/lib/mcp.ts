@@ -32,6 +32,7 @@ const commitScope = require('./commit-scope');
 const publish = require('./publish');
 const execNames = require('./exec-names');
 const { claimRefusalMessage } = require('./refusal-guidance');
+const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight');
 
 type ToolDefinition = {
   name: string;
@@ -1709,6 +1710,9 @@ const TOOLS: ToolDefinition[] = [
         sessionId: requireDispatchSession(),
         sharedTree: !!args.sharedTree,
         integrationBranch: args.integrationBranch,
+        // Reaching this handler is itself proof the board MCP is connected
+        // in this session (SQ-1017); CLI transport carries no such proof.
+        transport: 'mcp',
       });
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
@@ -1766,6 +1770,13 @@ const TOOLS: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      // native_agent does not go through prepareDispatch, so it needs its own
+      // copy of the same install preflight (SQ-1017) — see dispatch-preflight.js.
+      // Reaching this handler is itself proof the board MCP is connected.
+      if (meta.path) {
+        assertSidequestInstall(meta.path);
+        assertDispatchTransport('mcp');
+      }
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
       if (!ticket.model || !ticket.effort) throw new Error(`native_agent: ${ticket.ref} has no routable model and effort.`);

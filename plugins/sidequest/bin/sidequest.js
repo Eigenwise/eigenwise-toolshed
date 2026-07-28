@@ -13,6 +13,7 @@ const worktrees = require("../lib/worktrees");
 const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
+const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "produces", "changes", "consumes"]);
 const ALIASES = {
   t: "title",
@@ -55,7 +56,7 @@ function parseArgs(argv) {
         opts["auto-approve-plugin-tests"] = false;
         continue;
       }
-      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "override-legacy-scope", "contract-waiver", "full", "worktree-isolation", "auto-approve-plugin-tests", "high-stakes"]);
+      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "override-legacy-scope", "contract-waiver", "full", "worktree-isolation", "auto-approve-plugin-tests", "high-stakes", "unverified-transport"]);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -1756,9 +1757,15 @@ async function cmdDispatch(opts, positional) {
   const descriptionError = store.dispatchDescriptionError(ticket);
   if (descriptionError) fail(descriptionError);
   const sessionId2 = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
+  const unverifiedTransport = !!opts["unverified-transport"];
   let prepared;
   try {
-    prepared = store.prepareDispatch(slug, idOrRef, { sessionId: sessionId2, sharedTree: !!opts["shared-tree"] });
+    prepared = store.prepareDispatch(slug, idOrRef, {
+      sessionId: sessionId2,
+      sharedTree: !!opts["shared-tree"],
+      transport: "cli",
+      allowUnverifiedTransport: unverifiedTransport
+    });
   } catch (err) {
     fail(`dispatch: ${err && err.message || err}`);
   }
@@ -1768,6 +1775,10 @@ async function cmdDispatch(opts, positional) {
   const agent = prepared.ticket.dispatchExecutor;
   const dispatchState = prepared.ticket.dispatch || {};
   const spawn2 = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, dispatchState.description);
+  const warnings = store.dispatchWarnings(prepared.ticket);
+  if (unverifiedTransport) {
+    warnings.push("dispatch warning: --unverified-transport was used — this does NOT prove any session will have the Sidequest board MCP connected; a fresh native Agent could still receive zero board tools.");
+  }
   process.stdout.write(JSON.stringify({
     project: slug,
     projectPath: meta.path,
@@ -1779,7 +1790,7 @@ async function cmdDispatch(opts, positional) {
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
     recovery: prepared.recovery || null,
-    warnings: store.dispatchWarnings(prepared.ticket),
+    warnings,
     spawn: spawn2,
     guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}.`
   }, null, 2) + "\n");
@@ -1814,6 +1825,15 @@ async function cmdNativeAgent(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("native-agent: pass a ticket ref, e.g. sidequest native-agent SQ-12 --json.");
   const { slug, meta } = await resolveProject(opts);
+  const unverifiedTransport = !!opts["unverified-transport"];
+  if (meta.path) {
+    try {
+      assertSidequestInstall(meta.path);
+      assertDispatchTransport("cli", { allowUnverifiedTransport: unverifiedTransport });
+    } catch (err) {
+      fail(`native-agent: ${err && err.message || err}`);
+    }
+  }
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`native-agent: no ticket "${idOrRef}".`);
   if (!ticket.model || !ticket.effort) fail(`native-agent: ${ticket.ref} has no routable model and effort.`);
@@ -1833,7 +1853,8 @@ async function cmdNativeAgent(opts, positional) {
     sessionId: sessionId2,
     prompt
   });
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectPath: meta.path, ref: ticket.ref, effort: ticket.effort, exec: ticket.exec, prompt }, created), null, 2) + "\n");
+  const warnings = unverifiedTransport ? ["native-agent warning: --unverified-transport was used — this does NOT prove any session will have the Sidequest board MCP connected; this native Agent could still receive zero board tools."] : void 0;
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectPath: meta.path, ref: ticket.ref, effort: ticket.effort, exec: ticket.exec, prompt }, created, warnings ? { warnings } : {}), null, 2) + "\n");
 }
 async function cmdModelsSyncAgents(opts) {
   const res = agentsync.syncExecAgents(void 0, opts.dir ? { dir: opts.dir } : void 0);
@@ -2401,9 +2422,9 @@ const HELP_COMMANDS = {
   ready: "sidequest ready [--model <model>] [--category <id>] [--json] [--brief]",
   archive: "sidequest archive [<id|SQ-n>] [--done]",
   unarchive: "sidequest unarchive <id|SQ-n>",
-  dispatch: "sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]",
+  dispatch: "sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id] [--unverified-transport]",
   briefing: "sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]",
-  "native-agent": 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]',
+  "native-agent": 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]',
   temp: "sidequest temp cleanup [--root <path>] [--json]",
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
@@ -2525,9 +2546,9 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id]  prepare a token-gated dispatch: declared-file tickets use worktrees unless shared state or bounded artifact output is explicit
+  sidequest dispatch <SQ-n> [--shared-tree] [--project <path-or-slug>] [--session id] [--unverified-transport]  prepare a token-gated dispatch: declared-file tickets use worktrees unless shared state or bounded artifact output is explicit; CLI transport refuses unless --unverified-transport (does not prove any session gets the board MCP) — use the board MCP dispatch tool instead
   sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]  print the current token-gated executor briefing
-  sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json]  return an already-registered native Agent spawn spec + bounded prompt
+  sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]  return an already-registered native Agent spawn spec + bounded prompt; CLI transport refuses unless --unverified-transport
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
     \`sidequest work\`/\`drain\` are disabled because they cannot invoke Agent and never start a separate Claude process.
