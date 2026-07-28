@@ -418,6 +418,18 @@ function scopePauseRecoveryPacket(ticket?: any, slug?: any) {
   return `Scope-pause recovery: \`${patch}\` is an automatic snapshot of uncommitted work from a stopped executor. Stopped-agent messages are not a reliable recovery path, so a redispatch in a new worktree must apply this patch before implementation; do not apply it in the original paused worktree.`;
 }
 
+// One line, never the body: a briefing gains only the absolute path (SQ-1015).
+// Do not inline the plan content here at any size, and do not add a "small
+// plans can be inlined" threshold — that recreates the eager-injection
+// problem this replaces and gives authors a size to write to.
+function planDocumentPacket(ticket?: any, slug?: any) {
+  if (!ticket || !slug) return null;
+  const plan = store.ticketPlanInfo(slug, ticket.id || ticket.ref);
+  if (!plan) return null;
+  const planPath = path.resolve(plan.path);
+  return `Plan document: \`${planPath}\` (revision ${plan.revision}, ${plan.by}, ${plan.at}). Read it with \`Read\` and offset/limit on demand; it is never inlined here.`;
+}
+
 function experimentCheckoutTarget(ticket?: any) {
   const round = Number(ticket?.dispatch?.launchSeq);
   return Number.isInteger(round) && round > 1
@@ -526,6 +538,18 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
   ].join('\n')];
 }
 
+// The dependent-consumption half of SQ-1015: a blocks/blocked-by edge is the
+// whole point of planning (the linked ticket's plan is upstream context), and
+// it was previously 0% delivered — a link rendered as a bare ref with nothing
+// else. `related` links are excluded; they carry no ordering relationship.
+const DEPENDENCY_LINK_TYPES = new Set(['blocks', 'blocked-by']);
+
+function linkedPlanSuffix(link?: any, slug?: any) {
+  if (!slug || !link || !DEPENDENCY_LINK_TYPES.has(String(link.type))) return '';
+  const plan = link.ref ? store.ticketPlanInfo(slug, link.ref) : null;
+  return plan ? ` (plan: ${path.resolve(plan.path)})` : '';
+}
+
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projectPath?: any) {
   const category = ticket.category || {};
   const project = String(projectPath || (slug && store.readMeta(slug)?.path) || '').trim();
@@ -545,7 +569,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     ? 'Comment packet (newest-first excerpts; read full history only when flagged below):'
     : 'Complete comment thread (chronological, inspect every entry before implementation):';
   const links = Array.isArray(ticket.links) && ticket.links.length
-    ? ticket.links.map((link: any) => `- ${link.type || 'related'}: ${link.ref || '(unknown ticket)'}`).join('\n')
+    ? ticket.links.map((link: any) => `- ${link.type || 'related'}: ${link.ref || '(unknown ticket)'}${linkedPlanSuffix(link, slug)}`).join('\n')
     : '(No ticket dependencies were recorded.)';
   const declared = Array.isArray(ticket.files) ? ticket.files : [];
   const declaredFiles = declared.length
@@ -563,6 +587,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const closeout = ticketCloseout(ticket);
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
+  const planDocument = planDocumentPacket(ticket, slug);
   const contract = storyContractPacket(ticket, slug);
   const decisionLog = storyDecisionLogPacket(ticket, slug);
   const parts = [
@@ -581,6 +606,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     ...(ticketIsolationContract(ticket, project) || []),
     ...(scopePauseRecoveryPacket(ticket, slug) ? [scopePauseRecoveryPacket(ticket, slug)] : []),
     ...(experimentLog ? [`Experiment log:\n${experimentLog}`] : []),
+    ...(planDocument ? [planDocument] : []),
     `Declared files:\n${declaredFiles}`,
     ...(generatedFiles.length ? [`Auto-paired tracked generated files:\n${generatedFiles.map((file: any) => `- ${file}`).join('\n')}`] : []),
     'Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Keep your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. Report every refused or unscoped path in the final report; never call partial work ready for integration. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.',

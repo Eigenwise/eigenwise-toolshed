@@ -1948,6 +1948,42 @@ function saveAssetData(slug, id, name, buffer) {
   fs.writeFileSync(dest, buffer);
   return path.basename(dest);
 }
+const PLAN_ASSET_NAME = "plan.md";
+const PLAN_BODY_MAX_BYTES = 256 * 1024;
+function planAssetPath(slug, ticket) {
+  return assetPath(slug, ticket.id, PLAN_ASSET_NAME);
+}
+function writeTicketPlan(slug, idOrRef, by, body) {
+  const text = stripControlChars(String(body == null ? "" : body)).trim();
+  if (!text) return { ok: false, reason: "empty" };
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > PLAN_BODY_MAX_BYTES) {
+    return { ok: false, reason: "too_long", max: PLAN_BODY_MAX_BYTES, length: bytes };
+  }
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: "not_found" };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: "not_found" };
+    fs.mkdirSync(assetsDir(slug, ticket.id), { recursive: true });
+    fs.writeFileSync(planAssetPath(slug, ticket), text);
+    if (!Array.isArray(ticket.assets)) ticket.assets = [];
+    if (!ticket.assets.includes(PLAN_ASSET_NAME)) ticket.assets.push(PLAN_ASSET_NAME);
+    const revision = (Number(ticket.plan && ticket.plan.revision) || 0) + 1;
+    const at = (/* @__PURE__ */ new Date()).toISOString();
+    ticket.plan = { revision, by: String(by || "agent"), at };
+    ticket.updatedAt = at;
+    putTicket(slug, ticket);
+    return { ok: true, ticket, plan: ticket.plan, path: planAssetPath(slug, ticket) };
+  });
+}
+function ticketPlanInfo(slug, idOrRef) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket || !ticket.plan || !ticket.plan.revision) return null;
+  const file = planAssetPath(slug, ticket);
+  if (!fs.existsSync(file)) return null;
+  return { path: file, revision: ticket.plan.revision, by: ticket.plan.by, at: ticket.plan.at };
+}
 function experimentAssetName(ticket) {
   return `experiment-${String(ticket?.ref || ticket?.id || "ticket").replace(/[^a-z0-9_-]/gi, "_")}.md`;
 }
@@ -6490,6 +6526,10 @@ module.exports = {
   copyAsset,
   saveAssetData,
   assetPath,
+  PLAN_ASSET_NAME,
+  PLAN_BODY_MAX_BYTES,
+  writeTicketPlan,
+  ticketPlanInfo,
   appendExperimentEntry,
   applyExperimentVerdict,
   appendOverturnLine,

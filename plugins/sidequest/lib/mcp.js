@@ -189,6 +189,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   submit: "Submit verified work and final report.",
   integrate: "Deliver a submitted range as merge, replay, or uncommitted apply.",
   comment: "Add a durable handoff comment.",
+  plan: "Replace a ticket's plan document; never inlined into a briefing.",
   link: "Relate tickets; inverse automatic.",
   remove: "Delete a ticket. Claims need force:true.",
   claim: "Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.",
@@ -1458,6 +1459,20 @@ const TOOLS = [
     }
   },
   {
+    name: "plan",
+    description: "Write (replace-whole-document) a ticket's plan document, up to 256 KB. Never inlined into a briefing at any size — a briefing carries only the absolute path, and a dependent ticket carries it on its dependency line. Read the current document with `Read` before replacing it. Writer is the claim holder or the orchestrator.",
+    inputSchema: {
+      type: "object",
+      properties: { ref: { type: "string" }, project: PROJECT_PROP, body: { type: "string" }, by: { type: "string" } },
+      required: ["ref", "body"]
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      const res = store.writeTicketPlan(slug, args.ref, args.by || "agent", args.body);
+      return mutationAck(slug, res, res.ok ? { path: res.path, revision: res.plan.revision } : null);
+    }
+  },
+  {
     name: "comments",
     description: "Read ticket comments before work; full history is chronological. Past 10 comments, oldest bodies are omitted unless full:true. Follow nextCursor when paging.",
     inputSchema: {
@@ -2095,6 +2110,7 @@ const MUTATING_TOOLS = /* @__PURE__ */ new Set([
   "commit",
   "submit",
   "comment",
+  "plan",
   "link",
   "unlink",
   "assign",
