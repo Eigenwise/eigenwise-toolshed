@@ -3976,11 +3976,11 @@ function withTicketLock(slug?: any, id?: any, fn?: any) {
 }
 
 // The stable session-start executor receives the briefing and token in its prompt.
-function stableExecutorName(ticket?: any) {
+function stableExecutorName(ticket?: any, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
-  if (!dispatchReadOnly(ticket)) return resolved.agent;
+  if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
   return resolved.backend === 'codex'
     ? stableReadOnlyDispatchName(ticket.effort)
     : stableReadOnlyClaudeName(ticket.effort);
@@ -4504,7 +4504,6 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       });
     }
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
-    t.dispatchExecutor = stableExecutorName(t);
     if (t.scopePauseRecovery && current?.outcome === 'released') {
       t.scopePauseRecovery = Object.assign({}, t.scopePauseRecovery, { dispatchNonce: t.dispatchNonce });
     }
@@ -4524,6 +4523,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const artifactMode = Boolean(artifactRoot);
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
+    t.dispatchExecutor = stableExecutorName(t, artifactMode);
     const preparedExec = resolveExec(t.model, t.effort);
     const launchSeq = nextDispatchLaunchSeq(current);
     const readonly = dispatchReadOnly(t);

@@ -12,6 +12,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecy
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const agentsync = require('../lib/agentsync.js');
 
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecycle-project-'));
@@ -96,6 +97,13 @@ test('an explicitly marked shared-tree artifact ticket may close with done after
   assert.strictEqual(prepared.ticket.dispatch.artifactMode, true);
   assert.strictEqual(prepared.ticket.dispatch.artifactRoot, '.claude/.codebase-info');
   assert.strictEqual(prepared.ticket.dispatch.artifactScope, '.claude/.codebase-info');
+  assert.strictEqual(prepared.ticket.dispatch.readonly, true);
+  assert.strictEqual(prepared.ticket.dispatchExecutor, store.resolveExec(prepared.ticket.model, prepared.ticket.effort).agent);
+  const briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token, slug, PROJECT);
+  assert.match(briefing, /shared checkout is the dispatch contract/i);
+  assert.match(briefing, /may write only \.claude\/\.codebase-info/i);
+  assert.match(briefing, /do not apply the linked-worktree self-check/i);
+  assert.doesNotMatch(briefing, /Worktree isolation contract:/);
   assert.deepStrictEqual(prepared.ticket.dispatch.declaredFiles, ['.claude/.codebase-info']);
   assert.ok(prepared.ticket.dispatch.artifactDirtyBaseline.some((entry: any) => entry.path === 'pre-existing-local.txt' && /^[a-f0-9]{64}$/.test(entry.identity)));
   assert.strictEqual(claim(prepared, 'artifact-worker').ok, true);

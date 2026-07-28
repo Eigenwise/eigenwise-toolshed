@@ -3391,11 +3391,11 @@ function withTicketLock(slug, id, fn) {
     releaseLock(lock);
   }
 }
-function stableExecutorName(ticket) {
+function stableExecutorName(ticket, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error("dispatch executor requires a routable ticket.");
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
-  if (!dispatchReadOnly(ticket)) return resolved.agent;
+  if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
   return resolved.backend === "codex" ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
 }
 function dispatchTokenPrefix(token) {
@@ -3862,7 +3862,6 @@ function prepareDispatch(slug, idOrRef, opts) {
       });
     }
     t.dispatchNonce = crypto.randomBytes(24).toString("base64url");
-    t.dispatchExecutor = stableExecutorName(t);
     if (t.scopePauseRecovery && current?.outcome === "released") {
       t.scopePauseRecovery = Object.assign({}, t.scopePauseRecovery, { dispatchNonce: t.dispatchNonce });
     }
@@ -3878,6 +3877,7 @@ function prepareDispatch(slug, idOrRef, opts) {
     const artifactMode = Boolean(artifactRoot);
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
+    t.dispatchExecutor = stableExecutorName(t, artifactMode);
     const preparedExec = resolveExec(t.model, t.effort);
     const launchSeq = nextDispatchLaunchSeq(current);
     const readonly = dispatchReadOnly(t);
