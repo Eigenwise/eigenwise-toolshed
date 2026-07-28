@@ -11,7 +11,12 @@ const { flushOutbox } = require('../lib/observability/outbox.js');
 const { buildOtlpPayload, openObservabilityStore } = require('../lib/observability/store.js');
 const grafana = require('../observability/sinks/grafana/index.js');
 const { generatedDashboards, provisionDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
-const { MODEL_PRICES_PER_MILLION, modelCostTargets, unpricedModelsExpression } = require('../observability/sinks/grafana/model-prices.js');
+const {
+  MODEL_PRICES_PER_MILLION,
+  gatewayModelCostTargets,
+  modelCostTargets,
+  unpricedModelsExpression,
+} = require('../observability/sinks/grafana/model-prices.js');
 const posthog = require('../observability/sinks/posthog/index.js');
 const {
   DEFAULT_SINK,
@@ -75,10 +80,14 @@ test('prices every active model label and token type from one table', () => {
     'claude-codex-gpt-5.6-luna',
     'claude-codex-gpt-5.6-sol',
     'claude-codex-gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
   ]) {
     assert.ok(MODEL_PRICES_PER_MILLION[model], `missing price for ${model}`);
   }
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-sol'], { input: 5, cacheRead: 0.5, cacheCreation: 5, output: 30 });
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['gpt-5.6-sol'], MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-sol']);
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-terra'], { input: 2.5, cacheRead: 0.25, cacheCreation: 2.5, output: 15 });
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-luna'], { input: 1, cacheRead: 0.1, cacheCreation: 1, output: 6 });
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-haiku-4-5'], { input: 1, cacheRead: 0.1, cacheCreation: 1.25, output: 5 });
@@ -88,6 +97,13 @@ test('prices every active model label and token type from one table', () => {
   assert.match(target.expr, /type="cacheRead"/);
   assert.match(target.expr, /type="cacheCreation"/);
   assert.match(target.expr, /type="output"/);
+  const gatewayTarget = gatewayModelCostTargets().find(({ legendFormat }) => legendFormat === 'gpt-5.6-terra');
+  assert.match(gatewayTarget.expr, /gateway\.token\.usage/);
+  assert.match(gatewayTarget.expr, /workbench_attribute_model = "gpt-5\.6-terra"/);
+  assert.match(gatewayTarget.expr, /workbench_measurement_input_tokens_value/);
+  assert.match(gatewayTarget.expr, /workbench_measurement_cache_read_tokens_value/);
+  assert.match(gatewayTarget.expr, /workbench_measurement_cache_creation_tokens_value/);
+  assert.match(gatewayTarget.expr, /workbench_measurement_output_tokens_value/);
 });
 
 test('keeps only unknown exact model labels in the unpriced query', () => {
@@ -99,6 +115,7 @@ test('keeps only unknown exact model labels in the unpriced query', () => {
   assert.ok(quotedPattern.includes('claude-opus-5\\\\[1m\\\\]'));
   assert.ok(priced.test('claude-opus-5[1m]'));
   assert.ok(priced.test('claude-codex-gpt-5.6-luna'));
+  assert.ok(priced.test('claude-codex-auto'));
   assert.ok(!priced.test('claude-opus-51'));
   assert.ok(!priced.test('claude-codex-gpt-5.6-unknown'));
 });
@@ -237,6 +254,16 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   const global = dashboards.find(({ fileName }) => fileName === 'claude-code-usage.json').dashboard;
   assert.equal(global.title, 'Claude Code Usage');
   assert.equal(global.uid, 'claude-code-usage');
+  const gatewayCost = global.panels.find(({ title }) => title === 'Cost over time, by resolved model (gateway)');
+  assert.equal(gatewayCost.datasource.uid, 'loki');
+  assert.equal(gatewayCost.interval, '$bucket');
+  assert.ok(gatewayCost.targets.some(({ legendFormat }) => legendFormat === 'gpt-5.6-terra'));
+  assert.ok(gatewayCost.targets.every(({ expr }) => expr.includes('gateway.token.usage')));
+  const costEstimate = global.panels.find(({ title }) => title === 'Cost (USD estimate)');
+  assert.match(costEstimate.targets[0].expr, /model!="claude-codex-auto"/);
+  const offload = global.panels.find(({ title }) => title === 'Work moved off the Anthropic limit');
+  assert.equal(offload.datasource.uid, 'loki');
+  assert.ok(offload.targets.every(({ expr }) => expr.includes('gateway.token.usage')));
   // Panel-level "interval": "$bucket" reaches Grafana verbatim, so dropping the
   // variable fails every bucketed panel with "Invalid interval string" (SQ-854).
   for (const { fileName, dashboard } of dashboards) {
@@ -273,10 +300,10 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   assert.doesNotMatch(connections.targets[0].expr, /workbench_attribute_project_name/);
   assert.doesNotMatch(connections.targets[0].expr, /\$project/);
   assert.match(connections.targets[0].expr, /^sum by \(mcp_server, connection_status\)/);
-  const offload = global.panels.find(({ title }) => title === 'Work moved off the Anthropic limit');
-  assert.equal(offload.type, 'stat');
-  assert.ok(offload.targets.every(({ expr }) => !expr.includes('project_id')));
-  assert.ok(offload.targets.every(({ expr }) => !expr.includes('$project')));
+  const offloadPanel = global.panels.find(({ title }) => title === 'Work moved off the Anthropic limit');
+  assert.equal(offloadPanel.type, 'stat');
+  assert.ok(offloadPanel.targets.every(({ expr }) => !expr.includes('project_id')));
+  assert.ok(offloadPanel.targets.every(({ expr }) => !expr.includes('$project')));
   const topStats = global.panels.filter(({ gridPos }) => gridPos?.y === 1 && gridPos.h === 4);
   assert.deepEqual(topStats.map(({ gridPos }) => gridPos), [
     { x: 0, y: 1, w: 6, h: 4 },
@@ -450,7 +477,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     assert.equal(row.collapsed, false);
   }
   for (const title of [
-    'Tokens over time, by type', 'Cost allocation, by token type (USD)', 'Tokens over time, by model', 'Models in use', 'Token volume by backend',
+    'Tokens over time, by type', 'Cost allocation, by token type (USD)', 'Tokens over time, by model', 'Cost over time, by resolved model (gateway)', 'Models in use', 'Token volume by backend',
     'Background/compaction cost by model and project',
     'Tool activity by name', 'MCP activity by server / tool', 'MCP definition footprint by server',
     'Tool activity error rate',

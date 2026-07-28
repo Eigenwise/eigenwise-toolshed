@@ -251,11 +251,11 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range]))",
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range]))",
           "instant": true
         }
       ],
-      "description": "Reported API-equivalent cost over the selected range. This is the closest available proxy for subscription-window burn; raw token volume overstates it because cache reads are discounted."
+      "description": "Claude Code client-reported API-equivalent cost over the selected range. It excludes the virtual claude-codex-auto dispatch label because Claude Code invents its dollar figure; see the gateway resolved-model cost panel for dispatch traffic."
     },
     {
       "id": 30,
@@ -327,7 +327,7 @@
     {
       "id": 31,
       "title": "Cost allocation, by token type (USD)",
-      "description": "API-equivalent cost allocation in USD for the selected range. Each slice uses the same selected-range total as Cost (USD estimate), so the four legend Totals add up to that card within rounding. The total is split by input × 1.0, cache reads × 0.1, cache creation × 1.25, and output × 5.0; per-model price differences stay in the reported USD total. This is a breakdown of the range, not a trend: all four targets are instant queries over $__range, so plotting them on a time axis leaves one point at the right edge and a legend Total that over-counts by the window/step overlap.",
+      "description": "Client-reported API-equivalent cost allocation in USD for the selected range, excluding the virtual dispatch label. Each slice uses the same selected-range total as Cost (USD estimate), so the four legend Totals add up to that card within rounding. The total is split by input × 1.0, cache reads × 0.1, cache creation × 1.25, and output × 5.0; per-model price differences stay in the reported USD total. This is a breakdown of the range, not a trend: all four targets are instant queries over $__range, so plotting them on a time axis leaves one point at the right edge and a legend Total that over-counts by the window/step overlap.",
       "type": "piechart",
       "datasource": {
         "type": "prometheus",
@@ -378,7 +378,7 @@
           },
           "legendFormat": "fresh input",
           "instant": true,
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range])) or vector(0)) * (sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range])) or vector(0)) * (sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
         },
         {
           "refId": "B",
@@ -388,7 +388,7 @@
           },
           "legendFormat": "cache reads",
           "instant": true,
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range])) or vector(0)) * (0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range])) or vector(0)) * (0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
         },
         {
           "refId": "C",
@@ -398,7 +398,7 @@
           },
           "legendFormat": "cache creation",
           "instant": true,
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range])) or vector(0)) * (1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range])) or vector(0)) * (1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
         },
         {
           "refId": "D",
@@ -408,7 +408,7 @@
           },
           "legendFormat": "output",
           "instant": true,
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range])) or vector(0)) * (5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
+          "expr": "(sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range])) or vector(0)) * (5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
         }
       ]
     },
@@ -621,7 +621,7 @@
             "uid": "prometheus"
           },
           "legendFormat": "{{project_id}}",
-          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$bucket]))"
+          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$bucket]))"
         }
       ],
       "interval": "$bucket"
@@ -629,7 +629,7 @@
     {
       "id": 32,
       "title": "Cost over time, by model",
-      "description": "List-price equivalent by resolved model and token type. Subscriptions are flat-rate, so this is a common unit for comparing activity, not money owed.",
+      "description": "Client-side Claude Code metrics, priced by the model label Claude Code reports. Dispatch executor traffic uses the virtual claude-codex-auto label and resolves only in the gateway panel beside this one. Subscriptions are flat-rate, so this is a common unit for comparing activity, not money owed.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -638,7 +638,7 @@
       "gridPos": {
         "x": 0,
         "y": 25,
-        "w": 16,
+        "w": 8,
         "h": 8
       },
       "interval": "$bucket",
@@ -787,9 +787,63 @@
       ]
     },
     {
+      "id": 46,
+      "title": "Cost over time, by resolved model (gateway)",
+      "description": "Gateway token records, priced by the resolved backend model and token type. Dispatch executor traffic resolves here; subscriptions are flat-rate, so this is a common unit for comparing activity, not money owed.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 25,
+        "w": 8,
+        "h": 8
+      },
+      "interval": "$bucket",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 100,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "legendFormat": "{{workbench_attribute_model}}",
+          "expr": "__GATEWAY_MODEL_PRICE_TARGETS__"
+        }
+      ]
+    },
+    {
       "id": 33,
       "title": "Unpriced model usage",
-      "description": "Models missing from the list-price table are deliberately shown here instead of being treated as zero-cost. Add their confirmed per-token-type prices before using the by-model cost panel for them.",
+      "description": "Models missing from the list-price table are deliberately shown here instead of being treated as zero-cost. Virtual dispatch labels resolve in the gateway cost panel, rather than appearing as unpriced client-side models.",
       "type": "table",
       "datasource": {
         "type": "prometheus",
@@ -995,7 +1049,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{project_id=~\"$project\"}[$__range]))"
+          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range]))"
         }
       ],
       "transformations": [
@@ -1136,7 +1190,7 @@
     {
       "id": 33,
       "title": "Work moved off the Anthropic limit",
-      "description": "Cost on Codex-routed models as a share of all notional cost. Higher means category routing is moving more work onto the ChatGPT subscription. The two figures underneath show the offloaded and total notional costs for the selected range.",
+      "description": "Gateway-recorded resolved-model list-price equivalents show the Codex share of all known model costs. This includes dispatch executor traffic, unlike Claude Code’s virtual client-side dispatch label. The two figures underneath show the Codex and total list-price equivalents for the selected range.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -1210,7 +1264,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(100 * sum(increase(claude_code_cost_usage_USD_total{model=~\"claude-codex-.*\"}[$__range])) / sum(increase(claude_code_cost_usage_USD_total[$__range]))) and (sum(increase(claude_code_cost_usage_USD_total[$__range])) > 0)",
+          "expr": "(100 * sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-codex-.*\"}[$__range])) / sum(increase(claude_code_cost_usage_USD_total[$__range]))) and (sum(increase(claude_code_cost_usage_USD_total[$__range])) > 0)",
           "legendFormat": "Share routed to Codex",
           "instant": true
         },
@@ -1220,7 +1274,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total{model=~\"claude-codex-.*\"}[$__range]))",
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-codex-.*\"}[$__range]))",
           "legendFormat": "Codex list-price equivalent",
           "instant": true
         },
@@ -1324,7 +1378,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sort_desc(sum by (model, project_id) (increase(claude_code_cost_usage_USD_total{query_source=\"auxiliary\",project_id=~\"$project\"}[$__range])))",
+          "expr": "sort_desc(sum by (model, project_id) (increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",query_source=\"auxiliary\",project_id=~\"$project\"}[$__range])))",
           "instant": true
         }
       ],

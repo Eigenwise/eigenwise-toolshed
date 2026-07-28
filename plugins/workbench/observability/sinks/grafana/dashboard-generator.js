@@ -2,7 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { modelCostTargets, unpricedModelsExpression } = require('./model-prices');
+const {
+  gatewayModelCostTargets,
+  gatewayResolvedCodexCostExpression,
+  gatewayTotalCostExpression,
+  modelCostTargets,
+  unpricedModelsExpression,
+} = require('./model-prices');
 
 const TEMPLATE_FILE = path.join(__dirname, 'dashboards', 'claude-code-usage.json');
 const GENERATED_DIRECTORY = 'grafana-dashboards';
@@ -196,8 +202,39 @@ function perProjectDashboard(template, project) {
 function applyModelPricing(dashboard) {
   const costPanel = dashboard.panels.find(({ title }) => title === 'Cost over time, by model');
   if (costPanel) costPanel.targets = modelCostTargets();
+  const gatewayCostPanel = dashboard.panels.find(({ title }) => title === 'Cost over time, by resolved model (gateway)');
+  if (gatewayCostPanel) gatewayCostPanel.targets = gatewayModelCostTargets();
   const unpricedPanel = dashboard.panels.find(({ title }) => title === 'Unpriced model usage');
   if (unpricedPanel) unpricedPanel.targets[0].expr = unpricedModelsExpression();
+  const offloadPanel = dashboard.panels.find(({ title }) => title === 'Work moved off the Anthropic limit');
+  if (offloadPanel) {
+    const codexCost = gatewayResolvedCodexCostExpression('$__range');
+    const totalCost = gatewayTotalCostExpression('$__range');
+    offloadPanel.datasource = { type: 'loki', uid: 'loki' };
+    offloadPanel.targets = [
+      {
+        refId: 'A',
+        datasource: offloadPanel.datasource,
+        expr: `(100 * (${codexCost}) / (${totalCost})) and ((${totalCost}) > 0)`,
+        legendFormat: 'Share routed to Codex',
+        instant: true,
+      },
+      {
+        refId: 'B',
+        datasource: offloadPanel.datasource,
+        expr: codexCost,
+        legendFormat: 'Codex list-price equivalent',
+        instant: true,
+      },
+      {
+        refId: 'C',
+        datasource: offloadPanel.datasource,
+        expr: totalCost,
+        legendFormat: 'Total list-price equivalent',
+        instant: true,
+      },
+    ];
+  }
   return dashboard;
 }
 
