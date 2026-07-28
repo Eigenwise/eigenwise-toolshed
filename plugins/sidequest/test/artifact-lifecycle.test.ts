@@ -27,6 +27,11 @@ store.setCategory({
   artifactRoots: [],
 });
 
+test.afterEach(() => {
+  execFileSync('git', ['reset', '--hard', '--quiet'], { cwd: PROJECT, windowsHide: true });
+  execFileSync('git', ['clean', '-fdq'], { cwd: PROJECT, windowsHide: true });
+});
+
 function ticket(title: any, description: any, files?: any) {
   return store.createTicket(slug, {
     title,
@@ -164,6 +169,39 @@ test('read-only dispatches with in-repo declared files may close with done', () 
   assert.strictEqual(done.ok, true);
   assert.strictEqual(done.ticket.status, 'done');
   assert.strictEqual(done.ticket.submission == null, true);
+});
+
+test('read-only done refuses every dirty path since dispatch base', () => {
+  const relativePath = 'readonly-undisclosed.txt';
+  const created = ticket('read clean repository', 'Inspect without modifying the repository.', ['.claude/.codebase-info']);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(claim(prepared, 'readonly-dirty-worker').ok, true);
+  writeProjectFile(relativePath, 'unexpected change\n');
+  execFileSync('git', ['add', '--', relativePath], { cwd: PROJECT, windowsHide: true });
+
+  const done = store.completeTicket(slug, created.ref, 'readonly-dirty-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'done_scope_violation');
+  assert.deepStrictEqual(done.unscopedPaths, [relativePath]);
+  assert.match(done.message, new RegExp(relativePath));
+});
+
+test('non-repo done refuses dirty repository paths outside its external output', () => {
+  const outside = path.join(os.tmpdir(), `sq-nonrepo-delta-${process.pid}.html`);
+  const relativePath = 'nonrepo-undisclosed.txt';
+  const created = ticket('external report', 'Write an external report only.', [outside]);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(prepared.ticket.dispatch.nonRepoOutput, true);
+  assert.strictEqual(claim(prepared, 'nonrepo-dirty-worker').ok, true);
+  writeProjectFile(relativePath, 'unexpected change\n');
+
+  const done = store.completeTicket(slug, created.ref, 'nonrepo-dirty-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'done_scope_violation');
+  assert.deepStrictEqual(done.unscopedPaths, [relativePath]);
+  assert.match(done.message, new RegExp(relativePath));
 });
 
 test('read-only dispatches without declared files may close with done', () => {

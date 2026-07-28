@@ -36,6 +36,7 @@ const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
 const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const BOARD_RECONCILIATION_REMINDER = path.join(HOOKS, 'board-reconciliation-reminder.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
+const GUARD_SHARED_TREE_COMMIT = path.join(HOOKS, 'guard-shared-tree-commit.js');
 
 const BUDGET = {
   session: 4700,
@@ -118,6 +119,47 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
     mode: 'bypassPermissions',
   });
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+});
+
+test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-shared-commit-'));
+  gitFixture(['init', '--quiet'], projectPath);
+  gitFixture(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], projectPath);
+  const project = store.ensureProject(projectPath).slug;
+  const ticket = store.createTicket(project, { title: 'shared commit guard', category: 'debugging', source: 'cli' });
+  const sessionId = `shared-commit-${++sqSeq}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, sharedTree: true });
+  const agentId = `shared-commit-agent-${sqSeq}`;
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName: agentId,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
+  assert.equal(store.claimTicket(project, ticket.ref, 'shared-commit-worker', {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+
+  const payload = {
+    session_id: sessionId,
+    agent_type: prepared.ticket.dispatchExecutor,
+    agent_id: agentId,
+    cwd: projectPath,
+    tool_name: 'Bash',
+    tool_input: { command: 'git commit -m "bypass"' },
+  };
+  const blocked = runHookOutput(GUARD_SHARED_TREE_COMMIT, payload);
+  assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /mcp__plugin_sidequest_board__commit/);
+
+  assert.equal(runHookOutput(GUARD_SHARED_TREE_COMMIT, { ...payload, agent_id: 'unrelated-agent' }), null);
+  assert.equal(runHookOutput(GUARD_SHARED_TREE_COMMIT, payload, {
+    CLAUDE_PLUGIN_ROOT: path.join(os.tmpdir(), 'missing-sidequest-plugin'),
+  }), null);
 });
 
 test('pre-tool hook: every stable readonly executor remains allowed and forced to bypass', () => {

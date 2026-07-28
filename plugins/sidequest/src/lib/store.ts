@@ -4701,6 +4701,50 @@ function dispatchWorkspace(slug?: any, ticket?: any) {
   return base ? { root, base } : null;
 }
 
+function dispatchDelta(slug?: any, ticket?: any) {
+  const workspace = dispatchWorkspace(slug, ticket);
+  if (!workspace) return { ok: false, reason: 'workspace_unavailable' };
+  try {
+    const working = commitScope.workingPaths(workspace.root);
+    const base = execFileSync('git', ['rev-parse', '--verify', `${workspace.base}^{commit}`], {
+      cwd: workspace.root,
+      encoding: 'utf8',
+      windowsHide: true,
+    }).trim();
+    const head = execFileSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
+      cwd: workspace.root,
+      encoding: 'utf8',
+      windowsHide: true,
+    }).trim();
+    const commits = base === head ? [] : execFileSync('git', ['rev-list', `${base}..${head}`], {
+      cwd: workspace.root,
+      encoding: 'utf8',
+      windowsHide: true,
+    }).trim().split(/\r?\n/).filter(Boolean);
+    const committed = commits.length ? commitScope.rangePaths(workspace.root, commits) : [];
+    return { ok: true, workspace, working, committed };
+  } catch (error: any) {
+    return { ok: false, reason: 'git_error', message: error?.message || String(error) };
+  }
+}
+
+function activeSharedTreeClaim(identity?: any) {
+  const agentId = String(identity?.agentId || '').trim();
+  const executor = String(identity?.executor || '').trim();
+  if (!agentId || !executor) return null;
+  const matches: any[] = [];
+  for (const project of listProjects({ all: true })) {
+    const projectPath = readMeta(project.slug)?.path || null;
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || state.sharedTree !== true || state.terminalAt || !ticket.claim?.by) continue;
+      if (String(state.agentId || '') !== agentId || String(state.executor || '') !== executor) continue;
+      matches.push({ ref: ticket.ref, project: project.slug, projectPath });
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function dispatchIdentityAmbiguous(matches: any[], agentName?: any) {
   return matches.length > 1 && (!agentName || new Set(matches.map((match?: any) => match.slug)).size > 1);
 }
@@ -5011,6 +5055,34 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
     const activeNonRepoOutput = dispatch?.nonRepoOutput === true && liveClaim && activeDispatch;
     const activeReadOnlyDispatch = dispatch?.readonly === true && liveClaim && activeDispatch;
+    if (executorDone && liveClaim && activeDispatch) {
+      const delta = dispatchDelta(slug, t);
+      if (!delta.ok && dispatch?.sharedTree === true && dispatch?.baseCommit) {
+        return {
+          ok: false,
+          reason: 'dispatch_delta_unavailable',
+          message: `${t.ref} cannot inspect the full dispatch delta before done closeout. Restore the dispatch worktree or release the ticket and dispatch again.`,
+          ticket: t,
+        };
+      }
+      if (delta.ok) {
+        const changed = Array.from(new Set([...delta.working, ...delta.committed]));
+        const unscoped = (activeArtifactDispatch ? delta.committed : changed)
+          .filter((file: string) => !commitScope.isInScope(file, declaredFiles));
+        const refused = activeReadOnlyDispatch && !activeArtifactDispatch ? changed : unscoped;
+        if (refused.length) {
+          const paths = refused.sort();
+          const mode = activeReadOnlyDispatch ? 'read-only dispatch' : 'declared scope';
+          return {
+            ok: false,
+            reason: 'done_scope_violation',
+            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths since dispatch base: ${paths.join(', ')}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
+            ticket: t,
+            unscopedPaths: paths,
+          };
+        }
+      }
+    }
     if (executorDone && activeArtifactDispatch) {
       const scopeCheck = artifactScopeCheck(slug, t, dispatch);
       if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
@@ -7295,6 +7367,7 @@ module.exports = {
   recoverDispatchQuotaFailure,
   bindDispatchAgent,
   dispatchIsolationExpectation,
+  activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
   terminalDispatchForIdle,
