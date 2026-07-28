@@ -50,7 +50,9 @@ For substantial work:
 A complexity 4+ ticket gets a planning pass first: concrete scope, anchors, exact
 verify command. Wave tickets verify with a scoped test; run the full suite once when integrating the
 wave. A passing executable done-oracle needs no review-audit + fix wave unless the work lacks a
-deterministic oracle or carries high-stakes flags. The board makes the plan survive context loss; a
+deterministic oracle or carries high-stakes flags. **Blocked-step invariant:** when a review,
+investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
+direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work. The board makes the plan survive context loss; a
 user-directed mechanical edit to one or two exact named files with stated content needs no ticket;
 any edit requiring other-file reading or investigation does. Coexisting with an external tracker:
 `references/external-trackers.md`.

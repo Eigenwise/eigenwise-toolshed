@@ -215,6 +215,9 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
     assert.match(reason, /quick investigation, needs a ticket: file a spike/);
     assert.match(reason, /codebase-exploration/);
     assert.match(reason, /route it, dispatch it, then spawn the returned executor/);
+    assert.match(reason, /blocked work still gates any dependent action/);
+    assert.match(reason, /do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed/);
+    assert.match(reason, /rerouting around this block is a violation/);
     assert.doesNotMatch(reason, /fresh dispatch briefing/);
   }
   const mismatch = runHookOutput(FORCE_BYPASS, {
