@@ -132,23 +132,23 @@ test('the store requires a dispatch nonce, rejects a wrong one, and accepts its 
   assert.equal(accepted.ok, true);
 });
 
-test('CLI requires direct-ok for routed direct claims and records approved bypasses', () => {
+test('CLI refuses invalid direct rationales and records inline-safe direct claims', () => {
   const ref = cliJson(['add', '-t', 'research fixture', '--category', 'guard.claude']).ticket.ref;
   const before = ticket(ref);
   assert.deepEqual(before.files, []);
-  const reason = 'No executor can access this isolated local fixture.';
-  const deniedResult = runCli(['claim', ref, '--by', 'inline-worker', '--direct', '--reason', reason, '--json']);
+  const reason = 'Integration gate pinpoints this exact one-line mechanical diff.';
+  const invalidReason = 'Context already loaded in this session for these files.';
+  const deniedResult = runCli(['claim', ref, '--by', 'inline-worker', '--direct', '--reason', invalidReason, '--json']);
   assert.equal(deniedResult.status, 1);
   const denied = JSON.parse(deniedResult.stdout);
   assert.equal(denied.reason, 'direct_not_allowed');
   assert.match(denied.message, new RegExp(`${before.model}\\s*·\\s*${before.effort}`));
+  assert.match(denied.message, /inline-safe allowlist/i);
   assert.match(denied.message, /context already loaded/i);
   assert.match(denied.message, /small change/i);
   assert.match(denied.message, /handoff\/transfer cost/i);
-  assert.match(denied.message, /retroactively legitimize prior inline investigation/i);
   assert.equal(ticket(ref).claim, null);
 
-  store.updateTicket(store.ensureProject(PROJ).slug, ref, { labels: ['direct-ok'] });
   const missingReasonResult = runCli(['claim', ref, '--by', 'inline-worker', '--direct', '--json']);
   assert.equal(missingReasonResult.status, 1);
   const missingReason = JSON.parse(missingReasonResult.stdout);
@@ -169,7 +169,7 @@ test('CLI --source cannot bypass direct authority and next preserves its refusal
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-direct-authority-'));
   const slug = store.ensureProject(project).slug;
   const created = store.createTicket(slug, { title: 'authority fixture', category: 'guard.claude' });
-  const reason = 'The authority guard fixture needs an approved direct claim.';
+  const reason = 'This work is a small change with the context already loaded here.';
   const bypass = runCli(['claim', created.ref, '--by', 'source-bypass', '--direct', '--reason', reason, '--source', 'store', '--project', project, '--json']);
   assert.equal(bypass.status, 1);
   assert.equal(JSON.parse(bypass.stdout).reason, 'direct_not_allowed');
@@ -185,10 +185,9 @@ test('CLI --source cannot bypass direct authority and next preserves its refusal
 
   const nextCli = runCli(['next', '--by', 'next-bypass', '--direct', '--reason', reason, '--project', project]);
   assert.equal(nextCli.status, 1);
-  assert.match(nextCli.stdout, /user-granted `direct-ok` label/);
+  assert.match(nextCli.stdout, /inline-safe allowlist/);
   assert.doesNotMatch(nextCli.stdout, /No available tickets/);
 
-  store.updateTicket(slug, created.ref, { labels: ['DIRECT-OK'] });
   const missingReason = store.claimTicket(slug, created.ref, 'store-bypass', { direct: true, source: 'store' });
   assert.equal(missingReason.ok, false);
   assert.equal(missingReason.reason, 'direct_reason_required');
