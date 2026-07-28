@@ -64,6 +64,20 @@ in the spec, or split it further.
 
 **Non-repo deliverables need a durable rendezvous.** A report, analysis, or dataset must land on an agent-independent surface: the ticket comment thread when it fits the comment cap, a declared artifact root under the project (for example `.claude/.codebase-info`) for larger artifacts, or a user-named absolute path outside any session temp tree. Never pin a session scratchpad path in a ticket as the deliverable location or its verify command, because different agents resolve different scratchpad roots for the same project. Put the durable location and the exact verification step in the ticket before dispatch.
 
+## Inline-safe direct work
+
+Delegation is the default. For a routed ticket, direct inline work still files or annotates the ticket
+for the record and records a 20+ character reason. It is limited to a failing integration gate that
+pinpoints a known small mechanical diff (strict-TS null guard, deliberate assertion-string sync,
+byte-checked golden regeneration, or merge-conflict resolution preserving both intents), release
+bookkeeping (fragment, cut, or evidence closeout), or the existing user-directed 1–2 named-file edit.
+`direct-ok` is optional user signal only, never a gate.
+
+Route a ticket to an executor for work needing investigation or other-file reading to be confident,
+new behavior or API surface, a failing test that does not pinpoint the location, or any rationale
+like "context already loaded", "small change", or "faster myself". The blocked-step and never-inline
+invariants still apply to substantive work.
+
 ## Acceptance evidence and audit gates
 
 Set the acceptance boundary before splitting fixes:

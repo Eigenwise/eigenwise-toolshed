@@ -119,6 +119,26 @@ test('executor guidance keeps board lifecycle MCP-only and protects shared trees
   assert.doesNotMatch(orchestration, /It carries the full ticket contract/);
 });
 
+test('inline-safe guidance names allowed work and exploit-resistant negatives', () => {
+  for (const source of [skill, orchestration]) {
+    assert.match(source, /INLINE-SAFE|Inline-safe/);
+    assert.match(source, /strict-TS null guard/);
+    assert.match(source, /assertion[- ]string/);
+    assert.match(source, /golden regeneration/);
+    assert.match(source, /merge-conflict resolution/);
+    assert.match(source, /Release\s+bookkeeping|release\s+bookkeeping/);
+    assert.match(source, /user-directed.*(?:one-or-two|1.?2).*named-file/i);
+    assert.match(source, /investigation or other-file reading/i);
+    assert.match(source, /(?:new|adds?) behavior.*API|new behavior or API/i);
+    assert.match(source, /failing test\s+that does not pinpoint|unpinpointed failing test/i);
+    assert.match(source, /context already loaded/i);
+    assert.match(source, /small change/i);
+    assert.match(source, /faster\s+myself/i);
+  }
+  assert.match(store, /INVALID_DIRECT_REASON_PATTERNS/);
+  assert.doesNotMatch(skill, /user-granted `direct-ok` label/);
+});
+
 test('blocked ticket steps gate dependent delivery actions', () => {
   assert.match(skill, /Blocked-step invariant/);
   assert.match(skill, /when a review,\n\s*investigation, or verification awaits a ticket, every dependent action stays blocked until it closes/);

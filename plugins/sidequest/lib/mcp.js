@@ -918,7 +918,7 @@ const TOOLS = [
   },
   {
     name: "claim",
-    description: "Claim a ticket; routed work needs a dispatch token and executor. direct:true is only available on a user-labeled direct-ok ticket and needs a reason.",
+    description: "Claim a ticket; routed work needs a dispatch token and executor. direct:true needs a recorded inline-safe reason.",
     inputSchema: {
       type: "object",
       properties: {
@@ -928,8 +928,8 @@ const TOOLS = [
         effort: { type: "string", enum: store.VALID_EFFORTS },
         executor: { type: "string", description: "Exact executor name from the dispatch." },
         token: { type: "string", description: "Dispatch token (required for routed claims)." },
-        direct: { type: "boolean", description: "User-granted direct-ok exception; requires reason." },
-        reason: { type: "string", description: "Direct rationale (20+ chars, required with direct:true)." },
+        direct: { type: "boolean", description: "Inline-safe exception; requires a recorded reason." },
+        reason: { type: "string", description: "Inline-safe rationale (20+ chars, required with direct:true)." },
         force: { type: "boolean", description: "Steal a live claim only when certain." },
         session: { type: "string" }
       },
@@ -1005,8 +1005,8 @@ const TOOLS = [
         model: { type: "string", description: "Filter to a resolved Claude runtime or discovered Codex model slug." },
         category: { type: "string", description: "Filter to a category ID." },
         priority: { type: "string", enum: store.VALID_PRIORITY },
-        direct: { type: "boolean", description: "User-granted direct-ok exception; requires reason." },
-        reason: { type: "string", description: "Direct rationale (20+ chars, required with direct:true)." },
+        direct: { type: "boolean", description: "Inline-safe exception; requires a recorded reason." },
+        reason: { type: "string", description: "Inline-safe rationale (20+ chars, required with direct:true)." },
         session: { type: "string" }
       },
       required: ["by"]

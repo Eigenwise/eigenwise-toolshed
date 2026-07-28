@@ -55,6 +55,23 @@ investigation, or verification awaits a ticket, every dependent action stays blo
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
 The board keeps plans through context loss; a user-directed mechanical edit to one or two named files
 with stated content needs no ticket; any edit requiring other-file reading or investigation does.
+
+### INLINE-SAFE direct work
+
+For a routed ticket, the orchestrator may claim `--direct` and edit inline only after filing or
+annotating the ticket for the record, giving a 20+ character reason, and matching this allowlist:
+
+- A failing integration gate pinpoints an exact, known small diff: a strict-TS null guard, an
+  assertion string synced after a deliberate reword, byte-checked golden regeneration, or a
+  merge-conflict resolution that preserves both sides' intent.
+- Release bookkeeping: release fragments, the cut flow, or closing tickets with evidence.
+- The existing user-directed one-or-two-named-file carve-out above, unchanged.
+
+`direct-ok` may remain as a user signal, but it gates nothing. Never inline work that needs
+investigation or other-file reading to be confident, adds behavior or an API, or has a failing test
+that does not pinpoint the exact location. "Context already loaded", "small change", and "faster
+myself" are invalid reasons. File a ticket and dispatch its executor instead. The blocked-step and
+never-inline invariants still apply to substantive work.
 Coexisting with an external tracker: `references/external-trackers.md`.
 
 ## MCP is the executor board interface
@@ -105,8 +122,8 @@ needed; scope and authoring details: `references/ticket-authoring.md`.
 **Descriptions are developer-to-developer specs, never PM summaries.** Include anchors, behavior and
 edge cases (or the question), bounds, dependencies/decisions, and the exact verify command; bugs include
 a reproduction. Front-load known evidence, especially for cheaper executors. Route by remaining
-uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy` or user-labeled
-`direct-ok`; keep the paid recon in the ticket.
+uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy`; use direct
+only for the INLINE-SAFE allowlist below, with its recorded reason.
 
 Descriptions/comments render markdown. Use real newlines, never literal `\n`. Mid-task side issue? File
 it with `mcp__plugin_sidequest_board__add`, then keep going. Filing a ticket is not a request to work it.
@@ -123,8 +140,9 @@ it with `mcp__plugin_sidequest_board__add`, then keep going. Filing a ticket is 
 The board may be shared: a ticket must be **claimed** before you touch it, and claiming is
 **atomic**. **Never work a ticket you haven't successfully claimed**, even one you just filed.
 Lifecycle (executors use the matching MCP tools; CLI forms for inline/admin work):
-`next`/`claim SQ-3 --by <you> --direct --reason "why no executor can do this"` (user-labeled `direct-ok` exception only) → `commit` (declared
-ticket paths only) → `submit --commit <hash> --verify "<cmd>"` (parks the verified LOCAL commit)
+`next`/`claim SQ-3 --by <you> --direct --reason "why this is inline-safe"` (only for the
+INLINE-SAFE allowlist) → `commit` (declared ticket paths only) → `submit --commit <hash> --verify
+"<cmd>"` (parks the verified LOCAL commit)
 or `done --model <model> --effort <level>` (inline/non-repo only) or `release` (drop unfinished,
 optionally `--status todo`).
 
@@ -162,9 +180,9 @@ the board transition, never that work shipped: salvage and close it per `referen
 ## Route execution down; keep the loop tight
 
 The orchestrator is usually the most expensive model. Gather enough evidence with direct read-only tools or
-native `Explore`, then write precise tickets and route implementation by default. A routed direct claim needs a
-user-granted `direct-ok` label and a meaningful reason (20+ characters), and cannot retroactively legitimize
-prior inline investigation. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
+native `Explore`, then write precise tickets and route implementation by default. A direct claim is limited
+to the INLINE-SAFE allowlist and its meaningful 20+ character recorded reason; it cannot retroactively
+legitimize prior inline investigation. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
 as comments, not transcripts. Routed implementation agents use a freshly dispatched Sidequest executor.
 `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities; other
 delegated implementation or investigation work needs a ticketed route.

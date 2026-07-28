@@ -1986,7 +1986,7 @@ test('MCP claim passes prepared dispatch token and executor through to the store
 });
 
 test('MCP blocks no-dispatch routed claims and records an explicit direct research bypass', async () => {
-  const added = await callTool('add', { title: 'no-file research', category: 'coding.easy', labels: ['direct-ok'] });
+  const added = await callTool('add', { title: 'no-file research', category: 'coding.easy' });
   const ticket = store.getTicket(added.project, added.ref);
   assert.deepStrictEqual(ticket.files, []);
   const refused = await callTool('claim', { ref: added.ref, by: 'mcp-routed', effort: ticket.effort, executor: ticket.exec.agent });
@@ -2001,19 +2001,28 @@ test('MCP blocks no-dispatch routed claims and records an explicit direct resear
   assert.strictEqual(pulse.direct.model, ticket.model);
 });
 
-test('MCP direct-claim refusal prints the prepared executor call', async () => {
-  const added = await callTool('add', { title: 'prepared direct refusal', category: 'coding.easy' });
-  const slug = store.ensureProject(PROJ).slug;
-  const prepared = store.prepareDispatch(slug, added.ref);
+test('MCP direct-claim refusal requires a reason and prints the prepared executor call', async () => {
+  const added = await callTool('add', { title: 'direct reason required', category: 'coding.easy' });
   const refused = await callTool('claim', { ref: added.ref, by: 'mcp-direct-refusal', direct: true });
   assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'direct_reason_required');
+  assert.match(refused.message, /recorded direct rationale/);
+  assert.match(refused.message, /inline-safe/);
+});
+
+test('MCP direct claim refuses rationalizations outside the inline-safe allowlist', async () => {
+  const added = await callTool('add', { title: 'invalid direct rationale', category: 'coding.easy' });
+  const refused = await callTool('claim', {
+    ref: added.ref,
+    by: 'mcp-invalid-direct-reason',
+    direct: true,
+    reason: 'The context already loaded makes this a faster myself small change.',
+  });
+  assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'direct_not_allowed');
-  assert.strictEqual(refused.expectedExecutor, prepared.ticket.dispatchExecutor);
-  assert.ok(refused.message.includes('Expected executor: `' + prepared.ticket.dispatchExecutor + '`'));
-  assert.ok(refused.message.includes(`executor: ${JSON.stringify(prepared.ticket.dispatchExecutor)}`));
-  assert.ok(refused.message.includes(`token: ${JSON.stringify(prepared.token)}`));
-  assert.ok(refused.message.includes(`project: ${JSON.stringify(PROJ)}`));
-  assert.match(refused.message, /without `direct`/);
+  assert.match(refused.message, /inline-safe allowlist/);
+  assert.match(refused.message, /new behavior\/API/);
+  assert.match(refused.message, /failing test that does not pinpoint/);
 });
 
 test('MCP claim rejects a generic executor for a Codex route', async () => {
