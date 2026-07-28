@@ -46,6 +46,7 @@ const STATE = path.join(os.homedir(), '.claude', 'codex-gateway');
 const LOGS = path.join(STATE, 'logs');
 const BIN_DIR = path.join(STATE, 'bin');
 const WIRING_CONFIG_PATH = path.join(STATE, 'wiring.json');
+const SHIM_FAILURE_PATH = path.join(STATE, 'shim-supervisor-failure.txt');
 const PLUGIN_VERSION = readPluginVersion();
 const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-code-proxy');
 const PUBLIC_SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
@@ -420,6 +421,72 @@ function stopAll() {
   stopProcess('shim');
   stopProcess('guardian');
   stopProcess('proxy');
+  for (const processInfo of gatewayShimProcesses()) killPid(processInfo.pid);
+}
+
+function commandResult(command, commandArgs) {
+  return spawnSync(command, commandArgs, { encoding: 'utf8', windowsHide: true });
+}
+
+function processOwningPort(port) {
+  const result = WIN
+    ? commandResult('netstat', ['-ano', '-p', 'tcp'])
+    : commandResult('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
+  if (result.status !== 0) return null;
+  if (!WIN) return Number(String(result.stdout).trim().split(/\s+/)[0]) || null;
+  const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
+  return Number(String(result.stdout).match(portPattern)?.[1]) || null;
+}
+
+function gatewayShimProcesses() {
+  const result = WIN
+    ? commandResult('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress'])
+    : commandResult('ps', ['-eo', 'pid=,ppid=,args=']);
+  if (result.status !== 0) return [];
+  if (WIN) {
+    let entries;
+    try { entries = JSON.parse(String(result.stdout) || '[]'); } catch { return []; }
+    return (Array.isArray(entries) ? entries : [entries]).map((entry) => ({
+      command: entry.CommandLine || '',
+      parentPid: Number(entry.ParentProcessId) || null,
+      pid: Number(entry.ProcessId) || null,
+    })).filter((entry) => entry.pid && /codex-gateway[\\/].*serve-(?:shim|worker)|codex-gateway\.js"?\s+serve-(?:shim|worker)/i.test(entry.command));
+  }
+  return String(result.stdout).split(/\r?\n/).map((line) => {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+    return match && { pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] };
+  }).filter((entry) => entry && /codex-gateway[\\/].*serve-(?:shim|worker)|codex-gateway\.js\s+serve-(?:shim|worker)/i.test(entry.command));
+}
+
+function reapGatewayOrphans(supervisorPid) {
+  const processes = gatewayShimProcesses();
+  const keep = new Set(supervisorPid ? [supervisorPid] : []);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const entry of processes) {
+      if (keep.has(entry.parentPid) && !keep.has(entry.pid)) {
+        keep.add(entry.pid);
+        changed = true;
+      }
+    }
+  }
+  for (const entry of processes) {
+    if (!keep.has(entry.pid)) killPid(entry.pid);
+  }
+  return processes.filter((entry) => !keep.has(entry.pid));
+}
+
+async function stopRunningSupervisor({ quiet = false } = {}) {
+  const pid = processOwningPort(PUBLIC_SHIM_PORT);
+  if (pid) killPid(pid);
+  else stopProcess('guardian');
+  if (!(await waitForShimExit(3000))) {
+    return { ok: false, reason: `could not stop the shim supervisor on :${PUBLIC_SHIM_PORT}${pid ? ` (PID ${pid})` : ''}; run node "${__filename}" stop, then ensure` };
+  }
+  reapGatewayOrphans(null);
+  if (!quiet) log(`codex-gateway: stopped stale shim supervisor${pid ? ` (PID ${pid})` : ''}.`);
+  return { ok: true, pid };
 }
 
 function postJson(url, body, timeout = 2000) {
@@ -909,8 +976,12 @@ async function setup() {
   } else {
     log('codex-gateway: proxy unchanged; keeping its authenticated process running.');
   }
-  const restarting = await restartWorkerWithDrain();
-  if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
+  const supervisorRestart = await restartShimIfOutdated();
+  if (supervisorRestart && !supervisorRestart.ok) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
+  if (!supervisorRestart) {
+    const restarting = await restartWorkerWithDrain();
+    if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
+  }
   fs.rmSync(stage, { recursive: true, force: true });
 
   const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true });
@@ -981,17 +1052,33 @@ async function startAll({ quiet = false } = {}) {
     spawnDetached('proxy', PROXY_BIN, ['serve', '--no-monitor'], { PORT: String(PROXY_PORT) });
     started.push('proxy');
   }
+  const health = await fetchShimHealth();
+  if (health && shimNeedsRestart(PLUGIN_VERSION, health)) {
+    const stopped = await stopRunningSupervisor({ quiet });
+    if (!stopped.ok) return stopped;
+  } else if (health) {
+    reapGatewayOrphans(processOwningPort(PUBLIC_SHIM_PORT));
+  } else if (await portListening(PUBLIC_SHIM_PORT)) {
+    const stopped = await stopRunningSupervisor({ quiet });
+    if (!stopped.ok) return stopped;
+  } else {
+    reapGatewayOrphans(null);
+  }
   if (!(await shimHealthy())) {
+    try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     spawnDetached('guardian', process.execPath, [__filename, 'serve-shim'], {});
     started.push('shim');
   }
-  // wait for both to come up
   const deadline = Date.now() + Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
   while (Date.now() < deadline) {
     if ((await portListening(PROXY_PORT)) && (await shimHealthy())) {
       if (!quiet && started.length) log(`started: ${started.join(', ')}`);
       await writeCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
       return { ok: true, started };
+    }
+    if (fs.existsSync(SHIM_FAILURE_PATH)) {
+      const reason = fs.readFileSync(SHIM_FAILURE_PATH, 'utf8').trim();
+      return { ok: false, reason };
     }
     await new Promise((r) => setTimeout(r, 300));
   }
@@ -1005,24 +1092,32 @@ async function fetchShimHealth() {
   } catch { return null; }
 }
 
+function servingShimVersion(health) {
+  return health?.supervisorVersion || health?.version || null;
+}
+
 function shimNeedsRestart(installedVersion, health) {
-  const installed = parseSemver(installedVersion);
-  const running = parseSemver(health && health.version);
-  return Boolean(installed && running && semverLt(running, installed));
+  const running = servingShimVersion(health);
+  return Boolean(installedVersion && running && installedVersion !== running);
+}
+
+async function restartSupervisorForVersionMismatch({ quiet = false, start = startAll } = {}) {
+  const stopped = await stopRunningSupervisor({ quiet });
+  if (!stopped.ok) return stopped;
+  return start({ quiet });
 }
 
 async function restartShimIfOutdated({
   quiet = false,
   fetchHealth = fetchShimHealth,
-  restart = restartWorkerWithDrain,
+  restartWorker = restartWorkerWithDrain,
+  restartSupervisor = restartSupervisorForVersionMismatch,
   start = startAll,
 } = {}) {
   let health;
   try { health = await fetchHealth(); } catch { return null; }
   if (!shimNeedsRestart(PLUGIN_VERSION, health)) return null;
-  const stopped = await restart({ quiet });
-  if (!stopped.ok) return stopped;
-  return start({ quiet });
+  return restartSupervisor({ quiet, health, restartWorker, start });
 }
 
 // What mode the running shim actually achieved this session: compat only if
@@ -1039,7 +1134,6 @@ async function statusReport() {
   const proxyUp = await portListening(PROXY_PORT);
   const shimUp = await shimHealthy();
   log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${proxyUp ? 'running' : 'DOWN'}`);
-  log(`shim (model router) on :${SHIM_PORT}: ${shimUp ? 'running' : 'DOWN'}`);
   let health = null;
   if (shimUp) {
     health = await fetchShimHealth();
@@ -1049,6 +1143,8 @@ async function statusReport() {
       log(`models advertised to Claude Code: ${n}`);
     } catch { log('models advertised to Claude Code: (unavailable)'); }
   }
+  const servingVersion = servingShimVersion(health);
+  log(`shim (model router) on :${SHIM_PORT}: ${shimUp ? `running${servingVersion ? ` (serving ${servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
   const compat = health && health.compat;
   if (compat && compat.hostsDetected) {
     log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
@@ -1056,7 +1152,7 @@ async function statusReport() {
   } else if (compat) {
     log('RC-compatibility hosts entry: not present (default gateway mode)');
   }
-  return proxyUp && shimUp;
+  return { ok: proxyUp && shimUp, health };
 }
 
 // -------------------------------------------------------------- env wiring
@@ -1211,7 +1307,13 @@ async function doctor() {
   } catch (error) {
     log(`grok auth: ${error.message}`);
   }
-  const ok = await statusReport();
+  const status = await statusReport();
+  const servingVersion = servingShimVersion(status.health);
+  log(`serving shim version: ${servingVersion || 'unavailable'}`);
+  const versionMismatch = shimNeedsRestart(PLUGIN_VERSION, status.health);
+  if (versionMismatch) {
+    log(`codex-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${__filename}" ensure to replace the stale supervisor.`);
+  }
   const catalog = readCatalog();
   log(catalog && Array.isArray(catalog.models)
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
@@ -1243,7 +1345,7 @@ async function doctor() {
   } else if (scope === 'user') {
     log('install scope: user (correct)');
   }
-  if (!ok) process.exitCode = 1;
+  if (!status.ok || versionMismatch) process.exitCode = 1;
 }
 
 // ---------------------------------------------------------------- the shim
@@ -3112,6 +3214,7 @@ function runShim() {
         upstream.on('data', (chunk) => response.push(chunk));
         upstream.once('end', () => {
           const health = JSON.parse(Buffer.concat(response).toString());
+          health.supervisorVersion = PLUGIN_VERSION;
           health.compat = { ...compatState };
           res.writeHead(upstream.statusCode || 502, upstream.headers);
           res.end(JSON.stringify(health));
@@ -3175,9 +3278,21 @@ function runShim() {
   }
 
   const main = listen(PUBLIC_SHIM_PORT, '127.0.0.1', () => {
+    try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     console.log(`codex-gateway shim supervisor listening on 127.0.0.1:${PUBLIC_SHIM_PORT}`);
+    startWorker();
   });
-  main.once('error', (error) => { console.error(`codex-gateway: shim supervisor failed: ${error.code || error.message}`); process.exitCode = 1; });
+  main.once('error', (error) => {
+    stopped = true;
+    const owner = error.code === 'EADDRINUSE' ? processOwningPort(PUBLIC_SHIM_PORT) : null;
+    const remedy = owner
+      ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${__filename}" stop, then node "${__filename}" ensure.`
+      : `run node "${__filename}" stop, then node "${__filename}" ensure.`;
+    const message = `codex-gateway: shim supervisor cannot bind 127.0.0.1:${PUBLIC_SHIM_PORT}: ${error.code || error.message}; ${remedy}`;
+    try { fs.writeFileSync(SHIM_FAILURE_PATH, message); } catch {}
+    console.error(message);
+    setImmediate(() => process.exit(1));
+  });
   let compatServer = null;
   if (hostsEntry) {
     compatServer = listen(COMPAT_PORT, hostsEntry.ip, () => {
@@ -3189,7 +3304,6 @@ function runShim() {
       console.error(`codex-gateway: RC-compatibility supervisor unavailable: ${compatState.reason}`);
     });
   }
-  startWorker();
   process.once('SIGTERM', () => {
     stopped = true;
     killPid(worker?.pid);
@@ -3262,7 +3376,7 @@ if (require.main === module) {
       if (!quiet) await statusReport();
       break;
     }
-    case 'status': process.exitCode = (await statusReport()) ? 0 : 1; break;
+    case 'status': process.exitCode = (await statusReport()).ok ? 0 : 1; break;
     case 'models': {
       const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 })
         .catch(() => die('shim not running (start it first)'));
@@ -3314,7 +3428,9 @@ module.exports = {
   parseSemver,
   semverLt,
   shimNeedsRestart,
+  servingShimVersion,
   restartShimIfOutdated,
+  restartSupervisorForVersionMismatch,
   stopShimWithDrain,
   PLUGIN_VERSION,
   MIN_PROXY_VERSION,
