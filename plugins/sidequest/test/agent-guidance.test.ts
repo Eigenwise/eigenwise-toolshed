@@ -109,6 +109,12 @@ test('executor guidance keeps board lifecycle MCP-only and protects shared trees
   assert.doesNotMatch(orchestration, /It carries the full ticket contract/);
 });
 
+test('blocked ticket steps gate dependent delivery actions', () => {
+  assert.match(skill, /Blocked-step invariant/);
+  assert.match(skill, /when a review,\n\s*investigation, or verification awaits a ticket, every dependent action stays blocked until it closes/);
+  assert.match(skill, /direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work/);
+});
+
 test('complete Sidequest doctrine stays shipped and current', () => {
   assert.match(skill, /Cut along affected surfaces/);
   assert.match(skill, /store, CLI, MCP surface, skill\/docs, and applicable full test directory/);
