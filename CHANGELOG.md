@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.262.0 (2026-07-28)
+
+### codex-gateway 0.35.1 → 0.36.0
+
+#### Features
+
+- Grok subscription backend via cli-chat-proxy.grok.com (SQ-992) [`41e98e5`](https://github.com/Eigenwise/eigenwise-toolshed/commit/41e98e57dee92ef2ed550d3e815eb4ff880e5bab)
+
 ## v3.261.0 (2026-07-28)
 
 ### sidequest 3.37.0 → 3.37.1
