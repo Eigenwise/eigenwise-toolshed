@@ -18,7 +18,7 @@ processors:
   filter/signals:
     error_mode: "ignore"
     logs:
-      log_record: ["not IsMatch(attributes[\"event.name\"], \"^(claude_code|agent_sdk)\\\\.\")"]
+      log_record: ["not IsMatch(attributes[\"event.name\"], \"^(claude_code|agent_sdk|gateway)\\\\.|^(mcp_server_connection|hook_execution_(start|complete))$\")"]
   transform/redact:
     error_mode: "ignore"
     log_statements:
