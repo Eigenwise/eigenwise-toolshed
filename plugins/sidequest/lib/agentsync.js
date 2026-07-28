@@ -391,7 +391,16 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const comments = ticketCommentsPacket(ticket.comments);
   const commentHeading = comments.includes("[Comment packet truncated.") ? "Comment packet (newest-first excerpts; read full history only when flagged below):" : "Complete comment thread (chronological, inspect every entry before implementation):";
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}`).join("\n") : "(No ticket dependencies were recorded.)";
-  const declaredFiles = Array.isArray(ticket.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const declared = Array.isArray(ticket.files) ? ticket.files : [];
+  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const effectiveFiles = store.effectiveScope(slug, declared);
+  const declaredKeys = new Set(declared.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
+  const alwaysInScope = store.boardConfig(slug)?.alwaysInScope || [];
+  const alwaysKeys = new Set(alwaysInScope.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
+  const generatedFiles = effectiveFiles.filter((file) => {
+    const key = process.platform === "win32" ? String(file).toLowerCase() : String(file);
+    return !declaredKeys.has(key) && !alwaysKeys.has(key);
+  });
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "(No labels were recorded.)";
   const closeout = ticketCloseout(ticket);
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
@@ -424,6 +433,8 @@ ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
 ${experimentLog}`] : [],
     `Declared files:
 ${declaredFiles}`,
+    ...generatedFiles.length ? [`Auto-paired tracked generated files:
+${generatedFiles.map((file) => `- ${file}`).join("\n")}`] : [],
     "Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Keep your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.",
     `Contract metadata:
 ${ticketContractsPacket(ticket)}`,

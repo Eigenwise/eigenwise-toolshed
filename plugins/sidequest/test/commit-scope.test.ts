@@ -64,6 +64,44 @@ function repo(): string {
   return root;
 }
 
+test('configured generated pairs add only tracked outputs to effective scope and scoped commits', () => {
+  const root = repo();
+  const source = 'plugins/sidequest/src/lib/worker.ts';
+  const output = 'plugins/sidequest/lib/worker.js';
+  fs.mkdirSync(path.dirname(path.join(root, source)), { recursive: true });
+  fs.mkdirSync(path.dirname(path.join(root, output)), { recursive: true });
+  fs.writeFileSync(path.join(root, source), 'export const worker = true;\n');
+  fs.writeFileSync(path.join(root, output), 'exports.worker = true;\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'tracked source and output']);
+  const slug = store.ensureProject(root, 'generated pairs').slug;
+  store.setBoardConfig(slug, { generatedPairs: [{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }] });
+
+  const scope = store.effectiveScope(slug, [source]);
+  assert.deepEqual(scope, [source, output]);
+  assert.deepEqual(store.effectiveScope(slug, [output]), [output], 'generated output declarations do not pull source back into scope');
+  fs.writeFileSync(path.join(root, source), 'export const worker = false;\n');
+  fs.writeFileSync(path.join(root, output), 'exports.worker = false;\n');
+  const committed = commitScope.commitScoped(root, 'paired output', scope);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(committed.paths.sort(), [output, source]);
+});
+
+test('generated pairs leave unmapped boards and untracked counterparts unchanged', () => {
+  const root = repo();
+  const source = 'plugins/sidequest/src/hooks/worker.ts';
+  const output = 'plugins/sidequest/hooks/worker.js';
+  fs.mkdirSync(path.dirname(path.join(root, source)), { recursive: true });
+  fs.mkdirSync(path.dirname(path.join(root, output)), { recursive: true });
+  fs.writeFileSync(path.join(root, source), 'export const worker = true;\n');
+  git(root, ['add', source]);
+  git(root, ['commit', '-m', 'tracked source only']);
+  const slug = store.ensureProject(root, 'untracked generated pair').slug;
+  assert.deepEqual(store.effectiveScope(slug, [source]), [source]);
+  store.setBoardConfig(slug, { generatedPairs: [{ from: 'plugins/*/src/hooks/*.ts', to: 'plugins/*/hooks/*.js' }] });
+  assert.deepEqual(store.effectiveScope(slug, [source]), [source]);
+});
+
 // SQ-900: the store used to keep only the first 20 declared paths, so an approved
 // 28-path scope reached the commit gate 8 paths short and the executor's commit was
 // refused for work the orchestrator had signed off on.

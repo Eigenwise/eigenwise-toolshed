@@ -1963,8 +1963,9 @@ const TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: {
         project: PROJECT_PROP,
-        name: { type: 'string', minLength: 1, description: 'Display name only. The board slug, path, tickets, claims, and refs stay unchanged.' },
+        name: { type: 'string' },
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
+        generatedPairs: {},
         integrationMode: { type: 'string', enum: ['auto', 'local', 'remote'], description: 'auto is local without origin; local does not push.' },
         integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },
         worktreeIsolation: { type: 'boolean', description: 'When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true.' },
@@ -1977,6 +1978,7 @@ const TOOLS: ToolDefinition[] = [
       const patch: any = {};
       if (args.name !== undefined) patch.name = args.name;
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
+      if (args.generatedPairs !== undefined) patch.generatedPairs = args.generatedPairs;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
       if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
@@ -2062,7 +2064,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.autoApprovePluginTests !== undefined || args.worktreeSetup !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.autoApprovePluginTests !== undefined || args.worktreeSetup !== undefined;
   return false;
 }
 

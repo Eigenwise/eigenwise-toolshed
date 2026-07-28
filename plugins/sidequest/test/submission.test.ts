@@ -313,6 +313,33 @@ test('board always-in-scope paths commit and submit without ticket declaration',
 });
 
 
+test('generated pairs admit tracked output through CLI scoped commit and submit', () => {
+  cleanBranch();
+  const source = 'plugins/sidequest/src/bin/pair.ts';
+  const output = 'plugins/sidequest/bin/pair.js';
+  fs.mkdirSync(path.dirname(path.join(PROJECT_DIR, source)), { recursive: true });
+  fs.mkdirSync(path.dirname(path.join(PROJECT_DIR, output)), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, source), 'export const pair = true;\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, output), 'exports.pair = true;\n');
+  git(['add', source, output]);
+  git(['commit', '-m', 'tracked generated pair fixture']);
+  git(['push', 'origin', `HEAD:main`]);
+  cleanBranch();
+  store.setBoardConfig(slug, { generatedPairs: [{ from: 'plugins/*/src/bin/*.ts', to: 'plugins/*/bin/*.js' }] });
+  const t = addTicket('generated pair submission', { files: [source] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'pair-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.writeFileSync(path.join(PROJECT_DIR, source), 'export const pair = false;\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, output), 'exports.pair = false;\n');
+  const committed = cliJson(['commit', t.ref, '--by', 'pair-worker', '--message', 'paired submission', '--json']);
+  assert.deepStrictEqual(committed.paths.sort(), [output, source]);
+  pin(t, committed.commit);
+  const submitted = runCli(['submit', t.ref, '--by', 'pair-worker', '--commit', committed.commit]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  assert.deepStrictEqual(store.getTicket(slug, t.ref).submission.admittedScope, [source, output]);
+  store.setBoardConfig(slug, { generatedPairs: null });
+});
+
+
 test('publish queue adds release-window context only when release fragments exist', () => {
   cleanBranch();
   const fragments = path.join(PROJECT_DIR, '.release', 'unreleased');
@@ -641,8 +668,10 @@ test('CLI: a genuine ownership overlap with another queued submission is refused
 
 test('CLI: board config stores a worktree setup command', () => {
   const setup = 'cd plugins/sidequest && npm ci';
-  const configured = cliJson(['board-config', '--worktree-setup', setup, '--json']);
+  const pairs = JSON.stringify([{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }]);
+  const configured = cliJson(['board-config', '--worktree-setup', setup, '--generated-pairs', pairs, '--json']);
   assert.strictEqual(configured.worktreeSetup, setup);
+  assert.deepStrictEqual(configured.generatedPairs, JSON.parse(pairs));
   assert.strictEqual(cliJson(['board-config', '--json']).worktreeSetup, setup);
 });
 

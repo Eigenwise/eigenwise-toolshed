@@ -423,6 +423,16 @@ test('board_config reads and replaces always-in-scope paths', async () => {
   assert.deepEqual((await callTool('board_config', { project })).alwaysInScope, ['docs', 'notes']);
 });
 
+test('board_config stores generated source-to-output pairs', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-generated-pairs'), 'SQ generated pairs').slug;
+  const pairs = [{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }];
+  assert.deepEqual((await callTool('board_config', { project, generatedPairs: pairs })).generatedPairs, pairs);
+  assert.deepEqual((await callTool('board_config', { project })).generatedPairs, pairs);
+  const rejected = await callToolRaw('board_config', { project, generatedPairs: [{ from: 'src/*.ts', to: 'lib/*.js*' }] });
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.content[0].text, /same number of \* placeholders/);
+});
+
 test('board_config defaults and stores the integration branch', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-integration-branch'), 'SQ integration branch').slug;
   assert.equal((await callTool('board_config', { project })).integrationBranch, 'main');

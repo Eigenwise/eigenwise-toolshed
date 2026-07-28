@@ -1641,6 +1641,65 @@ function normalizeAlwaysInScope(paths?: any) {
   return normalized;
 }
 
+function normalizeGeneratedPairPath(value?: any, name?: any) {
+  const item = String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!item || item === '..' || item.startsWith('../') || path.isAbsolute(item) || item.includes('/../')) {
+    throw new Error(`generatedPairs ${name} pattern must stay inside the board repo: ${value}`);
+  }
+  return item;
+}
+
+function normalizeGeneratedPairs(pairs?: any) {
+  if (pairs == null) return [];
+  if (!Array.isArray(pairs)) throw new Error('generatedPairs must be an array of { from, to } patterns.');
+  const seen = new Set();
+  const normalized: any[] = [];
+  for (const pair of pairs) {
+    if (!pair || typeof pair !== 'object' || Array.isArray(pair)) {
+      throw new Error('generatedPairs entries must be { from, to } patterns.');
+    }
+    const from = normalizeGeneratedPairPath(pair.from, 'from');
+    const to = normalizeGeneratedPairPath(pair.to, 'to');
+    if ((from.match(/\*/g) || []).length !== (to.match(/\*/g) || []).length) {
+      throw new Error(`generatedPairs patterns must use the same number of * placeholders: ${from} -> ${to}`);
+    }
+    const key = `${from} ${to}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push({ from, to });
+    }
+  }
+  return normalized;
+}
+
+function generatedPathFor(source?: any, pair?: any) {
+  const sourcePath = String(source || '').replace(/\\/g, '/');
+  if (!sourcePath || sourcePath.includes('*')) return null;
+  const parts = String(pair.from).split('*');
+  const expression = new RegExp(`^${parts.map((part: string) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('(.+)')}$`);
+  const match = sourcePath.match(expression);
+  if (!match) return null;
+  return String(pair.to).split('*').map((part: string, index: number) => `${part}${index < match.length - 1 ? match[index + 1] : ''}`).join('');
+}
+
+function trackedGeneratedPaths(config?: any, files?: any) {
+  if (!config || !config.path || !Array.isArray(config.generatedPairs) || !config.generatedPairs.length || !Array.isArray(files)) return [];
+  const candidates = Array.from(new Set(files.flatMap((file: any) => config.generatedPairs.map((pair: any) => generatedPathFor(file, pair)).filter(Boolean))));
+  if (!candidates.length) return [];
+  try {
+    const tracked = execFileSync('git', ['ls-files', '-z', '--', ...candidates], {
+      cwd: config.path,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: 'pipe',
+    }).split(' ').filter(Boolean);
+    const candidateKeys = new Set(candidates.map((candidate: any) => process.platform === 'win32' ? candidate.toLowerCase() : candidate));
+    return tracked.filter((trackedPath: string) => candidateKeys.has(process.platform === 'win32' ? trackedPath.toLowerCase() : trackedPath));
+  } catch (_: any) {
+    return [];
+  }
+}
+
 function defaultAlwaysInScope(absPath?: any) {
   try {
     return fs.statSync(path.join(absPath, 'docs')).isDirectory() ? ['docs/'] : [];
@@ -1741,6 +1800,7 @@ function boardConfig(slug?: any) {
   return {
     name: meta.name,
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
+    generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
@@ -1773,6 +1833,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     if (Object.prototype.hasOwnProperty.call(patch, 'alwaysInScope')) {
       meta.alwaysInScope = normalizeAlwaysInScope(patch.alwaysInScope);
     }
+    if (Object.prototype.hasOwnProperty.call(patch, 'generatedPairs')) {
+      meta.generatedPairs = normalizeGeneratedPairs(patch.generatedPairs);
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'integrationMode')) {
       meta.integrationMode = normalizeIntegrationMode(patch.integrationMode);
     }
@@ -1795,7 +1858,8 @@ function setBoardConfig(slug?: any, patch?: any) {
 
 function effectiveScope(slug?: any, files?: any) {
   const config = boardConfig(slug);
-  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...((config && config.alwaysInScope) || [])]));
+  const paired = trackedGeneratedPaths(Object.assign({ path: readMeta(slug)?.path }, config), files);
+  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...((config && config.alwaysInScope) || []), ...paired]));
 }
 
 // Register (or refresh) a project and return { slug, dir, meta }. Creates the

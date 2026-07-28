@@ -27,6 +27,7 @@ const STABLE_EXECUTORS = EFFORTS.flatMap((effort) => [
 ]).sort();
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
+function git(dir: string, args: string[]) { return spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true }); }
 function readDir(dir?: any) { return fs.readdirSync(dir).filter((file: string) => file.endsWith('.md')).sort(); }
 function seedCatalog(models?: any) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-'));
@@ -38,6 +39,28 @@ function clearCatalog() { process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 function configure(store?: any, id?: any, route?: any, fallback?: any) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
+
+test('briefings surface tracked generated outputs paired into effective scope', () => {
+  const root = tmpDir();
+  assert.equal(git(root, ['init']).status, 0);
+  assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
+  assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
+  const source = 'plugins/sidequest/src/hooks/brief.ts';
+  const output = 'plugins/sidequest/hooks/brief.js';
+  fs.mkdirSync(path.dirname(path.join(root, source)), { recursive: true });
+  fs.mkdirSync(path.dirname(path.join(root, output)), { recursive: true });
+  fs.writeFileSync(path.join(root, source), 'export const brief = true;\n');
+  fs.writeFileSync(path.join(root, output), 'exports.brief = true;\n');
+  assert.equal(git(root, ['add', '.']).status, 0);
+  assert.equal(git(root, ['commit', '-m', 'fixture']).status, 0);
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(root, 'generated brief').slug;
+  store.setBoardConfig(slug, { generatedPairs: [{ from: 'plugins/*/src/hooks/*.ts', to: 'plugins/*/hooks/*.js' }] });
+  const ticket = store.createTicket(slug, { title: 'brief pair', files: [source], complexity: 2, complexityWhy: 'A tracked generated output must be visible to the executor.' });
+  const briefing = agentsync.renderTicketBriefing(ticket, 'generated-brief-token', slug, root);
+  assert.match(briefing, /Auto-paired tracked generated files:/);
+  assert.match(briefing, /plugins\/sidequest\/hooks\/brief\.js/);
+});
 
 test('SQ-677: briefing comments preserve the full chronological durable thread byte-for-byte', () => {
   const comments = [

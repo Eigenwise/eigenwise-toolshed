@@ -1845,6 +1845,13 @@ async function cmdBoardConfig(opts) {
   const patch = {};
   if (opts.name != null) patch.name = opts.name;
   if (opts["always-in-scope"] != null) patch.alwaysInScope = opts["always-in-scope"];
+  if (opts["generated-pairs"] != null) {
+    try {
+      patch.generatedPairs = JSON.parse(opts["generated-pairs"]);
+    } catch (_) {
+      fail("board-config: --generated-pairs must be a JSON array of { from, to } patterns.");
+    }
+  }
   if (opts["integration-mode"] != null) patch.integrationMode = opts["integration-mode"];
   if (opts["integration-branch"] != null) patch.integrationBranch = opts["integration-branch"];
   if (opts["worktree-isolation"] !== void 0) patch.worktreeIsolation = opts["worktree-isolation"];
@@ -1859,6 +1866,7 @@ async function cmdBoardConfig(opts) {
   }
   console.log(`board name: ${payload.name}`);
   console.log(`always in scope: ${payload.alwaysInScope.length ? payload.alwaysInScope.join(", ") : "(none)"}`);
+  console.log(`generated pairs: ${payload.generatedPairs.length ? payload.generatedPairs.map((pair) => `${pair.from} -> ${pair.to}`).join(", ") : "(none)"}`);
   console.log(`integration mode: ${payload.integrationMode}`);
   console.log(`integration branch: ${payload.integrationBranch}`);
   console.log(`worktree isolation: ${payload.worktreeIsolation ? "enabled" : "disabled"}`);
@@ -2349,7 +2357,7 @@ const HELP_COMMANDS = {
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--project <path-or-slug>] --json",
-  "board-config": 'sidequest board-config [--always-in-scope path]... [--integration-mode <mode>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
+  "board-config": 'sidequest board-config [--always-in-scope path]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
   projects: "sidequest projects [--archived] [--json]",
   routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
   "archive-board": "sidequest archive-board <board-ref> [--json]",
@@ -2529,7 +2537,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup <command>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup <command>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
