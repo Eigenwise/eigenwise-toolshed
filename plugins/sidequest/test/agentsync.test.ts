@@ -326,6 +326,7 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /`kind=question` needs, a scope conflict, or a failure the board cannot/);
   assert.doesNotMatch(body, /verified milestone/);
   assert.match(body, /Teammate subagent fan-out must omit the Agent `name` parameter/);
+  assert.match(body, /Helper writes are mechanically limited to the parent ticket's effective scope/);
   assert.doesNotMatch(body, /sidequest submit <ref>/);
   assert.doesNotMatch(body, /\{\{[A-Z_]+\}\}/);
 });
