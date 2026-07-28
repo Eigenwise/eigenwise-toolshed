@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.260.0 (2026-07-28)
+
+### sidequest 3.36.0 → 3.37.0
+
+#### Features
+
+- SessionStart no longer blocks on worktree sweep (SQ-988) [`ebf9c7a`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ebf9c7a)
+
 ## v3.259.0 (2026-07-28)
 
 ### sidequest 3.35.1 → 3.36.0
