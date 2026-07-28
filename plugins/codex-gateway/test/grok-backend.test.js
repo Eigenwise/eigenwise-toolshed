@@ -34,6 +34,10 @@ test('translates Anthropic messages, tools, and effort to Responses input', () =
   assert.equal(request.tools[0].type, 'function');
 });
 
+test('strips effort for Grok models without reasoning support', () => {
+  const request = grok.translateRequest({ output_config: { effort: 'high' } }, 'grok-build');
+  assert.equal(request.reasoning, undefined);
+});
 test('omits empty assistant messages for tool-only turns', () => {
   const request = grok.translateRequest({
     messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'lookup', input: {} }] }],
@@ -231,10 +235,10 @@ test('the shim lists and routes claude-prefixed Grok models', async (t) => {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  const response = await request(shimPort, JSON.stringify({ model: 'claude-grok-4-5', max_tokens: 10, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hello' }] }));
+  const response = await request(shimPort, JSON.stringify({ model: 'claude-grok-build', max_tokens: 10, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hello' }] }));
   assert.equal(response.status, 200);
   assert.equal(JSON.parse(response.body).content[0].text, 'hello');
-  assert.equal(observed[0].headers['x-grok-model-override'], 'grok-4.5');
+  assert.equal(observed[0].headers['x-grok-model-override'], 'grok-build');
   assert.equal(observed[0].headers['x-grok-client-version'], '0.2.112');
-  assert.equal(observed[0].body.reasoning.effort, 'high');
+  assert.equal(observed[0].body.reasoning, undefined);
 });

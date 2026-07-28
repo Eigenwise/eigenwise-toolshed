@@ -9,7 +9,7 @@ const GROK_TOKEN_ENDPOINT = 'https://auth.x.ai/oauth/token';
 const GROK_VERSION_FALLBACK = '0.2.112';
 const GROK_MODELS = [
   { id: 'grok-4.5', context: 500000, reasoning: true },
-  { id: 'grok-build', context: 500000, reasoning: true },
+  { id: 'grok-build', context: 500000, reasoning: false },
   { id: 'grok-4.3', context: 131072, reasoning: true },
   { id: 'grok-4.1-fast', context: 131072, reasoning: false },
 ];
@@ -210,7 +210,7 @@ function translateRequest(payload, model) {
   };
   const tools = translateTools(payload?.tools);
   if (tools?.length) request.tools = tools;
-  if (typeof effort === 'string') request.reasoning = { effort };
+  if (typeof effort === 'string' && GROK_MODELS.find((entry) => entry.id === model)?.reasoning === true) request.reasoning = { effort };
   return request;
 }
 
