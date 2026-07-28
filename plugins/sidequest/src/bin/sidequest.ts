@@ -1399,6 +1399,54 @@ async function cmdSubmit(opts: any, positional: any) {
   }
 }
 
+async function cmdIntegrate(opts: any, positional: any) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('integrate: pass a ticket id or ref, e.g. sidequest integrate SQ-3 --by orchestrator --mode replay.');
+  const { slug, meta } = await resolveProject(opts);
+  const by = workerId(opts);
+  const publish = require('../lib/publish');
+  const lock = await publish.publishLockStatus(meta.path);
+  if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionId(opts))) {
+    const holder = lock.holder || {};
+    fail(`integrate: publish lock is held by ${holder.by || holder.sessionId || 'another session'}; acquire or re-acquire it before delivery.`);
+  }
+  let target: any;
+  try {
+    target = store.integrationTarget(slug);
+  } catch (error: any) {
+    fail(`integrate: ${(error && error.message) || error}`);
+    return;
+  }
+  const mode = opts.mode == null ? store.boardConfig(slug).delivery : opts.mode;
+  const delivery = store.integrateSubmission(slug, idOrRef, {
+    mode,
+    target,
+    overrideLegacyScope: !!(opts['override-legacy-scope'] || opts.overrideLegacyScope),
+  });
+  if (!delivery.ok) {
+    if (delivery.outside?.length) fail(`integrate: refused ${idOrRef}; submitted range changes paths outside its admitted scope: ${delivery.outside.join(', ')}.`);
+    fail(`integrate: ${(delivery.message || delivery.reason)}.`);
+  }
+  const integration = delivery.integration;
+  const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}.`;
+  const closed = store.completeTicketAsControlPlane(slug, idOrRef, {
+    by,
+    reason,
+    purpose: 'integration',
+    overrideLegacyScope: !!(opts['override-legacy-scope'] || opts.overrideLegacyScope),
+  });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: integration }, closed), null, 2) + '\n');
+    if (!closed.ok) process.exitCode = 1;
+    return;
+  }
+  if (!closed.ok) fail(`integrate: delivered ${idOrRef}, but could not close it: ${closed.message || closed.reason}.`);
+  const result = integration.mode === 'apply'
+    ? `working tree changed: ${(integration.dirtyFiles || []).join(', ') || '(no files)'}`
+    : `HEAD ${String(integration.resultingHead).slice(0, 12)}`;
+  console.log(`✓ ${closed.ticket.ref} delivered by ${integration.mode} onto ${integration.targetBranch} (${result}) — ${meta.name}`);
+}
+
 // Orchestrator control-plane surface: the cross-process publish lock plus the
 // integration queue. The lock file lives in the repo's common git dir so every
 // worktree/session/process serializes on the same publish transaction.
@@ -1444,6 +1492,7 @@ async function cmdPublish(opts: any, positional: any) {
       return;
     }
     console.log(`${payload.count} submission(s) awaiting integration — ${meta.name}:`);
+    console.log(`  default delivery: ${payload.delivery || 'merge'}`);
     for (const t of payload.tickets) {
       const commits = Array.isArray(t.submission.commits) && t.submission.commits.length ? t.submission.commits : [t.submission.commit];
       const paths = Array.isArray(t.submission.changedPaths) ? t.submission.changedPaths : [];
@@ -2079,6 +2128,7 @@ async function cmdBoardConfig(opts: any) {
   }
   if (opts['integration-mode'] != null) patch.integrationMode = opts['integration-mode'];
   if (opts['integration-branch'] != null) patch.integrationBranch = opts['integration-branch'];
+  if (opts.delivery != null) patch.delivery = opts.delivery;
   if (opts['worktree-isolation'] !== undefined) patch.worktreeIsolation = opts['worktree-isolation'];
   if (opts['auto-approve-plugin-tests'] !== undefined) patch.autoApprovePluginTests = opts['auto-approve-plugin-tests'];
   if (opts['worktree-setup'] != null) patch.worktreeSetup = opts['worktree-setup'];
@@ -2096,6 +2146,7 @@ async function cmdBoardConfig(opts: any) {
   console.log(`generated pairs: ${payload.generatedPairs.length ? payload.generatedPairs.map((pair: any) => `${pair.from} -> ${pair.to}`).join(', ') : '(none)'}`);
   console.log(`integration mode: ${payload.integrationMode}`);
   console.log(`integration branch: ${payload.integrationBranch}`);
+  console.log(`delivery: ${payload.delivery}`);
   console.log(`worktree isolation: ${payload.worktreeIsolation ? 'enabled' : 'disabled'}`);
   console.log(`plugin test scope auto-approval: ${payload.autoApprovePluginTests ? 'enabled' : 'disabled'}`);
   console.log(`worktree setup: ${payload.worktreeSetup || '(none)'}`);
@@ -2650,6 +2701,7 @@ const HELP_COMMANDS: any = {
   done: 'sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]',
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
+  integrate: 'sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply] [--override-legacy-scope] [--json]',
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]',
@@ -2672,7 +2724,7 @@ const HELP_COMMANDS: any = {
   'cleanup-temp': 'sidequest cleanup-temp [--root <path>] [--json]',
   models: 'sidequest models [--project <path-or-slug>] [--full] [--json]',
   route: 'sidequest route <category> [--project <path-or-slug>] --json',
-  'board-config': 'sidequest board-config [--always-in-scope path]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
+  'board-config': 'sidequest board-config [--always-in-scope path]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
   routing: 'sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]',
   'archive-board': 'sidequest archive-board <board-ref> [--json]',
@@ -2741,6 +2793,7 @@ Working the board safely (multi-agent):
     executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
     (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).
   sidequest submit <id|SQ-n> --clear [-s todo]     orchestrator reset: drop a submission after a bounced integration
+  sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply]   deliver a ready submission and close it with the durable ref recorded
   sidequest publish lock|unlock|status [--repo path] [--steal] [--force]   cross-process publish lock (owner pid +
     session metadata in the repo's common git dir; stale/dead holders reclaimable, --steal takes over explicitly)
   sidequest publish queue [--json]                 tickets awaiting the publish transaction, oldest first
@@ -2831,7 +2884,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup <command>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup <command>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
@@ -2949,6 +3002,9 @@ async function main() {
       break;
     case 'submit':
       await cmdSubmit(opts, positional);
+      break;
+    case 'integrate':
+      await cmdIntegrate(opts, positional);
       break;
     case 'publish':
       await cmdPublish(opts, positional);

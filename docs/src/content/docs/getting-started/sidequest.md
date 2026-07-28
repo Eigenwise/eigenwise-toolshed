@@ -125,6 +125,7 @@ Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when yo
 ```text
 sidequest board-config --integration-mode auto|local|remote
 sidequest board-config --integration-branch feat/client-work
+sidequest board-config --delivery replay
 sidequest board-config --no-worktree-isolation
 sidequest board-config --no-auto-approve-plugin-tests
 sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
@@ -134,7 +135,13 @@ Plugin test scope requests under `plugins/<plugin>/test/**` are auto-approved by
 
 `integrationBranch` defaults to `main`. Set it to the branch your board actually integrates, such as `feat/client-work`; submissions and worktree cleanup then use that branch as their baseline. In local mode it must exist locally. In remote mode `origin/<branch>` must exist locally, so fetch it first. Sidequest refuses a missing configured branch and tells you to create, fetch, or reconfigure it rather than silently falling back to `main`.
 
-`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against the configured local branch without a push. `local` forces that same no-push path. `remote` uses the repository's configured `origin/<branch>` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"`, `integrationBranch: "branch-name"`, `worktreeIsolation: boolean`, and `worktreeSetup: "<one-line command>" | null`.
+`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against the configured local branch without a push. `local` forces that same no-push path. `remote` uses the repository's configured `origin/<branch>` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"`, `integrationBranch: "branch-name"`, `delivery: "merge" | "replay" | "apply"`, `worktreeIsolation: boolean`, and `worktreeSetup: "<one-line command>" | null`.
+
+### Delivering submitted work
+
+The orchestrator is the integrator. Run `sidequest integrate SQ-3 --by <who> --mode merge|replay|apply` for a ready submission. `merge` is the default and fits repos with a release pipeline. `replay` cherry-picks the submitted commits in order, preserving atomic history. `apply` puts the submitted diff in the working tree without a commit, so a consumer-project user can review it first. It refuses an overlapping dirty path and names it. All three modes recheck the admitted ticket scope, retain `refs/sidequest/SQ-3`, and record that recoverable ref before changing the checkout. Apply closes from that delivery record and ref, so it never waits for a user-side commit.
+
+Set the default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards usually want `apply` or `replay`. Use `merge` for a repository whose release flow owns integration. When a publish lock is active, acquire it before integration.
 
 In local mode, closing an integrated ticket also advances the integration branch. Nothing else moves it, so on a local board every integration used to leave `main` one commit further behind while the next executor's worktree started from that stale base. `sidequest groom-close <ref> --integration` (MCP: `groomClose` with `integration: true`) now looks for the checkout holding the commit that carries the closed ticket's submitted work and fast-forwards the branch onto it. It is fast-forward only, and it refuses rather than touching your default branch when the commit does not descend from the branch, when two checkouts carry the work, when your main checkout has something else checked out or has modified tracked files, or when the repository is mid merge, rebase, or cherry-pick. Every refusal names the branch, the commit, the reason, and the `git merge --ff-only` command that finishes the job. Untracked files do not block it. Remote refs are never written, and remote-mode boards keep advancing by push.
 
