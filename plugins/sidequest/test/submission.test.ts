@@ -341,6 +341,94 @@ test('submitted tickets leave the ready pool and refuse claims until cleared', (
   assert.strictEqual(store.clearSubmission(slug, t.ref, {}).reason, 'no_submission');
 });
 
+// SQ-1010: release --force + update --status todo both used to report ok while
+// leaving the submission in place, so the next claim kept refusing the ticket
+// as already-submitted even though it looked reopened. release/update must
+// now either refuse with the correct command, or (release --force) actually
+// reject the submission as part of the explicit reopen.
+test('release --status todo on a pending submission refuses instead of silently wedging it (SQ-1010)', () => {
+  const t = addTicket('release reopen refuses on pending submission');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
+
+  const released = store.releaseTicket(slug, t.ref, 'worker-a', { status: 'todo' });
+  assert.strictEqual(released.ok, false);
+  assert.strictEqual(released.reason, 'pending_submission');
+  assert.match(released.message, /pending submission/);
+  assert.match(released.message, /submit .*--clear/);
+
+  const after = store.getTicket(slug, t.ref);
+  assert.strictEqual(store.pendingSubmission(after), true, 'the submission is untouched by the refused release');
+  const stillRefused = store.claimTicket(slug, t.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' });
+  assert.strictEqual(stillRefused.ok, false);
+  assert.strictEqual(stillRefused.reason, 'submitted');
+});
+
+test('release --status todo --force rejects the pending submission and reopens in one step (SQ-1010)', () => {
+  const t = addTicket('release force reopen clears submission');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
+
+  const released = store.releaseTicket(slug, t.ref, 'worker-a', { status: 'todo', force: true });
+  assert.strictEqual(released.ok, true);
+  assert.strictEqual(released.clearedSubmission.commit, COMMIT);
+  const after = store.getTicket(slug, t.ref);
+  assert.strictEqual(after.submission, null);
+  assert.strictEqual(after.status, 'todo');
+
+  // Redispatch: a fresh executor claims cleanly, no leftover "submitted" refusal.
+  const reclaimed = store.claimTicket(slug, t.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' });
+  assert.strictEqual(reclaimed.ok, true);
+});
+
+test('update --status todo refuses on a pending submission instead of silently applying (SQ-1010)', () => {
+  const t = addTicket('update reopen refuses on pending submission');
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'worker-a', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
+
+  assert.throws(() => store.updateTicket(slug, t.ref, { status: 'todo', source: 'test' }), /pending submission/);
+  const after = store.getTicket(slug, t.ref);
+  assert.strictEqual(store.pendingSubmission(after), true, 'the submission is untouched by the refused update');
+  assert.strictEqual(after.status, 'doing', 'status did not silently move');
+
+  const cliAttempt = runCli(['update', t.ref, '--status', 'todo']);
+  assert.strictEqual(cliAttempt.status, 1);
+  assert.match(cliAttempt.stderr + cliAttempt.stdout, /pending submission/);
+
+  // The documented escape works and unwedges the ticket.
+  const cleared = store.clearSubmission(slug, t.ref, { status: 'todo' });
+  assert.strictEqual(cleared.ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+});
+
+test('MCP submit(clear:true) rejects a pending submission end to end: submit -> reject -> redispatch -> fresh claim succeeds (SQ-1010)', async () => {
+  const t = addTicket('mcp submit clear end to end');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
+  assert.strictEqual(store.pendingSubmission(store.getTicket(slug, t.ref)), true);
+
+  const rejected = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'orchestrator',
+    clear: true,
+    status: 'todo',
+  });
+  assert.strictEqual(rejected.ok, true);
+  assert.strictEqual(rejected.status, 'todo');
+
+  const after = store.getTicket(slug, t.ref);
+  assert.strictEqual(after.submission, null);
+  assert.strictEqual(store.pendingSubmission(after), false);
+
+  const redispatched = store.claimTicket(slug, t.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' });
+  assert.strictEqual(redispatched.ok, true, 'a fresh executor claims successfully after the reject');
+
+  const doubleClear = await callMcp('submit', { project: PROJECT_DIR, ref: t.ref, by: 'orchestrator', clear: true });
+  assert.strictEqual(doubleClear.ok, false);
+  assert.strictEqual(doubleClear.reason, 'no_submission');
+});
+
 test('integration closure consumes an in-scope submission with control-plane provenance', () => {
   cleanBranch();
   const t = addTicket('integration consumes submission', { files: ['lib/integrates.js'] });

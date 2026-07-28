@@ -3508,6 +3508,17 @@ function updateDoneRefusal(ticket?: any) {
   return null;
 }
 
+// update --status <anything but done> on a ticket with a pending submission
+// used to apply silently, leaving the submission in place: the ticket looked
+// reopened but the next claim still refused it as already-submitted (SQ-1010).
+// Reopening past a pending submission needs the explicit reject, not a status
+// patch that quietly strands it.
+function updateReopenRefusal(ticket?: any, nextStatus?: any) {
+  if (!pendingSubmission(ticket)) return null;
+  const commit = String(ticket.submission.commit || '').slice(0, 12);
+  return `${ticket.ref} has a pending submission (commit ${commit}) parked READY_FOR_INTEGRATION. update cannot move it to "${nextStatus}" and leave the submission in place — the next claim would still refuse it as already-submitted. Reject it first: \`sidequest submit ${ticket.ref} --clear --status ${nextStatus}\` (MCP \`submit\` with \`clear:true, status:"${nextStatus}"\`), or integrate it through the publish flow.`;
+}
+
 function sameFiles(left?: any, right?: any) {
   const normalizedLeft = normalizeFiles(left);
   const normalizedRight = normalizeFiles(right);
@@ -3548,6 +3559,8 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     const nextStatus = patch.status == null ? null : requireStatus(patch.status);
     const doneRefusal = nextStatus === 'done' ? updateDoneRefusal(t) : null;
     if (doneRefusal) throw new Error(doneRefusal);
+    const reopenRefusal = nextStatus != null && nextStatus !== 'done' ? updateReopenRefusal(t, nextStatus) : null;
+    if (reopenRefusal) throw new Error(reopenRefusal);
     const prevStatus = t.status;
     if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
     if (patch.description != null) t.description = String(patch.description).trim();
@@ -5159,6 +5172,28 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       }
       return { ok: false, reason: 'done', ticket: t };
     }
+    // A pending submission is the ready-for-integration queue: release --status
+    // todo used to apply the status flip and leave the submission sitting there,
+    // so the next claim kept refusing it as already-submitted even though the
+    // ticket looked reopened (SQ-1010). --force on a reopen means "reject the
+    // submission", not "look past it" — clear it as part of the explicit
+    // reopen instead of silently wedging the ticket again.
+    let reopenedSubmission: any = null;
+    if (opts.status && pendingSubmission(t)) {
+      const reopenStatus = coerceStatus(opts.status, t.status);
+      if (reopenStatus !== 'done') {
+        if (!opts.force) {
+          return {
+            ok: false,
+            reason: 'pending_submission',
+            ticket: t,
+            submission: t.submission,
+            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. CLI: pass --force to reject the submission and reopen in one step, or run \`sidequest submit ${t.ref} --clear --status ${reopenStatus}\` first. MCP: \`submit\` with \`clear:true, status:"${reopenStatus}"\` (release has no force param over MCP).`,
+          };
+        }
+        reopenedSubmission = t.submission;
+      }
+    }
     const controlPlaneDone = opts.status === 'done' && opts.completionAuthority === CONTROL_PLANE_COMPLETION;
     const executorDone = opts.status === 'done' && !controlPlaneDone;
     const dispatch = dispatchState(t);
@@ -5273,9 +5308,19 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     setDispatchTerminal(t, opts.status === 'done' ? 'done' : 'released', opts.source || 'cli');
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
+    if (reopenedSubmission) t.submission = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
     if (t.status === 'todo' && (previousStatus !== 'todo' || (held && held.by))) {
       appendReworkEvent(t, 'released_to_todo', {
+        at: now,
+        source: opts.source || 'cli',
+        by,
+        fromStatus: previousStatus,
+        toStatus: t.status,
+      });
+    }
+    if (reopenedSubmission) {
+      appendReworkEvent(t, 'submission_cleared', {
         at: now,
         source: opts.source || 'cli',
         by,
@@ -5320,7 +5365,13 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     if (comment) queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
-    return { ok: true, ticket: t, comment, ...(opts.completionComment && opts.completionComment.advisory ? { advisory: opts.completionComment.advisory } : {}) };
+    return {
+      ok: true,
+      ticket: t,
+      comment,
+      ...(reopenedSubmission ? { clearedSubmission: reopenedSubmission } : {}),
+      ...(opts.completionComment && opts.completionComment.advisory ? { advisory: opts.completionComment.advisory } : {}),
+    };
   });
 }
 

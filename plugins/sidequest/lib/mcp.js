@@ -1262,7 +1262,7 @@ const TOOLS = [
   },
   {
     name: "submit",
-    description: "Submit a verified scoped commit range for integration and release the claim. body carries the final report: paths, verification, and skips.",
+    description: "Submit a verified scoped commit range for integration and release the claim. body carries the final report: paths, verification, and skips. Pass clear:true instead to reject a pending submission without integrating it (drops commit/body/etc, optionally moves status).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1275,13 +1275,19 @@ const TOOLS = [
         gitRef: { type: "string" },
         worktree: { type: "string", description: "Absolute path to this executor’s git worktree root. Required for isolated worktrees." },
         body: { type: "string", description: "Final report: paths, verification, and skips." },
-        session: { type: "string" }
+        session: { type: "string" },
+        clear: { type: "boolean", description: "Reject this ticket’s pending submission without integrating it, so it can be re-dispatched. Ignores commit/base/verify/gitRef/worktree/body." },
+        status: { type: "string", enum: store.VALID_STATUS, description: 'With clear:true, move the ticket to this status (usually "todo") in the same step.' }
       },
-      required: ["ref", "by", "commit", "body"]
+      required: ["ref", "by"]
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, "submit");
+      if (args.clear) {
+        const res2 = store.clearSubmission(slug, args.ref, { status: args.status, source: "mcp" });
+        return mutationAck(slug, res2);
+      }
       const body = requiredFinalReport(args, "submit");
       const commit = requiredText(args, "commit", "submit");
       if (!/^[0-9a-f]{7,64}$/i.test(commit)) {
