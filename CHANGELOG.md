@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.266.0 (2026-07-28)
+
+### codex-gateway 0.36.3 → 0.37.0
+
+#### Features
+
+- WebSearch works on Grok via its native server-side web_search tool (SQ-1000) [`6e004bd`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6e004bdddf741b5be8e902cc45e9d4e0e3f1242a)
+
 ## v3.265.0 (2026-07-28)
 
 ### codex-gateway 0.36.2 → 0.36.3
