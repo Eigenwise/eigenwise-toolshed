@@ -260,12 +260,43 @@ function sseFrame(event) {
 function createGrokSseTransformer(write, model) {
   let started = false;
   let stopped = false;
-  let index = 0;
-  const toolIndexes = new Map();
+  let nextIndex = 0;
+  let activeIndex = null;
+  const blocks = new Map();
+  const outputBlocks = new Map();
+  const toolBlocks = new Map();
   function start(response) {
     if (started) return;
     started = true;
     write(sseFrame({ type: 'message_start', message: { id: response?.id || `msg_grok_${Date.now()}`, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: anthropicUsage(response?.usage) } }));
+  }
+  function stopBlock(block) {
+    if (!block || block.stopped) return;
+    block.stopped = true;
+    write(sseFrame({ type: 'content_block_stop', index: block.index }));
+    if (activeIndex === block.index) activeIndex = null;
+  }
+  function startBlock(key, outputIndex, contentBlock) {
+    const existing = blocks.get(key);
+    if (existing) return existing;
+    if (activeIndex !== null) stopBlock([...blocks.values()].find((block) => block.index === activeIndex));
+    const block = { index: nextIndex, stopped: false };
+    nextIndex += 1;
+    blocks.set(key, block);
+    if (outputIndex !== undefined && outputIndex !== null) outputBlocks.set(outputIndex, block);
+    activeIndex = block.index;
+    write(sseFrame({ type: 'content_block_start', index: block.index, content_block: contentBlock }));
+    return block;
+  }
+  function toolBlock(event, item = {}) {
+    const itemId = item.id || event.item_id || event.call_id || 'tool';
+    const existing = toolBlocks.get(itemId);
+    if (existing) return existing;
+    const callId = item.call_id || event.call_id || itemId;
+    const block = startBlock(`tool:${itemId}`, event.output_index, { type: 'tool_use', id: callId, name: item.name || event.name || '', input: {} });
+    const tool = { block, sawArgumentDelta: false };
+    toolBlocks.set(itemId, tool);
+    return tool;
   }
   function stop(usage, reason = 'end_turn') {
     if (stopped) return;
@@ -279,24 +310,38 @@ function createGrokSseTransformer(write, model) {
       if (event?.type === 'response.created') return start(response);
       if (event?.type === 'response.output_text.delta') {
         start(response);
-        if (index === 0) write(sseFrame({ type: 'content_block_start', index, content_block: { type: 'text', text: '' } }));
-        write(sseFrame({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: event.delta || '' } }));
+        const textKey = `text:${event.item_id ?? event.output_index ?? 'default'}`;
+        const block = startBlock(textKey, event.output_index, { type: 'text', text: '' });
+        write(sseFrame({ type: 'content_block_delta', index: block.index, delta: { type: 'text_delta', text: event.delta || '' } }));
+        return;
+      }
+      if (event?.type === 'response.output_item.added' && event.item?.type === 'function_call') {
+        start(response);
+        toolBlock(event, event.item);
         return;
       }
       if (event?.type === 'response.function_call_arguments.delta') {
         start(response);
-        const callId = event.item_id || event.call_id || 'tool';
-        if (!toolIndexes.has(callId)) {
-          index += 1;
-          toolIndexes.set(callId, index);
-          write(sseFrame({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: callId, name: event.name || '', input: {} } }));
-        }
-        write(sseFrame({ type: 'content_block_delta', index: toolIndexes.get(callId), delta: { type: 'input_json_delta', partial_json: event.delta || '' } }));
+        const tool = toolBlock(event);
+        tool.sawArgumentDelta = true;
+        write(sseFrame({ type: 'content_block_delta', index: tool.block.index, delta: { type: 'input_json_delta', partial_json: event.delta || '' } }));
+        return;
+      }
+      if (event?.type === 'response.function_call_arguments.done') {
+        start(response);
+        const tool = toolBlock(event);
+        if (!tool.sawArgumentDelta) write(sseFrame({ type: 'content_block_delta', index: tool.block.index, delta: { type: 'input_json_delta', partial_json: event.arguments || '' } }));
+        return;
+      }
+      if (event?.type === 'response.output_item.done') {
+        const itemId = event.item?.id || event.item_id;
+        const block = toolBlocks.get(itemId)?.block || outputBlocks.get(event.output_index);
+        stopBlock(block);
         return;
       }
       if (event?.type === 'response.completed') {
         start(response);
-        for (let closeIndex = 0; closeIndex <= index; closeIndex += 1) write(sseFrame({ type: 'content_block_stop', index: closeIndex }));
+        for (const block of blocks.values()) stopBlock(block);
         return stop(response?.usage, responseContent(response).some((block) => block.type === 'tool_use') ? 'tool_use' : 'end_turn');
       }
       if (event?.type === 'error' || event?.type === 'response.failed') {

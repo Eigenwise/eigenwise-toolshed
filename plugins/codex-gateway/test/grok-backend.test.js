@@ -98,6 +98,86 @@ test('translates Responses completions and stream events to Anthropic messages',
   assert.match(frames.join(''), /"type":"message_stop"/);
 });
 
+function sseEvents(frames) {
+  return frames.map((frame) => JSON.parse(frame.split('\n')[1].slice('data: '.length)));
+}
+
+function assertWellFormedContentBlocks(events) {
+  const openIndexes = new Set();
+  for (const event of events) {
+    if (event.type === 'content_block_start') {
+      assert.equal(openIndexes.has(event.index), false);
+      openIndexes.add(event.index);
+    }
+    if (event.type === 'content_block_delta') assert.equal(openIndexes.has(event.index), true);
+    if (event.type === 'content_block_stop') assert.equal(openIndexes.delete(event.index), true);
+  }
+  assert.equal(openIndexes.size, 0);
+}
+
+test('streams Grok function calls with their added-item identity', () => {
+  const response = {
+    id: 'resp_fixture',
+    output: [{ type: 'function_call', id: 'fc_resp_0', call_id: 'call_fixture_0', name: 'Read', arguments: '{"file_path":"config.toml"}' }],
+  };
+  const frames = [];
+  const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4-5');
+  stream.event({ type: 'response.created', response });
+  stream.event({ type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'fc_resp_0', call_id: 'call_fixture_0', name: 'Read', arguments: '', status: 'in_progress' }, response });
+  stream.event({ type: 'response.function_call_arguments.delta', item_id: 'fc_resp_0', output_index: 1, delta: '{"file_path":"config.toml"}', response });
+  stream.event({ type: 'response.function_call_arguments.done', item_id: 'fc_resp_0', arguments: '{"file_path":"config.toml"}', response });
+  stream.event({ type: 'response.output_item.done', output_index: 1, item: { type: 'function_call', id: 'fc_resp_0' }, response });
+  stream.event({ type: 'response.completed', response });
+
+  const events = sseEvents(frames);
+  const toolStart = events.find((event) => event.type === 'content_block_start' && event.content_block.type === 'tool_use');
+  assert.deepEqual(toolStart.content_block, { type: 'tool_use', id: 'call_fixture_0', name: 'Read', input: {} });
+  assert.deepEqual(events.filter((event) => event.type === 'content_block_delta').map((event) => event.delta.partial_json), ['{"file_path":"config.toml"}']);
+  assertWellFormedContentBlocks(events);
+});
+
+test('streams text and tool blocks in either order', () => {
+  const response = {
+    id: 'resp_fixture',
+    output: [{ type: 'function_call', id: 'fc_resp_0', call_id: 'call_fixture_0', name: 'Read', arguments: '{}' }],
+  };
+  const streams = [
+    {
+      expectedTypes: ['text', 'tool_use'],
+      events: [
+        { type: 'response.output_text.delta', output_index: 0, delta: 'before' },
+        { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'fc_resp_0', call_id: 'call_fixture_0', name: 'Read' } },
+        { type: 'response.function_call_arguments.done', item_id: 'fc_resp_0', arguments: '{}' },
+        { type: 'response.output_item.done', output_index: 1, item: { type: 'function_call', id: 'fc_resp_0' } },
+      ],
+    },
+    {
+      expectedTypes: ['tool_use', 'text'],
+      events: [
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc_resp_0', call_id: 'call_fixture_0', name: 'Read' } },
+        { type: 'response.function_call_arguments.done', item_id: 'fc_resp_0', arguments: '{}' },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc_resp_0' } },
+        { type: 'response.output_text.delta', output_index: 1, delta: 'after' },
+        { type: 'response.output_item.done', output_index: 1, item: { type: 'message' } },
+      ],
+    },
+  ];
+
+  for (const { events: upstreamEvents, expectedTypes } of streams) {
+    const frames = [];
+    const stream = grok.createGrokSseTransformer((frame) => frames.push(frame), 'claude-grok-4-5');
+    stream.event({ type: 'response.created', response });
+    for (const event of upstreamEvents) stream.event({ ...event, response });
+    stream.event({ type: 'response.completed', response });
+    const events = sseEvents(frames);
+    const starts = events.filter((event) => event.type === 'content_block_start');
+    assert.deepEqual(starts.map((event) => event.index), [0, 1]);
+    assert.deepEqual(starts.map((event) => event.content_block.type), expectedTypes);
+    assert.deepEqual(events.filter((event) => event.type === 'content_block_delta' && event.delta.type === 'input_json_delta').map((event) => event.delta.partial_json), ['{}']);
+    assertWellFormedContentBlocks(events);
+  }
+});
+
 test('the shim lists and routes claude-prefixed Grok models', async (t) => {
   const http = require('node:http');
   const { spawn } = require('node:child_process');
