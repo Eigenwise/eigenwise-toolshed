@@ -22,6 +22,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-test
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
 const { makeCliRunner } = require('./_helpers.js');
 
@@ -78,6 +79,12 @@ function addTicket(title?: any, extra?: any) {
     source: 'cli',
     labels: ['direct-ok'],
   }, extra || {}));
+}
+
+async function callMcp(name: string, args: Record<string, unknown>) {
+  const tool = mcp.TOOLS.find((candidate: any) => candidate.name === name);
+  assert.ok(tool, `missing MCP tool ${name}`);
+  return tool.handler(args);
 }
 
 test('CLI scope-request keeps the claim while update --files approves the addition', () => {
@@ -154,6 +161,158 @@ test('an invalid commit hash is rejected before anything is written', () => {
     assert.throws(() => store.submitTicket(slug, t.ref, 'worker-a', { commit: bad }), /invalid commit/);
   }
   assert.ok(store.getTicket(slug, t.ref).claim, 'the claim survives a rejected submit');
+});
+
+test('SQ-971: rejected range submission is quarantined and clean rebase resubmits', async () => {
+  cleanBranch();
+  const t = addTicket('rejected range preservation', { files: ['lib/rebased.js'] });
+  const by = 'rebase-worker';
+  assert.strictEqual(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'parent.js'), 'feature parent\n');
+  git(['add', 'parent.js']);
+  git(['commit', '-m', 'unrecognized feature parent']);
+  const parent = git(['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'rebased.js'), 'verified work\n');
+  git(['add', 'lib/rebased.js']);
+  git(['commit', '-m', 'verified ticket work']);
+  const rejectedCommit = git(['rev-parse', 'HEAD']);
+  pin(t, rejectedCommit);
+
+  const rejected = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
+    commit: rejectedCommit,
+    base: parent,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'Changed lib/rebased.js. Scoped submission test passed. Nothing skipped.',
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'unrecognized_base');
+  assert.match(rejected.message, /Preserved .*refs\/sidequest\/SQ-\d+-rejected/);
+  assert.match(rejected.message, /Rebase onto the current origin\/main target/);
+  assert.match(rejected.message, /orchestrator can cherry-pick/);
+  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), rejectedCommit);
+  const preserved = store.getTicket(slug, t.ref);
+  assert.equal(preserved.claim.by, by);
+  assert.equal(preserved.checkpoint.kind, 'submission_rejected');
+  assert.equal(preserved.checkpoint.commit, rejectedCommit);
+  assert.equal(preserved.checkpoint.gitRef, `refs/sidequest/${t.ref}-rejected`);
+  assert.equal(preserved.checkpoint.failure.reason, 'unrecognized_base');
+  assert.match(preserved.comments.at(-1).body, /Claim retained with a recovery checkpoint/);
+
+  git(['rebase', '--onto', 'origin/main', parent, rejectedCommit]);
+  const rebasedCommit = git(['rev-parse', 'HEAD']);
+  assert.notEqual(rebasedCommit, rejectedCommit);
+  pin(t, rebasedCommit);
+  const resubmitted = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
+    commit: rebasedCommit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'Rebased lib/rebased.js onto origin/main. Scoped submission test passed. Nothing skipped.',
+  });
+  assert.equal(resubmitted.ok, true, resubmitted.message);
+  const after = store.getTicket(slug, t.ref);
+  assert.equal(after.claim, null);
+  assert.equal(after.submission.commit, rebasedCommit);
+  assert.deepEqual(after.submission.commits, [rebasedCommit]);
+  assert.equal(after.submission.base, git(['rev-parse', 'origin/main']));
+});
+
+test('SQ-971: an unavailable recorded integration target still quarantines verified work', async () => {
+  cleanBranch();
+  const t = addTicket('missing integration target preservation', { files: ['lib/missing-target.js'] });
+  const by = 'missing-target-worker';
+  assert.equal(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  const claimed = store.getTicket(slug, t.ref);
+  claimed.dispatch = {
+    integrationTarget: {
+      mode: 'local',
+      upstream: 'missing-feature-target',
+      branch: 'missing-feature-target',
+    },
+  };
+  persist(claimed);
+
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'missing-target.js'), 'verified work\n');
+  git(['add', 'lib/missing-target.js']);
+  git(['commit', '-m', 'verified work for deleted target']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+
+  const rejected = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
+    commit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'Changed lib/missing-target.js. Scoped submission test passed. Nothing skipped.',
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'integration_target_unavailable');
+  assert.match(rejected.message, /Fetch or recreate missing-feature-target/);
+  assert.match(rejected.message, /rebase refs\/sidequest\/SQ-\d+ onto that target, and resubmit/);
+  assert.match(rejected.message, /orchestrator can cherry-pick/);
+  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), commit);
+  const preserved = store.getTicket(slug, t.ref);
+  assert.equal(preserved.claim.by, by);
+  assert.equal(preserved.checkpoint.kind, 'submission_rejected');
+  assert.equal(preserved.checkpoint.failure.reason, 'integration_target_unavailable');
+  assert.match(preserved.checkpoint.failure.message, /does not exist locally/);
+});
+
+test('SQ-971: checkpoint failure reports the already-written quarantine ref', async () => {
+  cleanBranch();
+  const t = addTicket('checkpoint failure after quarantine', { files: ['lib/checkpoint-failure.js'] });
+  const by = 'checkpoint-failure-worker';
+  assert.equal(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'parent.js'), 'unrecognized parent\n');
+  git(['add', 'parent.js']);
+  git(['commit', '-m', 'checkpoint failure parent']);
+  const parent = git(['rev-parse', 'HEAD']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'checkpoint-failure.js'), 'verified work\n');
+  git(['add', 'lib/checkpoint-failure.js']);
+  git(['commit', '-m', 'verified work before checkpoint failure']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+
+  const originalCheckpointTicket = store.checkpointTicket;
+  store.checkpointTicket = () => {
+    throw new Error(`forced checkpoint write failure ${'x'.repeat(5000)}`);
+  };
+  let rejected: any;
+  try {
+    rejected = await callMcp('submit', {
+      project: PROJECT_DIR,
+      ref: t.ref,
+      by,
+      commit,
+      base: parent,
+      verify: 'npm run test:files -- test/submission.test.ts',
+      worktree: PROJECT_DIR,
+      body: 'Changed lib/checkpoint-failure.js. Scoped submission test passed. Nothing skipped.',
+    });
+  } finally {
+    store.checkpointTicket = originalCheckpointTicket;
+  }
+
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'unrecognized_base');
+  assert.match(rejected.message, new RegExp(`Preserved ${commit} at refs/sidequest/${t.ref}-rejected`));
+  assert.match(rejected.message, /recovery checkpoint failed: checkpoint_error: forced checkpoint write failure/);
+  assert.ok(rejected.message.length < 2000, 'checkpoint failure text is bounded');
+  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), commit);
+  const preserved = store.getTicket(slug, t.ref);
+  assert.equal(preserved.claim.by, by);
+  assert.equal(preserved.checkpoint, null);
 });
 
 test('submitted tickets leave the ready pool and refuse claims until cleared', () => {

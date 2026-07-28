@@ -179,7 +179,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   ready: "Unclaimed, unblocked tickets in safe waves.",
   story: "Manage stories.",
   story_log: "Story log.",
-  checkpoint: "Record review candidate; retain claim.",
+  checkpoint: "Record candidate; retain claim.",
   sweepClaims: "Release dead claims; live ones stay.",
   next: "Claim the top available ticket.",
   scopeRequest: "Check scope; auto-approve eligible plugin tests.",
@@ -189,8 +189,8 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   link: "Relate tickets; inverse automatic.",
   remove: "Delete a ticket. Claims need force:true.",
   claim: "Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.",
-  dispatch: "Prepare a ticket executor through its stable route.",
-  done: "Finish ticket with final report. Stamp actual model and effort.",
+  dispatch: "Prepare through the ticket's stable route.",
+  done: "Finish with report; stamp actual model and effort.",
   release: "Release.",
   groomClose: "Grooming closure; pass integration:true after a submission is integrated.",
   native_agent: "Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.",
@@ -246,7 +246,7 @@ function mutationAck(project, result, changed) {
   const out = { ok: !!result.ok, project };
   if (ticket) Object.assign(out, { ref: ticket.ref, status: ticket.status });
   if (!result.ok) {
-    for (const key of ["reason", "claim", "expectedExecutor", "derivedEffort", "claimedEffort", "max", "length", "message"]) {
+    for (const key of ["reason", "claim", "expectedExecutor", "derivedEffort", "claimedEffort", "max", "length", "message", "preserved"]) {
       if (result[key] !== void 0) out[key] = result[key];
     }
     return out;
@@ -395,6 +395,63 @@ function requiredFinalReport(args, action) {
     throw new Error(`${action}: "body" is required — the completion comment carries the full final report (changed paths, verification evidence, and anything skipped).`);
   }
   return body;
+}
+function boundedSubmissionText(value, maxChars = 600) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars - 16)}… [${text.length} chars]`;
+}
+function preserveRejectedSubmission(options) {
+  const { slug, ticket, by, root, commit, gitRef, verify, reason, message, remedy } = options;
+  const quarantineRef = `refs/sidequest/${ticket.ref}-rejected`;
+  const validationMessage = boundedSubmissionText(message);
+  const failure = `${reason}${validationMessage ? `: ${validationMessage}` : ""}`;
+  const preserved = commitScope.preserveCommitRef(root, commit, quarantineRef);
+  if (!preserved.ok) {
+    const preservationFailure = `${preserved.reason}${preserved.message ? `: ${boundedSubmissionText(preserved.message)}` : ""}`;
+    return {
+      ok: false,
+      ticket,
+      reason,
+      message: `submit: refused ${ticket.ref}; ${failure}. Could not preserve ${commit} at ${quarantineRef}: ${preservationFailure}. The claim remains active. Remedy: ${remedy}`
+    };
+  }
+  let checkpoint;
+  try {
+    checkpoint = store.checkpointTicket(slug, ticket.ref, by, {
+      commit: preserved.commit,
+      worktree: root,
+      verify: verify.slice(0, 4e3),
+      ttlMinutes: 24 * 60,
+      kind: "submission_rejected",
+      gitRef: quarantineRef,
+      failure: { reason, message: validationMessage },
+      commentBody: `Submission validation refused ${ticket.ref}: ${failure}
+Preserved: ${preserved.commit} at ${quarantineRef}
+Claim retained with a recovery checkpoint.
+Remedy: ${remedy}`,
+      source: "mcp"
+    });
+  } catch (error) {
+    checkpoint = { ok: false, reason: "checkpoint_error", message: error && error.message || String(error) };
+  }
+  if (checkpoint && checkpoint.ok) {
+    return {
+      ok: false,
+      ticket: checkpoint.ticket,
+      reason,
+      message: `submit: refused ${ticket.ref}; ${failure}. Preserved ${preserved.commit} at ${quarantineRef}; the claim and recovery checkpoint remain active. Remedy: ${remedy}`,
+      preserved: { commit: preserved.commit, gitRef: quarantineRef, checkpoint: checkpoint.checkpoint }
+    };
+  }
+  const checkpointFailure = `${checkpoint?.reason || "checkpoint_failed"}${checkpoint?.message ? `: ${boundedSubmissionText(checkpoint.message)}` : ""}`;
+  return {
+    ok: false,
+    ticket: store.getTicket(slug, ticket.ref) || ticket,
+    reason,
+    message: `submit: refused ${ticket.ref}; ${failure}. Preserved ${preserved.commit} at ${quarantineRef}, but the recovery checkpoint failed: ${checkpointFailure}. The claim remains active. Remedy: ${remedy}`,
+    preserved: { commit: preserved.commit, gitRef: quarantineRef }
+  };
 }
 function requiredReleaseReason(args) {
   const reason = args && args.reason != null ? String(args.reason).trim() : "";
@@ -1234,18 +1291,67 @@ const TOOLS = [
         throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
       }
       const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
-      const target = store.integrationTarget(slug);
+      const dispatchTarget = ticket.dispatch && ticket.dispatch.integrationTarget;
+      const verify = String(args.verify || "").trim();
+      const heldByExecutor = ticket.claim && ticket.claim.by === by;
+      let target;
+      try {
+        target = store.integrationTarget(slug, dispatchTarget || void 0);
+      } catch (error) {
+        const reason = "integration_target_unavailable";
+        const message = error && error.message || String(error);
+        const targetName = dispatchTarget && typeof dispatchTarget === "object" ? String(dispatchTarget.upstream || dispatchTarget.branch || "the recorded integration target") : String(dispatchTarget || "the configured integration target");
+        const remedy = `Fetch or recreate ${targetName}, rebase ${gitRef} onto that target, and resubmit. Or the orchestrator can cherry-pick refs/sidequest/${ticket.ref}-rejected and record the range override.`;
+        if (verify && heldByExecutor) {
+          return mutationAck(slug, preserveRejectedSubmission({
+            slug,
+            ticket,
+            by,
+            root,
+            commit,
+            gitRef,
+            verify,
+            reason,
+            message,
+            remedy
+          }));
+        }
+        return mutationAck(slug, {
+          ok: false,
+          ticket,
+          reason,
+          message: `submit: refused ${ticket.ref}; ${boundedSubmissionText(message)}. Remedy: ${remedy}`
+        });
+      }
+      const dispatchBase = String(ticket.dispatch?.baseCommit || "").trim() || null;
       const allowedBases = store.submissionBaseCandidates(slug, ticket.ref);
+      if (dispatchBase) allowedBases.push(dispatchBase);
       const range = commitScope.submissionRange(root, {
         commit,
         gitRef,
         upstream: target.upstream,
         integrationBranch: target.branch,
         base: args.base,
+        dispatchBase,
         allowedBases,
         baseCandidates: args.base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true })
       });
       if (!range.ok) {
+        if (verify && heldByExecutor) {
+          const remedy = `Rebase onto the current ${target.upstream} target, update ${gitRef}, and resubmit. Or the orchestrator can cherry-pick refs/sidequest/${ticket.ref}-rejected and record the range override.`;
+          return mutationAck(slug, preserveRejectedSubmission({
+            slug,
+            ticket,
+            by,
+            root,
+            commit,
+            gitRef,
+            verify,
+            reason: range.reason,
+            message: range.message || "",
+            remedy
+          }));
+        }
         return mutationAck(slug, { ok: false, ticket, reason: range.reason, message: range.message });
       }
       const duplicate = store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).find((entry) => {
@@ -1265,7 +1371,7 @@ const TOOLS = [
       const res = store.submitTicket(slug, args.ref, by, {
         commit: range.commit,
         gitRef,
-        range: Object.assign({}, range, { integrationMode: target.mode }),
+        range: Object.assign({}, range, { integrationMode: target.mode, integrationBranch: target.branch }),
         verify: args.verify,
         worktree: args.worktree,
         unscopedPaths,
@@ -1390,6 +1496,7 @@ const TOOLS = [
         ref: { type: "string" },
         project: PROJECT_PROP,
         sharedTree: { type: "boolean", description: "Use shared state or leave an explicitly marked artifact." },
+        integrationBranch: { type: "string" },
         full: { type: "boolean", description: "Include token, executor, warnings, and recovery details." }
       },
       required: ["ref"]
@@ -1398,7 +1505,11 @@ const TOOLS = [
       const { slug, meta } = resolveProject(args.project);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
-      const prepared = store.prepareDispatch(slug, args.ref, { sessionId: requireDispatchSession(), sharedTree: !!args.sharedTree });
+      const prepared = store.prepareDispatch(slug, args.ref, {
+        sessionId: requireDispatchSession(),
+        sharedTree: !!args.sharedTree,
+        integrationBranch: args.integrationBranch
+      });
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);

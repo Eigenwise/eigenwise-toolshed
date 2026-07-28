@@ -33,6 +33,7 @@ __export(commit_scope_exports, {
   headCommit: () => headCommit,
   isInScope: () => isInScope,
   linkedWorktree: () => linkedWorktree,
+  preserveCommitRef: () => preserveCommitRef,
   rangePaths: () => rangePaths,
   repoRoot: () => repoRoot,
   scopedPaths: () => scopedPaths,
@@ -327,6 +328,21 @@ function headCommit(cwd) {
   const head = resolvedCommit(cwd, "HEAD");
   return head.ok ? head.value : null;
 }
+function preserveCommitRef(cwd, commit, gitRef) {
+  const ref = String(gitRef || "").trim();
+  if (!ref) return { ok: false, reason: "missing_git_ref" };
+  try {
+    const root = repoRoot(cwd);
+    const tip = resolvedCommit(root, commit);
+    if (!tip.ok) return { ok: false, reason: "missing_commit", message: tip.message };
+    const validRef = gitResult(root, ["check-ref-format", ref]);
+    if (!validRef.ok) return { ok: false, reason: "invalid_git_ref", message: validRef.message };
+    git(root, ["update-ref", ref, tip.value]);
+    return { ok: true, commit: tip.value, gitRef: ref };
+  } catch (error) {
+    return { ok: false, reason: "git_error", message: errorMessage(error) };
+  }
+}
 function scopedWorkPending(cwd, files, options) {
   const opts = isRecord(options) ? options : {};
   const scopes = scopedPaths(files);
@@ -376,10 +392,10 @@ function submissionRange(cwd, options) {
   const rootBase = isEmptyTreeBase(opts.base);
   const requestedBase = opts.base && !rootBase ? resolvedCommit(cwd, opts.base) : null;
   if (requestedBase && !requestedBase.ok) return { ok: false, reason: "missing_base", message: requestedBase.message };
-  const integrationBranch = requestedBase ? resolvedCommit(cwd, opts.integrationBranch || upstream) : null;
+  const integrationBranch = resolvedCommit(cwd, opts.integrationBranch || upstream);
   const baseIsOnTip = !!requestedBase && isAncestor(cwd, requestedBase.value, tip.value);
   const baseIsAfterMergeBase = !!requestedBase && isAncestor(cwd, mergeBase.value, requestedBase.value);
-  const baseIsIntegrated = !!requestedBase && !!integrationBranch?.ok && isAncestor(cwd, requestedBase.value, integrationBranch.value);
+  const baseIsIntegrated = !!requestedBase && integrationBranch.ok && isAncestor(cwd, requestedBase.value, integrationBranch.value);
   if (requestedBase && (!baseIsOnTip || !baseIsAfterMergeBase && !baseIsIntegrated)) {
     return { ok: false, reason: "base_not_reachable", base: requestedBase.value, actualBase: mergeBase.value, upstream, tip: tip.value };
   }
@@ -399,16 +415,25 @@ function submissionRange(cwd, options) {
     }
   }
   let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
+  if (!requestedBase && !rootBase && opts.dispatchBase) {
+    const dispatchBase = resolvedCommit(cwd, opts.dispatchBase);
+    const dispatchBaseIsOnTip = dispatchBase.ok && isAncestor(cwd, dispatchBase.value, tip.value);
+    const dispatchBaseIsAfterMergeBase = dispatchBase.ok && isAncestor(cwd, mergeBase.value, dispatchBase.value);
+    const dispatchBaseIsIntegrated = dispatchBase.ok && integrationBranch.ok && isAncestor(cwd, dispatchBase.value, integrationBranch.value);
+    if (dispatchBaseIsOnTip && (dispatchBaseIsAfterMergeBase || dispatchBaseIsIntegrated)) {
+      effectiveBase = dispatchBase.value;
+    }
+  }
   if (!requestedBase && !rootBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
     const candidates = /* @__PURE__ */ new Set();
     for (const name of opts.baseCandidates) {
       const candidate = resolvedCommit(cwd, name);
-      if (candidate.ok && isAncestor(cwd, mergeBase.value, candidate.value) && isAncestor(cwd, candidate.value, tip.value)) {
+      if (candidate.ok && isAncestor(cwd, effectiveBase, candidate.value) && isAncestor(cwd, candidate.value, tip.value)) {
         candidates.add(candidate.value);
       }
     }
     if (candidates.size) {
-      const history = gitResult(cwd, ["rev-list", "--reverse", `${mergeBase.value}..${tip.value}`]);
+      const history = gitResult(cwd, ["rev-list", "--reverse", `${effectiveBase}..${tip.value}`]);
       if (!history.ok) return { ok: false, reason: "git_error", message: history.message };
       for (const commit of history.value.split(/\r?\n/).filter(Boolean)) {
         if (candidates.has(commit)) effectiveBase = commit;
@@ -465,6 +490,7 @@ function validateStoredSubmissionRange(cwd, submissionValue) {
     gitRef: submission.gitRef,
     upstream: submission.upstream,
     upstreamCommit: submission.upstreamCommit,
+    integrationBranch: submission.integrationBranch,
     base: submission.base
   });
   if (!range.ok) return range;
@@ -520,6 +546,7 @@ function commitScoped(cwd, message, files) {
   headCommit,
   isInScope,
   linkedWorktree,
+  preserveCommitRef,
   rangePaths,
   repoRoot,
   scopedPaths,

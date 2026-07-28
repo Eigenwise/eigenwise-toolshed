@@ -1770,12 +1770,13 @@ function integrationBranchExists(absPath: any, ref: string) {
   }
 }
 
-function integrationTarget(slug?: any) {
+function integrationTarget(slug?: any, override?: any) {
   const meta = readMeta(slug);
   if (!meta) return null;
-  const configured = normalizeIntegrationMode(meta.integrationMode);
+  const requested = override && typeof override === 'object' ? override : {};
+  const configured = normalizeIntegrationMode(requested.mode ?? meta.integrationMode);
   const mode = configured === 'auto' ? (hasOriginRemote(meta.path) ? 'remote' : 'local') : configured;
-  const branch = normalizeIntegrationBranch(meta.integrationBranch);
+  const branch = normalizeIntegrationBranch(requested.branch ?? override ?? meta.integrationBranch);
   const upstream = mode === 'local' ? branch : `origin/${branch}`;
   const ref = mode === 'local' ? `refs/heads/${branch}` : `refs/remotes/origin/${branch}`;
   if (!integrationBranchExists(meta.path, ref)) {
@@ -4530,6 +4531,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const story = t.storyId ? getStory(slug, t.storyId) : null;
     const contract = storyExecutionContract(story);
     const contractDrift = t.storyContractDrift || null;
+    const targetOverride = opts.integrationBranch != null || opts.integrationMode != null
+      ? integrationTarget(slug, { branch: opts.integrationBranch, mode: opts.integrationMode })
+      : null;
     delete t.storyContractDrift;
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
@@ -4540,6 +4544,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       // "committed and never submitted" — in a shared tree the executor's branch
       // IS the integration branch, so there is no other baseline (SQ-923).
       baseCommit: commitScope.headCommit(readMeta(slug)?.path || ''),
+      ...(targetOverride ? { integrationTarget: targetOverride } : {}),
       readonly,
       ...(nonRepoOutput ? { nonRepoOutput: true } : {}),
       artifactMode,
@@ -5453,7 +5458,10 @@ function checkpointProjection(ticket?: any, now?: any) {
     at: checkpoint.at,
     expiresAt: checkpoint.expiresAt,
     ttlMinutes: checkpoint.ttlMinutes,
+    kind: checkpoint.kind || 'review',
     commit: checkpoint.commit || null,
+    gitRef: checkpoint.gitRef || null,
+    failure: checkpoint.failure || null,
     worktree: checkpoint.worktree || null,
     verify: verify.text,
     verifyLength: verify.length,
@@ -5521,11 +5529,18 @@ function checkpointTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       at: now,
       expiresAt: new Date(nowMs + ttlMs).toISOString(),
       ttlMinutes: ttlMs / 60000,
+      kind: opts.kind === 'submission_rejected' ? 'submission_rejected' : 'review',
       commit,
+      gitRef: opts.gitRef == null ? null : String(opts.gitRef).trim().slice(0, SUBMISSION_GITREF_MAX),
+      failure: opts.failure && typeof opts.failure === 'object' ? {
+        reason: String(opts.failure.reason || '').trim(),
+        message: String(opts.failure.message || '').trim(),
+      } : null,
       worktree,
       verify,
     };
-    const prepared = prepareComment({ by, body: checkpointCommentBody(checkpoint), source: opts.source || 'cli' });
+    const body = opts.commentBody == null ? checkpointCommentBody(checkpoint) : String(opts.commentBody);
+    const prepared = prepareComment({ by, body, source: opts.source || 'cli' });
     if (!prepared.ok) throw new Error(`checkpoint comment ${prepared.reason}`);
     const comment = createComment(prepared, now);
     if (!Array.isArray(t.comments)) t.comments = [];
@@ -5555,12 +5570,17 @@ function submissionRangeMetadata(range?: any, commit?: any) {
   const commits = Array.isArray(range.commits) ? range.commits.map((value?: any) => String(value).trim().toLowerCase()) : [];
   const changedPaths = Array.isArray(range.changedPaths) ? range.changedPaths.map((value?: any) => String(value).trim().replace(/\\/g, '/')).filter(Boolean) : [];
   const integrationMode = range.integrationMode == null ? null : String(range.integrationMode).trim().toLowerCase();
+  const integrationBranch = range.integrationBranch == null ? null : normalizeIntegrationBranch(range.integrationBranch);
   if (!SUBMISSION_COMMIT_RE.test(base) || !upstream || !SUBMISSION_COMMIT_RE.test(upstreamCommit) || !commits.length
     || commits.some((value?: any) => !SUBMISSION_COMMIT_RE.test(value)) || commits[commits.length - 1] !== commit
     || (integrationMode != null && !['local', 'remote'].includes(integrationMode))) {
     throw new Error('invalid submission range metadata');
   }
-  return Object.assign({ base, upstream, upstreamCommit, commits, changedPaths }, integrationMode ? { integrationMode } : {});
+  return Object.assign(
+    { base, upstream, upstreamCommit, commits, changedPaths },
+    integrationMode ? { integrationMode } : {},
+    integrationBranch ? { integrationBranch } : {},
+  );
 }
 
 // A submission that has not been consumed by a done transition yet — the
