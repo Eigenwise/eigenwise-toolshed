@@ -13,6 +13,16 @@ const telemetrySkill = fs.readFileSync(path.join(root, 'skills', 'enable-project
 const observability = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'observability.md'), 'utf8');
 const ruleTemplates = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'rule-templates.md'), 'utf8');
 const selfImprovement = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'self-improvement.md'), 'utf8');
+const doctorSkill = fs.readFileSync(path.join(root, 'skills', 'workbench-doctor', 'SKILL.md'), 'utf8');
+
+test('init-workspace enables agent teams and doctor only reports masked projects', () => {
+  assert.match(skill, /enableAgentTeams/);
+  assert.match(skill, /CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"/);
+  assert.match(skill, /Never\n  write it to shared `\.claude\/settings\.json`/);
+  assert.match(doctorSkill, /agentTeamsWarning/);
+  assert.match(doctorSkill, /prints nothing when the project has no `env` block or already enables teams/);
+  assert.match(doctorSkill, /Do not fix it from the doctor/);
+});
 
 test('init-workspace installs selected plugins before dependent workspace artifacts', () => {
   assert.match(skill, /only prerequisite is \*\*Workbench installed at user scope\*\*/);

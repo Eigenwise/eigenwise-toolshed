@@ -8,6 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { buildObservation, projectMetadata } = require('../hooks/observability.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { agentTeamsWarning, enableAgentTeams } = require('../lib/project-settings.js');
 const {
   applyProjectTelemetry,
   disableProjectTelemetry,
@@ -85,6 +86,41 @@ test('merges telemetry settings without dropping existing environment keys', (t)
   assert.equal(settings.env.KEEP_ME, 'yes');
   assert.equal(settings.env.OTEL_METRICS_EXPORTER, 'otlp');
   assert.equal(settings.env.OTEL_RESOURCE_ATTRIBUTES, 'deployment.environment=dev,project.id=telemetry-project,service.name=claude-code');
+});
+
+test('enables agent teams without replacing project environment settings', (t) => {
+  const { projectDir } = temporaryProject(t);
+  const settingsPath = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify({
+    permissions: { allow: ['Read'] },
+    env: { KEEP_ME: 'yes' },
+  }));
+
+  const first = enableAgentTeams(projectDir);
+  const second = enableAgentTeams(projectDir);
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+  assert.deepEqual(settings.permissions, { allow: ['Read'] });
+  assert.deepEqual(settings.env, {
+    KEEP_ME: 'yes',
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+  });
+});
+
+test('warns only when a project environment masks agent teams', (t) => {
+  const { projectDir } = temporaryProject(t);
+  const settingsPath = path.join(projectDir, '.claude', 'settings.local.json');
+
+  assert.equal(agentTeamsWarning(projectDir), null);
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify({ env: { KEEP_ME: 'yes' } }));
+  assert.match(agentTeamsWarning(projectDir), /CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS/);
+
+  enableAgentTeams(projectDir);
+  assert.equal(agentTeamsWarning(projectDir), null);
 });
 
 test('disable restores only telemetry values owned by Workbench', (t) => {
