@@ -3,7 +3,7 @@
   "rules": [
     {
       "path": "rules/manifest-versioning.md",
-      "hash": "462abf70222e86d27ac0f803d570326932544a1aa776fcf0f682dc4581e85ddf",
+      "hash": "0ca7e52afab3a83ae514b8daac92a24e1c80bf61870e012ec840f206c75dd486",
       "description": "Release-owned manifest versions",
       "globs": [
         ".claude-plugin/marketplace.json",
