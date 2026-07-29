@@ -936,7 +936,7 @@ test('env shows the local default until the user saves a wiring mode', () => {
 test('SessionStart nudges hand off gateway actions to the runnable skill', () => {
   const source = fs.readFileSync(CLI, 'utf8');
   assert.match(source, /Run \/model-gateway:model-gateway, then use its env --write-project command/);
-  assert.match(source, /run \/model-gateway:model-gateway to set it up, or use that skill.*env --remove command/);
+  assert.match(source, /claude-code-proxy is missing[\s\S]*No Anthropic fallback was used\./);
   assert.doesNotMatch(source, /(?:Run|run):? env --/);
 });
 

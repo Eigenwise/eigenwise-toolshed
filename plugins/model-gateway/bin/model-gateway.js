@@ -47,6 +47,7 @@ const LOGS = path.join(STATE, 'logs');
 const BIN_DIR = path.join(STATE, 'bin');
 const WIRING_CONFIG_PATH = path.join(STATE, 'wiring.json');
 const SHIM_FAILURE_PATH = path.join(STATE, 'shim-supervisor-failure.txt');
+const CODEX_UPSTREAM_BLOCK_PATH = path.join(STATE, 'codex-upstream-blocked.json');
 const PLUGIN_VERSION = readPluginVersion();
 const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-code-proxy');
 const PUBLIC_SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
@@ -957,6 +958,122 @@ function isAuthed() {
   return r.status === 0 && /account/i.test((r.stdout || '') + (r.stderr || ''));
 }
 
+const CODEX_READINESS_MESSAGES = {
+  'binary-missing': () => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${__filename}" setup\`, then retry. No Anthropic fallback was used.`,
+  'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${__filename}" login\`, finish browser OAuth, then run \`node "${__filename}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
+  'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. Run \`node "${__filename}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${__filename}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${__filename}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${__filename}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
+};
+
+function readUpstreamBlocked() {
+  const blocked = readJsonFile(CODEX_UPSTREAM_BLOCK_PATH);
+  return blocked?.state === 'upstream-blocked' ? blocked : null;
+}
+
+function setUpstreamBlocked({ statusCode, evidence }) {
+  mkdirs();
+  const blocked = {
+    state: 'upstream-blocked',
+    observedAt: new Date().toISOString(),
+    statusCode,
+    evidence,
+  };
+  fs.writeFileSync(CODEX_UPSTREAM_BLOCK_PATH, JSON.stringify(blocked) + '\n');
+  return blocked;
+}
+
+function clearUpstreamBlocked() {
+  try { fs.rmSync(CODEX_UPSTREAM_BLOCK_PATH); } catch { /* absent */ }
+}
+
+function noteCodexRequestSuccess() {
+  clearUpstreamBlocked();
+}
+
+async function proxyModelsAnswering() {
+  try {
+    const response = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2000 });
+    return response.status === 200;
+  } catch { return false; }
+}
+
+function readinessState(checks, upstreamBlocked) {
+  if (!checks.proxyBinary) return 'binary-missing';
+  if (!checks.proxyModels) return 'proxy-down';
+  if (!checks.codexAuth) return 'auth-missing';
+  if (!checks.shimRunning) return 'shim-down';
+  if (!checks.servingVersionMatches) return 'serving-version-mismatch';
+  if (upstreamBlocked) return 'upstream-blocked';
+  return 'ready';
+}
+
+async function getCodexReadiness({
+  binaryPresent = fs.existsSync(PROXY_BIN),
+  probeProxyModels = proxyModelsAnswering,
+  authStatus = isAuthed,
+  shimHealth = undefined,
+  fetchHealth = fetchShimHealth,
+} = {}) {
+  const proxyBinary = Boolean(binaryPresent);
+  const [proxyModels, health] = await Promise.all([
+    proxyBinary ? probeProxyModels() : false,
+    shimHealth === undefined ? fetchHealth() : shimHealth,
+  ]);
+  const codexAuth = proxyBinary ? Boolean(authStatus()) : false;
+  const shimRunning = Boolean(health?.ok);
+  const servingVersion = servingShimVersion(health);
+  const checks = {
+    proxyBinary,
+    proxyModels: Boolean(proxyModels),
+    codexAuth,
+    shimRunning,
+    servingVersion,
+    installedVersion: PLUGIN_VERSION,
+    servingVersionMatches: shimRunning && servingVersion === PLUGIN_VERSION,
+  };
+  const upstreamBlocked = readUpstreamBlocked();
+  const state = readinessState(checks, upstreamBlocked);
+  return {
+    ready: state === 'ready',
+    state,
+    message: state === 'ready'
+      ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
+      : CODEX_READINESS_MESSAGES[state](),
+    checks,
+    upstreamBlocked,
+    health,
+  };
+}
+
+function catalogReadiness(readiness) {
+  return {
+    ready: readiness.ready,
+    state: readiness.state,
+    message: readiness.message,
+    checks: readiness.checks,
+    upstreamBlocked: readiness.upstreamBlocked,
+  };
+}
+
+function hasOpenAiRejectionEvidence(statusCode, headers, body) {
+  if (![401, 403, 429].includes(statusCode)) return false;
+  const headerNames = Object.keys(headers || {});
+  if (headerNames.some((name) => name.toLowerCase().startsWith('x-openai-') || name.toLowerCase() === 'openai-processing-ms')) return true;
+  return /\bopenai\b/i.test(Buffer.from(body || '').toString());
+}
+
+function noteCodexUpstreamRejection(statusCode, headers, body) {
+  if (!hasOpenAiRejectionEvidence(statusCode, headers, body)) return false;
+  const headerNames = Object.keys(headers || {}).map((name) => name.toLowerCase())
+    .filter((name) => name.startsWith('x-openai-') || name === 'openai-processing-ms' || name === 'content-type');
+  const evidence = headerNames.length ? `headers:${headerNames.join(',')}` : 'body:openai';
+  setUpstreamBlocked({ statusCode, evidence });
+  console.error(`model-gateway: Codex request had an unambiguous OpenAI rejection (status ${statusCode}; ${evidence}); readiness is upstream-blocked.`);
+  return true;
+}
+
 // ------------------------------------------------------------------- setup
 
 async function setup() {
@@ -1004,11 +1121,29 @@ async function setup() {
   const proxyChanged = !currentVersion || !stagedVersion || currentVersion.join('.') !== stagedVersion.join('.');
 
   if (proxyChanged) {
+    const backupProxy = `${PROXY_BIN}.previous`;
+    const hadExistingProxy = fs.existsSync(PROXY_BIN);
+    if (hadExistingProxy) fs.copyFileSync(PROXY_BIN, backupProxy);
     log('model-gateway: proxy changed; restarting it after the shim drain. Live sessions will reconnect.');
     stopProcess('proxy');
     await new Promise((resolve) => setTimeout(resolve, 700));
-    fs.copyFileSync(stagedProxy, PROXY_BIN);
-    if (!WIN) fs.chmodSync(PROXY_BIN, 0o755);
+    try {
+      fs.copyFileSync(stagedProxy, PROXY_BIN);
+      if (!WIN) fs.chmodSync(PROXY_BIN, 0o755);
+      try { fs.rmSync(backupProxy); } catch { /* absent */ }
+    } catch (error) {
+      if (hadExistingProxy) {
+        try {
+          fs.copyFileSync(backupProxy, PROXY_BIN);
+          if (!WIN) fs.chmodSync(PROXY_BIN, 0o755);
+          spawnDetached('proxy', PROXY_BIN, ['serve', '--no-monitor'], { PORT: String(PROXY_PORT) });
+        } catch (restoreError) {
+          throw new Error(`proxy upgrade failed (${error.code || error.message}) and restoring the existing proxy failed (${restoreError.code || restoreError.message})`);
+        }
+        throw new Error(`The existing proxy was restored. Reboot Windows, run \`node "${__filename}" setup\`, then retry.`);
+      }
+      throw error;
+    }
   } else {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
@@ -1026,6 +1161,7 @@ async function setup() {
   // one-shot: start everything, and finish the wiring when auth already works
   const r = await startAll();
   if (!r.ok) die(r.reason);
+  clearUpstreamBlocked();
   if (!isAuthed()) {
     log(`next: node "${__filename}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
     return;
@@ -1166,29 +1302,24 @@ async function resolveIntendedMode() {
   return { mode: compat.hostsDetected && compat.port80Bound ? 'compat' : 'default', compat };
 }
 
-async function statusReport() {
-  const proxyUp = await portListening(PROXY_PORT);
-  const shimUp = await shimHealthy();
-  log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${proxyUp ? 'running' : 'DOWN'}`);
-  let health = null;
-  if (shimUp) {
-    health = await fetchShimHealth();
-    try {
-      const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
-      const n = (JSON.parse(r.body.toString()).data || []).length;
-      log(`models advertised to Claude Code: ${n}`);
-    } catch { log('models advertised to Claude Code: (unavailable)'); }
+async function statusReport({ readiness = null } = {}) {
+  const codex = readiness || await getCodexReadiness();
+  const { checks, health } = codex;
+  log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${checks.proxyModels ? 'answering /v1/models' : 'DOWN'}`);
+  if (checks.shimRunning) {
+    log(`models advertised to Claude Code: ${health?.models ?? 'unavailable'}`);
   }
-  const servingVersion = servingShimVersion(health);
-  log(`shim (model router) on :${SHIM_PORT}: ${shimUp ? `running${servingVersion ? ` (serving ${servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
-  const compat = health && health.compat;
-  if (compat && compat.hostsDetected) {
+  log(`shim (model router) on :${SHIM_PORT}: ${checks.shimRunning ? `running${checks.servingVersion ? ` (serving ${checks.servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
+  const compat = health?.compat;
+  if (compat?.hostsDetected) {
     log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
     log(`  127.0.0.1:${COMPAT_PORT} bound: ${compat.port80Bound ? 'yes' : `no${compat.reason ? ` (${compat.reason})` : ''}`}`);
   } else if (compat) {
     log('RC-compatibility hosts entry: not present (default gateway mode)');
   }
-  return { ok: proxyUp && shimUp, health };
+  log(`Codex readiness: ${codex.state}`);
+  if (!codex.ready) log(codex.message);
+  return { ok: codex.ready, health, readiness: codex };
 }
 
 // -------------------------------------------------------------- env wiring
@@ -1330,12 +1461,12 @@ async function syncCompatMode() {
 // ------------------------------------------------------------------ doctor
 
 async function doctor() {
-  log(`binary: ${fs.existsSync(PROXY_BIN) ? PROXY_BIN : 'MISSING (run setup)'}`);
-  if (fs.existsSync(PROXY_BIN)) {
+  const readiness = await getCodexReadiness();
+  log(`binary: ${readiness.checks.proxyBinary ? PROXY_BIN : 'MISSING (run setup)'}`);
+  if (readiness.checks.proxyBinary) {
     const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
     log(`version: ${(v.stdout || v.stderr || '').trim()}`);
-    const a = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
-    log(`codex auth: ${((a.stdout || '') + (a.stderr || '')).trim().split('\n')[0] || '(no output)'}`);
+    log(`codex auth: ${readiness.checks.codexAuth ? 'authenticated' : 'MISSING'}`);
   }
   try {
     grokBackend.readGrokAuth();
@@ -1343,11 +1474,10 @@ async function doctor() {
   } catch (error) {
     log(`grok auth: ${error.message}`);
   }
-  const status = await statusReport();
-  const servingVersion = servingShimVersion(status.health);
+  const status = await statusReport({ readiness });
+  const servingVersion = readiness.checks.servingVersion;
   log(`serving shim version: ${servingVersion || 'unavailable'}`);
-  const versionMismatch = shimNeedsRestart(PLUGIN_VERSION, status.health);
-  if (versionMismatch) {
+  if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) {
     log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${__filename}" ensure to replace the stale supervisor.`);
   }
   const catalog = readCatalog();
@@ -1381,7 +1511,7 @@ async function doctor() {
   } else if (scope === 'user') {
     log('install scope: user (correct)');
   }
-  if (!status.ok || versionMismatch) process.exitCode = 1;
+  if (!status.ok) process.exitCode = 1;
 }
 
 // ---------------------------------------------------------------- the shim
@@ -1778,7 +1908,7 @@ function labelFor(base) {
   return `GPT-${ver}${suffixLabel}`;
 }
 
-function buildCatalog(ids) {
+function buildCatalog(ids, readiness = null) {
   const used = new Set();
   const models = ids
     .filter((id) => CATALOG_FAMILY.has(codexBaseFromId(id)))
@@ -1791,6 +1921,7 @@ function buildCatalog(ids) {
     source: 'model-gateway',
     updatedAt: new Date().toISOString(),
     writtenBy: PLUGIN_VERSION,
+    codexReadiness: readiness ? catalogReadiness(readiness) : null,
     models,
   };
 }
@@ -1856,7 +1987,8 @@ async function fetchShimModelIds() {
 async function writeCatalog() {
   const ids = await fetchShimModelIds();
   if (!ids.length) return null;
-  const catalog = buildCatalog(ids);
+  const readiness = await getCodexReadiness();
+  const catalog = buildCatalog(ids, readiness);
   mkdirs();
   return writeCatalogFile(CATALOG_PATH, catalog);
 }
@@ -2535,6 +2667,7 @@ function runWorker() {
       // attempt, so no later attempt may write one. Report the real upstream
       // status and message in-band instead of crashing on ERR_HTTP_HEADERS_SENT.
       const successful2xx = upRes.statusCode >= 200 && upRes.statusCode < 300;
+      if (normalizeContextErrors && successful2xx) noteCodexRequestSuccess();
       const streamedContentType = String(upRes.headers['content-type'] || '').toLowerCase().includes('text/event-stream');
       if (compactGuard?.headWritten && !(successful2xx && streamedContentType)) {
         usageCapture?.setResponse(upRes.statusCode, upRes.headers);
@@ -2546,6 +2679,7 @@ function runWorker() {
           routeTelemetry?.finish(upRes.statusCode);
           // The status line is gone but the sentry's learned ceiling is not.
           if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId);
+          if (normalizeContextErrors) noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, Buffer.concat(chunks));
           clientRes.write(sseErrorFrame('api_error', upstreamErrorMessage(Buffer.concat(chunks), upRes.statusCode)));
           clientRes.end();
         };
@@ -2569,6 +2703,7 @@ function runWorker() {
         upRes.on('end', () => {
           const upstreamBody = Buffer.concat(chunks);
           if (!isWebSocketUpgradeRejection(upRes.statusCode, upstreamBody)) {
+            noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
             usageCapture?.setResponse(upRes.statusCode, upRes.headers);
             routeTelemetry?.finish(upRes.statusCode);
             const rewritten = rewriteCodexJson(upstreamBody, advertisedModel, false);
@@ -2646,6 +2781,7 @@ function runWorker() {
           if (settled) return;
           settled = true;
           const upstreamBody = rewriteCodexJson(Buffer.concat(chunks), advertisedModel, false);
+          noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
           const text = upstreamBody.toString();
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
             const normalized = CODEX_SENTRY_ENABLED
@@ -2945,8 +3081,7 @@ function runWorker() {
     if (pathOnly !== '/healthz') trackInFlight(res);
 
     if (pathOnly === '/healthz') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({
+      const health = {
         ok: true,
         version: PLUGIN_VERSION,
         models: modelCache.data.length,
@@ -2965,7 +3100,15 @@ function runWorker() {
           maxResponseBytes: usageEmitter.maxResponseBytes,
           settingsLevelBaseUrl: !!settingsWiring,
         },
-      }));
+      };
+      getCodexReadiness({ shimHealth: health }).then((readiness) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ...health, codexReadiness: catalogReadiness(readiness) }));
+      }).catch((error) => {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: error.message }));
+      });
+      return;
     }
 
     if (req.method === 'GET' && pathOnly === '/v1/models') {
@@ -3390,22 +3533,28 @@ if (require.main === module) {
       // silent when healthy and emit exactly one actionable line otherwise
       const quiet = flag('--quiet');
       const wired = isWired();
-      if (!fs.existsSync(PROXY_BIN)) {
+      const initialReadiness = await getCodexReadiness();
+      if (!initialReadiness.checks.proxyBinary) {
         if (wired) {
-          console.error('model-gateway: ANTHROPIC_BASE_URL is wired but the proxy binary is missing; run /model-gateway:model-gateway to set it up, or use that skill\'s env --remove command to unwire');
+          console.error(initialReadiness.message);
           process.exit(1);
         }
         log('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
         process.exit(0);
       }
-      const r = await restartShimIfOutdated({ quiet }) || await startAll({ quiet });
+      const r = await startAll({ quiet });
       if (!r.ok) { console.error('model-gateway: ' + r.reason); process.exit(1); }
+      const readiness = await getCodexReadiness();
+      if (wired && !readiness.ready) {
+        console.error(readiness.message);
+        process.exit(1);
+      }
       // Proxy is confirmed running; one fail-soft nudge if it predates the 413
       // overflow fix. No auto-download inside the keepalive hook.
       warnIfProxyOutdated();
       if (!wired) {
         if (!hasWiringMode()) log(wiringModeDefaultNotice());
-        log(isAuthed()
+        log(readiness.checks.codexAuth
           ? 'model-gateway is running but Claude Code is not wired to it. Run /model-gateway:model-gateway, then use its env --write-project command to write this project\'s .claude/settings.local.json, then restart.'
           : 'model-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the model-gateway skill.');
       } else {
@@ -3418,7 +3567,7 @@ if (require.main === module) {
         await syncCompatMode();
         await syncEffectivePins();
       }
-      if (!quiet) await statusReport();
+      if (!quiet) await statusReport({ readiness });
       break;
     }
     case 'status': process.exitCode = (await statusReport()).ok ? 0 : 1; break;
@@ -3479,6 +3628,14 @@ module.exports = {
   stopShimWithDrain,
   PLUGIN_VERSION,
   MIN_PROXY_VERSION,
+  getCodexReadiness,
+  catalogReadiness,
+  setUpstreamBlocked,
+  clearUpstreamBlocked,
+  noteCodexRequestSuccess,
+  hasOpenAiRejectionEvidence,
+  noteCodexUpstreamRejection,
+  CODEX_UPSTREAM_BLOCK_PATH,
   CATALOG_SCHEMA_VERSION,
   codexBaseFromId,
   isGatewayModelId,
