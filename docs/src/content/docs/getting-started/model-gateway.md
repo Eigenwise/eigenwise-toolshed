@@ -18,9 +18,30 @@ The Codex path depends on `claude-code-proxy` on purpose, because OpenAI gates n
 
 ### Codex readiness and recovery
 
-The gateway exposes one Codex readiness signal that `ensure`, `doctor`, and Sidequest read. If the proxy is missing, the exact recovery is `node <plugin>/bin/model-gateway.js setup`, then retry. If ChatGPT sign-in is required, run `node <plugin>/bin/model-gateway.js login`, finish browser OAuth, then run `node <plugin>/bin/model-gateway.js setup` and retry. Credentials live in `~/.config/claude-code-proxy/`, not `~/.claude`.
+The gateway exposes one Codex readiness contract that `ensure`, `doctor`, and Sidequest read. `GET /healthz` includes a `codexReadiness` object, and the model catalog includes the same readiness projection under its top-level `codexReadiness` field. Both expose `ready`, `state`, `message`, `checks`, and `upstreamBlocked`.
 
-If a Windows upgrade hits a locked executable, the old proxy is retained. Reboot, then run `node <plugin>/bin/model-gateway.js setup`. If Codex is blocked by an OpenAI rejection, run `node <plugin>/bin/model-gateway.js setup`; if it persists, wait for a `claude-code-proxy` update or explicitly re-route the ticket.
+A `ready` result proves only local setup:
+
+- `proxyBinary`: `claude-code-proxy` exists.
+- `proxyModels`: the proxy answers `GET /v1/models`.
+- `codexAuth`: `claude-code-proxy codex auth status` reports an account.
+- `shimRunning`: the model-gateway shim health check is OK.
+- `servingVersionMatches`: the running shim version matches the installed plugin version.
+
+Those checks do not prove that a streaming Codex request will succeed. A request can still fail upstream after local readiness is green. When a request gets an unambiguous OpenAI rejection, readiness becomes `upstream-blocked` and stays there through later health checks. A successful proxied Codex request clears that state.
+
+The `state` value points at the repair path:
+
+| State | Recovery |
+| --- | --- |
+| `binary-missing` | Run `node <plugin>/bin/model-gateway.js setup`, then retry. |
+| `auth-missing` | Run `node <plugin>/bin/model-gateway.js login`, finish browser OAuth, then run `setup` and retry. Credentials live in `~/.config/claude-code-proxy/`, not `~/.claude`. |
+| `proxy-down` | Run `node <plugin>/bin/model-gateway.js ensure`, then retry. |
+| `shim-down` | Run `node <plugin>/bin/model-gateway.js ensure`, then retry. |
+| `serving-version-mismatch` | Run `node <plugin>/bin/model-gateway.js ensure`, then retry. |
+| `upstream-blocked` | Run `node <plugin>/bin/model-gateway.js setup`. If it persists, wait for a `claude-code-proxy` update or explicitly re-route the ticket. Codex tickets remain blocked. |
+
+If a Windows upgrade hits a locked executable, the old proxy is retained. Reboot, then run `node <plugin>/bin/model-gateway.js setup`.
 
 ### Add Grok subscription models
 
