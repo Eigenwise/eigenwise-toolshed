@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.285.0 (2026-07-29)
+
+### sidequest 3.40.2 → 3.40.3
+
+#### Fixes
+
+- Publishing from a scratch worktree inside the OS temp dir fails Sidequest tests (SQ-891) [`3bc6e7f`](https://github.com/Eigenwise/eigenwise-toolshed/commit/3bc6e7f)
+  Make the outside-temp cleanup fixture path-independent so release suites pass from clean scratch worktrees under the OS temp directory.
+- Helper routing must prefer board categories before generic fallback (SQ-1045) [`2adc155`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2adc155)
+  Require category-first board routing, allow safeguarded generic helpers only when no category applies, and route audit/review prompts through review-audit.
+- Apply inline-safe gate before ticketing one-line housekeeping (SQ-1046) [`2389d92`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2389d92)
+  Run the inline-safe check before solo-fit and ticket filing; exact one-line .gitignore housekeeping now stays inline.
+
 ## v3.284.0 (2026-07-29)
 
 ### sidequest 3.40.1 → 3.40.2
