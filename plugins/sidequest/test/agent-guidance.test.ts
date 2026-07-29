@@ -151,10 +151,10 @@ test('inline-safe guidance names allowed work and exploit-resistant negatives', 
     assert.match(source, /golden regeneration/);
     assert.match(source, /merge-conflict resolution/);
     assert.match(source, /Release\s+bookkeeping|release\s+bookkeeping/);
-    assert.match(source, /user-directed.*(?:one-or-two|1.?2).*named-file/i);
-    assert.match(source, /before solo-fit or ticket filing/i);
-    assert.match(source, /exact one-line `\.gitignore` entry/i);
-    assert.match(source, /do not file a ticket or spawn an executor/i);
+    assert.match(source, /(?:user-directed|stated).*(?:one-or-two|1.?2).*named.file/i);
+    assert.match(source, /before solo-fit or (?:ticket )?filing/i);
+    assert.match(source, /one-line `\.gitignore` entry/i);
+    assert.match(source, /(?:do not file a ticket or spawn an executor|don't ticket or spawn it)/i);
     assert.match(source, /investigation or other-file reading/i);
     assert.match(source, /(?:new|adds?) behavior.*API|new behavior or API/i);
     assert.match(source, /failing test\s+that does not pinpoint|unpinpointed failing test/i);

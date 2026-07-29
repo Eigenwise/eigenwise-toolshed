@@ -7,7 +7,7 @@ in the main skill — this file is the detail on the bigger shapes.
 
 ## Decomposition in depth
 
-### Inline-safe gate, then solo-fit
+### Solo-fit gate before decomposition
 
 Apply the inline-safe gate before solo-fit or ticket filing. A user-directed mechanical edit to one or two named files with stated content, including an exact one-line `.gitignore` entry, is inline work: edit it directly, do not file a ticket or spawn an executor.
 
