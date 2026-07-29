@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.284.0 (2026-07-29)
+
+### sidequest 3.40.1 → 3.40.2
+
+#### Fixes
+
+- Mixed scope requests stay coherent through approval (SQ-1020) [`7e64ec2`](https://github.com/Eigenwise/eigenwise-toolshed/commit/7e64ec2d1a4808b19a9c216efae4710aa11bad7c)
+  A request mixing already-effective and pending paths reports exactly which paths need approval, keeps the full intended commit scope after approval, and can no longer produce a partial commit of only the pre-approved subset.
+
 ## v3.283.0 (2026-07-29)
 
 ### sidequest 3.40.0 → 3.40.1
