@@ -114,6 +114,7 @@ test('a claim far past any wall-clock TTL still commits, submits, and checkpoint
   assert.strictEqual(checkpoint.ok, true, 'a checkpoint is proof of life, never something a timer refuses');
   const scope = store.requestScope(slug, ticket.ref, by, ['lib/extra.js']);
   assert.strictEqual(scope.ok, true);
+  store.updateTicket(slug, ticket.ref, { files: ['lib/fixture.js', 'lib/extra.js'] });
   backdateClaim(ticket.ref, 10 * 24 * HOUR);
 
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = 2;\n');
