@@ -14,6 +14,14 @@ The setup skill installs or updates the proxy, checks authentication, and starts
 
 The gateway rows are named after the model they run, with the `claude-` prefix Claude Code's discovery requires: `claude-gpt-5.6-sol`, `claude-gpt-5.6-terra`, `claude-gpt-5.6-luna`, and their `-fast` variants. The older `claude-codex-gpt-*` ids still resolve, so a project that remembers one of them keeps working; the picker only lists the new names.
 
+The Codex path depends on `claude-code-proxy` on purpose, because OpenAI gates non-Codex clients by request fingerprint. Grok does not use the proxy.
+
+### Codex readiness and recovery
+
+The gateway exposes one Codex readiness signal that `ensure`, `doctor`, and Sidequest read. If the proxy is missing, the exact recovery is `node <plugin>/bin/model-gateway.js setup`, then retry. If ChatGPT sign-in is required, run `node <plugin>/bin/model-gateway.js login`, finish browser OAuth, then run `node <plugin>/bin/model-gateway.js setup` and retry. Credentials live in `~/.config/claude-code-proxy/`, not `~/.claude`.
+
+If a Windows upgrade hits a locked executable, the old proxy is retained. Reboot, then run `node <plugin>/bin/model-gateway.js setup`. If Codex is blocked by an OpenAI rejection, run `node <plugin>/bin/model-gateway.js setup`; if it persists, wait for a `claude-code-proxy` update or explicitly re-route the ticket.
+
 ### Add Grok subscription models
 
 Install the official Grok CLI and run `grok` once to sign in with your SuperGrok subscription. Model Gateway reads that CLI login from `~/.grok/auth.json`, refreshes it when needed, and adds `claude-grok-*` rows such as `claude-grok-4.5`, `claude-grok-build`, and `claude-grok-4.1-fast` to `/model`. No xAI API key is needed. If `doctor` reports Grok auth missing or refresh fails, run `grok` and log in again. Update the Grok CLI if it reports an outdated version header.
