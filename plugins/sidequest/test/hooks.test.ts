@@ -1828,6 +1828,17 @@ test('subagent-stop: a stopped executor holding a fresh claim gets the dead-clai
   assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim \\(age 1m\\), likely dead: salvage uncommitted work from its worktree, then release \\+ respawn and TaskStop it$`));
 });
 
+test('subagent-stop: a terminal release tells the parent to stop a Monitor-backed executor', () => {
+  const sess = `sess-released-${++sqSeq}`;
+  const t = addStopTicket('released ticket with a monitor still armed');
+  const stop = claimStopTicket(t, sess, 'worker-released');
+  assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-released', { status: 'todo' }).ok, true);
+  assert.strictEqual(
+    runHook(SUBAGENT_STOP, stop),
+    `exec stopped after terminal release: ${t.ref}; TaskStop this executor so an owned Monitor cannot resume it`
+  );
+});
+
 test('subagent-stop: a completed executor reports a clean stop from its done comment', () => {
   const sess = `sess-completed-${++sqSeq}`;
   const t = addStopTicket('completed ticket with commit note', { files: ['lib/fixture.js'] });

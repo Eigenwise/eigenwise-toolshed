@@ -131,6 +131,16 @@ test('owned background work stays non-terminal through Monitor timeouts', () => 
   assert.match(executorTemplate, /Never launch a\nbackground `sleep` as a fake wait/);
 });
 
+test('terminal board closeout tears down owned monitors', () => {
+  assert.match(executorTemplate, /Terminal closeout ends background ownership/);
+  assert.match(executorTemplate, /A successful `release`, `submit`, or `done` ends your\nclaim and your ownership/);
+  assert.match(executorTemplate, /Before terminal closeout, call\n`TaskStop` for each owned task using its task id/);
+  assert.match(executorTemplate, /If a task is required for closeout, keep the claim and\nre-arm it instead/);
+  assert.match(executorTemplate, /Do not close a ticket and then wait, re-arm, or write if a Monitor wakes you later/);
+  assert.match(executorTemplate, /stop any extra nonblocking validation and submit it/);
+  assert.match(executorTemplate, /blocking external gate.*never a reason to release unpinned green work/);
+});
+
 test('inline-safe guidance names allowed work and exploit-resistant negatives', () => {
   for (const source of [skill, orchestration]) {
     assert.match(source, /INLINE-SAFE|Inline-safe/);

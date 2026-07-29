@@ -178,12 +178,34 @@ test('the isolation guard ignores the main thread, non-executors, and scratchpad
   assert.equal(runHook(GUARD_ISOLATION, scratchpad), null, 'writes outside any repo stay allowed');
 });
 
-test('a terminal dispatch no longer expects isolation once nobody holds the claim', () => {
-  const agentId = 'a5isolated';
-  const { sessionId, executor } = dispatched(agentId);
-  assert.ok(store.dispatchIsolationExpectation({ agentId, sessionId, executor }));
-  assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
-  assert.equal(store.dispatchIsolationExpectation({ agentId, sessionId, executor }), null);
+test('a terminal dispatch keeps its isolation record and refuses a resumed write', () => {
+  for (const terminal of ['release', 'submit'] as const) {
+    const agentId = `a5${terminal}`;
+    const { ticket, sessionId, executor } = dispatched(agentId);
+    const by = `${terminal}-worker`;
+    assert.equal(store.claimTicket(slug, ticket.ref, by, {
+      token: ticket.dispatchNonce,
+      executor: ticket.dispatchExecutor,
+    }).ok, true);
+    if (terminal === 'release') {
+      assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo' }).ok, true);
+    } else {
+      assert.equal(store.submitTicket(slug, ticket.ref, by, { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
+    }
+
+    const expectation = store.dispatchIsolationExpectation({ agentId, sessionId, executor });
+    assert.equal(expectation && expectation.terminal, true);
+    const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(PROJECT, 'README.md'), PROJECT));
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /terminal board state/);
+  }
+});
+
+test('an executor without a dispatch record cannot write into the shared checkout', () => {
+  const target = path.join(PROJECT, 'README.md');
+  const out = runHook(GUARD_ISOLATION, writePayload('missing-agent', 'sidequest-exec-medium', 'missing-session', target, PROJECT));
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /no active dispatch record/);
 });
 
 // The incident's own shape: an executor that pauses for a scope request is

@@ -4818,11 +4818,11 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
 
 // Answers "was this running agent promised a linked worktree?" for the write
 // guard. The harness deletes an isolated worktree when an agent stops with it
-// unchanged, so an agent resumed after a clean pause is silently handed the
-// shared checkout; nothing but this record remembers what it was promised.
-// A session+executor match is only trusted when every dispatch it matches wants
-// isolation, so a genuine shared-tree sibling of the same executor type can
-// never be refused on another ticket's contract.
+// unchanged, so a resumed executor is silently handed the shared checkout.
+// Terminal dispatches stay here for their original agent id: that executor no
+// longer has a legal write target, and the guard must keep refusing its writes.
+// Session fallback deliberately excludes terminal no-claim dispatches so an
+// old executor cannot taint a different agent in the same session.
 function dispatchIsolationExpectation(identity?: any) {
   const sessionId = String(identity?.sessionId || '').trim();
   const executor = String(identity?.executor || '').trim();
@@ -4833,31 +4833,31 @@ function dispatchIsolationExpectation(identity?: any) {
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
-      // A paused executor is stopped-but-claimed: SubagentStop stamps terminalAt
-      // the moment it hands control back, and resuming it is exactly when the
-      // worktree has already been discarded. Terminal only ends the isolation
-      // contract once nobody holds the claim any more.
-      if (!state || (state.terminalAt && !(ticket.claim && ticket.claim.by))) continue;
+      if (!state) continue;
+      const terminalWithoutClaim = Boolean(state.terminalAt && !(ticket.claim && ticket.claim.by));
       const candidate = {
         ref: ticket.ref,
         project: project.slug,
         projectPath: readMeta(project.slug)?.path || null,
         sharedTree: state.sharedTree !== false,
+        terminal: terminalWithoutClaim,
         agentId: state.agentId ? String(state.agentId) : null,
       };
       if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
-      else if (sessionId && executor && state.sessionId === String(sessionId) && state.executor === String(executor)) {
+      else if (!terminalWithoutClaim && sessionId && executor && state.sessionId === sessionId && state.executor === executor) {
         bySession.push(candidate);
       }
     }
   }
   const matched = byAgent.length ? byAgent : bySession;
-  if (!matched.length || matched.some((candidate) => candidate.sharedTree)) return null;
+  if (!matched.length) return null;
   const expectation = matched[0];
   return {
     ref: expectation.ref,
     project: expectation.project,
     projectPath: expectation.projectPath,
+    sharedTree: matched.some((candidate) => candidate.sharedTree),
+    terminal: matched.some((candidate) => candidate.terminal),
     matchedBy: byAgent.length ? 'agent' : 'session',
     expectedWorktree: agentId && expectation.projectPath
       ? path.join(expectation.projectPath, '.claude', 'worktrees', `agent-${agentId}`)

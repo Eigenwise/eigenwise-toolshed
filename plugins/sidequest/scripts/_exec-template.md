@@ -32,6 +32,13 @@ a substitute and never satisfies the wait. Keep re-arming until every required p
 state, success or failure alike, then inspect output, verify, and submit/done/release. Never launch a
 background `sleep` as a fake wait.
 
+**Terminal closeout ends background ownership:** A successful `release`, `submit`, or `done` ends your
+claim and your ownership of every Monitor or background task you started. Before terminal closeout, call
+`TaskStop` for each owned task using its task id. If a task is required for closeout, keep the claim and
+re-arm it instead. Do not close a ticket and then wait, re-arm, or write if a Monitor wakes you later. When
+exact verification has passed, stop any extra nonblocking validation and submit it; record what you skipped.
+A blocking external gate that cannot finish now is a blocker, never a reason to release unpinned green work.
+
 **Worktree safety:** Worktree isolation follows the dispatch and board decision, regardless of whether the ticket
 has declared files. Only a dispatch explicitly marked for shared-tree execution runs in the shared tree. In a shared
 tree, after claiming inspect `git diff --cached --name-only`. Raw `git commit` is mechanically denied while you hold

@@ -4119,27 +4119,31 @@ function dispatchIsolationExpectation(identity) {
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
-      if (!state || state.terminalAt && !(ticket.claim && ticket.claim.by)) continue;
+      if (!state) continue;
+      const terminalWithoutClaim = Boolean(state.terminalAt && !(ticket.claim && ticket.claim.by));
       const candidate = {
         ref: ticket.ref,
         project: project.slug,
         projectPath: readMeta(project.slug)?.path || null,
         sharedTree: state.sharedTree !== false,
+        terminal: terminalWithoutClaim,
         agentId: state.agentId ? String(state.agentId) : null
       };
       if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
-      else if (sessionId && executor && state.sessionId === String(sessionId) && state.executor === String(executor)) {
+      else if (!terminalWithoutClaim && sessionId && executor && state.sessionId === sessionId && state.executor === executor) {
         bySession.push(candidate);
       }
     }
   }
   const matched = byAgent.length ? byAgent : bySession;
-  if (!matched.length || matched.some((candidate) => candidate.sharedTree)) return null;
+  if (!matched.length) return null;
   const expectation = matched[0];
   return {
     ref: expectation.ref,
     project: expectation.project,
     projectPath: expectation.projectPath,
+    sharedTree: matched.some((candidate) => candidate.sharedTree),
+    terminal: matched.some((candidate) => candidate.terminal),
     matchedBy: byAgent.length ? "agent" : "session",
     expectedWorktree: agentId && expectation.projectPath ? path.join(expectation.projectPath, ".claude", "worktrees", `agent-${agentId}`) : null
   };

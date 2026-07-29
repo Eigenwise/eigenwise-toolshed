@@ -32,6 +32,7 @@ interface Ticket {
   comments?: TicketComment[];
   files?: string[];
   scopeRequest?: { files?: string[] } | null;
+  dispatch?: { outcome?: string; terminalAt?: string };
   submission?: { commit?: string; integratedAt?: string; unscopedPaths?: string[] };
   effort?: string;
 }
@@ -109,6 +110,9 @@ function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null
   for (const ticket of tickets) {
     const submissionVerdictText = submissionVerdict(store, ticket);
     if (submissionVerdictText) return submissionVerdictText;
+    if (ticket?.dispatch?.terminalAt && ticket.dispatch.outcome === 'released') {
+      return `exec stopped after terminal release: ${ticket.ref}; TaskStop this executor so an owned Monitor cannot resume it`;
+    }
     if (!ticket || ticket.status !== 'done') continue;
     const comment = doneComment(ticket);
     if (!comment) continue;

@@ -155,6 +155,27 @@ function refusal(found, target, repoRoot, agentId, cwd) {
     `Do not work around this. Stop writing, tell the orchestrator "${found.ref} lost its worktree, re-dispatch it", and leave the shared tree untouched. If you already have staged work here, say so: the orchestrator commits it out of the shared tree, releases the claim, then closes with the shipped commit as evidence.`
   ].join("\n");
 }
+function terminalRefusal(found, target) {
+  return [
+    `sidequest: refusing this write. ${found.ref} already reached a terminal board state, so this executor has no legal write target.`,
+    `  writing to: ${target}`,
+    "Do not work around this or re-arm any Monitor. Stop owned background tasks and end this executor. Redispatch the ticket if more work is needed."
+  ].join("\n");
+}
+function unknownRefusal(target) {
+  return [
+    "sidequest: refusing this shared-checkout write because this executor has no active dispatch record.",
+    `  writing to: ${target}`,
+    "Do not work around this. Stop any owned background tasks and end the executor. Redispatch before making more changes."
+  ].join("\n");
+}
+function projectRefusal(found, target) {
+  return [
+    `sidequest: refusing this write. ${found.ref} belongs to a different project than this target.`,
+    `  writing to: ${target}`,
+    "Do not work around this. End the executor and redispatch the ticket for the correct project."
+  ].join("\n");
+}
 function main() {
   const input = readStdin();
   if (!input || !WRITE_TOOLS.has(stringField(input, "tool_name"))) return;
@@ -162,12 +183,24 @@ function main() {
   const executor = stringField(input, "agent_type", "agentType", "subagent_type");
   if (!agentId || !executorAgent(executor)) return;
   const target = targetPath(input);
-  if (!target || insideAgentWorktree(target)) return;
-  const repo = repoRootFor(target);
-  if (!repo || repo.linked) return;
+  if (!target) return;
   const found = expectation(input, agentId, executor);
-  if (!found) return;
-  if (found.projectPath && !samePath(found.projectPath, repo.root)) return;
+  if (found?.terminal) {
+    writeDeny("PreToolUse", terminalRefusal(found, target));
+    return;
+  }
+  if (insideAgentWorktree(target)) return;
+  const repo = repoRootFor(target);
+  if (!repo) return;
+  if (!found) {
+    if (!repo.linked) writeDeny("PreToolUse", unknownRefusal(target));
+    return;
+  }
+  if (repo.linked || found.sharedTree) return;
+  if (found.projectPath && !samePath(found.projectPath, repo.root)) {
+    writeDeny("PreToolUse", projectRefusal(found, target));
+    return;
+  }
   writeDeny("PreToolUse", refusal(found, target, repo.root, agentId, stringField(input, "cwd")));
 }
 try {
