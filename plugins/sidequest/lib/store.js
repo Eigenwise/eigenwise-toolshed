@@ -1249,6 +1249,9 @@ function routeProvider(route) {
   if (backend) return backend.backend;
   return normalized.model.startsWith("codex-") || normalized.model.startsWith("model-gateway:") ? "codex" : null;
 }
+function routeReadyForAutomaticFallback(route) {
+  return routeProvider(route) !== "codex" || providerReadiness("codex")?.ready === true;
+}
 function resolveCategoryRoute(category) {
   const warnings = [];
   const primary = normalizeRoute(category && category.route);
@@ -1267,7 +1270,7 @@ function resolveCategoryRoute(category) {
       continue;
     }
     const exec = resolveExec(route.model, route.effort);
-    if (exec) {
+    if (exec && routeReadyForAutomaticFallback(route)) {
       return {
         model: exec.runsModel,
         effort: route.effort,
@@ -1289,9 +1292,9 @@ function resolveCategoryFallback(category, failedModel) {
   ];
   for (const candidate of candidates) {
     const route = normalizeRoute(candidate.route);
-    if (!route || routeProvider(route) !== provider) continue;
+    if (!route || candidate.source === "global fallback" && routeProvider(route) !== provider) continue;
     const exec = resolveExec(route.model, route.effort);
-    if (!exec || exec.runsModel === failedModel) continue;
+    if (!exec || !routeReadyForAutomaticFallback(route) || exec.runsModel === failedModel) continue;
     return { model: exec.runsModel, effort: route.effort, exec, source: candidate.source };
   }
   return null;

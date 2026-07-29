@@ -32,7 +32,12 @@ function readDir(dir?: any) { return fs.readdirSync(dir).filter((file: string) =
 function seedCatalog(models?: any) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-'));
   fs.mkdirSync(path.join(dir, 'model-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models }));
+  fs.writeFileSync(path.join(dir, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 3,
+    source: 'model-gateway',
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+    models,
+  }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
 }
 function clearCatalog() { process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR; }
@@ -758,16 +763,17 @@ test('workflow recipes use the Claude runtime alias without a prompt prefix', ()
   });
 });
 
-test('workflow recipes preserve live fallback warnings', () => {
+test('workflow recipes refuse a silent cross-provider fallback', () => {
   clearCatalog();
   const store = require('../lib/store.js');
   configure(store, 'workflow-fallback', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'medium' });
   const category = Object.assign(store.getCategory('workflow-fallback'), { project: 'recipe-project' });
-  const recipe = agentsync.workflowRecipe(category, store.resolveCategoryRoute(category));
+  const resolved = store.resolveCategoryRoute(category);
 
-  assert.deepStrictEqual(recipe.route, { model: 'opus', effort: 'medium' });
-  assert.equal(recipe.effortCarrier, 'none');
-  assert.deepStrictEqual(recipe.warnings, ['Category "workflow-fallback" route model "codex-gpt-5-6-terra" isn\'t currently available.']);
+  assert.equal(resolved.exec, null);
+  assert.equal(resolved.model, TERRA.slug);
+  assert.match(resolved.warnings.join('\n'), /crosses providers and was refused/);
+  assert.throws(() => agentsync.workflowRecipe(category, resolved), /resolved category route is required/i);
 });
 
 test('workflow recipes reject an invalid Codex marker before spawning', () => {

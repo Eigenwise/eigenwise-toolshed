@@ -11,7 +11,19 @@ const path = require('node:path');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-home-'));
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-project-'));
+const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-catalog-'));
+fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
+fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
+  schemaVersion: 3,
+  source: 'model-gateway',
+  codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+  models: [
+    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
+  ],
+}));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
+process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 process.env.CLAUDE_PROJECT_DIR = PROJECT;
 execFileSync('git', ['init', '--quiet'], { cwd: PROJECT });
 execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: PROJECT });

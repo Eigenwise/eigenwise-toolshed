@@ -17,6 +17,11 @@ fs.mkdirSync(catalogDir, { recursive: true });
 fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
   source: 'model-gateway',
+  codexReadiness: {
+    ready: true,
+    state: 'ready',
+    message: 'Codex readiness confirms the local gateway is ready.',
+  },
   models: [{
     slug: 'codex-gpt-5-6-sol',
     id: 'claude-gpt-5.6-sol[1m]',

@@ -481,7 +481,7 @@ test('an unavailable primary retains its configured effort guard', () => {
   assert.equal(derived.effort, 'high');
   const wrong = runCli(['claim', ref, '--by', 'w1', '--effort', 'medium']);
   assert.notEqual(wrong.status, 0);
-  assert.match(wrong.stdout + wrong.stderr, /sidequest-exec-dispatch-high/);
+  assert.match(wrong.stdout + wrong.stderr, /sidequest-exec-high/);
   store.updateTicket(store.ensureProject(PROJ).slug, ref, { labels: ['direct-ok'] });
   assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'high', '--direct', '--reason', 'The fixture validates direct effort handling.']).ok, true);
 });

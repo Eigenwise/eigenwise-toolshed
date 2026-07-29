@@ -14,7 +14,20 @@ const { execFileSync } = require('node:child_process');
 // other hooks in this file don't touch the store, so this redirect is harmless to
 // them. Set BEFORE requiring store so its lazy home resolution picks it up.
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-test-'));
+const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
+fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
+fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
+  schemaVersion: 3,
+  source: 'model-gateway',
+  codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+  models: [
+    { slug: 'codex-gpt-5-6-luna', id: 'claude-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna' },
+    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
+  ],
+}));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
+process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
@@ -1972,6 +1985,7 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
     source: 'model-gateway',
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [
       { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' },
       { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' },
@@ -2020,6 +2034,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
     source: 'model-gateway',
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }],
   }));
   const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
@@ -2181,6 +2196,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
     source: 'model-gateway',
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' }],
   }));
   const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;

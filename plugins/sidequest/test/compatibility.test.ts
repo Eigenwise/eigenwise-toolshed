@@ -101,6 +101,14 @@ test('CLI verdict records an awaiting oracle result', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cli-verdict-home-'));
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cli-verdict-project-'));
   const env = isolatedEnv(ROOT, home, project);
+  const discovery = env.SIDEQUEST_DISCOVERY_DIRS!;
+  fs.mkdirSync(path.join(discovery, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 3,
+    source: 'model-gateway',
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+    models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' }],
+  }));
   const seed = `
     const store = require(${JSON.stringify(path.join(ROOT, 'lib', 'store.js'))});
     const { slug } = store.ensureProject(${JSON.stringify(project)});

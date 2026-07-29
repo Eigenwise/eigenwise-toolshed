@@ -8,7 +8,18 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-band-test-'));
-process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-band-catalog-'));
+const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-band-catalog-'));
+fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
+fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
+  schemaVersion: 3,
+  source: 'model-gateway',
+  codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+  models: [
+    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
+  ],
+}));
+process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const store = require('../lib/store.js');
 
 test('legacy complexity bands are fixed category mappings', () => {
