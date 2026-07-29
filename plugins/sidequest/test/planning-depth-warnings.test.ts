@@ -121,7 +121,10 @@ test('add and update warn only for unknown mentioned ticket refs', () => {
   assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.', NO_SCOPE_WARNING]);
 
   const updated = cliJson(['update', added.ticket.ref, '--title', `follow ${known.ticket.ref} and SQ-9998`]);
-  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998, SQ-9999.', NO_SCOPE_WARNING]);
+  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998.', NO_SCOPE_WARNING]);
+
+  const filesOnly = cliJson(['update', added.ticket.ref, '--files', 'src/changed.ts']);
+  assert.deepStrictEqual(filesOnly.warnings, ['Planning-depth warning: declared file scope does not exist in the repo: src/changed.ts.']);
 });
 
 const PATCH_BLOCK = [

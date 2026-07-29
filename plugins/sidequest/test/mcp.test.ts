@@ -1663,13 +1663,16 @@ test('update returns a compact acknowledgement', async () => {
   assert.equal(store.getTicket(added.project, added.ref).categoryId, 'mcp-update-echo');
 });
 
-test('add and update attach unknown ticket-ref warnings to compact acknowledgements', async () => {
+test('add and update warn only for unknown ticket refs introduced by the operation', async () => {
   const known = await callTool('add', { title: 'known ticket', unclassified: true });
   const added = await callTool('add', { title: `use ${known.ref} and SQ-9999`, unclassified: true });
   assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.', NO_SCOPE_WARNING]);
 
   const updated = await callTool('update', { ref: added.ref, description: 'now use SQ-9998' });
-  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9999, SQ-9998.', NO_SCOPE_WARNING]);
+  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998.', NO_SCOPE_WARNING]);
+
+  const filesOnly = await callTool('update', { ref: added.ref, files: ['src/changed.ts'] });
+  assert.deepStrictEqual(filesOnly.warnings, ['Planning-depth warning: declared file scope does not exist in the repo: src/changed.ts.']);
 });
 
 test('status validation fails loudly and directs deletion to remove', async () => {

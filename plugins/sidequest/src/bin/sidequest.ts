@@ -451,7 +451,7 @@ async function cmdUpdate(opts: any, positional: any) {
   // Re-read so derived model/effort (stamped from complexity at read time) show.
   const updated = store.getTicket(slug, saved.ref) || saved;
   const warnings: any = [
-    ...store.ticketReferenceWarnings(slug, updated.title, updated.description),
+    ...store.ticketReferenceWarnings(slug, patch.title, patch.description),
     ...store.ticketPlanningWarnings(updated, meta.path),
   ];
   if (patch.files !== undefined) {

@@ -358,7 +358,7 @@ async function cmdUpdate(opts, positional) {
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
   const updated = store.getTicket(slug, saved.ref) || saved;
   const warnings = [
-    ...store.ticketReferenceWarnings(slug, updated.title, updated.description),
+    ...store.ticketReferenceWarnings(slug, patch.title, patch.description),
     ...store.ticketPlanningWarnings(updated, meta.path)
   ];
   if (patch.files !== void 0) {

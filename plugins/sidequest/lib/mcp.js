@@ -847,7 +847,7 @@ const TOOLS = [
       const updated = store.updateTicket(slug, args.ref, patch);
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
-      const warnings = store.ticketReferenceWarnings(slug, t.title, t.description);
+      const warnings = store.ticketReferenceWarnings(slug, patch.title, patch.description);
       warnings.push(...store.ticketPlanningWarnings(t, meta.path));
       if (patch.files !== void 0) {
         const scopeWarning = store.pendingScopeApprovalWarning(t);
