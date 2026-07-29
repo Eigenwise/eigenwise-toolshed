@@ -265,7 +265,7 @@ test('SQ-971: an unavailable recorded integration target still quarantines verif
   assert.equal(preserved.claim.by, by);
   assert.equal(preserved.checkpoint.kind, 'submission_rejected');
   assert.equal(preserved.checkpoint.failure.reason, 'integration_target_unavailable');
-  assert.match(preserved.checkpoint.failure.message, /does not exist locally/);
+  assert.match(preserved.checkpoint.failure.message, /refs\/heads\/missing-feature-target/);
 });
 
 test('SQ-971: checkpoint failure reports the already-written quarantine ref', async () => {
@@ -1004,7 +1004,7 @@ test('CLI: a configured feature integration branch accepts its base and main ref
   assert.equal(runCli(['release', refused.ref, '--by', 'main-target-worker']).status, 0);
 
   store.setBoardConfig(slug, { integrationBranch: 'missing-integration-branch' });
-  assert.throws(() => store.integrationTarget(slug), /Configured integration branch "missing-integration-branch" does not exist on origin/);
+  assert.throws(() => store.integrationTarget(slug), /Configured integration ref "refs\/remotes\/origin\/missing-integration-branch"/);
   store.setBoardConfig(slug, { integrationBranch: 'main' });
 });
 

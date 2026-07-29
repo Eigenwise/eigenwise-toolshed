@@ -1517,9 +1517,17 @@ function integrationTarget(slug, override) {
   const upstream = mode === "local" ? branch : `origin/${branch}`;
   const ref = mode === "local" ? `refs/heads/${branch}` : `refs/remotes/origin/${branch}`;
   if (!integrationBranchExists(meta.path, ref)) {
-    throw new Error(`Configured integration branch "${branch}" does not exist ${mode === "local" ? "locally" : "on origin"}. Create or fetch it, or set integrationBranch with board-config --integration-branch <branch>.`);
+    throw new Error(`Configured integration ref "${ref}" for branch "${branch}" does not exist. Create or fetch it, or set integrationBranch with board-config --integration-branch <branch>.`);
   }
   return { mode, upstream, branch };
+}
+function integrationTargetCommit(absPath, target) {
+  return execFileSync("git", ["rev-parse", "--verify", `${target.upstream}^{commit}`], {
+    cwd: absPath,
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: "pipe"
+  }).trim();
 }
 function normalizeBoardName(value) {
   const name = typeof value === "string" ? value.trim() : "";
@@ -3962,7 +3970,7 @@ function prepareDispatch(slug, idOrRef, opts) {
       // Where this run starts from, so a closeout can tell "wrote nothing" from
       // "committed and never submitted" — in a shared tree the executor's branch
       // IS the integration branch, so there is no other baseline (SQ-923).
-      baseCommit: commitScope.headCommit(readMeta(slug)?.path || ""),
+      baseCommit: targetOverride ? integrationTargetCommit(readMeta(slug)?.path || "", targetOverride) : commitScope.headCommit(readMeta(slug)?.path || ""),
       ...targetOverride ? { integrationTarget: targetOverride } : {},
       readonly,
       ...nonRepoOutput ? { nonRepoOutput: true } : {},

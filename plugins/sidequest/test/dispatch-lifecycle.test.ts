@@ -802,7 +802,9 @@ test('a prepared dispatch records the commit its run starts from, and where its 
 
 test('SQ-971: a dispatch records its feature integration target separately from board config', () => {
   const branch = `feature-target-${Date.now()}`;
-  execFileSync('git', ['branch', branch, 'HEAD'], { cwd: PROJECT });
+  const defaultHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  const featureHead = execFileSync('git', ['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'feature target base'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  execFileSync('git', ['update-ref', `refs/heads/${branch}`, featureHead], { cwd: PROJECT });
   const ticket = createFixture('feature integration target');
   const prepared = store.prepareDispatch(slug, ticket.ref, {
     sessionId: 'feature-target-session',
@@ -814,7 +816,19 @@ test('SQ-971: a dispatch records its feature integration target separately from 
     upstream: branch,
     branch,
   });
+  assert.equal(prepared.ticket.dispatch.baseCommit, featureHead);
+  assert.notEqual(prepared.ticket.dispatch.baseCommit, defaultHead);
   assert.notEqual(store.boardConfig(slug).integrationBranch, branch);
+});
+
+test('an explicit missing integration branch refuses with its exact ref', () => {
+  const branch = `missing-target-${Date.now()}`;
+  const ticket = createFixture('missing feature integration target');
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, {
+    integrationBranch: branch,
+    integrationMode: 'local',
+  }), new RegExp(`refs/heads/${branch}`));
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
 });
 
 export {};
