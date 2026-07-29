@@ -133,6 +133,103 @@ test('update and check modes touch only Toolshed installs', () => withRegistry(r
   assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
 }));
 
+test('legacy codex-gateway installs stop before stale updates, setup, or wiring', () => {
+  const legacy = structuredClone(registry);
+  delete legacy.plugins['model-gateway@eigenwise-toolshed'];
+  legacy.plugins['codex-gateway@eigenwise-toolshed'] = [{
+    scope: 'user',
+    version: '0.37.0',
+    installPath: 'C:/cache/codex-gateway/0.37.0',
+  }];
+
+  return withRegistry(legacy, (registryFile) => {
+    const calls = [];
+    const lines = [];
+    const result = runUpdate({
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false },
+      run: (command) => {
+        calls.push(command);
+        return { ok: true };
+      },
+      report: (line) => lines.push(line),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.migrationRequired, true);
+    assert.equal(calls.length, 0);
+    assert.doesNotMatch(lines.join('\n'), /plugin update codex-gateway/);
+    assert.match(lines.join('\n'), /normal updater will not run stale codex-gateway setup or wiring/);
+    assert.match(lines.join('\n'), /Close every Claude Code session using Codex/);
+    assert.match(lines.join('\n'), /--migrate-model-gateway --confirm-sessions-closed/);
+  });
+});
+
+test('deferred migration installs model-gateway, moves owned state, verifies it, then retires codex-gateway', () => {
+  const legacy = structuredClone(registry);
+  delete legacy.plugins['model-gateway@eigenwise-toolshed'];
+  legacy.plugins['codex-gateway@eigenwise-toolshed'] = [{
+    scope: 'user',
+    version: '0.37.0',
+    installPath: 'C:/cache/codex-gateway/0.37.0',
+  }];
+
+  return withRegistry(legacy, (registryFile) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-gateway-rename-'));
+    try {
+      const legacyState = path.join(home, '.claude', 'codex-gateway');
+      fs.mkdirSync(legacyState, { recursive: true });
+      fs.writeFileSync(path.join(legacyState, 'wiring.json'), '{"mode":"local"}\n');
+      const calls = [];
+      const result = require('../bin/update-toolshed.js').runModelGatewayMigration({
+        home,
+        registryFile,
+        options: { claude: 'claude', dryRun: false, check: false, confirmSessionsClosed: true },
+        run: (command) => {
+          calls.push(command);
+          if (command.args.join(' ') === 'plugin install model-gateway@eigenwise-toolshed --scope user') {
+            const next = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+            next.plugins['model-gateway@eigenwise-toolshed'] = [{
+              scope: 'user',
+              installPath: 'C:/cache/model-gateway/0.39.0',
+              lastUpdated: '2026-07-29T00:00:00Z',
+            }];
+            fs.writeFileSync(registryFile, JSON.stringify(next));
+          }
+          return { ok: true };
+        },
+        report: () => {},
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(fs.existsSync(path.join(home, '.claude', 'codex-gateway')), false);
+      assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'wiring.json')), true);
+      assert.deepEqual(calls.map((command) => command.args.at(-1)), [
+        'user', 'setup', 'ensure', 'doctor', '--write-project', '--write-project', '--remove', 'user',
+      ]);
+      assert.equal(calls.at(-1).args.join(' '), 'plugin uninstall codex-gateway@eigenwise-toolshed --scope user');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+test('deferred migration leaves an already-migrated install alone', () => withRegistry(registry, (registryFile) => {
+  const calls = [];
+  const result = require('../bin/update-toolshed.js').runModelGatewayMigration({
+    registryFile,
+    options: { claude: 'claude', dryRun: false, check: false, confirmSessionsClosed: true },
+    run: (command) => {
+      calls.push(command);
+      return { ok: true };
+    },
+    report: () => {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 0);
+}));
+
 test('local mode wires recorded projects before removing the legacy global block', () => withRegistry(registry, (registryFile) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-local-wiring-'));
   try {
@@ -477,6 +574,13 @@ test('parses check, dry-run, and wiring-mode options', () => {
     dryRun: false,
     claude: 'claude',
     wiringMode: 'global',
+  });
+  assert.deepEqual(parseArgs(['--migrate-model-gateway', '--confirm-sessions-closed']), {
+    check: false,
+    dryRun: false,
+    claude: 'claude',
+    migrateModelGateway: true,
+    confirmSessionsClosed: true,
   });
   assert.throws(() => parseArgs(['--wiring-mode', 'elsewhere']), /--wiring-mode requires local or global/);
 });

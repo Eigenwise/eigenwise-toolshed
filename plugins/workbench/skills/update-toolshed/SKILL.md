@@ -1,7 +1,7 @@
 ---
 name: update-toolshed
 description: >-
-  Update installed Eigenwise Toolshed plugins and codex-gateway, or check their status. Use to update
+  Update installed Eigenwise Toolshed plugins and model-gateway, or check their status. Use to update
   Toolshed, refresh the marketplace, or check versions.
 ---
 
@@ -13,12 +13,21 @@ Run the portable updater from this plugin installation:
 node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js"
 ```
 
-It reads Claude Code's installed-plugin registry, refreshes only `eigenwise-toolshed`, and updates only Toolshed plugins from that marketplace at their recorded scope and project directory. It does not inspect, refresh, or update third-party marketplaces or plugins. Before gateway setup, it prints each recorded version transition and warns that the gateway worker will restart while its listener stays available. In-flight requests drain or retry, and the authenticated proxy stays up unless its binary changed. Claude Code's registry has versions but not release notes or commit history, so the updater says that plainly instead of guessing at a changelog. It then runs `codex-gateway setup` and
-`doctor` when that plugin is installed. In the default local gateway mode it also writes every recorded
+It reads Claude Code's installed-plugin registry, refreshes only `eigenwise-toolshed`, and updates only Toolshed plugins from that marketplace at their recorded scope and project directory. It does not inspect, refresh, or update third-party marketplaces or plugins. Before gateway setup, it prints each recorded version transition and warns that the gateway worker will restart while its listener stays available. In-flight requests drain or retry, and the authenticated proxy stays up unless its binary changed. Claude Code's registry has versions but not release notes or commit history, so the updater says that plainly instead of guessing at a changelog. It then runs `model-gateway setup` and `doctor` when that plugin is installed. In the default local gateway mode it also writes every recorded
 project's `.claude/settings.local.json`, moves only gateway-owned legacy keys out of `settings.json`, and
 removes the old user block only after every project succeeds. Unrecorded projects stay unwired until
-`codex-gateway env --write-project` runs there. Gateway wiring changes apply to new Claude Code sessions,
+`model-gateway env --write-project` runs there. Gateway wiring changes apply to new Claude Code sessions,
 so restart affected sessions. It continues after individual failures and prints the failing commands.
+
+## Gateway rename migration
+
+If the updater finds the retired `codex-gateway` install, it stops before refreshing plugins, running setup, or changing wiring. Close every Claude Code session using Codex. From a terminal, run the updater's deferred migration command from the installed Workbench plugin:
+
+```sh
+node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js" --migrate-model-gateway --confirm-sessions-closed
+```
+
+It installs `model-gateway` at each legacy scope, moves only `~/.claude/codex-gateway` state, runs setup, ensure, and doctor, rewires recorded projects, then retires the legacy registry rows. The confirmation is deliberate: the command does not stop the shared gateway or change its state while another session may still use it.
 
 Before changing anything, use this for a read-only report:
 

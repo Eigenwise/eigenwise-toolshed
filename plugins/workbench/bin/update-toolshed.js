@@ -8,6 +8,8 @@ const path = require('node:path');
 const { ensureStatuslineShim, statuslineCommand } = require('./setup-observability.js');
 
 const GATEWAY_MARKETPLACE = 'eigenwise-toolshed';
+const LEGACY_GATEWAY_PLUGIN = `codex-gateway@${GATEWAY_MARKETPLACE}`;
+const MODEL_GATEWAY_PLUGIN = `model-gateway@${GATEWAY_MARKETPLACE}`;
 const UPDATE_SCOPES = new Set(['user', 'project', 'local']);
 
 function parseArgs(argv) {
@@ -17,6 +19,8 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--check') options.check = true;
     else if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--migrate-model-gateway') options.migrateModelGateway = true;
+    else if (arg === '--confirm-sessions-closed') options.confirmSessionsClosed = true;
     else if (arg === '--claude') {
       options.claude = argv[index + 1];
       index += 1;
@@ -42,8 +46,12 @@ their recorded project directory so Claude Code updates the right scope.
 
   --check       Read installed versions and run model-gateway doctor without updating
   --dry-run     Print every command without running it
+  --migrate-model-gateway
+                Migrate the retired codex-gateway install after every Claude Code session is closed
+  --confirm-sessions-closed
+                Required with --migrate-model-gateway because migration moves shared gateway state
   --claude      Claude Code command to run (default: claude)
-  --wiring-mode Switch Codex gateway wiring and migrate recorded projects`;
+  --wiring-mode Switch model gateway wiring and migrate recorded projects`;
 }
 
 function registryPath(home = os.homedir()) {
@@ -206,6 +214,33 @@ function toolshedPlugins(registry) {
   return installedPlugins(registry).filter((instance) => pluginIdParts(instance.id)?.marketplace === GATEWAY_MARKETPLACE);
 }
 
+function legacyGatewayInstances(instances) {
+  return instances.filter((instance) => instance.id === LEGACY_GATEWAY_PLUGIN);
+}
+
+function modelGatewayInstances(instances) {
+  return instances.filter((instance) => instance.id === MODEL_GATEWAY_PLUGIN);
+}
+
+function matchingInstall(instance, candidates) {
+  return candidates.some((candidate) => candidate.scope === instance.scope && candidate.projectPath === instance.projectPath);
+}
+
+function gatewayMigrationInstruction() {
+  return `Migration required: codex-gateway was renamed to model-gateway. Close every Claude Code session using Codex, then run from a terminal:\n  node "${__filename}" --migrate-model-gateway --confirm-sessions-closed\nThis installs model-gateway at the legacy scopes, moves only ~/.claude/codex-gateway state, starts and verifies the new gateway, then retires the legacy registry entries. The normal updater will not run stale codex-gateway setup or wiring.`;
+}
+
+function moveLegacyGatewayState(home, options) {
+  const legacyState = path.join(home, '.claude', 'codex-gateway');
+  const modelState = path.join(home, '.claude', 'model-gateway');
+  if (!fs.existsSync(legacyState)) return { moved: false, legacyState, modelState };
+  if (fs.existsSync(modelState)) {
+    throw new Error(`Refusing to merge legacy gateway state into existing ${modelState}. Move it aside after checking it, then retry the migration.`);
+  }
+  if (!options.dryRun) fs.renameSync(legacyState, modelState);
+  return { moved: true, legacyState, modelState };
+}
+
 function isStaleProjectInstance(instance) {
   return instance.scope !== 'user' && Boolean(instance.projectPath) && !fs.existsSync(instance.projectPath);
 }
@@ -266,6 +301,24 @@ function updateCommand(instance, claude) {
   };
 }
 
+function installModelGatewayCommand(instance, claude) {
+  return {
+    command: claude,
+    args: ['plugin', 'install', MODEL_GATEWAY_PLUGIN, '--scope', instance.scope],
+    cwd: instance.scope === 'user' ? undefined : instance.projectPath,
+    label: `${MODEL_GATEWAY_PLUGIN} (${instance.scope}${instance.projectPath ? `, ${instance.projectPath}` : ''})`,
+  };
+}
+
+function retireLegacyGatewayCommand(instance, claude) {
+  return {
+    command: claude,
+    args: ['plugin', 'uninstall', LEGACY_GATEWAY_PLUGIN, '--scope', instance.scope],
+    cwd: instance.scope === 'user' ? undefined : instance.projectPath,
+    label: `retire ${LEGACY_GATEWAY_PLUGIN} (${instance.scope}${instance.projectPath ? `, ${instance.projectPath}` : ''})`,
+  };
+}
+
 function marketplaceCommand(marketplace, claude) {
   return {
     command: claude,
@@ -275,7 +328,7 @@ function marketplaceCommand(marketplace, claude) {
 }
 
 function gatewayCommand(instances, action) {
-  const gateways = activeProjectInstances(instances).filter((instance) => instance.id === `model-gateway@${GATEWAY_MARKETPLACE}` && instance.installPath);
+  const gateways = activeProjectInstances(instances).filter((instance) => instance.id === MODEL_GATEWAY_PLUGIN && instance.installPath);
   if (gateways.length === 0) return null;
 
   const newest = gateways.sort((left, right) => String(right.lastUpdated ?? '').localeCompare(String(left.lastUpdated ?? '')))[0];
@@ -401,6 +454,76 @@ function execute(command, options, run, report) {
   return false;
 }
 
+function runModelGatewayMigration({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log }) {
+  if (!options.confirmSessionsClosed) {
+    report('Migration stopped: close every Claude Code session using Codex, then retry with --confirm-sessions-closed. The migration will not stop the shared gateway for you.');
+    return { ok: false, failures: ['model-gateway migration confirmation required'] };
+  }
+
+  const registry = readRegistry(registryFile);
+  registryInstallEntries(registry);
+  const legacy = activeProjectInstances(legacyGatewayInstances(toolshedPlugins(registry)));
+  if (legacy.length === 0) {
+    report('model-gateway migration is not needed: no active codex-gateway install remains.');
+    return { ok: true, failures: [] };
+  }
+
+  const failures = [];
+  for (const instance of legacy) {
+    const command = installModelGatewayCommand(instance, options.claude);
+    if (!execute(command, options, run, report)) failures.push(command.label);
+  }
+  if (failures.length > 0) {
+    report(`Migration stopped before changing gateway state because ${failures.length} model-gateway install(s) failed.`);
+    return { ok: false, failures };
+  }
+  if (options.dryRun) {
+    report(`Would move gateway-owned state from ${path.join(home, '.claude', 'codex-gateway')} to ${path.join(home, '.claude', 'model-gateway')}, then run model-gateway setup, ensure, doctor, and retire codex-gateway.`);
+    return { ok: true, failures: [] };
+  }
+
+  const updated = toolshedPlugins(readRegistry(registryFile));
+  const gateways = modelGatewayInstances(updated);
+  const missing = legacy.filter((instance) => !matchingInstall(instance, gateways));
+  if (missing.length > 0) {
+    report('Migration stopped before changing gateway state because Claude Code did not record every new model-gateway install.');
+    return { ok: false, failures: ['model-gateway install missing from registry'] };
+  }
+
+  try {
+    const state = moveLegacyGatewayState(home, options);
+    if (state.moved) report(`Moved gateway-owned state to ${state.modelState}.`);
+  } catch (error) {
+    report(`Migration stopped: ${error.message}`);
+    return { ok: false, failures: ['gateway state move failed'] };
+  }
+
+  for (const action of ['setup', 'ensure', 'doctor']) {
+    const command = gatewayCommand(gateways, action);
+    if (!command || !execute(command, options, run, report)) failures.push(`model-gateway ${action}`);
+  }
+  if (failures.length === 0) {
+    const wiring = healGatewayWiring(updated, { ...options, home }, run, report);
+    failures.push(...wiring.failures);
+  }
+  if (failures.length > 0) {
+    report('Migration kept the legacy registry entries because the new gateway did not finish setup, verification, and wiring.');
+    return { ok: false, failures };
+  }
+
+  for (const instance of legacy) {
+    const command = retireLegacyGatewayCommand(instance, options.claude);
+    if (!execute(command, options, run, report)) failures.push(command.label);
+  }
+  if (failures.length > 0) {
+    report('Migration verified model-gateway, but one or more legacy registry entries could not be retired. Retry the migration after resolving those failures.');
+    return { ok: false, failures };
+  }
+
+  report('model-gateway migration completed. Start a new Claude Code session, then use /reload-plugins if the model picker is still stale.');
+  return { ok: true, failures: [] };
+}
+
 function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log }) {
   const modeWasConfigured = hasGatewayWiringMode(home);
   if (options.wiringMode && !options.check && !options.dryRun) setGatewayWiringMode(home, options.wiringMode);
@@ -411,6 +534,18 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   } catch (error) {
     report(`Registry GC skipped: ${error.message}. Registry was left unchanged.`);
     throw error;
+  }
+  const legacyGateways = legacyGatewayInstances(toolshedPlugins(registry));
+  if (legacyGateways.length > 0) {
+    report(gatewayMigrationInstruction());
+    return {
+      ok: false,
+      instances: toolshedPlugins(registry),
+      staleInstances: [],
+      registryGc: { entries: [], backupPath: null, cleaned: false },
+      failures: ['model-gateway migration required'],
+      migrationRequired: true,
+    };
   }
   const registryGc = cleanStaleAgentWorktreeInstalls(registryFile, registry, options, report);
   let instances = toolshedPlugins(registry);
@@ -504,7 +639,9 @@ function main() {
   }
 
   try {
-    const result = runUpdate({ options });
+    const result = options.migrateModelGateway
+      ? runModelGatewayMigration({ options })
+      : runUpdate({ options });
     if (!result.ok) process.exitCode = 1;
   } catch (error) {
     console.error(`Toolshed update failed: ${error.message}`);
@@ -516,7 +653,10 @@ if (require.main === module) main();
 
 module.exports = {
   GATEWAY_MARKETPLACE,
+  LEGACY_GATEWAY_PLUGIN,
+  MODEL_GATEWAY_PLUGIN,
   gatewayCommand,
+  gatewayMigrationInstruction,
   gatewayWiringCommand,
   gatewayWiringMode,
   hasGatewayWiringMode,
@@ -529,6 +669,7 @@ module.exports = {
   marketplacesFor,
   parseArgs,
   registryPath,
+  runModelGatewayMigration,
   runUpdate,
   toolshedPlugins,
   updateCommand,
