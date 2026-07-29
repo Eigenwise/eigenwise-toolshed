@@ -180,7 +180,13 @@ function helperDenyReason(type) {
 function helperModelDenyReason(type) {
   return `sidequest: executor helper ${type} needs an explicit Agent model. Nested spawns do not inherit the parent route, so a default model would silently weaken the helper.`;
 }
-function rewriteExecutorHelper(toolInput, type) {
+function helperEvidenceRule(input) {
+  const transcriptPath = stringField(input, "transcript_path", "transcriptPath").trim();
+  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path2.default.join(import_node_path2.default.dirname(transcriptPath), "subagents")] : [];
+  const knownLocations = sessionPaths.length ? ` Current session self-reference locations: ${sessionPaths.join(", ")}.` : "";
+  return "\n\nEvidence rule: quoted ticket strings appear in this session’s context and generated transcripts. A match in the parent or helper session transcript, subagent transcript, or task-output files is self-reference, not evidence: report it as such. Do not search session, transcript, or task-output directories for evidence. Cite only the directly reachable artifact under investigation; if it is outside the parent worktree or otherwise unavailable, report a visibility block rather than a finding." + knownLocations;
+}
+function rewriteExecutorHelper(input, toolInput, type) {
   if (!EXECUTOR_HELPER_TYPES.has(type)) {
     writeDeny("PreToolUse", helperDenyReason(type));
     return;
@@ -190,7 +196,12 @@ function rewriteExecutorHelper(toolInput, type) {
     writeDeny("PreToolUse", helperModelDenyReason(type));
     return;
   }
-  const updatedInput = { ...toolInput, mode: "bypassPermissions", run_in_background: true };
+  const updatedInput = {
+    ...toolInput,
+    prompt: `${String(toolInput.prompt || "")}${helperEvidenceRule(input)}`,
+    mode: "bypassPermissions",
+    run_in_background: true
+  };
   delete updatedInput.isolation;
   writeJson({
     systemMessage: "sidequest: executor helpers run in the background from the parent working tree. If the target is unavailable there, report the visibility block instead of returning clean findings.",
@@ -440,7 +451,7 @@ function main() {
   const type = String(toolInput.subagent_type || "");
   const classification = classifyExecutor(type);
   if (isSubagentCaller(input) && !isCurrentExecutor(classification)) {
-    rewriteExecutorHelper(toolInput, type);
+    rewriteExecutorHelper(input, toolInput, type);
     return;
   }
   if (PASS_THROUGH_AGENT_TYPES.has(type)) return;

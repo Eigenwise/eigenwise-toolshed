@@ -328,9 +328,29 @@ test('pre-tool hook: executor helpers are explicit-model background work in the 
     assert.equal(out.hookSpecificOutput.updatedInput.mode, 'bypassPermissions', subagent_type);
     assert.equal(out.hookSpecificOutput.updatedInput.run_in_background, true, subagent_type);
     assert.equal(out.hookSpecificOutput.updatedInput.isolation, undefined, subagent_type);
+    assert.match(out.hookSpecificOutput.updatedInput.prompt, /quoted ticket strings appear in this session’s context/);
+    assert.match(out.hookSpecificOutput.updatedInput.prompt, /self-reference, not evidence/);
+    assert.match(out.hookSpecificOutput.updatedInput.prompt, /report a visibility block rather than a finding/);
     assert.match(out.systemMessage, /background from the parent working tree/);
     assert.match(out.systemMessage, /report the visibility block instead of returning clean findings/);
   }
+});
+
+test('pre-tool hook: helper session transcript hits are self-reference', () => {
+  const transcriptPath = path.join(os.tmpdir(), 'sq-current-session.jsonl');
+  const out = runHookOutput(FORCE_BYPASS, {
+    agent_id: 'evidence-helper',
+    agent_type: 'sidequest-exec-dispatch-high',
+    transcript_path: transcriptPath,
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', model: 'haiku', prompt: 'Find quoted evidence.' },
+  });
+  const prompt = out.hookSpecificOutput.updatedInput.prompt;
+  assert.match(prompt, /self-reference, not evidence/);
+  assert.match(prompt, /report it as such/);
+  assert.match(prompt, /Current session self-reference locations:/);
+  assert.ok(prompt.includes(transcriptPath));
+  assert.ok(prompt.includes(path.join(path.dirname(transcriptPath), 'subagents')));
 });
 
 test('pre-tool hook: executor helpers reject generic types and model defaults', () => {
@@ -374,6 +394,13 @@ test('pre-tool hook: executor helpers reject generic types and model defaults', 
   });
   assert.equal(mainThread.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(mainThread.hookSpecificOutput.permissionDecisionReason, /generic Agent, not a Sidequest ticket executor/);
+});
+
+test('executor template calls transcript evidence self-reference', () => {
+  const template = fs.readFileSync(path.join(__dirname, '..', 'scripts', '_exec-template.md'), 'utf8');
+  assert.match(template, /Evidence work that needs session, transcript, or task-output searching is not helper work/);
+  assert.match(template, /a match there is self-reference, not evidence/);
+  assert.match(template, /report a visibility block rather than a finding/);
 });
 
 test('pre-tool hook: helper writes inherit the active parent ticket scope', () => {
