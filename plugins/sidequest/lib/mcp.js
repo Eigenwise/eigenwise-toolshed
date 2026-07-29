@@ -143,6 +143,7 @@ function requireKnownModel(action, value, ticket) {
   if (!exec) {
     const expected = store.resolvedDispatchRoute(ticket);
     const routeHint = expected ? ` — expected for ${ticket.ref}: ${expected.model}` : "";
+    if (ticket && ticket.model === value) return value;
     throw new Error(`${action}: unknown model "${value}"${routeHint} — known: ${store.getModelVocab().models.join(", ")}`);
   }
   return exec.runsModel;
@@ -1605,6 +1606,7 @@ const TOOLS = [
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
+        ...prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {},
         spawn
       };
       const warnings = store.dispatchWarnings(prepared.ticket, slug);
@@ -1623,6 +1625,7 @@ const TOOLS = [
         tokenPrefix: prepared.token.slice(0, 12),
         token: prepared.token,
         recovery: prepared.recovery || null,
+        ...dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {},
         warnings: store.dispatchWarnings(prepared.ticket, slug),
         spawn,
         guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`

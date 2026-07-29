@@ -14,6 +14,7 @@ interface CatalogData {
   schemaVersion?: unknown;
   schema?: unknown;
   models?: unknown;
+  codexReadiness?: unknown;
 }
 
 interface CatalogModel {
@@ -27,6 +28,13 @@ export interface ExternalModel {
   id: string;
   label: string;
   source: string;
+}
+
+export interface ProviderReadiness {
+  provider: 'codex';
+  ready: boolean;
+  state: string;
+  message: string;
 }
 
 export const CATALOG_SOURCES: readonly CatalogSource[] = [
@@ -53,12 +61,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
 }
 
-function catalogModels(data: unknown, schemas: ReadonlySet<number>): unknown[] {
-  if (!isRecord(data)) return [];
+function validCatalog(data: unknown, schemas: ReadonlySet<number>): CatalogData | null {
+  if (!isRecord(data)) return null;
   const catalog = data as CatalogData;
   const schema = catalog.schemaVersion ?? catalog.schema;
-  if (typeof schema !== 'number' || !schemas.has(schema) || !Array.isArray(catalog.models)) return [];
-  return catalog.models;
+  return typeof schema === 'number' && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;
+}
+
+function catalogModels(data: unknown, schemas: ReadonlySet<number>): unknown[] {
+  return validCatalog(data, schemas)?.models as unknown[] || [];
+}
+
+function validateReadiness(raw: unknown): Omit<ProviderReadiness, 'provider'> | null {
+  if (!isRecord(raw) || typeof raw.ready !== 'boolean') return null;
+  const state = typeof raw.state === 'string' ? raw.state.trim() : '';
+  const message = typeof raw.message === 'string' ? raw.message.trim() : '';
+  return state && message ? { ready: raw.ready, state, message } : null;
+}
+
+export function providerReadiness(provider: 'codex'): ProviderReadiness | null {
+  for (const root of discoveryRoots()) {
+    for (const { source, relPath, schemas } of CATALOG_SOURCES) {
+      if (source !== 'model-gateway' || provider !== 'codex') continue;
+      const catalog = validCatalog(readJsonSafe(path.join(root, relPath)), schemas);
+      const readiness = catalog && validateReadiness(catalog.codexReadiness);
+      if (readiness) return { provider, ...readiness };
+    }
+  }
+  return null;
 }
 
 function validateEntry(raw: unknown, source: string): ExternalModel | null {

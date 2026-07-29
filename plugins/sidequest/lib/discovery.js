@@ -29,7 +29,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var discovery_exports = {};
 __export(discovery_exports, {
   CATALOG_SOURCES: () => CATALOG_SOURCES,
-  discoverExternalModels: () => discoverExternalModels
+  discoverExternalModels: () => discoverExternalModels,
+  providerReadiness: () => providerReadiness
 });
 module.exports = __toCommonJS(discovery_exports);
 var import_node_fs = __toESM(require("node:fs"));
@@ -56,12 +57,31 @@ function readJsonSafe(file) {
 function isRecord(value) {
   return value !== null && typeof value === "object";
 }
-function catalogModels(data, schemas) {
-  if (!isRecord(data)) return [];
+function validCatalog(data, schemas) {
+  if (!isRecord(data)) return null;
   const catalog = data;
   const schema = catalog.schemaVersion ?? catalog.schema;
-  if (typeof schema !== "number" || !schemas.has(schema) || !Array.isArray(catalog.models)) return [];
-  return catalog.models;
+  return typeof schema === "number" && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;
+}
+function catalogModels(data, schemas) {
+  return validCatalog(data, schemas)?.models || [];
+}
+function validateReadiness(raw) {
+  if (!isRecord(raw) || typeof raw.ready !== "boolean") return null;
+  const state = typeof raw.state === "string" ? raw.state.trim() : "";
+  const message = typeof raw.message === "string" ? raw.message.trim() : "";
+  return state && message ? { ready: raw.ready, state, message } : null;
+}
+function providerReadiness(provider) {
+  for (const root of discoveryRoots()) {
+    for (const { source, relPath, schemas } of CATALOG_SOURCES) {
+      if (source !== "model-gateway" || provider !== "codex") continue;
+      const catalog = validCatalog(readJsonSafe(import_node_path.default.join(root, relPath)), schemas);
+      const readiness = catalog && validateReadiness(catalog.codexReadiness);
+      if (readiness) return { provider, ...readiness };
+    }
+  }
+  return null;
 }
 function validateEntry(raw, source) {
   if (!isRecord(raw)) return null;
@@ -93,5 +113,6 @@ function discoverExternalModels() {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CATALOG_SOURCES,
-  discoverExternalModels
+  discoverExternalModels,
+  providerReadiness
 });

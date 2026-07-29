@@ -53,15 +53,23 @@ function writeCatalogRaw(dir?: any, body?: any) {
   fs.mkdirSync(path.join(dir, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'model-gateway', 'catalog.json'), body);
 }
-function seedCatalog(models?: any) {
+function seedCatalog(models?: any, codexReadiness: any = {
+  ready: true,
+  state: 'ready',
+  message: 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks.',
+}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-catalog-'));
-  writeCatalogRaw(dir, JSON.stringify({ schemaVersion: 3, source: 'model-gateway', updatedAt: new Date().toISOString(), models }));
+  writeCatalogRaw(dir, JSON.stringify({ schemaVersion: 3, source: 'model-gateway', updatedAt: new Date().toISOString(), codexReadiness, models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
   return dir;
 }
 function clearCatalog() {
   process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 }
+seedCatalog([
+  { id: 'claude-gpt-5.6-terra', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' },
+  { id: 'claude-gpt-5.6-luna', slug: 'codex-gpt-5-6-luna', label: 'GPT-5.6 Luna' },
+]);
 function committedRepo(prefix?: any) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   execFileSync('git', ['init', '--quiet'], { cwd: root, windowsHide: true });
@@ -1625,6 +1633,7 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
   const dispatched = await callTool('dispatch', { ref: added.ref, full: true });
   assert.match(dispatched.warnings[0], /no verify command/);
 
+  seedCatalog([{ id: 'claude-gpt-5.6-luna', slug: 'codex-gpt-5-6-luna', label: 'GPT-5.6 Luna' }]);
   const research = await callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'research' });
   assert.deepEqual((await callTool('dispatch', { ref: research.ref, full: true })).warnings, []);
 });
@@ -1829,6 +1838,7 @@ test('MCP done requires a final report and release records its reason', async ()
 });
 
 test('MCP release records an oracle handoff without a separate reason', async () => {
+  seedCatalog([{ id: 'claude-gpt-5.6-terra', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
   const added = await callTool('add', { title: 'oracle release fixture', complexity: 2, why: 'exercise the human verdict handoff through the MCP release surface' });
   const prepared = store.prepareDispatch(added.project, added.ref, { sessionId: `oracle-release-${Date.now()}` });
   assert.equal(store.claimTicket(added.project, added.ref, 'mcp-oracle-worker', {
@@ -2018,6 +2028,30 @@ test('claim requires a worker id (no shared-identity default)', async () => {
   const res = await callToolRaw('claim', { ref: added.ref });
   assert.ok(res.isError, 'a claim without by is refused');
   assert.match(res.content[0].text, /by.*required/i);
+});
+
+test('MCP dispatch returns the Codex readiness recovery text without preparing state', async () => {
+  const message = 'Codex dispatch refused: claude-code-proxy is not answering on /v1/models. Run `node "gateway" ensure`, then retry. No Anthropic fallback was used.';
+  seedCatalog([{ id: 'claude-gpt-5.6-terra', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }], {
+    ready: false,
+    state: 'proxy-down',
+    message,
+  });
+  try {
+    store.setCategory({ id: 'mcp-readiness-refusal', name: 'MCP readiness refusal', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+    const added = await callTool('add', { title: 'readiness refusal', description: DISPATCH_DESCRIPTION, category: 'mcp-readiness-refusal' });
+    const refused = await callToolRaw('dispatch', { ref: added.ref });
+    assert.ok(refused.isError);
+    assert.equal(refused.content[0].text, message);
+    const ticket = store.getTicket(added.project, added.ref);
+    assert.equal(ticket.dispatchNonce, null);
+    assert.equal(ticket.dispatch, null);
+  } finally {
+    seedCatalog([
+      { id: 'claude-gpt-5.6-terra', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' },
+      { id: 'claude-gpt-5.6-luna', slug: 'codex-gpt-5-6-luna', label: 'GPT-5.6 Luna' },
+    ]);
+  }
 });
 
 test('MCP claim passes prepared dispatch token and executor through to the store', async () => {

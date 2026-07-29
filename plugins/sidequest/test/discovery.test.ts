@@ -11,6 +11,7 @@ interface CatalogHeader {
   schema?: number;
   source?: string;
   updatedAt?: string;
+  codexReadiness?: unknown;
 }
 interface ResolvedExec {
   agent: string;
@@ -23,6 +24,7 @@ const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-empty-'));
 process.env.SIDEQUEST_DISCOVERY_DIRS = empty;
 const discovery = require('../lib/discovery.js') as {
   discoverExternalModels(): Array<{ slug: string; id: string; label: string; source: string }>;
+  providerReadiness(provider: 'codex'): { provider: 'codex'; ready: boolean; state: string; message: string } | null;
 };
 const store = require('../lib/store.js') as {
   CLAUDE_RUNTIMES: readonly string[];
@@ -46,6 +48,23 @@ test('missing and malformed catalogs fail soft', () => {
   fs.writeFileSync(path.join(root, 'model-gateway', 'catalog.json'), '{bad');
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
   assert.deepEqual(discovery.discoverExternalModels(), []);
+});
+
+test('discovery reads the gateway readiness contract independently of catalog models', () => {
+  writeCatalog([], {
+    schemaVersion: 3,
+    codexReadiness: {
+      ready: false,
+      state: 'proxy-down',
+      message: 'Codex dispatch refused: claude-code-proxy is not answering on /v1/models. Run `node "gateway" ensure`, then retry. No Anthropic fallback was used.',
+    },
+  });
+  assert.deepEqual(discovery.providerReadiness('codex'), {
+    provider: 'codex',
+    ready: false,
+    state: 'proxy-down',
+    message: 'Codex dispatch refused: claude-code-proxy is not answering on /v1/models. Run `node "gateway" ensure`, then retry. No Anthropic fallback was used.',
+  });
 });
 
 test('discovery validates concrete catalog identity and drops routing hints', () => {

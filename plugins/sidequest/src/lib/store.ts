@@ -36,7 +36,7 @@ const db = require('./db.js');
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { migrateIfNeeded } = require('./migrate.js');
-const { discoverExternalModels } = require('./discovery.js');
+const { discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { routingDisabledMessage } = require('./refusal-guidance.js');
 const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight.js');
@@ -1496,39 +1496,79 @@ function classifierCategories(opts?: any) {
   return getCategories(Object.assign({}, opts, { includeDisabled: false })).map(({ id, name, description, route, fallback, contract }: any) => ({ id, name, description, route, fallback, contract }));
 }
 
+function routeProvider(route?: any) {
+  const normalized = normalizeRoute(route);
+  if (!normalized) return null;
+  const backend = availableRoute(normalized.model);
+  if (backend) return backend.backend;
+  return normalized.model.startsWith('codex-') || normalized.model.startsWith('model-gateway:') ? 'codex' : null;
+}
+
 function resolveCategoryRoute(category?: any) {
   const warnings: any[] = [];
+  const primary = normalizeRoute(category && category.route);
+  if (!primary) return { model: null, effort: null, exec: null, warnings: ['Category route is missing or invalid.'] };
+  const provider = routeProvider(primary);
   const candidates = [
-    { name: 'route', route: category && category.route },
-    { name: 'category fallback', route: category && category.fallback },
-    { name: 'global fallback', route: getRoutingFallback() },
+    { source: 'route', route: primary },
+    { source: 'category fallback', route: category && category.fallback },
+    { source: 'global fallback', route: getRoutingFallback() },
   ];
   for (const candidate of candidates) {
     const route = normalizeRoute(candidate.route);
     if (!route) continue;
+    if (candidate.source !== 'route' && routeProvider(route) !== provider) {
+      warnings.push(`Category "${category.id}" ${candidate.source} route "${route.model}" crosses providers and was refused.`);
+      continue;
+    }
     const exec = resolveExec(route.model, route.effort);
-    if (exec) return { model: exec.runsModel, effort: route.effort, exec, warnings };
-    warnings.push(`Category "${category.id}" ${candidate.name} model "${route.model}" isn't currently available.`);
+    if (exec) {
+      return {
+        model: exec.runsModel,
+        effort: route.effort,
+        exec,
+        warnings,
+        ...(candidate.source === 'route' ? {} : { fallbackReason: `${candidate.source} replaced unavailable ${primary.model}.` }),
+      };
+    }
+    warnings.push(`Category "${category.id}" ${candidate.source} model "${route.model}" isn't currently available.`);
   }
-  const route = ROUTING_FALLBACK_DEFAULT;
-  warnings.push('Global routing fallback is missing or invalid; using hardwired sonnet/high.');
-  return { model: route.model, effort: route.effort, exec: resolveExec(route.model, route.effort), warnings };
+  return { model: primary.model, effort: primary.effort, exec: null, warnings };
 }
 
 function resolveCategoryFallback(category?: any, failedModel?: any) {
+  const failedRoute = normalizeRoute({ model: failedModel, effort: 'low' });
+  const provider = routeProvider(failedRoute);
   const candidates = [
     { source: 'category fallback', route: category && category.fallback },
     { source: 'global fallback', route: getRoutingFallback() },
-    { source: 'hardwired fallback', route: ROUTING_FALLBACK_DEFAULT },
   ];
   for (const candidate of candidates) {
     const route = normalizeRoute(candidate.route);
-    if (!route) continue;
+    if (!route || routeProvider(route) !== provider) continue;
     const exec = resolveExec(route.model, route.effort);
     if (!exec || exec.runsModel === failedModel) continue;
     return { model: exec.runsModel, effort: route.effort, exec, source: candidate.source };
   }
   return null;
+}
+
+function codexDispatchRefusal(route?: any) {
+  const readiness = providerReadiness('codex');
+  if (!readiness) {
+    return 'Codex dispatch refused: model-gateway readiness is unavailable. Run `node "<gateway>/bin/model-gateway.js" ensure`, then retry. No Anthropic fallback was used.';
+  }
+  if (!readiness.ready) return readiness.message;
+  if (!resolveExec(route.model, route.effort)) {
+    return `Codex dispatch refused: configured route ${route.model} is not available from the live model-gateway catalog. Run \`node "<gateway>/bin/model-gateway.js" ensure\`, then retry. No Anthropic fallback was used.`;
+  }
+  return null;
+}
+
+function dispatchRouteRefusal(route?: any) {
+  const normalized = normalizeRoute(route);
+  if (!normalized) return 'Dispatch refused: the resolved route is missing or invalid.';
+  return routeProvider(normalized) === 'codex' ? codexDispatchRefusal(normalized) : null;
 }
 
 function ticketCategory(ticket?: any) {
@@ -1537,7 +1577,7 @@ function ticketCategory(ticket?: any) {
 }
 
 function execProjection(exec?: any) {
-  return { agent: exec.agent, model: exec.model, backend: exec.backend, runsModel: exec.runsModel, apiModel: exec.apiModel, runsLabel: exec.runsLabel, dispatch: exec.dispatch };
+  return exec ? { agent: exec.agent, model: exec.model, backend: exec.backend, runsModel: exec.runsModel, apiModel: exec.apiModel, runsLabel: exec.runsLabel, dispatch: exec.dispatch } : null;
 }
 
 function applyDerivedRouting(t?: any, opts?: any) {
@@ -4601,6 +4641,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     const current = dispatchState(t);
     rederiveUnlaunchedPreparedRoute(t, slug);
+    const policyCategory = getCategory(ticketCategory(t), { project: slug });
+    const resolvedPolicy = policyCategory && resolveCategoryRoute(policyCategory);
+    if (!current?.recovery && resolvedPolicy) {
+      t.model = resolvedPolicy.model;
+      t.effort = resolvedPolicy.effort;
+      t.exec = execProjection(resolvedPolicy.exec);
+    }
     const currentRoute = activeDispatchRoute(t);
     const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
     if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor
@@ -4637,6 +4684,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       t.effort = 'low';
       t.exec = execProjection(resolveExec(t.model, t.effort));
     }
+    const refusal = dispatchRouteRefusal({ model: t.model, effort: t.effort });
+    if (refusal) throw new Error(refusal);
+    const preparedExec = resolveExec(t.model, t.effort);
+    if (!preparedExec) throw new Error(`prepare dispatch: ${t.ref} has no executable route.`);
+    const fallbackReason = !current?.recovery && resolvedPolicy?.fallbackReason || null;
     const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
     const attempts = current && Array.isArray(current.attempts) ? current.attempts.slice() : [];
     const supersededTokens = current && Array.isArray(current.supersededTokens) ? current.supersededTokens.slice() : [];
@@ -4668,7 +4720,6 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const artifactScope = artifactMode ? declaredFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
     t.dispatchExecutor = stableExecutorName(t, artifactMode);
-    const preparedExec = resolveExec(t.model, t.effort);
     const launchSeq = nextDispatchLaunchSeq(current);
     const readonly = dispatchReadOnly(t);
     const story = t.storyId ? getStory(slug, t.storyId) : null;
@@ -4702,6 +4753,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       launchSeq,
       launchName: dispatchLaunchName(t.ref, t.title, launchSeq),
       route: dispatchRouteState(t.model, t.effort, preparedExec),
+      ...(fallbackReason ? { fallbackReason } : {}),
       storyContract: contract,
       ...(contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {}),
       preparedAt: now,
@@ -5483,8 +5535,8 @@ function makeWorkedBy(input?: any) {
   if (!input) return null;
   const rawModel = input.model;
   if (rawModel == null || String(rawModel).trim() === '') return null;
-  const model = normalizeReportedModel(rawModel);
-  if (!model || !availableRoute(model)) {
+  const model = normalizeReportedModel(rawModel) || (input.allowUnavailable ? String(rawModel).trim().toLowerCase() : null);
+  if (!model || (!input.allowUnavailable && !availableRoute(model))) {
     throw new Error(`invalid model "${rawModel}" — expected an available Claude runtime or discovered Codex model`);
   }
   let effort = null;
@@ -5514,6 +5566,7 @@ function completeTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     model: omittedProvenance && dispatched ? dispatched.model : opts.model,
     effort: omittedProvenance && dispatched ? dispatched.effort : opts.effort,
     by,
+    allowUnavailable: Boolean(ticket && opts.model != null && normalizeRouteModel(opts.model) === normalizeRouteModel(ticket.model)),
   });
   let completionComment = null;
   if (opts.body != null && String(opts.body).trim()) {

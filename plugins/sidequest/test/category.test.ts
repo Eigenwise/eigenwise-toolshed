@@ -61,7 +61,7 @@ test('category readonly is persisted and can be overridden per project', () => {
   assert.equal(store.getCategory('readonly-policy-test', { project: slug }).readonly, false);
 });
 
-test('fallback chain resolves primary, category fallback, global fallback, and safety net', () => {
+test('unavailable routes retain their provider instead of crossing to a fallback', () => {
   const catalog = [{ slug: 'codex-gpt-test', id: 'gpt-test', label: 'GPT Test' }];
   const { store, slug, home } = freshStore({ catalog });
   store.setCategory({ id: 'route-test', name: 'Route test', route: { model: 'codex-gpt-test', effort: 'high' }, fallback: { model: 'opus', effort: 'medium' }, enabled: true });
@@ -69,11 +69,11 @@ test('fallback chain resolves primary, category fallback, global fallback, and s
   assert.equal(store.getTicket(slug, created.ref).model, 'codex-gpt-test');
 
   process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-empty-'));
-  assert.equal(store.getTicket(slug, created.ref).model, 'opus');
+  assert.equal(store.getTicket(slug, created.ref).model, 'codex-gpt-test');
 
   store.setCategory('route-test', { fallback: { model: 'codex-also-gone', effort: 'low' } });
   store.setRoutingFallback({ model: 'fable', effort: 'xhigh' });
-  assert.equal(store.getTicket(slug, created.ref).model, 'fable');
+  assert.equal(store.getTicket(slug, created.ref).model, 'codex-gpt-test');
 
   const script = String.raw`
     const { DatabaseSync } = require('node:sqlite');
@@ -82,9 +82,10 @@ test('fallback chain resolves primary, category fallback, global fallback, and s
     db.close();
   `;
   assert.equal(spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' }).status, 0);
-  const safety = store.getTicket(slug, created.ref);
-  assert.equal(safety.model, 'sonnet');
-  assert.match(safety.warnings.join(' '), /hardwired sonnet\/high/);
+  const unresolved = store.getTicket(slug, created.ref);
+  assert.equal(unresolved.model, 'codex-gpt-test');
+  assert.equal(unresolved.exec, null);
+  assert.match(unresolved.warnings.join(' '), /isn't currently available/);
 });
 
 test('routing-disabled board rejects dispatch but preserves direct claims and old metadata defaults', () => {
