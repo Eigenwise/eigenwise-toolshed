@@ -31,7 +31,7 @@ const os = require('os');
 const path = require('path');
 const { dispatchLaunchName, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const db = require('./db.js');
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
@@ -47,6 +47,9 @@ const WORKTREE_SETUP_MAX_LENGTH = 1000;
 const SHARED_TREE_ARTIFACT_MARKER = 'Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.';
 const CONTROL_PLANE_COMPLETION = Symbol('sidequest.control-plane-completion');
 const DELIVERY_MODES = ['merge', 'replay', 'apply'];
+const DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_INTEGRATION_VERIFY_TIMEOUT_MS = 60 * 60 * 1000;
+const INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES = 8 * 1024;
 
 function descriptionField(...candidates: any[]) {
   for (const candidate of candidates) {
@@ -1761,6 +1764,15 @@ function normalizeWorktreeSetup(value?: any) {
   return setup;
 }
 
+function normalizeIntegrationVerifyTimeoutMs(value?: any) {
+  if (value == null || value === '') return DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS;
+  const timeoutMs = Number(value);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_INTEGRATION_VERIFY_TIMEOUT_MS) {
+    throw new Error(`integrationVerifyTimeoutMs must be an integer from 1 to ${MAX_INTEGRATION_VERIFY_TIMEOUT_MS}.`);
+  }
+  return timeoutMs;
+}
+
 function hasOriginRemote(absPath?: any) {
   try {
     execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: absPath, encoding: 'utf8', windowsHide: true, stdio: 'pipe' });
@@ -1828,6 +1840,7 @@ function boardConfig(slug?: any) {
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
     delivery: normalizeDeliveryMode(meta.delivery),
+    integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
     autoApprovePluginTests: normalizeAutoApprovePluginTests(meta.autoApprovePluginTests),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
@@ -1869,6 +1882,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'delivery')) {
       meta.delivery = normalizeDeliveryMode(patch.delivery);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'integrationVerifyTimeoutMs')) {
+      meta.integrationVerifyTimeoutMs = normalizeIntegrationVerifyTimeoutMs(patch.integrationVerifyTimeoutMs);
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeIsolation')) {
       meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
@@ -5792,6 +5808,83 @@ function integrationGitError(error: any) {
   return String(error?.stderr || error?.message || error || '').trim();
 }
 
+function integrationVerifyLogPath(slug: any, ticket: any) {
+  const safeRef = String(ticket.ref || ticket.id || 'submission').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const dir = path.join(projectDir(slug), 'verification', safeRef);
+  ensureDir(dir);
+  return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.log`);
+}
+
+function integrationVerifyOutputTail(logPath: string) {
+  const size = fs.statSync(logPath).size;
+  const length = Math.min(size, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES);
+  if (!length) return '';
+  const fd = fs.openSync(logPath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    return `${size > length ? '[output truncated]\n' : ''}${buffer.toString('utf8')}`.trim();
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
+  const command = String(ticket.submission?.verify || '').trim();
+  if (opts?.skipVerify === true) return { status: 'skipped', skippedByChoice: true, command: command || null };
+  if (!command) return { status: 'none', command: null };
+  const timeoutMs = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
+  const logPath = integrationVerifyLogPath(slug, ticket);
+  const fd = fs.openSync(logPath, 'w');
+  let result: any;
+  try {
+    result = spawnSync(command, {
+      cwd: readMeta(slug)?.path,
+      shell: true,
+      timeout: timeoutMs,
+      windowsHide: true,
+      stdio: ['ignore', fd, fd],
+    });
+  } finally {
+    fs.closeSync(fd);
+  }
+  const outputTail = integrationVerifyOutputTail(logPath);
+  const timedOut = result?.error?.code === 'ETIMEDOUT';
+  if (timedOut) return { status: 'timeout', command, timeoutMs, logPath, outputTail };
+  if (result?.status === 0) return { status: 'passed', command, timeoutMs, logPath, outputTail };
+  return {
+    status: 'failed',
+    command,
+    exitCode: typeof result?.status === 'number' ? result.status : null,
+    logPath,
+    outputTail,
+    error: result?.error ? String(result.error.message || result.error) : null,
+  };
+}
+
+function verificationFailureComment(verify: any) {
+  const outcome = verify.status === 'timeout' ? `timed out after ${verify.timeoutMs}ms` : `exited ${verify.exitCode ?? 'without an exit code'}`;
+  return [
+    `Integration verification ${outcome}.`,
+    `Command: ${verify.command}`,
+    `Log: ${verify.logPath}`,
+    verify.outputTail ? `Output tail:\n${verify.outputTail}` : null,
+  ].filter(Boolean).join('\n');
+}
+
+function verifyIntegration(slug: any, idOrRef: any, opts?: any) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket || !ticket.submission?.integration || ticket.submission.integration.outcome !== 'delivered') {
+    return { ok: false, reason: 'delivery_required', ticket };
+  }
+  const verify = verifyDeliveredSubmission(slug, ticket, opts);
+  const stored = updateSubmissionIntegration(slug, ticket.id, { verify, outcome: verify.status === 'passed' || verify.status === 'none' || verify.status === 'skipped' ? 'verified' : 'verify_failed' });
+  if (!stored.ok) return stored;
+  if (verify.status === 'passed' || verify.status === 'none' || verify.status === 'skipped') return { ok: true, ticket: stored.ticket, verify };
+  const comment = addComment(slug, ticket.id, { by: String(opts?.by || 'orchestrator'), source: 'integration', body: verificationFailureComment(verify) });
+  return { ok: false, reason: 'verify_failed', ticket: comment.ticket || stored.ticket, verify };
+}
+
 function changedIntegrationPaths(repo: string, submission: any) {
   if (Array.isArray(submission.changedPaths) && submission.changedPaths.length) return submission.changedPaths.slice();
   return integrationGit(repo, ['diff', '--name-only', submission.base, submission.commit]).split(/\r?\n/).filter(Boolean);
@@ -7783,6 +7876,7 @@ module.exports = {
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   integrateSubmission,
+  verifyIntegration,
   effectiveScope,
   listProjects,
   findProject,

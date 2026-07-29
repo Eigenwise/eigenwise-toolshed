@@ -273,7 +273,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   scopeRequest: 'Check scope; auto-approve eligible plugin tests.',
   commit: 'Commit declared paths from claimed worktree.',
   submit: 'Submit verified work and final report.',
-  integrate: 'Deliver a submitted range as merge, replay, or uncommitted apply.',
+  integrate: 'Deliver, verify.',
   comment: 'Add a durable handoff comment.',
   plan: 'Replace a ticket\'s plan document; never inlined into a briefing.',
   link: 'Relate tickets; inverse automatic.',
@@ -282,7 +282,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   dispatch: 'Prepare through the ticket\'s stable route.',
   done: 'Finish with report; stamp actual model and effort.',
   release: 'Release.',
-  groomClose: 'Grooming closure; pass integration:true after a submission is integrated.',
+  groomClose: 'Close an integrated submission.',
   native_agent: 'Return the registered native Agent spawn spec for a ticket; pass it to Agent unchanged.',
   archive: 'Archive one ticket, or every done ticket.',
   archive_board: 'Archive an explicitly named board.',
@@ -1542,7 +1542,7 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'integrate',
-    description: 'Deliver a ready submission onto the configured integration branch, then close it with the recorded delivery evidence.',
+    description: 'Deliver and verify a submitted range.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1550,6 +1550,7 @@ const TOOLS: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         mode: { type: 'string', enum: ['merge', 'replay', 'apply'], description: 'Defaults to the board delivery setting.' },
+        skipVerify: { type: 'boolean' },
         overrideLegacyScope: { type: 'boolean', description: 'Permit only a legacy submission without an admitted scope snapshot.' },
         session: { type: 'string' },
       },
@@ -1577,7 +1578,16 @@ const TOOLS: ToolDefinition[] = [
       const delivery = store.integrateSubmission(slug, args.ref, { mode, target, overrideLegacyScope: args.overrideLegacyScope === true });
       if (!delivery.ok) return mutationAck(slug, delivery, delivery.outside?.length ? { strayPaths: delivery.outside } : null);
       const integration = delivery.integration;
-      const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}.`;
+      const verification = store.verifyIntegration(slug, args.ref, { by, skipVerify: args.skipVerify === true });
+      if (!verification.ok) {
+        return mutationAck(slug, verification, { delivery: integration, verifyFailed: verification.verify });
+      }
+      const verifyReason = verification.verify.status === 'skipped'
+        ? 'Verify skipped by choice.'
+        : verification.verify.status === 'none'
+          ? 'Verify: none.'
+          : `Verify passed: ${verification.verify.command}.`;
+      const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`;
       const closed = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
         reason,
@@ -1587,6 +1597,7 @@ const TOOLS: ToolDefinition[] = [
       if (closed.ok) closeDispatchExecutor(delivery.ticket);
       return mutationAck(slug, closed, {
         delivery: integration,
+        verify: verification.verify,
         ...(closed.ok ? { completion: closed.ticket.completion } : {}),
       });
     },
@@ -2159,6 +2170,7 @@ const TOOLS: ToolDefinition[] = [
         integrationMode: { type: 'string', enum: ['auto', 'local', 'remote'], description: 'auto is local without origin; local does not push.' },
         integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },
         delivery: { type: 'string', enum: ['merge', 'replay', 'apply'], description: 'Default submission delivery mode. Defaults to merge.' },
+        integrationVerifyTimeoutMs: { type: 'integer', minimum: 1, maximum: 3600000 },
         worktreeIsolation: { type: 'boolean', description: 'When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true.' },
         autoApprovePluginTests: { type: 'boolean' },
         worktreeSetup: { type: ['string', 'null'], maxLength: 1000, pattern: '^[^\\r\\n]*$', description: 'One-line isolated-worktree setup; null clears it.' },
@@ -2173,6 +2185,7 @@ const TOOLS: ToolDefinition[] = [
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
       if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;
       if (args.delivery != null) patch.delivery = args.delivery;
+      if (args.integrationVerifyTimeoutMs != null) patch.integrationVerifyTimeoutMs = args.integrationVerifyTimeoutMs;
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
       if (args.autoApprovePluginTests !== undefined) patch.autoApprovePluginTests = args.autoApprovePluginTests;
       if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;

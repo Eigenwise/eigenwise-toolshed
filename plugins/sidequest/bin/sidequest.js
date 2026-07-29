@@ -56,7 +56,7 @@ function parseArgs(argv) {
         opts["auto-approve-plugin-tests"] = false;
         continue;
       }
-      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "override-legacy-scope", "contract-waiver", "full", "worktree-isolation", "auto-approve-plugin-tests", "high-stakes", "unverified-transport"]);
+      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "override-legacy-scope", "skip-verify", "contract-waiver", "full", "worktree-isolation", "auto-approve-plugin-tests", "high-stakes", "unverified-transport"]);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -1269,7 +1269,18 @@ async function cmdIntegrate(opts, positional) {
     fail(`integrate: ${delivery.message || delivery.reason}.`);
   }
   const integration = delivery.integration;
-  const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}.`;
+  const verification = store.verifyIntegration(slug, idOrRef, { by, skipVerify: !!opts["skip-verify"] });
+  if (!verification.ok) {
+    const payload = { project: slug, delivery: integration, verifyFailed: verification.verify };
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+      process.exitCode = 1;
+      return;
+    }
+    fail(`integrate: delivered ${idOrRef}, but verification ${verification.verify.status === "timeout" ? `timed out after ${verification.verify.timeoutMs}ms` : `failed with exit code ${verification.verify.exitCode}`}. Log: ${verification.verify.logPath}`);
+  }
+  const verifyReason = verification.verify.status === "skipped" ? "Verify skipped by choice." : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
+  const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`;
   const closed = store.completeTicketAsControlPlane(slug, idOrRef, {
     by,
     reason,
@@ -1277,7 +1288,7 @@ async function cmdIntegrate(opts, positional) {
     overrideLegacyScope: !!(opts["override-legacy-scope"] || opts.overrideLegacyScope)
   });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: integration }, closed), null, 2) + "\n");
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: integration, verify: verification.verify }, closed), null, 2) + "\n");
     if (!closed.ok) process.exitCode = 1;
     return;
   }
@@ -1924,6 +1935,7 @@ async function cmdBoardConfig(opts) {
   if (opts["integration-mode"] != null) patch.integrationMode = opts["integration-mode"];
   if (opts["integration-branch"] != null) patch.integrationBranch = opts["integration-branch"];
   if (opts.delivery != null) patch.delivery = opts.delivery;
+  if (opts["integration-verify-timeout-ms"] != null) patch.integrationVerifyTimeoutMs = opts["integration-verify-timeout-ms"];
   if (opts["worktree-isolation"] !== void 0) patch.worktreeIsolation = opts["worktree-isolation"];
   if (opts["auto-approve-plugin-tests"] !== void 0) patch.autoApprovePluginTests = opts["auto-approve-plugin-tests"];
   if (opts["worktree-setup"] != null) patch.worktreeSetup = opts["worktree-setup"];
@@ -1940,6 +1952,7 @@ async function cmdBoardConfig(opts) {
   console.log(`integration mode: ${payload.integrationMode}`);
   console.log(`integration branch: ${payload.integrationBranch}`);
   console.log(`delivery: ${payload.delivery}`);
+  console.log(`integration verify timeout: ${payload.integrationVerifyTimeoutMs}ms`);
   console.log(`worktree isolation: ${payload.worktreeIsolation ? "enabled" : "disabled"}`);
   console.log(`plugin test scope auto-approval: ${payload.autoApprovePluginTests ? "enabled" : "disabled"}`);
   console.log(`worktree setup: ${payload.worktreeSetup || "(none)"}`);
@@ -2406,7 +2419,7 @@ const HELP_COMMANDS = {
   done: "sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]",
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
-  integrate: "sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply] [--override-legacy-scope] [--json]",
+  integrate: "sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply] [--skip-verify] [--override-legacy-scope] [--json]",
   publish: "sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]",
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]',
@@ -2429,7 +2442,7 @@ const HELP_COMMANDS = {
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--project <path-or-slug>] --json",
-  "board-config": 'sidequest board-config [--always-in-scope path]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
+  "board-config": 'sidequest board-config [--always-in-scope path]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
   projects: "sidequest projects [--archived] [--json]",
   routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
   "archive-board": "sidequest archive-board <board-ref> [--json]",

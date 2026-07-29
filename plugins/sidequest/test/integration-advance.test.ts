@@ -73,7 +73,7 @@ function advance(fixture: any, overrides: any = {}) {
   }, overrides));
 }
 
-function submitFixture(slug: string, ticket: any, fixture: any) {
+function submitFixture(slug: string, ticket: any, fixture: any, verify: string | null = null) {
   const gitRef = `refs/sidequest/${ticket.ref}`;
   git(['update-ref', gitRef, fixture.submitted], fixture.executor);
   const target = store.integrationTarget(slug);
@@ -89,6 +89,7 @@ function submitFixture(slug: string, ticket: any, fixture: any) {
     gitRef,
     range,
     worktree: fixture.executor,
+    verify,
     force: true,
   }).ok, true);
 }
@@ -332,16 +333,17 @@ test('groom-close --integration prints the refusal loudly when the checkout is n
   assert.equal(head(fixture.repo, 'refs/heads/main'), git(['rev-parse', 'main'], fixture.repo));
 });
 
-function deliveryTicket(label: string) {
+function deliveryTicket(label: string, opts: any = {}) {
   const fixture = makeRepo(label);
   const { slug } = store.ensureProject(fixture.repo);
+  if (opts.timeoutMs != null) store.setBoardConfig(slug, { integrationVerifyTimeoutMs: opts.timeoutMs });
   const ticket = store.createTicket(slug, {
     title: `delivery ${label}`,
     category: 'codebase-exploration',
     description: 'A submitted fixture delivered through the integrator command.',
     files: ['feature.txt'],
   });
-  submitFixture(slug, ticket, fixture);
+  submitFixture(slug, ticket, fixture, opts.verify || null);
   const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
   return { fixture, slug, ticket, runCli: runner.runCli };
 }
@@ -355,6 +357,8 @@ for (const mode of ['merge', 'replay', 'apply']) {
     assert.equal(result.status, 0, result.stderr + result.stdout);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
+    assert.equal(payload.verify.status, 'none');
+    assert.match(payload.ticket.completion.reason, /Verify: none\./);
     assert.equal(payload.delivery.mode, mode);
     assert.equal(payload.delivery.pinnedRef, `refs/sidequest/${ticket.ref}`);
     assert.equal(payload.delivery.pinnedCommit, fixture.submitted);
@@ -370,6 +374,73 @@ for (const mode of ['merge', 'replay', 'apply']) {
     }
   });
 }
+
+function nodeVerify(source: string) {
+  return `"${process.execPath}" -e "${source.replace(/"/g, '\\"')}"`;
+}
+
+for (const mode of ['merge', 'replay', 'apply']) {
+  test(`integrate ${mode} delivers but keeps the ticket open when verification fails`, () => {
+    const { fixture, slug, ticket, runCli } = deliveryTicket(`verify-fail-${mode}`, {
+      verify: nodeVerify("console.error('integration verify failure'); process.exit(7)"),
+    });
+    const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', mode, '--json']);
+
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.verifyFailed.status, 'failed');
+    assert.equal(payload.verifyFailed.exitCode, 7);
+    assert.match(payload.verifyFailed.outputTail, /integration verify failure/);
+    assert.ok(fs.existsSync(payload.verifyFailed.logPath));
+    const stored = store.getTicket(slug, ticket.ref);
+    assert.equal(stored.status, 'doing');
+    assert.equal(stored.submission.integration.outcome, 'verify_failed');
+    assert.match(stored.comments.at(-1).body, /Integration verification exited 7/);
+    assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+  });
+}
+
+test('integrate finalizes after a passing recorded verification command', () => {
+  const { slug, ticket, runCli } = deliveryTicket('verify-pass', {
+    verify: nodeVerify("console.log('integration verify passed')"),
+  });
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.verify.status, 'passed');
+  assert.match(payload.verify.outputTail, /integration verify passed/);
+  assert.ok(fs.existsSync(payload.verify.logPath));
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+});
+
+test('integrate treats a timed out recorded verification command as failure', () => {
+  const { slug, ticket, runCli } = deliveryTicket('verify-timeout', {
+    verify: nodeVerify('setTimeout(() => {}, 1000)'),
+    timeoutMs: 25,
+  });
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.verifyFailed.status, 'timeout');
+  assert.equal(payload.verifyFailed.timeoutMs, 25);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'doing');
+});
+
+test('integrate records an explicit skipped verification choice', () => {
+  const { slug, ticket, runCli } = deliveryTicket('verify-skip', {
+    verify: nodeVerify("process.exit(7)"),
+  });
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--skip-verify', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.verify.status, 'skipped');
+  assert.equal(payload.verify.skippedByChoice, true);
+  assert.match(payload.ticket.completion.reason, /Verify skipped by choice\./);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+});
 
 test('replay conflict aborts, restores HEAD, and keeps the pinned ref', () => {
   const { fixture, slug, ticket, runCli } = deliveryTicket('replay-conflict');
