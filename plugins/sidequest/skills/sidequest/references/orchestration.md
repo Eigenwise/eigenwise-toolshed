@@ -7,7 +7,9 @@ in the main skill — this file is the detail on the bigger shapes.
 
 ## Decomposition in depth
 
-### Solo-fit gate before decomposition
+### Inline-safe gate, then solo-fit
+
+Apply the inline-safe gate before solo-fit or ticket filing. A user-directed mechanical edit to one or two named files with stated content, including an exact one-line `.gitignore` entry, is inline work: edit it directly, do not file a ticket or spawn an executor.
 
 Before filing several tickets, use solo-fit only to choose the dispatch shape. **SOLO-FIT picks
 one-executor vs wave; it NEVER means you implement inline.** File **one ticket and dispatch one
@@ -66,12 +68,7 @@ in the spec, or split it further.
 
 ## Inline-safe direct work
 
-Delegation is the default. For a routed ticket, direct inline work still files or annotates the ticket
-for the record and records a 20+ character reason. It is limited to a failing integration gate that
-pinpoints a known small mechanical diff (strict-TS null guard, deliberate assertion-string sync,
-byte-checked golden regeneration, or merge-conflict resolution preserving both intents), release
-bookkeeping (fragment, cut, or evidence closeout), or the existing user-directed 1–2 named-file edit.
-`direct-ok` is optional user signal only, never a gate.
+Run this check before filing. Do the user-directed 1–2 named-file carve-out inline without creating a ticket; an exact one-line `.gitignore` entry is the canonical case. If a routed ticket already exists, direct work still records a 20+ character reason. Other inline work is limited to a failing integration gate that pinpoints a known small mechanical diff (strict-TS null guard, deliberate assertion-string sync, byte-checked golden regeneration, or merge-conflict resolution preserving both intents) or release bookkeeping (fragment, cut, or evidence closeout). `direct-ok` is optional user signal only, never a gate.
 
 Route a ticket to an executor for work needing investigation or other-file reading to be confident,
 new behavior or API surface, a failing test that does not pinpoint the location, or any rationale

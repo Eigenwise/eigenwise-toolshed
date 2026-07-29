@@ -53,13 +53,11 @@ suite at integration. A passing executable done-oracle needs no review-audit + f
 lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
 investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
-The board keeps plans through context loss; a user-directed mechanical edit to one or two named files
-with stated content needs no ticket; any edit requiring other-file reading or investigation does.
+The board keeps plans through context loss. Apply the inline-safe check before solo-fit or ticket filing. A user-directed mechanical edit to one or two named files with stated content, including an exact one-line `.gitignore` entry, is inline work: edit it directly, do not file a ticket or spawn an executor. Any edit requiring other-file reading or investigation needs a ticket.
 
 ### INLINE-SAFE direct work
 
-For a routed ticket, the orchestrator may claim `--direct` and edit inline only after filing or
-annotating the ticket for the record, giving a 20+ character reason, and matching this allowlist:
+Run this gate before solo-fit or filing. Do the user-directed one-or-two-named-file carve-out inline without creating a ticket; an exact one-line `.gitignore` entry is the canonical case. If a routed ticket already exists, the orchestrator may claim `--direct` and edit inline only after annotating the ticket for the record, giving a 20+ character reason, and matching this allowlist:
 
 - A failing integration gate pinpoints an exact, known small diff: a strict-TS null guard, an
   assertion string synced after a deliberate reword, byte-checked golden regeneration, or a

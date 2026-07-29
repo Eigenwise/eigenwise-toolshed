@@ -8,6 +8,7 @@
     "dev": "npm run generate && astro dev",
     "prebuild": "npm run generate",
     "build": "astro check && astro build",
+    "check": "astro check",
     "preview": "astro preview",
     "screenshots": "node screenshots/capture.mjs"
   },

@@ -46,6 +46,7 @@ export default defineConfig({
             { label: 'Sidequest', slug: 'getting-started/sidequest' },
             { label: 'Experiment loops', slug: 'getting-started/experiments' },
             { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
+            { label: 'Windows Sandbox clean room', slug: 'getting-started/windows-sandbox' },
           ],
         },
         {
