@@ -104,9 +104,29 @@ test('cleanup defaults to the OS temp directory', () => {
 });
 
 test('cleanup refuses a caller-supplied root outside the OS temp directory', () => {
-  const outside = fs.mkdtempSync(path.join(process.cwd(), 'sq-cleanup-outside-'));
-  assert.throws(() => cleanupTempRoots({ root: outside }), /must resolve to the OS temp directory/);
-  fs.rmSync(outside, { recursive: true, force: true });
+  const tempRoot = fs.realpathSync.native(os.tmpdir());
+  const candidates = [process.cwd(), os.homedir(), path.dirname(tempRoot), path.parse(tempRoot).root];
+  let outside: string | undefined;
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    const relative = path.relative(tempRoot, resolved);
+    if (relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) continue;
+    try {
+      const created = fs.mkdtempSync(path.join(resolved, 'sq-cleanup-outside-'));
+      const createdRelative = path.relative(tempRoot, fs.realpathSync.native(created));
+      if (createdRelative.startsWith(`..${path.sep}`) || path.isAbsolute(createdRelative)) {
+        outside = created;
+        break;
+      }
+      fs.rmSync(created, { recursive: true, force: true });
+    } catch { }
+  }
+  assert.ok(outside, 'test needs a writable directory outside the OS temp directory');
+  try {
+    assert.throws(() => cleanupTempRoots({ root: outside }), /must resolve to the OS temp directory/);
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('cleanup refuses a traversal that leaves the OS temp directory', () => {
