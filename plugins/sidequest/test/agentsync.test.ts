@@ -406,7 +406,10 @@ test('sync writes route-independent generated executors', () => {
   assert.match(body, /`kind=question` needs, a scope conflict, or a failure the board cannot/);
   assert.doesNotMatch(body, /verified milestone/);
   assert.match(body, /Teammate subagent fan-out must omit the Agent `name` parameter/);
-  assert.match(body, /never use the generic `general-purpose` type/);
+  assert.match(body, /First classify matching work through Sidequest categories and board routing/);
+  assert.match(body, /genuinely uncategorized bounded work/);
+  assert.match(body, /Audit and review work always needs its routed `review-audit` ticket executor/);
+  assert.match(body, /`general-purpose` only after that category check/);
   assert.match(body, /run in the background from your current working tree/);
   assert.match(body, /omit `isolation`/);
   assert.match(body, /report a visibility block rather than clean findings/);

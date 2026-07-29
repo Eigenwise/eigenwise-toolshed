@@ -7,7 +7,8 @@ import { runtimeModule } from './shared/paths.js';
 import { dispatchLaunchName } from '../lib/exec-names.js';
 
 const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statusline-setup']);
-const EXECUTOR_HELPER_TYPES = new Set(['Explore', 'claude-code-guide', 'web-researcher']);
+const EXECUTOR_HELPER_TYPES = new Set(['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']);
+const HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
 
 type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
 interface ExecutorClassification {
@@ -106,10 +107,15 @@ function isSubagentCaller(input: HookInput): boolean {
 }
 
 function helperDenyReason(type: string): string {
-  if (type === 'general-purpose') {
-    return 'sidequest: executor helpers cannot use the generic general-purpose type. It can silently bypass a routed category such as review-audit. Use Explore for a bounded mechanical sweep, or route category work through its Sidequest ticket executor.';
-  }
-  return `sidequest: ${type || 'unnamed'} is not an allowed executor helper. Use Explore for a bounded mechanical sweep, claude-code-guide or web-researcher for documentation research, or route category work through its Sidequest ticket executor.`;
+  return `sidequest: ${type || 'unnamed'} is not an allowed executor helper. Route matching category work through its Sidequest ticket executor.`;
+}
+
+function helperReviewWorkDenyReason(): string {
+  return 'sidequest: helper prompts that request audit or review work must run through the board as a review-audit ticket executor.';
+}
+
+function isHelperReviewWork(toolInput: Record<string, unknown>): boolean {
+  return HELPER_REVIEW_WORK_RE.test(`${String(toolInput.prompt || '')}\n${String(toolInput.description || '')}`);
 }
 
 function helperModelDenyReason(type: string): string {
@@ -128,6 +134,10 @@ function helperEvidenceRule(input: HookInput): string {
 function rewriteExecutorHelper(input: HookInput, toolInput: Record<string, unknown>, type: string): void {
   if (!EXECUTOR_HELPER_TYPES.has(type)) {
     writeDeny('PreToolUse', helperDenyReason(type));
+    return;
+  }
+  if (isHelperReviewWork(toolInput)) {
+    writeDeny('PreToolUse', helperReviewWorkDenyReason());
     return;
   }
   const hasModel = Object.prototype.hasOwnProperty.call(toolInput, 'model') && toolInput.model != null && toolInput.model !== '';

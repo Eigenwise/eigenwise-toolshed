@@ -27,8 +27,10 @@ test('mid-task sub-delegation uses cheap scoped helpers', () => {
   assert.match(executorTemplate, /Mid-task sub-delegation/);
   assert.match(executorTemplate, /always pin an explicit cheap model/);
   assert.match(executorTemplate, /`web-researcher`, never a gateway model/);
-  assert.match(executorTemplate, /never use the generic `general-purpose` type/);
-  assert.match(executorTemplate, /routed-category work, including review, needs its own Sidequest executor/);
+  assert.match(executorTemplate, /First classify matching work through Sidequest categories and board routing/);
+  assert.match(executorTemplate, /genuinely uncategorized bounded work/);
+  assert.match(executorTemplate, /Audit and review work always needs its routed `review-audit` ticket executor/);
+  assert.match(executorTemplate, /`general-purpose` only after that category check/);
   assert.match(executorTemplate, /run in the background from your current working tree/);
   assert.match(executorTemplate, /report a visibility block rather than clean findings/);
   assert.match(executorTemplate, /Helper writes are mechanically limited to the parent ticket's effective scope/);

@@ -143,7 +143,8 @@ function dispatchLaunchName(ref, title, sequence) {
 
 // src/hooks/force-exec-bypass.ts
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
-var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher"]);
+var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
+var HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 function fallbackClassify(type) {
   const readOnlyDispatch = /^sidequest-exec-dispatch-readonly-(low|medium|high|xhigh|max)$/.exec(type);
@@ -172,10 +173,14 @@ function isSubagentCaller(input) {
   return Boolean(stringField(input, "agent_id"));
 }
 function helperDenyReason(type) {
-  if (type === "general-purpose") {
-    return "sidequest: executor helpers cannot use the generic general-purpose type. It can silently bypass a routed category such as review-audit. Use Explore for a bounded mechanical sweep, or route category work through its Sidequest ticket executor.";
-  }
-  return `sidequest: ${type || "unnamed"} is not an allowed executor helper. Use Explore for a bounded mechanical sweep, claude-code-guide or web-researcher for documentation research, or route category work through its Sidequest ticket executor.`;
+  return `sidequest: ${type || "unnamed"} is not an allowed executor helper. Route matching category work through its Sidequest ticket executor.`;
+}
+function helperReviewWorkDenyReason() {
+  return "sidequest: helper prompts that request audit or review work must run through the board as a review-audit ticket executor.";
+}
+function isHelperReviewWork(toolInput) {
+  return HELPER_REVIEW_WORK_RE.test(`${String(toolInput.prompt || "")}
+${String(toolInput.description || "")}`);
 }
 function helperModelDenyReason(type) {
   return `sidequest: executor helper ${type} needs an explicit Agent model. Nested spawns do not inherit the parent route, so a default model would silently weaken the helper.`;
@@ -189,6 +194,10 @@ function helperEvidenceRule(input) {
 function rewriteExecutorHelper(input, toolInput, type) {
   if (!EXECUTOR_HELPER_TYPES.has(type)) {
     writeDeny("PreToolUse", helperDenyReason(type));
+    return;
+  }
+  if (isHelperReviewWork(toolInput)) {
+    writeDeny("PreToolUse", helperReviewWorkDenyReason());
     return;
   }
   const hasModel = Object.prototype.hasOwnProperty.call(toolInput, "model") && toolInput.model != null && toolInput.model !== "";

@@ -323,8 +323,8 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
-test('pre-tool hook: executor helpers are explicit-model background work in the parent tree', () => {
-  for (const subagent_type of ['Explore', 'claude-code-guide', 'web-researcher']) {
+test('pre-tool hook: executor helpers allow mechanical sweeps with parent-tree safeguards', () => {
+  for (const subagent_type of ['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']) {
     const out = runHookOutput(FORCE_BYPASS, {
       agent_id: `native-task@${subagent_type}`,
       agent_type: 'sidequest-exec-dispatch-high',
@@ -334,7 +334,7 @@ test('pre-tool hook: executor helpers are explicit-model background work in the 
         model: 'haiku',
         isolation: 'worktree',
         run_in_background: false,
-        prompt: 'Inspect the parent ticket work without editing it.',
+        prompt: 'Locate matching test fixtures in the parent worktree without editing.',
       },
     });
     assert.equal(out.hookSpecificOutput.updatedInput.model, 'haiku', subagent_type);
@@ -366,21 +366,49 @@ test('pre-tool hook: helper session transcript hits are self-reference', () => {
   assert.ok(prompt.includes(path.join(path.dirname(transcriptPath), 'subagents')));
 });
 
-test('pre-tool hook: executor helpers reject generic types and model defaults', () => {
-  const generic = runHookOutput(FORCE_BYPASS, {
-    agent_id: 'code-review-child',
+test('pre-tool hook: executor helpers reject review work and model defaults', () => {
+  for (const subagent_type of ['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']) {
+    const review = runHookOutput(FORCE_BYPASS, {
+      agent_id: `review-helper-${subagent_type}`,
+      agent_type: 'sidequest-exec-dispatch-high',
+      tool_name: 'Agent',
+      tool_input: {
+        subagent_type,
+        model: 'haiku',
+        isolation: 'worktree',
+        description: 'Inspect the parent work.',
+        prompt: 'Audit the ticket-scoped storage API.',
+      },
+    });
+    assert.equal(review.hookSpecificOutput.permissionDecision, 'deny', subagent_type);
+    assert.match(review.hookSpecificOutput.permissionDecisionReason, /review-audit/, subagent_type);
+    assert.doesNotMatch(review.hookSpecificOutput.permissionDecisionReason, /Use Explore|claude-code-guide|web-researcher/, subagent_type);
+  }
+
+  for (const prompt of ['Audits the ticket-scoped storage API.', 'Reviews the ticket-scoped storage API.']) {
+    const review = runHookOutput(FORCE_BYPASS, {
+      agent_id: `plural-review-helper-${prompt[0]}`,
+      agent_type: 'sidequest-exec-dispatch-high',
+      tool_name: 'Agent',
+      tool_input: { subagent_type: 'Explore', model: 'haiku', prompt },
+    });
+    assert.equal(review.hookSpecificOutput.permissionDecision, 'deny', prompt);
+    assert.match(review.hookSpecificOutput.permissionDecisionReason, /review-audit/, prompt);
+  }
+
+  const reviewDescription = runHookOutput(FORCE_BYPASS, {
+    agent_id: 'review-description-helper',
     agent_type: 'sidequest-exec-dispatch-high',
     tool_name: 'Agent',
     tool_input: {
       subagent_type: 'general-purpose',
       model: 'haiku',
-      isolation: 'worktree',
-      prompt: 'Audit the ticket-scoped storage API.',
+      description: 'Act as a reviewer for the parent work.',
+      prompt: 'Locate the relevant test fixture.',
     },
   });
-  assert.equal(generic.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(generic.hookSpecificOutput.permissionDecisionReason, /cannot use the generic general-purpose type/);
-  assert.match(generic.hookSpecificOutput.permissionDecisionReason, /review-audit/);
+  assert.equal(reviewDescription.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(reviewDescription.hookSpecificOutput.permissionDecisionReason, /review-audit/);
 
   const defaulted = runHookOutput(FORCE_BYPASS, {
     agent_id: 'defaulted-helper',
