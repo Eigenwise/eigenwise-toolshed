@@ -4508,6 +4508,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
     const activeNonRepoOutput = dispatch?.nonRepoOutput === true && liveClaim && activeDispatch;
     const activeReadOnlyDispatch = dispatch?.readonly === true && liveClaim && activeDispatch;
+    let sharedTreeCommittedScope = false;
     if (executorDone && liveClaim && activeDispatch) {
       const delta = dispatchDelta(slug, t);
       if (!delta.ok && dispatch?.sharedTree === true && dispatch?.baseCommit) {
@@ -4518,17 +4519,18 @@ function releaseTicket(slug, idOrRef, by, opts) {
           ticket: t
         };
       }
-      if (delta.ok) {
-        const changed = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed]));
-        const unscoped = (activeArtifactDispatch ? delta.committed : changed).filter((file) => !commitScope.isInScope(file, declaredFiles));
-        const refused = activeReadOnlyDispatch && !activeArtifactDispatch ? changed : unscoped;
-        if (refused.length) {
-          const paths = refused.sort();
+      if (delta.ok && !activeArtifactDispatch) {
+        const scopedCommitted = delta.committed.filter((file) => commitScope.isInScope(file, declaredFiles));
+        sharedTreeCommittedScope = dispatch?.sharedTree === true && scopedCommitted.length > 0;
+        const scopedWorking = delta.working.filter((file) => commitScope.isInScope(file, declaredFiles));
+        const scopedChanges = activeReadOnlyDispatch ? Array.from(/* @__PURE__ */ new Set([...scopedWorking, ...scopedCommitted])) : [];
+        if (scopedChanges.length) {
+          const paths = scopedChanges.sort();
           const mode = activeReadOnlyDispatch ? "read-only dispatch" : "declared scope";
           return {
             ok: false,
             reason: "done_scope_violation",
-            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths since dispatch base: ${paths.join(", ")}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
+            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope since dispatch base: ${paths.join(", ")}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
             ticket: t,
             unscopedPaths: paths
           };
@@ -4549,7 +4551,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       };
     }
     const provenNoOp = opts.cleanDeclaredScope === true;
-    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
+    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
       return {
         ok: false,
         reason: "submission_required",
