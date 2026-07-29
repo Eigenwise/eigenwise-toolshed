@@ -1257,10 +1257,13 @@ test('stop reminder: names this session\'s doing tickets and pending submissions
     sessionId,
   }).ok, true);
 
-  const reminder = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }).systemMessage;
+  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+  assert.equal(output.hookSpecificOutput.hookEventName, 'Stop');
+  const reminder = output.hookSpecificOutput.additionalContext;
   assert.match(reminder, /1 ticket in doing/);
   assert.match(reminder, /1 submission pending integration/);
   assert.match(reminder, /Update or close them before finishing/);
+  assert.equal(output.systemMessage, undefined, 'the reminder must go to Claude rather than the user-visible system message');
   assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
 });
 
@@ -1277,6 +1280,21 @@ test('stop reminder: stays silent for a quiet session and when nudges are off', 
     session_id: sessionId,
     cwd: BOARD_PATH,
   }, { SIDEQUEST_NUDGE: 'off' }), null);
+});
+
+test('stop reminder: ignores re-entry and falls silent after two unchanged reminders', () => {
+  const sessionId = `reconcile-bound-${++sqSeq}`;
+  const ticket = addTicket('bounded reconciliation reminder');
+  claimStopTicket(ticket, sessionId, 'reconcile-bound');
+  const input = { session_id: sessionId, cwd: BOARD_PATH };
+
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, {
+    ...input,
+    stop_hook_active: true,
+  }), null, 're-entered Stop hooks must never emit another continuation');
+  assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input)?.hookSpecificOutput?.additionalContext);
+  assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input)?.hookSpecificOutput?.additionalContext);
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null, 'the same unresolved board state must stop after two reminders');
 });
 
 test('session-start: carries evidence-first advisory routing guidance', () => {
