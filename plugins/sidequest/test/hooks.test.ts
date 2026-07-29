@@ -310,48 +310,67 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
-test('pre-tool hook: subagent callers can fan out generic agents with bounded guidance', () => {
-  const proposed = {
-    subagent_type: 'general-purpose',
-    isolation: 'worktree',
-    prompt: 'Audit the ticket-scoped storage API.',
-  };
-  for (const agent_type of [
-    'sidequest-exec-high',
-    'sidequest-exec-dispatch-high',
-    'sidequest-sq-738-gpt-5-6-terra',
-    'sidequest-native-sq-738-gpt-5-6-terra',
-  ]) {
+test('pre-tool hook: executor helpers are explicit-model background work in the parent tree', () => {
+  for (const subagent_type of ['Explore', 'claude-code-guide', 'web-researcher']) {
     const out = runHookOutput(FORCE_BYPASS, {
-      agent_id: `native-task@${agent_type}`,
-      agent_type,
+      agent_id: `native-task@${subagent_type}`,
+      agent_type: 'sidequest-exec-dispatch-high',
       tool_name: 'Agent',
-      tool_input: proposed,
+      tool_input: {
+        subagent_type,
+        model: 'haiku',
+        isolation: 'worktree',
+        run_in_background: false,
+        prompt: 'Inspect the parent ticket work without editing it.',
+      },
     });
-    assert.match(out.systemMessage, /subagent fan-out is allowed/);
-    assert.match(out.systemMessage, /unnamed subagents only/);
-    assert.match(out.systemMessage, /current task scope/);
-    assert.match(out.systemMessage, /never file, route, or dispatch board tickets/);
-    assert.match(out.systemMessage, /from a subagent/);
-    assert.equal(out.hookSpecificOutput, undefined);
+    assert.equal(out.hookSpecificOutput.updatedInput.model, 'haiku', subagent_type);
+    assert.equal(out.hookSpecificOutput.updatedInput.mode, 'bypassPermissions', subagent_type);
+    assert.equal(out.hookSpecificOutput.updatedInput.run_in_background, true, subagent_type);
+    assert.equal(out.hookSpecificOutput.updatedInput.isolation, undefined, subagent_type);
+    assert.match(out.systemMessage, /background from the parent working tree/);
+    assert.match(out.systemMessage, /report the visibility block instead of returning clean findings/);
   }
+});
 
-  const genericSubagent = runHookOutput(FORCE_BYPASS, {
+test('pre-tool hook: executor helpers reject generic types and model defaults', () => {
+  const generic = runHookOutput(FORCE_BYPASS, {
     agent_id: 'code-review-child',
-    agent_type: 'code-review',
+    agent_type: 'sidequest-exec-dispatch-high',
     tool_name: 'Agent',
-    tool_input: proposed,
+    tool_input: {
+      subagent_type: 'general-purpose',
+      model: 'haiku',
+      isolation: 'worktree',
+      prompt: 'Audit the ticket-scoped storage API.',
+    },
   });
-  assert.equal(
-    genericSubagent.systemMessage,
-    'sidequest: subagent fan-out is allowed for this task. Spawn unnamed subagents only, keep them inside the current task scope, and never file, route, or dispatch board tickets from a subagent.'
-  );
-  assert.equal(genericSubagent.hookSpecificOutput, undefined);
+  assert.equal(generic.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(generic.hookSpecificOutput.permissionDecisionReason, /cannot use the generic general-purpose type/);
+  assert.match(generic.hookSpecificOutput.permissionDecisionReason, /review-audit/);
+
+  const defaulted = runHookOutput(FORCE_BYPASS, {
+    agent_id: 'defaulted-helper',
+    agent_type: 'sidequest-exec-dispatch-high',
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', prompt: 'Read the parent diff.' },
+  });
+  assert.equal(defaulted.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(defaulted.hookSpecificOutput.permissionDecisionReason, /needs an explicit Agent model/);
+  assert.match(defaulted.hookSpecificOutput.permissionDecisionReason, /do not inherit the parent route/);
+
+  const chained = runHookOutput(FORCE_BYPASS, {
+    agent_id: 'already-running-helper',
+    agent_type: 'general-purpose',
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', model: 'haiku', prompt: 'Read the parent diff.' },
+  });
+  assert.equal(chained.hookSpecificOutput.updatedInput.run_in_background, true);
 
   const mainThread = runHookOutput(FORCE_BYPASS, {
     agent_type: 'sidequest-exec-dispatch-high',
     tool_name: 'Agent',
-    tool_input: proposed,
+    tool_input: { subagent_type: 'general-purpose', prompt: 'Quick lookup.' },
   });
   assert.equal(mainThread.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(mainThread.hookSpecificOutput.permissionDecisionReason, /generic Agent, not a Sidequest ticket executor/);

@@ -25,10 +25,12 @@ test('comment guidance makes durable handoffs concise and consumable', () => {
 
 test('mid-task sub-delegation uses cheap scoped helpers', () => {
   assert.match(executorTemplate, /Mid-task sub-delegation/);
-  assert.match(executorTemplate, /explicitly cheap model/);
-  assert.match(executorTemplate, /`web-researcher` with a Claude-side haiku\/sonnet-class model/);
-  assert.match(executorTemplate, /never a gateway-model web-research subspawn because gateway WebSearch is unreliable/);
-  assert.match(executorTemplate, /Explore or a general subagent pinned through the Agent `model` argument/);
+  assert.match(executorTemplate, /always pin an explicit cheap model/);
+  assert.match(executorTemplate, /`web-researcher`, never a gateway model/);
+  assert.match(executorTemplate, /never use the generic `general-purpose` type/);
+  assert.match(executorTemplate, /routed-category work, including review, needs its own Sidequest executor/);
+  assert.match(executorTemplate, /run in the background from your current working tree/);
+  assert.match(executorTemplate, /report a visibility block rather than clean findings/);
   assert.match(executorTemplate, /Helper writes are mechanically limited to the parent ticket's effective scope/);
   assert.match(executorTemplate, /route an outside path through the parent as a scope request or new ticket/);
   assert.match(executorTemplate, /Helpers are throwaway, not sub-tickets/);

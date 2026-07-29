@@ -7,6 +7,7 @@ import { runtimeModule } from './shared/paths.js';
 import { dispatchLaunchName } from '../lib/exec-names.js';
 
 const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statusline-setup']);
+const EXECUTOR_HELPER_TYPES = new Set(['Explore', 'claude-code-guide', 'web-researcher']);
 
 type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
 interface ExecutorClassification {
@@ -102,6 +103,35 @@ function isCurrentExecutor(classification: ExecutorClassification): boolean {
 
 function isSubagentCaller(input: HookInput): boolean {
   return Boolean(stringField(input, 'agent_id'));
+}
+
+function helperDenyReason(type: string): string {
+  if (type === 'general-purpose') {
+    return 'sidequest: executor helpers cannot use the generic general-purpose type. It can silently bypass a routed category such as review-audit. Use Explore for a bounded mechanical sweep, or route category work through its Sidequest ticket executor.';
+  }
+  return `sidequest: ${type || 'unnamed'} is not an allowed executor helper. Use Explore for a bounded mechanical sweep, claude-code-guide or web-researcher for documentation research, or route category work through its Sidequest ticket executor.`;
+}
+
+function helperModelDenyReason(type: string): string {
+  return `sidequest: executor helper ${type} needs an explicit Agent model. Nested spawns do not inherit the parent route, so a default model would silently weaken the helper.`;
+}
+
+function rewriteExecutorHelper(toolInput: Record<string, unknown>, type: string): void {
+  if (!EXECUTOR_HELPER_TYPES.has(type)) {
+    writeDeny('PreToolUse', helperDenyReason(type));
+    return;
+  }
+  const hasModel = Object.prototype.hasOwnProperty.call(toolInput, 'model') && toolInput.model != null && toolInput.model !== '';
+  if (!hasModel) {
+    writeDeny('PreToolUse', helperModelDenyReason(type));
+    return;
+  }
+  const updatedInput: Record<string, unknown> = { ...toolInput, mode: 'bypassPermissions', run_in_background: true };
+  delete updatedInput.isolation;
+  writeJson({
+    systemMessage: 'sidequest: executor helpers run in the background from the parent working tree. If the target is unavailable there, report the visibility block instead of returning clean findings.',
+    hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
+  });
 }
 
 function agentDenyReason(type: string, classification: ExecutorClassification): string {
@@ -380,15 +410,13 @@ function main(): void {
   const toolInput = toolInputOf(input);
   if (!toolInput) return;
   const type = String(toolInput.subagent_type || '');
-  if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
   const classification = classifyExecutor(type);
+  if (isSubagentCaller(input) && !isCurrentExecutor(classification)) {
+    rewriteExecutorHelper(toolInput, type);
+    return;
+  }
+  if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
   if (!isCurrentExecutor(classification)) {
-    if (isSubagentCaller(input) && !type.startsWith('sidequest-')) {
-      writeJson({
-        systemMessage: 'sidequest: subagent fan-out is allowed for this task. Spawn unnamed subagents only, keep them inside the current task scope, and never file, route, or dispatch board tickets from a subagent.',
-      });
-      return;
-    }
     writeDeny('PreToolUse', agentDenyReason(type, classification));
     return;
   }
@@ -404,7 +432,12 @@ function main(): void {
     return;
   }
 
-  const updatedInput: Record<string, unknown> = { ...toolInput, mode: 'bypassPermissions' };
+  const updatedInput: Record<string, unknown> = {
+    ...toolInput,
+    mode: 'bypassPermissions',
+    ...(isSubagentCaller(input) ? { run_in_background: true } : {}),
+  };
+  if (isSubagentCaller(input)) delete updatedInput.isolation;
   const dispatchValidation = preparedDispatchValidation(input);
   if (dispatchValidation.status === 'stale') {
     writeDeny('PreToolUse', 'sidequest: dispatch token is stale or rotated. Re-run dispatch and pass its spawn unchanged.');
