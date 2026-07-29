@@ -310,7 +310,7 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
-test('pre-tool hook: executor callers can fan out generic agents with bounded guidance', () => {
+test('pre-tool hook: subagent callers can fan out generic agents with bounded guidance', () => {
   const proposed = {
     subagent_type: 'general-purpose',
     isolation: 'worktree',
@@ -328,12 +328,25 @@ test('pre-tool hook: executor callers can fan out generic agents with bounded gu
       tool_name: 'Agent',
       tool_input: proposed,
     });
-    assert.match(out.systemMessage, /executor fan-out is allowed/);
+    assert.match(out.systemMessage, /subagent fan-out is allowed/);
     assert.match(out.systemMessage, /unnamed subagents only/);
-    assert.match(out.systemMessage, /ticket scope/);
+    assert.match(out.systemMessage, /current task scope/);
     assert.match(out.systemMessage, /never file, route, or dispatch board tickets/);
+    assert.match(out.systemMessage, /from a subagent/);
     assert.equal(out.hookSpecificOutput, undefined);
   }
+
+  const genericSubagent = runHookOutput(FORCE_BYPASS, {
+    agent_id: 'code-review-child',
+    agent_type: 'code-review',
+    tool_name: 'Agent',
+    tool_input: proposed,
+  });
+  assert.equal(
+    genericSubagent.systemMessage,
+    'sidequest: subagent fan-out is allowed for this task. Spawn unnamed subagents only, keep them inside the current task scope, and never file, route, or dispatch board tickets from a subagent.'
+  );
+  assert.equal(genericSubagent.hookSpecificOutput, undefined);
 
   const mainThread = runHookOutput(FORCE_BYPASS, {
     agent_type: 'sidequest-exec-dispatch-high',

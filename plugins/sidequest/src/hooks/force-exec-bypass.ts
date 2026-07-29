@@ -100,14 +100,8 @@ function isCurrentExecutor(classification: ExecutorClassification): boolean {
     || classification.kind === 'read_only_codex_dispatch';
 }
 
-function isExecutorCaller(input: HookInput): boolean {
-  if (!stringField(input, 'agent_id')) return false;
-  const type = stringField(input, 'agent_type');
-  if (!type) return false;
-  return isCurrentExecutor(classifyExecutor(type))
-    || type.startsWith('sidequest-sq-')
-    || type.startsWith('sidequest-ticket-')
-    || type.startsWith('sidequest-native-');
+function isSubagentCaller(input: HookInput): boolean {
+  return Boolean(stringField(input, 'agent_id'));
 }
 
 function agentDenyReason(type: string, classification: ExecutorClassification): string {
@@ -389,9 +383,9 @@ function main(): void {
   if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
   const classification = classifyExecutor(type);
   if (!isCurrentExecutor(classification)) {
-    if (isExecutorCaller(input) && !type.startsWith('sidequest-')) {
+    if (isSubagentCaller(input) && !type.startsWith('sidequest-')) {
       writeJson({
-        systemMessage: 'sidequest: executor fan-out is allowed for this ticket. Spawn unnamed subagents only, keep them inside the ticket scope, and never file, route, or dispatch board tickets from an executor.',
+        systemMessage: 'sidequest: subagent fan-out is allowed for this task. Spawn unnamed subagents only, keep them inside the current task scope, and never file, route, or dispatch board tickets from a subagent.',
       });
       return;
     }
