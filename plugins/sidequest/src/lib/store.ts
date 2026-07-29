@@ -3259,6 +3259,17 @@ function scopeExpansionFiles(ticket?: any, additions?: any) {
   return normalizeFiles([...(Array.isArray(ticket?.files) ? ticket.files : []), ...normalizeFiles(additions)]);
 }
 
+function approvedScopeRequestFiles(ticket?: any, files?: any) {
+  const request = ticket?.scopeRequest;
+  const pending = normalizeFiles(request?.files);
+  if (!pending.length) return null;
+  const next = boundedFiles(files);
+  const pendingScope = scopeExpansionFiles(ticket, pending);
+  const requestedScope = scopeExpansionFiles(ticket, request?.requested || pending);
+  if (!sameFiles(next, pendingScope) && !sameFiles(next, requestedScope)) return null;
+  return requestedScope;
+}
+
 function scopeExpansionCommand(ticket?: any, additions?: any) {
   const ref = String(ticket?.ref || '').trim();
   if (!ref) return null;
@@ -3306,7 +3317,14 @@ function createScopeRequestMarker(ticket?: any, request?: any, worktree?: any) {
     const marker = path.join(root, '.sidequest', scopeRequestMarkerFile(ticket));
     const relativeMarker = path.relative(root, marker).replace(/\\/g, '/');
     fs.mkdirSync(path.dirname(marker), { recursive: true });
-    fs.writeFileSync(marker, JSON.stringify({ ref: ticket.ref, by: request.by, files: request.files, at: request.at }) + '\n');
+    fs.writeFileSync(marker, JSON.stringify({
+      ref: ticket.ref,
+      by: request.by,
+      files: request.files,
+      requested: request.requested,
+      covered: request.covered,
+      at: request.at,
+    }) + '\n');
     try {
       execFileSync('git', ['add', '--intent-to-add', '--force', '--', relativeMarker], { cwd: root, windowsHide: true, stdio: 'ignore' });
     } catch (_) {
@@ -3433,8 +3451,8 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
       return { ok: true, ticket: t, covered, approved: testDirectories, autoApproved: true, scopeRequest: null, command: null, comment };
     }
-    const command = scopeExpansionCommand(t, additions);
-    const request = { by, files: additions, at: now };
+    const command = scopeExpansionCommand(t, requested);
+    const request = { by, files: additions, requested, covered, at: now };
     const marker = createScopeRequestMarker(t, request, opts.worktree);
     if (!marker.ok) return { ok: false, reason: marker.reason, ticket: t };
     t.scopeRequest = Object.assign(request, marker.markerWorktree ? { markerWorktree: marker.markerWorktree } : {});
@@ -3443,7 +3461,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     if (!Array.isArray(t.comments)) t.comments = [];
     const comment = createComment({
       by,
-      body: `Scope expansion requested: ${additions.join(', ')}. Approve with \`${command}\`; claim remains held.`,
+      body: `Scope expansion requested: ${additions.join(', ')}.${covered.length ? ` Already in scope: ${covered.join(', ')}.` : ''} Approve with \`${command}\`; claim remains held.`,
       kind: 'comment',
       source: opts.source || 'cli',
     }, now);
@@ -3670,7 +3688,7 @@ function activeClaimScopeRefusal(ticket?: any, files?: any, patch?: any) {
   const next = boundedFiles(files);
   if (sameFiles(current, next)) return null;
   const request = ticket.scopeRequest;
-  if (request && sameFiles(next, scopeExpansionFiles(ticket, request.files))) return null;
+  if (request && approvedScopeRequestFiles(ticket, next)) return null;
   const caller = String(patch?.by || '').trim();
   if (caller && caller !== ticket.claim.by) return null;
   const claimedSession = String(dispatchState(ticket)?.sessionId || '').trim();
@@ -3714,7 +3732,8 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.files !== undefined) {
       const scopeRefusal = activeClaimScopeRefusal(t, patch.files, patch);
       if (scopeRefusal) throw new Error(scopeRefusal);
-      t.files = boundedFiles(patch.files);
+      const approvedFiles = approvedScopeRequestFiles(t, patch.files);
+      t.files = approvedFiles || boundedFiles(patch.files);
       const request = t.scopeRequest;
       if (request && Array.isArray(request.files) && request.files.every((file?: any) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
         clearScopeRequestMarker(t);

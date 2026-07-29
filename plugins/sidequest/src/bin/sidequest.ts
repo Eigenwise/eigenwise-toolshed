@@ -1203,6 +1203,16 @@ function scopeRemedy(ticket: any, paths: any[]) {
   return store.scopeExpansionCommand(ticket, paths);
 }
 
+function pendingScopeCommitRefusal(ticket: any) {
+  const request = ticket.scopeRequest;
+  if (!request) return null;
+  const pending = store.normalizeFiles(request.files);
+  const covered = store.normalizeFiles(request.covered);
+  const requested = store.normalizeFiles(request.requested || pending);
+  const approval = store.scopeExpansionCommand(ticket, requested);
+  return `commit: refused ${ticket.ref}; scope approval remains pending for ${pending.join(', ')}.${covered.length ? ` Already effective: ${covered.join(', ')}.` : ''} Approve the request with \`${approval}\` before committing.`;
+}
+
 async function cmdScopeRequest(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.');
@@ -1248,6 +1258,8 @@ async function cmdCommit(opts: any, positional: any) {
       fail(`commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`);
     }
   }
+  const pendingScopeRefusal = pendingScopeCommitRefusal(ticket);
+  if (pendingScopeRefusal) fail(pendingScopeRefusal);
   const scope = store.effectiveScope(slug, ticket.files);
   const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {

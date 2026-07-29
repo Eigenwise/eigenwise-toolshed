@@ -98,6 +98,15 @@ test('CLI scope-request keeps the claim while update --files approves the additi
   assert.deepStrictEqual(store.getTicket(slug, t.ref).scopeRequest.files, ['lib/new.js']);
   assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
 
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'partial\n');
+  git(['add', 'lib/fixture.js']);
+  const blocked = runCli(['commit', t.ref, '--by', by, '--message', 'must wait for scope approval']);
+  assert.strictEqual(blocked.status, 1, blocked.stderr + blocked.stdout);
+  assert.match(blocked.stderr + blocked.stdout, /scope approval remains pending/);
+  git(['reset', '--', 'lib/fixture.js']);
+  fs.unlinkSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'));
+
   assert.strictEqual(runCli(['update', t.ref, '--files', 'lib/fixture.js,lib/new.js']).status, 0);
   const approved = store.getTicket(slug, t.ref);
   assert.strictEqual(approved.scopeRequest, null);

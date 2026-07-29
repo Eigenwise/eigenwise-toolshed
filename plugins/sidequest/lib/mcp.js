@@ -1238,6 +1238,19 @@ const TOOLS = [
           });
         }
       }
+      const pendingScopeRequest = ticket.scopeRequest;
+      if (pendingScopeRequest) {
+        const pending = store.normalizeFiles(pendingScopeRequest.files);
+        const covered = store.normalizeFiles(pendingScopeRequest.covered);
+        const requested = store.normalizeFiles(pendingScopeRequest.requested || pending);
+        const approval = store.scopeExpansionCommand(ticket, requested);
+        return mutationAck(slug, {
+          ok: false,
+          ticket,
+          reason: "scope_request_pending",
+          message: `commit: refused ${ticket.ref}; scope approval remains pending for ${pending.join(", ")}.${covered.length ? ` Already effective: ${covered.join(", ")}.` : ""} Approve the request with \`${approval}\` before committing.`
+        });
+      }
       const scope = store.effectiveScope(slug, ticket.files);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
       if (outsideWorktree.length) {

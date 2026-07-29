@@ -1263,6 +1263,49 @@ test('MCP scopeRequest pauses a claimed executor until the orchestrator expands 
   assert.deepEqual(approved.files, ['lib', 'other/new.js']);
 });
 
+test('MCP mixed scope requests keep the full intent and block partial commits', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  assert.equal(store.setBoardConfig(project, { alwaysInScope: ['docs/'] }).ok, true);
+  assert.deepEqual(store.effectiveScope(project, []), ['docs/']);
+  const ticket = store.createTicket(project, {
+    title: 'Mixed scope request', complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a mixed request must not commit only its already-effective paths',
+  });
+  const by = 'mcp-mixed-scope-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The mixed scope fixture requires a local direct claim.' })).ok, true);
+
+  const docsFile = 'docs/guide.md';
+  const sourceFile = 'plugins/sidequest/src/lib/store.ts';
+  const requested = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: [docsFile, sourceFile] });
+  assert.deepEqual(requested.scopeRequest.covered, [docsFile]);
+  assert.deepEqual(requested.scopeRequest.files, [sourceFile]);
+  assert.deepEqual(store.getTicket(project, ticket.ref).scopeRequest.requested, [docsFile, sourceFile]);
+  assert.match(store.getTicket(project, ticket.ref).comments.at(-1).body, new RegExp(`Already in scope: ${docsFile}`));
+
+  fs.mkdirSync(path.join(worktree, 'docs'), { recursive: true });
+  fs.mkdirSync(path.join(worktree, 'plugins', 'sidequest', 'src', 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, docsFile), 'docs\n');
+  fs.writeFileSync(path.join(worktree, sourceFile), 'source\n');
+  gitAt(worktree, ['add', docsFile]);
+  const base = gitAt(worktree, ['rev-parse', 'HEAD']);
+  const blocked = await callTool('commit', { project, ref: ticket.ref, by, message: 'must wait for scope approval', worktree });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, 'scope_request_pending');
+  assert.match(blocked.message, new RegExp(`Already effective: ${docsFile}`));
+  assert.match(blocked.message, new RegExp(`sidequest update ${ticket.ref} --files`));
+  assert.equal(gitAt(worktree, ['rev-parse', 'HEAD']), base);
+
+  await callTool('update', { project, ref: ticket.ref, by: 'mcp-mixed-scope-approver', files: [sourceFile] });
+  const approved = store.getTicket(project, ticket.ref);
+  assert.equal(approved.scopeRequest, null);
+  assert.deepEqual(approved.files, [docsFile, sourceFile]);
+  gitAt(worktree, ['add', sourceFile]);
+  const committed = await callTool('commit', { project, ref: ticket.ref, by, message: 'commit the approved mixed scope', worktree });
+  assert.ok(committed.commit);
+  assert.deepEqual(gitAt(worktree, ['show', '--format=', '--name-only', 'HEAD']).split(/\r?\n/).filter(Boolean).sort(), [docsFile, sourceFile].sort());
+});
+
 test('MCP update rejects a claiming executor scope rewrite but permits no-op and unclaimed updates', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-update-'))).slug;
   const ticket = store.createTicket(project, {
