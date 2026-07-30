@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testDirectory = path.join(pluginRoot, 'test');
 const performanceTest = path.join(testDirectory, 'hooks.perf.test.ts');
+const testConcurrency = 4;
 const testFiles = (await fs.readdir(testDirectory))
   .filter((name) => name.endsWith('.test.ts'))
+  .sort()
   .map((name) => path.join(testDirectory, name))
   .filter((file) => file !== performanceTest);
 
 function runTests(files) {
-  const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...files], {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', `--test-concurrency=${testConcurrency}`, ...files], {
     cwd: pluginRoot,
     stdio: 'inherit',
     windowsHide: true,
