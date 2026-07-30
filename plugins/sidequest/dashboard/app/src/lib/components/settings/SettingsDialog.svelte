@@ -58,7 +58,7 @@
   let modelSelectOptions = $derived<SelectOption[]>(models.map((value) => ({ value, label: value })));
   let effortSelectOptions = $derived<SelectOption[]>(efforts.map((value) => ({ value, label: value })));
   let globalFallback = $derived(record(board.routingCatalog.globalFallback));
-  let visibleProjects = $derived((board.raw?.projects ?? []).filter((project) => !project.archived));
+  let visibleProjects = $derived((board.raw?.projects ?? []).filter((project) => !project.archivedAt));
   let allProjectRoutingEnabled = $derived(visibleProjects.length > 0 && visibleProjects.every((project) => project.routing !== 'disabled'));
 
   function record(value: unknown): JsonRecord {
