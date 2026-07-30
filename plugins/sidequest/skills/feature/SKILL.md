@@ -157,7 +157,7 @@ Whatever the route, a contract that makes fan-out safe pins:
 - **Shared surface**: the types, interfaces, and function signatures pieces hand each other, written
   out. This is the whole reason parallel executors compose instead of producing five conflicting
   interpretations of the same seam.
-- **File boundaries per piece**, and the blast radius each piece may touch.
+- **File boundaries per piece**, the blast radius each piece may touch, and any committed build output. Content-hashed output gets one rebuild ticket per wave.
 - **Dependency order**, so `ready` partitions the backlog into waves by itself.
 - **The exact verify command per piece**, runnable and deterministic.
 - **Shared runtime resources**: fixed ports, servers, databases, fixture paths. Worktrees isolate
