@@ -63,6 +63,12 @@ function seedCatalog(models?: any, codexReadiness: any = {
   process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
   return dir;
 }
+function seedCatalogV4(models?: any, providers?: any) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-catalog-'));
+  writeCatalogRaw(dir, JSON.stringify({ schemaVersion: 4, source: 'model-gateway', updatedAt: new Date().toISOString(), providers, models }));
+  process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
+  return dir;
+}
 function clearCatalog() {
   process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 }
@@ -2092,6 +2098,34 @@ test('MCP dispatch returns the Codex readiness recovery text without preparing s
     const ticket = store.getTicket(added.project, added.ref);
     assert.equal(ticket.dispatchNonce, null);
     assert.equal(ticket.dispatch, null);
+  } finally {
+    seedCatalog([
+      { id: 'claude-gpt-5.6-terra', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' },
+      { id: 'claude-gpt-5.6-luna', slug: 'codex-gpt-5-6-luna', label: 'GPT-5.6 Luna' },
+    ]);
+  }
+});
+
+test('MCP dispatch refuses external providers without a ready schema-4 entry', async () => {
+  const grok = { id: 'claude-grok-test', slug: 'grok-test', label: 'Grok Test', provider: 'grok' };
+  const fixtures = [
+    { id: 'missing-provider', providers: { codex: { ready: true, state: 'ready', message: 'Codex is ready.' } }, expected: /provider grok is unavailable/ },
+    { id: 'missing-readiness', providers: { grok: {} }, expected: /provider grok is unavailable/ },
+    { id: 'not-ready', providers: { grok: { ready: false, state: 'signed-out', message: 'Sign in to Grok CLI.' } }, expected: /grok dispatch refused: Sign in to Grok CLI\./ },
+  ];
+  try {
+    for (const fixture of fixtures) {
+      seedCatalogV4([grok], fixture.providers);
+      store.setCategory({ id: `mcp-grok-${fixture.id}`, name: `MCP Grok ${fixture.id}`, route: { model: grok.slug, effort: 'high' } });
+      const added = await callTool('add', { title: `grok ${fixture.id}`, description: DISPATCH_DESCRIPTION, category: `mcp-grok-${fixture.id}` });
+      const refused = await callToolRaw('dispatch', { ref: added.ref });
+      assert.ok(refused.isError);
+      assert.match(refused.content[0].text, fixture.expected);
+      assert.match(refused.content[0].text, /No Anthropic fallback was used\./);
+      const ticket = store.getTicket(added.project, added.ref);
+      assert.equal(ticket.dispatchNonce, null);
+      assert.equal(ticket.dispatch, null);
+    }
   } finally {
     seedCatalog([
       { id: 'claude-gpt-5.6-terra', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' },
