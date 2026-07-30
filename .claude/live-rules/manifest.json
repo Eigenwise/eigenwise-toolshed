@@ -2,6 +2,20 @@
   "version": 1,
   "rules": [
     {
+      "path": "rules/docs-stay-current.md",
+      "hash": "56dca9da7ae4669adc717ecc011b41484a19b96bc243e41c4453b0ab4c5245be",
+      "description": "Prose docs stay current with the code",
+      "globs": [
+        "plugins/*/**",
+        "docs/src/content/docs/**"
+      ],
+      "dirs": [],
+      "prompt": [],
+      "priority": 0,
+      "enabled": true,
+      "include": []
+    },
+    {
       "path": "rules/manifest-versioning.md",
       "hash": "0ca7e52afab3a83ae514b8daac92a24e1c80bf61870e012ec840f206c75dd486",
       "description": "Release-owned manifest versions",
