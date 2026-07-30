@@ -7,14 +7,25 @@
   import TicketDialog from './lib/components/ticket/TicketDialog.svelte';
   import Lightbox from './lib/components/common/Lightbox.svelte';
   import ToastRegion from './lib/components/common/ToastRegion.svelte';
+  import TourOverlay from './lib/components/tour/TourOverlay.svelte';
   import { BoardState } from './lib/state/board.svelte';
+  import { TourState } from './lib/state/tour.svelte';
   import { PollingController } from './lib/state/polling';
-  import { setBoardState } from './lib/state/context';
+  import { setBoardState, setTourState } from './lib/state/context';
 
   const state = new BoardState();
+  const tour = new TourState(state);
   const polling = new PollingController(state);
+  let autoStartChecked = false;
   state.controller = polling;
   setBoardState(state);
+  setTourState(tour);
+
+  $effect(() => {
+    if (!state.raw || autoStartChecked) return;
+    autoStartChecked = true;
+    tour.maybeAutoStart();
+  });
 
   onMount(() => polling.start());
 </script>
@@ -36,6 +47,7 @@
 <TicketDialog {state} />
 <Lightbox {state} />
 <ToastRegion {state} />
+<TourOverlay />
 
 <style>
   .grain-filter { position: absolute; width: 0; height: 0; }
