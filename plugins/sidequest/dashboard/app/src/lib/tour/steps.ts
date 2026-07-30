@@ -7,30 +7,101 @@ export interface TourStep {
   body: string;
   placement?: 'top' | 'bottom' | 'left' | 'right';
   optional?: boolean;
+  available?: (board: BoardState) => boolean;
   enter?: (board: BoardState) => void;
   exit?: (board: BoardState) => void;
 }
 
 export const TOUR_STEPS: TourStep[] = [
-  { id: 'welcome', target: null, title: 'Welcome to Sidequest', body: 'This quick tour takes about a minute. Skip it whenever you want.' },
-  { id: 'project-rail', target: '[data-tour="project-rail"]', title: 'Pick a board', body: 'Switch between boards here, or see every ticket at once. The bars show each board’s progress.' },
-  { id: 'search', target: '[data-tour="search"]', title: 'Find a ticket', body: 'Search refs, titles, and labels when you know what you need.' },
-  { id: 'priority-filter', target: '[data-tour="priority-filter"]', title: 'Focus by priority', body: 'Use this to narrow the board to work that needs attention first.' },
-  { id: 'sort-menu', target: '[data-tour="sort-menu"]', title: 'Choose the order', body: 'Keep your drag order, or sort by priority and recent activity.' },
-  { id: 'story-filter', target: '[data-tour="story-filter"]', title: 'Follow a story', body: 'Stories group related tickets so you can focus on one piece of work.', optional: true },
-  { id: 'board-columns', target: '[data-tour="board-columns"]', title: 'Move work forward', body: 'Drag tickets between todo, doing, and done as the work changes.', optional: true },
-  { id: 'ticket-card', target: '[data-tour="ticket-card"]', title: 'Read the work', body: 'Each ticket keeps its priority, story, route, and claim state in one place.', optional: true },
-  { id: 'new-ticket', target: '[data-tour="new-ticket"]', title: 'File a ticket', body: 'Add work here whenever it comes up. You can also press N.' },
+  {
+    id: 'welcome',
+    target: null,
+    title: 'Find your way around',
+    body: 'This board is a window onto work, much of it filed and handled by agents. This one-minute tour shows you where to look, and you can skip it anytime.'
+  },
+  {
+    id: 'project-rail',
+    target: '[data-tour="project-rail"]',
+    title: 'Your boards',
+    body: 'Switch between boards here, or see everything together. Each bar shows that board’s todo, doing, and done split at a glance.'
+  },
+  {
+    id: 'board-columns',
+    target: '[data-tour="board-columns"]',
+    title: 'Track the flow',
+    body: 'Work moves through todo, doing, and done. Scan the columns to see what’s queued, active, and finished.',
+    optional: true
+  },
+  {
+    id: 'ticket-card',
+    target: '[data-tour="ticket-card"]',
+    title: 'Read a card',
+    body: 'Cards are dense on purpose: the ref, priority, story, and model route tell you what the work is and how it will run. A claim chip means an agent currently holds it.',
+    optional: true
+  },
   {
     id: 'ticket-dialog',
     target: '[data-tour="ticket-dialog"]',
-    title: 'Shape the work',
-    body: 'Give the ticket enough detail for someone to pick it up and finish it.',
-    enter: (board) => { board.openDialog = 'create'; },
+    title: 'Read the full ticket',
+    body: 'Open a ticket for its full description, links, and claim details. The comment thread is where executors report back what they did, so it’s usually the main thing to check.',
+    optional: true,
+    available: (board) => board.visibleTickets.length > 0,
+    enter: (board) => { board.openDialog = board.visibleTickets[0]?.id ?? null; },
     exit: (board) => { board.openDialog = null; }
   },
-  { id: 'notifications', target: '[data-tour="notifications"]', title: 'Catch up', body: 'Your inbox keeps comments, new tickets, and status changes together.' },
-  { id: 'archive-toggle', target: '[data-tour="archive-toggle"]', title: 'See archived work', body: 'Open the archive when you need past tickets or boards without crowding the active view.' },
-  { id: 'settings-trigger', target: '[data-tour="settings-trigger"]', title: 'Make it yours', body: 'Settings holds routing, categories, theme, and notification preferences.' },
-  { id: 'finish', target: null, title: 'You’re set', body: 'Replay this tour from Settings or with the ? key whenever you need it.' }
+  {
+    id: 'notifications',
+    target: '[data-tour="notifications"]',
+    title: 'See what changed',
+    body: 'Your inbox collects comments, new tickets, and status moves from while you were away.'
+  },
+  {
+    id: 'search',
+    target: '[data-tour="search"]',
+    title: 'Find a ticket',
+    body: 'Search refs, titles, and labels to find a specific ticket on a busy board.'
+  },
+  {
+    id: 'priority-filter',
+    target: '[data-tour="priority-filter"]',
+    title: 'Focus by priority',
+    body: 'Narrow the board to the priority that needs your attention.'
+  },
+  {
+    id: 'sort-menu',
+    target: '[data-tour="sort-menu"]',
+    title: 'Choose the order',
+    body: 'Keep the board’s drag order, or sort by priority, recent activity, or age.'
+  },
+  {
+    id: 'story-filter',
+    target: '[data-tour="story-filter"]',
+    title: 'Follow a story',
+    body: 'Narrow the board to one story and the related tickets that make it up.',
+    optional: true
+  },
+  {
+    id: 'archive-toggle',
+    target: '[data-tour="archive-toggle"]',
+    title: 'Look through history',
+    body: 'Open the archive when you need finished tickets or archived boards.'
+  },
+  {
+    id: 'settings-trigger',
+    target: '[data-tour="settings-trigger"]',
+    title: 'Steer model routing',
+    body: 'Settings holds routing profiles and categories. This is where you choose which model handles each kind of work.'
+  },
+  {
+    id: 'new-ticket',
+    target: '[data-tour="new-ticket"]',
+    title: 'File work yourself',
+    body: 'You can file work yourself here, though most tickets arrive from agents. Press N as a shortcut.'
+  },
+  {
+    id: 'finish',
+    target: null,
+    title: 'You’re set',
+    body: 'Replay this tour from Settings or with the ? key whenever you need it.'
+  }
 ];

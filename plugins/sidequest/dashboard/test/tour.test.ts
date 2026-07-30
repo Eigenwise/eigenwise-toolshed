@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoardState } from '../app/src/lib/state/board.svelte';
 import { TourState } from '../app/src/lib/state/tour.svelte';
+import type { Snapshot } from '../app/src/lib/types';
 import {
   clearTourProgress,
   defaultTourProgress,
@@ -25,6 +26,20 @@ function persisted() {
 
 function tour() {
   return new TourState(new BoardState());
+}
+
+function boardWithTicket() {
+  const board = new BoardState();
+  const snapshot: Snapshot = {
+    projects: [{ slug: 'alpha', name: 'Alpha' }],
+    tickets: [{ id: 'ticket-1', ref: 'SQ-1', title: 'First', status: 'todo', priority: 'normal', order: 1, projectSlug: 'alpha' }],
+    stories: [],
+    categories: [],
+    notifications: { notifications: [], unread: 0, unreadNeeds: 0 },
+    health: { ok: true, name: 'sidequest', pid: 1, startedAt: '2026-01-01', version: '1.0.0' }
+  };
+  board.applySnapshot(snapshot);
+  return board;
 }
 
 describe('tour storage', () => {
@@ -119,33 +134,52 @@ describe('TourState', () => {
     expect(persisted()).toEqual({ version: TOUR_VERSION, completed: false, step: 0 });
   });
 
-  it('enters and exits the ticket dialog in both directions', () => {
-    const board = new BoardState();
+  it('enters and exits the first visible ticket in both directions', () => {
+    const board = boardWithTicket();
     const state = new TourState(board);
-    state.start(8);
+    const querySelector = vi.mocked(document.querySelector);
+    state.start(3);
     state.next();
-    expect(state.index).toBe(9);
-    expect(board.openDialog).toBe('create');
+    expect(state.index).toBe(4);
+    expect(board.openDialog).toBe('ticket-1');
+    expect(querySelector).not.toHaveBeenCalledWith('[data-tour="ticket-dialog"]');
     state.next();
-    expect(state.index).toBe(10);
+    expect(state.index).toBe(5);
     expect(board.openDialog).toBeNull();
 
     state.prev();
-    expect(state.index).toBe(9);
-    expect(board.openDialog).toBe('create');
+    expect(state.index).toBe(4);
+    expect(board.openDialog).toBe('ticket-1');
+    expect(querySelector).not.toHaveBeenCalledWith('[data-tour="ticket-dialog"]');
     state.prev();
-    expect(state.index).toBe(8);
+    expect(state.index).toBe(3);
     expect(board.openDialog).toBeNull();
   });
 
+  it('skips an unavailable predicate step without entering or exiting it', () => {
+    const state = tour();
+    const enter = vi.fn();
+    const exit = vi.fn();
+    state.steps = state.steps.map((step) => step.id === 'ticket-dialog'
+      ? { ...step, available: () => false, enter, exit }
+      : step);
+
+    state.start(3);
+    state.next();
+    expect(state.index).toBe(5);
+    expect(enter).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+    expect(document.querySelector).not.toHaveBeenCalledWith('[data-tour="ticket-dialog"]');
+  });
+
   it('skip exits the current step and persists completion', () => {
-    const board = new BoardState();
+    const board = boardWithTicket();
     const state = new TourState(board);
-    state.start(9);
-    expect(board.openDialog).toBe('create');
+    state.start(4);
+    expect(board.openDialog).toBe('ticket-1');
     state.skip();
     expect(state.active).toBe(false);
-    expect(persisted()).toEqual({ version: TOUR_VERSION, completed: true, step: 9 });
+    expect(persisted()).toEqual({ version: TOUR_VERSION, completed: true, step: 4 });
     expect(board.openDialog).toBeNull();
   });
 
@@ -173,11 +207,11 @@ describe('TourState', () => {
     completed.maybeAutoStart();
     expect(completed.active).toBe(false);
 
-    writeTourProgress({ version: TOUR_VERSION, completed: false, step: 4 });
+    writeTourProgress({ version: TOUR_VERSION, completed: false, step: 6 });
     const resumed = tour();
     resumed.maybeAutoStart();
     expect(resumed.active).toBe(true);
-    expect(resumed.index).toBe(4);
+    expect(resumed.index).toBe(6);
   });
 
   it('skips missing optional targets but keeps missing required targets', () => {
@@ -188,9 +222,12 @@ describe('TourState', () => {
     vi.stubGlobal('document', { querySelector });
 
     const state = tour();
-    state.start(4);
+    state.start(1);
     state.next();
-    expect(state.index).toBe(8);
+    expect(state.index).toBe(5);
+    state.start(8);
+    state.next();
+    expect(state.index).toBe(10);
 
     querySelector.mockImplementation(() => null);
     state.start(1);
