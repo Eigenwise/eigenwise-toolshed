@@ -53,6 +53,7 @@ test('auto-starts, follows the read-first order, and stacks above the ticket dia
   await next(page).click();
   await expect(counter(page)).toHaveText('5 of 14');
   await expect(page.getByRole('dialog', { name: /^Edit SQ-/ })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /^Edit SQ-/ })).toContainText('A regular seeded comment.');
   await expect(page.locator('[data-tour="ticket-dialog"]')).toBeVisible();
   await expect(next(page)).toBeVisible();
   await expect(next(page)).toBeEnabled();
