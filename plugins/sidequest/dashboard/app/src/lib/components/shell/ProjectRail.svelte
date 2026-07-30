@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type { BoardState } from '../../state/board.svelte';
   import type { Project } from '../../types';
   import { projectFor } from '../board/surface';
 
   let { state: board }: { state: BoardState } = $props();
   let menuProject = $state<Project | null>(null);
+  let menuElement = $state<HTMLDivElement>();
+  let menuPosition = $state({ left: 0, top: 0 });
 
   const activeProjects = $derived(board.raw?.projects ?? []);
   const archivedCount = $derived(board.archivedTickets.filter((ticket) => board.selectedProject === 'all' || projectFor(ticket) === board.selectedProject).length);
@@ -68,9 +70,21 @@
     await refreshArchivedProjects();
   }
 
-  function showMenu(event: MouseEvent, project: Project) {
+  async function showMenu(event: MouseEvent, project: Project) {
     event.preventDefault();
+    const pointer = { left: event.clientX, top: event.clientY };
+    menuPosition = pointer;
     menuProject = project;
+    await tick();
+    if (menuProject !== project || !menuElement) return;
+
+    const bounds = menuElement.getBoundingClientRect();
+    const left = pointer.left + bounds.width <= window.innerWidth ? pointer.left : pointer.left - bounds.width;
+    const top = pointer.top + bounds.height <= window.innerHeight ? pointer.top : pointer.top - bounds.height;
+    menuPosition = {
+      left: Math.max(0, Math.min(left, window.innerWidth - bounds.width)),
+      top: Math.max(0, Math.min(top, window.innerHeight - bounds.height))
+    };
   }
 </script>
 
@@ -106,7 +120,7 @@
 
 {#if menuProject}
   <div class="menu-backdrop" role="presentation" onclick={() => menuProject = null}></div>
-  <div class="project-menu" role="menu">
+  <div bind:this={menuElement} class="project-menu" role="menu" style:left={`${menuPosition.left}px`} style:top={`${menuPosition.top}px`}>
     {#if menuProject.archived}
       <button role="menuitem" onclick={() => { restoreProject(menuProject!); menuProject = null; }}>Restore board</button>
     {:else}
@@ -124,6 +138,6 @@
   .project-path { display: block; overflow: hidden; color: var(--text-muted); font-size: .69rem; text-overflow: ellipsis; white-space: nowrap; } .progress { display: flex; height: .2rem; margin-top: .45rem; overflow: hidden; border-radius: 999px; background: var(--border); } .progress i { flex: var(--size, 0); } .todo { background: var(--border-strong); } .doing { background: var(--warning); } .done { background: var(--accent); }
   .archived-group { margin-top: .5rem; color: var(--text-muted); font-size: .78rem; } summary { padding: .35rem .55rem; cursor: pointer; } summary span { font-family: var(--font-mono); } .archived { color: var(--text-muted); font-size: .8rem; }
   .archive-button { display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--border); } .connection { padding: .2rem .5rem; } .connection.offline { color: var(--danger); }
-  .menu-backdrop { position: fixed; inset: 0; z-index: 4; } .project-menu { position: fixed; z-index: 5; left: 1rem; bottom: 3rem; display: grid; min-width: 10rem; padding: .25rem; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-deep); } .project-menu .danger { color: var(--danger); }
+  .menu-backdrop { position: fixed; inset: 0; z-index: 4; } .project-menu { position: fixed; z-index: 5; display: grid; min-width: 10rem; padding: .25rem; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-deep); } .project-menu .danger { color: var(--danger); }
   @media (max-width: 820px) { .rail { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto; min-height: auto; gap: .6rem; border-right: 0; border-bottom: 1px solid var(--border); } nav { display: flex; align-items: stretch; overflow-x: auto; } nav > button { min-width: 10rem; } .project-path, .connection { display: none; } .progress { margin-top: .3rem; } .archive-button { width: auto; white-space: nowrap; } .archived-group { display: none; } }
 </style>

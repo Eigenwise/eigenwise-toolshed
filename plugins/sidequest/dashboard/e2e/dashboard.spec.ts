@@ -302,6 +302,42 @@ test('covers archive, notification, settings, create, and keyboard paths', async
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('positions board context menus at the pointer and inside the viewport', async ({ page, dashboard }) => {
+  await page.setViewportSize({ width: 1000, height: 700 });
+  await openBoard(page, dashboard);
+
+  const activeBoard = page.locator('.rail').getByRole('button', { name: /Beta board/ });
+  const activeBounds = await activeBoard.boundingBox();
+  expect(activeBounds).not.toBeNull();
+  const clickPosition = { x: 72, y: 18 };
+  const pointer = { x: activeBounds!.x + clickPosition.x, y: activeBounds!.y + clickPosition.y };
+  await activeBoard.click({ button: 'right', position: clickPosition });
+
+  const menu = page.locator('.project-menu');
+  await expect(menu).toBeVisible();
+  await expect.poll(async () => {
+    const bounds = await menu.boundingBox();
+    return bounds ? Math.max(Math.abs(bounds.x - pointer.x), Math.abs(bounds.y - pointer.y)) : Infinity;
+  }).toBeLessThanOrEqual(1);
+
+  await page.locator('.menu-backdrop').click({ position: { x: 500, y: 100 } });
+  await page.getByText('Archived boards', { exact: false }).click();
+  const archivedBoard = page.getByRole('button', { name: 'Retired board' });
+  const edgePointer = { x: 998, y: 698 };
+  await archivedBoard.dispatchEvent('contextmenu', { clientX: edgePointer.x, clientY: edgePointer.y, button: 2 });
+  await expect(menu).toBeVisible();
+  await expect.poll(async () => {
+    const bounds = await menu.boundingBox();
+    if (!bounds) return Infinity;
+    return Math.max(0, bounds.x + bounds.width - 1000, bounds.y + bounds.height - 700, -bounds.x, -bounds.y);
+  }).toBe(0);
+
+  const edgeBounds = await menu.boundingBox();
+  expect(edgeBounds).not.toBeNull();
+  expect(edgeBounds!.x).toBeLessThan(edgePointer.x);
+  expect(edgeBounds!.y).toBeLessThan(edgePointer.y);
+});
+
 test('returns focus to Settings and Ticket invokers for every close path', async ({ page, dashboard }) => {
   await openBoard(page, dashboard);
 
