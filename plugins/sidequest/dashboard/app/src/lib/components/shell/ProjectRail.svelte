@@ -121,7 +121,7 @@
 {#if menuProject}
   <div class="menu-backdrop" role="presentation" onclick={() => menuProject = null}></div>
   <div bind:this={menuElement} class="project-menu" role="menu" style:left={`${menuPosition.left}px`} style:top={`${menuPosition.top}px`}>
-    {#if menuProject.archived}
+    {#if menuProject.archivedAt}
       <button role="menuitem" onclick={() => { restoreProject(menuProject!); menuProject = null; }}>Restore board</button>
     {:else}
       <button role="menuitem" onclick={() => { archiveProject(menuProject!); menuProject = null; }}>Archive board</button>

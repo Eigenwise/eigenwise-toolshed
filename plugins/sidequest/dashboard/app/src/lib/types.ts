@@ -6,7 +6,8 @@ export interface Project {
   slug: string;
   name: string;
   path?: string;
-  archived?: boolean;
+  archived?: number;
+  archivedAt?: string | null;
   routing?: 'enabled' | 'disabled';
   notify?: boolean;
   [key: string]: unknown;
