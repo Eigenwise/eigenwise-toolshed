@@ -166,7 +166,7 @@ when they explicitly choose it. If Sidequest was not selected, skip this questio
 
 ## Phase 1 — Interview and selection
 
-Before the normal interview, invoke `/model-gateway:model-gateway` and use its `env --show-mode` command to inspect the machine-local gateway mode. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH. When no mode is saved, ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the choice through that skill with its `env --mode global` or `env --mode local` command; do not ask again once a mode exists, and later setup flows honor it silently. Do not ask during non-interactive setup: default to local and say `wiring mode defaulted to per-project; use /model-gateway:model-gateway to run its env --mode global command to change`.
+Before the normal interview, invoke `/model-gateway:model-gateway` and use its `env --show-mode` command to inspect the machine-local gateway mode. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH. When no mode is saved, ask exactly once: **"Global (recommended: it wires every project and executor worktree automatically) or per-project (a private-settings escape hatch that does not reach executor worktrees, and Sidequest cannot detect when it is half-wired)?"** Global gives uniform coverage everywhere. Per-project keeps personal wiring out of shared repos, but requires an explicit project write. Persist the choice through that skill with its `env --mode global` or `env --mode local` command. When the user chooses per-project, immediately run that skill's `env --write-project` command from the current project and record whether it succeeds. Record the resolved mode and wiring result in the session/bootstrap plan; do not ask again once a mode exists, and later setup flows honor it silently. Do not ask during non-interactive setup: default to global and say `wiring mode defaulted to global; use /model-gateway:model-gateway to run its env --mode local command to use per-project wiring`.
 
 Keep it short and propose defaults from what you detected, so the user confirms rather than types
 essays. The project-intent answer was collected before the picker; use it to seed the map and structure
@@ -362,7 +362,10 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 ## Phase 5 — Wrap up
 
 - Tell the user **exactly what they got**: which plugins are enabled, which rules are live (and that
-  editing them takes effect next prompt), whether a map was built, and where the board is.
+  editing them takes effect next prompt), whether a map was built, where the board is, and Model Gateway
+  wiring as `wired` or `not wired` with its mode. For `not wired`, include the exact recovery command:
+  the model-gateway skill's `env --write-project` command for per-project mode, or its `env --mode global`
+  command for global mode.
 - **Commit reminder.** If the project is a git repo, tell them to commit `.claude/` so the team and
   every future session share the setup. Offer to do it (ship-by-default if that's their preference). If
   they declined Git setup, say once that the workspace is uncommitted and that they can run `git init`,
