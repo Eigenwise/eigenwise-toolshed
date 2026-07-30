@@ -13,6 +13,18 @@ Node 22, `.mjs`, standard library only, so a CI runner needs nothing installed.
 
 See `.release/README.md` for the fragment schema.
 
+## Delivery and notification
+
+The marketplace manifests on `main` are delivery. Bump the affected marketplace and plugin versions
+with every ticket that changes a plugin, and never hold a bump for a GitHub Release. Claude Code
+caches plugins by version, so that manifest change is what users install.
+
+A GitHub Release is notification-only. `.github/workflows/release-cut.yml` reads the marketplace
+version from `main` once a day, does nothing when that version already has a Release, otherwise tags
+that exact `main` commit and creates one GitHub Release with generated notes. It also has a manual
+trigger. It never runs `cut.mjs`, changes a version, or pushes `main`; cuts stay local and human-run
+under the publish lock.
+
 ## The shape of a window
 
 Integration puts verified work on `dev` and writes a fragment. Nothing is published: no version
