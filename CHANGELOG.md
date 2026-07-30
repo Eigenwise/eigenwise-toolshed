@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.290.0 (2026-07-31)
+
+### sidequest 3.42.2 → 3.42.3
+
+#### Fixes
+
+- Do not reclaim a claim while its verify is still running (SQ-1082) [`caf24ba`](https://github.com/Eigenwise/eigenwise-toolshed/commit/caf24baf68867fd9a7948092e7dc9cf685461b07)
+  An executor blocked on a long verify looked identical to a dead one, so its claim could be swept out from under it and its commit refused. Claims now carry a verification marker, pulse reports whether a claim is verifying, and a claim is not reclaimable while that marker is live. An uncompleted marker still releases at the existing abandon backstop, so a crashed executor cannot pin a claim forever.
+
 ## v3.289.0 (2026-07-30)
 
 ### sidequest 3.42.1 → 3.42.2
