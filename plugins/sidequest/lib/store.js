@@ -3483,6 +3483,8 @@ function priorityRank(p) {
 const DEFAULT_CLAIM_IDLE_MIN = 60;
 const DEFAULT_CLAIM_ABANDON_MIN = 24 * 60;
 const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
+const VERIFY_START_COMMENT = "[sidequest:verify-start] ";
+const VERIFY_COMPLETE_COMMENT = "[sidequest:verify-complete]";
 function preparedDispatchTtlMs() {
   const hours = Number(process.env.SIDEQUEST_PREPARED_DISPATCH_TTL_HOURS);
   return (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_PREPARED_DISPATCH_TTL_HOURS) * 60 * 60 * 1e3;
@@ -3512,6 +3514,7 @@ function claimActivityMs(ticket) {
   };
   consider(claim.at);
   consider(claim.activeAt);
+  consider(claimVerification(ticket)?.startedAt);
   for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
     if (comment && comment.by === claim.by) consider(comment.at);
   }
@@ -3520,6 +3523,37 @@ function claimActivityMs(ticket) {
 function claimIdleAge(ticket, now) {
   const latest = claimActivityMs(ticket);
   return Number.isFinite(latest) ? Math.max(0, now - latest) : Number.POSITIVE_INFINITY;
+}
+function claimVerification(ticket) {
+  const claim = ticket?.claim;
+  const verification = claim?.verification;
+  if (!claim?.by || !verification || verification.by !== claim.by) return null;
+  const startedAt = String(verification.startedAt || "");
+  const command = String(verification.command || "").trim();
+  if (!Number.isFinite(Date.parse(startedAt)) || !command) return null;
+  return { startedAt, command };
+}
+function verificationComment(body) {
+  const text = String(body || "");
+  if (text.startsWith(VERIFY_START_COMMENT)) {
+    const command = text.slice(VERIFY_START_COMMENT.length).trim();
+    return command ? { kind: "start", command } : null;
+  }
+  return text === VERIFY_COMPLETE_COMMENT ? { kind: "complete" } : null;
+}
+function recordClaimVerification(ticket, comment) {
+  const claim = ticket?.claim;
+  if (!claim?.by || comment?.by !== claim.by) return;
+  const event = verificationComment(comment.body);
+  if (!event) return;
+  const dispatch = dispatchState(ticket);
+  if (event.kind === "start") {
+    claim.verification = { by: claim.by, startedAt: comment.at, command: event.command };
+    if (dispatch) delete dispatch.verifyStopAt;
+    return;
+  }
+  if (claimVerification(ticket)) delete claim.verification;
+  if (dispatch) delete dispatch.verifyStopAt;
 }
 function resumableScopePause(ticket) {
   const dispatch = dispatchState(ticket);
@@ -3548,6 +3582,13 @@ function claimReleaseVerdict(ticket, now) {
   const atMs = Number.isFinite(Number(now)) ? Number(now) : Date.now();
   const idleMs = claimIdleAge(ticket, atMs);
   const dispatch = dispatchState(ticket);
+  const verification = claimVerification(ticket);
+  if (verification) {
+    if (idleMs > claimAbandonMs()) {
+      return { kind: "abandoned_verifying", idleMs, at: verification.startedAt, reason: "its verification marker never completed past the unobserved-death backstop" };
+    }
+    return null;
+  }
   if (resumableScopePause(ticket)) {
     if (missingStoppedWorktree(dispatch)) {
       return { kind: "missing_worktree", idleMs, at: dispatch.terminalAt, reason: "its stopped executor worktree no longer exists" };
@@ -3582,6 +3623,9 @@ function claimReleaseNote(ticket, verdict) {
   const idle = claimIdleLabel(verdict && verdict.idleMs);
   if (verdict.kind === "observed_stop") {
     return `↩️ Auto-released to **todo**: its executor was observed to stop while holding the claim (SubagentStop at ${verdict.at}, was claimed by \`${by}\`). It is back in the ready pool; re-dispatch to continue the work.`;
+  }
+  if (verdict.kind === "abandoned_verifying") {
+    return `↩️ Auto-released to **todo**: verification from \`${by}\` never completed for ${idle}, past the unobserved-death backstop.`;
   }
   if (verdict.kind === "idle") {
     return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle} and no live executor is associated with this ticket.`;
@@ -4532,6 +4576,12 @@ function markDispatchStopped(sessionId, executor, agentId, agentName) {
         recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
       }
       if (active) {
+        if (claimVerification(t)) {
+          state.verifyStopAt = now;
+          stampDispatchEvent(t, "subagent-stop-during-verify", now);
+          putTicket(match.slug, t);
+          return { ok: true, ticket: t, stopped: false, verifying: true };
+        }
         if (t.scopeRequest) captureScopePauseRecovery(match.slug, t);
         setDispatchTerminal(t, t.claim && t.claim.by ? t.scopeRequest ? "scope_paused" : "stopped_claimed" : "failed", "subagent-stop");
         if (!t.claim || !t.claim.by) {
@@ -5930,6 +5980,7 @@ function addComment(slug, idOrRef, fields) {
     if (!Array.isArray(t.comments)) t.comments = [];
     const comment = createComment(prepared);
     t.comments.push(comment);
+    recordClaimVerification(t, comment);
     touchClaimActivity(t, comment.by, comment.at);
     t.lastEventType = "comment";
     t.lastEventSource = comment.source;
@@ -6154,7 +6205,8 @@ function claimPulse(ticket, now) {
     at: claim.at,
     ageMs: Number.isFinite(atMs) ? Math.max(0, now - atMs) : null,
     idleMs: Number.isFinite(idleMs) ? idleMs : null,
-    reclaimable: verdict ? verdict.kind : null
+    reclaimable: verdict ? verdict.kind : null,
+    verifying: Boolean(claimVerification(ticket))
   };
 }
 function boundedExcerpt(value, maxChars = 1200) {

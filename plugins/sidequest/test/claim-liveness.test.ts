@@ -95,6 +95,7 @@ function backdateClaim(ref?: any, ms?: any) {
   const at = new Date(Date.now() - ms).toISOString();
   ticket.claim.at = at;
   if (ticket.claim.activeAt) ticket.claim.activeAt = at;
+  if (ticket.claim.verification) ticket.claim.verification.startedAt = at;
   for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
     if (comment.by === ticket.claim.by) comment.at = at;
   }
@@ -171,6 +172,63 @@ test('a quiet long-running executor survives the sweep; an observed stop does no
   const note = after.comments.at(-1).body;
   assert.match(note, /observed to stop while holding the claim/);
   assert.doesNotMatch(note, /TTL/i, 'the released comment must name the real reason');
+});
+
+test('a live verification marker protects a claim through a false stop observation, then clears for a real stop', () => {
+  const ticket = addRouted('verification is still running');
+  const session = 'session-verifying';
+  const prepared = claimRouted(ticket, 'verifying-executor', { sessionId: session });
+  store.addComment(slug, ticket.ref, {
+    by: 'verifying-executor',
+    body: '[sidequest:verify-start] npm run e2e',
+    source: 'mcp',
+  });
+
+  const stoppedDuringVerify = store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null);
+  assert.equal(stoppedDuringVerify.ok, true);
+  assert.equal(stoppedDuringVerify.stopped, false);
+  backdateClaim(ticket.ref, 2 * HOUR);
+
+  const verifyingPulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(verifyingPulse.working, true);
+  assert.equal(verifyingPulse.claim.verifying, true);
+  assert.equal(verifyingPulse.claim.reclaimable, null);
+  assert.ok(verifyingPulse.lastActivityAt);
+  const protectedSweep = store.sweepStaleClaims({ project: slug, source: 'test' });
+  assert.equal(protectedSweep.released.some((entry?: any) => entry.ref === ticket.ref), false);
+
+  store.addComment(slug, ticket.ref, {
+    by: 'verifying-executor',
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  const stoppedAfterVerify = store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null);
+  assert.equal(stoppedAfterVerify.ok, true);
+  assert.equal(stoppedAfterVerify.stopped, true);
+  const stoppedPulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(stoppedPulse.working, false);
+  assert.equal(stoppedPulse.claim.verifying, false);
+  assert.equal(stoppedPulse.claim.reclaimable, 'observed_stop');
+  const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
+  assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
+});
+
+test('a verification marker still releases after the unobserved-death backstop', () => {
+  const ticket = addRouted('verification marker after a crash');
+  const session = 'session-verifying-crash';
+  const prepared = claimRouted(ticket, 'crashed-verifier', { sessionId: session });
+  store.addComment(slug, ticket.ref, {
+    by: 'crashed-verifier',
+    body: '[sidequest:verify-start] npm run e2e',
+    source: 'mcp',
+  });
+  assert.equal(store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null).stopped, false);
+  backdateClaim(ticket.ref, 25 * HOUR);
+
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.claim.reclaimable, 'abandoned_verifying');
+  const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
+  assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
 });
 
 test('a closeout after an auto-release names the exact recovery instead of silently failing', async () => {

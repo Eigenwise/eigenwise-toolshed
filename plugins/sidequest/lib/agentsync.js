@@ -444,6 +444,7 @@ ${category.contract || "(No category-specific executor instructions were recorde
 ${ticket.executorAnchors || "(No anchors were recorded.)"}`,
     `Verify command:
 ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
+    ...ticket.executorVerify ? ["Verify liveness: immediately before running the exact verify command, add a board comment whose body is `[sidequest:verify-start] <command>`. Immediately after that command exits, including on failure, add `[sidequest:verify-complete]`. These paired markers keep an in-flight long verify from being reclaimed."] : [],
     ...ticket.highStakes ? ["High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration."] : [],
     ...worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : [],
     ...ticketIsolationContract(ticket, project) || [],

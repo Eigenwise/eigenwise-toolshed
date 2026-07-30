@@ -579,6 +579,9 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.ok(briefing.includes(`project: ${JSON.stringify('C:\\dev\\fixture')}`));
   assert.ok(briefing.includes('token: "instant-token-334"'));
   assert.match(briefing, /Do not pass `direct`\. Do not substitute the model slug for `executor`\./);
+  assert.match(briefing, /Verify liveness: immediately before running the exact verify command/);
+  assert.match(briefing, /\[sidequest:verify-start\] <command>/);
+  assert.match(briefing, /\[sidequest:verify-complete\]/);
   assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report\./);
   assert.match(briefing, /keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative/);
   assert.match(briefing, /Non-repo done comments still carry the full report/);
