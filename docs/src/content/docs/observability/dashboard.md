@@ -19,7 +19,9 @@ Token panels split input, output, cache creation, and cache reads. The token car
 
 Use the **Bucket** dropdown to change the aggregation window. It is a Grafana dropdown, not a row of buttons. Choose `1m` for close investigation or `1h` and above for an overview. Every stacked bar is one bucket's total, split by its series, so bar height remains the combined total.
 
-**Cost over time, by model** prices each token type separately from the local model-price table. It is a list-price equivalent for comparing work across model routes, not a bill. Models without a table entry appear under **Unpriced model usage** instead of being treated as free.
+**Cost over time, by model** prices each token type separately from the local model-price table, including Claude Haiku 4.5 and the current Codex route IDs. It is a list-price equivalent for comparing work across model routes, not a bill. Models without a table entry appear under **Unpriced model usage** instead of being treated as free. The virtual `claude-codex-auto` label is excluded because it has no single price.
+
+**Cost over time, by resolved model (gateway)** reads the gateway record for the backend model that handled each request. Use this panel for Sidequest executor traffic, where the client label is `claude-codex-auto`; the panel prices the resolved `gpt-5.6-*` model instead.
 
 ## Efficiency
 

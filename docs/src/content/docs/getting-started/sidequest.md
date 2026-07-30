@@ -31,7 +31,7 @@ Executors can leave short findings for later waves with the story decision log:
 sidequest story log US-27
 sidequest story log US-27 -m "DECISION: Keep the MCP surface separate from story CRUD" --ref SQ-952 --by executor-1
 sidequest story log US-27 --body-file finding.txt --ref SQ-952 --by executor-1
-sidequest story log US-27 --clear
+sidequest story log US-27 --clear --by orchestrator
 ```
 
 Without an entry or `--clear`, the command reads the log. Entries are one-line `DECISION:`, `CONSTRAINT:`, or `DISCOVERY:` findings. Use `-m` or `--body-file`, and attach `--ref` and `--by` when recording work. The `story_log` MCP tool provides the same read, append, and clear operations.
@@ -84,7 +84,7 @@ Compact MCP reads for `category_list` and `comments` return `total`, `returned`,
 
 For tickets with more than 10 comments, default CLI and MCP comment reads keep all metadata but elide the oldest comment bodies, with an explicit omitted-count marker. Long orchestrator sessions can re-bill tool results, so this keeps routine reads smaller. Use `sidequest comments SQ-n --full` or the MCP `comments` tool with `full:true` to restore every body. Tickets with 10 or fewer comments are unchanged. Dashboard and REST reads are unaffected.
 
-Use read-only tools or native `Explore` to gather enough evidence for precise tickets, then route implementation by default. Use informed inline judgment when it fits. Routed implementation work goes through a ticket and dispatch. `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities; other delegated implementation, investigation, research, review, or domain analysis needs a ticketed route.
+Use read-only tools or native `Explore` to gather enough evidence for precise tickets, then route implementation by default. Use informed inline judgment when it fits. Routed implementation work goes through a ticket and dispatch. Helpers are limited to `Explore`, `claude-code-guide`, `web-researcher`, and `general-purpose` for genuinely uncategorized bounded work, mechanical sweeps, or documentation research; classify matching work through board categories first, use an explicit cheap model, keep helpers in the background, and route audit or review work through a `review-audit` ticket. Evidence that would require searching session, transcript, or task-output files is self-reference, not a finding. Other delegated implementation, investigation, research, review, or domain analysis needs a ticketed route.
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
 

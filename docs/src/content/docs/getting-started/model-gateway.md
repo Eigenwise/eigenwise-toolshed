@@ -18,7 +18,7 @@ The Codex path depends on `claude-code-proxy` on purpose, because OpenAI gates n
 
 ### Codex readiness and recovery
 
-The gateway exposes one Codex readiness contract that `ensure`, `doctor`, and Sidequest read. `GET /healthz` includes a `codexReadiness` object, and the model catalog includes the same readiness projection under its top-level `codexReadiness` field. Both expose `ready`, `state`, `message`, `checks`, and `upstreamBlocked`.
+The gateway exposes one Codex readiness contract that `ensure`, `doctor`, and Sidequest read. `GET /healthz` includes a `codexReadiness` object, and the model catalog includes the same readiness projection under its top-level `codexReadiness` field. Both expose `ready`, `state`, `message`, `checks`, and `upstreamBlocked`. The CLI `doctor` command prints the same state as `Codex readiness: <state>` and includes the recovery message when it is not ready.
 
 A `ready` result proves only local setup:
 

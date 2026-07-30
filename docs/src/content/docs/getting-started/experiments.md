@@ -9,16 +9,15 @@ If a test or metric can decide the question, use a coding or debugging ticket in
 
 ## File the experiment
 
-Create the ticket with the `experiment` category and a declared round budget:
+Create the ticket with the `experiment` category and put the round budget in its description:
 
 ```text
 sidequest add -t "Tune the spoken-word render" \
   --category experiment \
-  --rounds 4 \
-  -d "Compare four bounded changes to the room tone and sibilance."
+  -d "Run up to four bounded rounds comparing room tone and sibilance."
 ```
 
-`--rounds` is the number of rounds you are willing to run. Each round gets one hypothesis. The experiment category also requires every candidate to be committed under `sidequest/experiment/<ref>` and pinned as `refs/sidequest/<ref>/r<N>`, including candidates that lose.
+Sidequest does not enforce a separate rounds flag. Each round gets one hypothesis. The experiment category also requires every candidate to be committed under `sidequest/experiment/<ref>` and pinned as `refs/sidequest/<ref>/r<N>`, including candidates that lose.
 
 ## What happens in a round
 
