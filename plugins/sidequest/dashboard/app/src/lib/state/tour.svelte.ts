@@ -71,9 +71,15 @@ export class TourState {
   private availableIndex(index: number, direction: 1 | -1) {
     for (let current = index; current >= 0 && current < this.steps.length; current += direction) {
       const step = this.steps[current];
-      if (!step.optional || !step.target || this.targetExists(step.target)) return current;
+      if (this.stepIsAvailable(step)) return current;
     }
     return null;
+  }
+
+  private stepIsAvailable(step: TourStep) {
+    if (!step.optional) return true;
+    if (step.available) return step.available(this.board);
+    return !step.target || this.targetExists(step.target);
   }
 
   private targetExists(target: string) {

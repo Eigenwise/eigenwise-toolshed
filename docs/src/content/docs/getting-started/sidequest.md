@@ -22,7 +22,7 @@ See [CLI basics](#cli-basics) for command details and [Work a ticket](#work-a-ti
 
 ### Take the dashboard tour
 
-The dashboard starts a guided tour the first time you open it. It covers about fourteen steps across the app, including the board rail, search, priority, sort, and story filters, the columns and a ticket card, filing a ticket, the ticket dialog, notifications, the archive, and settings. Each step dims the app and highlights the surface it describes, opening dialogs as it goes so you see the real controls.
+The dashboard starts a guided tour the first time you open it. It is an orientation for reading a board where agents file and execute much of the work. Fourteen short steps move from boards, columns, cards, and full ticket details to the inbox, search and filters, the archive, routing settings, and the option to file a ticket yourself. Each step highlights the real surface, and the ticket step opens existing work so you can see its description and executor comments.
 
 Use Next, Back, the arrow keys, or Enter to move through the tour. Press Escape or Skip to leave it. If you stop partway through, the dashboard remembers your place and resumes there next time. After you finish or skip, it stays out of the way.
 

@@ -35,38 +35,47 @@ async function finishTour(page: Page) {
   await expect(tour(page)).toBeHidden();
 }
 
-test('auto-starts, advances through every seeded anchor, and stacks above the ticket dialog', async ({ page, dashboard }) => {
+test('auto-starts, follows the read-first order, and stacks above the ticket dialog', async ({ page, dashboard }) => {
   await openBoard(page, dashboard);
   await expect(counter(page)).toHaveText('1 of 14');
 
-  const rail = await page.locator('[data-tour="project-rail"]').boundingBox();
-  expect(rail).not.toBeNull();
-  await advance(page, 1);
-  await expect(counter(page)).toHaveText('2 of 14');
-  const search = await page.locator('[data-tour="search"]').boundingBox();
-  expect(search).not.toBeNull();
-  expect(search).not.toEqual(rail);
-
-  for (const [id, count] of [['story-filter', 5], ['board-columns', 6], ['ticket-card', 7]] as const) {
-    await advance(page, count - (count === 5 ? 1 : count === 6 ? 5 : 6));
+  const anchoredSteps = [
+    'project-rail',
+    'board-columns',
+    'ticket-card'
+  ];
+  for (const [index, id] of anchoredSteps.entries()) {
+    await next(page).click();
+    await expect(counter(page)).toHaveText(`${index + 2} of 14`);
     await expect(page.locator(`[data-tour="${id}"]`).first()).toBeVisible();
   }
 
-  await advance(page, 2);
-  await expect(counter(page)).toHaveText('10 of 14');
-  await expect(page.getByRole('dialog', { name: 'New ticket' })).toBeVisible();
+  await next(page).click();
+  await expect(counter(page)).toHaveText('5 of 14');
+  await expect(page.getByRole('dialog', { name: /^Edit SQ-/ })).toBeVisible();
+  await expect(page.locator('[data-tour="ticket-dialog"]')).toBeVisible();
   await expect(next(page)).toBeVisible();
   await expect(next(page)).toBeEnabled();
-  await next(page).click();
-  await expect(counter(page)).toHaveText('11 of 14');
 
-  const firstSpotlight = await page.locator('.spotlight').boundingBox();
   await next(page).click();
-  await expect(counter(page)).toHaveText('12 of 14');
-  const secondSpotlight = await page.locator('.spotlight').boundingBox();
-  expect(secondSpotlight).not.toEqual(firstSpotlight);
+  await expect(counter(page)).toHaveText('6 of 14');
+  await expect(page.getByRole('dialog', { name: /^Edit SQ-/ })).toBeHidden();
 
-  await advance(page, 2);
+  for (const [offset, id] of [
+    'search',
+    'priority-filter',
+    'sort-menu',
+    'story-filter',
+    'archive-toggle',
+    'settings-trigger',
+    'new-ticket'
+  ].entries()) {
+    await next(page).click();
+    await expect(counter(page)).toHaveText(`${offset + 7} of 14`);
+    await expect(page.locator(`[data-tour="${id}"]`).first()).toBeVisible();
+  }
+
+  await next(page).click();
   await expect(counter(page)).toHaveText('14 of 14');
   await next(page).click();
   await expect(tour(page)).toBeHidden();
@@ -147,10 +156,25 @@ test('completes on an empty board and skips optional board anchors', async ({ pa
   for (const ticket of tickets.tickets ?? []) {
     await page.request.delete(`${dashboard.baseURL}/api/tickets/${ticket.id}?project=${ticket.project}`);
   }
+  const stories = await (await page.request.get(`${dashboard.baseURL}/api/stories?project=all`)).json();
+  for (const story of stories.stories ?? []) {
+    await page.request.delete(`${dashboard.baseURL}/api/stories/${story.id}?project=${story.projectSlug}`);
+  }
 
   await openBoard(page, dashboard);
   await expect(page.getByText('No side quests yet')).toBeVisible();
   await expect(page.locator('[data-tour="board-columns"]')).toHaveCount(0);
   await expect(page.locator('[data-tour="ticket-card"]')).toHaveCount(0);
+  await expect(page.locator('[data-tour="ticket-dialog"]')).toHaveCount(0);
+  await expect(page.locator('[data-tour="story-filter"]')).toHaveCount(0);
+
+  await next(page).click();
+  await expect(counter(page)).toHaveText('2 of 14');
+  await next(page).click();
+  await expect(counter(page)).toHaveText('6 of 14');
+  await advance(page, 3);
+  await expect(counter(page)).toHaveText('9 of 14');
+  await next(page).click();
+  await expect(counter(page)).toHaveText('11 of 14');
   await finishTour(page);
 });
