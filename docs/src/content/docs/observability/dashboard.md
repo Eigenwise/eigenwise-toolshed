@@ -41,7 +41,11 @@ These are counts and derived cost estimates from local records. They are for fin
 
 ## Deleting project data
 
-Delete telemetry only when you mean it. It is permanent. Replace `project-id` and the Loki start time with the project and oldest data you want gone.
+Replace `project-id` and the Loki start time with the project and oldest data you want gone.
+
+:::danger
+Delete telemetry only when you mean it. It is permanent.
+:::
 
 ```sh
 docker exec workbench-otel-lgtm curl -X POST -g 'http://127.0.0.1:9090/api/v1/admin/tsdb/delete_series?match[]={project_id=~"project-id"}'

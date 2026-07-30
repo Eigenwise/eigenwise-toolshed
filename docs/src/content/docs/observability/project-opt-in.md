@@ -23,6 +23,9 @@ Disabling from anywhere in the repository unwires that same set, and leaves late
 
 ## Checking it worked
 
-Run the same skill to verify or disable telemetry. Its verification reports `found` only after the local observer and Grafana/Loki stack have a `claude_code_token_usage_tokens_total` sample for the project. `not-found` means no sample has arrived yet or no dashboard is configured, so restart Claude Code in the listed directories and create activity before treating setup as complete. `/workbench:workbench-doctor` is read-only and checks the observer, collector, registry, and statusline path. It also flags a half-wired project: one whose hook events reach the observer while no `claude_code_*` metric carries its name in the same window, which is what an unwired session directory looks like from the outside. It names the directory and prints the command that fixes it.
+1. Run the same skill to verify or disable telemetry. Its verification reports `found` only after the local observer and Grafana/Loki stack have a `claude_code_token_usage_tokens_total` sample for the project.
+2. Read the verification result: `not-found` means no sample has arrived yet or no dashboard is configured.
+3. If the result is `not-found`, restart Claude Code in the listed directories and create activity before treating setup as complete.
+4. Run `/workbench:workbench-doctor` for a read-only second opinion. It checks the observer, collector, registry, and statusline path, and flags a half-wired project: one whose hook events reach the observer while no `claude_code_*` metric carries its name in the same window, which is what an unwired session directory looks like from the outside. It names the directory and prints the command that fixes it.
 
 The global dashboard can show every opted-in project. A project view filters to the current project, so you can inspect one codebase without mixing its counts with the rest of your machine. When that project has no samples in the selected range, the top of its dashboard says so instead of looking like an idle project.

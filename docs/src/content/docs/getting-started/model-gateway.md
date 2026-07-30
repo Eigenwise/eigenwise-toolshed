@@ -41,8 +41,6 @@ The `state` value points at the repair path:
 | `serving-version-mismatch` | Run `node <plugin>/bin/model-gateway.js ensure`, then retry. |
 | `upstream-blocked` | Run `node <plugin>/bin/model-gateway.js setup`. If it persists, wait for a `claude-code-proxy` update or explicitly re-route the ticket. Codex tickets remain blocked. |
 
-If a Windows upgrade hits a locked executable, the old proxy is retained. Reboot, then run `node <plugin>/bin/model-gateway.js setup`.
-
 ### Add Grok subscription models
 
 Install the official Grok CLI and run `grok` once to sign in with your SuperGrok subscription. Model Gateway reads that CLI login from `~/.grok/auth.json`, refreshes it when needed, and adds `claude-grok-*` rows such as `claude-grok-4.5`, `claude-grok-build`, and `claude-grok-4.1-fast` to `/model`. No xAI API key is needed. If `doctor` reports Grok auth missing or refresh fails, run `grok` and log in again. Update the Grok CLI if it reports an outdated version header.
@@ -53,6 +51,16 @@ Gateway wiring uses each recorded project's private `.claude/settings.local.json
 
 The gateway pins Claude's Opus, Sonnet, and Fable aliases to their shipped 1M model ids. Pin a different native model persistently with `node <plugin>/bin/model-gateway.js pin --opus claude-opus-4-8[1m]`; `--sonnet` and `--fable` work the same way. Run `pin --opus default` to clear one, or `pin` to see the effective pins and which ones are overridden. After changing a pin, re-run `env --write-project` (or `/workbench:update-toolshed`) and start a new Claude Code session. The override is saved outside the plugin cache, so an update and a re-wire preserve it.
 
-`/compact` on a Codex model used to fail with `websocket_missing_terminal` or "Server error mid-response" while the same conversation compacted fine on a Claude model. The proxy streams over a WebSocket that can only recover from a dropped connection before its first chunk of output, and a compaction turn spends minutes past that point. The gateway now buffers the translated stream for compaction requests only and retries the whole turn on the same model if it ends without a terminal event, so a failed attempt never reaches your session. Normal turns keep streaming live. If retries run out you get the real upstream error rather than a truncated summary presented as a complete one. Set `CODEX_GATEWAY_COMPACT_STREAM_RETRIES` to change the retry count (default 2) or `CODEX_GATEWAY_COMPACT_STREAM_GUARD=0` to turn it off; `/healthz` reports the live settings under `compaction`.
+### Troubleshooting
+
+:::caution
+If a Windows upgrade hits a locked executable, the old proxy is retained. Reboot, then run `node <plugin>/bin/model-gateway.js setup`.
+:::
+
+`/compact` on a Codex model used to fail with `websocket_missing_terminal` or "Server error mid-response" while the same conversation compacted fine on a Claude model. The proxy streams over a WebSocket that can only recover from a dropped connection before its first chunk of output, and a compaction turn spends minutes past that point. The gateway now buffers the translated stream for compaction requests only and retries the whole turn on the same model if it ends without a terminal event, so a failed attempt never reaches your session. Normal turns keep streaming live. Set `CODEX_GATEWAY_COMPACT_STREAM_RETRIES` to change the retry count (default 2) or `CODEX_GATEWAY_COMPACT_STREAM_GUARD=0` to turn it off; `/healthz` reports the live settings under `compaction`.
+
+:::caution
+If retries run out you get the real upstream error rather than a truncated summary presented as a complete one.
+:::
 
 Claude Code Remote Control cannot use a local `ANTHROPIC_BASE_URL` in the same way. Run `/model-gateway:remote-control-compatibility` to safely switch compatibility mode on or off before using Remote Control, then restore gateway mode when you return.

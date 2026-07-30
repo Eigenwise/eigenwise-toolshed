@@ -11,6 +11,15 @@ Sidequest is a local Kanban board for Claude Code work.
 
 Reload Claude Code, then open the board with `/sidequest:board`. The dashboard spans projects, while each ticket keeps its project path and status. You can also use the Sidequest MCP tools or CLI to add, update, and close tickets.
 
+## Quick start
+
+1. Install Sidequest with the plugin command above, then reload Claude Code.
+2. File a ticket with `sidequest add -t "Ship the next change" --category <id>`.
+3. Dispatch it with `sidequest dispatch <ref>`, then spawn the returned executor unchanged.
+4. After the executor submits its verified commit, integrate it with `sidequest integrate <ref> --by <who>`.
+
+See [CLI basics](#cli-basics) for command details and [Work a ticket](#work-a-ticket) for the full dispatch and integration flow.
+
 ## CLI basics
 
 Check the installed CLI version with `sidequest --version` (also `sidequest -V` or `sidequest version`). Add `--help` to a command for its usage, for example `sidequest add --help`; use `sidequest help` for the full command list.
@@ -50,9 +59,13 @@ The MCP equivalent is `board_config` with `name: "Client work"` and the board's 
 
 ## Categories and dispatch
 
+### Routing profiles
+
 Routing profiles hold a complete category set and keep each board's policy independent. Every board points at one profile, then applies its own local rows as overrides, additions, pins, or disabled entries. A profile edit propagates to every board pointing at it; local changes stay local and the dashboard shows their provenance.
 
 Starter profiles include `coding`, `creative-music`, `research`, and `writing`. The init-workspace interview proposes one after scanning the repository. Accept it, pick another, or create a project profile from a starter. Shared starters are never changed by setup.
+
+### Profile commands
 
 Manage profiles with the CLI:
 
@@ -70,7 +83,11 @@ sidequest profile new-board [<profile>] [--json]
 
 `repoint --dry-run` previews changed, added, and missing categories plus local drift. `promote` copies a board's effective taxonomy into a new profile and repoints the selected boards when their taxonomies match. `new-board` reads or sets the profile used for future boards. Profiles can also be managed through the matching Sidequest MCP tools.
 
+### Category scope and routing
+
 Category commands require an explicit scope. Use `--profile <profile>` for profile entries and `--project <board>` for board-local changes. A mutation with neither scope fails. `global-fallback` remains the availability fallback used after category routes and category fallbacks.
+
+### Provider fallback and refusal
 
 When a Claude Opus dispatch fails before claim because its subscription capacity or entitlement is exhausted, Sidequest prepares that category's configured Codex fallback with a fresh token. The ticket continues on the replacement executor, while dispatch, board, CLI, and MCP reads show the executor actually used. Other provider failures leave the route alone. Category and board-local overrides still win over this recovery path.
 
@@ -80,11 +97,17 @@ The refusal includes the recovery. If `claude-code-proxy` is missing, run `node 
 
 Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. The board applies local overrides on top of the selected profile, and the dashboard marks each row as profile, override, pinned, board-only, or disabled.
 
+### Category and comment reads
+
 Compact MCP reads for `category_list` and `comments` return `total`, `returned`, and `nextCursor`. Follow `nextCursor` until it is null. Compact category descriptions and comment bodies mark excerpts explicitly; `full:true` returns exact text. Compact comments are newest-first for orchestration, while full comments stay chronological. `full:true` without a cursor or limit keeps the one-call complete response. The CLI JSON shapes do not use this pagination and remain unchanged.
 
 For tickets with more than 10 comments, default CLI and MCP comment reads keep all metadata but elide the oldest comment bodies, with an explicit omitted-count marker. Long orchestrator sessions can re-bill tool results, so this keeps routine reads smaller. Use `sidequest comments SQ-n --full` or the MCP `comments` tool with `full:true` to restore every body. Tickets with 10 or fewer comments are unchanged. Dashboard and REST reads are unaffected.
 
+### Executor guidance
+
 Use read-only tools or native `Explore` to gather enough evidence for precise tickets, then route implementation by default. Use informed inline judgment when it fits. Routed implementation work goes through a ticket and dispatch. Helpers are limited to `Explore`, `claude-code-guide`, `web-researcher`, and `general-purpose` for genuinely uncategorized bounded work, mechanical sweeps, or documentation research; classify matching work through board categories first, use an explicit cheap model, keep helpers in the background, and route audit or review work through a `review-audit` ticket. Evidence that would require searching session, transcript, or task-output files is self-reference, not a finding. Other delegated implementation, investigation, research, review, or domain analysis needs a ticketed route.
+
+### Session reminder and routing toggle
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
 
@@ -111,6 +134,8 @@ Dispatch builds the launch's `spawn.name` from the board, not from a random id: 
 ### Claims, and when one is released
 
 A claim says "someone is on this", so nothing else picks the ticket up. It is not a lease, and it never expires on the clock: an executor that has been working for five hours can still commit, submit, checkpoint, and close. That matters because a wall-clock timeout fails in the worst place, near the end of a long run, when the most unsaved work is at stake.
+
+### Claim sweep reference
 
 `sidequest claims sweep` (also run at session start, and available as the `sweepClaims` MCP tool) releases a claim in three cases: its executor was observed to stop while still holding it, it went idle past `SIDEQUEST_CLAIM_IDLE_MIN` (default 60 minutes) with no executor associated, or nothing ever reported the stop and it went idle past `SIDEQUEST_CLAIM_ABANDON_MIN` (default 1440 minutes). Idleness counts from the holder's last board write, so a comment, checkpoint, scope request, or commit keeps a long run safe. `sidequest pulse SQ-3` shows the same verdict as `claim.reclaimable`; when it is null, leave the claim alone.
 
@@ -161,11 +186,23 @@ In local mode, closing an integrated ticket also advances the integration branch
 
 Worktree isolation defaults to enabled. Set `--no-worktree-isolation` (or `worktreeIsolation: false` through MCP) to force every dispatched executor onto the shared checkout, including calls that explicitly request `sharedTree: false`.
 
+### Worktree-loss recovery
+
 An isolated executor can still lose its worktree: Claude Code discards an agent's worktree when that agent stops with it unchanged, so an executor that pauses for a scope request before its first edit comes back in the shared checkout. Sidequest refuses the next write instead of letting it land on your main branch. The refusal names the ticket, the worktree it was promised, and the path it was about to write, and it tells the executor to stop and ask for a re-dispatch. Shared-tree dispatches are unaffected.
 
-Sidequest also refuses `git reset --hard`, `git clean -f`, a whole-tree `checkout`/`restore`, and a forced checkout in a shared checkout that has uncommitted changes. Some of those changes may be an executor's finished work that never made it into a commit. The refusal lists what would be destroyed and names the only recovery path: first preserve every dirty path in a named stash, then run `sidequest recover-shared --project <repo> --stash <stash@{n}> --yes`. It verifies that stash object covers the currently dirty paths before it runs `git reset --hard && git clean -fd`, and prints the stash ref, object ID, and covered paths as recovery evidence.
+:::caution
+
+Sidequest also refuses `git reset --hard`, `git clean -f`, a whole-tree `checkout`/`restore`, and a forced checkout in a shared checkout that has uncommitted changes. Some of those changes may be an executor's finished work that never made it into a commit.
+
+The refusal lists what would be destroyed and names the only recovery path: first preserve every dirty path in a named stash, then run `sidequest recover-shared --project <repo> --stash <stash@{n}> --yes`. It verifies that stash object covers the currently dirty paths before it runs `git reset --hard && git clean -fd`, and prints the stash ref, object ID, and covered paths as recovery evidence.
+
+:::
+
+:::caution
 
 `git tag` and pushes to a repository's published/default branch also need the current session's `sidequest publish lock`. Pushes to the configured integration branch stay available for normal ticket integration. The hook catches Bash and PowerShell forms, including `HEAD:main`, remote aliases, tag pushes, and force pushes. It is a local early warning only. Server-side GitHub rules remain the guarantee. When a repo has `.release/unreleased/`, `sidequest publish queue` adds its fragment and held counts, latest release, integration and published branches, and the next scheduled-cut hint. Repositories without release fragments keep the usual queue output.
+
+:::
 
 `worktreeSetup` is per-project. A nonblank command is retained verbatim and shown in a fresh isolated executor briefing as `Worktree setup (run before verify): ...`; shared-tree dispatches and unset configuration omit it. Sidequest does not execute or shell-escape the command. The value must be one line and no longer than 1000 characters. Pass `null` through MCP to clear it.
 
