@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.289.0 (2026-07-30)
+
+### sidequest 3.42.1 → 3.42.2
+
+#### Fixes
+
+- Warn about build output, read-only browser reviews, and unrunnable verify commands (SQ-1081) [`6c5ec3b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6c5ec3bf7bf43d040e24b969871eb8dae8b34779)
+  Filing a ticket now warns when its scope changes source for a package whose build output is tracked but left out of scope, when a read-only ticket asks for browser or visual review work an executor with no write tool cannot do, and when a recorded verify command would not run from the directory it names. Adds short guidance that one ticket per wave owns a content-hashed build, and that a different test failing each run points at the runner rather than the tests.
+
 ## v3.288.0 (2026-07-30)
 
 ### sidequest 3.42.0 → 3.42.1
