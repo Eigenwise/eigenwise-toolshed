@@ -110,6 +110,28 @@ export const TOUR_STEPS: TourStep[] = [
     body: 'You can file work yourself here, though most tickets arrive from agents. Press N as a shortcut.'
   },
   {
+    id: 'board-menu',
+    target: '[data-tour="board-menu"]',
+    title: 'Archive or delete a board',
+    body: 'Right-click a board, then archive it to get it out of the way or delete it outright. No need to worry about deleting one: Sidequest automatically creates a project’s board when an agent starts Sidequest work there, so the next job brings it back, and an agent may have made its own already.',
+    placement: 'right',
+    optional: true,
+    available: (board) => Boolean(board.raw?.projects.length),
+    enter: () => {
+      const trigger = document.querySelector<HTMLElement>('[data-project-menu-trigger]');
+      if (!trigger) return;
+      const bounds = trigger.getBoundingClientRect();
+      trigger.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        clientX: bounds.right,
+        clientY: bounds.top
+      }));
+    },
+    exit: () => {
+      document.querySelector<HTMLElement>('.menu-backdrop')?.click();
+    }
+  },
+  {
     id: 'finish',
     target: null,
     title: 'You’re set',

@@ -99,7 +99,7 @@
     {#each activeProjects as project (project.slug)}
       {@const total = openCount(project)}
       {@const projectCounts = counts(project)}
-      <button class:active={board.selectedProject === project.slug && board.view === 'board'} onclick={() => board.selectProject(project.slug)} oncontextmenu={(event) => showMenu(event, project)}>
+      <button data-project-menu-trigger class:active={board.selectedProject === project.slug && board.view === 'board'} onclick={() => board.selectProject(project.slug)} oncontextmenu={(event) => showMenu(event, project)}>
         <span class="project-row"><b>{project.name}</b>{#if project.notify === false}<span class="muted" title="Notifications muted">muted</span>{/if}{#if unread(project)}<mark>{unread(project) > 99 ? '99+' : unread(project)}</mark>{/if}<small>{total}</small></span>
         <span class="project-path" title={project.path}>{projectLocation(project.path)}</span>
         <span class="progress" aria-hidden="true"><i style:--size={`${projectCounts.todo}`} class="todo"></i><i style:--size={`${projectCounts.doing}`} class="doing"></i><i style:--size={`${projectCounts.done}`} class="done"></i></span>
@@ -120,7 +120,7 @@
 
 {#if menuProject}
   <div class="menu-backdrop" role="presentation" onclick={() => menuProject = null}></div>
-  <div bind:this={menuElement} class="project-menu" role="menu" style:left={`${menuPosition.left}px`} style:top={`${menuPosition.top}px`}>
+  <div bind:this={menuElement} class="project-menu" role="menu" data-tour="board-menu" style:left={`${menuPosition.left}px`} style:top={`${menuPosition.top}px`}>
     {#if menuProject.archivedAt}
       <button role="menuitem" onclick={() => { restoreProject(menuProject!); menuProject = null; }}>Restore board</button>
     {:else}

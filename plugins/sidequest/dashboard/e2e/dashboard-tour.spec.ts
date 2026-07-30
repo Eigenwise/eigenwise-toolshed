@@ -37,7 +37,7 @@ async function finishTour(page: Page) {
 
 test('auto-starts, follows the read-first order, and stacks above the ticket dialog', async ({ page, dashboard }) => {
   await openBoard(page, dashboard);
-  await expect(counter(page)).toHaveText('1 of 14');
+  await expect(counter(page)).toHaveText('1 of 15');
 
   const anchoredSteps = [
     'project-rail',
@@ -46,12 +46,12 @@ test('auto-starts, follows the read-first order, and stacks above the ticket dia
   ];
   for (const [index, id] of anchoredSteps.entries()) {
     await next(page).click();
-    await expect(counter(page)).toHaveText(`${index + 2} of 14`);
+    await expect(counter(page)).toHaveText(`${index + 2} of 15`);
     await expect(page.locator(`[data-tour="${id}"]`).first()).toBeVisible();
   }
 
   await next(page).click();
-  await expect(counter(page)).toHaveText('5 of 14');
+  await expect(counter(page)).toHaveText('5 of 15');
   await expect(page.getByRole('dialog', { name: /^Edit SQ-/ })).toBeVisible();
   await expect(page.getByRole('dialog', { name: /^Edit SQ-/ })).toContainText('A regular seeded comment.');
   await expect(page.locator('[data-tour="ticket-dialog"]')).toBeVisible();
@@ -59,7 +59,7 @@ test('auto-starts, follows the read-first order, and stacks above the ticket dia
   await expect(next(page)).toBeEnabled();
 
   await next(page).click();
-  await expect(counter(page)).toHaveText('6 of 14');
+  await expect(counter(page)).toHaveText('6 of 15');
   await expect(page.getByRole('dialog', { name: /^Edit SQ-/ })).toBeHidden();
 
   for (const [offset, id] of [
@@ -72,12 +72,36 @@ test('auto-starts, follows the read-first order, and stacks above the ticket dia
     'new-ticket'
   ].entries()) {
     await next(page).click();
-    await expect(counter(page)).toHaveText(`${offset + 7} of 14`);
+    await expect(counter(page)).toHaveText(`${offset + 7} of 15`);
     await expect(page.locator(`[data-tour="${id}"]`).first()).toBeVisible();
   }
 
+  const projectsBefore = await (await page.request.get(`${dashboard.baseURL}/api/projects`)).json();
   await next(page).click();
-  await expect(counter(page)).toHaveText('14 of 14');
+  await expect(counter(page)).toHaveText('14 of 15');
+  const boardMenu = page.locator('[data-tour="board-menu"]');
+  await expect(boardMenu).toBeVisible();
+  await expect(boardMenu).toContainText('Archive board');
+  await expect(boardMenu).toContainText('Delete board');
+  const spotlightCoversMenu = await Promise.all([
+    tour(page).locator('.spotlight').boundingBox(),
+    boardMenu.boundingBox()
+  ]).then(([spotlight, menu]) => Boolean(
+    spotlight && menu &&
+    spotlight.x <= menu.x &&
+    spotlight.y <= menu.y &&
+    spotlight.x + spotlight.width >= menu.x + menu.width &&
+    spotlight.y + spotlight.height >= menu.y + menu.height
+  ));
+  expect(spotlightCoversMenu).toBe(true);
+
+  await next(page).click();
+  await expect(counter(page)).toHaveText('15 of 15');
+  await expect(boardMenu).toBeHidden();
+  const projectsAfter = await (await page.request.get(`${dashboard.baseURL}/api/projects`)).json();
+  expect(projectsAfter.projects.map((project: { slug: string }) => project.slug)).toEqual(
+    projectsBefore.projects.map((project: { slug: string }) => project.slug)
+  );
   await next(page).click();
   await expect(tour(page)).toBeHidden();
 });
@@ -129,9 +153,9 @@ test('Escape skips and completion persists across reloads', async ({ page, dashb
 test('resumes from the saved step after a reload', async ({ page, dashboard }) => {
   await openBoard(page, dashboard);
   await advance(page, 3);
-  await expect(counter(page)).toHaveText('4 of 14');
+  await expect(counter(page)).toHaveText('4 of 15');
   await page.reload();
-  await expect(counter(page)).toHaveText('4 of 14');
+  await expect(counter(page)).toHaveText('4 of 15');
 });
 
 test('replays from Settings and starts from the board shortcut, but not from search', async ({ page, dashboard }) => {
@@ -140,11 +164,11 @@ test('replays from Settings and starts from the board shortcut, but not from sea
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Replay the tour' }).click();
   await expect(page.getByRole('button', { name: 'Replay the tour' })).toBeHidden();
-  await expect(counter(page)).toHaveText('1 of 14');
+  await expect(counter(page)).toHaveText('1 of 15');
   await page.keyboard.press('Escape');
 
   await page.keyboard.press('?');
-  await expect(counter(page)).toHaveText('1 of 14');
+  await expect(counter(page)).toHaveText('1 of 15');
   await page.keyboard.press('Escape');
   const search = page.getByRole('textbox', { name: 'Search tickets' });
   await search.focus();
@@ -170,12 +194,12 @@ test('completes on an empty board and skips optional board anchors', async ({ pa
   await expect(page.locator('[data-tour="story-filter"]')).toHaveCount(0);
 
   await next(page).click();
-  await expect(counter(page)).toHaveText('2 of 14');
+  await expect(counter(page)).toHaveText('2 of 15');
   await next(page).click();
-  await expect(counter(page)).toHaveText('6 of 14');
+  await expect(counter(page)).toHaveText('6 of 15');
   await advance(page, 3);
-  await expect(counter(page)).toHaveText('9 of 14');
+  await expect(counter(page)).toHaveText('9 of 15');
   await next(page).click();
-  await expect(counter(page)).toHaveText('11 of 14');
+  await expect(counter(page)).toHaveText('11 of 15');
   await finishTour(page);
 });

@@ -208,9 +208,50 @@ describe('TourState', () => {
     expect(board.openDialog).toBeNull();
   });
 
+  it('opens and closes the first board menu without changing the board', () => {
+    const board = boardWithTickets([]);
+    const state = new TourState(board);
+    const boardMenuIndex = state.steps.findIndex((step) => step.id === 'board-menu');
+    const dispatchEvent = vi.fn();
+    const closeMenu = vi.fn();
+    vi.stubGlobal('MouseEvent', class {
+      constructor(public type: string) {}
+    });
+    vi.stubGlobal('document', {
+      querySelector: vi.fn((selector: string) => {
+        if (selector === '[data-project-menu-trigger]') {
+          return {
+            getBoundingClientRect: () => ({ right: 220, top: 80 }),
+            dispatchEvent
+          };
+        }
+        if (selector === '.menu-backdrop') return { click: closeMenu };
+        return {};
+      })
+    });
+    const archiveProject = vi.spyOn(board, 'archiveProject');
+    const deleteProject = vi.spyOn(board, 'deleteProject');
+
+    state.start(boardMenuIndex);
+    expect(state.index).toBe(boardMenuIndex);
+    expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'contextmenu' }));
+    state.next();
+    expect(closeMenu).toHaveBeenCalledOnce();
+    expect(archiveProject).not.toHaveBeenCalled();
+    expect(deleteProject).not.toHaveBeenCalled();
+  });
+
+  it('skips the board menu when there are no boards', () => {
+    const state = tour();
+    const boardMenuIndex = state.steps.findIndex((step) => step.id === 'board-menu');
+    state.start(boardMenuIndex);
+    expect(state.step?.id).toBe('finish');
+    expect(document.querySelector).not.toHaveBeenCalledWith('[data-project-menu-trigger]');
+  });
+
   it('finishes, including when next is called on the last step', () => {
     const state = tour();
-    state.start(13);
+    state.start(state.steps.length - 1);
     state.next();
     expect(state.active).toBe(false);
     expect(persisted()).toEqual({ version: TOUR_VERSION, completed: true, step: 0 });
