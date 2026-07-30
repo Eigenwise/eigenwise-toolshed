@@ -9,7 +9,7 @@ Telemetry is off until a project opts in. From anywhere inside that project, run
 /workbench:enable-project-telemetry
 ```
 
-The skill asks for consent before changing anything. It writes only the repository's private project settings, then prepares the loopback observer and Collector, records the project in the local registry, and checks whether metrics arrive. Per-project wiring is the default. If you choose global wiring, use `/model-gateway:model-gateway` to change the gateway environment mode before enabling telemetry. The registry lets the global dashboard group data by project without copying project files anywhere.
+The skill asks for consent before changing anything. It writes only the repository's private project settings, then prepares the loopback observer and Collector, records the project in the local registry, and checks whether metrics arrive. Global Model Gateway wiring is the recommended default because it reaches every project and executor worktree. Per-project wiring is an escape hatch: it needs `env --write-project` in each project, does not reach executor worktrees, and Sidequest cannot detect a half-wired project. The registry lets the global dashboard group data by project without copying project files anywhere.
 
 ## Opting in covers the repository
 
