@@ -69,9 +69,13 @@ test('Workbench skills hand off gateway mode commands to the installed gateway s
     assert.match(document, /through that skill with its `env --mode global` or `env --mode local` command/);
     assert.doesNotMatch(document, /`codex-gateway env --/);
   }
-  assert.match(skill, /Global \(all projects wired automatically via user settings\) or per-project \(each project opts in via its private settings\.local\.json — recommended\)\?/);
+  assert.match(skill, /When no mode is saved, ask exactly once:/);
+  assert.match(skill, /Global \(recommended:/);
+  assert.match(skill, /every project and executor worktree automatically/);
+  assert.match(skill, /or per-project \(a private-settings escape hatch/);
+  assert.match(skill, /does not reach executor worktrees/);
   assert.match(skill, /do not ask again once a mode exists/);
-  assert.match(skill, /wiring mode defaulted to per-project; use \/model-gateway:model-gateway to run its env --mode global command to change/);
+  assert.match(skill, /wiring mode defaulted to global; use \/model-gateway:model-gateway to run its env --mode local command to use per-project wiring/);
 });
 
 test('init-workspace starts with telemetry consent, project intent, then the live plugin picker', () => {
