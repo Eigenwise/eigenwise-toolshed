@@ -48,6 +48,8 @@ the contract, then clears the log. If the contract changes after a member is cla
 about revision drift. This keeps context completeness cheap without the orchestrator rediscovering the
 codebase inline.
 
+When a package commits build output, the source ticket scopes its generated output too. For content-hashed output, assign exactly one rebuild ticket per wave: parallel rebuilds choose different filenames and collide at merge.
+
 **The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket:
 direct `Read`/`Glob`/`Grep` when the affected surfaces are obvious; when they are unfamiliar, a
 proportional investigation ticket whose result pins the scope, executor anchors, and exact verify
@@ -93,6 +95,8 @@ Set the acceptance boundary before splitting fixes:
 - **Record stable facts once.** Put local-only git, artifact lifecycle, and frozen acceptance wording
   in the ticket or board record that owns them. Executors consume that source instead of receiving
   the same steering repeatedly.
+
+When full-suite failures move between runs but each failing test passes alone, reproduce under load and inspect runner concurrency or shared resources. Do not add sleeps, retries, or looser assertions. Accept the runner fix only after several consecutive green runs.
 
 ### Live review checkpoints
 

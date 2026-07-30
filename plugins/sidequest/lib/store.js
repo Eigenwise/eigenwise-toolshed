@@ -2484,6 +2484,118 @@ function noDeclaredScopeWarning(ticket) {
   if (Number(ticket?.complexity) >= 4) return null;
   return "Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.";
 }
+const BROWSER_REVIEW_SIGNAL = /\b(?:browser|visual|screenshot|playwright|ui review|e2e)\b/i;
+function readonlyBrowserReviewWarning(ticket) {
+  if (!dispatchReadOnly(ticket)) return null;
+  const signal = [ticket?.title, ticket?.description, ticketCategory(ticket)].join("\n");
+  if (!BROWSER_REVIEW_SIGNAL.test(signal)) return null;
+  return "Planning-depth warning: this readonly browser/visual ticket may need a driver script. Read-only executors cannot write one; grant write scope with an explicit no-repo-writes mandate, or use a browser tool that needs no script.";
+}
+function relativePathWithin(root, target) {
+  const relative = path.relative(String(root), String(target));
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : relative === "" ? "." : null;
+}
+function packageRootForScope(projectPath, scope) {
+  const absolute = path.resolve(String(projectPath), String(scope));
+  let directory = path.dirname(absolute);
+  for (; ; ) {
+    if (!relativePathWithin(projectPath, directory)) return null;
+    if (fs.existsSync(path.join(directory, "package.json"))) return directory;
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+function buildOutputDirectories(source) {
+  const outputs = /* @__PURE__ */ new Map();
+  const add = (directory, sourceDirectory) => {
+    const value = String(directory || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+    if (!value || value.includes("..") || path.isAbsolute(value)) return;
+    const current = outputs.get(value);
+    outputs.set(value, { directory: value, sourceDirectory: sourceDirectory || current?.sourceDirectory || null });
+  };
+  const text = String(source || "");
+  for (const match of text.matchAll(/--(?:outdir|out-dir|output-dir)\s*(?:=|\s+)\s*["']?([^"'\s;&]+)/gi)) add(match[1]);
+  for (const match of text.matchAll(/(?:outdir|outDir|outputDir)\s*:\s*["']([^"']+)["']/g)) add(match[1]);
+  for (const helper of text.matchAll(/(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)[^)]*\)\s*\{([\s\S]{0,2000}?)\n\}/g)) {
+    const [helperName, parameter, body] = [helper[1], helper[2], helper[3]];
+    if (!helperName || !parameter || !body || !new RegExp(`(?:outdir|outDir)\\s*:\\s*path\\.join\\([^)]*,\\s*${parameter}\\s*\\)`).test(body)) continue;
+    const call = new RegExp(`\\b${helperName}\\s*\\(\\s*["']([^"']+)["']`, "g");
+    for (const match of text.matchAll(call)) add(match[1], match[1]);
+  }
+  return [...outputs.values()];
+}
+function packageBuildOutputs(packageRoot) {
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(String(packageRoot), "package.json"), "utf8"));
+  } catch (_) {
+    return [];
+  }
+  const build = String(manifest?.scripts?.build || "");
+  if (!build) return [];
+  const outputs = buildOutputDirectories(build);
+  for (const match of build.matchAll(/\bnode\s+(?:["']([^"']+)["']|([^\s;&]+))/g)) {
+    const script = path.resolve(String(packageRoot), match[1] || match[2]);
+    if (!relativePathWithin(packageRoot, script) || !fs.existsSync(script)) continue;
+    try {
+      outputs.push(...buildOutputDirectories(fs.readFileSync(script, "utf8")));
+    } catch (_) {
+    }
+  }
+  return [...new Map(outputs.map((output) => [output.directory, output])).values()];
+}
+function isTrackedBuildOutput(projectPath, output) {
+  const relative = relativePathWithin(projectPath, output);
+  if (!relative || relative === ".") return false;
+  try {
+    return Boolean(execFileSync("git", ["ls-files", "--", relative], {
+      cwd: projectPath,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim());
+  } catch (_) {
+    return false;
+  }
+}
+function scopeIncludesPath(files, projectPath, target) {
+  return normalizeFiles(files).some((file) => {
+    const declared = path.resolve(String(projectPath), file);
+    return declared === target || relativePathWithin(target, declared) !== null;
+  });
+}
+function sourceBuildOutputWarnings(ticket, projectPath) {
+  if (!projectPath || !Array.isArray(ticket?.files)) return [];
+  const warnings = /* @__PURE__ */ new Set();
+  for (const scope of normalizeFiles(ticket.files)) {
+    const packageRoot = packageRootForScope(projectPath, scope);
+    if (!packageRoot) continue;
+    const sourceRelative = relativePathWithin(packageRoot, path.resolve(projectPath, scope))?.replace(/\\/g, "/");
+    if (!sourceRelative || sourceRelative !== "src" && !sourceRelative.startsWith("src/")) continue;
+    const sourceDirectory = sourceRelative.split("/")[1] || null;
+    for (const output of packageBuildOutputs(packageRoot)) {
+      if (output.sourceDirectory && sourceDirectory && output.sourceDirectory !== sourceDirectory) continue;
+      const target = path.resolve(packageRoot, output.directory);
+      if (!isTrackedBuildOutput(projectPath, target) || scopeIncludesPath(ticket.files, projectPath, target)) continue;
+      const packageRelative = relativePathWithin(projectPath, packageRoot)?.replace(/\\/g, "/") || ".";
+      const display = packageRelative === "." ? output.directory : `${packageRelative}/${output.directory}`;
+      warnings.add(`Planning-depth warning: declared source scope under ${packageRelative}/src omits tracked build output ${display}. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.`);
+    }
+  }
+  return [...warnings];
+}
+function verifyCommandWarning(ticket, projectPath) {
+  const verify = String(ticket?.executorVerify || "").trim();
+  if (!verify) return null;
+  const match = /^cd\s+(?:["']([^"']+)["']|([^&;\s]+))\s*&&/.exec(verify);
+  if (!match) return "Planning-depth warning: record verify commands as `cd <repo-relative-dir> && ...`, then run that exact string before submitting.";
+  const directory = path.resolve(String(projectPath || ""), match[1] || match[2]);
+  if (!projectPath || !relativePathWithin(projectPath, directory) || !fs.existsSync(directory)) {
+    return "Planning-depth warning: the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting.";
+  }
+  return null;
+}
 function dispatchDescriptionError(ticket) {
   if (!ticket || !ticket.model || !ticket.effort) return null;
   if (String(ticket.description || "").trim().length >= DISPATCH_DESCRIPTION_MIN) return null;
@@ -2501,6 +2613,16 @@ function claudeWebSearchUnavailable(ticket) {
 }
 function dispatchWarnings(ticket, slug) {
   const warnings = [];
+  const projectPath = slug ? readMeta(slug)?.path : null;
+  if (projectPath) {
+    const browserReview = readonlyBrowserReviewWarning(ticket);
+    if (browserReview) warnings.push(`Dispatch warning: ${browserReview.replace("Planning-depth warning: ", "")}`);
+    const verify = verifyCommandWarning(ticket, projectPath);
+    if (verify) warnings.push(`Dispatch warning: ${verify.replace("Planning-depth warning: ", "")}`);
+    for (const warning of sourceBuildOutputWarnings(ticket, projectPath)) {
+      warnings.push(`Dispatch warning: ${warning.replace("Planning-depth warning: ", "")}`);
+    }
+  }
   if (claudeWebSearchUnavailable(ticket)) {
     warnings.push("Dispatch warning: WebSearch is unavailable on this Claude xhigh/max route. Put web research in a research-category ticket.");
   }
@@ -2624,7 +2746,12 @@ function ticketPlanningWarnings(ticket, projectPath) {
   if (contradiction) warnings.push(contradiction);
   const noScope = noDeclaredScopeWarning(ticket);
   if (noScope) warnings.push(noScope);
+  const browserReview = readonlyBrowserReviewWarning(ticket);
+  if (browserReview) warnings.push(browserReview);
+  const verify = verifyCommandWarning(ticket, projectPath);
+  if (verify) warnings.push(verify);
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
+  warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
   const absent = ticket.files.filter((file) => !fs.existsSync(path.resolve(projectPath, file)));
   if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(", ")}.`);
   return warnings;

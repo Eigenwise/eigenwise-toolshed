@@ -118,8 +118,8 @@ fallback; never set `--model`/`--effort`. Use `--file`, `--story`, `--anchors`, 
 needed; scope and authoring details: `references/ticket-authoring.md`.
 
 **Descriptions are developer-to-developer specs, never PM summaries.** Include anchors, behavior and
-edge cases (or the question), bounds, dependencies/decisions, and the exact verify command; bugs include
-a reproduction. Front-load known evidence, especially for cheaper executors. Route by remaining
+edge cases, bounds, dependencies/decisions, and a runnable `cd <repo-relative-dir> && ...` verify command. Bugs include
+a reproduction. Front-load evidence for cheaper executors. Route by remaining
 uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy`; use direct
 only for the INLINE-SAFE allowlist below, with its recorded reason.
 

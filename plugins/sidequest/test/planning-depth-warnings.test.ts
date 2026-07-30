@@ -14,9 +14,16 @@ const WARNING = 'Planning-depth warning: complexity 4+ tickets should include ex
 const MISSING_SCOPE_WARNING = 'Planning-depth warning: declared file scope does not exist in the repo: missing/scope.js.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.';
 const PRESCRIPTIVE_HARD_WARNING = 'coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.';
+const BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output lib. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
+const READONLY_BROWSER_WARNING = 'Planning-depth warning: this readonly browser/visual ticket may need a driver script. Read-only executors cannot write one; grant write scope with an explicit no-repo-writes mandate, or use a browser tool that needs no script.';
+const VERIFY_WARNING = 'Planning-depth warning: record verify commands as `cd <repo-relative-dir> && ...`, then run that exact string before submitting.';
 
 function cliJson(args?: any) {
-  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
+  return cliJsonAt(PROJ, args);
+}
+
+function cliJsonAt(project: any, args: any[]) {
+  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: project });
   const res = spawnSync(process.execPath, [BIN, ...args, '--json'], { encoding: 'utf8', env });
   assert.strictEqual(res.status, 0, `expected success: ${args.join(' ')}\n${res.stderr}${res.stdout}`);
   return JSON.parse(res.stdout);
@@ -241,6 +248,51 @@ test('add warns for a write-scope ticket with no declared files, not when files 
 
   const readonly = cliJson(['add', '-t', 'readonly ticket', '--category', 'research', '--description', 'Look something up.']);
   assert.deepStrictEqual(readonly.warnings, []);
+});
+
+test('warns when tracked package build output is omitted from source scope', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'tracked-output');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'src', 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { build: 'node scripts/build.mjs' } }));
+  fs.writeFileSync(path.join(project, 'scripts', 'build.mjs'), [
+    'async function buildOutput(directory) {',
+    '  return { outdir: path.join(root, directory) };',
+    '}',
+    "buildOutput('lib');",
+  ].join('\n'));
+  fs.writeFileSync(path.join(project, 'src', 'lib', 'store.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(project, 'lib', 'store.js'), 'module.exports = {};\n');
+  assert.strictEqual(spawnSync('git', ['init'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['add', '.'], { cwd: project, encoding: 'utf8' }).status, 0);
+
+  const omitted = cliJsonAt(project, ['add', '-t', 'source change', '--category', 'coding.normal', '--file', 'src/lib/store.ts']);
+  assert.deepStrictEqual(omitted.warnings, [BUILD_OUTPUT_WARNING]);
+
+  const included = cliJsonAt(project, ['add', '-t', 'source and output change', '--category', 'coding.normal', '--file', 'src/lib/store.ts', '--file', 'lib/store.js']);
+  assert.deepStrictEqual(included.warnings, []);
+});
+
+test('warns only when a readonly ticket signals browser or visual work', () => {
+  const browser = cliJson(['add', '-t', 'visual review', '--category', 'research', '--description', 'Open the browser and take a screenshot.']);
+  assert.deepStrictEqual(browser.warnings, [READONLY_BROWSER_WARNING]);
+
+  const ordinary = cliJson(['add', '-t', 'read docs', '--category', 'research', '--description', 'Read the existing docs.']);
+  assert.deepStrictEqual(ordinary.warnings, []);
+});
+
+test('warns for an unrunnable recorded verify command, not a cd-prefixed one', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const bare = cliJson(['add', '-t', 'bare verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test']);
+  assert.deepStrictEqual(bare.warnings, [VERIFY_WARNING]);
+
+  const exact = cliJson(['add', '-t', 'exact verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . && node --test']);
+  assert.deepStrictEqual(exact.warnings, []);
 });
 
 export {};
