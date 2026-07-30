@@ -28,11 +28,11 @@ function tour() {
   return new TourState(new BoardState());
 }
 
-function boardWithTicket() {
+function boardWithTickets(tickets: Snapshot['tickets']) {
   const board = new BoardState();
   const snapshot: Snapshot = {
     projects: [{ slug: 'alpha', name: 'Alpha' }],
-    tickets: [{ id: 'ticket-1', ref: 'SQ-1', title: 'First', status: 'todo', priority: 'normal', order: 1, projectSlug: 'alpha' }],
+    tickets,
     stories: [],
     categories: [],
     notifications: { notifications: [], unread: 0, unreadNeeds: 0 },
@@ -40,6 +40,10 @@ function boardWithTicket() {
   };
   board.applySnapshot(snapshot);
   return board;
+}
+
+function boardWithTicket() {
+  return boardWithTickets([{ id: 'ticket-1', ref: 'SQ-1', title: 'First', status: 'todo', priority: 'normal', order: 1, projectSlug: 'alpha' }]);
 }
 
 describe('tour storage', () => {
@@ -134,14 +138,17 @@ describe('TourState', () => {
     expect(persisted()).toEqual({ version: TOUR_VERSION, completed: false, step: 0 });
   });
 
-  it('enters and exits the first visible ticket in both directions', () => {
-    const board = boardWithTicket();
+  it('opens the most illustrative visible ticket and closes it in both directions', () => {
+    const board = boardWithTickets([
+      { id: 'bare', ref: 'SQ-1', title: 'Bare', status: 'todo', priority: 'normal', projectSlug: 'alpha' },
+      { id: 'commented', ref: 'SQ-2', title: 'Commented', status: 'todo', priority: 'normal', projectSlug: 'alpha', comments: [{ id: 'comment-1', body: 'Report' }] }
+    ]);
     const state = new TourState(board);
     const querySelector = vi.mocked(document.querySelector);
     state.start(3);
     state.next();
     expect(state.index).toBe(4);
-    expect(board.openDialog).toBe('ticket-1');
+    expect(board.openDialog).toBe('commented');
     expect(querySelector).not.toHaveBeenCalledWith('[data-tour="ticket-dialog"]');
     state.next();
     expect(state.index).toBe(5);
@@ -149,11 +156,29 @@ describe('TourState', () => {
 
     state.prev();
     expect(state.index).toBe(4);
-    expect(board.openDialog).toBe('ticket-1');
+    expect(board.openDialog).toBe('commented');
     expect(querySelector).not.toHaveBeenCalledWith('[data-tour="ticket-dialog"]');
     state.prev();
     expect(state.index).toBe(3);
     expect(board.openDialog).toBeNull();
+  });
+
+  it('falls back to the first visible ticket when all tickets are bare', () => {
+    const board = boardWithTickets([
+      { id: 'first', ref: 'SQ-1', title: 'First', status: 'todo', priority: 'normal', projectSlug: 'alpha' },
+      { id: 'second', ref: 'SQ-2', title: 'Second', status: 'todo', priority: 'normal', projectSlug: 'alpha' }
+    ]);
+    const state = new TourState(board);
+    state.start(3);
+    state.next();
+    expect(board.openDialog).toBe('first');
+  });
+
+  it('skips the ticket step when there are no visible tickets', () => {
+    const state = new TourState(boardWithTickets([]));
+    state.start(3);
+    state.next();
+    expect(state.index).toBe(5);
   });
 
   it('skips an unavailable predicate step without entering or exiting it', () => {

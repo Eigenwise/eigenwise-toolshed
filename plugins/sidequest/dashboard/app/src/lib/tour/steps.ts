@@ -46,7 +46,18 @@ export const TOUR_STEPS: TourStep[] = [
     body: 'Open a ticket for its full description, links, and claim details. The comment thread is where executors report back what they did, so it’s usually the main thing to check.',
     optional: true,
     available: (board) => board.visibleTickets.length > 0,
-    enter: (board) => { board.openDialog = board.visibleTickets[0]?.id ?? null; },
+    enter: (board) => {
+      const score = (ticket: typeof board.visibleTickets[number]) =>
+        (Array.isArray(ticket.comments) && ticket.comments.length ? 8 : 0) +
+        (typeof ticket.description === 'string' && ticket.description.trim() ? 4 : 0) +
+        (ticket.claim?.by ? 2 : 0) +
+        (ticket.storyId ? 1 : 0);
+      const ticket = board.visibleTickets.reduce(
+        (best, candidate) => score(candidate) > score(best) ? candidate : best,
+        board.visibleTickets[0]
+      );
+      board.openDialog = ticket?.id ?? null;
+    },
     exit: (board) => { board.openDialog = null; }
   },
   {
