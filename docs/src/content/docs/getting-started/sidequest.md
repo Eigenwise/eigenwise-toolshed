@@ -20,6 +20,14 @@ Reload Claude Code, then open the board with `/sidequest:board`. The dashboard s
 
 See [CLI basics](#cli-basics) for command details and [Work a ticket](#work-a-ticket) for the full dispatch and integration flow.
 
+### Take the dashboard tour
+
+The dashboard starts a guided tour the first time you open it. It covers about fourteen steps across the app, including the board rail, search, priority, sort, and story filters, the columns and a ticket card, filing a ticket, the ticket dialog, notifications, the archive, and settings. Each step dims the app and highlights the surface it describes, opening dialogs as it goes so you see the real controls.
+
+Use Next, Back, the arrow keys, or Enter to move through the tour. Press Escape or Skip to leave it. If you stop partway through, the dashboard remembers your place and resumes there next time. After you finish or skip, it stays out of the way.
+
+To replay it, open Settings and choose **Replay the tour** under Appearance. You can also press `?` anywhere on the board. The tour state is stored in local storage for this browser, so clearing site data or using another browser or profile starts it over.
+
 ## CLI basics
 
 Check the installed CLI version with `sidequest --version` (also `sidequest -V` or `sidequest version`). Add `--help` to a command for its usage, for example `sidequest add --help`; use `sidequest help` for the full command list.
