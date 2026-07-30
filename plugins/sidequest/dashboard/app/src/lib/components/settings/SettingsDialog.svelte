@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Category, JsonRecord, Project, RoutingPreview, RoutingProfile } from '../../types';
+  import type { Category, JsonRecord, RoutingPreview, RoutingProfile } from '../../types';
   import type { BoardState } from '../../state/board.svelte';
   import Dialog from '../ui/Dialog.svelte';
   import Select, { type SelectOption } from '../ui/Select.svelte';
@@ -34,6 +34,7 @@
   let draftSentence = $state('');
   let saving = $state(false);
   let categoryEditorOpen = $state(false);
+  let routingBulkSaving = $state(false);
   let theme = $state<'light' | 'dark'>('light');
 
   function setTheme(value: 'light' | 'dark') {
@@ -57,6 +58,8 @@
   let modelSelectOptions = $derived<SelectOption[]>(models.map((value) => ({ value, label: value })));
   let effortSelectOptions = $derived<SelectOption[]>(efforts.map((value) => ({ value, label: value })));
   let globalFallback = $derived(record(board.routingCatalog.globalFallback));
+  let visibleProjects = $derived((board.raw?.projects ?? []).filter((project) => !project.archived));
+  let allProjectRoutingEnabled = $derived(visibleProjects.length > 0 && visibleProjects.every((project) => project.routing !== 'disabled'));
 
   function record(value: unknown): JsonRecord {
     return value && typeof value === 'object' ? value as JsonRecord : {};
@@ -240,6 +243,18 @@
     board.toast('Notification preferences saved.');
   }
 
+  async function setAllProjectRouting(enabled: boolean) {
+    routingBulkSaving = true;
+    try {
+      const results = await Promise.allSettled(visibleProjects.map((project) => board.setProjectRouting(project, enabled ? 'enabled' : 'disabled')));
+      const failures = results.filter((result) => result.status === 'rejected').length;
+      if (failures === 0) board.toast(`Routing ${enabled ? 'enabled' : 'disabled'} for all boards.`);
+      else board.toast(`Routing update failed for ${failures} board${failures === 1 ? '' : 's'}.`);
+    } finally {
+      routingBulkSaving = false;
+    }
+  }
+
   function inputValue(event: Event) {
     return (event.currentTarget as HTMLInputElement).value;
   }
@@ -298,7 +313,6 @@
           <div class="routing-panel">
             <div class="category-heading"><div><p class="eyebrow">Board routing</p><h3>{selectedProject?.name ?? 'Choose a board'}</h3><p class="hint">A board follows one routing profile, then applies its own local changes.</p></div>{#if board.raw?.categories.some((category) => category.layer)}<span class="change-badge">{board.raw?.categories.filter((category) => category.layer).length} local changes</span>{/if}</div>
             {#if selectedProject}
-              <label class="switch"><input type="checkbox" checked={selectedProject.routing !== 'disabled'} onchange={(event) => void board.setProjectRouting(selectedProject as Project, checkboxValue(event) ? 'enabled' : 'disabled')} /><span><strong>Routing enabled</strong><small>Direct claims still work when routing is off.</small></span></label>
               <label class="field"><span>Routing profile</span><Select label="Routing profile" value={repointTarget} options={profileOptions} onchange={(value) => void previewRepoint(value)} /></label>
               {#if boardProfile}<p class="routing-note">Following <strong>{boardProfile.name}</strong> · revision {boardProfile.revision} · {boardProfile.entryCount} categories</p>{/if}
               {#if routingPreview && routingPreview.to.id !== routingPreview.from.id}
@@ -352,6 +366,15 @@
             {#each ['comment', 'created', 'status'] as kind (kind)}
               <label class="switch"><input type="checkbox" checked={board.notifyPreferences[kind] !== false} onchange={(event) => void setNotificationKind(kind, checkboxValue(event))} /><span><strong>{kind}</strong><small>Notify when a ticket is {kind}.</small></span></label>
             {/each}
+          </div>
+          <div class="category-heading">
+            <h3>Model routing</h3>
+            <button disabled={routingBulkSaving || visibleProjects.length === 0} onclick={() => void setAllProjectRouting(!allProjectRoutingEnabled)}>{routingBulkSaving ? 'Updating…' : allProjectRoutingEnabled ? 'Uncheck all' : 'Check all'}</button>
+          </div>
+          <div class="project-list">
+            {#each visibleProjects as project (project.slug)}
+              <label class="switch"><input type="checkbox" disabled={routingBulkSaving} checked={project.routing !== 'disabled'} onchange={(event) => void board.setProjectRouting(project, checkboxValue(event) ? 'enabled' : 'disabled')} /><span><strong>{project.name}</strong><small>{project.routing === 'disabled' ? 'Routing off' : 'Routing on'}</small></span></label>
+            {:else}<p class="hint">No boards yet.</p>{/each}
           </div>
           <h3>Per-board mute</h3>
           <div class="project-list">
