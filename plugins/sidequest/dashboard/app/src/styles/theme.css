@@ -34,6 +34,7 @@
   --radius: 3px;
   --control-height: 2.125rem;
   --focus-ring: 0 0 0 3px var(--accent-strong);
+  --tour-scrim: rgb(12 16 22 / .48);
   --motion-fast: 100ms cubic-bezier(.2, .8, .2, 1);
 }
 
@@ -53,6 +54,7 @@
   --text-on-accent: #171a1e;
   --border: #343b42;
   --border-strong: #626b74;
+  --tour-scrim: rgb(0 0 0 / .62);
   --danger: #f08a79;
   --warning: #e0af4e;
   --success: #76b393;
