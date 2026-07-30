@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const SCHEMA_VERSION = 1;
-const CATALOG_SCHEMA_VERSION = 3;
+const CATALOG_SCHEMA_VERSION = 4;
 
 function pluginRoot() {
   return path.resolve(process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..'));
