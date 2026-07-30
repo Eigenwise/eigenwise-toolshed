@@ -189,7 +189,7 @@ test('shim health retains an OpenAI rejection until a successful proxied request
   assert.equal(recoveredHealth.codexReadiness.upstreamBlocked, null);
 });
 
-test('catalog carries the readiness metadata for external consumers', () => {
+test('catalog carries provider readiness metadata for external consumers', () => {
   const readiness = {
     ready: false,
     state: 'auth-missing',
@@ -198,7 +198,27 @@ test('catalog carries the readiness metadata for external consumers', () => {
     upstreamBlocked: null,
   };
   const catalog = gateway.buildCatalog(['claude-gpt-5.6-terra'], readiness);
-  assert.deepEqual(catalog.codexReadiness, readiness);
+  assert.deepEqual(catalog.providers.codex, {
+    ready: false,
+    state: 'auth-missing',
+    message: 'sign in',
+  });
+  assert.deepEqual(catalog.codexReadiness, catalog.providers.codex);
+});
+
+test('Grok readiness reports its CLI auth state', () => {
+  assert.deepEqual(gateway.getGrokReadiness({ readAuth: () => {} }), {
+    ready: true,
+    state: 'ready',
+    message: 'Grok CLI auth is present.',
+  });
+  assert.deepEqual(gateway.getGrokReadiness({
+    readAuth: () => { throw new Error('Grok CLI auth is missing. Run `grok` and log in again.'); },
+  }), {
+    ready: false,
+    state: 'auth-missing',
+    message: 'Grok CLI auth is missing. Run `grok` and log in again.',
+  });
 });
 
 test('upstream blocking only accepts explicit OpenAI evidence', () => {

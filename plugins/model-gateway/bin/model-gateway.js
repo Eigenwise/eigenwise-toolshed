@@ -1057,6 +1057,14 @@ function catalogReadiness(readiness) {
   };
 }
 
+function providerReadiness(readiness) {
+  return {
+    ready: Boolean(readiness?.ready),
+    state: typeof readiness?.state === 'string' ? readiness.state : 'unavailable',
+    message: typeof readiness?.message === 'string' ? readiness.message : 'Readiness is unavailable.',
+  };
+}
+
 function hasOpenAiRejectionEvidence(statusCode, headers, body) {
   if (![401, 403, 429].includes(statusCode)) return false;
   const headerNames = Object.keys(headers || {});
@@ -1851,30 +1859,19 @@ function dispatchRouteFromMessages(messages) {
 
 const CATALOG_PATH = path.join(STATE, 'catalog.json');
 const CATALOG_STALE_MS = 5 * 60 * 1000;
-const CATALOG_SCHEMA_VERSION = 3;
-
-// The catalog is what Switchboard reads to offer concrete Codex models. It
-// carries the six GPT-5.6 routeable variants. The /model picker (fed by the
-// shim's /v1/models) still sees all of DEFAULT_MODELS; this narrowing is
-// catalog-only.
-const CATALOG_FAMILY = new Set([
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
-  'gpt-5.6-sol-fast',
-  'gpt-5.6-terra-fast',
-  'gpt-5.6-luna-fast',
-]);
+const CATALOG_SCHEMA_VERSION = 4;
 
 // Slugs keep the `codex-` backend name and so survive the id rename byte for
 // byte: the board's route table pins slugs, and re-slugging would break every
 // persisted route at once.
 //
-// "codex-" + base, dots→dashes, kept inside ^[a-z0-9][a-z0-9-]{1,31}$; on
+// Provider + base, dots→dashes, kept inside ^[a-z0-9][a-z0-9-]{1,31}$; on
 // collision (or an over-length base) fall back to a short deterministic hash
 // so the slug stays unique without depending on iteration order.
-function slugFor(base, used) {
-  let s = ('codex-' + base).toLowerCase()
+function slugFor(provider, base, used) {
+  const providerPrefix = `${provider}-`;
+  const providerBase = base.startsWith(providerPrefix) ? base.slice(providerPrefix.length) : base;
+  let s = (providerPrefix + providerBase).toLowerCase()
     .replace(/\[1m\]$/, '')
     .replace(/\./g, '-')
     .replace(/[^a-z0-9-]+/g, '-')
@@ -1908,20 +1905,72 @@ function labelFor(base) {
   return `GPT-${ver}${suffixLabel}`;
 }
 
+function modelCatalogDetails(id) {
+  const codexBase = codexBaseFromId(id);
+  if (codexBase && codexBase !== 'auto') {
+    return { provider: 'codex', base: codexBase, label: labelFor(codexBase) };
+  }
+  if (typeof id === 'string' && id.startsWith(GROK_PREFIX)) {
+    const base = id.slice(PREFIX.length).replace(/\[1m\]$/, '');
+    return { provider: 'grok', base, label: displayName(base, 'grok') };
+  }
+  return null;
+}
+
+function unavailableProviderReadiness(provider) {
+  return {
+    ready: false,
+    state: 'unavailable',
+    message: `${provider} readiness is unavailable.`,
+  };
+}
+
+function getGrokReadiness({ readAuth = grokBackend.readGrokAuth } = {}) {
+  try {
+    readAuth();
+    return {
+      ready: true,
+      state: 'ready',
+      message: 'Grok CLI auth is present.',
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Grok CLI auth is unavailable. Run `grok` and log in again.';
+    return {
+      ready: false,
+      state: /invalid/i.test(message) ? 'auth-invalid' : 'auth-missing',
+      message,
+    };
+  }
+}
+
+function providerCatalogReadiness(provider, readiness) {
+  const source = readiness?.[provider] ?? (provider === 'codex' ? readiness : null);
+  if (source) return providerReadiness(source);
+  if (provider === 'grok') return getGrokReadiness();
+  return unavailableProviderReadiness(provider);
+}
+
 function buildCatalog(ids, readiness = null) {
   const used = new Set();
   const models = ids
-    .filter((id) => CATALOG_FAMILY.has(codexBaseFromId(id)))
-    .map((id) => {
-      const base = codexBaseFromId(id);
-      return { slug: slugFor(base, used), id, label: labelFor(base) };
-    });
+    .map((id) => ({ id, details: modelCatalogDetails(id) }))
+    .filter(({ details }) => details)
+    .map(({ id, details }) => ({
+      slug: slugFor(details.provider, details.base, used),
+      id,
+      label: details.label,
+      provider: details.provider,
+    }));
+  const providers = Object.fromEntries(
+    [...new Set(models.map((model) => model.provider))].map((provider) => [provider, providerCatalogReadiness(provider, readiness)]),
+  );
   return {
     schemaVersion: CATALOG_SCHEMA_VERSION,
     source: 'model-gateway',
     updatedAt: new Date().toISOString(),
     writtenBy: PLUGIN_VERSION,
-    codexReadiness: readiness ? catalogReadiness(readiness) : null,
+    providers,
+    codexReadiness: providers.codex ?? null,
     models,
   };
 }
@@ -1954,8 +2003,15 @@ function mergeSubsetCatalog(existing, catalog) {
 
   // A removal-only response is indistinguishable from a stale writer. Adding a model makes the response authoritative, so intentional replacement can still remove entries.
   const preserved = existing.models.filter((model) => typeof model?.id === 'string' && !fetchedIds.has(model.id));
+  const models = [...catalog.models, ...preserved];
+  const providers = { ...catalog.providers };
+  for (const model of preserved) {
+    if (typeof model.provider === 'string' && !providers[model.provider] && existing.providers?.[model.provider]) {
+      providers[model.provider] = existing.providers[model.provider];
+    }
+  }
   log(`catalog: preserved ${preserved.map((model) => model.id).join(', ')} from a subset write`);
-  return { ...catalog, models: [...catalog.models, ...preserved] };
+  return { ...catalog, models, providers, codexReadiness: providers.codex ?? null };
 }
 
 function writeCatalogFile(catalogPath, catalog) {
@@ -1977,7 +2033,7 @@ async function fetchShimModelIds() {
   for (let attempt = 0; attempt < 2; attempt++) {
     const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
     if (r.status !== 200) throw new Error(`shim /v1/models returned ${r.status}`);
-    const ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => codexBaseFromId(id) != null);
+    const ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => modelCatalogDetails(id) != null);
     if (ids.length || attempt === 1) return ids;
     await new Promise((res) => setTimeout(res, 300));
   }
@@ -3630,6 +3686,7 @@ module.exports = {
   MIN_PROXY_VERSION,
   getCodexReadiness,
   catalogReadiness,
+  getGrokReadiness,
   setUpstreamBlocked,
   clearUpstreamBlocked,
   noteCodexRequestSuccess,

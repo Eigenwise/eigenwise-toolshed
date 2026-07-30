@@ -346,7 +346,11 @@ test('dispatch route ignores markers echoed through tool_result blocks end-to-en
   assert.equal(forwarded.length, 1);
 });
 
-test('buildCatalog publishes the v3 concrete-model contract without routing policy', () => {
+test('buildCatalog publishes the v4 provider-generic model contract', () => {
+  const readiness = {
+    codex: { ready: true, state: 'ready', message: 'Codex is ready.' },
+    grok: { ready: false, state: 'auth-missing', message: 'Grok CLI auth is missing. Run `grok` and log in again.' },
+  };
   const catalog = gw.buildCatalog([
     'claude-codex-auto',
     'claude-gpt-5.6-sol',
@@ -355,40 +359,62 @@ test('buildCatalog publishes the v3 concrete-model contract without routing poli
     'claude-gpt-5.6-sol-fast',
     'claude-gpt-5.6-terra-fast',
     'claude-gpt-5.6-luna-fast',
-  ]);
-  assert.equal(catalog.schemaVersion, 3);
+    'claude-grok-4.5',
+    'claude-grok-build',
+  ], readiness);
+  assert.equal(catalog.schemaVersion, 4);
   assert.equal(catalog.source, 'model-gateway');
   assert.equal(catalog.writtenBy, JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version);
+  assert.deepEqual(catalog.providers, readiness);
+  assert.deepEqual(catalog.codexReadiness, catalog.providers.codex);
   assert.deepEqual(catalog.models, [
     {
       slug: 'codex-gpt-5-6-sol',
       id: 'claude-gpt-5.6-sol',
       label: 'GPT-5.6 Sol',
+      provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-terra',
       id: 'claude-gpt-5.6-terra',
       label: 'GPT-5.6 Terra',
+      provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-luna',
       id: 'claude-gpt-5.6-luna',
       label: 'GPT-5.6 Luna',
+      provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-sol-fast',
       id: 'claude-gpt-5.6-sol-fast',
       label: 'GPT-5.6 Sol Fast',
+      provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-terra-fast',
       id: 'claude-gpt-5.6-terra-fast',
       label: 'GPT-5.6 Terra Fast',
+      provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-luna-fast',
       id: 'claude-gpt-5.6-luna-fast',
       label: 'GPT-5.6 Luna Fast',
+      provider: 'codex',
+    },
+    {
+      slug: 'grok-4-5',
+      id: 'claude-grok-4.5',
+      label: 'Grok 4.5',
+      provider: 'grok',
+    },
+    {
+      slug: 'grok-build',
+      id: 'claude-grok-build',
+      label: 'Grok build',
+      provider: 'grok',
     },
   ]);
 });
@@ -411,6 +437,28 @@ test('writeCatalogFile preserves missing models from a same-schema subset write'
       'claude-gpt-5.6-sol',
     ]);
     assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), written);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeCatalogFile preserves provider readiness for subset-retained models', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-provider-subset-write-'));
+  const file = path.join(dir, 'catalog.json');
+  const readiness = {
+    codex: { ready: true, state: 'ready', message: 'Codex is ready.' },
+    grok: { ready: false, state: 'auth-missing', message: 'Grok CLI auth is missing.' },
+  };
+  try {
+    const existing = gw.buildCatalog(['claude-gpt-5.6-terra', 'claude-grok-4.5'], readiness);
+    const subset = gw.buildCatalog(['claude-gpt-5.6-terra'], readiness);
+    fs.writeFileSync(file, JSON.stringify(existing));
+
+    const written = gw.writeCatalogFile(file, subset);
+
+    assert.deepEqual(written.models.map((model) => model.id), ['claude-gpt-5.6-terra', 'claude-grok-4.5']);
+    assert.deepEqual(written.providers, readiness);
+    assert.deepEqual(written.codexReadiness, written.providers.codex);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -441,7 +489,7 @@ test('doctor prints the catalog writer version', () => {
     const state = path.join(home, '.claude', 'model-gateway');
     fs.mkdirSync(state, { recursive: true });
     fs.writeFileSync(path.join(state, 'catalog.json'), JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       source: 'model-gateway',
       writtenBy: '0.30.0',
       models: [],
@@ -461,12 +509,12 @@ test('doctor prints the catalog writer version', () => {
 test('writeCatalogFile refuses to replace a future schema', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-write-guard-'));
   const file = path.join(dir, 'catalog.json');
-  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 4, models: [] }));
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 5, models: [] }));
   assert.throws(
     () => gw.writeCatalogFile(file, gw.buildCatalog(['claude-gpt-5.6-terra'])),
-    /refusing to overwrite catalog schema 4.*supports schema 3.*upgrade required/,
+    /refusing to overwrite catalog schema 5.*supports schema 4.*upgrade required/,
   );
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { schemaVersion: 4, models: [] });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { schemaVersion: 5, models: [] });
 });
 
 // SQ-1004: the advertised ids lost their backend segment, so `claude-` is no

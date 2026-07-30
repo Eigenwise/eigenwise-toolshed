@@ -30,7 +30,7 @@ test('writes an atomic Codex Gateway registry breadcrumb', (t) => {
     capabilities: ['model-catalog'],
     catalog: {
       path: path.join(directory, '.claude', 'model-gateway', 'catalog.json'),
-      schemaVersion: 3,
+      schemaVersion: 4,
     },
   });
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['model-gateway.json']);
