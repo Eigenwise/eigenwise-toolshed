@@ -18,7 +18,7 @@
 {#if !board.scopedTickets.length}
   <section class="onboarding panel"><span>+</span><h2>No side quests yet</h2><p>Stray work lands here when you file it. Start with a ticket, then pull it across the board.</p><button onclick={() => board.openDialog = 'create'}>New ticket</button></section>
 {:else}
-  <div class="board" aria-label="Ticket board">
+  <div class="board" data-tour="board-columns" aria-label="Ticket board">
     <BoardColumn state={board} status="todo" tickets={board.columns.todo} bind:draggingTicket onmove={move} />
     <BoardColumn state={board} status="doing" tickets={board.columns.doing} bind:draggingTicket onmove={move} />
     <BoardColumn state={board} status="done" tickets={board.columns.done} bind:draggingTicket onmove={move} />

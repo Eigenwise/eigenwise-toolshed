@@ -109,7 +109,7 @@
 
 <Dialog class="ticket-dialog" open={board.openDialog === 'create' || Boolean(editingTicket)} wide label={editingTicket ? `Edit ${editingTicket.ref}` : 'New ticket'} onclose={close}>
 	{#if board.openDialog === 'create' || editingTicket}
-		<div class="dialog-content">
+		<div class="dialog-content" data-tour="ticket-dialog">
 			<header class="dialog-header"><div><h2>{editingTicket ? editingTicket.ref : 'New ticket'}</h2><small>{saving ? 'Saving…' : editingTicket?.updatedAt ? `Updated ${new Date(editingTicket.updatedAt).toLocaleString()}` : 'Fill in the ticket details.'}</small></div><Button variant="quiet" onclick={close}>Close</Button></header>
 			<div class="main-grid">
 				<div class="fields">
