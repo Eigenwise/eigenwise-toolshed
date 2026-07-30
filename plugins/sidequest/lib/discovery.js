@@ -38,7 +38,7 @@ var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 const CATALOG_SOURCES = [
-  { source: "model-gateway", relPath: import_node_path.default.join("model-gateway", "catalog.json"), schemas: /* @__PURE__ */ new Set([2, 3]) }
+  { source: "model-gateway", relPath: import_node_path.default.join("model-gateway", "catalog.json"), schemas: /* @__PURE__ */ new Set([2, 3, 4]) }
 ];
 function discoveryRoots() {
   const override = process.env.SIDEQUEST_DISCOVERY_DIRS;
@@ -63,8 +63,8 @@ function validCatalog(data, schemas) {
   const schema = catalog.schemaVersion ?? catalog.schema;
   return typeof schema === "number" && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;
 }
-function catalogModels(data, schemas) {
-  return validCatalog(data, schemas)?.models || [];
+function catalogSchema(catalog) {
+  return catalog.schemaVersion ?? catalog.schema;
 }
 function validateReadiness(raw) {
   if (!isRecord(raw) || typeof raw.ready !== "boolean") return null;
@@ -74,33 +74,37 @@ function validateReadiness(raw) {
 }
 function providerReadiness(provider) {
   for (const root of discoveryRoots()) {
-    for (const { source, relPath, schemas } of CATALOG_SOURCES) {
-      if (source !== "model-gateway" || provider !== "codex") continue;
+    for (const { relPath, schemas } of CATALOG_SOURCES) {
       const catalog = validCatalog(readJsonSafe(import_node_path.default.join(root, relPath)), schemas);
-      const readiness = catalog && validateReadiness(catalog.codexReadiness);
+      if (!catalog) continue;
+      const schema = catalogSchema(catalog);
+      const readiness = schema >= 4 ? isRecord(catalog.providers) && validateReadiness(catalog.providers[provider]) : provider === "codex" && validateReadiness(catalog.codexReadiness);
       if (readiness) return { provider, ...readiness };
     }
   }
   return null;
 }
-function validateEntry(raw, source) {
+function validateEntry(raw, source, schema) {
   if (!isRecord(raw)) return null;
   const model = raw;
   const slug = typeof model.slug === "string" ? model.slug.trim().toLowerCase() : "";
   if (!SLUG_RE.test(slug)) return null;
   const id = typeof model.id === "string" ? model.id.trim() : "";
   if (!id) return null;
+  const provider = schema >= 4 ? typeof model.provider === "string" && model.provider === model.provider.toLowerCase() && SLUG_RE.test(model.provider) ? model.provider : "" : "codex";
+  if (!provider) return null;
   const label = typeof model.label === "string" && model.label.trim() ? model.label.trim() : slug;
-  return { slug, id, label, source };
+  return { slug, id, label, provider, source };
 }
 function discoverExternalModels() {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
   for (const root of discoveryRoots()) {
     for (const { source, relPath, schemas } of CATALOG_SOURCES) {
-      const models = catalogModels(readJsonSafe(import_node_path.default.join(root, relPath)), schemas);
-      for (const raw of models) {
-        const entry = validateEntry(raw, source);
+      const catalog = validCatalog(readJsonSafe(import_node_path.default.join(root, relPath)), schemas);
+      if (!catalog) continue;
+      for (const raw of catalog.models) {
+        const entry = validateEntry(raw, source, catalogSchema(catalog));
         const key = entry && `${entry.source}:${entry.slug}`;
         if (!entry || !key || seen.has(key)) continue;
         seen.add(key);

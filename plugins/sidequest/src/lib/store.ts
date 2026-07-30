@@ -497,7 +497,7 @@ function resolvedBackend(entry?: any, discovered?: any) {
   const agentSlug = discovered.filter((candidate?: any) => candidate.slug === entry.slug).length > 1
     ? `${entry.source}-${entry.slug}`
     : entry.slug;
-  return { backend: 'codex', source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label };
+  return { backend: 'codex', provider: entry.provider, source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label };
 }
 
 function normalizeRouteModel(model?: any) {
@@ -1500,12 +1500,13 @@ function routeProvider(route?: any) {
   const normalized = normalizeRoute(route);
   if (!normalized) return null;
   const backend = availableRoute(normalized.model);
-  if (backend) return backend.backend;
+  if (backend) return (backend as any).provider || backend.backend;
   return normalized.model.startsWith('codex-') || normalized.model.startsWith('model-gateway:') ? 'codex' : null;
 }
 
 function routeReadyForAutomaticFallback(route?: any) {
-  return routeProvider(route) !== 'codex' || providerReadiness('codex')?.ready === true;
+  const provider = routeProvider(route);
+  return !provider || provider === 'claude' || providerReadiness(provider)?.ready === true;
 }
 
 function resolveCategoryRoute(category?: any) {
@@ -1557,14 +1558,23 @@ function resolveCategoryFallback(category?: any, failedModel?: any) {
   return null;
 }
 
-function codexDispatchRefusal(route?: any) {
-  const readiness = providerReadiness('codex');
+function providerDispatchRefusal(route?: any) {
+  const provider = routeProvider(route);
+  if (!provider || provider === 'claude') return null;
+  const readiness = providerReadiness(provider);
+  const name = provider === 'codex' ? 'Codex' : provider;
   if (!readiness) {
-    return 'Codex dispatch refused: model-gateway readiness is unavailable. Run `node "<gateway>/bin/model-gateway.js" ensure`, then retry. No Anthropic fallback was used.';
+    return provider === 'codex'
+      ? 'Codex dispatch refused: model-gateway readiness is unavailable. Run `node "<gateway>/bin/model-gateway.js" ensure`, then retry. No Anthropic fallback was used.'
+      : `${name} dispatch refused: model-gateway readiness for provider ${provider} is unavailable. Run \`node "<gateway>/bin/model-gateway.js" ensure\`, then retry. No Anthropic fallback was used.`;
   }
-  if (!readiness.ready) return readiness.message;
+  if (!readiness.ready) {
+    return provider === 'codex'
+      ? readiness.message
+      : `${name} dispatch refused: ${readiness.message} Run \`node "<gateway>/bin/model-gateway.js" ensure\`, then retry. No Anthropic fallback was used.`;
+  }
   if (!resolveExec(route.model, route.effort)) {
-    return `Codex dispatch refused: configured route ${route.model} is not available from the live model-gateway catalog. Run \`node "<gateway>/bin/model-gateway.js" ensure\`, then retry. No Anthropic fallback was used.`;
+    return `${name} dispatch refused: configured route ${route.model} is not available from the live model-gateway catalog. Run \`node "<gateway>/bin/model-gateway.js" ensure\`, then retry. No Anthropic fallback was used.`;
   }
   return null;
 }
@@ -1572,7 +1582,7 @@ function codexDispatchRefusal(route?: any) {
 function dispatchRouteRefusal(route?: any) {
   const normalized = normalizeRoute(route);
   if (!normalized) return 'Dispatch refused: the resolved route is missing or invalid.';
-  return routeProvider(normalized) === 'codex' ? codexDispatchRefusal(normalized) : null;
+  return providerDispatchRefusal(normalized);
 }
 
 function ticketCategory(ticket?: any) {

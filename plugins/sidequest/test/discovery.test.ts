@@ -11,6 +11,7 @@ interface CatalogHeader {
   schema?: number;
   source?: string;
   updatedAt?: string;
+  providers?: unknown;
   codexReadiness?: unknown;
 }
 interface ResolvedExec {
@@ -23,8 +24,8 @@ process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery
 const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-empty-'));
 process.env.SIDEQUEST_DISCOVERY_DIRS = empty;
 const discovery = require('../lib/discovery.js') as {
-  discoverExternalModels(): Array<{ slug: string; id: string; label: string; source: string }>;
-  providerReadiness(provider: 'codex'): { provider: 'codex'; ready: boolean; state: string; message: string } | null;
+  discoverExternalModels(): Array<{ slug: string; id: string; label: string; provider: string; source: string }>;
+  providerReadiness(provider: string): { provider: string; ready: boolean; state: string; message: string } | null;
 };
 const store = require('../lib/store.js') as {
   CLAUDE_RUNTIMES: readonly string[];
@@ -74,7 +75,7 @@ test('discovery validates concrete catalog identity and drops routing hints', ()
     { slug: 'missing-id' },
   ]);
   assert.deepEqual(discovery.discoverExternalModels(), [{
-    slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', source: 'model-gateway',
+    slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex', source: 'model-gateway',
   }]);
 });
 
@@ -85,12 +86,29 @@ test('discovery accepts catalog v2 migration input', () => {
     updatedAt: new Date().toISOString(),
   });
   assert.deepEqual(discovery.discoverExternalModels(), [{
-    slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', source: 'model-gateway',
+    slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex', source: 'model-gateway',
   }]);
 });
 
+test('discovery reads schema-4 providers and model providers', () => {
+  writeCatalog([{ slug: 'grok-test', id: 'claude-grok-test', label: 'Grok Test', provider: 'grok' }], {
+    schemaVersion: 4,
+    providers: {
+      grok: { ready: false, state: 'credentials-missing', message: 'Sign in to Grok CLI, then retry.' },
+      codex: { ready: true, state: 'ready', message: 'Codex is ready.' },
+    },
+  });
+  assert.deepEqual(discovery.discoverExternalModels(), [{
+    slug: 'grok-test', id: 'claude-grok-test', label: 'Grok Test', provider: 'grok', source: 'model-gateway',
+  }]);
+  assert.deepEqual(discovery.providerReadiness('grok'), {
+    provider: 'grok', ready: false, state: 'credentials-missing', message: 'Sign in to Grok CLI, then retry.',
+  });
+  assert.equal(discovery.providerReadiness('gemini'), null);
+});
+
 test('discovery ignores future catalog schemas', () => {
-  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }], { schemaVersion: 4 });
+  writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }], { schemaVersion: 5 });
   assert.deepEqual(discovery.discoverExternalModels(), []);
 });
 
