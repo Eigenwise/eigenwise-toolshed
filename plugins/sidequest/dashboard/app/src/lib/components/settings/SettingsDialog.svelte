@@ -2,10 +2,12 @@
   import { onMount } from 'svelte';
   import type { Category, JsonRecord, RoutingPreview, RoutingProfile } from '../../types';
   import type { BoardState } from '../../state/board.svelte';
+  import { getTourState } from '../../state/context';
   import Dialog from '../ui/Dialog.svelte';
   import Select, { type SelectOption } from '../ui/Select.svelte';
 
   let { state: board }: { state: BoardState } = $props();
+  const tour = getTourState();
 
   type CategoryScope = 'profile' | 'board';
   type CategoryDraft = {
@@ -284,6 +286,11 @@
       void board.saveDialogFromShortcut(event);
       return;
     }
+    if (event.key === '?' && !event.ctrlKey && !event.metaKey && !event.altKey && !board.openDialog && !tour.active && !ignoresShortcut(event.target)) {
+      event.preventDefault();
+      tour.start(0);
+      return;
+    }
     if (event.key.toLowerCase() === 'n' && !event.ctrlKey && !event.metaKey && !event.altKey && !board.openDialog && !ignoresShortcut(event.target)) {
       event.preventDefault();
       board.openDialog = 'create';
@@ -293,7 +300,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<button class="settings-trigger" aria-expanded={board.popover === 'settings'} onclick={() => board.popover === 'settings' ? board.popover = null : void openSettings()}>Settings</button>
+<button class="settings-trigger" data-tour="settings-trigger" aria-expanded={board.popover === 'settings'} onclick={() => board.popover === 'settings' ? board.popover = null : void openSettings()}>Settings</button>
 
 <Dialog open={board.popover === 'settings'} wide label="Settings" onclose={() => board.popover = null}>
     <div class="settings-frame">
@@ -359,6 +366,13 @@
           <p class="eyebrow">Appearance</p>
           <h3>Theme</h3>
           <label class="switch"><input type="checkbox" checked={theme === 'dark'} onchange={(event) => setTheme(checkboxValue(event) ? 'dark' : 'light')} /><span><strong>Dark theme</strong><small>Use the Eigenwise dark palette.</small></span></label>
+          <div class="tour-control">
+            <p class="eyebrow">Tour</p>
+            <h3>Guided tour</h3>
+            <p class="hint">Take a quick pass through the dashboard whenever you need it.</p>
+            <button onclick={() => { tour.reset(); board.popover = null; }}>Replay the tour</button>
+            <small class="hint">{tour.progress.completed ? "You've finished the tour." : tour.progress.step > 0 ? `You stopped at step ${tour.progress.step + 1} of ${tour.steps.length}.` : "You haven't taken it yet."}</small>
+          </div>
           <p class="eyebrow">Notifications</p>
           <h3>Keep the signal useful</h3>
           <button class="permission" onclick={() => void requestDesktopNotifications()}><strong>Desktop notifications</strong><span>{board.desktopNotificationPermission === 'granted' ? 'Enabled' : board.desktopNotificationPermission === 'unsupported' ? 'Unsupported here' : 'Click to enable'}</span></button>
@@ -382,7 +396,7 @@
               <label class="switch"><input type="checkbox" checked={project.notify !== false} onchange={(event) => void board.setProjectMuted(project, !checkboxValue(event))} /><span><strong>{project.name}</strong><small>{project.notify === false ? 'Muted' : 'Notifications on'}</small></span></label>
             {:else}<p class="hint">No boards yet.</p>{/each}
           </div>
-          <p class="shortcut-hint"><kbd>N</kbd> creates a ticket. <kbd>Ctrl</kbd> or <kbd>⌘</kbd> + <kbd>Enter</kbd> saves the current dialog. <kbd>Esc</kbd> closes the topmost panel.</p>
+          <p class="shortcut-hint"><kbd>N</kbd> creates a ticket. <kbd>Ctrl</kbd> or <kbd>⌘</kbd> + <kbd>Enter</kbd> saves the current dialog. <kbd>?</kbd> replays the tour. <kbd>Esc</kbd> closes the topmost panel.</p>
         </section>
       </div>
       </div>
@@ -415,6 +429,9 @@
   .switch input { width: auto; margin-top: .2rem; accent-color: var(--accent); }
   .switch span { display: grid; gap: .08rem; }
   .switch small, .hint, .shortcut-hint { color: var(--text-muted); line-height: 1.4; }
+  .tour-control { border-bottom: 1px solid var(--border); padding: .9rem 0 1.1rem; }
+  .tour-control .hint { margin-bottom: .65rem; }
+  .tour-control small { display: block; margin-top: .45rem; }
   .scope-tabs { display: flex; gap: .35rem; margin: .8rem 0; }
   .routing-panel, .profile-library { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 1rem; }
   .routing-note { color: var(--text-muted); font-size: .82rem; }
