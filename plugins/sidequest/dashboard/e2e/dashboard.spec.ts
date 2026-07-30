@@ -1,7 +1,15 @@
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
-import { startFixture } from './fixtures/sidequest-fixture.mjs';
+import { seedTourProgress, startFixture } from './fixtures/sidequest-fixture.mjs';
 
-const test = base.extend<{ dashboard: Awaited<ReturnType<typeof startFixture>> }>({
+const test = base.extend<{
+  dashboard: Awaited<ReturnType<typeof startFixture>>;
+  tourSeen: boolean;
+}>({
+  tourSeen: [true, { option: true }],
+  context: async ({ context, tourSeen }, use) => {
+    await seedTourProgress(context, tourSeen);
+    await use(context);
+  },
   dashboard: [async ({}, use) => {
     const fixture = await startFixture();
     await use(fixture);

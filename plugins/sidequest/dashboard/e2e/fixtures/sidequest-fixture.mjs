@@ -85,6 +85,17 @@ function seed(home, projectRoot) {
   return { first, second, archived, todo, doing, done, betaTicket, archivedTicket };
 }
 
+export const TOUR_STORAGE_KEY = 'sq_tour';
+export const TOUR_VERSION = 1;
+
+export async function seedTourProgress(context, tourSeen = true) {
+  if (!tourSeen) return;
+  await context.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+    key: TOUR_STORAGE_KEY,
+    value: JSON.stringify({ version: TOUR_VERSION, completed: true, step: 0 })
+  });
+}
+
 export async function startFixture() {
   const home = await mkdtemp(join(tmpdir(), 'sidequest-dashboard-e2e-'));
   const projectRoot = await mkdtemp(join(tmpdir(), 'sidequest-dashboard-project-'));
