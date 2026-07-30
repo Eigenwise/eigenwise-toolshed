@@ -27,7 +27,7 @@
   }
 </script>
 
-<article class:has-story={Boolean(story)} class="card" style:--questline={questline} draggable="true" ondragstart={() => { ondragging(true); state.setDragging(true); }} ondragend={() => { ondragging(false); state.setDragging(false); }}>
+<article class:has-story={Boolean(story)} class="card" data-tour="ticket-card" style:--questline={questline} draggable="true" ondragstart={() => { ondragging(true); state.setDragging(true); }} ondragend={() => { ondragging(false); state.setDragging(false); }}>
   <span class="questline" aria-hidden="true"><span class="waypoint"></span>{#if claim?.by}<span class="claim-node"></span>{/if}</span>
   <button class="card-main" onclick={() => state.openDialog = ticket.id}>
     <span class="topline"><code>{ticket.ref}</code>{#if state.selectedProject === 'all'}<span class="project">{project?.name ?? projectFor(ticket)}</span>{/if}{#if story}<span class="story" style:--story={story.color}>{story.title}</span>{/if}{#if category?.name}<span class="category">{category.name}</span>{/if}<span class={`priority ${ticket.priority ?? 'normal'}`}>{ticket.priority ?? 'normal'}</span></span>

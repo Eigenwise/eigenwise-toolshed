@@ -74,7 +74,7 @@
   }
 </script>
 
-<aside class="rail" aria-label="Boards">
+<aside class="rail" aria-label="Boards" data-tour="project-rail">
   <div class="brand"><img class="brand-mark" src="/eigenwise-e.svg" alt="" /><strong>Sidequest</strong><span>work queue</span></div>
   <nav>
     <button class:active={board.selectedProject === 'all' && board.view === 'board'} onclick={() => board.selectProject('all')}>
@@ -100,7 +100,7 @@
       </details>
     {/if}
   </nav>
-  <button class:active={board.view === 'archive'} class="archive-button" onclick={() => board.view === 'archive' ? board.closeArchive() : board.openArchive()}><span>Archive</span>{#if archivedCount}<mark>{archivedCount}</mark>{/if}</button>
+  <button class:active={board.view === 'archive'} class="archive-button" data-tour="archive-toggle" onclick={() => board.view === 'archive' ? board.closeArchive() : board.openArchive()}><span>Archive</span>{#if archivedCount}<mark>{archivedCount}</mark>{/if}</button>
   <small class:offline={board.offline} class="connection">{board.offline ? 'offline' : 'live'}</small>
 </aside>
 

@@ -118,6 +118,7 @@
 
 <button
   class="bell"
+  data-tour="notifications"
   aria-label="Notifications"
   aria-expanded={state.popover === 'inbox'}
   title={`${unread} unread notifications`}
