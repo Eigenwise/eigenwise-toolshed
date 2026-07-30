@@ -8,6 +8,36 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.287.0 (2026-07-30)
+
+### model-gateway 0.40.0 → 0.41.0
+
+#### Features
+
+- Catalog schema v4: provider-generic models and readiness (SQ-1070) [`e89a01c`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e89a01cd99adaacef3c3943aa8fe98722d1708e5)
+  Catalog entries now carry a provider slug, Grok models are advertised alongside Codex, and a per-provider readiness map replaces the codex-only key (codexReadiness still mirrored for older readers).
+
+### sidequest 3.41.0 → 3.42.0
+
+#### Features
+
+- Provider-generic dispatch readiness (SQ-1071) [`2b2a720`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2b2a72088d8229dafcc39b8966553acf037d5a9b)
+  Dispatch readiness is no longer codex-only: the route's model resolves to its catalog provider and that provider's readiness is checked, refusing loudly on unknown or unready backends (Grok included). Schema 2/3 catalogs keep today's behavior.
+- Interactive first-run tour for the dashboard (US-35) [`ef198e7`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ef198e70e50a213aa4a4e439bbeb74f7f4ddc057)
+  Auto-starts once on a first visit and walks the board as read-first orientation: what each surface is and where to look, since agents file most tickets and people are mostly reading. Spotlights each target, opens a real ticket to show the comment thread, and remembers where you stopped. Replay it from Settings under Appearance, or press ?.
+
+#### Fixes
+
+- Cross-board Model routing settings table (SQ-1059) [`7a6ead9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/7a6ead9)
+  Replaced the single-board 'Routing enabled' toggle in Settings with a cross-board table (one row per board, per-row checkbox, Check all/Uncheck all).
+
+### workbench 0.70.2 → 0.70.3
+
+#### Fixes
+
+- init-workspace wires the gateway mode it asks about, global now recommended (SQ-1061) [`9b03dfa`](https://github.com/Eigenwise/eigenwise-toolshed/commit/9b03dfa37b443ae7a3cf305a96f455e7e29420b8)
+  init-workspace now recommends global gateway wiring (per-project wiring never reaches executor worktrees), runs env --write-project immediately when per-project is still chosen, and reports wiring status in the wrap-up. Docs prose updated to match.
+
 ## v3.285.0 (2026-07-29)
 
 ### sidequest 3.40.2 → 3.40.3
