@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const { once } = require('node:events');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
@@ -36,6 +37,39 @@ function request(port, method, pathname, body, host = '127.0.0.1') {
   });
 }
 
+async function stopChild(child) {
+  if (child.exitCode === null && child.signalCode === null) child.kill();
+  if (!child.closed) await once(child, 'close');
+}
+
+function spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home }) {
+  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+      CODEX_GATEWAY_COMPAT_PORT: String(compatPort),
+      CODEX_GATEWAY_HOSTS_FILE: hostsFile,
+    },
+    stdio: 'ignore',
+  });
+  t.after(async () => {
+    await stopChild(child);
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+}
+
+function loadGatewayWithCurrentHome() {
+  const cachedGateway = require.cache[CLI];
+  delete require.cache[CLI];
+  const isolatedGateway = require(CLI);
+  if (cachedGateway) require.cache[CLI] = cachedGateway;
+  return isolatedGateway;
+}
+
 async function waitForHealthz(port, host = '127.0.0.1') {
   const deadline = Date.now() + 5000;
   let lastErr;
@@ -46,7 +80,8 @@ async function waitForHealthz(port, host = '127.0.0.1') {
     } catch (e) { lastErr = e; }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw lastErr || new Error('shim did not become healthy');
+  const reason = lastErr ? ` Last error: ${lastErr.message}.` : '';
+  throw new Error(`Shim at ${host}:${port} did not become healthy within 5000ms.${reason}`);
 }
 
 // ---------------------------------------------------- hosts syntax parsing
@@ -167,37 +202,33 @@ test('writeEnv switches only the plugin-owned base URL and leaves unrelated sett
   t.after(() => {
     if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
     if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
-  });
-  const wiringConfig = gw.WIRING_CONFIG_PATH;
-  const previousWiringConfig = fs.existsSync(wiringConfig) ? fs.readFileSync(wiringConfig) : null;
-  t.after(() => {
-    if (previousWiringConfig) fs.writeFileSync(wiringConfig, previousWiringConfig);
-    else fs.rmSync(wiringConfig, { force: true });
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   process.env.USERPROFILE = home;
   process.env.HOME = home;
-  gw.writeWiringMode('global');
+  const isolatedGateway = loadGatewayWithCurrentHome();
+  isolatedGateway.writeWiringMode('global');
 
-  const file = gw.settingsPath('user');
+  const file = isolatedGateway.settingsPath('user');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ env: { USER_SETTING: 'keep-me' } }));
 
-  gw.writeEnv('user', false, { mode: 'default', quiet: true });
+  isolatedGateway.writeEnv('user', false, { mode: 'default', quiet: true });
   let settings = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.equal(settings.env.ANTHROPIC_BASE_URL, gw.DEFAULT_BASE_URL);
+  assert.equal(settings.env.ANTHROPIC_BASE_URL, isolatedGateway.DEFAULT_BASE_URL);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
 
-  gw.writeEnv('user', false, { mode: 'compat', quiet: true });
+  isolatedGateway.writeEnv('user', false, { mode: 'compat', quiet: true });
   settings = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.equal(settings.env.ANTHROPIC_BASE_URL, gw.COMPAT_BASE_URL);
+  assert.equal(settings.env.ANTHROPIC_BASE_URL, isolatedGateway.COMPAT_BASE_URL);
   assert.equal(settings.env.USER_SETTING, 'keep-me'); // untouched across the switch
-  assert.deepEqual(gw.wiredMode(), { scope: 'user', mode: 'compat' });
+  assert.deepEqual(isolatedGateway.wiredMode(), { scope: 'user', mode: 'compat' });
 
-  gw.writeEnv('user', true, { quiet: true }); // --remove
+  isolatedGateway.writeEnv('user', true, { quiet: true }); // --remove
   settings = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
-  assert.equal(gw.wiredMode(), null);
+  assert.equal(isolatedGateway.wiredMode(), null);
 });
 
 // ---------------------------------------------------- DNS recursion guard
@@ -253,18 +284,7 @@ test('serve-shim binds a second RC-compatibility listener only when the hosts en
   const proxyPort = await freePort();
   const compatPort = await freePort();
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: {
-      ...process.env,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-      CODEX_GATEWAY_COMPAT_PORT: String(compatPort),
-      CODEX_GATEWAY_HOSTS_FILE: hostsFile,
-    },
-    stdio: 'ignore',
-  });
-  t.after(() => child.kill());
+  spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home: hostsDir });
 
   const health = await waitForHealthz(shimPort);
   assert.equal(health.compat.hostsDetected, true);
@@ -286,18 +306,7 @@ test('serve-shim stays default-only when no hosts entry is present', async (t) =
   const proxyPort = await freePort();
   const compatPort = await freePort();
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: {
-      ...process.env,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-      CODEX_GATEWAY_COMPAT_PORT: String(compatPort),
-      CODEX_GATEWAY_HOSTS_FILE: hostsFile,
-    },
-    stdio: 'ignore',
-  });
-  t.after(() => child.kill());
+  spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home: hostsDir });
 
   const health = await waitForHealthz(shimPort);
   assert.equal(health.compat.hostsDetected, false);
@@ -319,20 +328,9 @@ test('serve-shim safely retains default mode when the compatibility port is unav
   // occupy the compat port first so the shim's bind attempt fails
   const blocker = net.createServer();
   await new Promise((resolve) => blocker.listen(compatPort, '127.0.0.1', resolve));
-  t.after(() => blocker.close());
+  t.after(() => new Promise((resolve, reject) => blocker.close((error) => (error ? reject(error) : resolve()))));
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: {
-      ...process.env,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-      CODEX_GATEWAY_COMPAT_PORT: String(compatPort),
-      CODEX_GATEWAY_HOSTS_FILE: hostsFile,
-    },
-    stdio: 'ignore',
-  });
-  t.after(() => child.kill());
+  spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home: hostsDir });
 
   const health = await waitForHealthz(shimPort);
   assert.equal(health.compat.hostsDetected, true);
