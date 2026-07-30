@@ -16,6 +16,7 @@
   let card = $state<HTMLElement>();
   let nextButton = $state<HTMLButtonElement>();
   let targetRect = $state.raw<TargetRect | null>(null);
+  let spotlightRect = $state.raw<TargetRect | null>(null);
   let cardPosition = $state({ left: margin, top: margin });
   let detachTarget = () => {};
   let activation = 0;
@@ -24,6 +25,7 @@
     detachTarget();
     detachTarget = () => {};
     targetRect = null;
+    spotlightRect = null;
   }
 
   function availablePlacement(rect: TargetRect): Placement {
@@ -76,6 +78,11 @@
     const measure = () => {
       const bounds = target.getBoundingClientRect();
       targetRect = { top: bounds.top, right: bounds.right, bottom: bounds.bottom, left: bounds.left, width: bounds.width, height: bounds.height };
+      const left = Math.max(0, bounds.left - spotlightPadding);
+      const top = Math.max(0, bounds.top - spotlightPadding);
+      const right = Math.min(window.innerWidth, bounds.right + spotlightPadding);
+      const bottom = Math.min(window.innerHeight, bounds.bottom + spotlightPadding);
+      spotlightRect = { top, right, bottom, left, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
       positionCard(targetRect, step);
     };
     const observer = new ResizeObserver(measure);
@@ -106,7 +113,18 @@
 
   function handleKeydown(event: KeyboardEvent) {
     event.stopPropagation();
-    if (event.key === 'ArrowRight' || event.key === 'Enter') {
+    if (event.key === 'Tab' && dialog) {
+      const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled)'));
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    } else if (event.key === 'ArrowRight' || event.key === 'Enter') {
       event.preventDefault();
       tour.next();
     } else if (event.key === 'ArrowLeft') {
@@ -147,14 +165,16 @@
 
 <dialog bind:this={dialog} aria-label="Product tour" onkeydown={handleKeydown} oncancel={handleCancel}>
   {#if tour.active && tour.step}
-    {#if targetRect}
+    {#if spotlightRect}
       <div
         class="spotlight"
-        style:left={`${targetRect.left - spotlightPadding}px`}
-        style:top={`${targetRect.top - spotlightPadding}px`}
-        style:width={`${targetRect.width + spotlightPadding * 2}px`}
-        style:height={`${targetRect.height + spotlightPadding * 2}px`}
+        style:left={`${spotlightRect.left}px`}
+        style:top={`${spotlightRect.top}px`}
+        style:width={`${spotlightRect.width}px`}
+        style:height={`${spotlightRect.height}px`}
       ></div>
+    {:else if !tour.step.target}
+      <div class="tour-scrim"></div>
     {/if}
     <section class="tour-card" bind:this={card} style:left={`${cardPosition.left}px`} style:top={`${cardPosition.top}px`}>
       <div class="counter">{tour.index + 1} of {tour.steps.length}</div>
@@ -176,7 +196,8 @@
   dialog { position: fixed; inset: 0; box-sizing: border-box; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; overflow: hidden; border: 0; background: transparent; color: var(--text); }
   dialog:not([open]) { display: none; }
   dialog::backdrop { background: transparent; }
-  .spotlight { position: absolute; box-sizing: border-box; pointer-events: none; border: 2px solid var(--accent); border-radius: 6px; box-shadow: 0 0 0 9999px color-mix(in oklch, var(--bg-deep), transparent 35%); transition: inset var(--motion-fast), width var(--motion-fast), height var(--motion-fast); }
+  .spotlight { position: absolute; box-sizing: border-box; pointer-events: none; border: 2px solid var(--accent); border-radius: 6px; box-shadow: 0 0 0 9999px var(--tour-scrim); transition: inset var(--motion-fast), width var(--motion-fast), height var(--motion-fast); }
+  .tour-scrim { position: absolute; inset: 0; pointer-events: none; background: var(--tour-scrim); }
   .tour-card { position: absolute; box-sizing: border-box; width: min(22rem, calc(100vw - 24px)); padding: 1.15rem; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-card); box-shadow: 0 16px 44px rgb(12 16 22 / .24), 0 2px 8px rgb(12 16 22 / .12); transition: left var(--motion-fast), top var(--motion-fast); }
   .counter { margin-bottom: .55rem; color: var(--text-muted); font-family: var(--font-mono); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; }
   h2 { margin: 0; font-family: var(--font-serif); font-size: 1.45rem; font-weight: 600; letter-spacing: -.02em; }

@@ -72,6 +72,35 @@ test('auto-starts, advances through every seeded anchor, and stacks above the ti
   await expect(tour(page)).toBeHidden();
 });
 
+test('keeps the spotlight and keyboard focus inside the tour viewport', async ({ page, dashboard }) => {
+  await openBoard(page, dashboard);
+  await expect(tour(page).locator('.tour-scrim')).toBeVisible();
+
+  await page.keyboard.press('Tab');
+  await expect(tour(page).locator('button:focus')).toHaveText('Skip');
+
+  await next(page).click();
+  const bounds = await tour(page).locator('.spotlight').evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    };
+  });
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.top).toBeGreaterThanOrEqual(0);
+  expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight);
+  expect(bounds.width).toBeGreaterThan(0);
+  expect(bounds.height).toBeGreaterThan(0);
+});
+
 test('Escape skips and completion persists across reloads', async ({ page, dashboard }) => {
   await openBoard(page, dashboard);
   await page.keyboard.press('Escape');
