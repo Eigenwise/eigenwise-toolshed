@@ -28,3 +28,6 @@ yarn-error.log*
 # Playwright MCP session artifacts and ad-hoc verification captures
 .playwright-mcp/
 /*.png
+
+# Local-only Windows Sandbox clean-room harness (maintainer tooling, not published)
+/sandbox/
