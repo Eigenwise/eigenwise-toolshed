@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { audience, rank, routeFor } = require('../lib/findings.js');
+const { AMEND_FIRST, audience, rank, ROUTES, routeFor } = require('../lib/findings.js');
 
 const finding = (overrides) => ({ kind: 'repeated-command', occurrences: 3, sessions: 1, actors: [], evidence: [], ...overrides });
 
@@ -83,6 +83,25 @@ test('hazards outrank frequency, and one-offs are dropped rather than padded', (
   assert.equal(findings[0].kind, 'hazard-private-data');
   assert.equal(findings[0].id, 'F01');
   assert.ok(dropped.some((item) => item.kind === 'permission-denial'), 'a single denial is not worth a fix');
+});
+
+test('every route that can write an artifact carries the amend-first check', () => {
+  for (const route of ['script', 'skill', 'rule', 'map', 'memory']) {
+    assert.ok(AMEND_FIRST[route], `${route} must ask whether one already exists`);
+    assert.match(ROUTES[route], /new or amended|memory entry|codebase map/);
+  }
+
+  const { findings } = rank([
+    finding({ title: 'same verify, forty times', occurrences: 40, sessions: 5, actors: [{ label: 'main-loop', count: 40 }], arguments: [{ position: 1, token: '<path>', distinct: 3, values: ['a', 'b', 'c'] }] }),
+  ]);
+  assert.match(findings[0].amendFirst, /already does this/);
+});
+
+test('a hazard carries no amend-first check, because the fix is an ignore entry either way', () => {
+  const { findings } = rank([
+    { kind: 'hazard-private-data', severity: 'critical', title: 'env file exposed', occurrences: 1, sessions: 1, actors: [], evidence: [] },
+  ]);
+  assert.equal(findings[0].amendFirst, null);
 });
 
 test('a hazard survives the floor no matter how low it scores', () => {

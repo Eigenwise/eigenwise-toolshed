@@ -44,6 +44,12 @@ Hazards are reported first regardless of how often they happened, because the co
 reaching a commit is not proportional to frequency. Everything else has to earn its place: one-offs are
 dropped and counted rather than padded into the report.
 
+Every route above can land on something the repo already has. The report carries an **Amend first** line
+saying so, because a skill that was invoked while the work got redone anyway needs its body fixed, and a
+skill that covers the work but never got invoked needs its description widened. Both leave the same trace
+in a transcript, and shipping a second skill instead of fixing the first one leaves two half-right
+skills where there was one.
+
 ## Usage
 
 ```bash

@@ -35,6 +35,7 @@ function formatFinding(finding) {
   lines.push(`### ${finding.id} [${KIND_LABELS[finding.kind] ?? finding.kind}] ${finding.title}`);
   lines.push('');
   lines.push(`- **Route:** ${finding.routeLabel} — ${finding.routeWhy}`);
+  if (finding.amendFirst) lines.push(`- **Amend first:** ${finding.amendFirst}`);
   if (finding.routeAlternatives?.length) lines.push(`- **Or:** ${finding.routeAlternatives.join('; ')}`);
   lines.push(`- **Who:** ${actorSummary(finding)}`);
   lines.push(`- **Spread:** ${finding.occurrences} occurrence(s) across ${finding.sessions} session(s), severity ${finding.severity}, score ${finding.score}`);

@@ -1,15 +1,16 @@
 # Routing rubric
 
-Every finding gets exactly one destination. Choosing it is the judgment the pass exists to make: the
-detectors can only say what recurred, not what should be done about it.
+Every finding gets exactly one destination, and that destination is as often an artifact that already
+exists as a new one. Choosing it is the judgment the pass exists to make: the detectors can only say
+what recurred, not what should be done about it.
 
 ## The destinations
 
 | Route | What it is | Reaches |
 |-------|------------|---------|
 | **gitignore + memory** | An ignore entry, plus a memory file recording why the path exists | Immediately, permanently |
-| **bundled script only** | An executable under a plugin's `bin/` or the project's `scripts/`, with CLI arguments | Anyone who is told about it, including executors |
-| **skill (with bundled script)** | A `SKILL.md` that wraps a script, for when *choosing* to run it needs judgment | Whoever invokes it, or whoever the description triggers |
+| **bundled script** | An executable under a plugin's `bin/` or the project's `scripts/`, with CLI arguments | Anyone who is told about it, including executors |
+| **skill** | A `SKILL.md`, usually wrapping a script, for when *choosing* to run it needs judgment | Whoever invokes it, or whoever the description triggers |
 | **live rule** | A scoped rule in `.claude/live-rules/rules/` | Injected automatically, on every matching prompt or edit |
 | **memory entry** | A file under the project's memory directory | Loaded at session start |
 | **codebase map** | A document under `.claude/.codebase-info/` | Injected at session start, including for executors |
@@ -19,6 +20,34 @@ detectors can only say what recurred, not what should be done about it.
 
 `settings` sits outside the usual six on purpose. Repeated permission denials are a configuration gap,
 not a behavior anyone needs corrected, and routing them anywhere else produces a fix that cannot work.
+
+## Amend or create
+
+A route names a destination. It does not say the destination has to be new, and most of the time it
+should not be: the repo has been accumulating skills, scripts, and rules for as long as the friction has
+been recurring, so the odds that something already claims this territory are good. Look before writing.
+Two artifacts covering one job is worse than one broken artifact, because now every reader has to work
+out which is authoritative, and the broken one keeps its name.
+
+Diagnose from the transcript, because each symptom needs a different edit:
+
+| What the transcript shows | What is broken | The edit |
+|---|---|---|
+| The skill was invoked, the work still got redone | The body | Sharpen the instruction that got skipped, with its reason |
+| The skill was never invoked, and should have been | The `description` | Add the words that were actually typed |
+| A script exists, the command still varied by hand | The signature | Turn what varied into an argument |
+| A rule exists, the edits went unguided | The glob | Widen it to the files that were actually touched |
+| A map entry exists, the area got re-derived anyway | The entry | Extend it with what was re-derived |
+| Nothing covers this territory | Nothing | A new artifact |
+
+The last two rows are the ones people confuse. A skill nobody invoked leaves exactly the same trace as a
+skill that does not exist: work done by hand, no skill in the transcript. The fixes are opposite, so
+check what is on disk before deciding which case you are in. Guessing produces a duplicate of a skill
+that only ever needed six more words in its description.
+
+Amending is a smaller change than creating, and it is also a riskier one when the artifact is shared:
+other projects load the same skill or rule, and they are not in the window you mined. Say so in the
+proposal, and treat it like any other shared change.
 
 ## Choosing between a script and a skill
 

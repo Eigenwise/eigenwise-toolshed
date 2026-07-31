@@ -2,10 +2,11 @@
 name: skill-retro
 description: >-
   Mine recent Claude Code transcripts, including subagent transcripts, for work that keeps getting
-  redone, then turn each finding into a skill, a bundled script, a live rule, a memory entry, a
-  codebase-map edit, or a ticket. Use for a cross-session retro, "what do I keep redoing", "what do you
-  keep redoing", turning repeated work into tooling, or auditing recent sessions for waste and for
-  private data that was one commit from being exposed.
+  redone, then turn each finding into a new or amended skill, bundled script, live rule, memory entry,
+  codebase-map edit, or ticket. Use for a cross-session retro, "what do I keep redoing", "what do you
+  keep redoing", turning repeated work into tooling, fixing a skill that keeps failing to trigger or to
+  be followed, or auditing recent sessions for waste and for private data that was one commit from being
+  exposed.
 ---
 
 # Skill retro
@@ -66,11 +67,40 @@ The short version:
 | A repeated user correction | a live rule, never a skill |
 | A one-off correction with a reason worth keeping | a memory entry |
 | Repeated permission denials | a settings allowlist |
+| A skill that was invoked and the work got redone anyway | an edit to that skill's body |
+| A skill that covers the work but never got invoked | an edit to that skill's description |
 | Real work with no obvious owner | a ticket |
 
 **Drop genuine one-offs.** A report padded with things that happened once trains the reader to skim the
 next one, which costs more than the padding ever saves. An honest "three findings" beats a manufactured
 twelve. If nothing recurred, say so and stop.
+
+## Amend what exists before you add anything
+
+Every route names a destination, and the destination often already exists. A near-miss skill sitting
+beside a second near-miss skill is worse than either alone: both look authoritative, and neither works.
+So before proposing anything new, go looking for the artifact that already owns this territory, in the
+plugins directory, `.claude/live-rules/`, `.claude/.codebase-info/`, the memory directory, and the skills
+this session already has listed. The report prints an **Amend first** line on every route that can write
+an artifact, because the miner reads transcripts and cannot see the repo.
+
+When one does exist, the transcript says which edit it needs, and they are opposite edits:
+
+- **It ran and the work got redone anyway.** The body is the problem: a step missing, a default that is
+  wrong for this repo, an instruction vague enough to skip. Sharpen that instruction and say why, so it
+  survives the next person who finds it inconvenient.
+- **It never ran and it should have.** The `description` is the problem. The words in the transcript are
+  the words that failed to match, so add those. Widen it without narrowing it; the triggers it already
+  catches are ones nobody is complaining about.
+- **A script exists but the command still varied by hand.** What varied is a missing argument or flag.
+- **A rule exists but the edits went unguided.** Its glob missed the files that were actually touched.
+
+Name which one the evidence supports. "Amend the skill" with no diagnosis produces an appended bullet,
+and appended bullets are how a skill reaches three screens and starts getting skimmed.
+
+A skill that nobody invoked looks identical in a transcript to a skill that does not exist, so check
+before concluding either. Only genuinely different territory earns a new artifact. Amending something
+other projects use is a shared change, so it goes through the same propose-then-apply steps below.
 
 ## Verify before you write anything
 
@@ -93,15 +123,16 @@ Never present a salvaged script as working when only its syntax was checked. Say
    its evidence, its actors, and its proposed route.
 2. **Let the user approve, drop, or re-route.** These are workspace changes, and some of them are shared.
 3. **Apply each approved fix as its own step**, through the tool that owns it: `add-rule` for a live
-   rule, `update-codebase-map` for the map, `skill-creator` for a new skill, a direct edit for a
-   gitignore entry, a memory file for a memory entry. One step each, so any one is easy to undo.
+   rule, `update-codebase-map` for the map, `skill-creator` for a skill, whether that means writing one
+   or editing one that fell short, a direct edit for a gitignore entry, a memory file for a memory entry.
+   One step each, so any one is easy to undo.
 4. **Re-verify after writing.** A new rule's globs should match real files; a new skill needs a
    description that will actually trigger; a bundled script needs real CLI arguments.
 
-## Skills this writes follow house style
+## Skills this writes or amends follow house style
 
-When a finding routes to a skill, write it the way the rest of the Toolshed writes them, because a skill
-that does not trigger is dead weight and a skill nobody can follow gets ignored:
+When a finding routes to a skill, write it, or edit it, the way the rest of the Toolshed writes them,
+because a skill that does not trigger is dead weight and a skill nobody can follow gets ignored:
 
 - The `description` says **what it does and when to use it**, in the words someone would actually type.
   Triggering is the whole job of that field.
@@ -125,6 +156,8 @@ this.
 - [ ] Mined through the CLI, never by reading a transcript into context
 - [ ] The actual window reported, including sessions skipped by the cap
 - [ ] Findings attributed to user, main loop, or named subagents, and routed accordingly
+- [ ] Existing coverage searched for before any new artifact was proposed, and every amendment names its
+      diagnosis and the edit it needs
 - [ ] Hazards reported first regardless of frequency
 - [ ] One-offs dropped rather than padded into the report
 - [ ] Cited paths checked, salvaged scripts parsed, and tested against recorded output where it exists

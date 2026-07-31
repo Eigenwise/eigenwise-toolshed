@@ -2,14 +2,28 @@
 
 const ROUTES = {
   gitignore: 'gitignore + memory',
-  script: 'bundled script only',
-  skill: 'skill (with bundled script)',
-  rule: 'live rule',
+  script: 'bundled script, new or amended',
+  skill: 'skill, new or amended',
+  rule: 'live rule, new or amended',
   memory: 'memory entry',
   map: 'codebase map',
   ticket: 'ticket',
   settings: 'settings (permissions)',
   drop: 'drop',
+};
+
+/**
+ * The question to ask before writing anything new for this route. The miner cannot see what the repo
+ * already holds, so it can only make the check unskippable; the reviewing model does the looking.
+ * Skipping it is how a near-miss skill ends up with a second near-miss skill beside it while the
+ * original stays broken.
+ */
+const AMEND_FIRST = {
+  script: 'Search for a script that already does this. If one exists, the finding is usually a missing flag or a wrong default in it, so amend that script rather than shipping a rival.',
+  skill: 'Search for a skill whose territory already covers this. If it exists and still got redone, the fault is in its body or its trigger words, and the fix is an edit to it.',
+  rule: 'Search .claude/live-rules/ for a rule that already covers this. A rule that exists but did not fire usually has a glob that missed the files that were actually edited.',
+  map: 'Check whether the map already has an entry for this area. An entry that exists but was re-derived anyway was too thin, so extend it rather than adding a second one.',
+  memory: 'Check the memory directory for an entry on this. Update it in place; two entries on one fact means the stale one wins half the time.',
 };
 
 const BASE_SCORE = {
@@ -42,6 +56,9 @@ function audience(finding) {
  * Who repeated the work decides as much as what was repeated. A skill only helps someone who thinks to
  * invoke it, so work that subagents keep redoing routes to things that reach them without being asked:
  * a script they can call, a rule scoped to the files they edit, a map entry loaded at their start.
+ *
+ * Every route names a destination, never a new file. Whether the destination already exists is a
+ * question about the repo, which only the reviewing model can answer; see AMEND_FIRST.
  */
 function routeFor(finding) {
   const who = audience(finding);
@@ -150,6 +167,7 @@ function rank(findings, options = {}) {
       routeLabel: ROUTES[routing.route],
       routeWhy: routing.why,
       routeAlternatives: routing.alternatives ?? [],
+      amendFirst: AMEND_FIRST[routing.route] ?? null,
       score: value,
       severity: finding.severity ?? (value >= 200 ? 'high' : value >= 80 ? 'medium' : 'low'),
     };
@@ -169,4 +187,4 @@ function rank(findings, options = {}) {
   return { findings: kept, dropped: dropped.map((finding) => ({ kind: finding.kind, title: finding.title, score: finding.score })) };
 }
 
-module.exports = { audience, rank, ROUTES, routeFor, score };
+module.exports = { AMEND_FIRST, audience, rank, ROUTES, routeFor, score };

@@ -66,6 +66,25 @@ When the finding was a fail-then-fix pair, they split:
 Putting the reason only in a code comment loses it the moment someone reads the skill instead of the
 source, and putting the fix only in prose guarantees it gets retyped wrong.
 
+## Editing one that already exists
+
+Most of what this pass writes is an edit, not a new file, and an edit has failure modes a new skill does
+not.
+
+- **Widen a description, never narrow it.** Add the words from the transcript that failed to match, and
+  keep every trigger already there. Those triggers are catching asks nobody has complained about, and a
+  rewrite that reads better usually catches fewer.
+- **Sharpen the instruction that failed rather than appending a new one.** If a step got skipped, the
+  sentence describing it was skippable. Rewrite that sentence with its reason attached. An appended
+  bullet leaves the weak sentence in place, so both are now competing and the skill is a line longer.
+- **Keep the edit at the altitude of the file.** A skill written in imperative why-carrying prose does
+  not want one paragraph of transcript quotes bolted to the end.
+- **No changelog inside the skill.** No "updated 2026-07", no "(new)", no note about what this used to
+  say. Git holds that, and every line spent on history is a line the next reader skims past on the way
+  to the instructions.
+- **Say what you changed, in the report, not in the file.** The proposal names the diagnosis and the
+  edit; the file just reads as though it was always right.
+
 ## Length
 
 Keep it as short as it can be while still saying why. A skill that runs to several screens gets skimmed,

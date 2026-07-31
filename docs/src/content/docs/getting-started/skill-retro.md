@@ -52,6 +52,19 @@ approved fix is applied as its own step through the tool that owns it, so any on
 
 Genuine one-offs are dropped and counted rather than padded into the report.
 
+## A route can point at something you already have
+
+Most routes carry an **Amend first** line, because the artifact that should have handled the work often
+already exists and fell short. Editing it beats adding a rival next to it: two skills covering one job
+means every reader has to work out which one is authoritative, while the broken one keeps its name.
+
+The transcript says which edit it needs. A skill that was invoked while the work still got redone has a
+body problem, usually a step vague enough to skip. A skill that covers the work but never got invoked
+has a description problem, and the words in the transcript are the words that failed to match it. A
+script that exists while the command still varied by hand is missing an argument. A rule that exists
+while the edits went unguided has a glob that missed the files. Those are different fixes, so the
+proposal names which one it is before anything gets written.
+
 ## Salvaged scripts are tested, not assumed
 
 When a script was rewritten from scratch more than once, the plugin recovers the last working version
