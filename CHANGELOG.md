@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.301.0 (2026-07-31)
+
+### skill-retro 0.2.0 → 0.3.0
+
+#### Features
+
+- skill-retro amends an existing skill instead of only adding a new one (SQ-1130) [`3abb97b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/3abb97b24b9f3c754247ae2036085ecc0c3ecb4c)
+
 ## v3.300.0 (2026-07-31)
 
 ### model-gateway 0.43.0 → 0.44.0

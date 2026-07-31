@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.300.0",
+  "version": "3.301.0",
   "plugins": [
     {
       "name": "workbench",
@@ -101,7 +101,7 @@
       "name": "skill-retro",
       "source": "./plugins/skill-retro",
       "description": "Mines recent Claude Code transcripts, including subagent transcripts, for work that keeps getting redone, then routes each finding to the cheapest durable fix: a skill, a bundled script, a live rule, a memory entry, a codebase-map edit, or a ticket. Sessions run to tens of megabytes, so a bundled miner streams them and emits bounded aggregates instead of loading transcripts into context.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "Eigenwise"
       },
