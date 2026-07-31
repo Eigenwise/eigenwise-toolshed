@@ -8,7 +8,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node scripts/build.mjs",
-    "build:check": "npm run build && git diff --exit-code -- bin lib hooks",
+    "build:check": "node scripts/build-check.mjs",
     "drift": "npm run build && node scripts/drift.mjs",
     "test:files": "node --import tsx --test",
     "test:full": "npm run typecheck && npm run build:check && node scripts/test-full.mjs",
