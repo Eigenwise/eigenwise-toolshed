@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.308.0 (2026-08-01)
+
+### model-gateway 0.44.1 → 0.44.2
+
+#### Fixes
+
+- Extract the request worker and remaining commands so the model-gateway entry point is wiring only (SQ-1149) [`bc828c0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/bc828c0)
+
+### sidequest 3.50.0 → 3.50.1
+
+#### Fixes
+
+- Make the build discover nested sources and extract the first store domain module (SQ-1144) [`7ca873b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/7ca873b)
+- Split the MCP tool handlers into per-domain modules behind an unchanged tool surface (SQ-1147) [`efb00ae`](https://github.com/Eigenwise/eigenwise-toolshed/commit/efb00ae)
+
 ## v3.307.0 (2026-08-01)
 
 ### model-gateway 0.44.0 → 0.44.1
