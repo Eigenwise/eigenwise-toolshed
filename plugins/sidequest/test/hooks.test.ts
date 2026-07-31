@@ -1516,8 +1516,12 @@ test('session-start: says sidequest coexists with an external tracker (Jira)', (
 });
 
 test('session-start: shows the live investigation workforce within its cap', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-workforce-'));
   for (const source of ['', 'compact', 'resume']) {
-    const ctx = runHookForBudget(SESSION, { session_id: `workforce-${source || 'startup'}`, source });
+    const ctx = runHookForBudget(SESSION, { session_id: `workforce-${source || 'startup'}`, source }, {
+      SIDEQUEST_HOME: home,
+      CLAUDE_PROJECT_DIR: path.join(home, 'project'),
+    });
     const start = ctx.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:');
     assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
     const workforce = ctx.slice(start);
