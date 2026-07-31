@@ -89,14 +89,40 @@ function retarget(command, sourcePath, basename, target) {
     .replace(/""+/g, '"');
 }
 
-function shellFor(tool, command) {
-  if (tool === 'PowerShell') {
-    const executable = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { windowsHide: true }).status === 0
-      ? 'pwsh'
-      : 'powershell';
-    return [executable, ['-NoProfile', '-NonInteractive', '-Command', command]];
+function isAvailable(executable, args = ['--version']) {
+  const probe = spawnSync(executable, args, { windowsHide: true });
+  return !probe.error && probe.status === 0;
+}
+
+function bundledGitBash() {
+  if (process.platform !== 'win32') return null;
+  const git = spawnSync('where.exe', ['git'], { encoding: 'utf8', windowsHide: true });
+  if (git.error || git.status !== 0) return null;
+
+  for (const executable of String(git.stdout ?? '').split(/\r?\n/).filter(Boolean)) {
+    const bash = path.resolve(path.dirname(executable), '..', 'bin', 'bash.exe');
+    if (fs.existsSync(bash) && isAvailable(bash)) return bash;
   }
-  return ['bash', ['-lc', command]];
+  return null;
+}
+
+function resolveShell(tool) {
+  if (tool === 'PowerShell') {
+    const probe = ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'];
+    if (isAvailable('pwsh', probe)) return 'pwsh';
+    if (isAvailable('powershell', probe)) return 'powershell';
+    return null;
+  }
+  if (isAvailable('bash')) return 'bash';
+  return bundledGitBash();
+}
+
+function shellFor(tool, command, resolve = resolveShell) {
+  const executable = resolve(tool);
+  if (!executable) return null;
+  return tool === 'PowerShell'
+    ? [executable, ['-NoProfile', '-NonInteractive', '-Command', command]]
+    : [executable, ['-lc', command]];
 }
 
 /**
@@ -130,10 +156,19 @@ function verifySalvage(entry, options = {}) {
     return result;
   }
 
-  const [executable, args] = shellFor(entry.proof.tool ?? 'Bash', command);
+  const tool = entry.proof.tool ?? 'Bash';
+  const shell = shellFor(tool, command, options.resolveShell);
+  if (!shell) {
+    result.execution = { status: 'shell-unavailable', detail: `The recorded ${tool} shell is unavailable, so this replay could not run.` };
+    return result;
+  }
+
+  const [executable, args] = shell;
   const run = spawnSync(executable, args, { cwd, encoding: 'utf8', windowsHide: true, timeout: options.timeoutMs ?? 120000 });
   if (run.error) {
-    result.execution = { status: 'error', detail: run.error.message };
+    result.execution = run.error.code === 'ENOENT'
+      ? { status: 'shell-unavailable', detail: `The recorded ${tool} shell (${executable}) is unavailable, so this replay could not run.` }
+      : { status: 'error', detail: run.error.message };
     return result;
   }
   result.execution = {
@@ -164,4 +199,4 @@ function gitTracked(projectPath, relativePath) {
   }
 }
 
-module.exports = { checkParses, compareOutput, gitTracked, normalizeOutput, pathsExist, retarget, verifySalvage };
+module.exports = { checkParses, compareOutput, gitTracked, normalizeOutput, pathsExist, retarget, shellFor, verifySalvage };
