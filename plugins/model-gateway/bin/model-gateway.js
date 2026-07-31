@@ -2403,7 +2403,7 @@ function runWorker() {
     if (!state || state.fired || state.usage <= compactTrigger) return false;
     state.fired = true;
     const body = contextOverflowBody(state.usage, compactTrigger,
-      'Codex context sentry: input crossed the compaction trigger; compact and retry.');
+      'Prompt is too long for the Codex context window; compact and retry.');
     res.writeHead(413, {
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(body),
