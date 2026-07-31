@@ -5,13 +5,16 @@ import { build } from 'esbuild';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-async function sourceEntries(directory) {
+// Only lib and bin mirror nested sources into output. Hook entry points stay top-level:
+// src/hooks/shared/* are bundled into each hook, and emitting them would flatten distinct
+// nested paths onto colliding basenames in hooks/.
+async function sourceEntries(directory, { recursive = true } = {}) {
   const absolute = path.join(pluginRoot, 'src', directory);
   async function collectEntries(root) {
     const entries = await fs.readdir(root, { withFileTypes: true });
     const collected = await Promise.all(entries.map(async (entry) => {
       const entryPath = path.join(root, entry.name);
-      if (entry.isDirectory()) return collectEntries(entryPath);
+      if (entry.isDirectory()) return recursive ? collectEntries(entryPath) : [];
       return entry.isFile() && entry.name.endsWith('.ts') ? [entryPath] : [];
     }));
     return collected.flat();
@@ -43,7 +46,7 @@ async function buildNonBundled(directory, banner) {
 }
 
 async function buildHooks() {
-  const entryPoints = await sourceEntries('hooks');
+  const entryPoints = await sourceEntries('hooks', { recursive: false });
   for (const entryPoint of entryPoints) {
     await build({
       entryPoints: [entryPoint],
