@@ -12,7 +12,7 @@ const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
 
-const DASHBOARD_BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
+const DASHBOARD_COMMAND_BIN = path.join(__dirname, '..', 'bin', 'sidequest-cmd-server.js');
 const HOME_DIR = os.homedir();
 // Point the store at a throwaway home so any incidental store reads/writes
 // (findNewerInstall never touches it, but requiring server.js pulls in
@@ -155,7 +155,7 @@ test('findNewerInstall: resolves the registry install after the cache layout mov
 });
 
 test('detached dashboard spawn options use a stable cwd and preserve lifecycle flags', () => {
-  const cli = fs.readFileSync(DASHBOARD_BIN, 'utf8');
+  const cli = fs.readFileSync(DASHBOARD_COMMAND_BIN, 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
   assert.match(cli, /spawn\(process\.execPath, args, \{ cwd: os\.homedir\(\), detached: true, stdio: "ignore", windowsHide: true \}\)/);
   assert.match(server, /spawn\(process\.execPath, \[targetBin, "serve", "--port", String\(ownPort\), "--handoff-pid", String\(process\.pid\)\], \{\s*cwd: os\.homedir\(\),\s*detached: true,\s*stdio: "ignore",\s*windowsHide: true\s*\}\)/);
