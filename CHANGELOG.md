@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.298.0 (2026-07-31)
+
+### sidequest 3.44.0 → 3.45.0
+
+#### Features
+
+- Read-only executors can't drive Playwright, and their no-write promise is false (SQ-1113) [`bd64515`](https://github.com/Eigenwise/eigenwise-toolshed/commit/bd64515)
+  Read-only executor agents now get the Playwright MCP tools, so a visual-review ticket can drive a browser through a sanctioned tool instead of improvising one from Bash. The role note also describes the real boundary now: don't modify the repo working tree, Bash is for inspection and tests, scratch goes in the session scratchpad, no installs into the project's package.json or node_modules. It previously claimed the tools could not change files at all, which was never true with Bash in the same allowlist.
+
 ## v3.297.0 (2026-07-31)
 
 ### live-rules 2.8.0 → 2.9.0
