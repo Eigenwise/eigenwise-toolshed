@@ -8,6 +8,34 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.294.0 (2026-07-31)
+
+### codebase-mapper 2.11.3 → 2.12.0
+
+#### Features
+
+- Inject the codebase map into work subagents at SubagentStart (SQ-1089) [`6216880`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6216880)
+  Subagents started with no map and re-read it by hand: 851 orienting reads costing ~134 min and ~4.44M fresh tokens across 58 transcripts in four days, with modules.md itself among the most re-read files. The map is now injected at SubagentStart, matcher-scoped to work-executing agent types so cheap recon agents do not pay for context they will not use. Also stops the test suite inheriting CLAUDE_PROJECT_DIR, which had been silently pointing every temp-fixture test at the real repo whenever the variable was set.
+
+### sidequest 3.42.4 → 3.43.0
+
+#### Features
+
+- Preload verify discipline into every dispatched executor (SQ-1090) [`4a68a9a`](https://github.com/Eigenwise/eigenwise-toolshed/commit/4a68a9a)
+  Test and check commands were 284.5 of the 341 minutes of shell wall clock measured over four days, 566 of 693 runs by subagents, with test:full averaging 51.3s against 21.5s for a scoped run. A new verify-discipline skill is preloaded through the subagent skills: frontmatter field, which injects full skill content at startup and is the only route that reaches read-only executors, whose tool list omits Skill.
+
+### skill-retro 0.1.0 → 0.2.0
+
+#### Features
+
+- Rank findings by elapsed time, not only occurrence count (SQ-1092) [`e52742b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e52742b)
+  Ranking by count alone could not answer which repeated work actually costs anything: npm ci looked significant at 193 runs but only 16.9 minutes, while the verify loop was 284.5. Elapsed time now flows through from the transcript records and appears alongside occurrence count in the ranked table and per-finding detail.
+
+#### Fixes
+
+- Report an unavailable replay shell instead of calling the script broken (SQ-1093) [`f075bfb`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f075bfb)
+  Salvage replay hardcoded bash -lc. Under cmd.exe, where bash is not on PATH, the spawn failure was reported as nonzero-exit, the same status a genuinely broken script gets, so a working salvaged script was labelled broken. An unavailable shell is now a distinct status. Present in 0.1.0 and hidden because CI runs on Linux and local runs use Git Bash.
+
 ## v3.293.0 (2026-07-31)
 
 ### skill-retro 0.0.0 → 0.1.0
