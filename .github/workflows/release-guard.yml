@@ -2,7 +2,7 @@ name: Release guard
 
 on:
   push:
-    branches: [dev, main]
+    branches: [main]
   pull_request:
 
 permissions:

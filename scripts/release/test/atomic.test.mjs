@@ -54,8 +54,9 @@ test('every remote-changing command happens after the whole release is built', a
 
 test('one push carries the branch and every tag by explicit sha, so no ref can land alone', async (t) => {
   const repo = setup(t);
+  const logged = [];
 
-  const result = await cut({ repoRoot: repo.root, push: true, skipTests: true, log: () => {} });
+  const result = await cut({ repoRoot: repo.root, push: true, skipTests: true, log: (line) => logged.push(line) });
 
   assert.equal(result.refspecs[0], `${result.commit}:refs/heads/main`, 'the branch moves to the verified commit, not to whatever HEAD is');
   assert.equal(result.refspecs.length, result.plan.tags.length + 1);
@@ -64,6 +65,7 @@ test('one push carries the branch and every tag by explicit sha, so no ref can l
   const remote = repo.remoteRefs();
   assert.equal(remote['refs/heads/main'], result.commit);
   for (const tag of result.plan.tags) assert.ok(remote[`refs/tags/${tag}`], `${tag} rode the same push`);
+  assert.doesNotMatch(logged.join('\n'), /restore the invariant/);
 });
 
 test('a rejected ref rejects the whole push, so the remote never half-publishes', async (t) => {

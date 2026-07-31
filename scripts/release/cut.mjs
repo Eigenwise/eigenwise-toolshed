@@ -132,7 +132,7 @@ export async function cut(options = {}) {
     sha = null,
     date = null,
     publishBranch = 'main',
-    integrationBranch = 'dev',
+    integrationBranch = 'main',
     remote = 'origin',
     dryRun = false,
     push = false,
@@ -193,7 +193,7 @@ export async function cut(options = {}) {
   // A normal window is only what a fast-forward would produce. If the pin does not already contain
   // the publish branch, no plan built from it describes the cut that would follow.
   if (mode === 'normal' && pinned !== basePin && !git.isAncestor(basePin, pinned)) {
-    throw new Error(`${publishBranch} (${basePin}) is not an ancestor of the pin ${pinned}, so this window could not fast-forward; merge ${publishBranch} into ${integrationBranch} first`);
+    throw new Error(`${publishBranch} (${basePin}) is not an ancestor of the pin ${pinned}, so this window could not fast-forward; choose a pin descended from ${publishBranch}`);
   }
 
   const manifest = loadManifest(baseSource);
@@ -300,7 +300,7 @@ export async function cut(options = {}) {
   if (failures.length > 0) {
     throw new Error(
       `release suites failed, nothing was published:\n  ${failures.join('\n  ')}\n` +
-      `The release commit and tags are local only. Fix on ${integrationBranch}, then let the next window pick it up.`,
+      'The release commit and tags are local only. Fix the failing suite, then rerun the release window.',
     );
   }
   assertReleaseIntact(git, plan, commit);
@@ -312,7 +312,6 @@ export async function cut(options = {}) {
     git.pushAtomic(remote, refspecs);
     pushed = true;
     log(`published ${plan.tag} (${commit})`);
-    log(`now restore the invariant: git push ${remote} ${commit}:refs/heads/${integrationBranch}`);
   } else {
     log(`built ${plan.tag} locally as ${commit}; publish it with:`);
     log(`  ${pushCommand}`);
@@ -358,7 +357,7 @@ export async function main(argv) {
     sha: values.sha ?? null,
     date: values.date ?? null,
     publishBranch: values['publish-branch'] ?? 'main',
-    integrationBranch: values['integration-branch'] ?? 'dev',
+    integrationBranch: values['integration-branch'] ?? 'main',
     remote: values.remote ?? 'origin',
     dryRun: values['dry-run'] === true,
     push: values.push === true,
