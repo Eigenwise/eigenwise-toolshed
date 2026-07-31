@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.306.0 (2026-08-01)
+
+### sidequest 3.49.0 → 3.50.0
+
+#### Features
+
+- Warn at dispatch when a ticket names symbols or ticket refs that contradict the repo and board (SQ-1141) [`8482435`](https://github.com/Eigenwise/eigenwise-toolshed/commit/84824356eee9375d398fe2cb45aaa500add711fb)
+
 ## v3.305.0 (2026-08-01)
 
 ### sidequest 3.48.0 → 3.49.0
