@@ -244,7 +244,7 @@ test('a pin that does not contain the publish branch is refused, not silently pl
 
   await assert.rejects(
     () => cut({ repoRoot: repo.root, sha: devSha, dryRun: true, log: () => {} }),
-    /is not an ancestor of the pin .*could not fast-forward/,
+    /is not an ancestor of the pin .*could not fast-forward; choose a pin descended from main/,
   );
 });
 
