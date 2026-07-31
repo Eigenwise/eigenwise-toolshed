@@ -48,6 +48,7 @@ export default defineConfig({
             { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
             { label: 'Codebase Mapper', slug: 'getting-started/codebase-mapper' },
             { label: 'Live Rules', slug: 'getting-started/live-rules' },
+            { label: 'Skill Retro', slug: 'getting-started/skill-retro' },
           ],
         },
         {
@@ -73,6 +74,7 @@ export default defineConfig({
             { label: 'Codebase Mapper', slug: 'reference/codebase-mapper' },
             { label: 'Live Rules', slug: 'reference/live-rules' },
             { label: 'Sidequest', slug: 'reference/sidequest' },
+            { label: 'Skill Retro', slug: 'reference/skill-retro' },
             { label: 'Marketplace versions', slug: 'reference/marketplace' },
           ],
         },

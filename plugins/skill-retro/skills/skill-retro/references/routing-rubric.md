@@ -1,0 +1,70 @@
+# Routing rubric
+
+Every finding gets exactly one destination. Choosing it is the judgment the pass exists to make: the
+detectors can only say what recurred, not what should be done about it.
+
+## The destinations
+
+| Route | What it is | Reaches |
+|-------|------------|---------|
+| **gitignore + memory** | An ignore entry, plus a memory file recording why the path exists | Immediately, permanently |
+| **bundled script only** | An executable under a plugin's `bin/` or the project's `scripts/`, with CLI arguments | Anyone who is told about it, including executors |
+| **skill (with bundled script)** | A `SKILL.md` that wraps a script, for when *choosing* to run it needs judgment | Whoever invokes it, or whoever the description triggers |
+| **live rule** | A scoped rule in `.claude/live-rules/rules/` | Injected automatically, on every matching prompt or edit |
+| **memory entry** | A file under the project's memory directory | Loaded at session start |
+| **codebase map** | A document under `.claude/.codebase-info/` | Injected at session start, including for executors |
+| **settings (permissions)** | An allowlist entry in `.claude/settings.json` | The harness, silently |
+| **ticket** | A Sidequest ticket | A future executor |
+| **drop** | Nothing | Nobody, deliberately |
+
+`settings` sits outside the usual six on purpose. Repeated permission denials are a configuration gap,
+not a behavior anyone needs corrected, and routing them anywhere else produces a fix that cannot work.
+
+## Choosing between a script and a skill
+
+A **script** is right when the work is mechanical: the same steps, differing only in arguments. If you
+can name what varied, those are the CLI arguments, and there is no decision left to write down.
+
+A **skill** is right when the hard part is *knowing when and whether* to run something. A skill wrapping
+a script with no judgment in it adds a layer that has to be maintained and invoked, for nothing.
+
+The tie-breaker is the audience. A skill only helps someone who thinks to invoke it. When the repetition
+comes from **subagents**, a skill is close to useless, because an executor works from its briefing and
+does not go shopping for skills. Route subagent repetition to a script they can be told to call, a rule
+scoped to the globs they edit, or a map entry loaded before they start reading.
+
+## Choosing between a rule and a memory entry
+
+A **live rule** is for behavior that must arrive unbidden, because the failure mode is forgetting. A
+repeated correction is the clearest case: the reason it repeated is that nobody remembered it, so a
+destination that has to be looked up will fail the same way.
+
+A **memory entry** is for a fact, a decision, or a preference with a reason. It carries the *why*, which
+is the part that stops the correction recurring; a rule that says "do X" without why gets dropped the
+first time X is inconvenient.
+
+**Never route a correction to a skill.** The entire problem is that nobody thinks to invoke one.
+
+## Choosing the map
+
+Route to the **codebase map** when the cost is orienting: reads before the first change, the same files
+opened at the start of transcript after transcript. The map is injected at session start, so it is the
+only destination that arrives *before* someone starts reading, which is the only time it can help.
+
+If the answer is not written down anywhere yet, that is a ticket first and a map entry after.
+
+## Hazards outrank everything
+
+A path holding private data that git neither tracks nor ignores goes first, above every
+frequency-ranked finding, however rare. The cost is not proportional to how often it happened; one
+`git add -A` is enough. Fix the ignore entry in the same pass, then record why the path exists so the
+hole does not reopen.
+
+Untracked, unignored files that are simply new work are **not** a hazard. They are untracked because
+they are new. It becomes a finding when a bulk `git add` actually happened while they sat there.
+
+## Dropping
+
+Drop anything that will not recur. The test is "will this happen again," not "did this happen." A report
+padded to look thorough teaches the reader to skim, and a skimmed report is worth less than a short one.
+Say what was dropped and why, so the judgment is visible and can be argued with.

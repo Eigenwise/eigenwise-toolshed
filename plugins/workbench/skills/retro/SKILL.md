@@ -13,6 +13,12 @@ session (yours or a teammate's) starts smoother. This is the deep counterpart to
 self-improvement live rule: that rule nudges small in-the-moment fixes; `retro` does the periodic
 batch pass.
 
+**Scope:** this pass works from what is in context right now — this session, as you remember it. If the
+question is what keeps getting redone *across* sessions, or what your subagents keep redoing, that
+needs the transcripts on disk, which is the `skill-retro` skill from the skill-retro plugin. Hand off to
+it rather than guessing at sessions you cannot see; come back here for friction only this session's
+context can show.
+
 ## Process
 
 ### Step 1 — Review the session for friction
