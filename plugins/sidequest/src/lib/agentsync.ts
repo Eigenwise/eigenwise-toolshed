@@ -535,6 +535,18 @@ function ticketReadinessContractPacket(ticket?: any, slug?: any) {
     : '(No contract-edge sequencing applies.)';
 }
 
+function findingCheckpointPacket(ticket?: any) {
+  const category = ticket?.category || {};
+  const categoryText = [ticket?.categoryId, category.id, category.name].filter(Boolean).join(' ');
+  const readOnly = ticket?.dispatch?.readonly === true;
+  const analysis = /\b(?:analysis|research|investigation)\b/i.test(categoryText);
+  if (!readOnly && !analysis) return null;
+  const durableArtifact = readOnly
+    ? 'This is a read-only dispatch, so board comments are its only durable artifact.'
+    : 'This is analysis, research, or investigation work.';
+  return `${durableArtifact} Post each substantive intermediate finding as a ticket comment when it lands, including after a theory pass, a measurement, or a reproduction. Record findings only, not a progress diary. If the run dies, it should lose at most the current step, not the whole investigation.`;
+}
+
 // An executor cannot tell an isolated tree from the shared checkout by looking
 // at its file paths, and the one place that knows the dispatch asked for
 // isolation is this packet. Resume is the trap: the harness discards an
@@ -632,6 +644,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const planDocument = planDocumentPacket(ticket, slug);
   const contract = storyContractPacket(ticket, slug);
   const decisionLog = storyDecisionLogPacket(ticket, slug);
+  const findingCheckpoints = findingCheckpointPacket(ticket);
   const parts = [
     '',
     ...(contract ? [contract] : []),
@@ -641,6 +654,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     `Title: ${ticket.title || '(Untitled ticket)'}`,
     `Description:\n${ticketDescriptionPacket(ticket.description)}`,
     `Category contract:\nCategory: ${category.id || ticket.categoryId || '(Unclassified)'}\nConfigured route: ${category.route?.model || '(No configured route)'} / ${category.route?.effort || '(No configured effort)'}\nDispatch route: ${ticket.model || category.route?.model || '(No route)'} / ${ticket.effort || category.route?.effort || '(No effort)'}\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
+    ...(findingCheckpoints ? [`Durable finding checkpoints:\n${findingCheckpoints}`] : []),
     `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
     ...(ticket.executorVerify ? [`Verify output discipline: run the exact command through this Bash wrapper so the suite writes to a temporary file and only its exit code, TAP counts, and log path enter the transcript:\n\`\`\`bash\n${filteredVerifyCommand(ticket.executorVerify)}\n\`\`\`\nA passing suite's full output carries no information. Its exit code and summary counts are the signal. On failure, read only the relevant line ranges from the printed log path around the reported \`not ok\` lines. Iterate with the narrowest documented test file or consumer check; reserve this full gate for final verification.`] : []),
@@ -654,7 +668,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     ...(planDocument ? [planDocument] : []),
     `Declared files:\n${declaredFiles}`,
     ...(generatedFiles.length ? [`Auto-paired tracked generated files:\n${generatedFiles.map((file: any) => `- ${file}`).join('\n')}`] : []),
-    'Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Keep your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. Report every refused or unscoped path in the final report; never call partial work ready for integration. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.',
+    'Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Keep your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. When the root cause is outside declared scope, request that scope with `scopeRequest` and wait, or record the root-cause finding on the ticket and stop. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix. Report every refused or unscoped path in the final report; never call partial work ready for integration. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.',
     `Contract metadata:\n${ticketContractsPacket(ticket)}`,
     `Readiness contract edges:\n${ticketReadinessContractPacket(ticket, slug)}`,
     `Ticket state:\nStatus: ${ticket.status || '(Unknown)'}\nPriority: ${ticket.priority || '(Unknown)'}\nLabels: ${labels}\nStory: ${ticket.storyId || '(No story)'}\nDependencies:\n${links}`,

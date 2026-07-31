@@ -195,6 +195,11 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   dispatch are a user-visible failure: comment the ticket with the verbatim denial/terminal evidence, surface
   it, do not try a third spawn, and do not pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
+- **Recover partial reasoning from an infrastructure death.** When an executor dies mid-run on a transient
+  infrastructure error, release its claim first. Then use the one diagnose-first respawn: pass the dead
+  executor's last visible output to the replacement only as a lead to confirm or refute with its own evidence.
+  Never pass partial reasoning as a conclusion to inherit. The replacement still owns its investigation and
+  evidence; this recovery prevents a transient death from discarding a useful starting point.
 - **Diagnose a 32 MB launch failure before recovering.** Claude Code uses `Request too large (max 32MB)` for an HTTP body-byte cap, but Model Gateway deliberately uses HTTP 413 `request_too_large` as its Codex context-compaction signal too. Read the underlying error details. `Prompt is too long for the Codex context window; compact and retry. (<actual> tokens > <trigger> tokens)` is the gateway's token-overflow signature, not inherited parent images or attachments. If a dispatched native Agent dies before its first model turn with that signature, do not compact the orchestrator or resume it. If it claimed the ticket, run `release --status todo` first, then dispatch one fresh executor with a tighter scope and briefing. It has its own briefing and history, so it does not inherit the parent request body. If that replacement hits the same signature, report the token counts and narrow the task again rather than blindly retrying. A genuine byte-cap rejection does not carry that token signature; follow Claude Code's body-size recovery there (`/compact`, Esc twice, or smaller attachments). The salvage rule above still governs any partial commit.
 - **Use steerable background execution by default.** Executors are background teammates, so `TaskOutput`
   cannot resolve their names (`No task found`) and polling is banned regardless. When

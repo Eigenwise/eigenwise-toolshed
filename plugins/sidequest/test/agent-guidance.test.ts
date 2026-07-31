@@ -95,6 +95,14 @@ test('dormant executors resume once before replacement', () => {
   assert.match(orchestration, /Never respawn beside a live claim or `TaskStop` without terminal board evidence/);
 });
 
+test('infrastructure-death recovery preserves partial output as an untrusted lead', () => {
+  assert.match(orchestration, /Recover partial reasoning from an infrastructure death/);
+  assert.match(orchestration, /release its claim first/);
+  assert.match(orchestration, /one diagnose-first respawn/);
+  assert.match(orchestration, /only as a lead to confirm or refute with its own evidence/);
+  assert.match(orchestration, /Never pass partial reasoning as a conclusion to inherit/);
+});
+
 test('post-wave integration judges the oracle instead of re-reviewing executor work', () => {
   assert.match(orchestration, /Integrate and verify by wave/);
   assert.match(orchestration, /Each executor runs its scoped verification before submission/);

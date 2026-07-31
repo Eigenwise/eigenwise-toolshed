@@ -773,6 +773,37 @@ test('renderTicketBriefing makes the prepared read-only closeout path explicit',
   assert.match(briefing, /Do not commit or submit\./);
 });
 
+test('briefings checkpoint findings for read-only and investigation work without burdening coding', () => {
+  const base = { ref: 'SQ-1138', title: 'Checkpoint findings', model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high' };
+  const readOnly = agentsync.renderTicketBriefing({
+    ...base, category: {}, dispatch: { readonly: true },
+  }, 'readonly-checkpoint-token');
+  assert.match(readOnly, /board comments are its only durable artifact/);
+  assert.match(readOnly, /Post each substantive intermediate finding as a ticket comment when it lands/);
+  assert.match(readOnly, /theory pass, a measurement, or a reproduction/);
+  assert.match(readOnly, /not a progress diary/);
+
+  const investigation = agentsync.renderTicketBriefing({
+    ...base, category: { id: 'codebase-investigation', name: 'Codebase investigation' },
+  }, 'investigation-checkpoint-token');
+  assert.match(investigation, /This is analysis, research, or investigation work/);
+
+  const coding = agentsync.renderTicketBriefing({
+    ...base, category: { id: 'plugin-dev', name: 'Plugin development' },
+  }, 'coding-checkpoint-token');
+  assert.doesNotMatch(coding, /Durable finding checkpoints:/);
+});
+
+test('briefings reject compensating workarounds when the root cause is out of scope', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-1138', title: 'Scope wall', model: 'opus', effort: 'high', category: {},
+  }, 'scope-wall-token');
+  assert.match(briefing, /When the root cause is outside declared scope, request that scope with `scopeRequest` and wait/);
+  assert.match(briefing, /record the root-cause finding on the ticket and stop/);
+  assert.match(briefing, /Never ship a compensating or downstream workaround inside scope instead/);
+  assert.match(briefing, /verified workaround is not a substitute for the root fix/);
+});
+
 test('renderTicketBriefing omits closeout when the ticket route is unresolved', () => {
   clearCatalog();
   const briefing = agentsync.renderTicketBriefing({

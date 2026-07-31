@@ -392,6 +392,15 @@ function ticketReadinessContractPacket(ticket, slug) {
   const dependencies = store.readyWaveDependencies(slug).filter((edge) => edge.before === ticket.ref || edge.after === ticket.ref);
   return dependencies.length ? dependencies.map((edge) => `- ${edge.reason}`).join("\n") : "(No contract-edge sequencing applies.)";
 }
+function findingCheckpointPacket(ticket) {
+  const category = ticket?.category || {};
+  const categoryText = [ticket?.categoryId, category.id, category.name].filter(Boolean).join(" ");
+  const readOnly = ticket?.dispatch?.readonly === true;
+  const analysis = /\b(?:analysis|research|investigation)\b/i.test(categoryText);
+  if (!readOnly && !analysis) return null;
+  const durableArtifact = readOnly ? "This is a read-only dispatch, so board comments are its only durable artifact." : "This is analysis, research, or investigation work.";
+  return `${durableArtifact} Post each substantive intermediate finding as a ticket comment when it lands, including after a theory pass, a measurement, or a reproduction. Record findings only, not a progress diary. If the run dies, it should lose at most the current step, not the whole investigation.`;
+}
 function ticketWorktreeIdentity(ticket, projectPath) {
   const dispatch = ticket?.dispatch;
   const root = String(projectPath || "").trim();
@@ -468,6 +477,7 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const planDocument = planDocumentPacket(ticket, slug);
   const contract = storyContractPacket(ticket, slug);
   const decisionLog = storyDecisionLogPacket(ticket, slug);
+  const findingCheckpoints = findingCheckpointPacket(ticket);
   const parts = [
     "",
     ...contract ? [contract] : [],
@@ -482,6 +492,8 @@ Category: ${category.id || ticket.categoryId || "(Unclassified)"}
 Configured route: ${category.route?.model || "(No configured route)"} / ${category.route?.effort || "(No configured effort)"}
 Dispatch route: ${ticket.model || category.route?.model || "(No route)"} / ${ticket.effort || category.route?.effort || "(No effort)"}
 ${category.contract || "(No category-specific executor instructions were recorded.)"}`,
+    ...findingCheckpoints ? [`Durable finding checkpoints:
+${findingCheckpoints}`] : [],
     `Anchors:
 ${ticket.executorAnchors || "(No anchors were recorded.)"}`,
     `Verify command:
@@ -504,7 +516,7 @@ ${experimentLog}`] : [],
 ${declaredFiles}`,
     ...generatedFiles.length ? [`Auto-paired tracked generated files:
 ${generatedFiles.map((file) => `- ${file}`).join("\n")}`] : [],
-    "Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Keep your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. Report every refused or unscoped path in the final report; never call partial work ready for integration. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.",
+    "Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Keep your claim held. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. When the root cause is outside declared scope, request that scope with `scopeRequest` and wait, or record the root-cause finding on the ticket and stop. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix. Report every refused or unscoped path in the final report; never call partial work ready for integration. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.",
     `Contract metadata:
 ${ticketContractsPacket(ticket)}`,
     `Readiness contract edges:
