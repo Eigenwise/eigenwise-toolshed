@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.293.0 (2026-07-31)
+
+### skill-retro 0.0.0 → 0.1.0
+
+#### Features
+
+- Add skill-retro: mine transcripts for repeated work and route it to durable fixes (SQ-1088) [`19dc097`](https://github.com/Eigenwise/eigenwise-toolshed/commit/19dc09735f83a442fc5e41e42224004cab2c8006)
+  Finds the work that keeps getting redone across recent sessions and proposes where each fix belongs: a skill, a bundled script, a live rule, a memory entry, a map edit, or nothing. It reads subagent transcripts too, which is where most of the work in an orchestrated repo actually happens, and the actor decides the route: a skill never reaches an executor, so repetition by executors goes to a script or a rule instead. Transcripts are streamed by a bundled CLI and never loaded into context. Workbench retro now points at it for anything spanning more than the current session.
+
+### workbench 0.70.3 → 0.71.0
+
+#### Features
+
+- Add skill-retro: mine transcripts for repeated work and route it to durable fixes (SQ-1088) [`19dc097`](https://github.com/Eigenwise/eigenwise-toolshed/commit/19dc09735f83a442fc5e41e42224004cab2c8006)
+  Finds the work that keeps getting redone across recent sessions and proposes where each fix belongs: a skill, a bundled script, a live rule, a memory entry, a map edit, or nothing. It reads subagent transcripts too, which is where most of the work in an orchestrated repo actually happens, and the actor decides the route: a skill never reaches an executor, so repetition by executors goes to a script or a rule instead. Transcripts are streamed by a bundled CLI and never loaded into context. Workbench retro now points at it for anything spanning more than the current session.
+
 ## v3.292.0 (2026-07-31)
 
 ### model-gateway 0.41.0 → 0.42.0
