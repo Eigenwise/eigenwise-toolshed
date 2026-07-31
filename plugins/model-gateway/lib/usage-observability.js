@@ -1,13 +1,17 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
+const os = require('node:os');
+const path = require('node:path');
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:4318/v1/logs';
 const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 500;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@\[\]-]{0,254}$/;
+const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const MCP_SERVER_BYTES = Symbol('mcpServerBytes');
 const MAX_MCP_SERVER_MEASUREMENTS = 20;
@@ -15,6 +19,9 @@ const DEFAULT_CONTEXT_SNAPSHOT_TTL_MS = 4 * 60 * 60 * 1000;
 const DEFAULT_CONTEXT_SNAPSHOT_MAX_IDENTITIES = 500;
 const TOOL_RESULT_EVENT = 'gateway.tool_result.usage';
 const MCP_FOOTPRINT_EVENT = 'gateway.mcp.footprint';
+const REQUEST_BODY_STATE_DIR = process.env.MODEL_GATEWAY_REQUEST_BODY_DIR
+  || path.join(os.homedir(), '.claude', 'model-gateway', 'request-body');
+const requestBodyHighWater = new Map();
 
 const RATE_LIMIT_HEADERS = Object.freeze({
   'anthropic-ratelimit-requests-limit': ['rate_limit_requests_limit', 'count'],
@@ -46,6 +53,39 @@ function headerValue(headers, name) {
 function numeric(value) {
   const number = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function requestBodyHighWaterPath(sessionId, directory = REQUEST_BODY_STATE_DIR) {
+  if (typeof sessionId !== 'string' || !SAFE_SESSION_ID.test(sessionId)) return null;
+  return path.join(directory, `${Buffer.from(sessionId).toString('base64url')}.json`);
+}
+
+function existingHighWater(filePath) {
+  try {
+    const record = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return numeric(record?.value) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function recordRequestBodyHighWater(sessionId, requestBodyBytes, directory = REQUEST_BODY_STATE_DIR) {
+  const value = numeric(requestBodyBytes);
+  const filePath = requestBodyHighWaterPath(sessionId, directory);
+  if (value === null || !filePath) return null;
+  const previous = requestBodyHighWater.has(filePath)
+    ? requestBodyHighWater.get(filePath)
+    : existingHighWater(filePath);
+  requestBodyHighWater.set(filePath, previous);
+  if (value <= previous) return previous;
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify({ value, observed_at: new Date().toISOString() }), { encoding: 'utf8', mode: 0o600 });
+    requestBodyHighWater.set(filePath, value);
+    return value;
+  } catch {
+    return previous || null;
+  }
 }
 
 function serializedBytes(value) {
@@ -870,6 +910,8 @@ module.exports = {
   inputComposition,
   mergeUsage,
   parseLimitHeaders,
+  recordRequestBodyHighWater,
+  requestBodyHighWaterPath,
   resolveUsageEndpoint,
   serializedBytes,
 };
