@@ -8,6 +8,26 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.299.0 (2026-07-31)
+
+### model-gateway 0.42.0 → 0.43.0
+
+#### Features
+
+- The request-body guard measures the transcript instead of the request (SQ-879) [`a014120`](https://github.com/Eigenwise/eigenwise-toolshed/commit/a014120)
+  The 32MB request-body warning read the whole transcript .jsonl and reported attachments plus 1.1x the rest. Measured against real wire data that overstated the request body by 15x to 40x: the guard reported 29-39MB on a session whose largest actual request was 2.30MB. It counted history discarded by compaction, per-record bookkeeping that never leaves the machine, and pasted images twice, and it went silent above a 36MB transcript, so it was dark on exactly the sessions that needed it. The remedy it printed, run /compact, could not move the number it reported.
+
+  The gateway already computes the true size of every forwarded request, so it now keeps a small per-session high-water record and the hook reads that instead. The guard reflects the real body, works regardless of transcript size, and costs a sub-kilobyte read per spawn rather than a 175ms whole-file scan. The warning threshold is 24MB of the 32MB cap; the largest body ever measured in this project was 7.19MB.
+
+### workbench 0.71.0 → 0.72.0
+
+#### Features
+
+- The request-body guard measures the transcript instead of the request (SQ-879) [`a014120`](https://github.com/Eigenwise/eigenwise-toolshed/commit/a014120)
+  The 32MB request-body warning read the whole transcript .jsonl and reported attachments plus 1.1x the rest. Measured against real wire data that overstated the request body by 15x to 40x: the guard reported 29-39MB on a session whose largest actual request was 2.30MB. It counted history discarded by compaction, per-record bookkeeping that never leaves the machine, and pasted images twice, and it went silent above a 36MB transcript, so it was dark on exactly the sessions that needed it. The remedy it printed, run /compact, could not move the number it reported.
+
+  The gateway already computes the true size of every forwarded request, so it now keeps a small per-session high-water record and the hook reads that instead. The guard reflects the real body, works regardless of transcript size, and costs a sub-kilobyte read per spawn rather than a 175ms whole-file scan. The warning threshold is 24MB of the 32MB cap; the largest body ever measured in this project was 7.19MB.
+
 ## v3.298.0 (2026-07-31)
 
 ### sidequest 3.44.0 → 3.45.0
