@@ -1311,13 +1311,10 @@ test('session-end sweeps old patch-equivalent worktrees and stays fail-soft', ()
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
 });
 
-test('stop reminder: names this session\'s doing tickets and pending submissions within its byte budget', () => {
+test('stop reminder: names pending submissions within its byte budget', () => {
   const sessionId = `reconcile-${++sqSeq}`;
-  const doing = addTicket('needs reconciliation');
   const submitted = addTicket('pending integration');
-  claimStopTicket(doing, sessionId, 'reconcile-doing');
   claimStopTicket(submitted, sessionId, 'reconcile-submitted');
-  assert.equal(store.getTicket(slug, doing.ref).dispatch.sessionId, sessionId);
   assert.equal(store.getTicket(slug, submitted.ref).dispatch.sessionId, sessionId);
   assert.equal(store.findProject(BOARD_PATH).slug, slug);
   assert.equal(store.submitTicket(slug, submitted.ref, 'reconcile-submitted', {
@@ -1328,14 +1325,47 @@ test('stop reminder: names this session\'s doing tickets and pending submissions
   const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
   assert.equal(output.hookSpecificOutput.hookEventName, 'Stop');
   const reminder = output.hookSpecificOutput.additionalContext;
-  assert.match(reminder, /1 ticket in doing/);
   assert.match(reminder, /1 submission pending integration/);
   assert.match(reminder, /Update or close them before finishing/);
   assert.equal(output.systemMessage, undefined, 'the reminder must go to Claude rather than the user-visible system message');
   assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
 });
 
-test('stop reminder: stays silent for a quiet session and when nudges are off', () => {
+test('stop reminder: ignores this session\'s live dispatched tickets in doing or todo', () => {
+  const sessionId = `reconcile-live-${++sqSeq}`;
+  const doing = addTicket('executor is verifying');
+  const todo = addTicket('executor has not claimed yet');
+  claimStopTicket(doing, sessionId, 'reconcile-live-doing');
+  store.prepareDispatch(slug, todo.ref, { sessionId });
+
+  assert.equal(store.getTicket(slug, doing.ref).status, 'doing');
+  assert.equal(store.getTicket(slug, todo.ref).status, 'todo');
+  assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }), null);
+});
+
+test('stop reminder: counts terminal dispatched claims that are reclaimable', () => {
+  const sessionId = `reconcile-terminal-${++sqSeq}`;
+  const ticket = addTicket('dead executor');
+  const stop = claimStopTicket(ticket, sessionId, 'reconcile-terminal');
+  assert.equal(store.markDispatchStopped(stop.session_id, stop.agent_type, stop.agent_id, stop.agent_name).ok, true);
+  assert.equal(store.claimPulse(store.getTicket(slug, ticket.ref)).reclaimable, 'observed_stop');
+
+  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+  assert.match(output.hookSpecificOutput.additionalContext, /1 ticket in doing/);
+});
+
+test('stop reminder: excludes live claims from a mixed live and terminal dispatched wave', () => {
+  const sessionId = `reconcile-mixed-${++sqSeq}`;
+  const live = addTicket('live executor');
+  const dead = addTicket('dead executor');
+  claimStopTicket(live, sessionId, 'reconcile-mixed-live');
+  const stop = claimStopTicket(dead, sessionId, 'reconcile-mixed-dead');
+  assert.equal(store.markDispatchStopped(stop.session_id, stop.agent_type, stop.agent_id, stop.agent_name).ok, true);
+
+  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+  assert.match(output.hookSpecificOutput.additionalContext, /1 ticket in doing/);
+  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /2 tickets in doing/);
+});test('stop reminder: stays silent for a quiet session and when nudges are off', () => {
   assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, {
     session_id: `reconcile-quiet-${++sqSeq}`,
     cwd: BOARD_PATH,
@@ -1353,7 +1383,8 @@ test('stop reminder: stays silent for a quiet session and when nudges are off', 
 test('stop reminder: ignores re-entry and falls silent after two unchanged reminders', () => {
   const sessionId = `reconcile-bound-${++sqSeq}`;
   const ticket = addTicket('bounded reconciliation reminder');
-  claimStopTicket(ticket, sessionId, 'reconcile-bound');
+  const stop = claimStopTicket(ticket, sessionId, 'reconcile-bound');
+  assert.equal(store.markDispatchStopped(stop.session_id, stop.agent_type, stop.agent_id, stop.agent_name).ok, true);
   const input = { session_id: sessionId, cwd: BOARD_PATH };
 
   assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, {

@@ -14,7 +14,7 @@ interface Ticket {
   ref?: string;
   status?: string;
   claim?: { by?: string } | null;
-  dispatch?: { sessionId?: string | null } | null;
+  dispatch?: { sessionId?: string | null; terminalAt?: string | null } | null;
   submission?: { commit?: string; integratedAt?: string | null } | null;
 }
 
@@ -23,6 +23,7 @@ interface Store {
   findProject: (start: string) => { ok: boolean; slug?: string };
   listTickets: (slug: string) => Ticket[];
   sessionClaims: (sessionId: string) => Array<{ ref?: string | null }>;
+  claimPulse: (ticket: Ticket) => { reclaimable?: string | null } | null;
 }
 
 interface Reminder {
@@ -43,6 +44,12 @@ function nudgeOff(): boolean {
 
 function pendingSubmission(ticket: Ticket): boolean {
   return Boolean(ticket.submission?.commit && !ticket.submission.integratedAt);
+}
+
+function liveDispatch(ticket: Ticket, sessionId: string, store: Store): boolean {
+  return ticket.dispatch?.sessionId === sessionId
+    && !ticket.dispatch.terminalAt
+    && !store.claimPulse(ticket)?.reclaimable;
 }
 
 function byteCapped(message: string): string {
@@ -92,7 +99,9 @@ function reconciliationMessage(data: HookInput): Reminder | null {
 
     const claimedRefs = new Set(store.sessionClaims(sessionId).map((claim) => String(claim.ref || '')).filter(Boolean));
     const touched = (ticket: Ticket): boolean => claimedRefs.has(String(ticket.ref || '')) || ticket.dispatch?.sessionId === sessionId;
-    const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== 'done' && touched(ticket));
+    const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== 'done'
+      && touched(ticket)
+      && (!liveDispatch(ticket, sessionId, store) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === 'doing' && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
     const otherOpen = open.length - doing.length - submissions.length;
