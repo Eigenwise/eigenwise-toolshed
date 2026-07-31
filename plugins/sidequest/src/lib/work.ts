@@ -14,6 +14,7 @@ const store = require('./store');
 // Leave room below the 8191-character argv ceiling for the Agent wrapper and
 // preserve every supplied anchor/verify character rather than truncating it.
 const NATIVE_PROMPT_MAX = 7600;
+const EXECUTOR_RUN_GUIDANCE = 'Run verify and gate commands in the foreground with a bounded timeout. Never sleep on a monitor for your own work. If a run must be backgrounded, confirm it started, then use a bounded poll that fails loud when the process is gone. A parked executor holds its claim while the board looks healthy, so fail loud and release instead.';
 
 function executorPrompt(ticket?: any, taskPrompt?: any) {
   const base = String(taskPrompt || '').trim();
@@ -23,7 +24,7 @@ function executorPrompt(ticket?: any, taskPrompt?: any) {
     `Title: ${ticket.title}`,
     ticket.description || '(No additional description was recorded.)',
   ].join('\n');
-  const parts = [base, contract];
+  const parts = [base, EXECUTOR_RUN_GUIDANCE, contract];
   if (ticket.executorAnchors) parts.push(`Anchors:\n${ticket.executorAnchors}`);
   if (ticket.executorVerify) parts.push(`Verify command:\n${ticket.executorVerify}`);
   const prompt = parts.join('\n\n');

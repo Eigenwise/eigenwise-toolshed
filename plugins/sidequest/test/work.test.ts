@@ -73,7 +73,7 @@ test('executorPrompt carries the authoritative ticket contract before ticket con
   const t = ticket({ title: 'Preserve scope', description: 'Update every lesson route across both commits.' });
   assert.strictEqual(
     work.executorPrompt(t, 'Claim SQ-1 as worker-1.'),
-    'Claim SQ-1 as worker-1.\n\nAuthoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):\nTitle: Preserve scope\nUpdate every lesson route across both commits.'
+    'Claim SQ-1 as worker-1.\n\nRun verify and gate commands in the foreground with a bounded timeout. Never sleep on a monitor for your own work. If a run must be backgrounded, confirm it started, then use a bounded poll that fails loud when the process is gone. A parked executor holds its claim while the board looks healthy, so fail loud and release instead.\n\nAuthoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):\nTitle: Preserve scope\nUpdate every lesson route across both commits.'
   );
 });
 
@@ -81,7 +81,7 @@ test('executorPrompt appends ticket anchors and verify command verbatim', () => 
   const t = ticket({ executorAnchors: 'lib/work.js:14 executorPrompt', executorVerify: 'node --test plugins/sidequest/test/work.test.js' });
   assert.strictEqual(
     work.executorPrompt(t, 'Implement the bounded change.'),
-    'Implement the bounded change.\n\nAuthoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):\nTitle: fixture\n(No additional description was recorded.)\n\nAnchors:\nlib/work.js:14 executorPrompt\n\nVerify command:\nnode --test plugins/sidequest/test/work.test.js'
+    'Implement the bounded change.\n\nRun verify and gate commands in the foreground with a bounded timeout. Never sleep on a monitor for your own work. If a run must be backgrounded, confirm it started, then use a bounded poll that fails loud when the process is gone. A parked executor holds its claim while the board looks healthy, so fail loud and release instead.\n\nAuthoritative ticket contract (the task prompt may add logistics only; do not narrow this scope):\nTitle: fixture\n(No additional description was recorded.)\n\nAnchors:\nlib/work.js:14 executorPrompt\n\nVerify command:\nnode --test plugins/sidequest/test/work.test.js'
   );
 });
 
