@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 
-const { checkParses, compareOutput, verifySalvage } = require('../lib/verify.js');
+const { checkParses, compareOutput, shellFor, verifySalvage } = require('../lib/verify.js');
 const { inspectPlugin, unhiddenCalls } = require('../../test-support/windows-hide.js');
 
 function scratch() {
@@ -49,6 +49,29 @@ test('genuinely different output is reported as a difference with the first mism
   const result = compareOutput('alpha\nbeta', 'alpha\ngamma');
   assert.equal(result.match, 'differs');
   assert.match(result.detail, /first difference at normalized line 2/);
+});
+
+test('the recorded Bash and PowerShell shells keep their own replay arguments', () => {
+  assert.deepEqual(shellFor('Bash', 'printf ok', () => 'bash'), ['bash', ['-lc', 'printf ok']]);
+  assert.deepEqual(
+    shellFor('PowerShell', 'Write-Output ok', () => 'pwsh'),
+    ['pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'Write-Output ok']],
+  );
+});
+
+test('an unavailable recorded shell is reported separately from a failing replay', () => {
+  const dir = scratch();
+  const entry = {
+    id: 'salvage-unavailable-shell',
+    basename: 'probe.js',
+    sourcePath: 'C:/old/probe.js',
+    content: 'console.log("hello");\n',
+    proof: { tool: 'Bash', command: 'node C:/old/probe.js', stdout: 'hello\n' },
+  };
+
+  const result = verifySalvage(entry, { execute: true, scratchDir: dir, resolveShell: () => null });
+  assert.equal(result.execution.status, 'shell-unavailable');
+  assert.match(result.execution.detail, /Bash shell is unavailable/);
 });
 
 test('a salvaged script is replayed against the output its transcript recorded', () => {
