@@ -380,6 +380,18 @@ function ticketReadinessContractPacket(ticket, slug) {
   const dependencies = store.readyWaveDependencies(slug).filter((edge) => edge.before === ticket.ref || edge.after === ticket.ref);
   return dependencies.length ? dependencies.map((edge) => `- ${edge.reason}`).join("\n") : "(No contract-edge sequencing applies.)";
 }
+function ticketWorktreeIdentity(ticket, projectPath) {
+  const dispatch = ticket?.dispatch;
+  const root = String(projectPath || "").trim();
+  if (!dispatch || !root || dispatch.sharedTree == null) return null;
+  const sharedTree = dispatch.sharedTree === true;
+  const worktree = sharedTree ? root : String(dispatch.worktree || "").trim();
+  if (!worktree) return null;
+  const gitDir = sharedTree ? path.join(root, ".git") : path.join(root, ".git", "worktrees", path.basename(worktree));
+  return `Worktree identity: ${sharedTree ? "shared tree" : "linked worktree"}
+Path: ${worktree}
+Git dir: ${gitDir}`;
+}
 function ticketIsolationContract(ticket, projectPath) {
   if (!ticket || !ticket.dispatch || ticket.dispatch.sharedTree !== false) return null;
   const root = String(projectPath || "").trim() || "<board project path>";
@@ -426,6 +438,7 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "(No labels were recorded.)";
   const closeout = ticketCloseout(ticket);
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
+  const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
   const experimentLog = experimentLogPacket(ticket, slug);
   const planDocument = planDocumentPacket(ticket, slug);
   const contract = storyContractPacket(ticket, slug);
@@ -450,6 +463,7 @@ ${ticket.executorAnchors || "(No anchors were recorded.)"}`,
 ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
     ...ticket.executorVerify ? ["Verify liveness: immediately before running the exact verify command, add a board comment whose body is `[sidequest:verify-start] <command>`. Immediately after that command exits, including on failure, add `[sidequest:verify-complete]`. These paired markers keep an in-flight long verify from being reclaimed."] : [],
     ...ticket.highStakes ? ["High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration."] : [],
+    ...worktreeIdentity ? [worktreeIdentity] : [],
     ...worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : [],
     ...ticketIsolationContract(ticket, project) || [],
     ...scopePauseRecoveryPacket(ticket, slug) ? [scopePauseRecoveryPacket(ticket, slug)] : [],

@@ -682,6 +682,28 @@ test('artifact lifecycle marker appears only for a validated shared-tree artifac
   }
 });
 
+test('briefings surface resolved worktree identities for linked and shared dispatches', () => {
+  const root = tmpDir();
+  const linkedWorktree = path.join(root, '.claude', 'worktrees', 'agent-briefing-worker');
+  const base = {
+    ref: 'SQ-1091', title: 'Surface worktree identity', model: 'opus', effort: 'high', category: {},
+  };
+
+  const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
+    dispatch: { sharedTree: false, worktree: linkedWorktree },
+  }), 'linked-token', undefined, root);
+  assert.ok(linked.includes('Worktree identity: linked worktree'));
+  assert.ok(linked.includes(`Path: ${linkedWorktree}`));
+  assert.ok(linked.includes(`Git dir: ${path.join(root, '.git', 'worktrees', 'agent-briefing-worker')}`));
+
+  const shared = agentsync.renderTicketBriefing(Object.assign({}, base, {
+    dispatch: { sharedTree: true },
+  }), 'shared-token', undefined, root);
+  assert.ok(shared.includes('Worktree identity: shared tree'));
+  assert.ok(shared.includes(`Path: ${root}`));
+  assert.ok(shared.includes(`Git dir: ${path.join(root, '.git')}`));
+});
+
 test('worktree setup appears only in isolated worktree briefings', () => {
   const store = require('../lib/store.js');
   const slug = store.ensureProject(tmpDir(), 'worktree setup briefing').slug;
