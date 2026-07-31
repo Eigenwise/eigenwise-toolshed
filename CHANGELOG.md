@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.295.0 (2026-07-31)
+
+### sidequest 3.43.0 → 3.44.0
+
+#### Features
+
+- State resolved worktree identity in dispatch briefings (SQ-1091) [`2808252`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2808252)
+  Executors opened by probing for where they were: git rev-parse --git-dir with --git-common-dir and status --short ran 98 times across 7 distinct executor types in four days, 230 runs of that family costing 22.9 minutes, for information dispatch already held when it wrote the briefing. The briefing now states the resolved worktree path, git-dir, and whether the checkout is linked or shared.
+
+#### Fixes
+
+- Retire the dead dev branch from CI and release tooling (SQ-1096) [`f15b6e0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f15b6e03f020ef9de699a5a8d475d6c285674c03)
+  test.yml now runs on main pushes instead of the dead dev branch, which had left main pushes with no test coverage. cut.mjs drops the stale restore-the-invariant instruction and its unused integration-branch flag; release-guard no longer triggers on dev.
+
 ## v3.294.0 (2026-07-31)
 
 ### codebase-mapper 2.11.3 → 2.12.0
