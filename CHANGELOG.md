@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.291.0 (2026-07-31)
+
+### sidequest 3.42.3 → 3.42.4
+
+#### Fixes
+
+- Stop hook stops nagging about tickets a live executor is working (SQ-1083) [`f790c9c`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f790c9c6b602754aa30aae82788444f3ffd572ca)
+  The board reconciliation reminder counted every ticket this session dispatched as debt, so a normal parallel wave nagged for its whole duration in one bucket or the other: 'N tickets in doing' while executors worked, 'N tickets still open' before they claimed. It now keys on dispatch liveness instead of status. A live dispatch is never debt. A dispatch that went terminal without a submission still is, which is the stranded-executor case the reminder is actually for.
+- Executors are told to run gates in the foreground (SQ-1084) [`7593b20`](https://github.com/Eigenwise/eigenwise-toolshed/commit/7593b2062ace6c93175e1045aa3b69ba828d9c2c)
+  Two executors backgrounded their gate runs behind monitors of processes that were never started, then slept forever holding their claims while the board read healthy. Every dispatched executor prompt now carries the rule: foreground with a bounded timeout, never sleep on a monitor for your own work, and if a run must be backgrounded, confirm it started and poll in a bounded loop that fails loud.
+
 ## v3.290.0 (2026-07-31)
 
 ### sidequest 3.42.2 → 3.42.3
