@@ -195,15 +195,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   dispatch are a user-visible failure: comment the ticket with the verbatim denial/terminal evidence, surface
   it, do not try a third spawn, and do not pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
-- **A 32 MB launch failure is not a retry.** When a dispatched native Agent dies before its first model
-  turn with `Request too large (max 32MB)`, it is a non-retryable 413 from the orchestrator's accumulated
-  images or attachments, not the ticket or briefing. Do not blindly redispatch or resume it: a fresh Agent
-  inherits the oversized parent request and fails the same way, while a resume only grows it. If it claimed
-  the ticket, run `release --status todo` first. It did no file work, so there is no worktree to salvage,
-  though the salvage rule above still governs any partial commit. Recover by running `/compact` in the
-  orchestrator's own session, which drops accumulated attachments, or use Esc twice to remove the turn that
-  added them, then redispatch once. If that fails too, start a new top-level session with only the concise
-  task and filesystem paths. Surface the failure after that one compact-and-redispatch attempt.
+- **Diagnose a 32 MB launch failure before recovering.** Claude Code uses `Request too large (max 32MB)` for an HTTP body-byte cap, but Model Gateway deliberately uses HTTP 413 `request_too_large` as its Codex context-compaction signal too. Read the underlying error details. `Prompt is too long for the Codex context window; compact and retry. (<actual> tokens > <trigger> tokens)` is the gateway's token-overflow signature, not inherited parent images or attachments. If a dispatched native Agent dies before its first model turn with that signature, do not compact the orchestrator or resume it. If it claimed the ticket, run `release --status todo` first, then dispatch one fresh executor with a tighter scope and briefing. It has its own briefing and history, so it does not inherit the parent request body. If that replacement hits the same signature, report the token counts and narrow the task again rather than blindly retrying. A genuine byte-cap rejection does not carry that token signature; follow Claude Code's body-size recovery there (`/compact`, Esc twice, or smaller attachments). The salvage rule above still governs any partial commit.
 - **Use steerable background execution by default.** Executors are background teammates, so `TaskOutput`
   cannot resolve their names (`No task found`) and polling is banned regardless. When
   `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is enabled, the teammate shape IS how executors run — treat it

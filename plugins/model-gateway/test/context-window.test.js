@@ -281,7 +281,7 @@ test('Codex sentry sums all input usage fields from SSE message_delta frames', a
   assert.equal(forwarded, 2);
 });
 
-test('Codex sentry returns one synthetic 413 with parseable token counts', async (t) => {
+test('Codex sentry returns one client-distinguishable context-overflow 413', async (t) => {
   let forwarded = 0;
   const proxy = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
@@ -299,7 +299,9 @@ test('Codex sentry returns one synthetic 413 with parseable token counts', async
   assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
   const overflow = await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders);
   assert.equal(overflow.status, 413);
-  assert.match(JSON.parse(overflow.body).error.message, /101 tokens > 100 tokens/);
+  const error = JSON.parse(overflow.body).error;
+  assert.equal(error.type, 'request_too_large');
+  assert.match(error.message, /^Prompt is too long for the Codex context window; compact and retry\. \(101 tokens > 100 tokens\)$/);
   assert.equal(forwarded, 1);
 });
 
