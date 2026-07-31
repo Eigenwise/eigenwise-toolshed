@@ -119,6 +119,8 @@ For tickets with more than 10 comments, default CLI and MCP comment reads keep a
 
 Use read-only tools or native `Explore` to gather enough evidence for precise tickets, then route implementation by default. Use informed inline judgment when it fits. Routed implementation work goes through a ticket and dispatch. Helpers are limited to `Explore`, `claude-code-guide`, `web-researcher`, and `general-purpose` for genuinely uncategorized bounded work, mechanical sweeps, or documentation research; classify matching work through board categories first, use an explicit cheap model, keep helpers in the background, and route audit or review work through a `review-audit` ticket. Evidence that would require searching session, transcript, or task-output files is self-reference, not a finding. Other delegated implementation, investigation, research, review, or domain analysis needs a ticketed route.
 
+Read-only executors can use any MCP server you have configured, so a visual-review ticket can use Playwright and a research ticket can use a docs MCP. Their repository contract stays read-only: Bash is available for inspection, tests, and verification, but they do not modify the working tree. If a configured MCP can push to a remote or write files, use the per-board `readOnlyDeniedTools` setting to subtract matching tools from the resolved list, for example `readOnlyDeniedTools: ["mcp__remote__*"]`.
+
 ### Session reminder and routing toggle
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
