@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.292.0 (2026-07-31)
+
+### model-gateway 0.41.0 → 0.42.0
+
+#### Features
+
+- Picking a wiring mode now actually wires it (SQ-1085) [`ecb7a0e`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ecb7a0ec0087636c988037476b6d45b4d4fde399)
+  env --mode global recorded a preference and wrote nothing, so a machine could sit in global mode with unwired user settings and every project outside an explicitly-wired repo silently had no gateway models. doctor printed that state as a neutral line among healthy ones. Selecting a mode now completes the wiring, doctor treats an unwired active scope as a failure with the repair command and a nonzero exit, and it also names the case where a project env block masks global wiring.
+
 ## v3.291.0 (2026-07-31)
 
 ### sidequest 3.42.3 → 3.42.4
