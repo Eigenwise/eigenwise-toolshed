@@ -56,10 +56,12 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
 available wherever you work. Gateway wiring is private and defaults to each recorded project's
 `.claude/settings.local.json`, never the team's committed `settings.json`. Run `/update-toolshed`
 to wire recorded projects and migrate an older global gateway block. Projects the updater has not
-recorded stay unwired until you run `node <plugin>/bin/model-gateway.js env --write-project` from
-that project. Global `~/.claude/settings.json` wiring remains available when you explicitly select
-it with `env --mode global`; `doctor` reports the active mode. Settings changes apply to new Claude
-Code sessions, so restart open sessions after wiring.
+recorded stay unwired until you run `node <plugin>/bin/model-gateway.js env --mode local` from
+that project. `env --mode global` writes user-level `~/.claude/settings.json` immediately, while
+`env --mode local` writes this project's `settings.local.json` immediately. A project-level `env`
+block takes precedence over user settings, so `doctor` reports an unwired project block that masks
+global wiring. Settings changes apply to new Claude Code sessions, so restart open sessions after
+wiring.
 
 On your next session, Claude notices the plugin isn't set up yet (a one-line SessionStart nudge)
 and offers to finish the job. `setup` downloads claude-code-proxy and starts the gateway; then run
@@ -105,7 +107,7 @@ release and is the upgrade path.
 | `models` | Show exactly what the shim advertises to the picker |
 | `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
 | `pin [--opus\|--sonnet\|--fable <model\|default>]` | Show or persist the native Claude alias pins |
-| `env [--write-user\|--write-project\|--remove] [--mode local\|global]` | Select private local or global wiring, then wire/unwire the Claude Code env block |
+| `env [--write-user\|--write-project\|--remove] [--mode local\|global]` | Write the private local or global wiring, and persist that mode |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
 | `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility procedure, or read-only diagnosis |
 

@@ -1384,15 +1384,8 @@ async function envCommand() {
   if (requestedMode) writeWiringMode(requestedMode);
 
   const remove = flag('--remove');
-  const scope = flag('--write-project') ? 'project' : flag('--write-user') ? 'user' : null;
+  const scope = flag('--write-project') ? 'project' : flag('--write-user') ? 'user' : requestedMode === 'local' ? 'project' : requestedMode === 'global' ? 'user' : null;
   if (!scope) {
-    if (requestedMode) {
-      log(`wiring mode set to ${requestedMode}. ${requestedMode === 'local'
-        ? 'Run /workbench:update-toolshed to migrate recorded projects from global wiring, or use /model-gateway:model-gateway to run its env --write-project command in this project.'
-        : 'Run /workbench:update-toolshed to write global wiring. Existing project settings.local.json blocks stay in place.'}`);
-      log('Settings changes apply to new Claude Code sessions.');
-      return;
-    }
     log('add this to the "env" block of this project\'s .claude/settings.local.json:');
     log(JSON.stringify({ env: envBlockFor('default') }, null, 2));
     log('\nor use /model-gateway:model-gateway to run its env --write-project command (this repo), or its env --write-user command (global mode)');
@@ -1497,20 +1490,32 @@ async function doctor() {
   }
   const activeMode = wiringMode();
   const activeScope = selectedWiringScope();
+  const wiring = new Map();
   log(`wiring mode: ${activeMode} (${activeMode === 'local' ? 'per-project .claude/settings.local.json' : 'global ~/.claude/settings.json'})`);
   if (!hasWiringMode()) log(wiringModeDefaultNotice());
   for (const scope of ['project', 'user']) {
+    const label = scope === 'project' ? 'project settings.local.json' : 'user settings.json';
     try {
-      const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
-      const base = s.env && s.env.ANTHROPIC_BASE_URL;
+      const settings = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
+      const base = settings.env?.ANTHROPIC_BASE_URL;
       const wired = ourBaseUrls().includes(base);
+      wiring.set(scope, { wired, hasEnv: Boolean(settings.env) });
       const modeLabel = base === COMPAT_BASE_URL ? ' [RC-compatibility mode]' : base === DEFAULT_BASE_URL ? ' [default mode]' : '';
-      const label = scope === 'project' ? 'project settings.local.json' : 'user settings.json';
       log(`${label}: ${wired ? 'wired' + modeLabel : 'not wired'} (${settingsPath(scope)})${scope === activeScope ? ' [active]' : ''}`);
     } catch {
-      const label = scope === 'project' ? 'project settings.local.json' : 'user settings.json';
+      wiring.set(scope, { wired: false, hasEnv: false });
       log(`${label}: not wired${scope === activeScope ? ' [active]' : ''}`);
     }
+  }
+  if (!wiring.get(activeScope).wired) {
+    const command = activeScope === 'project' ? 'env --write-project' : 'env --write-user';
+    console.error(`model-gateway: ERROR: active ${activeScope} wiring is not configured. Run /model-gateway:model-gateway, then use its ${command} command and restart Claude Code.`);
+    process.exitCode = 1;
+  }
+  const projectWiring = wiring.get('project');
+  if (activeMode === 'global' && projectWiring.hasEnv && !projectWiring.wired) {
+    console.error('model-gateway: ERROR: project settings.local.json has an env block without ANTHROPIC_BASE_URL, so it masks global user wiring. Run /model-gateway:model-gateway, then use its env --write-project command and restart Claude Code.');
+    process.exitCode = 1;
   }
   if (activeMode === 'local') log('Local wiring applies to new Claude Code sessions. Use /model-gateway:model-gateway to run its env --write-project command in a new project.');
   const scope = installScope();
