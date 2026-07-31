@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.296.0 (2026-07-31)
+
+### live-rules 2.7.3 → 2.8.0
+
+#### Features
+
+- live-rules injection header names the legacy monolith even when atomic rules are loaded (SQ-1104) [`8f873e9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/8f873e9)
+  The injected Source line always printed .claude/live-rules.md, even when the atomic .claude/live-rules/ directory was the loader's actual source, so the header contradicted what was loaded. It now names the real source. Rules dropped from an atomic set are also surfaced by name instead of vanishing behind a bare stale flag.
+
 ## v3.295.0 (2026-07-31)
 
 ### sidequest 3.43.0 → 3.44.0
