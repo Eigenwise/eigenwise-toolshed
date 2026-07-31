@@ -57,8 +57,8 @@ function main() {
   const header =
     '=== LIVE RULES (live-rules) ===\n' +
     'Project rules re-grounded because they are new or changed for this session. Follow them for the work in this session. ' +
-    (ruleSet.stale ? 'The live-rules manifest is stale, so these files were read directly. ' : '') +
-    'Source: ' + lib.displayPath(projectDir, lib.getRulesFile(projectDir));
+    lib.formatRuleSetStatus(ruleSet) +
+    'Source: ' + lib.displayPath(projectDir, ruleSet.source);
 
   lib.emit('UserPromptSubmit', lib.renderRules(changed, header));
   process.exit(0);

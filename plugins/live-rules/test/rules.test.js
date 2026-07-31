@@ -14,6 +14,10 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const rules = require('../hooks/lib/rules.js');
 
@@ -24,6 +28,34 @@ function parseFrontmatterData(fmText) {
   const src = '---\n' + fmText + '\n---\nbody\n';
   const secs = rules.splitSections(src);
   return secs[0].data;
+}
+
+const root = path.resolve(__dirname, '..');
+const promptHook = path.join(root, 'hooks', 'inject-prompt-rules.js');
+const editHook = path.join(root, 'hooks', 'inject-edit-rules.js');
+
+function project() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'live-rules-'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  return dir;
+}
+
+function writeAtomicRule(projectDir, data = { description: 'Always' }) {
+  const body = 'Atomic rule.';
+  const rule = rules.buildRule('rule', data, body);
+  const frontmatter = Object.entries(data)
+    .map(([key, value]) => key + ': ' + (Array.isArray(value) ? JSON.stringify(value) : value))
+    .join('\n');
+  rules.writeAtomicRuleSet(projectDir, [{ rule, content: '---\n' + frontmatter + '\n---\n' + body + '\n' }]);
+}
+
+function runHook(script, projectDir, stateDir, data) {
+  return execFileSync(process.execPath, [script], {
+    cwd: projectDir,
+    env: { ...process.env, LIVE_RULES_STATE_DIR: stateDir },
+    input: JSON.stringify({ cwd: projectDir, ...data }),
+    encoding: 'utf8',
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -276,4 +308,45 @@ test('selectAlways: returns only always-on, enabled rules', () => {
   const sel = rules.selectAlways([alwaysRule, promptRule, disabledAlways]);
   assert.strictEqual(sel.length, 1);
   assert.strictEqual(sel[0].rule.id, 'always.md');
+});
+
+test('atomic rules report the atomic directory as their source', () => {
+  const dir = project();
+  writeAtomicRule(dir);
+  const output = runHook(promptHook, dir, path.join(dir, 'state'), { session_id: 'prompt', prompt: 'hello' });
+  assert.match(output, /Source: \.claude\/live-rules/);
+
+  const editDir = project();
+  writeAtomicRule(editDir, { description: 'Edit', globs: ['src/**/*.js'] });
+  const editOutput = runHook(editHook, editDir, path.join(editDir, 'state'), { session_id: 'edit', tool_input: { file_path: 'src/a.js' } });
+  assert.match(editOutput, /Source: \.claude\/live-rules/);
+});
+
+test('legacy-only rules report their monolithic source', () => {
+  const dir = project();
+  fs.writeFileSync(path.join(dir, '.claude', 'live-rules.md'), 'Legacy rule.\n');
+  const output = runHook(promptHook, dir, path.join(dir, 'state'), { session_id: 'legacy', prompt: 'hello' });
+  assert.match(output, /Source: \.claude\/live-rules\.md/);
+});
+
+test('atomic rules take precedence over a legacy monolith in the source header', () => {
+  const dir = project();
+  writeAtomicRule(dir);
+  fs.writeFileSync(path.join(dir, '.claude', 'live-rules.md'), 'Legacy rule.\n');
+  const output = runHook(promptHook, dir, path.join(dir, 'state'), { session_id: 'both', prompt: 'hello' });
+  assert.match(output, /Source: \.claude\/live-rules/);
+  assert.doesNotMatch(output, /Source: \.claude\/live-rules\.md/);
+});
+
+test('a missing atomic rule is named as dropped while loaded rules remain in effect', () => {
+  const dir = project();
+  writeAtomicRule(dir);
+  const manifestFile = path.join(dir, '.claude', 'live-rules', 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+  manifest.rules.push({ path: 'rules/missing.md' });
+  fs.writeFileSync(manifestFile, JSON.stringify(manifest) + '\n');
+
+  const output = runHook(promptHook, dir, path.join(dir, 'state'), { session_id: 'missing', prompt: 'hello' });
+  assert.match(output, /The manifest does not match the loaded rule files, but these rules were read directly and are in effect\./);
+  assert.match(output, /Dropped rule files: rules\/missing\.md\./);
 });
