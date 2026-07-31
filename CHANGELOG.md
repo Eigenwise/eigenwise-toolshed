@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.297.0 (2026-07-31)
+
+### live-rules 2.8.0 → 2.9.0
+
+#### Features
+
+- live-rules migration must remove the monolith it replaces (SQ-1105) [`7f311ed`](https://github.com/Eigenwise/eigenwise-toolshed/commit/7f311ed)
+  Migrating a project from .claude/live-rules.md to the atomic .claude/live-rules/ directory now finishes the job: it writes the atomic set, loads it back, compares every rule field for field, and removes the monolith only once they match. On any mismatch it keeps both files and says why. The retired monolith was still a live fallback the loader picked up whenever the manifest failed to parse, so leaving it behind meant a stale copy could silently win later. An explicit LIVE_RULES_PATH is left alone.
+
 ## v3.296.0 (2026-07-31)
 
 ### live-rules 2.7.3 → 2.8.0
