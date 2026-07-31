@@ -2037,14 +2037,15 @@ const TOOLS = [
         project: PROJECT_PROP,
         name: { type: "string" },
         alwaysInScope: { type: "array", items: { type: "string" }, description: "When supplied, replaces the board paths merged into every ticket scope." },
+        readOnlyDeniedTools: { type: "array", items: { type: "string" } },
         generatedPairs: {},
         integrationMode: { type: "string", enum: ["auto", "local", "remote"], description: "auto is local without origin; local does not push." },
         integrationBranch: { type: "string", minLength: 1, description: "Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>." },
         delivery: { type: "string", enum: ["merge", "replay", "apply"], description: "Default submission delivery mode. Defaults to merge." },
-        integrationVerifyTimeoutMs: { type: "integer", minimum: 1, maximum: 36e5 },
+        integrationVerifyTimeoutMs: { type: "integer" },
         worktreeIsolation: { type: "boolean", description: "When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true." },
         autoApprovePluginTests: { type: "boolean" },
-        worktreeSetup: { type: ["string", "null"], maxLength: 1e3, pattern: "^[^\\r\\n]*$", description: "One-line isolated-worktree setup; null clears it." }
+        worktreeSetup: { type: ["string", "null"], description: "One-line isolated-worktree setup; null clears it." }
       }
     },
     handler(args) {
@@ -2052,6 +2053,7 @@ const TOOLS = [
       const patch = {};
       if (args.name !== void 0) patch.name = args.name;
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
+      if (args.readOnlyDeniedTools !== void 0) patch.readOnlyDeniedTools = args.readOnlyDeniedTools;
       if (args.generatedPairs !== void 0) patch.generatedPairs = args.generatedPairs;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
       if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;

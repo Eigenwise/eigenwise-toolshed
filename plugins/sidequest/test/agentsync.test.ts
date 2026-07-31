@@ -334,7 +334,7 @@ test('read-only stable executors expose only the approved tool allowlist', () =>
 
   for (const file of ['sidequest-exec-dispatch-readonly-high.md', 'sidequest-exec-readonly-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.match(body, /^tools: Read, Glob, Grep, WebSearch, WebFetch, Bash, ToolSearch, SendMessage, mcp__plugin_sidequest_board__\*, mcp__plugin_playwright_playwright__\*$/m);
+    assert.match(body, /^tools: Read, Glob, Grep, WebSearch, WebFetch, Bash, ToolSearch, SendMessage, mcp__\*$/m);
     assert.doesNotMatch(body, /^tools:.*\b(?:Edit|Write|NotebookEdit)\b/m);
     assert.match(body, /Read-only role/);
     assert.match(body, /Do not modify the repository working tree/);
@@ -348,6 +348,17 @@ test('read-only stable executors expose only the approved tool allowlist', () =>
   for (const file of ['sidequest-exec-dispatch-high.md', 'sidequest-exec-high.md']) {
     assert.doesNotMatch(fs.readFileSync(path.join(dir, file), 'utf8'), /^tools:/m);
   }
+});
+
+test('read-only executor denylists remove configured MCP tools without changing other grants', () => {
+  const body = agentsync.renderReadOnlyDispatchAgent('high', ['mcp__notion__search']);
+  assert.match(body, /^tools: Read, Glob, Grep, WebSearch, WebFetch, Bash, ToolSearch, SendMessage, mcp__\*$/m);
+  assert.match(body, /^disallowedTools: mcp__notion__search$/m);
+  assert.match(agentsync.renderReadOnlyClaudeAgent('high', ['mcp__plugin_svelte_svelte__*']), /^disallowedTools: mcp__plugin_svelte_svelte__\*$/m);
+  assert.notEqual(
+    agentsync.stableInstallHash(agentsync.EXECUTOR_SKILLS, ['mcp__notion__search']),
+    agentsync.stableInstallHash(agentsync.EXECUTOR_SKILLS, ['mcp__github__create_issue']),
+  );
 });
 
 test('stable executors preload verify discipline and the install hash tracks the skill list', () => {

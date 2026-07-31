@@ -443,6 +443,17 @@ test('board_config reads and replaces always-in-scope paths', async () => {
   assert.deepEqual((await callTool('board_config', { project })).alwaysInScope, ['docs', 'notes']);
 });
 
+test('board_config stores read-only MCP deny patterns', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-read-only-deny'), 'SQ read-only deny').slug;
+  const patterns = ['mcp__notion__search', 'mcp__plugin_svelte_svelte__*'];
+  const configured = await callTool('board_config', { project, readOnlyDeniedTools: patterns });
+  assert.deepEqual(configured.readOnlyDeniedTools, patterns);
+  assert.deepEqual((await callTool('board_config', { project })).readOnlyDeniedTools, patterns);
+  const rejected = await callToolRaw('board_config', { project, readOnlyDeniedTools: ['Bash'] });
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.content[0].text, /must target MCP tools/);
+});
+
 test('board_config stores generated source-to-output pairs', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-generated-pairs'), 'SQ generated pairs').slug;
   const pairs = [{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }];

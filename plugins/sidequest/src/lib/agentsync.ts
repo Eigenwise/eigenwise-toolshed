@@ -38,7 +38,7 @@ const crypto = require('crypto');
 const store = require('./store.js');
 const { spawnDescription } = store;
 
-type SyncOptions = { dir?: string };
+type SyncOptions = { dir?: string; readOnlyDeniedTools?: any };
 type SyncResult = { written: number; removed: number; unchanged: number };
 type FastSyncResult = SyncResult & { skipped: boolean; installHash: string };
 
@@ -149,17 +149,25 @@ function workflowRecipe(category?: any, resolved?: any) {
 // permissionMode: bypassPermissions frontmatter. `name` and `effort` are
 // required; `modelId`, `marker`, and `extraNote` are optional.
 const READ_ONLY_TOOLS = [
-  'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Bash', 'ToolSearch', 'SendMessage', 'mcp__plugin_sidequest_board__*', 'mcp__plugin_playwright_playwright__*',
+  'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Bash', 'ToolSearch', 'SendMessage', 'mcp__*',
 ];
 const EXECUTOR_SKILLS = ['sidequest:verify-discipline'];
+
+function resolveReadOnlyTools(readOnlyDeniedTools?: any) {
+  return {
+    tools: READ_ONLY_TOOLS,
+    disallowedTools: Array.isArray(readOnlyDeniedTools) ? readOnlyDeniedTools : [],
+  };
+}
 
 function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in the session scratchpad, never the repo, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 
-function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief, tools, skills = EXECUTOR_SKILLS }: any) {
+function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief, tools, disallowedTools, skills = EXECUTOR_SKILLS }: any) {
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   const toolsLine = Array.isArray(tools) && tools.length ? `tools: ${tools.join(', ')}\n` : '';
+  const disallowedToolsLine = Array.isArray(disallowedTools) && disallowedTools.length ? `disallowedTools: ${disallowedTools.join(', ')}\n` : '';
   const skillsLine = Array.isArray(skills) && skills.length ? `skills:\n${skills.map((skill) => `  - ${skill}`).join('\n')}\n` : '';
   return template
     .split('{{NAME}}').join(String(name))
@@ -167,7 +175,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
     .split('{{MODEL_FRONTMATTER}}').join(modelId ? `\nmodel: ${modelId}` : '')
     .split('{{MAX_TURNS}}').join(String(execMaxTurns(String(effort))))
     .split('{{CHECKPOINT_TOOL_ROUNDS}}').join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS))
-    .split('permissionMode: bypassPermissions').join(`${toolsLine}${skillsLine}permissionMode: bypassPermissions`)
+    .split('permissionMode: bypassPermissions').join(`${toolsLine}${disallowedToolsLine}${skillsLine}permissionMode: bypassPermissions`)
     .split('{{MARKER}}').join(marker || '')
     .split('{{EXTRA_NOTE}}').join(extraNote || '')
     .split('{{TICKET_BRIEF}}').join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief ? `\n\n${ticketBrief}` : ''}`);
@@ -192,24 +200,28 @@ function renderDispatchAgent(effort?: any) {
   });
 }
 
-function renderReadOnlyDispatchAgent(effort?: any) {
+function renderReadOnlyDispatchAgent(effort?: any, readOnlyDeniedTools?: any) {
+  const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return renderExecAgent({
     name: stableReadOnlyDispatchName(effort),
     effort,
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: `${dispatchNote(effort)}${readOnlyNote()}`,
-    tools: READ_ONLY_TOOLS,
+    tools: readOnlyTools.tools,
+    disallowedTools: readOnlyTools.disallowedTools,
   });
 }
 
-function renderReadOnlyClaudeAgent(effort?: any) {
+function renderReadOnlyClaudeAgent(effort?: any, readOnlyDeniedTools?: any) {
+  const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return renderExecAgent({
     name: stableReadOnlyClaudeName(effort),
     effort,
     marker: MARKER,
     extraNote: readOnlyNote(),
-    tools: READ_ONLY_TOOLS,
+    tools: readOnlyTools.tools,
+    disallowedTools: readOnlyTools.disallowedTools,
   });
 }
 
@@ -854,15 +866,16 @@ function hasStableMarker(source?: any) {
 
 const INSTALL_HASH_FILE = '.sidequest-install-hash';
 
-function stableInstallHash(skills = EXECUTOR_SKILLS) {
+function stableInstallHash(skills = EXECUTOR_SKILLS, readOnlyDeniedTools?: any) {
   let version = '0.0.0';
   try {
     version = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version || version;
   } catch (_) {}
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   const maxTurnsOverride = String(process.env.SIDEQUEST_EXEC_MAX_TURNS || '').trim();
+  const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return crypto.createHash('sha256')
-    .update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, maxTurns: EXEC_MAX_TURNS, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, maxTurnsOverride, readOnlyTools: READ_ONLY_TOOLS, skills }))
+    .update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, maxTurns: EXEC_MAX_TURNS, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, maxTurnsOverride, readOnlyTools, skills }))
     .digest('hex');
 }
 
@@ -884,11 +897,12 @@ function writeInstallHash(dir: string, hash: string) {
 
 function syncExecAgentsIfChanged(_prefs?: any, opts?: SyncOptions): FastSyncResult {
   const dir = opts && opts.dir ? opts.dir : defaultAgentsDir();
-  const installHash = stableInstallHash();
+  const readOnlyDeniedTools = opts && opts.readOnlyDeniedTools;
+  const installHash = stableInstallHash(EXECUTOR_SKILLS, readOnlyDeniedTools);
   if (readInstallHash(dir) === installHash) {
     return { written: 0, removed: 0, unchanged: 0, skipped: true, installHash };
   }
-  const result = syncExecAgents(_prefs, { dir });
+  const result = syncExecAgents(_prefs, { dir, readOnlyDeniedTools });
   return Object.assign({}, result, { skipped: false, installHash });
 }
 
@@ -898,6 +912,7 @@ function syncExecAgentsIfChanged(_prefs?: any, opts?: SyncOptions): FastSyncResu
 function syncExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
   opts = opts || {};
   const dir = opts.dir || defaultAgentsDir();
+  const readOnlyDeniedTools = opts.readOnlyDeniedTools;
   const wanted = new Map();
   for (const effort of EXEC_EFFORTS) {
     wanted.set(`${stableDispatchName(effort)}.md`, renderDispatchAgent(effort));
@@ -906,8 +921,8 @@ function syncExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
       effort,
       marker: MARKER,
     }));
-    wanted.set(`${stableReadOnlyDispatchName(effort)}.md`, renderReadOnlyDispatchAgent(effort));
-    wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort));
+    wanted.set(`${stableReadOnlyDispatchName(effort)}.md`, renderReadOnlyDispatchAgent(effort, readOnlyDeniedTools));
+    wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
   }
 
   let existing = [];
@@ -960,7 +975,7 @@ function syncExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
     }
   }
 
-  writeInstallHash(dir, stableInstallHash());
+  writeInstallHash(dir, stableInstallHash(EXECUTOR_SKILLS, readOnlyDeniedTools));
   return { written, removed, unchanged };
 }
 
@@ -978,6 +993,7 @@ module.exports = {
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
   READ_ONLY_TOOLS,
+  resolveReadOnlyTools,
   EXECUTOR_SKILLS,
   execMaxTurns,
   ticketCommentsPacket,

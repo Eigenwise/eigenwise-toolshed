@@ -1433,6 +1433,22 @@ function normalizeAlwaysInScope(paths) {
   }
   return normalized;
 }
+function normalizeReadOnlyDeniedTools(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error("readOnlyDeniedTools must be an array of tool patterns.");
+  const seen = /* @__PURE__ */ new Set();
+  const normalized = [];
+  for (const entry of value) {
+    const pattern = String(entry || "").trim();
+    if (!pattern) throw new Error("readOnlyDeniedTools entries must be non-empty tool patterns.");
+    if (!pattern.startsWith("mcp__")) throw new Error(`readOnlyDeniedTools patterns must target MCP tools: ${entry}`);
+    if (!seen.has(pattern)) {
+      seen.add(pattern);
+      normalized.push(pattern);
+    }
+  }
+  return normalized;
+}
 function normalizeGeneratedPairPath(value, name) {
   const item = String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
   if (!item || item === ".." || item.startsWith("../") || path.isAbsolute(item) || item.includes("/../")) {
@@ -1601,6 +1617,7 @@ function boardConfig(slug) {
   return {
     name: meta.name,
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
+    readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
     generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
@@ -1634,6 +1651,9 @@ function setBoardConfig(slug, patch) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, "alwaysInScope")) {
       meta.alwaysInScope = normalizeAlwaysInScope(patch.alwaysInScope);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "readOnlyDeniedTools")) {
+      meta.readOnlyDeniedTools = normalizeReadOnlyDeniedTools(patch.readOnlyDeniedTools);
     }
     if (Object.prototype.hasOwnProperty.call(patch, "generatedPairs")) {
       meta.generatedPairs = normalizeGeneratedPairs(patch.generatedPairs);
