@@ -28,10 +28,10 @@ function atomic(projectDir, files) {
   rules.writeAtomicRuleSet(projectDir, entries);
 }
 
-function hook(script, projectDir, stateDir, data) {
+function hook(script, projectDir, stateDir, data, env) {
   return execFileSync(process.execPath, [script], {
     cwd: projectDir,
-    env: { ...process.env, LIVE_RULES_STATE_DIR: stateDir },
+    env: { ...process.env, LIVE_RULES_STATE_DIR: stateDir, ...env },
     input: JSON.stringify({ cwd: projectDir, ...data }),
     encoding: 'utf8',
   });
@@ -88,6 +88,7 @@ test('startup, resume, compact, and clear rehydrate current prompt rules once', 
     const output = hook(startHook, dir, state, { session_id: 'one', source });
     assert.match(output, new RegExp('SessionStart \\(' + source + '\\)'));
     assert.match(output, /Rule/);
+    assert.doesNotMatch(output, /Live Rules migrated/);
     assert.strictEqual(hook(promptHook, dir, state, { session_id: 'one', prompt: 'hello' }), '');
   }
 });
@@ -102,13 +103,15 @@ test('path-scoped rules ground once when their edited path first applies', () =>
   assert.strictEqual(hook(editHook, dir, state, { session_id: 'one', tool_input: { file_path: 'other/a.ts' } }), '');
 });
 
-test('legacy monolithic files migrate into atomic files without changing selectors', () => {
+test('legacy monolithic files migrate into equivalent atomic files and remove the source', () => {
   const dir = project();
-  fs.writeFileSync(path.join(dir, '.claude', 'live-rules.md'), [
+  const legacy = path.join(dir, '.claude', 'live-rules.md');
+  fs.writeFileSync(legacy, [
     '---', 'description: Always', '---', 'Always body.',
     '---', 'description: Deploy', 'prompt: [deploy]', '---', 'Deploy body.',
   ].join('\n'));
   assert.strictEqual(rules.migrateLegacyRules(dir), true);
+  assert.ok(!fs.existsSync(legacy));
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'live-rules', 'manifest.json'), 'utf8'));
   assert.strictEqual(manifest.rules.length, 2);
   const loaded = rules.loadRuleSet(dir);
@@ -116,14 +119,64 @@ test('legacy monolithic files migrate into atomic files without changing selecto
   assert.deepStrictEqual(rules.selectForPrompt(loaded.rules, { promptText: 'please deploy', cwdRel: '' }).map((entry) => entry.rule.description), ['Always', 'Deploy']);
 });
 
-test('SessionStart migrates legacy rules once without changing grounded content', () => {
+test('SessionStart reports a completed migration once', () => {
   const dir = project();
   const state = path.join(dir, 'state');
   const legacy = path.join(dir, '.claude', 'live-rules.md');
   fs.writeFileSync(legacy, '---\ndescription: Always\n---\nKeep this exact rule.\n');
-  assert.match(hook(startHook, dir, state, { session_id: 'one', source: 'startup' }), /Keep this exact rule/);
-  assert.strictEqual(fs.readFileSync(legacy, 'utf8'), '---\ndescription: Always\n---\nKeep this exact rule.\n');
-  assert.strictEqual(rules.migrateLegacyRules(dir), false);
+  const first = hook(startHook, dir, state, { session_id: 'one', source: 'startup' });
+  assert.match(first, /Live Rules migrated to \.claude\/live-rules; removed \.claude\/live-rules\.md\./);
+  assert.match(first, /Keep this exact rule/);
+  assert.ok(!fs.existsSync(legacy));
+  const second = hook(startHook, dir, state, { session_id: 'one', source: 'startup' });
+  assert.doesNotMatch(second, /Live Rules migrated/);
+});
+
+test('a failed migration verification keeps the monolith and names the difference', () => {
+  const dir = project();
+  const legacy = path.join(dir, '.claude', 'live-rules.md');
+  fs.writeFileSync(legacy, '---\ndescription: Always\n---\nKeep this exact rule.\n');
+  const result = rules.migrateLegacyRules(dir, {
+    detailed: true,
+    beforeVerification() {
+      fs.writeFileSync(path.join(dir, '.claude', 'live-rules', 'rules', '001.md'), '---\ndescription: Always\n---\nA changed rule.\n');
+    },
+  });
+  assert.strictEqual(result.migrated, false);
+  assert.match(result.notice, /kept \.claude\/live-rules\.md because verification failed: rule 1 has different body/);
+  assert.ok(fs.existsSync(legacy));
+  assert.ok(fs.existsSync(path.join(dir, '.claude', 'live-rules', 'manifest.json')));
+});
+
+test('LIVE_RULES_PATH migrations retain their source file', () => {
+  const dir = project();
+  const state = path.join(dir, 'state');
+  const legacy = path.join(dir, 'shared-rules.md');
+  fs.writeFileSync(legacy, '---\ndescription: Always\n---\nKeep this shared rule.\n');
+  const output = hook(startHook, dir, state, { session_id: 'one', source: 'startup' }, { LIVE_RULES_PATH: legacy });
+  assert.match(output, /kept shared-rules\.md because LIVE_RULES_PATH is set/);
+  assert.ok(fs.existsSync(legacy));
+  assert.ok(fs.existsSync(path.join(dir, '.claude', 'live-rules', 'manifest.json')));
+});
+
+test('a failed monolith deletion leaves both copies available for rollback', () => {
+  const dir = project();
+  const legacy = path.join(dir, '.claude', 'live-rules.md');
+  fs.writeFileSync(legacy, 'Rollback rule.\n');
+  const remove = fs.rmSync;
+  fs.rmSync = (target, options) => {
+    if (target === legacy) throw new Error('delete blocked');
+    return remove(target, options);
+  };
+  try {
+    const result = rules.migrateLegacyRules(dir, { detailed: true });
+    assert.strictEqual(result.migrated, false);
+    assert.match(result.notice, /kept \.claude\/live-rules\.md: delete blocked/);
+  } finally {
+    fs.rmSync = remove;
+  }
+  assert.ok(fs.existsSync(legacy));
+  assert.ok(fs.existsSync(path.join(dir, '.claude', 'live-rules', 'manifest.json')));
 });
 
 test('interrupted temp state, an active lock, and future manifests never replace trusted data', () => {

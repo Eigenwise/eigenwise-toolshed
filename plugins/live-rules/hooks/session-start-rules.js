@@ -44,22 +44,29 @@ function main() {
   // README's promise that they survive compaction would silently break.
   const data = lib.readStdin();
   const projectDir = lib.getProjectDir(data);
-  lib.migrateLegacyRules(projectDir);
+  const migration = lib.migrateLegacyRules(projectDir, { detailed: true });
   if (lib.atomicSchema(projectDir) === 'future') {
     lib.emit('SessionStart', 'Live Rules uses a newer schema. Preserve its files and update the plugin before changing its metadata.');
     process.exit(0);
   }
 
   const ruleSet = lib.loadRuleSet(projectDir);
-  if (!ruleSet.rules.length) process.exit(0);
+  if (!ruleSet.rules.length) {
+    if (migration.notice) lib.emit('SessionStart', migration.notice);
+    process.exit(0);
+  }
 
   const cwd = (data && typeof data.cwd === 'string' && data.cwd) || projectDir;
   const cwdRel = path.relative(projectDir, cwd).replace(/\\/g, '/');
   const selected = lib.attachIncludes(lib.selectForPrompt(ruleSet.rules, { promptText: '', cwdRel }), projectDir);
   const changed = ledger.changed(projectDir, data.session_id, selected, true);
-  if (!changed.length) process.exit(0);
+  if (!changed.length) {
+    if (migration.notice) lib.emit('SessionStart', migration.notice);
+    process.exit(0);
+  }
 
   const header =
+    (migration.notice ? migration.notice + '\n\n' : '') +
     '=== LIVE RULES (live-rules, session start) ===\n' +
     'Rules re-grounded after SessionStart (' + (data.source || 'startup') + '). ' +
     lib.formatRuleSetStatus(ruleSet) +

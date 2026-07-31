@@ -739,24 +739,63 @@ function archiveUntrustedAtomicDirectory(projectDir) {
   fs.renameSync(destination, destination + '.untrusted-' + process.pid + '-' + crypto.randomBytes(4).toString('hex'));
 }
 
-function migrateLegacyRules(projectDir) {
+function migrationRuleDifference(legacyRules, atomicRules) {
+  if (legacyRules.length !== atomicRules.length) {
+    return 'rule count differs (' + legacyRules.length + ' expected, ' + atomicRules.length + ' found)';
+  }
+  const fields = [
+    ['globs', 'globs'],
+    ['dirs', 'dirs'],
+    ['prompts', 'prompt selectors'],
+    ['priority', 'priority'],
+    ['enabled', 'enabled flag'],
+    ['includes', 'includes'],
+    ['body', 'body'],
+  ];
+  for (let index = 0; index < legacyRules.length; index++) {
+    for (const [field, label] of fields) {
+      if (JSON.stringify(legacyRules[index][field]) !== JSON.stringify(atomicRules[index][field])) {
+        return 'rule ' + (index + 1) + ' has different ' + label;
+      }
+    }
+  }
+  return '';
+}
+
+function migrationResult(migrated, notice) {
+  return { migrated, notice: notice || '' };
+}
+
+function migrateLegacyRules(projectDir, options) {
+  const detailed = options && options.detailed;
   const legacy = getRulesFile(projectDir);
-  if (!fs.existsSync(legacy)) return false;
+  const resultFor = (result) => detailed ? result : result.migrated;
+  if (!fs.existsSync(legacy)) return resultFor(migrationResult(false));
   const status = atomicSchema(projectDir);
-  if (status === 'current' || status === 'future') return false;
+  if (status === 'current' || status === 'future') return resultFor(migrationResult(false));
   const lockPath = path.join(projectDir, '.claude', 'live-rules.migration.lock');
   try {
     const result = migrationLock.withMigrationLock(lockPath, () => {
       const nextStatus = atomicSchema(projectDir);
-      if (nextStatus === 'current' || nextStatus === 'future') return { migrated: false };
+      if (nextStatus === 'current' || nextStatus === 'future') return migrationResult(false);
       if (nextStatus === 'untrusted') archiveUntrustedAtomicDirectory(projectDir);
-      const rules = loadLegacyRules(projectDir);
-      writeAtomicRuleSet(projectDir, rules.map((rule) => ({ rule, content: renderRuleFile({ description: rule.description, globs: rule.globs, dirs: rule.dirs, prompt: rule.prompts, priority: rule.priority, enabled: rule.enabled, include: rule.includes }, rule.body) })));
-      return { migrated: true };
+      const legacyRules = loadLegacyRules(projectDir);
+      writeAtomicRuleSet(projectDir, legacyRules.map((rule) => ({ rule, content: renderRuleFile({ description: rule.description, globs: rule.globs, dirs: rule.dirs, prompt: rule.prompts, priority: rule.priority, enabled: rule.enabled, include: rule.includes }, rule.body) })));
+      if (options && typeof options.beforeVerification === 'function') options.beforeVerification();
+      const atomic = loadAtomicRules(projectDir);
+      const difference = !atomic ? 'atomic rules could not be loaded' : migrationRuleDifference(legacyRules, atomic.rules);
+      if (difference) {
+        return migrationResult(false, 'Live Rules migrated to ' + displayPath(projectDir, getAtomicRulesDir(projectDir)) + ', but kept ' + displayPath(projectDir, legacy) + ' because verification failed: ' + difference + '.');
+      }
+      if (process.env.LIVE_RULES_PATH && String(process.env.LIVE_RULES_PATH).trim()) {
+        return migrationResult(true, 'Live Rules migrated to ' + displayPath(projectDir, getAtomicRulesDir(projectDir)) + '; kept ' + displayPath(projectDir, legacy) + ' because LIVE_RULES_PATH is set.');
+      }
+      fs.rmSync(legacy);
+      return migrationResult(true, 'Live Rules migrated to ' + displayPath(projectDir, getAtomicRulesDir(projectDir)) + '; removed ' + displayPath(projectDir, legacy) + '.');
     });
-    return Boolean(result.migrated);
-  } catch (_) {
-    return false;
+    return resultFor(result);
+  } catch (error) {
+    return resultFor(migrationResult(false, 'Live Rules migration failed; kept ' + displayPath(projectDir, legacy) + ': ' + error.message));
   }
 }
 
