@@ -9,6 +9,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
+const COMMANDS = path.join(__dirname, '..', 'lib', 'commands.js');
 
 // Neutralize a machine-set override so the default-window assertions are
 // deterministic; the override test sets it explicitly in its own child env.
@@ -936,7 +937,7 @@ test('env shows the local default until the user saves a wiring mode', () => {
 });
 
 test('SessionStart nudges hand off gateway actions to the runnable skill', () => {
-  const source = fs.readFileSync(CLI, 'utf8');
+  const source = fs.readFileSync(COMMANDS, 'utf8');
   assert.match(source, /Run \/model-gateway:model-gateway, then use its env --write-project command/);
   assert.match(source, /claude-code-proxy is missing[\s\S]*No Anthropic fallback was used\./);
   assert.doesNotMatch(source, /(?:Run|run):? env --/);
