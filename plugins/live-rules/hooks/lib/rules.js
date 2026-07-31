@@ -461,12 +461,15 @@ function loadAtomicRules(projectDir) {
   } catch (_) {
     return null;
   }
-  if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.rules)) return { rules: [], stale: true };
+  if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.rules)) return { rules: [], stale: true, dropped: [] };
   const rules = [];
+  const dropped = [];
   let stale = false;
   for (const entry of manifest.rules) {
+    const droppedPath = entry && entry.path ? String(entry.path).replace(/\\/g, '/') : '<invalid manifest entry>';
     if (!entry || !isSafeRulePath(entry.path)) {
       stale = true;
+      dropped.push(droppedPath);
       continue;
     }
     const target = path.join(getAtomicRulesDir(projectDir), entry.path);
@@ -475,12 +478,14 @@ function loadAtomicRules(projectDir) {
       content = fs.readFileSync(target, 'utf8');
     } catch (_) {
       stale = true;
+      dropped.push(droppedPath);
       continue;
     }
     if (entry.hash !== hashContent(content)) stale = true;
     const sections = splitSections(content);
     if (sections.length !== 1) {
       stale = true;
+      dropped.push(droppedPath);
       continue;
     }
     try {
@@ -489,15 +494,23 @@ function loadAtomicRules(projectDir) {
       rules.push(enrichRule(rule, ATOMIC_RULES_DIR.replace(/\\/g, '/') + '/' + entry.path.replace(/\\/g, '/'), content));
     } catch (_) {
       stale = true;
+      dropped.push(droppedPath);
     }
   }
-  return { rules, stale };
+  return { rules, stale, dropped };
 }
 
 function loadRuleSet(projectDir) {
   const atomic = loadAtomicRules(projectDir);
-  if (atomic) return atomic;
-  return { rules: loadLegacyRules(projectDir), stale: false, legacy: true };
+  if (atomic) return { ...atomic, source: getAtomicRulesDir(projectDir) };
+  return { rules: loadLegacyRules(projectDir), stale: false, legacy: true, source: getRulesFile(projectDir) };
+}
+
+function formatRuleSetStatus(ruleSet) {
+  if (!ruleSet.stale) return '';
+  const stale = 'The manifest does not match the loaded rule files, but these rules were read directly and are in effect. ';
+  if (!ruleSet.dropped || !ruleSet.dropped.length) return stale;
+  return stale + 'Dropped rule files: ' + ruleSet.dropped.join(', ') + '. ';
 }
 
 function loadRules(projectDir) {
@@ -939,6 +952,7 @@ module.exports = {
   getManifestFile,
   hashContent,
   loadRuleSet,
+  formatRuleSetStatus,
   atomicSchema,
   migrateLegacyRules,
   writeAtomicRuleSet,

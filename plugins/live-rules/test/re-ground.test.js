@@ -68,7 +68,7 @@ test('a stale manifest is detected and direct file hashes still re-ground rules'
   fs.writeFileSync(target, '---\ndescription: Always\n---\nVersion two.\n');
   const output = hook(promptHook, dir, state, { session_id: 'one', prompt: 'hello' });
   assert.match(output, /Version two/);
-  assert.match(output, /manifest is stale/);
+  assert.match(output, /The manifest does not match the loaded rule files, but these rules were read directly and are in effect\./);
 });
 
 test('session ledgers are isolated across concurrent session ids', () => {

@@ -67,7 +67,9 @@ function main() {
 
   const header =
     '=== LIVE RULES for ' + relPath + ' (live-rules) ===\n' +
-    'Project rules that apply to the file you are about to edit. Follow them in this change.';
+    'Project rules that apply to the file you are about to edit. Follow them in this change. ' +
+    lib.formatRuleSetStatus(ruleSet) +
+    'Source: ' + lib.displayPath(projectDir, ruleSet.source);
 
   lib.emit('PreToolUse', lib.renderRules(changed, header));
   process.exit(0);
