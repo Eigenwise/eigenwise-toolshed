@@ -2472,6 +2472,83 @@ function executorText(value, max, label) {
   if (text.length > max) throw new Error(`${label} exceeds the ${max}-character executor-context limit.`);
   return text;
 }
+const MANUAL_VERIFY_PREFIX = "manual:";
+const VERIFY_BUILTINS = /* @__PURE__ */ new Set([
+  "bash",
+  "bun",
+  "cargo",
+  "cd",
+  "cmd",
+  "composer",
+  "dart",
+  "deno",
+  "dotnet",
+  "elixir",
+  "eslint",
+  "flutter",
+  "git",
+  "go",
+  "gradle",
+  "java",
+  "jest",
+  "just",
+  "make",
+  "mix",
+  "mvn",
+  "node",
+  "npm",
+  "npx",
+  "php",
+  "pnpm",
+  "poetry",
+  "powershell",
+  "pwsh",
+  "py",
+  "pytest",
+  "python",
+  "python3",
+  "rake",
+  "ruby",
+  "sh",
+  "tox",
+  "tsc",
+  "uv",
+  "vitest",
+  "yarn"
+]);
+function manualVerify(value) {
+  return /^manual:\s+\S/i.test(String(value || "").trim());
+}
+function verifyCommandError(value) {
+  const command = String(value || "").trim();
+  if (!command || manualVerify(command)) return null;
+  if (/^manual:/i.test(command)) {
+    return "Manual verification must say what was checked: `manual: <what you checked>`. Otherwise provide a runnable command such as `cd <repo-relative-dir> && <command>`.";
+  }
+  const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1] || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2] || "";
+  const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase()) || /[\\/]|\.(?:bat|cmd|com|exe|ps1|sh)$/i.test(first);
+  const proseStarter = /^(?:check|confirm|ensure|inspect|look|open|read|review|verify)\s/i.test(command);
+  if (command.endsWith(".") || proseStarter || !likelyExecutable && /[.!?]/.test(command)) {
+    return "Verify must be a runnable command such as `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.";
+  }
+  for (const match of command.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\}|(?::[^}]*)\})/g)) {
+    const name = match[1] || match[2];
+    if (name && process.env[name] == null && !match[0].includes(":-")) {
+      return `Verify references unset environment variable ${name}. Set a portable default such as \`${"${"}${name}:-/tmp}\`, or use \`manual: <what you checked>\`.`;
+    }
+  }
+  for (const match of command.matchAll(/%([A-Za-z_][A-Za-z0-9_]*)%/g)) {
+    const name = match[1];
+    if (name != null && process.env[name] == null) {
+      return `Verify references unset environment variable ${name}. Set a portable default or use \`manual: <what you checked>\`.`;
+    }
+  }
+  return null;
+}
+function requireVerifyCommand(value) {
+  const error = verifyCommandError(value);
+  if (error) throw new Error(error);
+}
 function ticketReferenceWarnings(slug, title, description) {
   const refs = new Set((`${title || ""}
 ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase()));
@@ -2812,6 +2889,7 @@ function createTicket(slug, fields) {
     } catch (_) {
     }
   }
+  requireVerifyCommand(fields.executorVerify);
   const ticket = {
     id,
     ref: `SQ-${seq}`,
@@ -3379,7 +3457,10 @@ function updateTicket(slug, idOrRef, patch) {
     if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;
     if (patch.readonly !== void 0 || patch.readonlyOverride !== void 0) t.readonlyOverride = requestedReadonlyOverride(patch);
     if (patch.executorAnchors !== void 0) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors");
-    if (patch.executorVerify !== void 0) t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
+    if (patch.executorVerify !== void 0) {
+      requireVerifyCommand(patch.executorVerify);
+      t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
+    }
     if (patch.workedBy !== void 0) {
       try {
         const w = makeWorkedBy(patch.workedBy);
@@ -5261,6 +5342,9 @@ function verifyDeliveredSubmission(slug, ticket, opts) {
   const command = String(ticket.submission?.verify || "").trim();
   if (opts?.skipVerify === true) return { status: "skipped", skippedByChoice: true, command: command || null };
   if (!command) return { status: "none", command: null };
+  const validationError = verifyCommandError(command);
+  if (validationError) return { status: "invalid", command, error: validationError };
+  if (manualVerify(command)) return { status: "manual", command, manual: command.slice(MANUAL_VERIFY_PREFIX.length).trim() };
   const timeoutMs = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
   const logPath = integrationVerifyLogPath(slug, ticket);
   const fd = fs.openSync(logPath, "w");
@@ -5304,10 +5388,11 @@ function verifyIntegration(slug, idOrRef, opts) {
   if (!ticket || !ticket.submission?.integration || ticket.submission.integration.outcome !== "delivered") {
     return { ok: false, reason: "delivery_required", ticket };
   }
-  const verify = verifyDeliveredSubmission(slug, ticket, opts);
-  const stored = updateSubmissionIntegration(slug, ticket.id, { verify, outcome: verify.status === "passed" || verify.status === "none" || verify.status === "skipped" ? "verified" : "verify_failed" });
+  const verify = ticket.submission.integration?.verify || verifyDeliveredSubmission(slug, ticket, opts);
+  const accepted = ["passed", "none", "skipped", "manual"].includes(verify.status);
+  const stored = updateSubmissionIntegration(slug, ticket.id, { verify, outcome: accepted ? "verified" : "verify_failed" });
   if (!stored.ok) return stored;
-  if (verify.status === "passed" || verify.status === "none" || verify.status === "skipped") return { ok: true, ticket: stored.ticket, verify };
+  if (accepted) return { ok: true, ticket: stored.ticket, verify };
   const comment = addComment(slug, ticket.id, { by: String(opts?.by || "orchestrator"), source: "integration", body: verificationFailureComment(verify) });
   return { ok: false, reason: "verify_failed", ticket: comment.ticket || stored.ticket, verify };
 }
@@ -5366,7 +5451,20 @@ function integrateSubmission(slug, idOrRef, opts) {
   opts = opts || {};
   const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
   if (!admitted.ok) return admitted;
-  const ticket = admitted.ticket;
+  const preflight = verifyDeliveredSubmission(slug, admitted.ticket, opts);
+  const acceptedPreflight = ["passed", "none", "skipped", "manual"].includes(preflight.status);
+  if (!acceptedPreflight) {
+    return {
+      ok: false,
+      reason: "verify_failed",
+      ticket: admitted.ticket,
+      verify: preflight,
+      message: `${admitted.ticket.ref} integration refused before merge: ${preflight.error || `verification ${preflight.status}`}.`
+    };
+  }
+  const prepared = updateSubmissionIntegration(slug, admitted.ticket.id, { verify: preflight, preflightAt: (/* @__PURE__ */ new Date()).toISOString() });
+  if (!prepared.ok) return prepared;
+  const ticket = prepared.ticket;
   const project = readMeta(slug);
   const repo = project?.path;
   const mode = normalizeDeliveryMode(opts.mode);

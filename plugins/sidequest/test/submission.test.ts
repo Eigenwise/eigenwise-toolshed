@@ -438,6 +438,34 @@ test('MCP submit(clear:true) rejects a pending submission end to end: submit -> 
   assert.strictEqual(doubleClear.reason, 'no_submission');
 });
 
+test('existing tickets with prose verify fields remain readable', () => {
+  const t = addTicket('legacy prose verify');
+  t.executorVerify = 'Read the rendered page source and confirm the required points.';
+  persist(t);
+
+  assert.strictEqual(store.getTicket(slug, t.ref).executorVerify, t.executorVerify);
+});
+
+test('integration runs verification before merging the submitted commit', () => {
+  cleanBranch();
+  const t = addTicket('pre-merge verification', { files: ['lib/preflight.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'preflight-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'preflight.js'), 'preflight\n');
+  git(['add', 'lib/preflight.js']);
+  git(['commit', '-m', 'preflight candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'preflight-worker', '--commit', commit, '--verify', 'node -e "process.exit(1)"']).status, 0);
+
+  const before = git(['rev-parse', 'HEAD']);
+  const rejected = store.integrateSubmission(slug, t.ref, { mode: 'merge', target: store.integrationTarget(slug) });
+  assert.strictEqual(rejected.ok, false);
+  assert.strictEqual(rejected.reason, 'verify_failed');
+  assert.strictEqual(git(['rev-parse', 'HEAD']), before);
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.integration, undefined);
+});
+
 test('integration closure consumes an in-scope submission with control-plane provenance', () => {
   cleanBranch();
   const t = addTicket('integration consumes submission', { files: ['lib/integrates.js'] });
