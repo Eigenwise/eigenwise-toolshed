@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.309.0 (2026-08-01)
+
+### sidequest 3.50.1 → 3.50.2
+
+#### Fixes
+
+- Split the CLI command handlers into per-domain modules behind an unchanged command surface (SQ-1146) [`f37c106`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f37c106)
+
 ## v3.308.0 (2026-08-01)
 
 ### model-gateway 0.44.1 → 0.44.2
