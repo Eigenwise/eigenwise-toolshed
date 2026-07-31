@@ -1435,8 +1435,18 @@ async function cmdIntegrate(opts: any, positional: any) {
     mode,
     target,
     overrideLegacyScope: !!(opts['override-legacy-scope'] || opts.overrideLegacyScope),
+    skipVerify: !!opts['skip-verify'],
   });
   if (!delivery.ok) {
+    if (delivery.reason === 'verify_failed') {
+      const payload = { project: slug, delivery: null, verifyFailed: delivery.verify };
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+        process.exitCode = 1;
+        return;
+      }
+      fail(`integrate: ${delivery.message || 'verification failed before delivery'}`);
+    }
     if (delivery.outside?.length) fail(`integrate: refused ${idOrRef}; submitted range changes paths outside its admitted scope: ${delivery.outside.join(', ')}.`);
     fail(`integrate: ${(delivery.message || delivery.reason)}.`);
   }
@@ -1453,9 +1463,11 @@ async function cmdIntegrate(opts: any, positional: any) {
   }
   const verifyReason = verification.verify.status === 'skipped'
     ? 'Verify skipped by choice.'
-    : verification.verify.status === 'none'
-      ? 'Verify: none.'
-      : `Verify passed: ${verification.verify.command}.`;
+    : verification.verify.status === 'manual'
+      ? `Manual verification recorded: ${verification.verify.manual}.`
+      : verification.verify.status === 'none'
+        ? 'Verify: none.'
+        : `Verify passed: ${verification.verify.command}.`;
   const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`;
   const closed = store.completeTicketAsControlPlane(slug, idOrRef, {
     by,

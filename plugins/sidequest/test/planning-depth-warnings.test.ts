@@ -29,6 +29,11 @@ function cliJsonAt(project: any, args: any[]) {
   return JSON.parse(res.stdout);
 }
 
+function cliResult(args: any[]) {
+  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
+  return spawnSync(process.execPath, [BIN, ...args, '--json'], { encoding: 'utf8', env });
+}
+
 test('complexity 4+ add warns for empty executor context and file scope', () => {
   const added = cliJson([
     'add', '-t', 'underscouted add', '--complexity', '4',
@@ -281,6 +286,30 @@ test('warns only when a readonly ticket signals browser or visual work', () => {
 
   const ordinary = cliJson(['add', '-t', 'read docs', '--category', 'research', '--description', 'Read the existing docs.']);
   assert.deepStrictEqual(ordinary.warnings, []);
+});
+
+test('rejects prose verification while preserving commands and recording manual checks', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const command = cliJson(['add', '-t', 'command verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . && node --test "lib/verify.js"']);
+  assert.strictEqual(command.ticket.executorVerify, 'cd . && node --test "lib/verify.js"');
+
+  const multiline = cliJson(['add', '-t', 'multiline verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . &&\nnode --test "lib/verify.js"']);
+  assert.strictEqual(multiline.ticket.executorVerify, 'cd . &&\nnode --test "lib/verify.js"');
+
+  const prose = cliResult(['add', '-t', 'prose verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'Read the rendered page source and confirm the required points.']);
+  assert.strictEqual(prose.status, 1);
+  assert.match(prose.stderr + prose.stdout, /cd <repo-relative-dir> && <command>/);
+  assert.match(prose.stderr + prose.stdout, /manual: <what you checked>/);
+
+  const manual = cliJson(['add', '-t', 'manual verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'manual: Reviewed the rendered page and reference output.']);
+  assert.strictEqual(manual.ticket.executorVerify, 'manual: Reviewed the rendered page and reference output.');
+
+  const unsetVariable = cliResult(['update', command.ticket.ref, '--verify', 'cd . && node --test "$SIDEQUEST_VERIFY_UNSET_TEST"']);
+  assert.strictEqual(unsetVariable.status, 1);
+  assert.match(unsetVariable.stderr + unsetVariable.stdout, /SIDEQUEST_VERIFY_UNSET_TEST/);
 });
 
 test('warns for an unrunnable recorded verify command, not a cd-prefixed one', () => {

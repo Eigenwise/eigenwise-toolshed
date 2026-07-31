@@ -380,23 +380,25 @@ function nodeVerify(source: string) {
 }
 
 for (const mode of ['merge', 'replay', 'apply']) {
-  test(`integrate ${mode} delivers but keeps the ticket open when verification fails`, () => {
+  test(`integrate ${mode} refuses delivery when preflight verification fails`, () => {
     const { fixture, slug, ticket, runCli } = deliveryTicket(`verify-fail-${mode}`, {
       verify: nodeVerify("console.error('integration verify failure'); process.exit(7)"),
     });
+    const before = head(fixture.repo);
     const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', mode, '--json']);
 
     assert.equal(result.status, 1, result.stderr + result.stdout);
     const payload = JSON.parse(result.stdout);
+    assert.equal(payload.delivery, null);
     assert.equal(payload.verifyFailed.status, 'failed');
     assert.equal(payload.verifyFailed.exitCode, 7);
     assert.match(payload.verifyFailed.outputTail, /integration verify failure/);
     assert.ok(fs.existsSync(payload.verifyFailed.logPath));
     const stored = store.getTicket(slug, ticket.ref);
     assert.equal(stored.status, 'doing');
-    assert.equal(stored.submission.integration.outcome, 'verify_failed');
-    assert.match(stored.comments.at(-1).body, /Integration verification exited 7/);
-    assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+    assert.equal(stored.submission.integration, undefined);
+    assert.equal(head(fixture.repo), before);
+    assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
   });
 }
 
@@ -414,7 +416,7 @@ test('integrate finalizes after a passing recorded verification command', () => 
   assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
 });
 
-test('integrate treats a timed out recorded verification command as failure', () => {
+test('integrate refuses delivery when recorded verification times out', () => {
   const { slug, ticket, runCli } = deliveryTicket('verify-timeout', {
     verify: nodeVerify('setTimeout(() => {}, 1000)'),
     timeoutMs: 25,
@@ -423,6 +425,7 @@ test('integrate treats a timed out recorded verification command as failure', ()
 
   assert.equal(result.status, 1, result.stderr + result.stdout);
   const payload = JSON.parse(result.stdout);
+  assert.equal(payload.delivery, null);
   assert.equal(payload.verifyFailed.status, 'timeout');
   assert.equal(payload.verifyFailed.timeoutMs, 25);
   assert.equal(store.getTicket(slug, ticket.ref).status, 'doing');

@@ -1442,14 +1442,19 @@ const TOOLS = [
         return mutationAck(slug, { ok: false, ticket: store.getTicket(slug, args.ref), reason: "integration_target_unavailable", message: error && error.message || String(error) });
       }
       const mode = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
-      const delivery = store.integrateSubmission(slug, args.ref, { mode, target, overrideLegacyScope: args.overrideLegacyScope === true });
+      const delivery = store.integrateSubmission(slug, args.ref, {
+        mode,
+        target,
+        overrideLegacyScope: args.overrideLegacyScope === true,
+        skipVerify: args.skipVerify === true
+      });
       if (!delivery.ok) return mutationAck(slug, delivery, delivery.outside?.length ? { strayPaths: delivery.outside } : null);
       const integration = delivery.integration;
       const verification = store.verifyIntegration(slug, args.ref, { by, skipVerify: args.skipVerify === true });
       if (!verification.ok) {
         return mutationAck(slug, verification, { delivery: integration, verifyFailed: verification.verify });
       }
-      const verifyReason = verification.verify.status === "skipped" ? "Verify skipped by choice." : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
+      const verifyReason = verification.verify.status === "skipped" ? "Verify skipped by choice." : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.manual}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
       const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`;
       const closed = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
