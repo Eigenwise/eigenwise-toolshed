@@ -149,12 +149,12 @@ function workflowRecipe(category?: any, resolved?: any) {
 // permissionMode: bypassPermissions frontmatter. `name` and `effort` are
 // required; `modelId`, `marker`, and `extraNote` are optional.
 const READ_ONLY_TOOLS = [
-  'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Bash', 'ToolSearch', 'SendMessage', 'mcp__plugin_sidequest_board__*',
+  'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Bash', 'ToolSearch', 'SendMessage', 'mcp__plugin_sidequest_board__*', 'mcp__plugin_playwright_playwright__*',
 ];
 const EXECUTOR_SKILLS = ['sidequest:verify-discipline'];
 
 function readOnlyNote() {
-  return '\n\n**Read-only role:** Your tools cannot change files. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket. Do not try to work around the tool restriction.';
+  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in the session scratchpad, never the repo, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 
 function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief, tools, skills = EXECUTOR_SKILLS }: any) {
