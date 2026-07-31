@@ -128,7 +128,9 @@ function score(finding) {
   const occurrences = Math.max(1, finding.occurrences ?? 1);
   const breadth = (finding.sessions ?? 1) + (finding.actors ?? []).length;
   const complexity = finding.complexity ? Math.min(3, 1 + finding.complexity / 30) : 1;
-  return Math.round(base * Math.log2(occurrences + 1) * Math.sqrt(breadth) * complexity);
+  const time = finding.kind === 'repeated-command' ? Math.sqrt(Math.max(0, finding.totalDurationMs ?? 0) / 60000) : 0;
+  // Time adds to frequency instead of replacing it, so a long verify loop wins while cheap, frequent hazards still stay visible.
+  return Math.round(base * (Math.log2(occurrences + 1) + time) * Math.sqrt(breadth) * complexity);
 }
 
 /**

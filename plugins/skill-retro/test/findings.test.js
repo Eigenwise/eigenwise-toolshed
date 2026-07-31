@@ -65,6 +65,14 @@ test('audience is decided by who did the work, not by how many did it', () => {
   assert.equal(audience({ actors: [{ label: 'subagent:x', count: 5 }, { label: 'main-loop', count: 1 }] }).primary, 'subagents');
 });
 
+test('elapsed time raises a slow repeated command above a cheaper frequent one', () => {
+  const { findings } = rank([
+    finding({ title: 'npm ci', occurrences: 193, totalDurationMs: 16.9 * 60 * 1000, complexity: 1 }),
+    finding({ title: 'verify loop', occurrences: 3, totalDurationMs: 284.5 * 60 * 1000, complexity: 1 }),
+  ]);
+  assert.equal(findings[0].title, 'verify loop');
+});
+
 test('hazards outrank frequency, and one-offs are dropped rather than padded', () => {
   const { findings, dropped } = rank([
     { kind: 'repeated-command', title: 'ran a lot', occurrences: 40, sessions: 5, actors: [{ label: 'main-loop', count: 40 }], complexity: 30, evidence: [] },

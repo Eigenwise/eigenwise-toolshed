@@ -6,6 +6,7 @@ const readline = require('node:readline');
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'ToolSearch', 'NotebookRead', 'WebFetch', 'WebSearch']);
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'BashOutput']);
+const MAX_TOOL_DURATION_MS = 10 * 60 * 1000;
 
 // Shell invocations that only look at things. Anything not matched here counts as a mutation, so an
 // unrecognized command is treated as substantive rather than silently ignored.
@@ -40,6 +41,16 @@ function resultIsError(block, record) {
     if (typeof result.stderr === 'string' && result.stderr.trim() && result.stdout === '') return true;
   }
   return false;
+}
+
+function toolDurationMs(block, record, call, timestampMs) {
+  const recorded = Number(record?.durationMs ?? block?.durationMs);
+  const elapsed = Number.isFinite(recorded) && recorded >= 0
+    ? recorded
+    : Number.isFinite(timestampMs) && Number.isFinite(call?.timestampMs)
+      ? timestampMs - call.timestampMs
+      : Number.NaN;
+  return Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(elapsed, MAX_TOOL_DURATION_MS) : null;
 }
 
 function isHumanPrompt(record, scope) {
@@ -100,7 +111,7 @@ async function streamTranscript(source, detectors) {
 
   const pendingTools = new Map();
   const usageByRequest = new Map();
-  const stats = { records: 0, unparseable: 0, errors: 0, firstMs: null, lastMs: null };
+  const stats = { records: 0, unparseable: 0, errors: 0, firstMs: null, lastMs: null, measuredToolDurationMs: 0 };
 
   const emit = (event) => {
     for (const detector of detectors) {
@@ -177,12 +188,15 @@ async function streamTranscript(source, detectors) {
         if (block?.type !== 'tool_result') continue;
         const call = pendingTools.get(block.tool_use_id);
         pendingTools.delete(block.tool_use_id);
+        const durationMs = toolDurationMs(block, record, call, base.timestampMs);
+        if (durationMs !== null) stats.measuredToolDurationMs += durationMs;
         emit({
           ...base,
           kind: 'tool_result',
           id: block.tool_use_id,
           name: call?.name ?? null,
           input: call?.input ?? null,
+          durationMs,
           isError: resultIsError(block, record),
           text: toolResultText(block, record),
           denial: record.toolDenialKind ?? null,
@@ -210,6 +224,7 @@ async function streamTranscript(source, detectors) {
 module.exports = {
   isHumanPrompt,
   isMutating,
+  MAX_TOOL_DURATION_MS,
   READ_ONLY_SHELL,
   READ_TOOLS,
   SHELL_TOOLS,

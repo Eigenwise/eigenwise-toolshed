@@ -41,6 +41,8 @@ function mergeShapes(records) {
       if (record.count > match.count) match.shape = record.shape;
       match.count += record.count;
       match.failures += record.failures;
+      match.totalDurationMs += record.totalDurationMs;
+      match.durationCount += record.durationCount;
       match.complexity = Math.max(match.complexity, record.complexity);
       for (const session of record.sessions) match.sessions.add(session);
       for (const [actor, count] of record.actors) match.actors.set(actor, (match.actors.get(actor) ?? 0) + count);
@@ -51,6 +53,8 @@ function mergeShapes(records) {
       shape: record.shape,
       count: record.count,
       failures: record.failures,
+      totalDurationMs: record.totalDurationMs,
+      durationCount: record.durationCount,
       complexity: record.complexity,
       sessions: new Set(record.sessions),
       actors: new Map(record.actors),
@@ -105,6 +109,8 @@ function createCommandDetector() {
         complexity: shapeComplexity(shape),
         count: 0,
         failures: 0,
+        totalDurationMs: 0,
+        durationCount: 0,
         sessions: new Set(),
         actors: new Map(),
         samples: [],
@@ -139,6 +145,10 @@ function createCommandDetector() {
       if (!entry) return;
 
       const record = shapes.get(entry.shape);
+      if (record && Number.isFinite(event.durationMs)) {
+        record.totalDurationMs += event.durationMs;
+        record.durationCount += 1;
+      }
       if (event.isError) {
         if (record) record.failures += 1;
         if (failuresByHead.size >= MAX_PENDING) failuresByHead.delete(failuresByHead.keys().next().value);
@@ -187,7 +197,7 @@ function createCommandDetector() {
       const eligible = [...shapes.values()].sort((a, b) => b.count - a.count);
       const merged = mergeShapes(eligible)
         .filter((group) => group.count >= REPEAT_THRESHOLD)
-        .sort((a, b) => b.count * b.complexity - a.count * a.complexity);
+        .sort((a, b) => b.totalDurationMs - a.totalDurationMs || b.count * b.complexity - a.count * a.complexity);
 
       const findings = merged.slice(0, 20).map((group) => {
         const primary = group.variants.reduce((best, record) => (record.count > best.count ? record : best), group.variants[0]);
@@ -199,6 +209,9 @@ function createCommandDetector() {
           kind: 'repeated-command',
           title: `\`${clip(group.shape, 90)}\` ran ${group.count} times`,
           occurrences: group.count,
+          totalDurationMs: group.totalDurationMs,
+          averageDurationMs: group.durationCount ? group.totalDurationMs / group.durationCount : null,
+          durationCount: group.durationCount,
           sessions: group.sessions.size,
           actors: [...group.actors].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
           complexity: group.complexity,

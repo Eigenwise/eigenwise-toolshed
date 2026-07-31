@@ -43,10 +43,12 @@ files they edit, or a codebase-map entry that loads before they start reading.
 
 ## Applying findings
 
-The report ranks findings, puts hazards first regardless of how often they happened, and proposes a
-route for each: a skill, a bundled script, a live rule, a memory entry, a codebase-map edit, a settings
-allowlist, or a ticket. Nothing is written until you approve it, and each approved fix is applied as its
-own step through the tool that owns it, so any one of them is easy to undo.
+The report ranks findings by how often they happened and how much measured tool time they took. Repeated
+commands show their total and average elapsed time plus their share of measured tool time, so a slow verify
+loop ranks above a cheap command that happened more often. Hazards still come first regardless
+of either metric. It proposes a route for each: a skill, a bundled script, a live rule, a memory entry, a
+codebase-map edit, a settings allowlist, or a ticket. Nothing is written until you approve it, and each
+approved fix is applied as its own step through the tool that owns it, so any one of them is easy to undo.
 
 Genuine one-offs are dropped and counted rather than padded into the report.
 
