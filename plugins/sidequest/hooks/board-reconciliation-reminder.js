@@ -71,7 +71,7 @@ function runtimeModule(name) {
 
 // src/hooks/board-reconciliation-reminder.ts
 var MAX_MESSAGE_BYTES = 360;
-var MAX_REMINDERS_PER_STATE = 2;
+var ESCALATION_STOP_THRESHOLD = 3;
 function nudgeOff() {
   const value = String(process.env.SIDEQUEST_NUDGE || "").trim().toLowerCase();
   return value === "off" || value === "0" || value === "false" || value === "no";
@@ -100,16 +100,23 @@ function canRemind(reminder) {
     try {
       prior = JSON.parse(import_node_fs2.default.readFileSync(file, "utf8"));
     } catch (error) {
-      if (error.code !== "ENOENT") return false;
+      if (error.code !== "ENOENT") return null;
     }
-    const count = prior?.state === reminder.state && Number.isInteger(prior.count) ? prior.count + 1 : 1;
-    if (count > MAX_REMINDERS_PER_STATE) return false;
+    const priorCount = prior?.state === reminder.state && Number.isInteger(prior.count) ? prior.count : 0;
+    const count = Math.min(priorCount + 1, ESCALATION_STOP_THRESHOLD);
     import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(file), { recursive: true });
     import_node_fs2.default.writeFileSync(file, JSON.stringify({ state: reminder.state, count }));
-    return true;
+    if (count === 1) return "initial";
+    if (reminder.pendingRefs.length && count === ESCALATION_STOP_THRESHOLD && priorCount < count) return "escalated";
+    return null;
   } catch (_) {
-    return false;
+    return null;
   }
+}
+function escalatedMessage(reminder) {
+  const refs = reminder.pendingRefs.join(", ");
+  const verb = reminder.pendingRefs.length === 1 ? "has" : "have";
+  return byteCapped(`Sidequest: ${refs} ${verb} been pending integration for ${ESCALATION_STOP_THRESHOLD} consecutive stops. Integrate or clear them before finishing.`);
 }
 function reconciliationMessage(data) {
   if (nudgeOff()) return null;
@@ -126,6 +133,7 @@ function reconciliationMessage(data) {
     const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId, store) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
+    const pendingRefs = submissions.map((ticket) => String(ticket.ref || "")).filter(Boolean);
     const otherOpen = open.length - doing.length - submissions.length;
     if (!open.length) return null;
     const state = [
@@ -144,6 +152,7 @@ function reconciliationMessage(data) {
     return {
       sessionId,
       message: byteCapped(`Sidequest: ${state} on this board. Update or close them before finishing.`),
+      pendingRefs,
       state: signature
     };
   } catch (_) {
@@ -154,6 +163,7 @@ function main() {
   const data = readStdin();
   if (!data || data.stop_hook_active === true) return;
   const reminder = reconciliationMessage(data);
-  if (reminder && canRemind(reminder)) writeContext("Stop", reminder.message);
+  const kind = reminder && canRemind(reminder);
+  if (reminder && kind) writeContext("Stop", kind === "escalated" ? escalatedMessage(reminder) : reminder.message);
 }
 main();
