@@ -11,6 +11,18 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "matcher": "^(?:sidequest-exec.*|general-purpose|codebase-mapper:.*writer.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-context.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

@@ -42,43 +42,42 @@ function changedContext(changed, source) {
     '. Re-read only these documents when relevant.';
 }
 
+function hookEventName(data) {
+  return data.hook_event_name === 'SubagentStart' ? 'SubagentStart' : 'SessionStart';
+}
+
+function output(eventName, additionalContext) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: eventName,
+      additionalContext,
+    },
+  }));
+}
+
 function main() {
   const data = readStdin();
   const root = projectDir(data);
   const source = data.source || 'startup';
+  const eventName = hookEventName(data);
   mapDocuments.migrateLegacyMap(root);
   const map = mapDocuments.loadMap(root);
   if (!map || !map.index) return;
 
   if (source === 'startup' || source === 'clear') {
     ledger.mark(root, data.session_id, map.documents, true);
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'SessionStart',
-        additionalContext: context(map, source),
-      },
-    }));
+    output(eventName, context(map, source));
     return;
   }
 
   if (source === 'compact') {
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'SessionStart',
-        additionalContext: context(map, source),
-      },
-    }));
+    output(eventName, context(map, source));
     return;
   }
 
   const changed = ledger.changed(root, data.session_id, map.documents, false);
   if (!changed.length) return;
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'SessionStart',
-      additionalContext: changedContext(changed, source),
-    },
-  }));
+  output(eventName, changedContext(changed, source));
 }
 
 try {
