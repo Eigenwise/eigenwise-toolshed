@@ -40,6 +40,7 @@ const { discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { routingDisabledMessage } = require('./refusal-guidance.js');
 const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight.js');
+const { createAssets } = require('./store/assets.js');
 
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
@@ -297,6 +298,8 @@ function cloneCached<T>(value: T): T {
 function ensureDir(dir?: any) {
   fs.mkdirSync(dir, { recursive: true });
 }
+
+const { copyAsset, saveAssetData, assetPath } = createAssets({ assetsDir, ensureDir });
 
 function refreshRoutingProfileSeeds(handle?: any) {
   const pending: any[] = [];
@@ -2352,62 +2355,6 @@ function mergeProject(srcSlug?: any, destSlug?: any, opts?: any) {
 function seqOfRef(ref?: any) {
   const m = /(\d+)\s*$/.exec(String(ref || ''));
   return m ? parseInt(m[1]!, 10) : Number.MAX_SAFE_INTEGER;
-}
-
-/* ------------------------------------------------------------------ *
- *  Assets (images attached to a ticket)
- * ------------------------------------------------------------------ */
-
-function sanitizeFilename(name?: any) {
-  const base = path.basename(String(name || 'image')).replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+/, '');
-  return base || 'image';
-}
-
-// Copy a source image into a ticket's asset folder and return the stored
-// filename (deduped on collision). Throws on an unreadable source so the CLI
-// can report it; callers that must not throw wrap this.
-function copyAsset(slug?: any, id?: any, srcPath?: any) {
-  const src = path.resolve(srcPath);
-  const data = fs.readFileSync(src); // throws if missing -> surfaced by CLI
-  const dir = assetsDir(slug, id);
-  ensureDir(dir);
-  let fname = sanitizeFilename(path.basename(src));
-  if (!path.extname(fname)) fname += '.png';
-  let dest = path.join(dir, fname);
-  let n = 1;
-  while (fs.existsSync(dest)) {
-    const ext = path.extname(fname);
-    const stem = fname.slice(0, -ext.length || undefined);
-    dest = path.join(dir, `${stem}-${n}${ext}`);
-    n++;
-  }
-  fs.writeFileSync(dest, data);
-  return path.basename(dest);
-}
-
-function assetPath(slug?: any, id?: any, filename?: any) {
-  // Guard against path traversal in a filename coming from the HTTP layer.
-  const safe = path.basename(String(filename));
-  return path.join(assetsDir(slug, id), safe);
-}
-
-// Save raw image bytes (e.g. a screenshot pasted into the dashboard) into a
-// ticket's asset folder, deduping the filename. Returns the stored filename.
-function saveAssetData(slug?: any, id?: any, name?: any, buffer?: any) {
-  const dir = assetsDir(slug, id);
-  ensureDir(dir);
-  let fname = sanitizeFilename(name || 'pasted.png');
-  if (!path.extname(fname)) fname += '.png';
-  let dest = path.join(dir, fname);
-  let n = 1;
-  while (fs.existsSync(dest)) {
-    const ext = path.extname(fname);
-    const stem = fname.slice(0, -ext.length || undefined);
-    dest = path.join(dir, `${stem}-${n}${ext}`);
-    n++;
-  }
-  fs.writeFileSync(dest, buffer);
-  return path.basename(dest);
 }
 
 /* ------------------------------------------------------------------ *

@@ -7,11 +7,17 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 
 async function sourceEntries(directory) {
   const absolute = path.join(pluginRoot, 'src', directory);
+  async function collectEntries(root) {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    const collected = await Promise.all(entries.map(async (entry) => {
+      const entryPath = path.join(root, entry.name);
+      if (entry.isDirectory()) return collectEntries(entryPath);
+      return entry.isFile() && entry.name.endsWith('.ts') ? [entryPath] : [];
+    }));
+    return collected.flat();
+  }
   try {
-    return (await fs.readdir(absolute, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
-      .map((entry) => path.join(absolute, entry.name))
-      .sort();
+    return (await collectEntries(absolute)).sort();
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
     throw error;

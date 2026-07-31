@@ -13,6 +13,7 @@ const { discoverExternalModels, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
 const { routingDisabledMessage } = require("./refusal-guidance.js");
 const { assertSidequestInstall, assertDispatchTransport } = require("./dispatch-preflight.js");
+const { createAssets } = require("./store/assets.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
@@ -175,6 +176,7 @@ function cloneCached(value) {
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
+const { copyAsset, saveAssetData, assetPath } = createAssets({ assetsDir, ensureDir });
 function refreshRoutingProfileSeeds(handle) {
   const pending = [];
   for (const seed of STARTER_ROUTING_PROFILES) {
@@ -1994,48 +1996,6 @@ function mergeProject(srcSlug, destSlug, opts) {
 function seqOfRef(ref) {
   const m = /(\d+)\s*$/.exec(String(ref || ""));
   return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
-}
-function sanitizeFilename(name) {
-  const base = path.basename(String(name || "image")).replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+/, "");
-  return base || "image";
-}
-function copyAsset(slug, id, srcPath) {
-  const src = path.resolve(srcPath);
-  const data = fs.readFileSync(src);
-  const dir = assetsDir(slug, id);
-  ensureDir(dir);
-  let fname = sanitizeFilename(path.basename(src));
-  if (!path.extname(fname)) fname += ".png";
-  let dest = path.join(dir, fname);
-  let n = 1;
-  while (fs.existsSync(dest)) {
-    const ext = path.extname(fname);
-    const stem = fname.slice(0, -ext.length || void 0);
-    dest = path.join(dir, `${stem}-${n}${ext}`);
-    n++;
-  }
-  fs.writeFileSync(dest, data);
-  return path.basename(dest);
-}
-function assetPath(slug, id, filename) {
-  const safe = path.basename(String(filename));
-  return path.join(assetsDir(slug, id), safe);
-}
-function saveAssetData(slug, id, name, buffer) {
-  const dir = assetsDir(slug, id);
-  ensureDir(dir);
-  let fname = sanitizeFilename(name || "pasted.png");
-  if (!path.extname(fname)) fname += ".png";
-  let dest = path.join(dir, fname);
-  let n = 1;
-  while (fs.existsSync(dest)) {
-    const ext = path.extname(fname);
-    const stem = fname.slice(0, -ext.length || void 0);
-    dest = path.join(dir, `${stem}-${n}${ext}`);
-    n++;
-  }
-  fs.writeFileSync(dest, buffer);
-  return path.basename(dest);
 }
 const PLAN_ASSET_NAME = "plan.md";
 const PLAN_BODY_MAX_BYTES = 256 * 1024;
