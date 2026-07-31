@@ -26,6 +26,10 @@ function actorSummary(finding) {
   return actors.length > 4 ? `${shown}, +${actors.length - 4} more` : shown;
 }
 
+function formatMinutes(durationMs) {
+  return `${(durationMs / 60000).toFixed(1)} min`;
+}
+
 function formatFinding(finding) {
   const lines = [];
   lines.push(`### ${finding.id} [${KIND_LABELS[finding.kind] ?? finding.kind}] ${finding.title}`);
@@ -34,6 +38,10 @@ function formatFinding(finding) {
   if (finding.routeAlternatives?.length) lines.push(`- **Or:** ${finding.routeAlternatives.join('; ')}`);
   lines.push(`- **Who:** ${actorSummary(finding)}`);
   lines.push(`- **Spread:** ${finding.occurrences} occurrence(s) across ${finding.sessions} session(s), severity ${finding.severity}, score ${finding.score}`);
+  if (Number.isFinite(finding.totalDurationMs)) {
+    const average = Number.isFinite(finding.averageDurationMs) ? `, ${formatMinutes(finding.averageDurationMs)} average` : '';
+    lines.push(`- **Elapsed:** ${formatMinutes(finding.totalDurationMs)} across ${finding.occurrences} runs, ${((finding.durationShare ?? 0) * 100).toFixed(1)}% of all measured tool time${average}`);
+  }
   if (finding.arguments?.length) {
     const args = finding.arguments
       .map((argument) => `arg ${argument.position} (${argument.token}, ${argument.distinct} distinct): ${argument.values.slice(0, 3).join(' | ')}`)
@@ -107,10 +115,13 @@ function formatReport(result) {
 
     lines.push('## Ranked findings');
     lines.push('');
-    lines.push('| # | Finding | Route | Who | Spread |');
-    lines.push('|---|---------|-------|-----|--------|');
+    lines.push('| # | Finding | Route | Who | Time | Spread |');
+    lines.push('|---|---------|-------|-----|------|--------|');
     for (const finding of rest) {
-      lines.push(`| ${finding.id} | ${finding.title.replace(/\|/g, '\\|')} | ${finding.routeLabel} | ${finding.audience.primary} | ${finding.occurrences}x / ${finding.sessions} sessions |`);
+      const time = Number.isFinite(finding.totalDurationMs)
+        ? `${formatMinutes(finding.totalDurationMs)} (${((finding.durationShare ?? 0) * 100).toFixed(1)}%)`
+        : '-';
+      lines.push(`| ${finding.id} | ${finding.title.replace(/\|/g, '\\|')} | ${finding.routeLabel} | ${finding.audience.primary} | ${time} | ${finding.occurrences}x / ${finding.sessions} sessions |`);
     }
     lines.push('');
     rest.forEach((finding) => lines.push(formatFinding(finding)));

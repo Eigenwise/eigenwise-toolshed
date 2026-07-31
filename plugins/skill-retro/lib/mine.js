@@ -47,6 +47,7 @@ async function mine(options = {}) {
         unparseable: summary.unparseable,
         tokens: summary.tokens,
         cacheReadTokens: summary.cacheReadTokens,
+        measuredToolDurationMs: summary.measuredToolDurationMs,
       });
     } catch (error) {
       failures.push({ file: file.file, message: error.message });
@@ -63,6 +64,11 @@ async function mine(options = {}) {
     notes[detector.name] = result.notes ?? {};
   }
 
+  const measuredToolDurationMs = transcripts.reduce((sum, item) => sum + item.measuredToolDurationMs, 0);
+  for (const finding of raw) {
+    if (!Number.isFinite(finding.totalDurationMs)) continue;
+    finding.durationShare = measuredToolDurationMs ? finding.totalDurationMs / measuredToolDurationMs : 0;
+  }
   const ranked = rank(raw, { floor: options.floor });
 
   // Redaction happens once, here, over everything that will be reported. Doing it at each detector
@@ -92,6 +98,7 @@ async function mine(options = {}) {
       unparseable: transcripts.reduce((sum, item) => sum + item.unparseable, 0),
       tokens: transcripts.reduce((sum, item) => sum + item.tokens, 0),
       cacheReadTokens: transcripts.reduce((sum, item) => sum + item.cacheReadTokens, 0),
+      measuredToolDurationMs,
       readFailures: failures.length,
     },
     findings,

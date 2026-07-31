@@ -77,6 +77,19 @@ test('the report always states the window, including what the cap skipped', asyn
   assert.match(report, /5 sessions \+ 0 subagent transcripts/);
 });
 
+test('the ranked table and detail render elapsed command time', async () => {
+  const root = makeRoot();
+  const main = createTranscript({ root, slug: 'proj', sessionId: 's1' });
+  for (let index = 0; index < 3; index += 1) main.tool('Bash', { command: 'npm run verify' }, { result: 'ok', durationMs: 40000 });
+  main.write();
+
+  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: 'C:/project', git: () => new Set() });
+  const report = formatReport(result);
+  assert.match(report, /\| # \| Finding \| Route \| Who \| Time \| Spread \|/);
+  assert.match(report, /2\.0 min \(100\.0%\)/);
+  assert.match(report, /\*\*Elapsed:\*\* 2\.0 min across 3 runs, 100\.0% of all measured tool time, 0\.7 min average/);
+});
+
 test('a quiet window is reported as a real result, not as an empty one', async () => {
   const root = makeRoot();
   createTranscript({ root, slug: 'proj', sessionId: 's1' }).prompt('go').write();

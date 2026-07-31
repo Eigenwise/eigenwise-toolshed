@@ -1,9 +1,11 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const { test } = require('node:test');
 
 const { mine } = require('../lib/mine.js');
+const { MAX_TOOL_DURATION_MS, streamTranscript } = require('../lib/stream.js');
 const { createTranscript, makeRoot } = require('./helpers/transcripts.js');
 
 const noGit = () => new Set();
@@ -15,6 +17,32 @@ function run(root, overrides = {}) {
 function find(result, kind) {
   return result.findings.filter((finding) => finding.kind === kind);
 }
+
+test('tool result events retain recorded durations', async () => {
+  const root = makeRoot();
+  createTranscript({ root, slug: 'proj', sessionId: 's1' })
+    .tool('Bash', { command: 'npm test' }, { result: 'ok', durationMs: 1234 })
+    .write();
+  const events = [];
+  await streamTranscript({ file: path.join(root, 'proj', 's1.jsonl'), scope: 'main', sessionId: 's1' }, [{ onEvent: (event) => events.push(event) }]);
+  assert.equal(events.find((event) => event.kind === 'tool_result').durationMs, 1234);
+});
+
+test('command durations fall back to timestamps and cap background outliers', async () => {
+  const root = makeRoot();
+  const main = createTranscript({ root, slug: 'proj', sessionId: 's1' });
+  for (let index = 0; index < 3; index += 1) main.tool('Bash', { command: 'npm run verify' }, { result: 'ok', resultGapMs: 800 });
+  for (let index = 0; index < 3; index += 1) main.tool('Bash', { command: 'npm run slow-verify' }, { result: 'ok', durationMs: MAX_TOOL_DURATION_MS * 10 });
+  main.write();
+
+  const result = await run(root);
+  const [fallback] = find(result, 'repeated-command').filter((finding) => finding.title.includes('npm run verify'));
+  const [outlier] = find(result, 'repeated-command').filter((finding) => finding.title.includes('npm run slow-verify'));
+  assert.equal(fallback.totalDurationMs, 2400);
+  assert.equal(fallback.averageDurationMs, 800);
+  assert.equal(outlier.totalDurationMs, MAX_TOOL_DURATION_MS * 3);
+  assert.equal(result.totals.measuredToolDurationMs, 2400 + MAX_TOOL_DURATION_MS * 3);
+});
 
 test('a command repeated three times across worktrees is one finding with its arguments named', async () => {
   const root = makeRoot();

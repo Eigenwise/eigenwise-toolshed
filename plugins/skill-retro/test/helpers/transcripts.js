@@ -42,7 +42,7 @@ function createTranscript({ root, slug, sessionId, agent = null, startMs = Date.
       return api;
     },
 
-    tool(name, input, { result = '', isError = false, usage = null, gapMs, denial = null } = {}) {
+    tool(name, input, { result = '', isError = false, usage = null, gapMs, resultGapMs = 200, durationMs, denial = null } = {}) {
       const toolUseId = nextId();
       lines.push({
         ...base(),
@@ -59,11 +59,12 @@ function createTranscript({ root, slug, sessionId, agent = null, startMs = Date.
       const record = {
         ...base(),
         type: 'user',
-        timestamp: advance(200),
+        timestamp: advance(resultGapMs),
         toolUseResult: { stdout: isError ? '' : result, stderr: isError ? result : '', interrupted: false },
         sourceToolAssistantUUID: nextId(),
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: result, is_error: isError }] },
       };
+      if (durationMs !== undefined) record.durationMs = durationMs;
       if (denial) record.toolDenialKind = denial;
       lines.push(record);
       return api;
