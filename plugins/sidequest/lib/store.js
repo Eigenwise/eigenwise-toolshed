@@ -3672,18 +3672,17 @@ function touchClaim(slug, idOrRef, by) {
 function ticketLockPath(slug, id) {
   return path.join(ticketsDir(slug), "." + path.basename(String(id)) + ".lock");
 }
+const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 function busyWait(ms) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-  }
+  Atomics.wait(LOCK_SLEEP, 0, 0, ms);
 }
 function testClaimLockDelayMs() {
   const delay = Number(process.env.SIDEQUEST_TEST_CLAIM_LOCK_DELAY_MS);
   return Number.isInteger(delay) && delay > 0 ? delay : 0;
 }
 function acquireLock(lockPath) {
-  const STALE_LOCK_MS = 5e3;
-  const RETRY_MS = 5;
+  const STALE_LOCK_MS = 3e4;
+  const RETRY_MS = 10;
   const MAX_ATTEMPTS = STALE_LOCK_MS / RETRY_MS;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {

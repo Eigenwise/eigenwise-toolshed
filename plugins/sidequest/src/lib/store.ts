@@ -4311,13 +4311,12 @@ function ticketLockPath(slug?: any, id?: any) {
   return path.join(ticketsDir(slug), '.' + path.basename(String(id)) + '.lock');
 }
 
-// A tiny synchronous pause. The lock is contended only under genuinely
-// simultaneous claims and is held for microseconds, so this never runs long.
+// A synchronous sleep keeps contended writers from consuming the CPU that the
+// lock holder needs to finish its transaction.
+const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+
 function busyWait(ms?: any) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    /* spin */
-  }
+  Atomics.wait(LOCK_SLEEP, 0, 0, ms);
 }
 
 function testClaimLockDelayMs() {
@@ -4329,8 +4328,8 @@ function testClaimLockDelayMs() {
 // few seconds is treated as abandoned (holder crashed mid-claim) and reclaimed,
 // so a crash can never permanently wedge a ticket.
 function acquireLock(lockPath?: any) {
-  const STALE_LOCK_MS = 5000;
-  const RETRY_MS = 5;
+  const STALE_LOCK_MS = 30000;
+  const RETRY_MS = 10;
   const MAX_ATTEMPTS = STALE_LOCK_MS / RETRY_MS;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
