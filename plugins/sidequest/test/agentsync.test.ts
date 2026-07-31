@@ -619,6 +619,11 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.ok(briefing.includes(`project: ${JSON.stringify('C:\\dev\\fixture')}`));
   assert.ok(briefing.includes('token: "instant-token-334"'));
   assert.match(briefing, /Do not pass `direct`\. Do not substitute the model slug for `executor`\./);
+  assert.match(briefing, /Verify output discipline: run the exact command through this Bash wrapper/);
+  assert.match(briefing, /\(node --test plugins\/sidequest\/test\/agentsync\.test\.js\) > "\$log" 2>&1/);
+  assert.match(briefing, /grep -nE '\^not ok\|\^# \(fail\|pass\)' "\$log" \| head -40/);
+  assert.match(briefing, /exit "\$status"/);
+  assert.match(briefing, /A passing suite's full output carries no information/);
   assert.match(briefing, /Verify liveness: immediately before running the exact verify command/);
   assert.match(briefing, /\[sidequest:verify-start\] <command>/);
   assert.match(briefing, /\[sidequest:verify-complete\]/);

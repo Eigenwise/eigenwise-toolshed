@@ -577,6 +577,20 @@ function linkedPlanSuffix(link?: any, slug?: any) {
   return plan ? ` (plan: ${path.resolve(plan.path)})` : '';
 }
 
+function filteredVerifyCommand(verify?: any) {
+  const command = String(verify || '').trim();
+  if (!command) return '';
+  return [
+    'log="$(mktemp "${TMPDIR:-/tmp}/sidequest-verify.XXXXXX.log")"',
+    `(${command}) > "$log" 2>&1`,
+    'status=$?',
+    "printf 'exit=%s\\n' \"$status\"",
+    "grep -nE '^not ok|^# (fail|pass)' \"$log\" | head -40",
+    "printf 'details=%s\\n' \"$log\"",
+    'exit "$status"',
+  ].join('\n');
+}
+
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projectPath?: any) {
   const category = ticket.category || {};
   const project = String(projectPath || (slug && store.readMeta(slug)?.path) || '').trim();
@@ -629,6 +643,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     `Category contract:\nCategory: ${category.id || ticket.categoryId || '(Unclassified)'}\nConfigured route: ${category.route?.model || '(No configured route)'} / ${category.route?.effort || '(No configured effort)'}\nDispatch route: ${ticket.model || category.route?.model || '(No route)'} / ${ticket.effort || category.route?.effort || '(No effort)'}\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
     `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
+    ...(ticket.executorVerify ? [`Verify output discipline: run the exact command through this Bash wrapper so the suite writes to a temporary file and only its exit code, TAP counts, and log path enter the transcript:\n\`\`\`bash\n${filteredVerifyCommand(ticket.executorVerify)}\n\`\`\`\nA passing suite's full output carries no information. Its exit code and summary counts are the signal. On failure, read only the relevant line ranges from the printed log path around the reported \`not ok\` lines. Iterate with the narrowest documented test file or consumer check; reserve this full gate for final verification.`] : []),
     ...(ticket.executorVerify ? ['Verify liveness: immediately before running the exact verify command, add a board comment whose body is `[sidequest:verify-start] <command>`. Immediately after that command exits, including on failure, add `[sidequest:verify-complete]`. These paired markers keep an in-flight long verify from being reclaimed.'] : []),
     ...(ticket.highStakes ? ['High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration.'] : []),
     ...(worktreeIdentity ? [worktreeIdentity] : []),
