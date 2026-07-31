@@ -2708,8 +2708,97 @@ function claudeWebSearchUnavailable(ticket) {
   const effort = coerceEffort(ticket && ticket.effort);
   return ["opus", "sonnet", "fable"].includes(String(model)) && ["xhigh", "max"].includes(String(effort));
 }
-function dispatchWarnings(ticket, slug) {
+const DISPATCH_SYMBOL_CHECK_MAX = 12;
+const DISPATCH_SYMBOL_CHECK_MAX_SCOPES = 64;
+const DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES = 256 * 1024;
+function ticketSymbolReferences(ticket) {
+  const candidates = `${ticket?.title || ""}
+${ticket?.description || ""}`.matchAll(/`([^`\r\n]+)`/g);
+  const symbols = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of candidates) {
+    const symbol = String(candidate[1] || "").trim();
+    if (symbol.length < 3 || !/[_.]|\(\)/.test(symbol)) continue;
+    if (!/^[A-Za-z_$][\w$]*(?:[._][A-Za-z_$][\w$]*)*(?:\(\))?$/.test(symbol)) continue;
+    const key = symbol.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    symbols.push(symbol);
+    if (symbols.length >= DISPATCH_SYMBOL_CHECK_MAX) break;
+  }
+  return symbols;
+}
+function symbolSearchIsBounded(projectPath, target, scopes) {
+  if (!projectPath || !target || scopes.length > DISPATCH_SYMBOL_CHECK_MAX_SCOPES) return false;
+  const args = ["ls-tree", "-r", "--name-only", String(target)];
+  if (scopes.length) args.push("--", ...scopes);
+  try {
+    execFileSync("git", args, {
+      cwd: projectPath,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: "pipe",
+      maxBuffer: DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+function symbolExistsOnTarget(projectPath, target, symbol, scopes) {
+  const args = ["grep", "-F", "-q", "--", String(symbol), String(target)];
+  if (scopes.length) args.push("--", ...scopes);
+  const result = spawnSync("git", args, {
+    cwd: projectPath,
+    windowsHide: true,
+    stdio: "ignore",
+    timeout: 3e3
+  });
+  if (result.error || result.signal || result.status == null) return null;
+  return result.status === 0;
+}
+function symbolExistenceWarnings(ticket, slug) {
+  const projectPath = slug ? readMeta(slug)?.path : null;
+  const symbols = ticketSymbolReferences(ticket);
+  if (!projectPath || !symbols.length) return [];
+  let target;
+  try {
+    target = integrationTarget(slug);
+  } catch (_) {
+    return [];
+  }
+  const scopes = dispatchDeclaredFiles(ticket);
+  if (!symbolSearchIsBounded(projectPath, target.upstream, scopes)) return [];
   const warnings = [];
+  for (const symbol of symbols) {
+    const exists = symbolExistsOnTarget(projectPath, target.upstream, symbol, scopes);
+    if (exists === false) warnings.push(`ticket names \`${symbol}\` but it does not appear on ${target.upstream}; verify this claim before acting.`);
+  }
+  return warnings;
+}
+function crossTicketStateWarnings(ticket, slug) {
+  if (!ticket || !slug) return [];
+  const writtenAt = Date.parse(ticket.referenceUpdatedAt || ticket.updatedAt);
+  if (!Number.isFinite(writtenAt)) return [];
+  const refs = new Set((String(ticket.description || "").match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase()));
+  refs.delete(String(ticket.ref || "").toUpperCase());
+  const warnings = [];
+  for (const ref of refs) {
+    const referenced = getTicket(slug, ref);
+    const transition = referenced?.statusTransition;
+    const changedAt = Date.parse(transition?.at);
+    if (!referenced || !Number.isFinite(changedAt) || changedAt <= writtenAt) continue;
+    const from = transition.from || "unknown";
+    const to = transition.to || referenced.status || "unknown";
+    warnings.push(`${ref} changed state (${from} -> ${to}) after this ticket was written; its claims may be stale.`);
+  }
+  return warnings;
+}
+function dispatchUncertaintyWarnings(ticket, slug) {
+  return [...symbolExistenceWarnings(ticket, slug), ...crossTicketStateWarnings(ticket, slug)].map((warning) => `Dispatch warning: ${warning}`);
+}
+function dispatchWarnings(ticket, slug) {
+  const warnings = dispatchUncertaintyWarnings(ticket, slug);
   const projectPath = slug ? readMeta(slug)?.path : null;
   if (projectPath) {
     const browserReview = readonlyBrowserReviewWarning(ticket);
@@ -2938,6 +3027,7 @@ function createTicket(slug, fields) {
     lastEventSource: String(fields.source || "manual"),
     createdAt: now,
     updatedAt: now,
+    referenceUpdatedAt: now,
     order: Date.now()
   };
   putTicket(slug, ticket);
@@ -3497,7 +3587,10 @@ function updateTicket(slug, idOrRef, patch) {
     }
     t.lastEventType = t.status !== prevStatus ? "status" : "edit";
     t.lastEventSource = patch.source ? String(patch.source) : "cli";
-    t.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    if (t.status !== prevStatus) t.statusTransition = { from: prevStatus, to: t.status, at: now };
+    t.updatedAt = now;
+    t.referenceUpdatedAt = now;
     putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return t;
@@ -4794,7 +4887,9 @@ function claimTicket(slug, idOrRef, by, opts) {
       state.claimedAt = now;
       state.outcome = "claimed";
     }
+    const previousStatus = t2.status;
     if (opts.status !== false) t2.status = coerceStatus(opts.status || "doing", t2.status);
+    if (t2.status !== previousStatus) t2.statusTransition = { from: previousStatus, to: t2.status, at: now };
     if (state) stampDispatchEvent(t2, opts.source || "cli", now);
     else {
       t2.lastEventType = "status";
@@ -4976,6 +5071,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     t.dispatchExecutor = null;
     if (reopenedSubmission) t.submission = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
+    if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: now };
     if (t.status === "todo" && (previousStatus !== "todo" || held && held.by)) {
       appendReworkEvent(t, "released_to_todo", {
         at: now,
@@ -5624,6 +5720,7 @@ function submitTicket(slug, idOrRef, by, opts) {
       integratedAt: null
     }, range || {});
     const dispatch = dispatchState(t);
+    const previousStatus = t.status;
     clearScopeRequestMarker(t);
     t.scopeRequest = null;
     delete t.scopePauseRecovery;
@@ -5632,7 +5729,8 @@ function submitTicket(slug, idOrRef, by, opts) {
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     t.status = "doing";
-    if (dispatch) stampDispatchEvent(t, opts.source || "cli");
+    if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: submittedAt };
+    if (dispatch) stampDispatchEvent(t, opts.source || "cli", submittedAt);
     else {
       t.lastEventType = "status";
       t.lastEventSource = opts.source ? String(opts.source) : "cli";
@@ -5658,6 +5756,7 @@ function clearSubmission(slug, idOrRef, opts) {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     t.submission = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
+    if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: now };
     appendReworkEvent(t, "submission_cleared", {
       at: now,
       source: opts.source || "cli",
@@ -6922,6 +7021,7 @@ module.exports = {
   dispatchDeclaredFiles,
   dispatchWorkspace,
   dispatchWarnings,
+  dispatchUncertaintyWarnings,
   ticketReferenceWarnings,
   ticketCategoryWarnings,
   ticketPlanningWarnings,
