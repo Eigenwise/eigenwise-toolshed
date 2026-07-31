@@ -13,4 +13,4 @@ Codebase Mapper creates a navigable map of a project for future Claude sessions.
 2. Review the generated map, then commit `.claude/.codebase-info/` so your team and future sessions share it.
 3. After structural or other documented project changes, run `/codebase-mapper:update-codebase-map`. It refreshes only the affected documents, and requires an existing `.claude/.codebase-info/INDEX.md`; use `map-codebase` first if the map does not exist.
 
-The plugin's session-start hook injects `.claude/.codebase-info/INDEX.md`, so Claude starts each session with the map's navigation hub in context.
+The plugin injects `.claude/.codebase-info/INDEX.md` at session start and when work-executing subagents start, so they begin with the map's navigation hub in context. Focused lookup agents are excluded to avoid adding map context where it would only add tokens.

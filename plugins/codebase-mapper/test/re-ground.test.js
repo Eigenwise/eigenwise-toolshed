@@ -12,6 +12,7 @@ const documents = require('../hooks/lib/map-documents');
 const root = path.resolve(__dirname, '..');
 const promptHook = path.join(root, 'hooks', 'remind.js');
 const startHook = path.join(root, 'hooks', 'inject-context.js');
+const hooksConfig = require('../hooks/hooks.json');
 
 function project() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codebase-mapper-'));
@@ -158,6 +159,34 @@ test('current maps no-op while future state and interrupted temps stay untouched
   assert.strictEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).schemaVersion, 99);
   assert.match(text(hook(startHook, directory, path.join(directory, 'state'), { session_id: 'future', source: 'startup' })), /newer schema/);
   assert.ok(fs.existsSync(statePath + '.tmp-interrupted'));
+});
+
+test('SubagentStart injects only for selected work agents and stays silent without a map', () => {
+  const subagentHook = hooksConfig.hooks.SubagentStart[0];
+  const matcher = new RegExp(subagentHook.matcher);
+  assert.match(subagentHook.hooks[0].command, /hooks\/inject-context\.js/);
+  assert.match('sidequest-exec-dispatch-high', matcher);
+  assert.match('general-purpose', matcher);
+  assert.match('codebase-mapper:map-writer', matcher);
+  assert.doesNotMatch('Explore', matcher);
+
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const output = hook(startHook, directory, state, {
+    session_id: 'subagent',
+    hook_event_name: 'SubagentStart',
+    agent_type: 'general-purpose',
+  });
+  const payload = JSON.parse(output).hookSpecificOutput;
+  assert.strictEqual(payload.hookEventName, 'SubagentStart');
+  assert.match(payload.additionalContext, /INDEX\.md/);
+  assert.doesNotMatch(payload.additionalContext, /Version one/);
+
+  const emptyDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'codebase-mapper-empty-'));
+  assert.strictEqual(hook(startHook, emptyDirectory, state, {
+    hook_event_name: 'SubagentStart',
+    agent_type: 'general-purpose',
+  }), '');
 });
 
 test('stale map migration locks recover while fresh locks serialize concurrent starts', () => {
