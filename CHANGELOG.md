@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.303.0 (2026-07-31)
+
+### sidequest 3.47.0 → 3.47.1
+
+#### Fixes
+
+- Contended ticket-lock writers starved the lock holder under load (SQ-1133) [`226f257`](https://github.com/Eigenwise/eigenwise-toolshed/commit/226f257)
+  The ticket lock's wait was a busy spin on Date.now(). On a loaded machine the waiting process consumed the CPU the lock holder needed to finish its transaction, so a concurrent close could fail rather than resolving into one idempotent and one non-idempotent winner. It surfaced as an intermittent test failure that only appeared when the machine was saturated, and it failed a release gate on a commit that could not have caused it.
+
+  Contended writers now sleep instead of spinning. The abandoned-lock threshold also moved from 5s to 30s, so a live-but-starved holder is no longer mistaken for a crashed one; a genuinely crashed holder still releases its ticket rather than wedging it forever.
+
+  The test's failure message now reports each call's exit status, signal, stdout and stderr. It previously interpolated stderr alone, so the release log recorded a bare 'done race failed:' with nothing after it.
+
 ## v3.302.0 (2026-07-31)
 
 ### sidequest 3.46.0 → 3.47.0
