@@ -20,6 +20,10 @@ Reload Claude Code, then open the board with `/sidequest:board`. The dashboard s
 
 See [CLI basics](#cli-basics) for command details and [Work a ticket](#work-a-ticket) for the full dispatch and integration flow.
 
+### Verification during ticket work
+
+Generated executors use focused checks while they iterate, then run the ticket's recorded verification command once before submitting. The executor derives the focused command from that ticket command and the project's task scripts, so it tests the changed file or consumer without assuming every project has the same test runner.
+
 ### Take the dashboard tour
 
 The dashboard starts a guided tour the first time you open it. It is an orientation for reading a board where agents file and execute much of the work. Fifteen short steps move from boards, columns, cards, and full ticket details to the inbox, search and filters, the archive, routing settings, filing a ticket yourself, and archiving or deleting a board from its right-click menu. Each step highlights the real surface, and the ticket and board-menu steps open the real UI so you can see the ticket details, executor comments, and board actions without changing anything. Deleting a board is low-stakes: Sidequest creates it again when an agent starts Sidequest work in that project.
