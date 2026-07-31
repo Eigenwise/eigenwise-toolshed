@@ -308,6 +308,7 @@ const TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES = 4 * 1024;
 const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
 const EXPERIMENT_LOG_PACKET_MAX_BYTES = 12 * 1024;
 const STORY_DECISION_LOG_PACKET_MAX_BYTES = 4 * 1024;
+const DISPATCH_UNCERTAINTY_PACKET_MAX_BYTES = 1024;
 
 function byteLength(value?: any) {
   return Buffer.byteLength(String(value || ''), 'utf8');
@@ -603,6 +604,16 @@ function filteredVerifyCommand(verify?: any) {
   ].join('\n');
 }
 
+function dispatchUncertaintyPacket(ticket?: any, slug?: any) {
+  const warnings = store.dispatchUncertaintyWarnings(ticket, slug);
+  if (!warnings.length) return null;
+  return boundedPacket(
+    `Flagged uncertainty:\n${warnings.map((warning: any) => `- ${warning}`).join('\n')}`,
+    DISPATCH_UNCERTAINTY_PACKET_MAX_BYTES,
+    '\n[Additional dispatch uncertainty warnings truncated.]',
+  );
+}
+
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projectPath?: any) {
   const category = ticket.category || {};
   const project = String(projectPath || (slug && store.readMeta(slug)?.path) || '').trim();
@@ -645,6 +656,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const contract = storyContractPacket(ticket, slug);
   const decisionLog = storyDecisionLogPacket(ticket, slug);
   const findingCheckpoints = findingCheckpointPacket(ticket);
+  const uncertainty = dispatchUncertaintyPacket(ticket, slug);
   const parts = [
     '',
     ...(contract ? [contract] : []),
@@ -654,6 +666,8 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     `Title: ${ticket.title || '(Untitled ticket)'}`,
     `Description:\n${ticketDescriptionPacket(ticket.description)}`,
     `Category contract:\nCategory: ${category.id || ticket.categoryId || '(Unclassified)'}\nConfigured route: ${category.route?.model || '(No configured route)'} / ${category.route?.effort || '(No configured effort)'}\nDispatch route: ${ticket.model || category.route?.model || '(No route)'} / ${ticket.effort || category.route?.effort || '(No effort)'}\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
+    ...(uncertainty ? [uncertainty] : []),
+    'Executor contradiction rule: When an instruction names a file, symbol, or state that does not exist in this worktree, STOP and report the contradiction on the ticket immediately. Do not investigate around it or conclude the base is wrong.',
     ...(findingCheckpoints ? [`Durable finding checkpoints:\n${findingCheckpoints}`] : []),
     `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,

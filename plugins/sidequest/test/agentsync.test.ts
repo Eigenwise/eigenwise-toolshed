@@ -67,6 +67,44 @@ test('briefings surface tracked generated outputs paired into effective scope', 
   assert.match(briefing, /plugins\/sidequest\/hooks\/brief\.js/);
 });
 
+test('dispatch uncertainty warnings check symbols and newer cross-ticket state changes', () => {
+  const root = tmpDir();
+  assert.equal(git(root, ['init', '-b', 'main']).status, 0);
+  assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
+  assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'fixture.ts'), 'const existing_symbol = true;\n');
+  assert.equal(git(root, ['add', '.']).status, 0);
+  assert.equal(git(root, ['commit', '-m', 'fixture']).status, 0);
+
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(root, 'dispatch uncertainty').slug;
+  const missingSymbols = Array.from({ length: 13 }, (_, index) => `missing_symbol_${index + 1}`);
+  const target = store.createTicket(slug, {
+    title: `Check ${missingSymbols.map((symbol) => `\`${symbol}\``).join(' ')} before dispatch`,
+    description: 'The `existing_symbol` path depends on a related ticket.',
+    files: ['src'],
+  });
+  const referenced = store.createTicket(slug, { title: 'Referenced ticket' });
+  store.updateTicket(slug, target.ref, { description: `The \`existing_symbol\` path depends on ${referenced.ref}.` });
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  store.updateTicket(slug, referenced.ref, { status: 'doing' });
+
+  const warnings = store.dispatchUncertaintyWarnings(store.getTicket(slug, target.ref), slug);
+  assert.equal(warnings.filter((warning: string) => warning.includes('does not appear on main')).length, 12);
+  assert.match(warnings.join('\n'), /ticket names `missing_symbol_1` but it does not appear on main/);
+  assert.doesNotMatch(warnings.join('\n'), /existing_symbol.*does not appear/);
+  assert.match(warnings.join('\n'), new RegExp(`${referenced.ref} changed state \\(todo -> doing\\) after this ticket was written`));
+
+  const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, target.ref), 'uncertainty-token', slug, root);
+  const uncertaintyPacket = briefing.match(/Flagged uncertainty:\n([\s\S]*?)\n\nExecutor contradiction rule:/);
+  assert.ok(uncertaintyPacket);
+  assert.ok(Buffer.byteLength(`Flagged uncertainty:\n${uncertaintyPacket![1]}`) <= 1024, `uncertainty packet is ${Buffer.byteLength(`Flagged uncertainty:\n${uncertaintyPacket![1]}`)} bytes`);
+  assert.match(uncertaintyPacket![1], /Additional dispatch uncertainty warnings truncated/);
+  assert.match(briefing, /Flagged uncertainty:/);
+  assert.match(briefing, /Executor contradiction rule: When an instruction names a file, symbol, or state that does not exist in this worktree, STOP and report the contradiction/);
+});
+
 test('SQ-677: briefing comments preserve the full chronological durable thread byte-for-byte', () => {
   const comments = [
     {
