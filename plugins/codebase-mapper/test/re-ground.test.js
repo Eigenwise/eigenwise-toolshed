@@ -36,9 +36,14 @@ function writeState(projectDir) {
 }
 
 function hook(script, projectDir, stateDirectory, data) {
+  // inject-context.js resolves the project from CLAUDE_PROJECT_DIR before data.cwd,
+  // so an inherited value silently points every fixture at the real repo instead of
+  // the temp map built above. Claude Code sets it, so leaving it through means the
+  // suite only passes outside a live session.
+  const { CLAUDE_PROJECT_DIR: _ignored, ...ambient } = process.env;
   return childProcess.execFileSync(process.execPath, [script], {
     cwd: projectDir,
-    env: { ...process.env, CODEBASE_MAPPER_STATE_DIR: stateDirectory },
+    env: { ...ambient, CODEBASE_MAPPER_STATE_DIR: stateDirectory },
     input: JSON.stringify({ cwd: projectDir, ...data }),
     encoding: 'utf8',
   });
