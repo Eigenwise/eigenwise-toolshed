@@ -39,7 +39,7 @@ const { assertSidequestInstall, assertDispatchTransport } = require('../lib/disp
  * ------------------------------------------------------------------ */
 
 // Flags that may be repeated collect into arrays; everything else is a scalar.
-const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope', 'produces', 'changes', 'consumes']);
+const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope', 'read-only-denied-tool', 'produces', 'changes', 'consumes']);
 const ALIASES: any = {
   t: 'title',
   d: 'desc',
@@ -2118,7 +2118,12 @@ async function cmdNativeAgent(opts: any, positional: any) {
 // touching the dashboard (which triggers the same sync on save). Useful after
 // changing a tier's backend some other way, or to clean up stale files.
 async function cmdModelsSyncAgents(opts: any) {
-  const res = agentsync.syncExecAgents(undefined, opts.dir ? { dir: opts.dir } : undefined);
+  const { slug } = await resolveProject(opts);
+  const config = store.boardConfig(slug);
+  const res = agentsync.syncExecAgents(undefined, {
+    ...(opts.dir ? { dir: opts.dir } : {}),
+    readOnlyDeniedTools: config?.readOnlyDeniedTools,
+  });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({}, res, res.written > 0 ? { message: agentsync.RELOAD_NOTICE } : {}), null, 2) + '\n');
     return;
@@ -2179,6 +2184,7 @@ async function cmdBoardConfig(opts: any) {
   const patch: any = {};
   if (opts.name != null) patch.name = opts.name;
   if (opts['always-in-scope'] != null) patch.alwaysInScope = opts['always-in-scope'];
+  if (opts['read-only-denied-tool'] != null) patch.readOnlyDeniedTools = opts['read-only-denied-tool'];
   if (opts['generated-pairs'] != null) {
     try { patch.generatedPairs = JSON.parse(opts['generated-pairs']); } catch (_: any) { fail('board-config: --generated-pairs must be a JSON array of { from, to } patterns.'); }
   }
@@ -2782,7 +2788,7 @@ const HELP_COMMANDS: any = {
   'cleanup-temp': 'sidequest cleanup-temp [--root <path>] [--json]',
   models: 'sidequest models [--project <path-or-slug>] [--full] [--json]',
   route: 'sidequest route <category> [--project <path-or-slug>] --json',
-  'board-config': 'sidequest board-config [--always-in-scope path]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
+  'board-config': 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
   routing: 'sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]',
   'archive-board': 'sidequest archive-board <board-ref> [--json]',
@@ -2942,7 +2948,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup <command>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup <command>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
