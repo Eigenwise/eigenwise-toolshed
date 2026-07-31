@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.304.0 (2026-07-31)
+
+### sidequest 3.47.1 → 3.48.0
+
+#### Features
+
+- A green suite's full output was 43k tokens of nothing (SQ-1129) [`1e6d5a1`](https://github.com/Eigenwise/eigenwise-toolshed/commit/1e6d5a1)
+  Running the sidequest suite emitted 177,001 bytes across 4,788 lines. Executors run a gate several times, so a single ticket could spend well over 100k tokens ingesting TAP that says 'ok'. Two executors were killed by context exhaustion in one evening with this as the dominant cost.
+
+  Verify discipline now redirects the full gate to a temporary log and prints only the exit status and the TAP summary counts, reading log ranges around a failure rather than dumping the file. Filtered green output is 110 bytes across 6 lines. The wrapper preserves the command's exit code, so filtering never weakens the submission gate, and a briefing can supply the wrapper with the ticket's exact command already filled in.
+
 ## v3.303.0 (2026-07-31)
 
 ### sidequest 3.47.0 → 3.47.1
