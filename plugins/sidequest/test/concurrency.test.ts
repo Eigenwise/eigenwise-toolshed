@@ -124,7 +124,10 @@ test('concurrent done retries share one terminal comment', async () => {
     runCli(['done', ref, '--by', by, '--body', body, '--json']),
     runCli(['done', ref, '--by', by, '--body', body, '--json']),
   ]);
-  assert.ok(calls.every((result?: any) => result.status === 0), `done race failed: ${calls.map((result?: any) => result.stderr).join('\n')}`);
+  assert.ok(
+    calls.every((result?: any) => result.status === 0),
+    `done race failed:\n${calls.map((result?: any, index?: any) => `call ${index}: status=${result.status} signal=${result.signal || 'none'}\nstdout=${result.stdout}\nstderr=${result.stderr}`).join('\n')}`,
+  );
   const completions = calls.map((result?: any, index?: any) => parseJson(result, `done race ${index}`));
   assert.strictEqual(completions.filter((result?: any) => result.idempotent === true).length, 1);
   assert.strictEqual(completions.filter((result?: any) => result.idempotent !== true).length, 1);
