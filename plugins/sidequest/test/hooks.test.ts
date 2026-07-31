@@ -1311,7 +1311,7 @@ test('session-end sweeps old patch-equivalent worktrees and stays fail-soft', ()
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
 });
 
-test('stop reminder: names pending submissions within its byte budget', () => {
+test('stop reminder: names and re-escalates pending submissions within its byte budget', () => {
   const sessionId = `reconcile-${++sqSeq}`;
   const submitted = addTicket('pending integration');
   claimStopTicket(submitted, sessionId, 'reconcile-submitted');
@@ -1322,13 +1322,43 @@ test('stop reminder: names pending submissions within its byte budget', () => {
     sessionId,
   }).ok, true);
 
-  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
-  assert.equal(output.hookSpecificOutput.hookEventName, 'Stop');
-  const reminder = output.hookSpecificOutput.additionalContext;
-  assert.match(reminder, /1 submission pending integration/);
-  assert.match(reminder, /Update or close them before finishing/);
-  assert.equal(output.systemMessage, undefined, 'the reminder must go to Claude rather than the user-visible system message');
+  const input = { session_id: sessionId, cwd: BOARD_PATH };
+  const initial = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input);
+  assert.equal(initial.hookSpecificOutput.hookEventName, 'Stop');
+  assert.match(initial.hookSpecificOutput.additionalContext, /1 submission pending integration/);
+  assert.equal(initial.systemMessage, undefined, 'the reminder must go to Claude rather than the user-visible system message');
+  assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input), null, 'a pending submission waits before escalating');
+
+  const escalated = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input);
+  const reminder = escalated.hookSpecificOutput.additionalContext;
+  assert.match(reminder, new RegExp(submitted.ref));
+  assert.match(reminder, /3 consecutive stops/);
+  assert.match(reminder, /Integrate or clear/);
   assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
+
+  const stateFile = path.join(SIDEQUEST_HOME, 'hook-state', `stop-reminder-${crypto.createHash('sha256').update(sessionId).digest('hex')}.json`);
+  const sizeAfterEscalation = fs.statSync(stateFile).size;
+  assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input), null, 'the escalation does not repeat on every stop');
+  assert.equal(fs.statSync(stateFile).size, sizeAfterEscalation, 'the reminder state stays bounded across stops');
+});
+
+test('stop reminder: resets its counter when the board signature changes', () => {
+  const sessionId = `reconcile-reset-${++sqSeq}`;
+  const submitted = addTicket('reset reconciliation reminder');
+  claimStopTicket(submitted, sessionId, 'reconcile-reset');
+  assert.equal(store.submitTicket(slug, submitted.ref, 'reconcile-reset', {
+    commit: 'def1234',
+    sessionId,
+  }).ok, true);
+
+  const stateFile = path.join(SIDEQUEST_HOME, 'hook-state', `stop-reminder-${crypto.createHash('sha256').update(sessionId).digest('hex')}.json`);
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, JSON.stringify({ state: 'stale-signature', count: 3 }));
+
+  const output = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+  assert.match(output.hookSpecificOutput.additionalContext, /1 submission pending integration/);
+  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /consecutive stops/);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).count, 1);
 });
 
 test('stop reminder: ignores this session\'s live dispatched tickets in doing or todo', () => {
@@ -1380,7 +1410,7 @@ test('stop reminder: excludes live claims from a mixed live and terminal dispatc
   }, { SIDEQUEST_NUDGE: 'off' }), null);
 });
 
-test('stop reminder: ignores re-entry and falls silent after two unchanged reminders', () => {
+test('stop reminder: ignores re-entry and only re-escalates pending submissions', () => {
   const sessionId = `reconcile-bound-${++sqSeq}`;
   const ticket = addTicket('bounded reconciliation reminder');
   const stop = claimStopTicket(ticket, sessionId, 'reconcile-bound');
@@ -1392,8 +1422,8 @@ test('stop reminder: ignores re-entry and falls silent after two unchanged remin
     stop_hook_active: true,
   }), null, 're-entered Stop hooks must never emit another continuation');
   assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input)?.hookSpecificOutput?.additionalContext);
-  assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input)?.hookSpecificOutput?.additionalContext);
-  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null, 'the same unresolved board state must stop after two reminders');
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null, 'a stable board without a submission must not re-fire');
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null, 'a stable board without a submission remains silent');
 });
 
 test('session-start: carries evidence-first advisory routing guidance', () => {

@@ -8,7 +8,7 @@ import { writeContext } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
 const MAX_MESSAGE_BYTES = 360;
-const MAX_REMINDERS_PER_STATE = 2;
+const ESCALATION_STOP_THRESHOLD = 3;
 
 interface Ticket {
   ref?: string;
@@ -29,6 +29,7 @@ interface Store {
 interface Reminder {
   sessionId: string;
   message: string;
+  pendingRefs: string[];
   state: string;
 }
 
@@ -36,6 +37,8 @@ interface ReminderState {
   state: string;
   count: number;
 }
+
+type ReminderKind = 'initial' | 'escalated';
 
 function nudgeOff(): boolean {
   const value = String(process.env.SIDEQUEST_NUDGE || '').trim().toLowerCase();
@@ -66,23 +69,31 @@ function reminderStateFile(sessionId: string): string {
   return path.join(home, 'hook-state', `stop-reminder-${key}.json`);
 }
 
-function canRemind(reminder: Reminder): boolean {
+function canRemind(reminder: Reminder): ReminderKind | null {
   const file = reminderStateFile(reminder.sessionId);
   try {
     let prior: ReminderState | null = null;
     try {
       prior = JSON.parse(fs.readFileSync(file, 'utf8')) as ReminderState;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
     }
-    const count = prior?.state === reminder.state && Number.isInteger(prior.count) ? prior.count + 1 : 1;
-    if (count > MAX_REMINDERS_PER_STATE) return false;
+    const priorCount = prior?.state === reminder.state && Number.isInteger(prior.count) ? prior.count : 0;
+    const count = Math.min(priorCount + 1, ESCALATION_STOP_THRESHOLD);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ state: reminder.state, count } satisfies ReminderState));
-    return true;
+    if (count === 1) return 'initial';
+    if (reminder.pendingRefs.length && count === ESCALATION_STOP_THRESHOLD && priorCount < count) return 'escalated';
+    return null;
   } catch (_) {
-    return false;
+    return null;
   }
+}
+
+function escalatedMessage(reminder: Reminder): string {
+  const refs = reminder.pendingRefs.join(', ');
+  const verb = reminder.pendingRefs.length === 1 ? 'has' : 'have';
+  return byteCapped(`Sidequest: ${refs} ${verb} been pending integration for ${ESCALATION_STOP_THRESHOLD} consecutive stops. Integrate or clear them before finishing.`);
 }
 
 function reconciliationMessage(data: HookInput): Reminder | null {
@@ -104,6 +115,7 @@ function reconciliationMessage(data: HookInput): Reminder | null {
       && (!liveDispatch(ticket, sessionId, store) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === 'doing' && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
+    const pendingRefs = submissions.map((ticket) => String(ticket.ref || '')).filter(Boolean);
     const otherOpen = open.length - doing.length - submissions.length;
     if (!open.length) return null;
 
@@ -123,6 +135,7 @@ function reconciliationMessage(data: HookInput): Reminder | null {
     return {
       sessionId,
       message: byteCapped(`Sidequest: ${state} on this board. Update or close them before finishing.`),
+      pendingRefs,
       state: signature,
     };
   } catch (_) {
@@ -134,7 +147,8 @@ function main(): void {
   const data = readStdin();
   if (!data || data.stop_hook_active === true) return;
   const reminder = reconciliationMessage(data);
-  if (reminder && canRemind(reminder)) writeContext('Stop', reminder.message);
+  const kind = reminder && canRemind(reminder);
+  if (reminder && kind) writeContext('Stop', kind === 'escalated' ? escalatedMessage(reminder) : reminder.message);
 }
 
 main();
