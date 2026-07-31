@@ -7,13 +7,13 @@ const DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 function buildPreflightOutput(payload, suppliedEstimate) {
   if (!payload || payload.hook_event_name !== 'PreToolUse' || !DISPATCH_TOOLS.has(payload.tool_name)) return null;
   const estimate = suppliedEstimate === undefined
-    ? estimateRequestBodyBytes(payload.transcript_path)
+    ? estimateRequestBodyBytes(payload.session_id)
     : suppliedEstimate;
   if (!estimate || !estimate.warning) return null;
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      additionalContext: 'Request body is near the 32MB limit. Run /compact before spawning executors.',
+      additionalContext: 'Request body peak is near the 32MB limit. Reduce the next request before spawning executors.',
     },
   };
 }

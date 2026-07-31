@@ -14,33 +14,34 @@ const {
   REQUEST_BODY_WARNING_BYTES,
   estimateRequestBodyBytes,
   formatRequestBodyStatus,
+  requestBodyHighWaterPath,
 } = require('../lib/observability/request-body.js');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'request-body-transcript.jsonl');
 const NOW = new Date('2026-07-19T10:00:00.000Z');
 
-test('request-body estimate counts base64 fixture bytes without exposing attachment data', () => {
-  const estimate = estimateRequestBodyBytes(FIXTURE);
-  assert.equal(estimate.attachment_bytes, 12);
-  assert.equal(estimate.value, estimate.attachment_bytes + estimate.text_allowance_bytes);
-  assert.equal(estimate.warning, false);
+test('request-body high water uses the gateway record instead of the transcript', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-body-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const sessionId = 'session-1';
+  fs.writeFileSync(requestBodyHighWaterPath(sessionId, directory), JSON.stringify({ value: 1234567 }));
+  const estimate = estimateRequestBodyBytes(sessionId, directory);
+  assert.deepEqual(estimate, { value: 1234567, warning: false });
 
   const observations = buildStatuslineObservations({
-    session_id: 'session-1',
+    session_id: sessionId,
     transcript_path: FIXTURE,
     context_window: { total_input_tokens: 42000, context_window_size: 1000000 },
   }, NOW, estimate);
   const body = observations[0].measurements.find((measurement) => measurement.name === 'request_body_bytes');
   assert.equal(body.value, estimate.value);
-  assert.equal(body.quality, 'estimate');
-  assert.equal(body.scope, 'context_snapshot');
-  assert.equal(JSON.stringify(observations).includes('AQID'), false);
+  assert.equal(body.quality, 'exact_client');
 });
 
 test('request-body threshold is visible in the statusline and warns before Task dispatch', () => {
   const estimate = { value: REQUEST_BODY_WARNING_BYTES, warning: true };
-  assert.match(formatRequestBodyStatus(estimate), /^body ~26\.0MB\/32MB WARNING: \/compact before spawning$/);
-  assert.equal(renderStatusline('', estimate), 'body ~26.0MB/32MB WARNING: /compact before spawning');
+  assert.match(formatRequestBodyStatus(estimate), /^body peak 24\.0MB\/32MB WARNING$/);
+  assert.equal(renderStatusline('', estimate), 'body peak 24.0MB/32MB WARNING');
 
   const output = buildPreflightOutput({ hook_event_name: 'PreToolUse', tool_name: 'Task' }, estimate);
   assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
@@ -98,11 +99,19 @@ test('real statusline invocation appends subscription burn and ledgers both wind
   assert.equal(values.rate_limit_seven_day_reset_at_ms, 1738857600000);
 });
 
-test('missing or oversized transcripts fail open', (t) => {
-  const oversized = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-body-')), 'transcript.jsonl');
-  t.after(() => fs.rmSync(path.dirname(oversized), { recursive: true, force: true }));
-  fs.writeFileSync(oversized, 'x');
-  fs.truncateSync(oversized, 37 * 1024 * 1024);
-  assert.equal(estimateRequestBodyBytes(path.join(__dirname, 'fixtures', 'missing.jsonl')), null);
-  assert.equal(estimateRequestBodyBytes(oversized), null);
+test('gateway records stay readable after a transcript exceeds the former limit', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-body-'));
+  const transcript = path.join(directory, 'transcript.jsonl');
+  const sessionId = 'large-session';
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.writeFileSync(transcript, 'x');
+  fs.truncateSync(transcript, 37 * 1024 * 1024);
+  fs.writeFileSync(requestBodyHighWaterPath(sessionId, directory), JSON.stringify({ value: 1024 }));
+  assert.deepEqual(estimateRequestBodyBytes(sessionId, directory), { value: 1024, warning: false });
+});
+
+test('missing gateway records fail open', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-body-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  assert.equal(estimateRequestBodyBytes('missing-session', directory), null);
 });

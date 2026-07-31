@@ -43,7 +43,7 @@ function buildStatuslineObservations(payload, now, suppliedRequestBodyEstimate) 
   const sessionId = identifier(first(payload.session_id, payload.sessionId));
   const model = identifier(first(payload.model && payload.model.id, payload.model && payload.model.display_name, payload.model));
   const requestBodyEstimate = suppliedRequestBodyEstimate === undefined
-    ? estimateRequestBodyBytes(payload.transcript_path)
+    ? estimateRequestBodyBytes(sessionId)
     : suppliedRequestBodyEstimate;
 
   const context = payload.context_window && typeof payload.context_window === 'object'
@@ -83,7 +83,7 @@ function buildStatuslineObservations(payload, now, suppliedRequestBodyEstimate) 
     measurements: [
       measure('context_tokens', contextTokens, 'tokens', 'context_snapshot', 'exact_client'),
       measure('context_window_tokens', windowTokens, 'tokens', 'context_snapshot', 'exact_client'),
-      measure('request_body_bytes', requestBodyEstimate ? requestBodyEstimate.value : null, 'bytes', 'context_snapshot', 'estimate'),
+      measure('request_body_bytes', requestBodyEstimate ? requestBodyEstimate.value : null, 'bytes', 'context_snapshot', 'exact_client'),
       measure('cost_usd', nonNegative(first(cost.total_cost_usd, cost.totalCostUsd)), 'usd', 'session', 'estimate'),
       measure('duration_ms', nonNegative(first(cost.total_duration_ms, cost.totalDurationMs)), 'ms', 'session', 'exact_client'),
     ],
@@ -164,7 +164,7 @@ async function main() {
   const raw = Buffer.concat(chunks).toString('utf8');
   try {
     const payload = JSON.parse(raw);
-    const requestBodyEstimate = estimateRequestBodyBytes(payload.transcript_path);
+    const requestBodyEstimate = estimateRequestBodyBytes(payload.session_id);
     process.stdout.write(renderStatusline(raw, requestBodyEstimate, payload));
     for (const observation of buildStatuslineObservations(payload, new Date(), requestBodyEstimate)) {
       spool(process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath(), observation);

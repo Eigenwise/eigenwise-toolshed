@@ -1,6 +1,9 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -13,6 +16,8 @@ const {
   inputComposition,
   mergeUsage,
   parseLimitHeaders,
+  recordRequestBodyHighWater,
+  requestBodyHighWaterPath,
   resolveUsageEndpoint,
   serializedBytes,
 } = require('../lib/usage-observability.js');
@@ -54,6 +59,17 @@ function finishEmitterRequest(emitter, requestPayload, contextTokens, sessionId,
   capture.observeJson(JSON.stringify({ usage: { input_tokens: contextTokens, output_tokens: 1 } }));
   return capture.finish();
 }
+
+test('records a per-session request-body high water mark', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-body-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const sessionId = 'high-water-session';
+  const filePath = requestBodyHighWaterPath(sessionId, directory);
+
+  assert.equal(recordRequestBodyHighWater(sessionId, 1234, directory), 1234);
+  assert.equal(recordRequestBodyHighWater(sessionId, 1000, directory), 1234);
+  assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')).value, 1234);
+});
 
 test('counts request composition without retaining content', () => {
   const composition = inputComposition(payload, 9876);

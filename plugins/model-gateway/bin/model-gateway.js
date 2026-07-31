@@ -38,7 +38,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const { createGatewayUsageEmitter } = require('../lib/usage-observability.js');
+const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('../lib/usage-observability.js');
 const grokBackend = require('../lib/grok-backend.js');
 
 const WIN = process.platform === 'win32';
@@ -3276,12 +3276,14 @@ function runWorker() {
               fallback: false,
               via: dispatchVia || 'direct',
             });
+            const requestBodySessionId = requestSessionId(req);
             const sessionId = codexSessionId(req);
             if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId)) {
               routeTelemetry.finish(413);
               return;
             }
             const forwardedBody = JSON.stringify(parsed);
+            recordRequestBodyHighWater(requestBodySessionId, Buffer.byteLength(forwardedBody));
             const usageCapture = pathOnly === '/v1/messages' && usageEmitter.enabled
               ? usageEmitter.start({
                 payload: parsed,
@@ -3325,6 +3327,7 @@ function runWorker() {
               fallback: false,
               via: 'direct',
             });
+            recordRequestBodyHighWater(requestSessionId(req), raw.length);
             const usageCapture = usageEmitter.enabled
               ? usageEmitter.start({
                 payload: parsed,
@@ -3347,6 +3350,7 @@ function runWorker() {
         fallback: false,
         via: 'direct',
       });
+      recordRequestBodyHighWater(requestSessionId(req), raw.length);
       const usageCapture = pathOnly === '/v1/messages' && usageEmitter.enabled && parsedPayload
         ? usageEmitter.start({
           payload: parsedPayload,
