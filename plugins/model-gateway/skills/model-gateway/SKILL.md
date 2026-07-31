@@ -20,7 +20,7 @@ All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" <command>`
 
 ## First-time setup
 
-Before wiring a machine with no saved mode (`env --show-mode` says it defaulted), ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. Persist the answer with `env --mode global` or `env --mode local`; do not ask again once a mode exists. If setup must run without interaction, use local and say `wiring mode defaulted to per-project; run model-gateway env --mode global to change`.
+Before wiring a machine with no saved mode (`env --show-mode` says it defaulted), ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. `env --mode global` persists the answer and writes `~/.claude/settings.json`; `env --mode local` persists it and writes the current project's `.claude/settings.local.json`. Do not ask again once a mode exists. If setup must run without interaction, use local and say `wiring mode defaulted to per-project; run model-gateway env --mode global to change`.
 
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
 state; act on it. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
@@ -34,14 +34,17 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" setup    # finishes the wiring
 ```
 
 `login` opens the user's browser; they complete it themselves (suggest `! node ... login` if it
-needs a real TTY). Local wiring is the default: run `env --write-project` from the current repo,
-or `/workbench:update-toolshed` to wire recorded projects and migrate an older global block. It writes
-`.claude/settings.local.json`; unrecorded projects stay unwired until explicitly wired. To switch a
-saved mode and migrate recorded projects, run `/workbench:update-toolshed --wiring-mode local` or
+needs a real TTY). Local wiring is the default: `env --mode local` writes the current repo's
+`.claude/settings.local.json`, while `env --mode global` writes user settings for every project.
+`/workbench:update-toolshed` wires recorded projects and migrates an older global block. A project
+`settings.local.json` `env` block overrides user settings completely, so run `doctor` when a project
+has its own env settings and the Codex rows are missing. To migrate recorded projects after changing
+the saved mode, run `/workbench:update-toolshed --wiring-mode local` or
 `/workbench:update-toolshed --wiring-mode global`. The global switch preserves existing local blocks
-and names them as redundant; it never deletes them. All wiring changes apply to new Claude Code sessions, so restart after the
-write. The Codex rows appear in `/model` labeled "From gateway". Discovery needs Claude Code
-v2.1.129+ and fails silently if the shim answers slowly; `models` shows exactly what's advertised.
+and names them as redundant; it never deletes them. All wiring changes apply to new Claude Code
+sessions, so restart after the write. The Codex rows appear in `/model` labeled "From gateway".
+Discovery needs Claude Code v2.1.129+ and fails silently if the shim answers slowly; `models` shows
+exactly what's advertised.
 
 That restart is ONLY to surface new model rows in `/model` — model discovery happens once at
 session start. Restoring or refreshing auth on an already-wired install needs no restart: the
