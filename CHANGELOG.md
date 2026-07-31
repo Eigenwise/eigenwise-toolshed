@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.307.0 (2026-08-01)
+
+### model-gateway 0.44.0 → 0.44.1
+
+#### Fixes
+
+- Extract pin management, process supervision, settings wiring, and remote control out of the model-gateway entry point (SQ-1145) [`8c9884e`](https://github.com/Eigenwise/eigenwise-toolshed/commit/8c9884e)
+
 ## v3.306.0 (2026-08-01)
 
 ### sidequest 3.49.0 → 3.50.0
