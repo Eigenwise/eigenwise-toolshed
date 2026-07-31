@@ -341,6 +341,26 @@ test('read-only stable executors expose only the approved tool allowlist', () =>
   }
 });
 
+test('stable executors preload verify discipline and the install hash tracks the skill list', () => {
+  const dir = tmpDir();
+  agentsync.syncExecAgents(null, { dir });
+
+  for (const file of [
+    'sidequest-exec-dispatch-high.md',
+    'sidequest-exec-high.md',
+    'sidequest-exec-dispatch-readonly-high.md',
+    'sidequest-exec-readonly-high.md',
+  ]) {
+    const body = fs.readFileSync(path.join(dir, file), 'utf8');
+    assert.match(body, /^skills:\n  - sidequest:verify-discipline$/m);
+  }
+
+  assert.notEqual(
+    agentsync.stableInstallHash(),
+    agentsync.stableInstallHash([...agentsync.EXECUTOR_SKILLS, 'sidequest:another-skill']),
+  );
+});
+
 test('sync keeps the complete stable ladder after route removal', () => {
   seedCatalog([TERRA, PROJECT_ONLY]);
   const store = require('../lib/store.js');
