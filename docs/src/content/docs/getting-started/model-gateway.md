@@ -43,6 +43,20 @@ The `state` value points at the repair path:
 
 The `doctor` output also includes a model fallback diagnostic. If the model used by a dispatch and the served model appear different, reproduce the problem in a throwaway session with `CLAUDE_CODE_NO_MODEL_FALLBACK=true`. That turns silent fallback into a thrown error identifying the call site. Unset the variable afterwards; normal operation keeps graceful fallback for transient 5xx errors.
 
+### Migrating from codex-gateway
+
+`codex-gateway` was renamed to `model-gateway` in 0.38.0. Install and invoke Model Gateway, then run setup, `env --write-user`, and restart Claude Code. Existing `claude-codex-*` model ids still resolve, while the picker advertises current `claude-gpt-*` and `claude-grok-*` ids. `/workbench:update-toolshed` migrates older per-project wiring to the global user block. Remove old wiring before uninstalling the legacy plugin so open sessions do not keep pointing at its shim.
+
+### Settings, state, and overrides
+
+The plugin owns one gateway `env` block in `~/.claude/settings.json`: the local base URL, model discovery, non-streaming fallback protection, tool search, output-token limit, and native Opus, Sonnet, and Fable pins. It removes only those keys, plus its legacy auto-compact key, when you run `env --remove`. Runtime state lives under `~/.claude/model-gateway/`, including the downloaded proxy, logs, model catalog, route metadata, dispatch metadata, and supervisor failure markers. ChatGPT/Codex credentials stay with `claude-code-proxy` under `~/.config/claude-code-proxy/` (or `%APPDATA%\\claude-code-proxy\\` on Windows); Grok credentials stay in `~/.grok/auth.json`.
+
+Optional process overrides cover ports, context and compaction thresholds, streaming retries, request-route logs, trace and usage telemetry, and the request-body high-water directory. Restart the gateway after changing them. `ANTHROPIC_BASE_URL` resolves from process environment, project-local settings, project shared settings, then user settings; `doctor` marks the effective winner and flags compat/default contradictions.
+
+### Upgrade behavior
+
+The gateway uses one supervisor and reports both installed and serving versions. If an old supervisor is still serving a previous plugin version, `doctor` reports `serving-version-mismatch`; run `ensure` to replace it before trusting the model catalog or dispatch route.
+
 ### Add Grok subscription models
 
 Install the official Grok CLI and run `grok` once to sign in with your SuperGrok subscription. Model Gateway reads that CLI login from `~/.grok/auth.json`, refreshes it when needed, and adds `claude-grok-*` rows such as `claude-grok-4.5`, `claude-grok-build`, and `claude-grok-4.1-fast` to `/model`. No xAI API key is needed. If `doctor` reports Grok auth missing or refresh fails, run `grok` and log in again. Update the Grok CLI if it reports an outdated version header.
