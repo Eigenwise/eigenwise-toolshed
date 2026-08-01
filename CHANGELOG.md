@@ -8,6 +8,72 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.327.0 (2026-08-01)
+
+### codebase-mapper 2.12.0 → 2.12.1
+
+#### Fixes
+
+- Point every plugin README at the docs site and state the right install scope (SQ-1219) [`40faeb1`](https://github.com/Eigenwise/eigenwise-toolshed/commit/40faeb1b3168c01822cc50158cc529d95330d990)
+  Each plugin README now opens with a link to its guide on the docs site, and says whether it installs at user scope or project scope. Model Gateway is user scope only: its wiring writes ~/.claude/settings.json and there is no project-scoped mode.
+
+### live-rules 2.9.0 → 2.9.1
+
+#### Fixes
+
+- Point every plugin README at the docs site and state the right install scope (SQ-1219) [`40faeb1`](https://github.com/Eigenwise/eigenwise-toolshed/commit/40faeb1b3168c01822cc50158cc529d95330d990)
+  Each plugin README now opens with a link to its guide on the docs site, and says whether it installs at user scope or project scope. Model Gateway is user scope only: its wiring writes ~/.claude/settings.json and there is no project-scoped mode.
+
+### model-gateway 0.46.2 → 0.46.3
+
+#### Fixes
+
+- Point every plugin README at the docs site and state the right install scope (SQ-1219) [`40faeb1`](https://github.com/Eigenwise/eigenwise-toolshed/commit/40faeb1b3168c01822cc50158cc529d95330d990)
+  Each plugin README now opens with a link to its guide on the docs site, and says whether it installs at user scope or project scope. Model Gateway is user scope only: its wiring writes ~/.claude/settings.json and there is no project-scoped mode.
+
+### sidequest 3.51.0 → 3.52.0
+
+#### Features
+
+- Re-derive the starter routing profiles around required capability instead of artifact type (SQ-1222) [`5f19f73`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5f19f730b3122a39833a0589912593479f3f4a69)
+  Starter categories were named after the thing produced, but a category only decides model and effort, so the axis that matters is what capability the work needs. Research split into a cheap lookup and a real investigation, testing became behavior-verification, ui-frontend became interaction-design-implementation, and the writing starter no longer ships a docs-writing category to projects with no docs. Existing boards migrate; the seed migration now keys on category id rather than on the old description text, which is what used to strand artifactRoots on upgrade.
+
+#### Fixes
+
+- Point every plugin README at the docs site and state the right install scope (SQ-1219) [`40faeb1`](https://github.com/Eigenwise/eigenwise-toolshed/commit/40faeb1b3168c01822cc50158cc529d95330d990)
+  Each plugin README now opens with a link to its guide on the docs site, and says whether it installs at user scope or project scope. Model Gateway is user scope only: its wiring writes ~/.claude/settings.json and there is no project-scoped mode.
+- Restore the README claims that the plugin contract tests pin (SQ-1229) [`70daf4b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/70daf4b4f76a)
+  The README rewrite dropped three claims the suites assert on and introduced an internal identifier one of them forbids.
+- Stop the compaction policy tests inheriting SIDEQUEST_COMPACTION_POLICY from the shell (SQ-1230) [`ea34114`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ea341146e3eff3b6ab84d557e60915818a3a6fa5)
+  The tests spawned the hook with the developer's own environment, so on a machine with the per-project veto setting the two default-policy tests got the veto policy and failed. That made the release gate red for anyone with a legitimate local setting.
+
+### skill-retro 0.3.0 → 0.3.1
+
+#### Fixes
+
+- Point every plugin README at the docs site and state the right install scope (SQ-1219) [`40faeb1`](https://github.com/Eigenwise/eigenwise-toolshed/commit/40faeb1b3168c01822cc50158cc529d95330d990)
+  Each plugin README now opens with a link to its guide on the docs site, and says whether it installs at user scope or project scope. Model Gateway is user scope only: its wiring writes ~/.claude/settings.json and there is no project-scoped mode.
+
+### workbench 0.75.0 → 0.76.0
+
+#### Features
+
+- init-workspace explains what it is doing while it runs (SQ-1220) [`661c213`](https://github.com/Eigenwise/eigenwise-toolshed/commit/661c21358a4bdeb02310fdc6b9a1f7449ddb7f91)
+  The skill was written purely as agent instructions, so someone running it got a series of questions with no stated reason. It now orients you before the first question, gives every ask a one-line reason, says which files it writes including the one global settings exception for the compaction window, and ends Phase 5 as a handover rather than a silent stop.
+- Build out the init-workspace rule templates for projects that are not codebases (SQ-1223) [`6c1572e`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6c1572e824a12f23b267e635d7689c69595df522)
+  The not-a-codebase section was a three-bullet stub sitting under about ten detailed code rules, so a knowledge vault got a thinner workspace than a Python repo. It now covers voice enforcement against the project's own guideline files, per-type frontmatter conformance, dating temporal claims, handling contradictions, link hygiene, and research sourcing. Generated rule text is also told to conform to the target project's own voice rules.
+- init-workspace derives categories and rules from the project instead of cloning a starter (SQ-1225) [`02c6582`](https://github.com/Eigenwise/eigenwise-toolshed/commit/02c6582578da792eda1510d02e78863265925550)
+  Phase 0 told the agent to propose a small delta from the closest starter, which anchored it on the template and made removing an inherited category feel abnormal. The flow now enumerates what capabilities the work actually needs, requires a per-category justification and a contract, and treats the starters and rule catalogs as reference rather than a base. A generated artifact that comes out byte-identical to a template block is stated as the signal it was copied rather than derived.
+
+#### Fixes
+
+- Point every plugin README at the docs site and state the right install scope (SQ-1219) [`40faeb1`](https://github.com/Eigenwise/eigenwise-toolshed/commit/40faeb1b3168c01822cc50158cc529d95330d990)
+  Each plugin README now opens with a link to its guide on the docs site, and says whether it installs at user scope or project scope. Model Gateway is user scope only: its wiring writes ~/.claude/settings.json and there is no project-scoped mode.
+- Treat non-codebase projects as a real project class in the init-workspace stack reference (SQ-1224) [`f6c8e90`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f6c8e903e56cbd5238ce6bbfc88356508f93fa7c)
+  stack-plugins.md gave non-codebase projects two lines and used them as the leftover bucket. They now get a proper section, so a vault or a writing project gets a considered plugin set instead of whatever did not match a language.
+- Restore the README claims that the plugin contract tests pin (SQ-1229) [`70daf4b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/70daf4b4f76a)
+  The README rewrite dropped three claims the suites assert on and introduced an internal identifier one of them forbids.
+
 ## v3.326.0 (2026-08-01)
 
 ### workbench 0.74.0 → 0.75.0
