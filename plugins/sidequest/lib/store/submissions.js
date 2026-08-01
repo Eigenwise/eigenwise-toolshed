@@ -481,6 +481,7 @@ ${verify.outputTail}` : null
         by,
         at: submittedAt,
         commit,
+        commentId: comment ? comment.id : null,
         gitRef: gitRef || submissionGitRef(t),
         verify,
         worktree,

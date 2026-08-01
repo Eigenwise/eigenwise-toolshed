@@ -45,6 +45,7 @@ const {
   PAGE_LIMIT_MAX,
   boundedExcerpt,
   compactComment,
+  compactListRow,
   categoryListEntry,
   pageArguments,
   pageRows,
@@ -68,6 +69,16 @@ type ToolDefinition = {
   inputSchema: any;
   handler: (args: any) => any | Promise<any>;
 };
+
+function readySummary(payload?: any) {
+  const tickets = payload.tickets.map((ticket: any) => ({ ref: ticket.ref, title: ticket.title }));
+  return {
+    count: tickets.length,
+    tickets,
+    waves: payload.waves,
+    waveDependencies: payload.waveDependencies,
+  };
+}
 
 const tools: ToolDefinition[] = [
   {
@@ -99,7 +110,8 @@ const tools: ToolDefinition[] = [
         status, archived: args.archived, brief,
         cursor: args.cursor, limit: args.limit, all: args.all, maxChars,
       });
-      const out = Object.assign({ project: slug, projectName: meta.name }, withoutCategories(payload));
+      const shapedPayload = brief ? Object.assign({}, payload, { tickets: payload.tickets.map(compactListRow) }) : payload;
+      const out = Object.assign({ project: slug, projectName: meta.name }, withoutCategories(shapedPayload));
       if (payload.nextCursor) {
         out.hint = `Page ${payload.returned}/${payload.total}; continue with cursor:"${payload.nextCursor}" until nextCursor is null.`;
       }
@@ -259,21 +271,23 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'ready',
-    description: 'Unclaimed, unblocked, not-done tickets in parallel-safe waves by file scope. Default to brief:true for orchestration reads.',
+    description: 'Ready tickets in safe waves. Default: count plus ref/title rows; full:true returns ticket records.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         model: MODEL_FILTER_PROP,
         category: { type: 'string', description: 'Filter to a category ID.' },
-        brief: { type: 'boolean', description: 'Compact rows without bodies; null category fields mean classify before dispatch.' },
+        brief: { type: 'boolean' },
+        full: { type: 'boolean' },
       },
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       requireKnownModelFilter('ready', args.model);
-      const payload = store.readyPayload(slug, { model: args.model, category: args.category, brief: args.brief !== false });
-      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(payload));
+      const full = args.full === true || args.brief === false;
+      const payload = store.readyPayload(slug, { model: args.model, category: args.category, brief: !full });
+      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(full ? payload : readySummary(payload)));
     },
   },
 ];

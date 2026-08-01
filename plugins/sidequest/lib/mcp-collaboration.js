@@ -44,6 +44,7 @@ const {
   PAGE_LIMIT_MAX,
   boundedExcerpt,
   compactComment,
+  preservesFinalReport,
   categoryListEntry,
   pageArguments,
   pageRows,
@@ -109,7 +110,7 @@ const tools = [
       if (!t) throw new Error(`comments: no ticket "${args.ref}".`);
       const full = !!args.full;
       const history = store.commentHistory(t.comments || [], full);
-      const comments = full ? history.comments : history.comments.map(compactComment);
+      const comments = full ? history.comments : history.comments.map((comment) => compactComment(comment, preservesFinalReport(t, comment)));
       const buildPayload = (page, total, nextCursor) => {
         const payload = {
           ref: t.ref,
