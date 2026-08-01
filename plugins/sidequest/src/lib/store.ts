@@ -54,6 +54,46 @@ const { createRouting } = require('./store/routing.js');
 const { createTickets } = require('./store/tickets.js');
 const { createSubmissions } = require('./store/submissions.js');
 const { createDispatch } = require('./store/dispatch.js');
+const { createPaths } = require('./store/paths.js');
+const { createCache } = require('./store/cache.js');
+const { createConfig } = require('./store/config.js');
+const { createSweeps } = require('./store/sweeps.js');
+const { createServer } = require('./store/server.js');
+
+let cacheLayer: any;
+function sqliteDataVersion(...args: any[]) { return cacheLayer.sqliteDataVersion(...args); }
+function newStoreCache(...args: any[]) { return cacheLayer.newStoreCache(...args); }
+function residentCache(...args: any[]) { return cacheLayer.residentCache(...args); }
+function invalidateStoreCaches(...args: any[]) { return cacheLayer.invalidateStoreCaches(...args); }
+function putCachedRow(...args: any[]) { return cacheLayer.putCachedRow(...args); }
+function deleteCachedRow(...args: any[]) { return cacheLayer.deleteCachedRow(...args); }
+function cloneCached(...args: any[]) { return cacheLayer.cloneCached(...args); }
+function ensureDir(...args: any[]) { return cacheLayer.ensureDir(...args); }
+
+let configLayer: any;
+function defaultProjectName(...args: any[]) { return configLayer.defaultProjectName(...args); }
+function normalizeAlwaysInScope(...args: any[]) { return configLayer.normalizeAlwaysInScope(...args); }
+function normalizeReadOnlyDeniedTools(...args: any[]) { return configLayer.normalizeReadOnlyDeniedTools(...args); }
+function normalizeGeneratedPairPath(...args: any[]) { return configLayer.normalizeGeneratedPairPath(...args); }
+function normalizeGeneratedPairs(...args: any[]) { return configLayer.normalizeGeneratedPairs(...args); }
+function generatedPathFor(...args: any[]) { return configLayer.generatedPathFor(...args); }
+function trackedGeneratedPaths(...args: any[]) { return configLayer.trackedGeneratedPaths(...args); }
+function defaultAlwaysInScope(...args: any[]) { return configLayer.defaultAlwaysInScope(...args); }
+function normalizeDeliveryMode(...args: any[]) { return configLayer.normalizeDeliveryMode(...args); }
+function normalizeIntegrationMode(...args: any[]) { return configLayer.normalizeIntegrationMode(...args); }
+function normalizeIntegrationBranch(...args: any[]) { return configLayer.normalizeIntegrationBranch(...args); }
+function normalizeWorktreeIsolation(...args: any[]) { return configLayer.normalizeWorktreeIsolation(...args); }
+function normalizeAutoApprovePluginTests(...args: any[]) { return configLayer.normalizeAutoApprovePluginTests(...args); }
+function normalizeWorktreeSetup(...args: any[]) { return configLayer.normalizeWorktreeSetup(...args); }
+function normalizeIntegrationVerifyTimeoutMs(...args: any[]) { return configLayer.normalizeIntegrationVerifyTimeoutMs(...args); }
+function hasOriginRemote(...args: any[]) { return configLayer.hasOriginRemote(...args); }
+function integrationBranchExists(...args: any[]) { return configLayer.integrationBranchExists(...args); }
+function integrationTarget(...args: any[]) { return configLayer.integrationTarget(...args); }
+function integrationTargetCommit(...args: any[]) { return configLayer.integrationTargetCommit(...args); }
+function normalizeBoardName(...args: any[]) { return configLayer.normalizeBoardName(...args); }
+function boardConfig(...args: any[]) { return configLayer.boardConfig(...args); }
+function setBoardConfig(...args: any[]) { return configLayer.setBoardConfig(...args); }
+function effectiveScope(...args: any[]) { return configLayer.effectiveScope(...args); }
 
 let dispatch: any;
 function dispatchState(...args: any[]) { return dispatch.dispatchState(...args); }
@@ -320,141 +360,7 @@ function nextDispatchLaunchSeq(state?: any) {
  *  Roots and path helpers
  * ------------------------------------------------------------------ */
 
-function homeRoot() {
-  const env = process.env.SIDEQUEST_HOME;
-  if (env && String(env).trim()) return path.resolve(String(env).trim());
-  return path.join(os.homedir(), '.claude', 'sidequest');
-}
-
-function projectsRoot() {
-  return path.join(homeRoot(), 'projects');
-}
-
-function serverFile() {
-  return path.join(homeRoot(), 'server.json');
-}
-
-// Windows paths are case-insensitive; normalize case for a stable hash so the
-// same folder always maps to the same slug regardless of how it was typed.
-function normalizeForHash(absPath?: any) {
-  const p = path.resolve(absPath);
-  return process.platform === 'win32' ? p.toLowerCase() : p;
-}
-
-function slugify(absPath?: any) {
-  const base = path
-    .basename(path.resolve(absPath))
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'project';
-  const hash = crypto.createHash('sha1').update(normalizeForHash(absPath)).digest('hex').slice(0, 8);
-  return `${base}-${hash}`;
-}
-
-// A git worktree's `.git` is a FILE, not a directory:
-//     gitdir: C:/dev/repo/.git/worktrees/<name>
-// Given that file, resolve the MAIN worktree root that owns it (C:\dev\repo)
-// so a worktree never mints its own board. Returns null when this isn't a
-// linked worktree we can trust locally, and the caller keeps today's behavior:
-//   - the entry is a `.git` DIRECTORY (a real clone root) — not our job
-//   - the gitdir points at `.../modules/...` (a submodule — a separate repo)
-//   - the gitdir is missing/malformed, or points off THIS machine (a remote
-//     clone, a container mount, another OS) so the computed root isn't real here
-// Fail-soft throughout: any error returns null.
-function mainWorktreeRoot(gitEntry?: any) {
-  let stat: any;
-  try {
-    stat = fs.statSync(gitEntry);
-  } catch (_: any) {
-    return null;
-  }
-  if (!stat.isFile()) return null; // a `.git` dir is a real repo root, leave it
-  let content: any;
-  try {
-    content = fs.readFileSync(gitEntry, 'utf8');
-  } catch (_: any) {
-    return null;
-  }
-  const m = /^gitdir:\s*(.+?)\s*$/m.exec(content);
-  if (!m) return null;
-  // gitdir is normally absolute; resolve relative forms against the worktree dir.
-  let gitdir = m[1]!.replace(/[/\\]+$/, '');
-  if (!path.isAbsolute(gitdir)) gitdir = path.resolve(path.dirname(gitEntry), gitdir);
-  // Only linked worktrees (.git/worktrees/<name>) fold home. Submodules
-  // (.git/modules/<name>) and anything else stay their own board.
-  const parts = gitdir.split(/[/\\]+/);
-  const wtIdx = parts.lastIndexOf('worktrees');
-  if (wtIdx < 1) return null;
-  // parts[0..wtIdx) is `.../.git`; the main worktree root is one level above it.
-  const gitDirPath = parts.slice(0, wtIdx).join(path.sep);
-  const root = path.dirname(gitDirPath);
-  // Trust it only if that root actually exists on THIS filesystem — otherwise
-  // the worktree points at a repo that isn't here, and we must not anchor a
-  // board onto a phantom path.
-  try {
-    if (fs.statSync(root).isDirectory()) return path.resolve(root);
-  } catch (_: any) { /* off-machine / moved — fall through to null */ }
-  return null;
-}
-
-// Resolve startDir to the root of the project the agent is actually working in,
-// so a board is always anchored there — never on a worktree, and never on a bare
-// subfolder. Precedence, safest-first:
-//
-//   1. A path inside `<root>\.claude\worktrees\<name>` (the EnterWorktree
-//      convention) folds straight back to <root>. Pure string match, no fs
-//      trust: the worktree checkout may carry its OWN committed `.claude`, which
-//      must NOT win — keying on the outermost `.claude/worktrees` guarantees the
-//      real project root regardless.
-//   2. Walk up to the nearest `.git`. A `.git` FILE is a linked worktree — fold
-//      it to its main worktree root (works wherever the worktree sits on disk,
-//      even far from the repo, because the file points home). A `.git` DIRECTORY
-//      is a real clone root and wins, so a genuine nested/vendored repo keeps its
-//      own board just like before.
-//   3. A worktree we can't resolve locally (gitdir missing, off-machine, a
-//      submodule) or a plain non-repo folder is returned unchanged — a
-//      self-contained board on the dir you're actually in. Today's behavior.
-//
-// Fail-soft: any fs error stops the walk and falls back to the resolved startDir.
-function nearestRepoRoot(startDir?: any) {
-  const start = path.resolve(startDir);
-
-  // (1) EnterWorktree fast path — deterministic, no filesystem trust required.
-  const wt = /^(.*?)[/\\]\.claude[/\\]worktrees[/\\]/i.exec(start + path.sep);
-  if (wt && wt[1]) {
-    const owner = path.resolve(wt[1]);
-    try {
-      if (fs.statSync(owner).isDirectory()) return owner;
-    } catch (_: any) { /* owner gone — fall through to the git walk */ }
-  }
-
-  // (2) + (3) Walk up to the enclosing `.git`.
-  let dir = start;
-  for (;;) {
-    try {
-      const entry = path.join(dir, '.git');
-      if (fs.existsSync(entry)) {
-        return mainWorktreeRoot(entry) || dir;
-      }
-    } catch (_: any) {
-      return start;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) return start; // hit the filesystem root without a repo
-    dir = parent;
-  }
-}
-
-function projectDir(slug?: any) {
-  return path.join(projectsRoot(), slug);
-}
-function ticketsDir(slug?: any) {
-  return path.join(projectDir(slug), 'tickets');
-}
-function assetsDir(slug?: any, id?: any) {
-  return path.join(projectDir(slug), 'assets', id);
-}
+const { homeRoot, projectsRoot, serverFile, normalizeForHash, slugify, mainWorktreeRoot, nearestRepoRoot, projectDir, ticketsDir, assetsDir } = createPaths({ fs, os, path, crypto });
 
 /* ------------------------------------------------------------------ *
  *  SQLite persistence
@@ -463,74 +369,7 @@ function assetsDir(slug?: any, id?: any) {
 const dbByHome = new Map<string, any>();
 const transactionDepth = new WeakMap<object, number>();
 
-interface StoreCache {
-  dataVersion: number;
-  metadata: Map<string, any>;
-  projectCategories: Map<string, any[]>;
-  routingProfiles: Map<string, any>;
-  routingProfileEntries: Map<string, any[]>;
-  projectRoutingProfiles: Map<string, any>;
-  routingProfileSettings: any | undefined;
-  routingFallback: any | undefined;
-  snapshots: Map<string, any>;
-}
-
-const storeCacheByDatabase = new WeakMap<object, StoreCache>();
-
-function sqliteDataVersion(handle: any): number {
-  const row = handle.prepare('PRAGMA data_version').get();
-  return Number(row && row.data_version) || 0;
-}
-
-function newStoreCache(dataVersion: number): StoreCache {
-  return {
-    dataVersion,
-    metadata: new Map<string, any>(),
-    projectCategories: new Map<string, any[]>(),
-    routingProfiles: new Map<string, any>(),
-    routingProfileEntries: new Map<string, any[]>(),
-    projectRoutingProfiles: new Map<string, any>(),
-    routingProfileSettings: undefined,
-    routingFallback: undefined,
-    snapshots: new Map<string, any>(),
-  };
-}
-
-function residentCache(): StoreCache {
-  const handle = database();
-  const dataVersion = sqliteDataVersion(handle);
-  let cache = storeCacheByDatabase.get(handle);
-  if (!cache || cache.dataVersion !== dataVersion) {
-    cache = newStoreCache(dataVersion);
-    storeCacheByDatabase.set(handle, cache);
-  }
-  return cache;
-}
-
-function invalidateStoreCaches(): void {
-  const handle = database();
-  storeCacheByDatabase.set(handle, newStoreCache(sqliteDataVersion(handle)));
-}
-
-function putCachedRow(handle: any, table: any, row: any): any {
-  const result = db.putRow(handle, table, row);
-  invalidateStoreCaches();
-  return result;
-}
-
-function deleteCachedRow(handle: any, table: any, key: any): boolean {
-  const deleted = db.deleteRow(handle, table, key);
-  if (deleted) invalidateStoreCaches();
-  return deleted;
-}
-
-function cloneCached<T>(value: T): T {
-  return value == null ? value : structuredClone(value);
-}
-
-function ensureDir(dir?: any) {
-  fs.mkdirSync(dir, { recursive: true });
-}
+cacheLayer = createCache({ database, db, fs });
 
 const {
   acquireLock,
@@ -1022,305 +861,7 @@ function autoStoryColor(index?: any) {
   return STORY_PALETTE[(((index || 0) % n) + n) % n];
 }
 
-function defaultProjectName(absPath?: any) {
-  return path.basename(path.resolve(absPath)) || 'project';
-}
-
-function normalizeAlwaysInScope(paths?: any) {
-  if (!Array.isArray(paths)) throw new Error('alwaysInScope must be an array of repo-relative paths.');
-  const seen = new Set();
-  const normalized: any[] = [];
-  for (const value of paths) {
-    const item = String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
-    const relative = item.replace(/\/+$/, '');
-    if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) {
-      throw new Error(`alwaysInScope path must stay inside the board repo: ${value}`);
-    }
-    const key = process.platform === 'win32' ? relative.toLowerCase() : relative;
-    if (!seen.has(key)) {
-      seen.add(key);
-      normalized.push(item);
-    }
-  }
-  return normalized;
-}
-
-function normalizeReadOnlyDeniedTools(value?: any) {
-  if (value == null) return [];
-  if (!Array.isArray(value)) throw new Error('readOnlyDeniedTools must be an array of tool patterns.');
-  const seen = new Set();
-  const normalized: any[] = [];
-  for (const entry of value) {
-    const pattern = String(entry || '').trim();
-    if (!pattern) throw new Error('readOnlyDeniedTools entries must be non-empty tool patterns.');
-    if (!pattern.startsWith('mcp__')) throw new Error(`readOnlyDeniedTools patterns must target MCP tools: ${entry}`);
-    if (!seen.has(pattern)) {
-      seen.add(pattern);
-      normalized.push(pattern);
-    }
-  }
-  return normalized;
-}
-
-function normalizeGeneratedPairPath(value?: any, name?: any) {
-  const item = String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
-  if (!item || item === '..' || item.startsWith('../') || path.isAbsolute(item) || item.includes('/../')) {
-    throw new Error(`generatedPairs ${name} pattern must stay inside the board repo: ${value}`);
-  }
-  return item;
-}
-
-function normalizeGeneratedPairs(pairs?: any) {
-  if (pairs == null) return [];
-  if (!Array.isArray(pairs)) throw new Error('generatedPairs must be an array of { from, to } patterns.');
-  const seen = new Set();
-  const normalized: any[] = [];
-  for (const pair of pairs) {
-    if (!pair || typeof pair !== 'object' || Array.isArray(pair)) {
-      throw new Error('generatedPairs entries must be { from, to } patterns.');
-    }
-    const from = normalizeGeneratedPairPath(pair.from, 'from');
-    const to = normalizeGeneratedPairPath(pair.to, 'to');
-    if ((from.match(/\*/g) || []).length !== (to.match(/\*/g) || []).length) {
-      throw new Error(`generatedPairs patterns must use the same number of * placeholders: ${from} -> ${to}`);
-    }
-    const key = `${from} ${to}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      normalized.push({ from, to });
-    }
-  }
-  return normalized;
-}
-
-function generatedPathFor(source?: any, pair?: any) {
-  const sourcePath = String(source || '').replace(/\\/g, '/');
-  if (!sourcePath || sourcePath.includes('*')) return null;
-  const parts = String(pair.from).split('*');
-  const expression = new RegExp(`^${parts.map((part: string) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('(.+)')}$`);
-  const match = sourcePath.match(expression);
-  if (!match) return null;
-  return String(pair.to).split('*').map((part: string, index: number) => `${part}${index < match.length - 1 ? match[index + 1] : ''}`).join('');
-}
-
-function trackedGeneratedPaths(config?: any, files?: any) {
-  if (!config || !config.path || !Array.isArray(config.generatedPairs) || !config.generatedPairs.length || !Array.isArray(files)) return [];
-  const candidates = Array.from(new Set(files.flatMap((file: any) => config.generatedPairs.map((pair: any) => generatedPathFor(file, pair)).filter(Boolean))));
-  if (!candidates.length) return [];
-  try {
-    const tracked = execFileSync('git', ['ls-files', '-z', '--', ...candidates], {
-      cwd: config.path,
-      encoding: 'utf8',
-      windowsHide: true,
-      stdio: 'pipe',
-    }).split(' ').filter(Boolean);
-    const candidateKeys = new Set(candidates.map((candidate: any) => process.platform === 'win32' ? candidate.toLowerCase() : candidate));
-    return tracked.filter((trackedPath: string) => candidateKeys.has(process.platform === 'win32' ? trackedPath.toLowerCase() : trackedPath));
-  } catch (_: any) {
-    return [];
-  }
-}
-
-function defaultAlwaysInScope(absPath?: any) {
-  try {
-    return fs.statSync(path.join(absPath, 'docs')).isDirectory() ? ['docs/'] : [];
-  } catch (_: any) {
-    return [];
-  }
-}
-
-function normalizeDeliveryMode(mode?: any) {
-  const value = String(mode || 'merge').trim().toLowerCase();
-  if (!DELIVERY_MODES.includes(value)) {
-    throw new Error('delivery must be "merge", "replay", or "apply".');
-  }
-  return value;
-}
-
-function normalizeIntegrationMode(mode?: any) {
-  const value = String(mode || 'auto').trim().toLowerCase();
-  if (!['auto', 'local', 'remote'].includes(value)) {
-    throw new Error('integrationMode must be "auto", "local", or "remote".');
-  }
-  return value;
-}
-
-function normalizeIntegrationBranch(value?: any) {
-  const branch = String(value == null ? 'main' : value).trim();
-  if (!branch || branch === '@' || branch.startsWith('/') || branch.endsWith('/') || branch.endsWith('.')
-    || branch.includes('//') || branch.includes('/.') || branch.endsWith('.lock') || branch.includes('..') || branch.includes('@{') || /[\s~^:?*\[\\]/.test(branch)) {
-    throw new Error('integrationBranch must be a valid Git branch name.');
-  }
-  return branch;
-}
-
-function normalizeWorktreeIsolation(value?: any) {
-  if (value == null) return true;
-  if (typeof value !== 'boolean') throw new Error('worktreeIsolation must be a boolean.');
-  return value;
-}
-
-function normalizeAutoApprovePluginTests(value?: any) {
-  if (value == null) return true;
-  if (typeof value !== 'boolean') throw new Error('autoApprovePluginTests must be a boolean.');
-  return value;
-}
-
-function normalizeWorktreeSetup(value?: any) {
-  if (value == null || String(value).trim() === '') return null;
-  const setup = String(value);
-  if (/[\r\n]/.test(setup)) throw new Error('worktreeSetup must be a one-line command.');
-  if (setup.length > WORKTREE_SETUP_MAX_LENGTH) {
-    throw new Error(`worktreeSetup exceeds the ${WORKTREE_SETUP_MAX_LENGTH}-character board-config limit.`);
-  }
-  return setup;
-}
-
-function normalizeIntegrationVerifyTimeoutMs(value?: any) {
-  if (value == null || value === '') return DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS;
-  const timeoutMs = Number(value);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_INTEGRATION_VERIFY_TIMEOUT_MS) {
-    throw new Error(`integrationVerifyTimeoutMs must be an integer from 1 to ${MAX_INTEGRATION_VERIFY_TIMEOUT_MS}.`);
-  }
-  return timeoutMs;
-}
-
-function hasOriginRemote(absPath?: any) {
-  try {
-    execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: absPath, encoding: 'utf8', windowsHide: true, stdio: 'pipe' });
-    return true;
-  } catch (_: any) {
-    return false;
-  }
-}
-
-function integrationBranchExists(absPath: any, ref: string) {
-  try {
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
-      cwd: absPath,
-      encoding: 'utf8',
-      windowsHide: true,
-      stdio: 'pipe',
-    });
-    return true;
-  } catch (_: any) {
-    return false;
-  }
-}
-
-function integrationTarget(slug?: any, override?: any) {
-  const meta = readMeta(slug);
-  if (!meta) return null;
-  const requested = override && typeof override === 'object' ? override : {};
-  const configured = normalizeIntegrationMode(requested.mode ?? meta.integrationMode);
-  const mode = configured === 'auto' ? (hasOriginRemote(meta.path) ? 'remote' : 'local') : configured;
-  const branch = normalizeIntegrationBranch(requested.branch ?? override ?? meta.integrationBranch);
-  const upstream = mode === 'local' ? branch : `origin/${branch}`;
-  const ref = mode === 'local' ? `refs/heads/${branch}` : `refs/remotes/origin/${branch}`;
-  if (!integrationBranchExists(meta.path, ref)) {
-    throw new Error(`Configured integration ref "${ref}" for branch "${branch}" does not exist. Create or fetch it, or set integrationBranch with board-config --integration-branch <branch>.`);
-  }
-  return { mode, upstream, branch };
-}
-
-function integrationTargetCommit(absPath: any, target: any) {
-  return execFileSync('git', ['rev-parse', '--verify', `${target.upstream}^{commit}`], {
-    cwd: absPath,
-    encoding: 'utf8',
-    windowsHide: true,
-    stdio: 'pipe',
-  }).trim();
-}
-
-function normalizeBoardName(value?: any) {
-  const name = typeof value === 'string' ? value.trim() : '';
-  if (!name) throw new Error('Board name cannot be empty.');
-  return name;
-}
-
-function boardConfig(slug?: any) {
-  const meta = readMeta(slug);
-  if (!meta) return null;
-  const selected = projectRoutingProfile(slug);
-  if (!selected) throw new Error(`Project "${slug}" does not have a routing profile.`);
-  const layer = getProjectCategories(slug);
-  const byKind = Object.fromEntries(['ADD', 'OVERRIDE', 'DETACH', 'DISABLE'].map((kind?: any) => [kind, layer.rows.filter((row?: any) => row.kind === kind).length]));
-  return {
-    name: meta.name,
-    alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
-    readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
-    generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
-    integrationMode: normalizeIntegrationMode(meta.integrationMode),
-    integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
-    delivery: normalizeDeliveryMode(meta.delivery),
-    integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
-    worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
-    autoApprovePluginTests: normalizeAutoApprovePluginTests(meta.autoApprovePluginTests),
-    worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
-    profile: {
-      id: selected.profile.id,
-      name: selected.profile.name,
-      revision: selected.profile.revision,
-      entryCount: routingProfileEntries(selected.profile.id).length,
-    },
-    overrides: {
-      count: layer.rows.length,
-      byKind,
-      foreignBaseCount: layer.rows.filter((row?: any) => row.baseProfileId && row.baseProfileId !== selected.profile.id).length,
-      items: layer.rows,
-    },
-    warnings: [...selected.warnings, ...layer.warnings],
-  };
-}
-
-function setBoardConfig(slug?: any, patch?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    if (!patch || typeof patch !== 'object') return { ok: true, config: boardConfig(slug) };
-    if (Object.prototype.hasOwnProperty.call(patch, 'name')) {
-      meta.name = normalizeBoardName(patch.name);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'alwaysInScope')) {
-      meta.alwaysInScope = normalizeAlwaysInScope(patch.alwaysInScope);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'readOnlyDeniedTools')) {
-      meta.readOnlyDeniedTools = normalizeReadOnlyDeniedTools(patch.readOnlyDeniedTools);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'generatedPairs')) {
-      meta.generatedPairs = normalizeGeneratedPairs(patch.generatedPairs);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'integrationMode')) {
-      meta.integrationMode = normalizeIntegrationMode(patch.integrationMode);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'integrationBranch')) {
-      meta.integrationBranch = normalizeIntegrationBranch(patch.integrationBranch);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'delivery')) {
-      meta.delivery = normalizeDeliveryMode(patch.delivery);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'integrationVerifyTimeoutMs')) {
-      meta.integrationVerifyTimeoutMs = normalizeIntegrationVerifyTimeoutMs(patch.integrationVerifyTimeoutMs);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'worktreeIsolation')) {
-      meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'autoApprovePluginTests')) {
-      meta.autoApprovePluginTests = normalizeAutoApprovePluginTests(patch.autoApprovePluginTests);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'worktreeSetup')) {
-      meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
-    }
-    putProject(slug, meta);
-    return { ok: true, config: boardConfig(slug) };
-  });
-}
-
-function effectiveScope(slug?: any, files?: any) {
-  const config = boardConfig(slug);
-  const paired = trackedGeneratedPaths(Object.assign({ path: readMeta(slug)?.path }, config), files);
-  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...((config && config.alwaysInScope) || []), ...paired]));
-}
+configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 
 // Register (or refresh) a project and return { slug, dir, meta }. Creates the
 // directory tree on first use. `name` overrides the display name (defaults to
@@ -2899,76 +2440,9 @@ function closeTicketForGrooming(slug?: any, idOrRef?: any, opts?: any) {
  *  ticket — which stamps the submission integrated.
  * ------------------------------------------------------------------ */
 
-// Expire only dispatches that remained prepared. Launched and bound dispatches are stateful work, not wall-clock leases.
-function sweepStaleDispatches(opts?: any) {
-  opts = opts || {};
-  const source = opts.source ? String(opts.source) : 'sweep';
-  const now = Number.isFinite(Number(opts.now)) ? Number(opts.now) : Date.now();
-  const expired: any[] = [];
-  for (const project of listProjects({ all: true })) {
-    if (opts.project && project.slug !== opts.project) continue;
-    for (const ticket of listTickets(project.slug)) {
-      if (ticket.archived || ticket.status === 'done' || !expiredPreparedDispatch(dispatchState(ticket), now)) continue;
-      try {
-        const res = withTicketLock(project.slug, ticket.id, () => {
-          const current = getTicket(project.slug, ticket.id);
-          if (!current || !expiredPreparedDispatch(dispatchState(current), now)) return { ok: false };
-          setDispatchTerminal(current, 'expired', source);
-          current.dispatchNonce = null;
-          current.dispatchExecutor = null;
-          stampDispatchEvent(current, source);
-          putTicket(project.slug, current);
-          return { ok: true, ticket: current };
-        });
-        if (!res || !res.ok) continue;
-        expired.push({ project: project.slug, ref: res.ticket.ref });
-        addComment(project.slug, ticket.id, {
-          by: 'sidequest', kind: 'comment', source,
-          body: `Auto-expired prepared dispatch: it never launched within the ${Math.round(preparedDispatchTtlMs() / 3600000)} hour TTL.`,
-        });
-      } catch (_: any) {
-        // One inaccessible board must not prevent other stale dispatches from recovering.
-      }
-    }
-  }
-  return { ok: true, ttlMs: preparedDispatchTtlMs(), expired };
-}
-
-// Garbage-collect claims whose holder is gone: an observed stop first, then the
-// idle/abandoned backstops for deaths nothing reported. Each release re-checks
-// the verdict under the ticket lock, so a claim that is merely quiet — or one
-// replaced since the snapshot — is never swept.
-function sweepStaleClaims(opts?: any) {
-  opts = opts || {};
-  const source = opts.source ? String(opts.source) : 'sweep';
-  const released: any[] = [];
-  for (const project of listProjects({ all: true })) {
-    if (opts.project && project.slug !== opts.project) continue;
-    for (const ticket of listTickets(project.slug)) {
-      if (ticket.archived || ticket.status === 'done') continue;
-      const verdict = claimReleaseVerdict(ticket);
-      if (!verdict) continue;
-      try {
-        const res = releaseTicket(project.slug, ticket.id, ticket.claim.by, {
-          status: 'todo',
-          source,
-          requireReleaseVerdict: true,
-          claimRelease: { kind: verdict.kind, reason: verdict.reason, idleMs: Number.isFinite(verdict.idleMs) ? verdict.idleMs : null },
-        });
-        if (!res.ok) continue;
-        released.push({ project: project.slug, ref: ticket.ref, kind: verdict.kind });
-        addComment(project.slug, ticket.id, {
-          by: 'sidequest', kind: 'comment', source,
-          body: claimReleaseNote(ticket, verdict),
-        });
-      } catch (_: any) {
-        // One inaccessible board must not prevent other dead claims from recovering.
-      }
-    }
-  }
-  const dispatches = sweepStaleDispatches(opts);
-  return { ok: true, idleMs: claimIdleMs(), abandonMs: claimAbandonMs(), released, expiredDispatches: dispatches.expired };
-}
+const { sweepStaleDispatches, sweepStaleClaims } = createSweeps({
+  addComment, claimAbandonMs, claimIdleMs, claimReleaseNote, claimReleaseVerdict, dispatchState, expiredPreparedDispatch, getTicket, listProjects, listTickets, preparedDispatchTtlMs, putTicket, releaseTicket, setDispatchTerminal, stampDispatchEvent, withTicketLock,
+});
 
 // True when a ticket may be handed to a worker running as tier `want`: either the
 // worker didn't specify a tier, or the tags match. Every ticket now carries a
@@ -3127,15 +2601,7 @@ function claimPulse(ticket?: any, now?: any) {
  *  Server lockfile (used by CLI + server to find/reuse a running dashboard)
  * ------------------------------------------------------------------ */
 
-function readServerInfo() {
-  return readGlobal('server-info', null);
-}
-function writeServerInfo(info?: any) {
-  writeGlobal('server-info', info);
-}
-function clearServerInfo() {
-  deleteCachedRow(database(), 'globals', 'server-info');
-}
+const { readServerInfo, writeServerInfo, clearServerInfo } = createServer({ database, deleteCachedRow, readGlobal, writeGlobal });
 
 const stories = createStories({
   autoStoryColor,
