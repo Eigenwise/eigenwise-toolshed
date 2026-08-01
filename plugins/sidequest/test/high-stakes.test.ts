@@ -107,7 +107,22 @@ test('high-stakes integration warns until a review is recorded', async () => {
     project: unreviewed.slug, ref: unreviewed.ticket.ref, by: 'integrator', reason: 'Integrated test fixture.', integration: true,
   });
   assert.equal(warned.ok, true);
-  assert.equal(warned.advisory, 'high-stakes ticket integrated without a recorded review pass');
+  assert.equal(warned.advisory, 'high-stakes ticket integrated without a recorded review pass. Close it by recording a comment beginning `reviewed-by: <ref>` or linking a completed review-audit ticket.');
+
+  const linked = submitIntegrationFixture('Linked review');
+  const review = store.createTicket(linked.slug, { title: 'Review', category: 'review-audit', status: 'done' });
+  assert.equal(store.linkTickets(linked.slug, review.ref, 'related', linked.ticket.ref).ok, true);
+  const linkedClosed = store.completeTicketAsControlPlane(linked.slug, linked.ticket.ref, {
+    purpose: 'integration', by: 'integrator', reason: 'Integrated test fixture.',
+  });
+  assert.equal(linkedClosed.ok, true);
+  assert.equal(linkedClosed.advisory, undefined);
+
+  const verdictRefusal = await callTool('verdict', {
+    project: linked.slug, ref: linked.ticket.ref, text: 'No oracle', outcome: 'accepted',
+  });
+  assert.equal(verdictRefusal.reason, 'no_oracle');
+  assert.match(verdictRefusal.message, /review-audit/);
 
   const reviewed = submitIntegrationFixture('Reviewed', true);
   const closed = store.completeTicketAsControlPlane(reviewed.slug, reviewed.ticket.ref, {

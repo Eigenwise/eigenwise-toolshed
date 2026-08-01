@@ -1555,7 +1555,15 @@ function recordedReviewPass(ticket?: any) {
   return Array.isArray(ticket?.comments) && ticket.comments.some((comment?: any) => /^\s*reviewed-by\s*:\s*\S/i.test(String(comment?.body || '')));
 }
 
-const HIGH_STAKES_REVIEW_WARNING = 'high-stakes ticket integrated without a recorded review pass';
+function linkedReviewPass(slug?: any, ticket?: any) {
+  if (!ticket) return false;
+  return listTickets(slug).some((candidate?: any) => (candidate.category === 'review-audit' || candidate.category?.id === 'review-audit' || candidate.categoryId === 'review-audit')
+    && candidate.status === 'done'
+    && Array.isArray(candidate.links)
+    && candidate.links.some((link?: any) => String(link?.ref || '').toUpperCase() === String(ticket.ref || '').toUpperCase()));
+}
+
+const HIGH_STAKES_REVIEW_WARNING = 'high-stakes ticket integrated without a recorded review pass. Close it by recording a comment beginning `reviewed-by: <ref>` or linking a completed review-audit ticket.';
 
 function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
@@ -1596,7 +1604,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     if (!admitted.ok) return admitted;
     legacyScopeOverride = !!admitted.legacyScopeOverride;
   }
-  const advisory = purpose === 'integration' && ticket.highStakes && !recordedReviewPass(ticket)
+  const advisory = purpose === 'integration' && ticket.highStakes && !recordedReviewPass(ticket) && !linkedReviewPass(slug, ticket)
     ? HIGH_STAKES_REVIEW_WARNING
     : null;
   const result = completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
