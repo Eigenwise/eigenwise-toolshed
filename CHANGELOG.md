@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.322.0 (2026-08-01)
+
+### model-gateway 0.44.4 → 0.45.0
+
+#### Features
+
+- Remove per-project gateway wiring mode so a project file cannot silently shadow the gateway URL (SQ-1190)
+
+### workbench 0.72.0 → 0.73.0
+
+#### Features
+
+- Remove per-project gateway wiring mode so a project file cannot silently shadow the gateway URL (SQ-1190)
+
 ## v3.321.0 (2026-08-01)
 
 ### model-gateway 0.44.3 → 0.44.4
