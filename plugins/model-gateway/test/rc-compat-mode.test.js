@@ -293,7 +293,7 @@ test('envBlockFor differs only on ANTHROPIC_BASE_URL between modes', () => {
   assert.deepEqual(defRest, compatRest);
 });
 
-test('writeEnv switches only the plugin-owned base URL and leaves unrelated settings alone', (t) => {
+test('writeEnv removes retired socket wiring while preserving unrelated settings', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-writeenv-'));
   const prevUserProfile = process.env.USERPROFILE;
   const prevHome = process.env.HOME;
@@ -313,13 +313,16 @@ test('writeEnv switches only the plugin-owned base URL and leaves unrelated sett
   isolatedGateway.writeEnv('user', false, { mode: 'default', quiet: true });
   let settings = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, isolatedGateway.DEFAULT_BASE_URL);
-  assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, isolatedGateway.SOCKET_PATH);
+  assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
+
+  settings.env.ANTHROPIC_UNIX_SOCKET = 'retired-socket-value';
+  fs.writeFileSync(file, JSON.stringify(settings));
 
   isolatedGateway.writeEnv('user', false, { mode: 'compat', quiet: true });
   settings = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, isolatedGateway.COMPAT_BASE_URL);
-  assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, isolatedGateway.SOCKET_PATH);
+  assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me'); // untouched across the switch
   assert.deepEqual(isolatedGateway.wiredMode(), { scope: 'user', mode: 'compat' });
 
