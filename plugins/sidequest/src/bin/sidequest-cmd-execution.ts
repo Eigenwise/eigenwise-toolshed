@@ -402,6 +402,25 @@ async function cmdScopeRequest(opts: any, positional: any) {
   }
 }
 
+async function cmdScopeDeny(opts: any, positional: any) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('scope-deny: pass a ticket ref, e.g. sidequest scope-deny SQ-3 --reason "handled by another ticket".');
+  if (!opts.reason) fail('scope-deny: pass the orchestrator reason with --reason.');
+  const { slug, meta } = await resolveProject(opts);
+  const by = workerId(opts);
+  const res = store.denyScopeRequest(slug, idOrRef, by, opts.reason, { source: opts.source || 'cli' });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) {
+    console.log(`✓ ${res.ticket.ref} scope request denied; claim and declared scope remain intact. ${meta.name}`);
+  } else {
+    reportClaimFailure('scope-deny', idOrRef, res, meta);
+  }
+}
+
 async function cmdCommit(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('commit: pass a ticket ref, e.g. sidequest commit SQ-3 --by me --message "fix the thing".');
@@ -760,4 +779,4 @@ async function cmdPublish(opts: any, positional: any) {
 }
 
 
-module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish };
+module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeDeny, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish };

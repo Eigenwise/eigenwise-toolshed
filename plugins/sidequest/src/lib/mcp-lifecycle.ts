@@ -340,21 +340,27 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         files: { type: 'array', items: { type: 'string' }, minItems: 1 },
-        worktree: { type: 'string' },
+        reason: { type: 'string' },
       },
-      required: ['ref', 'by', 'files'],
+      required: ['ref', 'by'],
     },
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'scopeRequest');
-      const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp', worktree: args.worktree });
-      return mutationAck(slug, res, res.ok ? {
-        covered: res.covered || [],
-        approved: res.approved || [],
-        autoApproved: !!res.autoApproved,
-        scopeRequest: res.scopeRequest,
-        command: res.command,
-      } : null);
+      const reason = String(args.reason || '').trim();
+      const res = args.files == null && reason
+        ? store.denyScopeRequest(slug, args.ref, by, reason, { source: 'mcp' })
+        : store.requestScope(slug, args.ref, by, args.files, { source: 'mcp', worktree: args.worktree });
+      const changed = res.ok && res.denied
+        ? { denied: res.denied }
+        : res.ok && res.scopeRequest !== undefined ? {
+          covered: res.covered || [],
+          approved: res.approved || [],
+          autoApproved: !!res.autoApproved,
+          scopeRequest: res.scopeRequest,
+          command: res.command,
+        } : null;
+      return mutationAck(slug, res, changed);
     },
   },
   {

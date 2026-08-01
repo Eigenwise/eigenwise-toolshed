@@ -241,6 +241,41 @@ test('the dispatch briefing states the isolation contract and the resume trap', 
   assert.ok(!sharedBriefing.includes('Worktree isolation contract'), 'a shared-tree dispatch is not told it is isolated');
 });
 
+test('an isolated scope pause preserves its worktree through denial', () => {
+  const agentId = 'a10scope-denial';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
+  fs.mkdirSync(path.dirname(linked), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  try {
+    assert.equal(store.claimTicket(slug, ticket.ref, 'scope-denial-worker', {
+      token: ticket.dispatchNonce,
+      executor: ticket.dispatchExecutor,
+    }).ok, true);
+    const checkpoint = store.checkpointTicket(slug, ticket.ref, 'scope-denial-worker', {
+      worktree: linked,
+      verify: 'scope denial preserves the live checkpoint',
+    }).checkpoint;
+    assert.equal(store.requestScope(slug, ticket.ref, 'scope-denial-worker', ['new.js'], { worktree: linked }).ok, true);
+    const marker = path.join(linked, '.sidequest', `scope-request-${ticket.id}.json`);
+    assert.ok(fs.existsSync(marker));
+
+    assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
+    const denied = store.denyScopeRequest(slug, ticket.ref, 'isolation-orchestrator', 'The requested file belongs to another ticket.');
+    assert.equal(denied.ok, true);
+    const afterDeny = store.getTicket(slug, ticket.ref);
+    assert.equal(afterDeny.claim.by, 'scope-denial-worker');
+    assert.equal(afterDeny.checkpoint.id, checkpoint.id);
+    assert.equal(afterDeny.scopeRequest, null);
+    assert.equal(afterDeny.dispatch.outcome, 'claimed');
+    assert.equal(afterDeny.dispatch.terminalAt, undefined);
+    assert.ok(!fs.existsSync(marker));
+    assert.doesNotMatch(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), /\.sidequest/);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
 test('an isolated scope pause preserves its worktree through approval', () => {
   const agentId = 'a10scope-marker';
   const { ticket, sessionId, executor } = dispatched(agentId);
