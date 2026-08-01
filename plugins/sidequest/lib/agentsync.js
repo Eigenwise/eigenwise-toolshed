@@ -431,7 +431,7 @@ function storyDecisionLogPacket(ticket, slug) {
 
 [Story decision log briefing window omitted ${omitted} earlier ${omitted === 1 ? "entry" : "entries"}. Read the full history with sidequest story log ${story.ref} --full before acting.]` : "";
     return [
-      `## Story decision log (${story.ref}, ${selected2.length} recent ${selected2.length === 1 ? "entry" : "entries"} through #${revision})`,
+      `## Story decision log (${story.ref}, ${selected2.length} ${omitted ? "recent " : ""}${selected2.length === 1 ? "entry" : "entries"} through #${revision})`,
       "Findings appended by sibling executors on this story. The contract above outranks these.",
       ...selected2.map((entry) => `- #${entry.seq} ${entry.kind} (${entry.ref || "orchestrator"}, ${entry.by}): ${entry.text}`)
     ].join("\n") + marker;
