@@ -1311,6 +1311,21 @@ test('session-end sweeps old patch-equivalent worktrees and stays fail-soft', ()
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
 });
 
+test('stop reminder: tells a claimed executor to hold pending scope approval', () => {
+  const sessionId = `reconcile-scope-${++sqSeq}`;
+  const ticket = addStopTicket('scope approval pending', { files: ['declared/'] });
+  claimStopTicket(ticket, sessionId, 'reconcile-scope');
+  const request = store.requestScope(slug, ticket.ref, 'reconcile-scope', ['outside/new.ts']);
+  assert.deepEqual(request.scopeRequest.files, ['outside/new.ts']);
+
+  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+  const reminder = output.hookSpecificOutput.additionalContext;
+  assert.match(reminder, /1 ticket waiting on scope approval from the orchestrator/);
+  assert.match(reminder, /Checkpoint and hold; never release, releasing loses work/);
+  assert.doesNotMatch(reminder, /Update or close/);
+  assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
+});
+
 test('stop reminder: names and re-escalates pending submissions within its byte budget', () => {
   const sessionId = `reconcile-${++sqSeq}`;
   const submitted = addTicket('pending integration');
@@ -1326,6 +1341,8 @@ test('stop reminder: names and re-escalates pending submissions within its byte 
   const initial = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input);
   assert.equal(initial.hookSpecificOutput.hookEventName, 'Stop');
   assert.match(initial.hookSpecificOutput.additionalContext, /1 submission pending integration/);
+  assert.match(initial.hookSpecificOutput.additionalContext, /Checkpoint and hold; never release, releasing loses work/);
+  assert.doesNotMatch(initial.hookSpecificOutput.additionalContext, /Update or close/);
   assert.equal(initial.systemMessage, undefined, 'the reminder must go to Claude rather than the user-visible system message');
   assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input), null, 'a pending submission waits before escalating');
 
@@ -1333,7 +1350,7 @@ test('stop reminder: names and re-escalates pending submissions within its byte 
   const reminder = escalated.hookSpecificOutput.additionalContext;
   assert.match(reminder, new RegExp(submitted.ref));
   assert.match(reminder, /3 consecutive stops/);
-  assert.match(reminder, /Integrate or clear/);
+  assert.match(reminder, /Checkpoint and hold; never release, releasing loses work/);
   assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
 
   const stateFile = path.join(SIDEQUEST_HOME, 'hook-state', `stop-reminder-${crypto.createHash('sha256').update(sessionId).digest('hex')}.json`);
