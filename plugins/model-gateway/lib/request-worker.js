@@ -20,7 +20,7 @@ const {
   ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_HOST,
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
-  REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT,
+  REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
   STATE, TRACE_HEADERS, mkdirs,
 } = require('./runtime.js');
 
@@ -2018,6 +2018,16 @@ function runWorker() {
   servers.add(mainServer);
   mainServer.listen(SHIM_PORT, '127.0.0.1', () => {
     console.log(`model-gateway shim listening on 127.0.0.1:${SHIM_PORT} (proxy :${PROXY_PORT}, anthropic ${ANTHROPIC_UPSTREAM})`);
+  });
+
+  const socketServer = makeServer();
+  servers.add(socketServer);
+  socketServer.once('error', (error) => {
+    servers.delete(socketServer);
+    console.error(`model-gateway: could not bind ANTHROPIC_UNIX_SOCKET ${SOCKET_PATH}: ${error.code || error.message}`);
+  });
+  socketServer.listen(SOCKET_PATH, () => {
+    console.log(`model-gateway shim listening on ANTHROPIC_UNIX_SOCKET ${SOCKET_PATH}`);
   });
 
   // RC-compatibility: only attempted when the user has added the exact hosts

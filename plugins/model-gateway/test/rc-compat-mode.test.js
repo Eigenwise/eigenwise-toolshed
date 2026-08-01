@@ -39,12 +39,25 @@ function request(port, method, pathname, body, host = '127.0.0.1') {
   });
 }
 
+function requestSocket(socketPath, method, pathname, body) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ socketPath, method, path: pathname,
+      headers: body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {} }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
 async function stopChild(child) {
   if (child.exitCode === null && child.signalCode === null) child.kill();
   if (!child.closed) await once(child, 'close');
 }
 
-function spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home, anthropicUpstream }) {
+function spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home, anthropicUpstream, socketPath }) {
   const child = spawn(process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
@@ -55,6 +68,7 @@ function spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home, anthro
       CODEX_GATEWAY_REQUEST_LOG: '0',
       CODEX_GATEWAY_COMPAT_PORT: String(compatPort),
       CODEX_GATEWAY_HOSTS_FILE: hostsFile,
+      ...(socketPath ? { CODEX_GATEWAY_SOCKET_PATH: socketPath } : {}),
       ...(anthropicUpstream ? { CODEX_GATEWAY_ANTHROPIC_UPSTREAM: anthropicUpstream } : {}),
     },
     stdio: 'ignore',
@@ -85,6 +99,20 @@ async function waitForHealthz(port, host = '127.0.0.1') {
   }
   const reason = lastErr ? ` Last error: ${lastErr.message}.` : '';
   throw new Error(`Shim at ${host}:${port} did not become healthy within 5000ms.${reason}`);
+}
+
+async function waitForSocketHealthz(socketPath) {
+  const deadline = Date.now() + 5000;
+  let lastErr;
+  while (Date.now() < deadline) {
+    try {
+      const response = await requestSocket(socketPath, 'GET', '/healthz');
+      if (response.status === 200) return JSON.parse(response.body);
+    } catch (error) { lastErr = error; }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const reason = lastErr ? ` Last error: ${lastErr.message}.` : '';
+  throw new Error(`Shim at ${socketPath} did not become healthy within 5000ms.${reason}`);
 }
 
 // ---------------------------------------------------- hosts syntax parsing
@@ -285,17 +313,20 @@ test('writeEnv switches only the plugin-owned base URL and leaves unrelated sett
   isolatedGateway.writeEnv('user', false, { mode: 'default', quiet: true });
   let settings = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, isolatedGateway.DEFAULT_BASE_URL);
+  assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, isolatedGateway.SOCKET_PATH);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
 
   isolatedGateway.writeEnv('user', false, { mode: 'compat', quiet: true });
   settings = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, isolatedGateway.COMPAT_BASE_URL);
+  assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, isolatedGateway.SOCKET_PATH);
   assert.equal(settings.env.USER_SETTING, 'keep-me'); // untouched across the switch
   assert.deepEqual(isolatedGateway.wiredMode(), { scope: 'user', mode: 'compat' });
 
   isolatedGateway.writeEnv('user', true, { quiet: true }); // --remove
   settings = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, undefined);
+  assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
   assert.equal(isolatedGateway.wiredMode(), null);
 });
@@ -398,6 +429,26 @@ test('serve-shim stays default-only when no hosts entry is present', async (t) =
 
   // nothing should be listening on the would-be compat port
   await assert.rejects(request(compatPort, 'GET', '/healthz'));
+});
+
+test('serve-shim accepts requests through ANTHROPIC_UNIX_SOCKET', async (t) => {
+  const hostsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-shimsocket-'));
+  const hostsFile = path.join(hostsDir, 'hosts');
+  fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
+  const socketPath = process.platform === 'win32'
+    ? `\\\\.\\pipe\\model-gateway-test-${process.pid}-${Date.now()}`
+    : path.join(hostsDir, 'gateway.sock');
+
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const compatPort = await freePort();
+  spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home: hostsDir, socketPath });
+
+  const health = await waitForSocketHealthz(socketPath);
+  assert.equal(health.ok, true);
+  const catalog = await requestSocket(socketPath, 'GET', '/v1/models');
+  assert.equal(catalog.status, 200);
+  assert.ok(JSON.parse(catalog.body).data.some((model) => model.id === 'claude-gpt-5.6-terra'));
 });
 
 test('serve-shim forwards an unexpected bodyless request without crashing on raw.length', async (t) => {

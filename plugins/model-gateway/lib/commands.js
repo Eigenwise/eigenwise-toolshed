@@ -39,7 +39,7 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
-const { CLI_PATH } = require('./runtime.js');
+const { CLI_PATH, SOCKET_PATH } = require('./runtime.js');
 
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
@@ -607,6 +607,10 @@ async function syncEffectivePins() {
   }
 }
 
+function settingsEnvBlock(mode) {
+  return { ...envBlockFor(mode), ANTHROPIC_UNIX_SOCKET: SOCKET_PATH };
+}
+
 async function envCommand() {
   for (const retired of ['--mode', '--show-mode', '--write-project']) {
     if (flag(retired)) {
@@ -618,7 +622,7 @@ async function envCommand() {
   const remove = flag('--remove');
   if (!flag('--write-user') && !remove) {
     log('add this to the "env" block of your ~/.claude/settings.json:');
-    log(JSON.stringify({ env: envBlockFor('default') }, null, 2));
+    log(JSON.stringify({ env: settingsEnvBlock('default') }, null, 2));
     log('\nor use /model-gateway:model-gateway to run its env --write-user command');
     log('\nWiring is global: one ~/.claude/settings.json block covers every project. It applies to new Claude Code sessions after restart.');
     log('RC-compatibility mode (restores /remote-control) is opt-in and automatic once you add the');
@@ -661,12 +665,13 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   settings.env = settings.env || {};
   if (remove) {
     if (ourBaseUrls().includes(settings.env.ANTHROPIC_BASE_URL)) delete settings.env.ANTHROPIC_BASE_URL;
+    if (settings.env.ANTHROPIC_UNIX_SOCKET === SOCKET_PATH) delete settings.env.ANTHROPIC_UNIX_SOCKET;
     for (const [k, v] of Object.entries({ ...gatewayEnvBlock(), ...LEGACY_ENV_BLOCK })) {
       if (Object.values(PIN_ALIASES).includes(k) || String(settings.env[k]) === String(v)) delete settings.env[k];
     }
     if (!Object.keys(settings.env).length) delete settings.env;
   } else {
-    Object.assign(settings.env, envBlockFor(effectiveMode));
+    Object.assign(settings.env, settingsEnvBlock(effectiveMode));
     for (const [k, v] of Object.entries(LEGACY_ENV_BLOCK)) {
       if (String(settings.env[k]) === String(v)) delete settings.env[k];
     }
@@ -678,8 +683,11 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   }
   writeSettings(file, settings);
   const verified = readSettingsForWrite(file);
-  const expected = remove ? undefined : envBlockFor(effectiveMode).ANTHROPIC_BASE_URL;
-  if (verified.env?.ANTHROPIC_BASE_URL !== expected) throw new Error(`Could not verify gateway settings in ${file}`);
+  const expected = remove ? undefined : settingsEnvBlock(effectiveMode).ANTHROPIC_BASE_URL;
+  const socketVerified = remove
+    ? verified.env?.ANTHROPIC_UNIX_SOCKET !== SOCKET_PATH
+    : verified.env?.ANTHROPIC_UNIX_SOCKET === SOCKET_PATH;
+  if (verified.env?.ANTHROPIC_BASE_URL !== expected || !socketVerified) throw new Error(`Could not verify gateway settings in ${file}`);
   if (scope === 'project') recordProjectWiring();
   if (quiet) return { changed: true, file };
   log(`${remove ? 'removed from' : 'written to'} ${file}`);
@@ -1745,6 +1753,7 @@ module.exports = {
   COMPAT_PORT,
   DEFAULT_BASE_URL,
   COMPAT_BASE_URL,
+  SOCKET_PATH,
   WIRING_CONFIG_PATH,
   parseSemver,
   semverLt,
