@@ -19,6 +19,8 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control <command>
 
 ## Enable
 
+Remote Control and the Codex/Grok rows in `/model` cannot both work. Enabling RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, so Claude Code disables gateway model discovery and the rows disappear from the picker. The models still work: type an explicit id such as `/model claude-gpt-5.6-terra`; Claude Code accepts it and saves it as the default. Routing and Sidequest dispatch are unaffected.
+
 1. Start with a read-only diagnosis:
 
    ```bash
@@ -57,6 +59,8 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control <command>
    confirmation. The user must restart Claude Code before `/remote-control` appears.
 
 ## Disable
+
+Disabling RC-compatibility restores the Codex/Grok rows in `/model`. While compatibility is enabled, an explicit model id such as `/model claude-gpt-5.6-terra` still works and persists as the default.
 
 1. Run `remote-control doctor` first.
 2. Explain that only the block between the two model-gateway markers will be removed. It leaves all

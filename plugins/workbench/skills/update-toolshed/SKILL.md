@@ -13,11 +13,7 @@ Run the portable updater from this plugin installation:
 node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js"
 ```
 
-It reads Claude Code's installed-plugin registry, refreshes only `eigenwise-toolshed`, and updates only Toolshed plugins from that marketplace at their recorded scope and project directory. It does not inspect, refresh, or update third-party marketplaces or plugins. Before gateway setup, it prints each recorded version transition and warns that the gateway worker will restart while its listener stays available. In-flight requests drain or retry, and the authenticated proxy stays up unless its binary changed. Claude Code's registry has versions but not release notes or commit history, so the updater says that plainly instead of guessing at a changelog. It then runs `model-gateway setup` and `doctor` when that plugin is installed. In the default local gateway mode it also writes every recorded
-project's `.claude/settings.local.json`, moves only gateway-owned legacy keys out of `settings.json`, and
-removes the old user block only after every project succeeds. Unrecorded projects stay unwired until
-`model-gateway env --write-user` runs. Gateway wiring changes apply to new Claude Code sessions,
-so restart affected sessions. It continues after individual failures and prints the failing commands.
+It reads Claude Code's installed-plugin registry, refreshes only `eigenwise-toolshed`, and updates only Toolshed plugins from that marketplace at their recorded scope and project directory. It does not inspect, refresh, or update third-party marketplaces or plugins. Before gateway setup, it prints each recorded version transition and warns that the gateway worker will restart while its listener stays available. In-flight requests drain or retry, and the authenticated proxy stays up unless its binary changed. Claude Code's registry has versions but not release notes or commit history, so the updater says that plainly instead of guessing at a changelog. It then runs `model-gateway setup` and `doctor` when that plugin is installed. Gateway wiring is global now: it writes one `~/.claude/settings.json` block for every project and executor worktree. Remote Control compatibility points the base URL at `api.anthropic.com`, so the Codex/Grok rows disappear from `/model`; an explicit id such as `/model claude-gpt-5.6-terra` still works. Gateway wiring changes apply to new Claude Code sessions, so restart affected sessions. It continues after individual failures and prints the failing commands.
 
 ## Gateway rename migration
 

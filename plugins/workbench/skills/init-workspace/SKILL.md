@@ -166,7 +166,7 @@ when they explicitly choose it. If Sidequest was not selected, skip this questio
 
 ## Phase 1 — Interview and selection
 
-Gateway wiring is global and has no mode to choose, so do not ask about it. If the gateway is unwired, invoke `/model-gateway:model-gateway` and use its `env --write-user` command, then record the wiring result in the session/bootstrap plan. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH.
+Gateway wiring is global and has no mode to choose, so do not ask about it. If the gateway is unwired, invoke `/model-gateway:model-gateway` and use its `env --write-user` command, then record the wiring result in the session/bootstrap plan. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH. If the user enables Remote Control compatibility, explain first that the Codex/Grok rows disappear from `/model`; explicit ids such as `/model claude-gpt-5.6-terra` still work and persist as the default, and disabling compatibility restores the rows.
 
 Keep it short and propose defaults from what you detected, so the user confirms rather than types
 essays. The project-intent answer was collected before the picker; use it to seed the map and structure

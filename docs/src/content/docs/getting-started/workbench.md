@@ -33,4 +33,4 @@ Use `/workbench:update-toolshed` to refresh installed Toolshed plugins and the g
 
 It removes registry entries for deleted Sidequest agent worktrees, writes a timestamped registry backup first, and reports every removal. Other missing project directories are still skipped and reported without changing the registry.
 
-Gateway wiring is global and has no mode to choose: `env --write-user` writes `~/.claude/settings.json` once and reaches every project and executor worktree. `/workbench:update-toolshed` writes that block and reconciles any leftover per-project wiring from older installs.
+Gateway wiring is global and has no mode to choose: `env --write-user` writes `~/.claude/settings.json` once and reaches every project and executor worktree. The hosts file is machine-wide, which is why RC-compatibility uses global wiring. Remote Control and the Codex/Grok rows in `/model` cannot both work. Compatibility hides the gateway rows, but `/model claude-gpt-5.6-terra` still works and persists as the default. Disabling compatibility restores the rows. `/workbench:update-toolshed` writes that block and reconciles leftover wiring from older installs.

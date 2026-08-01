@@ -98,12 +98,12 @@ back, or you kill the session that was about to use it.
   references incrementally on Codex models.
 - The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models); override it in
   `~/.claude/model-gateway/models.json` (JSON array of ids).
-- **RC-compat and missing Codex rows**: compat mode still serves the complete Codex catalog, but
-  Claude Code uses its built-in first-party list when the hostname is `api.anthropic.com`. Pin a
-  visible Claude alias to a Codex id, rewire, restart, and choose that visible row, for example:
-  `pin --opus claude-gpt-5.6-terra`, then `env --write-user`. The shim
-  routes the pinned `claude-gpt-*` id to Codex. Sidequest dispatch is unaffected because it resolves
-  its explicit route marker and never uses picker discovery.
+- **RC-compat and missing Codex rows**: Remote Control and the Codex/Grok rows in `/model` cannot
+  both work. RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, and Claude Code
+  disables gateway model discovery for that host. The gateway still routes explicit ids: type
+  `/model claude-gpt-5.6-terra`, and Claude Code accepts and saves it as the default. Disabling
+  compatibility restores the picker rows. Sidequest dispatch is unaffected because it resolves its
+  explicit route marker and never uses picker discovery.
 - Claude models keep working normally at the same time (passthrough path); subagents can mix tiers
   freely.
 
@@ -114,8 +114,11 @@ plugin-marked hosts block, creates a backup before an elevated write, reconciles
 checks the final state. Do not edit the hosts file outside that procedure.
 
 Claude Code's `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the real
-Anthropic host, which conflicts with gateway routing. model-gateway offers an opt-in, fully
-reversible workaround instead of pretending both can coexist by default:
+Anthropic host, which conflicts with gateway model discovery. Remote Control and the Codex/Grok rows
+in `/model` cannot both work. Before enabling compatibility, tell the user that the rows disappear
+from the picker, while explicit ids such as `/model claude-gpt-5.6-terra` still work and persist as
+the default. Disabling compatibility restores the rows. model-gateway offers an opt-in, fully
+reversible workaround:
 
 - The user (never this plugin, never automatically) adds one hosts entry mapping
   `api.anthropic.com` to loopback — `127.0.0.1 api.anthropic.com` on Windows

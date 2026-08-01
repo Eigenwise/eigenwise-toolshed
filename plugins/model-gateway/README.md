@@ -154,10 +154,11 @@ After changing any of these variables, restart the gateway (`stop`, then `start`
 ## RC-compatibility mode (restoring `/remote-control`)
 
 Claude Code's built-in `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the
-real Anthropic host. There's no supported way to keep Codex routing *and* get that exact host at
-the same time without touching the OS — no hosts-file changes, custom CA, admin rights, or Claude
-binary patching is possible for both features simultaneously. So it's opt-in, detected, and
-completely reversible:
+real Anthropic host. Remote Control and the Codex/Grok rows in `/model` cannot both work. RC-compatibility
+points the base URL at `api.anthropic.com`, which makes Claude Code disable gateway model discovery.
+The gateway still routes explicit ids, so type `/model claude-gpt-5.6-terra`; Claude Code accepts it
+and saves it as the default. Routing and Sidequest dispatch are unaffected. The mode is opt-in,
+detected, and completely reversible:
 
 Anthropic's [official Remote Control documentation](https://code.claude.com/docs/en/remote-control)
 also requires Claude Code v2.1.51 or later, a Pro/Max/Team/Enterprise subscription (not an API key),
@@ -187,19 +188,12 @@ feature. Before blaming gateway compatibility, check `claude --version`, run `/s
    the plugin-owned `ANTHROPIC_BASE_URL` to `http://api.anthropic.com` and starts a second listener
    on that port next to the usual `127.0.0.1:18764`. Nothing else in your settings changes. You get
    exactly one line telling you to restart Claude Code.
-4. Restart Claude Code. Claude Code may render its built-in first-party model list for the
-   `api.anthropic.com` hostname, so the Codex rows can disappear from `/model` even though the
-   compat listener still serves the full catalog. To keep using Codex, pin a visible Claude alias to
-   a Codex id, then rewire and restart. For example:
-
-   ```bash
-   node <plugin>/bin/model-gateway.js pin --opus claude-gpt-5.6-terra
-   node <plugin>/bin/model-gateway.js env --write-user
-   ```
-
-   Pick the visible Opus row. The shim routes the pinned `claude-gpt-*` id to Codex. Sidequest
-   dispatch is unaffected: it resolves its explicit route marker directly and never depends on
-   `/model` discovery.
+4. Restart Claude Code. Claude Code disables gateway model discovery while the base URL host is
+   `api.anthropic.com`, so the Codex/Grok rows disappear from `/model`. To keep using a gateway model,
+   type its full id directly, for example `/model claude-gpt-5.6-terra`. Claude Code accepts it and
+   saves it as the default for new sessions. The shim routes it to Codex. Disabling compatibility
+   restores the picker rows. Sidequest dispatch is unaffected: it resolves its explicit route marker
+   directly and never depends on `/model` discovery.
 5. Run `remote-control disable --confirm` after another direct confirmation to remove only the
    plugin-marked block, restore default mode, and verify it. If you manually remove the hosts block,
    the next `ensure` also reverts the gateway automatically.
