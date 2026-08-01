@@ -3,14 +3,41 @@ title: Getting started
 description: Install the marketplace, reload Claude Code, and start a workspace.
 ---
 
-Eigenwise Toolshed is a Claude Code plugin marketplace. Add it once, install the plugins you need, then reload Claude Code so the new skills and hooks are discovered.
+Eigenwise Toolshed is a Claude Code plugin marketplace. Start with these four steps:
 
-```text
-/plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install workbench@eigenwise-toolshed --scope user
-```
+1. Add the marketplace:
 
-Install project plugins with `--scope project` when their settings should travel with the repository. Claude Code only loads a plugin at the reload boundary, so start a new session after installing or updating one.
+   ```text
+   /plugin marketplace add Eigenwise/eigenwise-toolshed
+   ```
+
+2. Install Workbench for your user account:
+
+   ```text
+   /plugin install workbench@eigenwise-toolshed --scope user
+   ```
+
+3. Reload Claude Code so the new skills and hooks are discovered:
+
+   ```text
+   /reload-plugins
+   ```
+
+4. From the project you want to prepare, run:
+
+   ```text
+   /workbench:init-workspace
+   ```
+
+Step 4 installs and configures the other Toolshed plugins for that project. You do not need to install six plugins by hand.
+
+Use these scopes when you install or configure plugins:
+
+- Workbench is user-scoped because you want the workspace manager in every project.
+- Model Gateway is required and user-scoped because its wiring is global.
+- Every other plugin is project-scoped so its configuration travels with the repository.
+
+Claude Code only loads a plugin at the reload boundary, so run `/reload-plugins` after installing or updating one.
 
 ## First workspace
 

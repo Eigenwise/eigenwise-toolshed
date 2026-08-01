@@ -5,10 +5,14 @@ description: Use your ChatGPT and Codex subscription models from Claude Code.
 
 Model Gateway runs a local proxy and puts `claude-gpt-*` models in Claude Code's `/model` picker. It uses your ChatGPT/Codex subscription through the supported proxy, so no OpenAI API key is required.
 
+Model Gateway must be installed for your user account:
+
 ```text
 /plugin install model-gateway@eigenwise-toolshed --scope user
 /model-gateway:model-gateway setup
 ```
+
+Gateway wiring is global-only. `env --write-user` writes `~/.claude/settings.json`, `--write-project` is retired, and the keepalive hook must be live in every project and every executor worktree. Do not choose a project-scoped wiring mode.
 
 The setup skill installs or updates the proxy, checks authentication, and starts the local gateway. Gateway updates replace the worker behind a listener that stays bound, so open sessions keep their connection while an in-flight request drains or retries. Use `/model-gateway:model-gateway doctor` when the picker is missing models or the gateway port is unavailable. Once it is healthy, choose a `claude-gpt-*` model with `/model`; regular Claude model ids continue to use the Anthropic API.
 
@@ -67,7 +71,7 @@ Model Gateway records each session's largest forwarded request body locally. Wor
 
 `Request too large (max 32MB)` normally means the raw HTTP body hit Claude Code's byte limit. Model Gateway also returns HTTP 413 to ask Claude Code to compact a Codex context before its model limit. Read the error details: `Prompt is too long for the Codex context window; compact and retry. (<actual> tokens > <trigger> tokens)` identifies the token-based gateway signal. It is separate from the 32MB body cap, so reduce the task's context or start a fresh, tighter-scoped agent instead of removing parent-session attachments.
 
-Gateway wiring is global: `env --write-user` writes `~/.claude/settings.json` once and reaches every project and every executor worktree. The hosts file is machine-wide, so global wiring is what makes RC-compatibility manageable. To exempt one project deliberately, set `ANTHROPIC_BASE_URL` in that project's `settings.local.json` yourself; `doctor` marks whichever file wins as `[effective]`. Run `/workbench:update-toolshed` to migrate older wiring. Wiring applies to new Claude Code sessions, so restart open sessions after changing it. Claude Code resolves `ANTHROPIC_BASE_URL` from process environment first, then the current project's `.claude/settings.local.json`, project `.claude/settings.json`, and user `~/.claude/settings.json`. `doctor` marks the winner `[effective]`; a compat/default contradiction is a hard failure. A process-environment winner must be unset outside settings. Remote Control and the Codex/Grok rows in `/model` cannot both work: RC-compatibility points the base URL at `api.anthropic.com`, which disables gateway model discovery. Type an explicit id such as `/model claude-gpt-5.6-terra` to keep using the gateway model; it persists as the default. Disabling compatibility restores the picker rows.
+Gateway wiring is global-only: `env --write-user` writes `~/.claude/settings.json` once and reaches every project and every executor worktree. The `--write-project` mode is retired. The hosts file is machine-wide, so global wiring is what makes RC-compatibility manageable. Run `/workbench:update-toolshed` to migrate older wiring. Wiring applies to new Claude Code sessions, so restart open sessions after changing it. Claude Code resolves `ANTHROPIC_BASE_URL` from process environment first, then the current project's `.claude/settings.local.json`, project `.claude/settings.json`, and user `~/.claude/settings.json`. `doctor` marks the winner `[effective]`; a compat/default contradiction is a hard failure. A process-environment winner must be unset outside settings. Remote Control and the Codex/Grok rows in `/model` cannot both work: RC-compatibility points the base URL at `api.anthropic.com`, which disables gateway model discovery. Type an explicit id such as `/model claude-gpt-5.6-terra` to keep using the gateway model; it persists as the default. Disabling compatibility restores the picker rows.
 
 `env --write-user --reconcile` is a separate confirmation-gated command. Plain `env --write-user` lists recorded projects whose local URL differs and leaves their `.claude/settings.local.json` files unchanged. Confirming reconciliation writes to OTHER projects and removes only Model Gateway-owned wiring keys, leaving unrelated settings alone. It cannot change an inherited process environment, and cleanup takes effect for the next session after a restart.
 
