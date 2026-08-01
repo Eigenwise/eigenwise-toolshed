@@ -47,6 +47,7 @@ const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
 const { createReads } = require('./store/reads.js');
+const { createClaims } = require('./store/claims.js');
 
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
@@ -334,6 +335,32 @@ const {
   releaseLock,
   transaction,
   writeGlobal,
+});
+
+const {
+  DEFAULT_CLAIM_ABANDON_MIN,
+  DEFAULT_CLAIM_IDLE_MIN,
+  DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
+  autoReleasedClaimMessage,
+  claimAbandonMs,
+  claimActivityMs,
+  claimIdleAge,
+  claimIdleMs,
+  claimReclaimable,
+  claimReleaseNote,
+  claimReleaseVerdict,
+  claimVerification,
+  preparedDispatchTtlMs,
+  recordClaimVerification,
+  resumableScopePause,
+  touchClaim,
+  touchClaimActivity,
+} = createClaims({
+  dispatchState,
+  fs,
+  getTicket,
+  putTicket,
+  withTicketLock,
 });
 
 const {
@@ -3989,228 +4016,6 @@ const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, normal: 2, l
 
 function priorityRank(p?: any) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? (PRIORITY_RANK[String(p)] ?? 9) : 9;
-}
-
-const DEFAULT_CLAIM_IDLE_MIN = 60;
-const DEFAULT_CLAIM_ABANDON_MIN = 24 * 60;
-const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
-const VERIFY_START_COMMENT = '[sidequest:verify-start] ';
-const VERIFY_COMPLETE_COMMENT = '[sidequest:verify-complete]';
-
-function preparedDispatchTtlMs() {
-  const hours = Number(process.env.SIDEQUEST_PREPARED_DISPATCH_TTL_HOURS);
-  return (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_PREPARED_DISPATCH_TTL_HOURS) * 60 * 60 * 1000;
-}
-
-function envMinutesMs(fallbackMinutes?: any, ...names: string[]) {
-  for (const name of names) {
-    const raw = process.env[name];
-    if (raw == null || String(raw).trim() === '') continue;
-    const minutes = Number(raw);
-    if (Number.isFinite(minutes) && minutes > 0) return minutes * 60 * 1000;
-  }
-  return fallbackMinutes * 60 * 1000;
-}
-
-/* ------------------------------------------------------------------ *
- *  Claim liveness (SQ-820)
- *
- *  A claim coordinates ("someone is on this, don't double-assign"); it never
- *  authorizes. Nothing on the closeout path — commit, submit, done, checkpoint,
- *  scope request — may consult a clock, because elapsed time says nothing about
- *  whether a worker is alive, and the error is biased the worst way: it fires
- *  late in long, valuable runs, exactly when unsaved work is at its peak.
- *
- *  Reclaiming is driven by OBSERVED death (SubagentStop stamps the dispatch
- *  terminal while the claim is still held; SessionEnd reconciles that session's
- *  claims). Time is only a backstop for a death nothing observed, and even then
- *  it measures idleness since the holder's last board write, not claim age.
- * ------------------------------------------------------------------ */
-
-// No activity for this long releases a claim that has NO live executor
-// associated with it (a hand claim, or one whose dispatch already ended).
-function claimIdleMs() {
-  return envMinutesMs(DEFAULT_CLAIM_IDLE_MIN, 'SIDEQUEST_CLAIM_IDLE_MIN', 'SIDEQUEST_CLAIM_TTL_MIN');
-}
-
-// The anti-wedge backstop: a death we never observed still has to free the
-// ticket eventually. Long enough that a working executor cannot reach it.
-function claimAbandonMs() {
-  return envMinutesMs(DEFAULT_CLAIM_ABANDON_MIN, 'SIDEQUEST_CLAIM_ABANDON_MIN');
-}
-
-// The last moment the claim holder demonstrably touched this ticket: its claim,
-// its own comments, and the activity stamp every holder board write refreshes
-// (comment, checkpoint, scope request, commit). NaN when nothing parses.
-function claimActivityMs(ticket?: any) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by) return Number.NaN;
-  let latest = Number.NaN;
-  const consider = (value?: any) => {
-    const ms = Date.parse(value);
-    if (Number.isFinite(ms) && (!Number.isFinite(latest) || ms > latest)) latest = ms;
-  };
-  consider(claim.at);
-  consider(claim.activeAt);
-  consider(claimVerification(ticket)?.startedAt);
-  for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
-    if (comment && comment.by === claim.by) consider(comment.at);
-  }
-  return latest;
-}
-
-function claimIdleAge(ticket?: any, now?: any) {
-  const latest = claimActivityMs(ticket);
-  return Number.isFinite(latest) ? Math.max(0, now - latest) : Number.POSITIVE_INFINITY;
-}
-
-function claimVerification(ticket?: any) {
-  const claim = ticket?.claim;
-  const verification = claim?.verification;
-  if (!claim?.by || !verification || verification.by !== claim.by) return null;
-  const startedAt = String(verification.startedAt || '');
-  const command = String(verification.command || '').trim();
-  if (!Number.isFinite(Date.parse(startedAt)) || !command) return null;
-  return { startedAt, command };
-}
-
-function verificationComment(body?: any) {
-  const text = String(body || '');
-  if (text.startsWith(VERIFY_START_COMMENT)) {
-    const command = text.slice(VERIFY_START_COMMENT.length).trim();
-    return command ? { kind: 'start', command } : null;
-  }
-  return text === VERIFY_COMPLETE_COMMENT ? { kind: 'complete' } : null;
-}
-
-function recordClaimVerification(ticket?: any, comment?: any) {
-  const claim = ticket?.claim;
-  if (!claim?.by || comment?.by !== claim.by) return;
-  const event = verificationComment(comment.body);
-  if (!event) return;
-  const dispatch = dispatchState(ticket);
-  if (event.kind === 'start') {
-    claim.verification = { by: claim.by, startedAt: comment.at, command: event.command };
-    if (dispatch) delete dispatch.verifyStopAt;
-    return;
-  }
-  if (claimVerification(ticket)) delete claim.verification;
-  if (dispatch) delete dispatch.verifyStopAt;
-}
-
-function resumableScopePause(ticket?: any) {
-  const dispatch = dispatchState(ticket);
-  return Boolean(
-    dispatch && dispatch.terminalAt && ticket?.claim?.by && ticket?.scopeRequest
-      && ['scope_paused', 'stopped_claimed'].includes(dispatch.outcome),
-  );
-}
-
-// markDispatchStopped is the only path that stamps a dispatch terminal while its
-// claim is still held, so this outcome — timestamped inside the current claim —
-// is a real observation that the runtime holding the claim is gone.
-function observedStop(dispatch?: any, claim?: any) {
-  if (!dispatch || dispatch.outcome !== 'stopped_claimed' || !dispatch.terminalAt) return false;
-  const stoppedMs = Date.parse(dispatch.terminalAt);
-  const claimedMs = Date.parse(claim && claim.at);
-  if (!Number.isFinite(stoppedMs)) return false;
-  return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
-}
-
-// Why (if at all) this claim may be swept back to todo. Null means "leave it
-// alone" — including for a quiet executor that is still running.
-function missingStoppedWorktree(dispatch?: any) {
-  if (!dispatch || dispatch.sharedTree !== false || !dispatch.terminalAt || !dispatch.worktree) return false;
-  try { return !fs.existsSync(dispatch.worktree); } catch (_) { return false; }
-}
-
-function claimReleaseVerdict(ticket?: any, now?: any) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by) return null;
-  const atMs = Number.isFinite(Number(now)) ? Number(now) : Date.now();
-  const idleMs = claimIdleAge(ticket, atMs);
-  const dispatch = dispatchState(ticket);
-  const verification = claimVerification(ticket);
-  if (verification) {
-    if (idleMs > claimAbandonMs()) {
-      return { kind: 'abandoned_verifying', idleMs, at: verification.startedAt, reason: 'its verification marker never completed past the unobserved-death backstop' };
-    }
-    return null;
-  }
-  if (resumableScopePause(ticket)) {
-    if (missingStoppedWorktree(dispatch)) {
-      return { kind: 'missing_worktree', idleMs, at: dispatch.terminalAt, reason: 'its stopped executor worktree no longer exists' };
-    }
-    return null;
-  }
-  if (observedStop(dispatch, claim)) {
-    return { kind: 'observed_stop', idleMs, at: dispatch.terminalAt, reason: 'its executor was observed to stop while still holding the claim' };
-  }
-  const liveAgent = Boolean(dispatch && !dispatch.terminalAt);
-  if (!liveAgent && idleMs > claimIdleMs()) {
-    return { kind: 'idle', idleMs, reason: 'no board activity from the claim holder and no live executor associated' };
-  }
-  if (!liveAgent && idleMs > claimAbandonMs()) {
-    return { kind: 'abandoned', idleMs, reason: 'no board activity from the claim holder past the unobserved-death backstop' };
-  }
-  return null;
-}
-
-// True only when the claim may be taken over. Deliberately takes the TICKET, not
-// a bare claim: liveness needs the dispatch association, and a claim alone
-// cannot answer the question.
-function claimReclaimable(ticket?: any, now?: any) {
-  return Boolean(claimReleaseVerdict(ticket, now));
-}
-
-// A claim taken away by the sweep must never leave its holder guessing. Name the
-// release, protect the work already on disk, and spell out the way back in.
-function autoReleasedClaimMessage(ref?: any, release?: any) {
-  const when = release && release.at ? ` at ${release.at}` : '';
-  const why = (release && (release.reason || release.kind)) || 'the claim sweep released it';
-  return `${ref}'s claim was auto-released${when}: ${why}. Its dispatch token went with it, so this closeout cannot be recorded. Your commits are safe — do NOT discard, reset, or redo the work. Recovery: have the orchestrator run \`sidequest dispatch ${ref}\`, claim with that fresh token and executor, then hand in the SAME commit.`;
-}
-
-function claimIdleLabel(idleMs?: any) {
-  return Number.isFinite(idleMs) ? `${Math.round(Number(idleMs) / 60000)}m` : 'an unknown time';
-}
-
-function claimReleaseNote(ticket?: any, verdict?: any) {
-  const by = ticket && ticket.claim && ticket.claim.by;
-  const idle = claimIdleLabel(verdict && verdict.idleMs);
-  if (verdict.kind === 'observed_stop') {
-    return `↩️ Auto-released to **todo**: its executor was observed to stop while holding the claim (SubagentStop at ${verdict.at}, was claimed by \`${by}\`). It is back in the ready pool; re-dispatch to continue the work.`;
-  }
-  if (verdict.kind === 'abandoned_verifying') {
-    return `↩️ Auto-released to **todo**: verification from \`${by}\` never completed for ${idle}, past the unobserved-death backstop.`;
-  }
-  if (verdict.kind === 'idle') {
-    return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle} and no live executor is associated with this ticket.`;
-  }
-  return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle}, past the unobserved-death backstop (nothing ever reported that executor stopping).`;
-}
-
-// Refresh the holder's activity stamp in place. Every board write by the claim
-// owner counts, so a chatty long-running executor can never look abandoned.
-function touchClaimActivity(ticket?: any, by?: any, now?: any) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by || (by != null && claim.by !== by)) return false;
-  claim.activeAt = now || new Date().toISOString();
-  return true;
-}
-
-// Same, as its own locked write — for callers (MCP commit) that touch git rather
-// than the ticket. Fail-soft: a missed stamp only costs idleness precision.
-function touchClaim(slug?: any, idOrRef?: any, by?: any) {
-  const found = getTicket(slug, idOrRef);
-  if (!found) return { ok: false, reason: 'not_found' };
-  return withTicketLock(slug, found.id, () => {
-    const t = getTicket(slug, found.id);
-    if (!t) return { ok: false, reason: 'not_found' };
-    if (!touchClaimActivity(t, by)) return { ok: false, reason: 'not_owner', ticket: t };
-    putTicket(slug, t);
-    return { ok: true, ticket: t };
-  });
 }
 
 function ticketLockPath(slug?: any, id?: any) {
