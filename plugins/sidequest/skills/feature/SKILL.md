@@ -26,8 +26,8 @@ for a subsystem that changes an on-disk format, and pure waste for a new CLI fla
 size, you state it, and every step below reads off that decision.
 
 Board mechanics live in the `sidequest` skill (claim lifecycle, dispatch fields, routing, publish
-transaction) and its `references/`. Read `references/orchestration.md` before a first wave. This skill
-is the sequence and the sizing, not a second copy of those rules.
+transaction) and its `references/`. Read `../sidequest/references/orchestration.md` before a first
+wave. This skill is the sequence and the sizing, not a second copy of those rules.
 
 ## Size it first
 
