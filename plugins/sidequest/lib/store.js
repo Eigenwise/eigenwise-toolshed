@@ -32,6 +32,8 @@ const { createCache } = require("./store/cache.js");
 const { createConfig } = require("./store/config.js");
 const { createSweeps } = require("./store/sweeps.js");
 const { createServer } = require("./store/server.js");
+const { createProjects } = require("./store/projects.js");
+const { createWarnings } = require("./store/warnings.js");
 let cacheLayer;
 function sqliteDataVersion(...args) {
   return cacheLayer.sqliteDataVersion(...args);
@@ -126,6 +128,168 @@ function setBoardConfig(...args) {
 }
 function effectiveScope(...args) {
   return configLayer.effectiveScope(...args);
+}
+let projectsLayer;
+function ensureProject(...args) {
+  return projectsLayer.ensureProject(...args);
+}
+function readMeta(...args) {
+  return projectsLayer.readMeta(...args);
+}
+function metaLockPath(...args) {
+  return projectsLayer.metaLockPath(...args);
+}
+function withMetaLock(...args) {
+  return projectsLayer.withMetaLock(...args);
+}
+function nextSeq(...args) {
+  return projectsLayer.nextSeq(...args);
+}
+function nextStorySeq(...args) {
+  return projectsLayer.nextStorySeq(...args);
+}
+function setProjectNotify(...args) {
+  return projectsLayer.setProjectNotify(...args);
+}
+function setProjectRouting(...args) {
+  return projectsLayer.setProjectRouting(...args);
+}
+function projectRoutingEnabled(...args) {
+  return projectsLayer.projectRoutingEnabled(...args);
+}
+function archiveProject(...args) {
+  return projectsLayer.archiveProject(...args);
+}
+function unarchiveProject(...args) {
+  return projectsLayer.unarchiveProject(...args);
+}
+function deleteProjectExact(...args) {
+  return projectsLayer.deleteProjectExact(...args);
+}
+function listProjects(...args) {
+  return projectsLayer.listProjects(...args);
+}
+function findProject(...args) {
+  return projectsLayer.findProject(...args);
+}
+function mergeProject(...args) {
+  return projectsLayer.mergeProject(...args);
+}
+let warningsLayer;
+let DISPATCH_DESCRIPTION_MIN;
+function executorText(...args) {
+  return warningsLayer.executorText(...args);
+}
+function manualVerify(...args) {
+  return warningsLayer.manualVerify(...args);
+}
+function verifyCommandError(...args) {
+  return warningsLayer.verifyCommandError(...args);
+}
+function requireVerifyCommand(...args) {
+  return warningsLayer.requireVerifyCommand(...args);
+}
+function ticketReferenceWarnings(...args) {
+  return warningsLayer.ticketReferenceWarnings(...args);
+}
+function ticketPrescribesFix(...args) {
+  return warningsLayer.ticketPrescribesFix(...args);
+}
+function ticketCategoryWarnings(...args) {
+  return warningsLayer.ticketCategoryWarnings(...args);
+}
+function readonlyCategoryWriteIntentWarning(...args) {
+  return warningsLayer.readonlyCategoryWriteIntentWarning(...args);
+}
+function noDeclaredScopeWarning(...args) {
+  return warningsLayer.noDeclaredScopeWarning(...args);
+}
+function readonlyBrowserReviewWarning(...args) {
+  return warningsLayer.readonlyBrowserReviewWarning(...args);
+}
+function relativePathWithin(...args) {
+  return warningsLayer.relativePathWithin(...args);
+}
+function packageRootForScope(...args) {
+  return warningsLayer.packageRootForScope(...args);
+}
+function buildOutputDirectories(...args) {
+  return warningsLayer.buildOutputDirectories(...args);
+}
+function packageBuildOutputs(...args) {
+  return warningsLayer.packageBuildOutputs(...args);
+}
+function isTrackedBuildOutput(...args) {
+  return warningsLayer.isTrackedBuildOutput(...args);
+}
+function scopeIncludesPath(...args) {
+  return warningsLayer.scopeIncludesPath(...args);
+}
+function sourceBuildOutputWarnings(...args) {
+  return warningsLayer.sourceBuildOutputWarnings(...args);
+}
+function verifyCommandWarning(...args) {
+  return warningsLayer.verifyCommandWarning(...args);
+}
+function dispatchDescriptionError(...args) {
+  return warningsLayer.dispatchDescriptionError(...args);
+}
+function storyContractDriftWarnings(...args) {
+  return warningsLayer.storyContractDriftWarnings(...args);
+}
+function ticketSymbolReferences(...args) {
+  return warningsLayer.ticketSymbolReferences(...args);
+}
+function symbolSearchIsBounded(...args) {
+  return warningsLayer.symbolSearchIsBounded(...args);
+}
+function symbolExistsOnTarget(...args) {
+  return warningsLayer.symbolExistsOnTarget(...args);
+}
+function symbolExistenceWarnings(...args) {
+  return warningsLayer.symbolExistenceWarnings(...args);
+}
+function crossTicketStateWarnings(...args) {
+  return warningsLayer.crossTicketStateWarnings(...args);
+}
+function dispatchUncertaintyWarnings(...args) {
+  return warningsLayer.dispatchUncertaintyWarnings(...args);
+}
+function dispatchWarnings(...args) {
+  return warningsLayer.dispatchWarnings(...args);
+}
+function dispatchDeclaredFiles(...args) {
+  return warningsLayer.dispatchDeclaredFiles(...args);
+}
+function externalDeclaredFiles(...args) {
+  return warningsLayer.externalDeclaredFiles(...args);
+}
+function nonRepoExternalOutput(...args) {
+  return warningsLayer.nonRepoExternalOutput(...args);
+}
+function fencedBlocks(...args) {
+  return warningsLayer.fencedBlocks(...args);
+}
+function diffShapedBlock(...args) {
+  return warningsLayer.diffShapedBlock(...args);
+}
+function evidenceShapedBlock(...args) {
+  return warningsLayer.evidenceShapedBlock(...args);
+}
+function embedsCompleteEdit(...args) {
+  return warningsLayer.embedsCompleteEdit(...args);
+}
+function presolvedRoutingWarnings(...args) {
+  return warningsLayer.presolvedRoutingWarnings(...args);
+}
+function ticketPlanningWarnings(...args) {
+  return warningsLayer.ticketPlanningWarnings(...args);
+}
+function normalizeReadonlyOverride(...args) {
+  return warningsLayer.normalizeReadonlyOverride(...args);
+}
+function requestedReadonlyOverride(...args) {
+  return warningsLayer.requestedReadonlyOverride(...args);
 }
 let dispatch;
 function dispatchState(...args) {
@@ -846,313 +1010,6 @@ function autoStoryColor(index) {
   return STORY_PALETTE[((index || 0) % n + n) % n];
 }
 configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
-function ensureProject(absPath, name) {
-  const resolved = path.resolve(absPath);
-  const slug = slugify(resolved);
-  const dir = projectDir(slug);
-  ensureDir(ticketsDir(slug));
-  let meta;
-  let changed = false;
-  transaction(() => {
-    const handle = database();
-    meta = db.getRow(handle, "projects", slug);
-    if (!meta || typeof meta !== "object") {
-      meta = {
-        path: resolved,
-        name: name || defaultProjectName(resolved),
-        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        seq: 0,
-        storySeq: 0,
-        alwaysInScope: defaultAlwaysInScope(resolved),
-        worktreeIsolation: true
-      };
-      db.putRow(handle, "projects", { slug, data: meta });
-      changed = true;
-    } else {
-      if (meta.path !== resolved) {
-        meta.path = resolved;
-        changed = true;
-      }
-      if (name && meta.name !== name) {
-        meta.name = name;
-        changed = true;
-      }
-      if (!meta.name) {
-        meta.name = defaultProjectName(resolved);
-        changed = true;
-      }
-      if (typeof meta.seq !== "number") {
-        meta.seq = 0;
-        changed = true;
-      }
-      if (typeof meta.storySeq !== "number") {
-        meta.storySeq = 0;
-        changed = true;
-      }
-      if (changed) db.putRow(handle, "projects", { slug, data: meta });
-    }
-    const pointer = handle.prepare("SELECT project FROM project_routing_profiles WHERE project = ?").get(slug);
-    if (!pointer) {
-      const settings = handle.prepare("SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1").get();
-      if (!settings?.new_project_profile_id) throw new Error("The new-board routing profile is not configured.");
-      db.putRow(handle, "project_routing_profiles", {
-        project: slug,
-        profile_id: settings.new_project_profile_id,
-        assigned_at: (/* @__PURE__ */ new Date()).toISOString(),
-        assigned_by: "ensure-project"
-      });
-      changed = true;
-    }
-  });
-  if (changed) invalidateStoreCaches();
-  return { slug, dir, meta };
-}
-function readMeta(slug) {
-  const key = String(slug || "");
-  const cache = residentCache();
-  if (cache.metadata.has(key)) return cloneCached(cache.metadata.get(key));
-  const meta = db.getRow(database(), "projects", key);
-  cache.metadata.set(key, meta);
-  return cloneCached(meta);
-}
-function metaLockPath(slug) {
-  return path.join(projectDir(slug), ".meta.lock");
-}
-function withMetaLock(slug, fn) {
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  try {
-    return transaction(fn);
-  } finally {
-    if (locked) releaseLock(lock);
-  }
-}
-function nextSeq(slug) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug) || { seq: 0 };
-    meta.seq = (typeof meta.seq === "number" ? meta.seq : 0) + 1;
-    putProject(slug, meta);
-    return meta.seq;
-  });
-}
-function nextStorySeq(slug) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug) || { storySeq: 0 };
-    meta.storySeq = (typeof meta.storySeq === "number" ? meta.storySeq : 0) + 1;
-    putProject(slug, meta);
-    return meta.storySeq;
-  });
-}
-function setProjectNotify(slug, on) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: "not_found" };
-    meta.notify = on !== false;
-    putProject(slug, meta);
-    return { ok: true, notify: meta.notify };
-  });
-}
-function setProjectRouting(slug, routing) {
-  if (!["enabled", "disabled"].includes(routing)) throw new Error("Routing must be enabled or disabled.");
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: "not_found" };
-    meta.routing = routing;
-    putProject(slug, meta);
-    return { ok: true, routing: meta.routing };
-  });
-}
-function projectRoutingEnabled(slug) {
-  const meta = readMeta(slug);
-  return !meta || meta.routing !== "disabled";
-}
-function archiveProject(slug) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: "not_found" };
-    if (meta.archivedAt) return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: true };
-    meta.archivedAt = (/* @__PURE__ */ new Date()).toISOString();
-    putProject(slug, meta);
-    return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: false };
-  });
-}
-function unarchiveProject(slug) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: "not_found" };
-    if (!meta.archivedAt) return { ok: true, slug, wasArchived: false };
-    delete meta.archivedAt;
-    putProject(slug, meta);
-    return { ok: true, slug, wasArchived: true };
-  });
-}
-function deleteProjectExact(slug) {
-  if (typeof slug !== "string" || !/^[a-z0-9][a-z0-9-]{1,80}$/.test(slug)) return { ok: false, reason: "not_found" };
-  if (!readMeta(slug)) return { ok: false, reason: "not_found" };
-  transaction(() => {
-    for (const ticket of db.listRows(database(), "tickets", { project: slug })) deleteCachedRow(database(), "tickets", ticket.id);
-    for (const story of db.listRows(database(), "stories", { project: slug })) deleteCachedRow(database(), "stories", story.id);
-    deleteCachedRow(database(), "projects", slug);
-  });
-  fs.rmSync(projectDir(slug), { recursive: true, force: true });
-  return { ok: true, slug };
-}
-function listProjects(opts) {
-  opts = opts || {};
-  const cache = residentCache();
-  const cacheKey = `projects:${opts.all ? "all" : opts.archived ? "archived" : "active"}`;
-  const cached = cache.snapshots.get(cacheKey);
-  if (cached) return cloneCached(cached);
-  const rows = db.selectRows(database(), `
-    SELECT
-      p.slug,
-      p.data,
-      COALESCE(t.todo, 0) AS todo,
-      COALESCE(t.doing, 0) AS doing,
-      COALESCE(t.done, 0) AS done,
-      COALESCE(t.active, 0) AS active,
-      COALESCE(t.archived, 0) AS archived,
-      t.last_activity,
-      COALESCE(s.stories, 0) AS stories
-    FROM projects p
-    LEFT JOIN (
-      SELECT
-        project,
-        SUM(CASE WHEN archived = 0 AND status = 'todo' THEN 1 ELSE 0 END) AS todo,
-        SUM(CASE WHEN archived = 0 AND status = 'doing' THEN 1 ELSE 0 END) AS doing,
-        SUM(CASE WHEN archived = 0 AND status = 'done' THEN 1 ELSE 0 END) AS done,
-        SUM(CASE WHEN archived = 0 THEN 1 ELSE 0 END) AS active,
-        SUM(CASE WHEN archived != 0 THEN 1 ELSE 0 END) AS archived,
-        MAX(json_extract(data, '$.updatedAt')) AS last_activity
-      FROM tickets
-      GROUP BY project
-    ) t ON t.project = p.slug
-    LEFT JOIN (
-      SELECT project, COUNT(*) AS stories
-      FROM stories
-      GROUP BY project
-    ) s ON s.project = p.slug
-  `);
-  const out = [];
-  for (const row of rows) {
-    let meta;
-    try {
-      meta = JSON.parse(row.data);
-    } catch (_) {
-      continue;
-    }
-    if (!meta || !meta.path) continue;
-    const archivedAt = meta.archivedAt || null;
-    if (!opts.all && (opts.archived ? !archivedAt : !!archivedAt)) continue;
-    const counts = { todo: Number(row.todo) || 0, doing: Number(row.doing) || 0, done: Number(row.done) || 0 };
-    out.push({
-      slug: slugify(meta.path),
-      name: meta.name || row.slug,
-      path: meta.path || "",
-      counts,
-      total: Number(row.active) || 0,
-      archived: Number(row.archived) || 0,
-      open: counts.todo + counts.doing,
-      lastActivity: row.last_activity || meta.createdAt || null,
-      notify: meta.notify !== false,
-      routing: meta.routing === "disabled" ? "disabled" : "enabled",
-      stories: Number(row.stories) || 0,
-      archivedAt
-    });
-  }
-  out.sort((a, b) => String(b.lastActivity || "").localeCompare(String(a.lastActivity || "")));
-  cache.snapshots.set(cacheKey, out);
-  return cloneCached(out);
-}
-function findProject(ref) {
-  const arg = String(ref == null ? "" : ref).trim();
-  if (!arg) return { ok: false, reason: "not_found", known: listProjects({ all: true }).map((project) => project.name) };
-  if (path.isAbsolute(arg)) {
-    const resolvedPath = path.resolve(arg);
-    const slug = slugify(resolvedPath);
-    const meta = readMeta(slug);
-    if (meta && normalizeForHash(meta.path) === normalizeForHash(resolvedPath)) return { ok: true, slug, meta };
-  } else {
-    const meta = readMeta(arg);
-    if (meta) return { ok: true, slug: arg, meta };
-  }
-  const projects = db.selectRows(database(), "SELECT slug, data FROM projects ORDER BY slug").map((row) => {
-    try {
-      return { slug: row.slug, meta: JSON.parse(row.data) };
-    } catch (_) {
-      return null;
-    }
-  }).filter(Boolean);
-  const wantedName = arg.toLowerCase();
-  const byName = projects.filter((project) => String(project.meta.name || project.slug).trim().toLowerCase() === wantedName);
-  if (byName.length === 1) return { ok: true, slug: byName[0].slug, meta: byName[0].meta };
-  if (byName.length > 1) {
-    return {
-      ok: false,
-      reason: "ambiguous",
-      matches: byName.map((project) => ({ slug: project.slug, name: project.meta.name || project.slug, path: project.meta.path || "" }))
-    };
-  }
-  if (!path.isAbsolute(arg)) {
-    const wantedPath = normalizeForHash(path.resolve(arg));
-    const byPath = projects.find((project) => project.meta.path && normalizeForHash(path.resolve(project.meta.path)) === wantedPath);
-    if (byPath) return { ok: true, slug: byPath.slug, meta: byPath.meta };
-  }
-  return { ok: false, reason: "not_found", known: projects.map((project) => project.meta.name || project.slug) };
-}
-function mergeProject(srcSlug, destSlug, opts) {
-  opts = opts || {};
-  const dryRun = !!opts.dryRun;
-  if (srcSlug === destSlug) throw new Error("source and destination are the same board");
-  if (!readMeta(srcSlug)) throw new Error(`source board "${srcSlug}" does not exist`);
-  if (!readMeta(destSlug)) throw new Error(`destination board "${destSlug}" does not exist`);
-  const tickets = listTickets(srcSlug).slice().sort((a, b) => seqOfRef(a.ref) - seqOfRef(b.ref));
-  const stories2 = listStories(srcSlug);
-  const refMap = {};
-  const ticketPlan = [];
-  for (const t of tickets) {
-    const newRef = dryRun ? `SQ-?` : `SQ-${nextSeq(destSlug)}`;
-    if (t.ref) refMap[String(t.ref).toUpperCase()] = newRef;
-    ticketPlan.push({ ticket: t, newRef });
-  }
-  const storyPlan = [];
-  for (const s of stories2) {
-    const newRef = dryRun ? `US-?` : `US-${nextStorySeq(destSlug)}`;
-    storyPlan.push({ story: s, newRef });
-  }
-  const mapping = ticketPlan.map(({ ticket, newRef }) => ({ from: ticket.ref, to: newRef, title: ticket.title }));
-  if (dryRun) return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
-  transaction(() => {
-    for (const ticket of tickets) deleteCachedRow(database(), "tickets", ticket.id);
-    for (const story of stories2) deleteCachedRow(database(), "stories", story.id);
-    for (const { story, newRef } of storyPlan) {
-      const moved = Object.assign({}, story, { ref: newRef });
-      putStory(destSlug, moved);
-    }
-    for (const { ticket, newRef } of ticketPlan) {
-      const links = Array.isArray(ticket.links) ? ticket.links.map((l) => Object.assign({}, l, { ref: refMap[String(l.ref).toUpperCase()] || l.ref })) : [];
-      const moved = Object.assign({}, ticket, { ref: newRef, links });
-      putTicket(destSlug, moved);
-      const srcAssets = assetsDir(srcSlug, ticket.id);
-      if (fs.existsSync(srcAssets)) {
-        try {
-          fs.cpSync(srcAssets, assetsDir(destSlug, ticket.id), { recursive: true });
-        } catch (_) {
-        }
-      }
-    }
-    deleteCachedRow(database(), "projects", srcSlug);
-  });
-  try {
-    fs.rmSync(projectDir(srcSlug), { recursive: true, force: true });
-  } catch (_) {
-  }
-  return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
-}
-function seqOfRef(ref) {
-  const m = /(\d+)\s*$/.exec(String(ref || ""));
-  return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
-}
 function parseTicketData(slug, data) {
   try {
     const ticket = typeof data === "string" ? JSON.parse(data) : data;
@@ -1284,489 +1141,6 @@ function requireStatus(s) {
 function coercePriority(p, fallback) {
   p = String(p || "").toLowerCase();
   return VALID_PRIORITY.includes(p) ? p : fallback;
-}
-const DISPATCH_DESCRIPTION_MIN = 80;
-const DISPATCH_DESCRIPTION_GUIDANCE = "the executor's entire brief is this ticket; add a description (Where / Contract / Verify) and a verify command, then dispatch";
-function executorText(value, max, label) {
-  if (value == null) return "";
-  const text = String(value);
-  if (text.length > max) throw new Error(`${label} exceeds the ${max}-character executor-context limit.`);
-  return text;
-}
-const VERIFY_BUILTINS = /* @__PURE__ */ new Set([
-  "bash",
-  "bun",
-  "cargo",
-  "cd",
-  "cmd",
-  "composer",
-  "dart",
-  "deno",
-  "dotnet",
-  "elixir",
-  "eslint",
-  "flutter",
-  "git",
-  "go",
-  "gradle",
-  "java",
-  "jest",
-  "just",
-  "make",
-  "mix",
-  "mvn",
-  "node",
-  "npm",
-  "npx",
-  "php",
-  "pnpm",
-  "poetry",
-  "powershell",
-  "pwsh",
-  "py",
-  "pytest",
-  "python",
-  "python3",
-  "rake",
-  "ruby",
-  "sh",
-  "tox",
-  "tsc",
-  "uv",
-  "vitest",
-  "yarn"
-]);
-function manualVerify(value) {
-  return /^manual:\s+\S/i.test(String(value || "").trim());
-}
-function verifyCommandError(value) {
-  const command = String(value || "").trim();
-  if (!command || manualVerify(command)) return null;
-  if (/^manual:/i.test(command)) {
-    return "Manual verification must say what was checked: `manual: <what you checked>`. Otherwise provide a runnable command such as `cd <repo-relative-dir> && <command>`.";
-  }
-  const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1] || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2] || "";
-  const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase()) || /[\\/]|\.(?:bat|cmd|com|exe|ps1|sh)$/i.test(first);
-  const proseStarter = /^(?:check|confirm|ensure|inspect|look|open|read|review|verify)\s/i.test(command);
-  if (command.endsWith(".") || proseStarter || !likelyExecutable && /[.!?]/.test(command)) {
-    return "Verify must be a runnable command such as `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.";
-  }
-  for (const match of command.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\}|(?::[^}]*)\})/g)) {
-    const name = match[1] || match[2];
-    if (name && process.env[name] == null && !match[0].includes(":-")) {
-      return `Verify references unset environment variable ${name}. Set a portable default such as \`${"${"}${name}:-/tmp}\`, or use \`manual: <what you checked>\`.`;
-    }
-  }
-  for (const match of command.matchAll(/%([A-Za-z_][A-Za-z0-9_]*)%/g)) {
-    const name = match[1];
-    if (name != null && process.env[name] == null) {
-      return `Verify references unset environment variable ${name}. Set a portable default or use \`manual: <what you checked>\`.`;
-    }
-  }
-  return null;
-}
-function requireVerifyCommand(value) {
-  const error = verifyCommandError(value);
-  if (error) throw new Error(error);
-}
-function ticketReferenceWarnings(slug, title, description) {
-  const refs = new Set((`${title || ""}
-${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase()));
-  if (!refs.size) return [];
-  const known = new Set(listTickets(slug).map((ticket) => String(ticket.ref).toUpperCase()));
-  const unknown = [...refs].filter((ref) => !known.has(ref));
-  return unknown.length ? [`Unknown ticket refs: ${unknown.join(", ")}.`] : [];
-}
-function ticketPrescribesFix(description) {
-  const body = String(description || "");
-  if (/^\s*fix\s*:/im.test(body)) return true;
-  if (/\b(?:replace|change)\s+\S[\s\S]{0,160}?\s+(?:with|to)\s+\S/i.test(body)) return true;
-  if (/```(?:diff|patch)?\s*\r?\n[\s\S]*?^-\S[\s\S]*?^\+\S[\s\S]*?```/im.test(body)) return true;
-  return (body.match(/^\s*\d+[.)]\s+(?:add|change|replace|remove|rename|move|update|set|delete|edit|wire)\b/gim) || []).length >= 2;
-}
-function ticketCategoryWarnings(ticket) {
-  if (ticketCategory(ticket) !== "coding.hard" || !ticketPrescribesFix(ticket && ticket.description)) return [];
-  return ["coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category."];
-}
-function readonlyCategoryWriteIntentWarning(ticket) {
-  if (!categoryReadOnly(ticket)) return null;
-  const writesFiles = normalizeFiles(ticket.files).length > 0;
-  const writesContracts = (normalizeContracts(ticket.contracts).changes || []).length > 0;
-  if (!writesFiles && !writesContracts) return null;
-  return "Readonly category contradicts declared write intent (files or changes). Resolve the category or set an explicit readonly override before dispatch.";
-}
-function noDeclaredScopeWarning(ticket) {
-  if (dispatchReadOnly(ticket)) return null;
-  if (Array.isArray(ticket.files) && ticket.files.length) return null;
-  if (Number(ticket?.complexity) >= 4) return null;
-  return "Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.";
-}
-const BROWSER_REVIEW_SIGNAL = /\b(?:browser|visual|screenshot|playwright|ui review|e2e)\b/i;
-function readonlyBrowserReviewWarning(ticket) {
-  if (!dispatchReadOnly(ticket)) return null;
-  const signal = [ticket?.title, ticket?.description, ticketCategory(ticket)].join("\n");
-  if (!BROWSER_REVIEW_SIGNAL.test(signal)) return null;
-  return "Planning-depth warning: this readonly browser/visual ticket may need a driver script. Read-only executors cannot write one; grant write scope with an explicit no-repo-writes mandate, or use a browser tool that needs no script.";
-}
-function relativePathWithin(root, target) {
-  const relative = path.relative(String(root), String(target));
-  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : relative === "" ? "." : null;
-}
-function packageRootForScope(projectPath, scope) {
-  const absolute = path.resolve(String(projectPath), String(scope));
-  let directory = path.dirname(absolute);
-  for (; ; ) {
-    if (!relativePathWithin(projectPath, directory)) return null;
-    if (fs.existsSync(path.join(directory, "package.json"))) return directory;
-    const parent = path.dirname(directory);
-    if (parent === directory) return null;
-    directory = parent;
-  }
-}
-function buildOutputDirectories(source) {
-  const outputs = /* @__PURE__ */ new Map();
-  const add = (directory, sourceDirectory) => {
-    const value = String(directory || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
-    if (!value || value.includes("..") || path.isAbsolute(value)) return;
-    const current = outputs.get(value);
-    outputs.set(value, { directory: value, sourceDirectory: sourceDirectory || current?.sourceDirectory || null });
-  };
-  const text = String(source || "");
-  for (const match of text.matchAll(/--(?:outdir|out-dir|output-dir)\s*(?:=|\s+)\s*["']?([^"'\s;&]+)/gi)) add(match[1]);
-  for (const match of text.matchAll(/(?:outdir|outDir|outputDir)\s*:\s*["']([^"']+)["']/g)) add(match[1]);
-  for (const helper of text.matchAll(/(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)[^)]*\)\s*\{([\s\S]{0,2000}?)\n\}/g)) {
-    const [helperName, parameter, body] = [helper[1], helper[2], helper[3]];
-    if (!helperName || !parameter || !body || !new RegExp(`(?:outdir|outDir)\\s*:\\s*path\\.join\\([^)]*,\\s*${parameter}\\s*\\)`).test(body)) continue;
-    const call = new RegExp(`\\b${helperName}\\s*\\(\\s*["']([^"']+)["']`, "g");
-    for (const match of text.matchAll(call)) add(match[1], match[1]);
-  }
-  return [...outputs.values()];
-}
-function packageBuildOutputs(packageRoot) {
-  let manifest;
-  try {
-    manifest = JSON.parse(fs.readFileSync(path.join(String(packageRoot), "package.json"), "utf8"));
-  } catch (_) {
-    return [];
-  }
-  const build = String(manifest?.scripts?.build || "");
-  if (!build) return [];
-  const outputs = buildOutputDirectories(build);
-  for (const match of build.matchAll(/\bnode\s+(?:["']([^"']+)["']|([^\s;&]+))/g)) {
-    const script = path.resolve(String(packageRoot), match[1] || match[2]);
-    if (!relativePathWithin(packageRoot, script) || !fs.existsSync(script)) continue;
-    try {
-      outputs.push(...buildOutputDirectories(fs.readFileSync(script, "utf8")));
-    } catch (_) {
-    }
-  }
-  return [...new Map(outputs.map((output) => [output.directory, output])).values()];
-}
-function isTrackedBuildOutput(projectPath, output) {
-  const relative = relativePathWithin(projectPath, output);
-  if (!relative || relative === ".") return false;
-  try {
-    return Boolean(execFileSync("git", ["ls-files", "--", relative], {
-      cwd: projectPath,
-      encoding: "utf8",
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim());
-  } catch (_) {
-    return false;
-  }
-}
-function scopeIncludesPath(files, projectPath, target) {
-  return normalizeFiles(files).some((file) => {
-    const declared = path.resolve(String(projectPath), file);
-    return declared === target || relativePathWithin(target, declared) !== null;
-  });
-}
-function sourceBuildOutputWarnings(ticket, projectPath) {
-  if (!projectPath || !Array.isArray(ticket?.files)) return [];
-  const warnings = /* @__PURE__ */ new Set();
-  for (const scope of normalizeFiles(ticket.files)) {
-    const packageRoot = packageRootForScope(projectPath, scope);
-    if (!packageRoot) continue;
-    const sourceRelative = relativePathWithin(packageRoot, path.resolve(projectPath, scope))?.replace(/\\/g, "/");
-    if (!sourceRelative || sourceRelative !== "src" && !sourceRelative.startsWith("src/")) continue;
-    const sourceDirectory = sourceRelative.split("/")[1] || null;
-    for (const output of packageBuildOutputs(packageRoot)) {
-      if (output.sourceDirectory && sourceDirectory && output.sourceDirectory !== sourceDirectory) continue;
-      const target = path.resolve(packageRoot, output.directory);
-      if (!isTrackedBuildOutput(projectPath, target) || scopeIncludesPath(ticket.files, projectPath, target)) continue;
-      const packageRelative = relativePathWithin(projectPath, packageRoot)?.replace(/\\/g, "/") || ".";
-      const display = packageRelative === "." ? output.directory : `${packageRelative}/${output.directory}`;
-      warnings.add(`Planning-depth warning: declared source scope under ${packageRelative}/src omits tracked build output ${display}. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.`);
-    }
-  }
-  return [...warnings];
-}
-function verifyCommandWarning(ticket, projectPath) {
-  const verify = String(ticket?.executorVerify || "").trim();
-  if (!verify) return null;
-  const match = /^cd\s+(?:["']([^"']+)["']|([^&;\s]+))\s*&&/.exec(verify);
-  if (!match) return "Planning-depth warning: record verify commands as `cd <repo-relative-dir> && ...`, then run that exact string before submitting.";
-  const directory = path.resolve(String(projectPath || ""), match[1] || match[2]);
-  if (!projectPath || !relativePathWithin(projectPath, directory) || !fs.existsSync(directory)) {
-    return "Planning-depth warning: the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting.";
-  }
-  return null;
-}
-function dispatchDescriptionError(ticket) {
-  if (!ticket || !ticket.model || !ticket.effort) return null;
-  if (String(ticket.description || "").trim().length >= DISPATCH_DESCRIPTION_MIN) return null;
-  return `dispatch: ${DISPATCH_DESCRIPTION_GUIDANCE}.`;
-}
-function storyContractDriftWarnings(ticket) {
-  const contractDrift = ticket && (ticket.storyContractDrift || dispatchState(ticket)?.storyContractDrift);
-  if (!contractDrift) return [];
-  return [`Dispatch warning: ${contractDrift.storyRef || "story"} execution contract changed from revision ${contractDrift.fromRevision} to ${contractDrift.toRevision} while this ticket was claimed; the next briefing uses revision ${contractDrift.toRevision}.`];
-}
-function claudeWebSearchUnavailable(ticket) {
-  const model = normalizeRouteModel(ticket && ticket.model);
-  const effort = coerceEffort(ticket && ticket.effort);
-  return ["opus", "sonnet", "fable"].includes(String(model)) && ["xhigh", "max"].includes(String(effort));
-}
-const DISPATCH_SYMBOL_CHECK_MAX = 12;
-const DISPATCH_SYMBOL_CHECK_MAX_SCOPES = 64;
-const DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES = 256 * 1024;
-function ticketSymbolReferences(ticket) {
-  const candidates = `${ticket?.title || ""}
-${ticket?.description || ""}`.matchAll(/`([^`\r\n]+)`/g);
-  const symbols = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const candidate of candidates) {
-    const symbol = String(candidate[1] || "").trim();
-    if (symbol.length < 3 || !/[_.]|\(\)/.test(symbol)) continue;
-    if (!/^[A-Za-z_$][\w$]*(?:[._][A-Za-z_$][\w$]*)*(?:\(\))?$/.test(symbol)) continue;
-    const key = symbol.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    symbols.push(symbol);
-    if (symbols.length >= DISPATCH_SYMBOL_CHECK_MAX) break;
-  }
-  return symbols;
-}
-function symbolSearchIsBounded(projectPath, target, scopes) {
-  if (!projectPath || !target || scopes.length > DISPATCH_SYMBOL_CHECK_MAX_SCOPES) return false;
-  const args = ["ls-tree", "-r", "--name-only", String(target)];
-  if (scopes.length) args.push("--", ...scopes);
-  try {
-    execFileSync("git", args, {
-      cwd: projectPath,
-      encoding: "utf8",
-      windowsHide: true,
-      stdio: "pipe",
-      maxBuffer: DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES
-    });
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-function symbolExistsOnTarget(projectPath, target, symbol, scopes) {
-  const args = ["grep", "-F", "-q", "--", String(symbol), String(target)];
-  if (scopes.length) args.push("--", ...scopes);
-  const result = spawnSync("git", args, {
-    cwd: projectPath,
-    windowsHide: true,
-    stdio: "ignore",
-    timeout: 3e3
-  });
-  if (result.error || result.signal || result.status == null) return null;
-  return result.status === 0;
-}
-function symbolExistenceWarnings(ticket, slug) {
-  const projectPath = slug ? readMeta(slug)?.path : null;
-  const symbols = ticketSymbolReferences(ticket);
-  if (!projectPath || !symbols.length) return [];
-  let target;
-  try {
-    target = integrationTarget(slug);
-  } catch (_) {
-    return [];
-  }
-  const scopes = dispatchDeclaredFiles(ticket);
-  if (!symbolSearchIsBounded(projectPath, target.upstream, scopes)) return [];
-  const warnings = [];
-  for (const symbol of symbols) {
-    const exists = symbolExistsOnTarget(projectPath, target.upstream, symbol, scopes);
-    if (exists === false) warnings.push(`ticket names \`${symbol}\` but it does not appear on ${target.upstream}; verify this claim before acting.`);
-  }
-  return warnings;
-}
-function crossTicketStateWarnings(ticket, slug) {
-  if (!ticket || !slug) return [];
-  const writtenAt = Date.parse(ticket.referenceUpdatedAt || ticket.updatedAt);
-  if (!Number.isFinite(writtenAt)) return [];
-  const refs = new Set((String(ticket.description || "").match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase()));
-  refs.delete(String(ticket.ref || "").toUpperCase());
-  const warnings = [];
-  for (const ref of refs) {
-    const referenced = getTicket(slug, ref);
-    const transition = referenced?.statusTransition;
-    const changedAt = Date.parse(transition?.at);
-    if (!referenced || !Number.isFinite(changedAt) || changedAt <= writtenAt) continue;
-    const from = transition.from || "unknown";
-    const to = transition.to || referenced.status || "unknown";
-    warnings.push(`${ref} changed state (${from} -> ${to}) after this ticket was written; its claims may be stale.`);
-  }
-  return warnings;
-}
-function dispatchUncertaintyWarnings(ticket, slug) {
-  return [...symbolExistenceWarnings(ticket, slug), ...crossTicketStateWarnings(ticket, slug)].map((warning) => `Dispatch warning: ${warning}`);
-}
-function dispatchWarnings(ticket, slug) {
-  const warnings = dispatchUncertaintyWarnings(ticket, slug);
-  const projectPath = slug ? readMeta(slug)?.path : null;
-  if (projectPath) {
-    const browserReview = readonlyBrowserReviewWarning(ticket);
-    if (browserReview) warnings.push(`Dispatch warning: ${browserReview.replace("Planning-depth warning: ", "")}`);
-    const verify = verifyCommandWarning(ticket, projectPath);
-    if (verify) warnings.push(`Dispatch warning: ${verify.replace("Planning-depth warning: ", "")}`);
-    for (const warning of sourceBuildOutputWarnings(ticket, projectPath)) {
-      warnings.push(`Dispatch warning: ${warning.replace("Planning-depth warning: ", "")}`);
-    }
-  }
-  if (claudeWebSearchUnavailable(ticket)) {
-    warnings.push("Dispatch warning: WebSearch is unavailable on this Claude xhigh/max route. Put web research in a research-category ticket.");
-  }
-  if (readOnlyOverrideActive(ticket)) {
-    warnings.push(ticket.readonlyOverride ? "readonly override active: this ticket closes with done + comment despite its category default." : "readonly override active: this read-only category routes through the writing executor.");
-  }
-  const contradiction = readonlyCategoryWriteIntentWarning(ticket);
-  if (contradiction) warnings.push(`Dispatch warning: ${contradiction}`);
-  const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
-  if (worktreeWarning) warnings.push(worktreeWarning);
-  const categoryId = ticket && (ticket.categoryId || ticket.category && ticket.category.id);
-  if (/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || "")) && !String(ticket.executorVerify || "").trim()) {
-    warnings.push("Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.");
-  }
-  warnings.push(...storyContractDriftWarnings(ticket));
-  const declaredFiles = dispatchDeclaredFiles(ticket);
-  const outside = externalDeclaredFiles(declaredFiles);
-  if (outside.length) {
-    warnings.push(`Dispatch warning: declared paths are outside the repo worktree: ${outside.join(", ")}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`);
-  }
-  if (!slug || !declaredFiles.length) return warnings;
-  for (const sibling of listTickets(slug)) {
-    if (sibling.id === ticket.id) continue;
-    const dispatch2 = dispatchState(sibling);
-    const liveClaim = sibling.claim && sibling.claim.by && !claimReclaimable(sibling);
-    const liveDispatch = dispatch2 && !dispatch2.terminalAt && ["prepared", "launched", "bound", "claimed"].includes(pulseDispatchState(dispatch2));
-    if (!liveClaim && !liveDispatch) continue;
-    const overlaps = overlappingScopePaths(declaredFiles, dispatchDeclaredFiles(sibling));
-    const contractReasons = contractCollisionReasons(ticket, sibling);
-    if (!overlaps.length && !contractReasons.length) continue;
-    if (overlaps.length) {
-      const lockfilesOnly = overlaps.every((file) => /(?:^|\/)(?:Cargo\.lock|package-lock\.json|pnpm-lock\.yaml)$/i.test(file));
-      const lockfileGuidance = lockfilesOnly ? " Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration." : "";
-      warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(", ")} — parallel is fine in isolated worktrees unless the same symbols/regions change; assess.${lockfileGuidance}`);
-    }
-    for (const collision of contractReasons) {
-      warnings.push(`Dispatch warning: contract edge with in-flight ${sibling.ref}: ${collision.message} Serialize unless a reviewed contract waiver applies.`);
-    }
-  }
-  return warnings;
-}
-function dispatchDeclaredFiles(ticket) {
-  const dispatch2 = dispatchState(ticket);
-  return normalizeFiles(dispatch2 && Array.isArray(dispatch2.declaredFiles) ? dispatch2.declaredFiles : ticket && ticket.files);
-}
-function externalDeclaredFiles(files) {
-  return commitScope.validateRelativeScopes(files).outside;
-}
-function nonRepoExternalOutput(ticket, files) {
-  const declaredFiles = normalizeFiles(files);
-  const outside = externalDeclaredFiles(declaredFiles);
-  return declaredFiles.length > 0 && outside.length === declaredFiles.length && dispatchReadOnly(ticket);
-}
-const JUDGMENT_TIER_CATEGORIES = ["coding.normal", "coding.hard", "debugging", "plugin-dev", "ui-frontend"];
-const PRESOLVED_BLOCK_MIN_LINES = 20;
-const PRESOLVED_BLOCK_MIN_CHARS = 1200;
-const EVIDENCE_SHARE = 0.25;
-const EVIDENCE_LINE = /^\s*(?:\||at\s+\S.*:\d+:\d+|(?:not )?ok\s|[#$>]\s|(?:npm|node|git|pwsh|PS|yarn|pnpm|cargo|python)\s|(?:\[[^\]]*\]\s*)?(?:ERROR|WARN|INFO|DEBUG|TRACE)\b|(?:pass|fail|tests|suites|skipped|todo|cancelled|duration_ms)\s+\d|[\w.]*(?:Error|Exception):)/;
-const EVIDENCE_TIMESTAMP = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
-const DEFINITION_SHAPES = [
-  /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*[\w$]*\s*\(/m,
-  /^\s*(?:export\s+)?(?:abstract\s+)?class\s+[\w$]+/m,
-  /^\s*(?:export\s+)?(?:const|let|var)\s+[\w$]+[^=\n]*=\s*(?:async\s*)?(?:function\b|\([^)\n]*\)\s*=>|[\w$]+\s*=>)/m,
-  /^\s*def\s+[\w$]+\s*\(/m,
-  /^\s*(?:public|private|protected|internal)\s+(?:static\s+)?[\w<>\[\],\s]+\s+[\w$]+\s*\(/m
-];
-function fencedBlocks(description) {
-  const blocks = [];
-  const body = String(description || "");
-  const fence = /^[ \t]*```+[ \t]*([^\n`]*)\r?\n([\s\S]*?)^[ \t]*```+[ \t]*$/gm;
-  let match;
-  while (match = fence.exec(body)) blocks.push({ info: String(match[1]).trim().toLowerCase(), body: String(match[2]) });
-  return blocks;
-}
-function diffShapedBlock(block) {
-  if (/^(?:diff|patch)\b/.test(block.info)) return true;
-  if (/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(block.body)) return true;
-  if (/^--- .+\r?\n\+\+\+ /m.test(block.body)) return true;
-  const added = (block.body.match(/^\+(?!\+)\s*\S/gm) || []).length;
-  const removed = (block.body.match(/^-(?!-)\s*\S/gm) || []).length;
-  return added >= 2 && removed >= 2;
-}
-function evidenceShapedBlock(lines) {
-  const filled = lines.filter((line) => line.trim());
-  if (!filled.length) return true;
-  const evidence = filled.filter((line) => EVIDENCE_LINE.test(line) || EVIDENCE_TIMESTAMP.test(line)).length;
-  return evidence / filled.length >= EVIDENCE_SHARE;
-}
-function embedsCompleteEdit(description) {
-  for (const block of fencedBlocks(description)) {
-    const lines = block.body.split(/\r?\n/);
-    if (lines.length < PRESOLVED_BLOCK_MIN_LINES && block.body.length < PRESOLVED_BLOCK_MIN_CHARS) continue;
-    if (evidenceShapedBlock(lines)) continue;
-    if (diffShapedBlock(block) || DEFINITION_SHAPES.some((shape) => shape.test(block.body))) return true;
-  }
-  return false;
-}
-function presolvedRoutingWarnings(ticket) {
-  if (!JUDGMENT_TIER_CATEGORIES.includes(String(ticketCategory(ticket) || ""))) return [];
-  if (!embedsCompleteEdit(ticket && ticket.description)) return [];
-  return ["Planning-depth warning: this description embeds what looks like a complete edit; route by remaining uncertainty, so a fully resolved approach belongs on coding.easy or direct-ok, not a judgment tier."];
-}
-function ticketPlanningWarnings(ticket, projectPath) {
-  if (!ticket) return [];
-  const warnings = [];
-  const outside = externalDeclaredFiles(ticket.files);
-  if (outside.length) {
-    warnings.push(`Planning-depth warning: declared paths are outside the repo worktree: ${outside.join(", ")}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`);
-  }
-  if (Number(ticket.complexity) >= 4) {
-    const missing = [];
-    if (!String(ticket.executorAnchors || "").trim()) missing.push("executor anchors");
-    if (!String(ticket.executorVerify || "").trim()) missing.push("verify command");
-    if (!Array.isArray(ticket.files) || !ticket.files.length) missing.push("file scope");
-    if (missing.length) {
-      warnings.push(`Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: ${missing.join(", ")}.`);
-    }
-  }
-  warnings.push(...presolvedRoutingWarnings(ticket));
-  const contradiction = readonlyCategoryWriteIntentWarning(ticket);
-  if (contradiction) warnings.push(contradiction);
-  const noScope = noDeclaredScopeWarning(ticket);
-  if (noScope) warnings.push(noScope);
-  const browserReview = readonlyBrowserReviewWarning(ticket);
-  if (browserReview) warnings.push(browserReview);
-  const verify = verifyCommandWarning(ticket, projectPath);
-  if (verify) warnings.push(verify);
-  if (!projectPath || !Array.isArray(ticket.files)) return warnings;
-  warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
-  const absent = ticket.files.filter((file) => !fs.existsSync(path.resolve(projectPath, file)));
-  if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(", ")}.`);
-  return warnings;
-}
-function normalizeReadonlyOverride(value) {
-  return typeof value === "boolean" ? value : null;
-}
-function requestedReadonlyOverride(fields) {
-  return normalizeReadonlyOverride(fields?.readonlyOverride === void 0 ? fields?.readonly : fields.readonlyOverride);
 }
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 function priorityRank(p) {
@@ -2307,6 +1681,57 @@ const {
   storyExecutionContract,
   updateStory
 } = stories;
+projectsLayer = createProjects({
+  acquireLock,
+  assetsDir,
+  cloneCached,
+  database,
+  db,
+  defaultAlwaysInScope,
+  defaultProjectName,
+  deleteCachedRow,
+  ensureDir,
+  fs,
+  invalidateStoreCaches,
+  listStories,
+  listTickets,
+  normalizeForHash,
+  path,
+  projectDir,
+  putProject,
+  putStory,
+  putTicket,
+  releaseLock,
+  residentCache,
+  slugify,
+  ticketsDir,
+  transaction
+});
+warningsLayer = createWarnings({
+  categoryReadOnly,
+  claimReclaimable,
+  coerceEffort,
+  commitScope,
+  contractCollisionReasons,
+  dispatchReadOnly,
+  dispatchState,
+  execFileSync,
+  fs,
+  getTicket,
+  integrationTarget,
+  listTickets,
+  normalizeContracts,
+  normalizeFiles,
+  normalizeRouteModel,
+  overlappingScopePaths,
+  path,
+  pulseDispatchState,
+  readMeta,
+  readOnlyOverrideActive,
+  spawnSync,
+  ticketCategory
+});
+DISPATCH_DESCRIPTION_MIN = warningsLayer.DISPATCH_DESCRIPTION_MIN;
 const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createPulse({
   boardConfig,
   checkpointProjection,

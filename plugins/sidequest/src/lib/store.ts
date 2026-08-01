@@ -59,6 +59,8 @@ const { createCache } = require('./store/cache.js');
 const { createConfig } = require('./store/config.js');
 const { createSweeps } = require('./store/sweeps.js');
 const { createServer } = require('./store/server.js');
+const { createProjects } = require('./store/projects.js');
+const { createWarnings } = require('./store/warnings.js');
 
 let cacheLayer: any;
 function sqliteDataVersion(...args: any[]) { return cacheLayer.sqliteDataVersion(...args); }
@@ -94,6 +96,64 @@ function normalizeBoardName(...args: any[]) { return configLayer.normalizeBoardN
 function boardConfig(...args: any[]) { return configLayer.boardConfig(...args); }
 function setBoardConfig(...args: any[]) { return configLayer.setBoardConfig(...args); }
 function effectiveScope(...args: any[]) { return configLayer.effectiveScope(...args); }
+
+let projectsLayer: any;
+function ensureProject(...args: any[]) { return projectsLayer.ensureProject(...args); }
+function readMeta(...args: any[]) { return projectsLayer.readMeta(...args); }
+function metaLockPath(...args: any[]) { return projectsLayer.metaLockPath(...args); }
+function withMetaLock(...args: any[]) { return projectsLayer.withMetaLock(...args); }
+function nextSeq(...args: any[]) { return projectsLayer.nextSeq(...args); }
+function nextStorySeq(...args: any[]) { return projectsLayer.nextStorySeq(...args); }
+function setProjectNotify(...args: any[]) { return projectsLayer.setProjectNotify(...args); }
+function setProjectRouting(...args: any[]) { return projectsLayer.setProjectRouting(...args); }
+function projectRoutingEnabled(...args: any[]) { return projectsLayer.projectRoutingEnabled(...args); }
+function archiveProject(...args: any[]) { return projectsLayer.archiveProject(...args); }
+function unarchiveProject(...args: any[]) { return projectsLayer.unarchiveProject(...args); }
+function deleteProjectExact(...args: any[]) { return projectsLayer.deleteProjectExact(...args); }
+function listProjects(...args: any[]) { return projectsLayer.listProjects(...args); }
+function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
+function mergeProject(...args: any[]) { return projectsLayer.mergeProject(...args); }
+
+let warningsLayer: any;
+let DISPATCH_DESCRIPTION_MIN: any;
+function executorText(...args: any[]) { return warningsLayer.executorText(...args); }
+function manualVerify(...args: any[]) { return warningsLayer.manualVerify(...args); }
+function verifyCommandError(...args: any[]) { return warningsLayer.verifyCommandError(...args); }
+function requireVerifyCommand(...args: any[]) { return warningsLayer.requireVerifyCommand(...args); }
+function ticketReferenceWarnings(...args: any[]) { return warningsLayer.ticketReferenceWarnings(...args); }
+function ticketPrescribesFix(...args: any[]) { return warningsLayer.ticketPrescribesFix(...args); }
+function ticketCategoryWarnings(...args: any[]) { return warningsLayer.ticketCategoryWarnings(...args); }
+function readonlyCategoryWriteIntentWarning(...args: any[]) { return warningsLayer.readonlyCategoryWriteIntentWarning(...args); }
+function noDeclaredScopeWarning(...args: any[]) { return warningsLayer.noDeclaredScopeWarning(...args); }
+function readonlyBrowserReviewWarning(...args: any[]) { return warningsLayer.readonlyBrowserReviewWarning(...args); }
+function relativePathWithin(...args: any[]) { return warningsLayer.relativePathWithin(...args); }
+function packageRootForScope(...args: any[]) { return warningsLayer.packageRootForScope(...args); }
+function buildOutputDirectories(...args: any[]) { return warningsLayer.buildOutputDirectories(...args); }
+function packageBuildOutputs(...args: any[]) { return warningsLayer.packageBuildOutputs(...args); }
+function isTrackedBuildOutput(...args: any[]) { return warningsLayer.isTrackedBuildOutput(...args); }
+function scopeIncludesPath(...args: any[]) { return warningsLayer.scopeIncludesPath(...args); }
+function sourceBuildOutputWarnings(...args: any[]) { return warningsLayer.sourceBuildOutputWarnings(...args); }
+function verifyCommandWarning(...args: any[]) { return warningsLayer.verifyCommandWarning(...args); }
+function dispatchDescriptionError(...args: any[]) { return warningsLayer.dispatchDescriptionError(...args); }
+function storyContractDriftWarnings(...args: any[]) { return warningsLayer.storyContractDriftWarnings(...args); }
+function ticketSymbolReferences(...args: any[]) { return warningsLayer.ticketSymbolReferences(...args); }
+function symbolSearchIsBounded(...args: any[]) { return warningsLayer.symbolSearchIsBounded(...args); }
+function symbolExistsOnTarget(...args: any[]) { return warningsLayer.symbolExistsOnTarget(...args); }
+function symbolExistenceWarnings(...args: any[]) { return warningsLayer.symbolExistenceWarnings(...args); }
+function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
+function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
+function dispatchWarnings(...args: any[]) { return warningsLayer.dispatchWarnings(...args); }
+function dispatchDeclaredFiles(...args: any[]) { return warningsLayer.dispatchDeclaredFiles(...args); }
+function externalDeclaredFiles(...args: any[]) { return warningsLayer.externalDeclaredFiles(...args); }
+function nonRepoExternalOutput(...args: any[]) { return warningsLayer.nonRepoExternalOutput(...args); }
+function fencedBlocks(...args: any[]) { return warningsLayer.fencedBlocks(...args); }
+function diffShapedBlock(...args: any[]) { return warningsLayer.diffShapedBlock(...args); }
+function evidenceShapedBlock(...args: any[]) { return warningsLayer.evidenceShapedBlock(...args); }
+function embedsCompleteEdit(...args: any[]) { return warningsLayer.embedsCompleteEdit(...args); }
+function presolvedRoutingWarnings(...args: any[]) { return warningsLayer.presolvedRoutingWarnings(...args); }
+function ticketPlanningWarnings(...args: any[]) { return warningsLayer.ticketPlanningWarnings(...args); }
+function normalizeReadonlyOverride(...args: any[]) { return warningsLayer.normalizeReadonlyOverride(...args); }
+function requestedReadonlyOverride(...args: any[]) { return warningsLayer.requestedReadonlyOverride(...args); }
 
 let dispatch: any;
 function dispatchState(...args: any[]) { return dispatch.dispatchState(...args); }
@@ -863,378 +923,6 @@ function autoStoryColor(index?: any) {
 
 configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 
-// Register (or refresh) a project and return { slug, dir, meta }. Creates the
-// directory tree on first use. `name` overrides the display name (defaults to
-// the folder basename).
-function ensureProject(absPath?: any, name?: any) {
-  const resolved = path.resolve(absPath);
-  const slug = slugify(resolved);
-  const dir = projectDir(slug);
-  ensureDir(ticketsDir(slug));
-  let meta: any;
-  let changed = false;
-  transaction(() => {
-    const handle = database();
-    meta = db.getRow(handle, 'projects', slug);
-    if (!meta || typeof meta !== 'object') {
-      meta = {
-        path: resolved,
-        name: name || defaultProjectName(resolved),
-        createdAt: new Date().toISOString(),
-        seq: 0,
-        storySeq: 0,
-        alwaysInScope: defaultAlwaysInScope(resolved),
-        worktreeIsolation: true,
-      };
-      db.putRow(handle, 'projects', { slug, data: meta });
-      changed = true;
-    } else {
-      if (meta.path !== resolved) { meta.path = resolved; changed = true; }
-      if (name && meta.name !== name) { meta.name = name; changed = true; }
-      if (!meta.name) { meta.name = defaultProjectName(resolved); changed = true; }
-      if (typeof meta.seq !== 'number') { meta.seq = 0; changed = true; }
-      if (typeof meta.storySeq !== 'number') { meta.storySeq = 0; changed = true; }
-      if (changed) db.putRow(handle, 'projects', { slug, data: meta });
-    }
-    const pointer = handle.prepare('SELECT project FROM project_routing_profiles WHERE project = ?').get(slug);
-    if (!pointer) {
-      const settings = handle.prepare('SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1').get();
-      if (!settings?.new_project_profile_id) throw new Error('The new-board routing profile is not configured.');
-      db.putRow(handle, 'project_routing_profiles', {
-        project: slug,
-        profile_id: settings.new_project_profile_id,
-        assigned_at: new Date().toISOString(),
-        assigned_by: 'ensure-project',
-      });
-      changed = true;
-    }
-  });
-  if (changed) invalidateStoreCaches();
-  return { slug, dir, meta };
-}
-
-function readMeta(slug?: any) {
-  const key = String(slug || '');
-  const cache = residentCache();
-  if (cache.metadata.has(key)) return cloneCached(cache.metadata.get(key));
-  const meta = db.getRow(database(), 'projects', key);
-  cache.metadata.set(key, meta);
-  return cloneCached(meta);
-}
-
-function metaLockPath(slug?: any) {
-  return path.join(projectDir(slug), '.meta.lock');
-}
-
-function withMetaLock(slug?: any, fn?: any) {
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  try {
-    return transaction(fn);
-  } finally {
-    if (locked) releaseLock(lock);
-  }
-}
-
-// Locked read-modify-write so two concurrent createTicket calls never mint the
-// same human-facing SQ-N ref (a bare read+increment+write here would race).
-// acquireLock already retries internally on contention; if it still can't get
-// the lock (e.g. a wedged/unwritable dir), fall back to an unlocked bump rather
-// than blocking ticket creation entirely.
-function nextSeq(slug?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug) || { seq: 0 };
-    meta.seq = (typeof meta.seq === 'number' ? meta.seq : 0) + 1;
-    putProject(slug, meta);
-    return meta.seq;
-  });
-}
-
-// The story counter is a second monotonic sequence on the same project row,
-// minting US-1, US-2, … independently of the SQ-N ticket refs.
-function nextStorySeq(slug?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug) || { storySeq: 0 };
-    meta.storySeq = (typeof meta.storySeq === 'number' ? meta.storySeq : 0) + 1;
-    putProject(slug, meta);
-    return meta.storySeq;
-  });
-}
-
-// Turn a board's per-project notifications on or off. When off, the board is
-// muted: queueEventNotification below drops every background event for it, even
-// with a dashboard tab open. Stored on the project row (absent == on).
-function setProjectNotify(slug?: any, on?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    meta.notify = on !== false;
-    putProject(slug, meta);
-    return { ok: true, notify: meta.notify };
-  });
-}
-
-function setProjectRouting(slug?: any, routing?: any) {
-  if (!['enabled', 'disabled'].includes(routing)) throw new Error('Routing must be enabled or disabled.');
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    meta.routing = routing;
-    putProject(slug, meta);
-    return { ok: true, routing: meta.routing };
-  });
-}
-
-function projectRoutingEnabled(slug?: any) {
-  const meta = readMeta(slug);
-  return !meta || meta.routing !== 'disabled';
-}
-
-// Board-level archive is a reversible project-row stamp. Project data and tickets
-// remain in place, and repeat calls keep the original archive timestamp.
-function archiveProject(slug?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    if (meta.archivedAt) return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: true };
-    meta.archivedAt = new Date().toISOString();
-    putProject(slug, meta);
-    return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: false };
-  });
-}
-
-function unarchiveProject(slug?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    if (!meta.archivedAt) return { ok: true, slug, wasArchived: false };
-    delete meta.archivedAt;
-    putProject(slug, meta);
-    return { ok: true, slug, wasArchived: true };
-  });
-}
-
-// Permanent deletion is deliberately strict: callers must already have the exact
-// stored slug. This avoids turning an untrusted display name or path into a new
-// project lookup at a destructive boundary.
-function deleteProjectExact(slug?: any) {
-  if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9-]{1,80}$/.test(slug)) return { ok: false, reason: 'not_found' };
-  if (!readMeta(slug)) return { ok: false, reason: 'not_found' };
-  transaction(() => {
-    for (const ticket of db.listRows(database(), 'tickets', { project: slug })) deleteCachedRow(database(), 'tickets', ticket.id);
-    for (const story of db.listRows(database(), 'stories', { project: slug })) deleteCachedRow(database(), 'stories', story.id);
-    deleteCachedRow(database(), 'projects', slug);
-  });
-  fs.rmSync(projectDir(slug), { recursive: true, force: true });
-  return { ok: true, slug };
-}
-
-// List every registered project with live ticket counts. Sorted by most recent
-// activity so the busiest board floats to the top of the switcher. By default,
-// archived boards are hidden. Pass { archived: true } to list only archived
-// boards, or { all: true } for internal resolution.
-function listProjects(opts?: any) {
-  opts = opts || {};
-  const cache = residentCache();
-  const cacheKey = `projects:${opts.all ? 'all' : opts.archived ? 'archived' : 'active'}`;
-  const cached = cache.snapshots.get(cacheKey);
-  if (cached) return cloneCached(cached);
-
-  const rows = db.selectRows(database(), `
-    SELECT
-      p.slug,
-      p.data,
-      COALESCE(t.todo, 0) AS todo,
-      COALESCE(t.doing, 0) AS doing,
-      COALESCE(t.done, 0) AS done,
-      COALESCE(t.active, 0) AS active,
-      COALESCE(t.archived, 0) AS archived,
-      t.last_activity,
-      COALESCE(s.stories, 0) AS stories
-    FROM projects p
-    LEFT JOIN (
-      SELECT
-        project,
-        SUM(CASE WHEN archived = 0 AND status = 'todo' THEN 1 ELSE 0 END) AS todo,
-        SUM(CASE WHEN archived = 0 AND status = 'doing' THEN 1 ELSE 0 END) AS doing,
-        SUM(CASE WHEN archived = 0 AND status = 'done' THEN 1 ELSE 0 END) AS done,
-        SUM(CASE WHEN archived = 0 THEN 1 ELSE 0 END) AS active,
-        SUM(CASE WHEN archived != 0 THEN 1 ELSE 0 END) AS archived,
-        MAX(json_extract(data, '$.updatedAt')) AS last_activity
-      FROM tickets
-      GROUP BY project
-    ) t ON t.project = p.slug
-    LEFT JOIN (
-      SELECT project, COUNT(*) AS stories
-      FROM stories
-      GROUP BY project
-    ) s ON s.project = p.slug
-  `);
-
-  const out: any[] = [];
-  for (const row of rows) {
-    let meta: any;
-    try { meta = JSON.parse(row.data); } catch (_: any) { continue; }
-    if (!meta || !meta.path) continue;
-    const archivedAt = meta.archivedAt || null;
-    if (!opts.all && (opts.archived ? !archivedAt : !!archivedAt)) continue;
-    const counts = { todo: Number(row.todo) || 0, doing: Number(row.doing) || 0, done: Number(row.done) || 0 };
-    out.push({
-      slug: slugify(meta.path),
-      name: meta.name || row.slug,
-      path: meta.path || '',
-      counts,
-      total: Number(row.active) || 0,
-      archived: Number(row.archived) || 0,
-      open: counts.todo + counts.doing,
-      lastActivity: row.last_activity || meta.createdAt || null,
-      notify: meta.notify !== false,
-      routing: meta.routing === 'disabled' ? 'disabled' : 'enabled',
-      stories: Number(row.stories) || 0,
-      archivedAt,
-    });
-  }
-  out.sort((a?: any, b?: any) => String(b.lastActivity || '').localeCompare(String(a.lastActivity || '')));
-  cache.snapshots.set(cacheKey, out);
-  return cloneCached(out);
-}
-
-// Resolve a caller-supplied --project reference to the ONE already-registered
-// board it names — an exact slug, a case-insensitive display NAME, or a
-// filesystem path. NEVER creates or matches anything outside the registered
-// set (see SQ-86): a name is not a slug, so a bare display name used to miss
-// the slug lookup, fall into ensureProject(), and get treated as a raw path
-// resolved against cwd — silently minting a phantom empty board that happened
-// to share the real project's display name (or a real one's if two directories
-// share a basename, e.g. "BMR" run from both C:\dev\BMR and C:\dev\BMR\BMR).
-// Returns { ok:true, slug, meta } on a clean match, or { ok:false, reason,
-// ...} for the caller (the CLI) to turn into a hard error:
-//   - reason 'ambiguous' + matches: 2+ registered boards share that NAME —
-//     the caller must re-run with the disambiguating path.
-//   - reason 'not_found' + known: nothing matched — known is the list of
-//     registered display names to surface in the error.
-function findProject(ref?: any) {
-  const arg = String(ref == null ? '' : ref).trim();
-  if (!arg) return { ok: false, reason: 'not_found', known: listProjects({ all: true }).map((project?: any) => project.name) };
-
-  if (path.isAbsolute(arg)) {
-    const resolvedPath = path.resolve(arg);
-    const slug = slugify(resolvedPath);
-    const meta = readMeta(slug);
-    if (meta && normalizeForHash(meta.path) === normalizeForHash(resolvedPath)) return { ok: true, slug, meta };
-  } else {
-    const meta = readMeta(arg);
-    if (meta) return { ok: true, slug: arg, meta };
-  }
-
-  const projects = db.selectRows(database(), 'SELECT slug, data FROM projects ORDER BY slug')
-    .map((row?: any) => {
-      try { return { slug: row.slug, meta: JSON.parse(row.data) }; } catch (_: any) { return null; }
-    })
-    .filter(Boolean);
-
-  const wantedName = arg.toLowerCase();
-  const byName = projects.filter((project?: any) => String(project.meta.name || project.slug).trim().toLowerCase() === wantedName);
-  if (byName.length === 1) return { ok: true, slug: byName[0].slug, meta: byName[0].meta };
-  if (byName.length > 1) {
-    return {
-      ok: false,
-      reason: 'ambiguous',
-      matches: byName.map((project?: any) => ({ slug: project.slug, name: project.meta.name || project.slug, path: project.meta.path || '' })),
-    };
-  }
-
-  if (!path.isAbsolute(arg)) {
-    const wantedPath = normalizeForHash(path.resolve(arg));
-    const byPath = projects.find((project?: any) => project.meta.path && normalizeForHash(path.resolve(project.meta.path)) === wantedPath);
-    if (byPath) return { ok: true, slug: byPath.slug, meta: byPath.meta };
-  }
-
-  return { ok: false, reason: 'not_found', known: projects.map((project?: any) => project.meta.name || project.slug) };
-}
-
-// Fold one board (src) entirely into another (dest): move every ticket, story,
-// and attached asset over, then delete the source board. Used to collapse the
-// duplicate boards that older versions minted when the CLI ran from a subfolder
-// (see nearestRepoRoot / SQ-94). The renumbering rules that make this safe:
-//   - Ticket SQ-n / story US-n refs are re-minted ABOVE dest's live counters
-//     (via nextSeq/nextStorySeq), so they never collide with dest's own refs.
-//   - Stable ids (tk_… / st_…) are kept as-is. They're globally unique, so the
-//     ticket/story JSON drops into dest without a filename clash, the assets
-//     folder (keyed by ticket id) copies 1:1, and a ticket's storyId (which
-//     points at a story's stable id, never its ref) still resolves after the
-//     move — no membership is orphaned.
-//   - Intra-board links (links[].ref, which point by SQ-ref) are rewritten
-//     through the old->new ref map so dependencies survive the renumber.
-// dryRun computes and returns the same mapping without touching disk. Returns
-// { tickets, stories, mapping: [{ from, to, title }] }.
-function mergeProject(srcSlug?: any, destSlug?: any, opts?: any) {
-  opts = opts || {};
-  const dryRun = !!opts.dryRun;
-  if (srcSlug === destSlug) throw new Error('source and destination are the same board');
-  if (!readMeta(srcSlug)) throw new Error(`source board "${srcSlug}" does not exist`);
-  if (!readMeta(destSlug)) throw new Error(`destination board "${destSlug}" does not exist`);
-
-  // Oldest-first so re-minted refs preserve the source's creation order.
-  const tickets = listTickets(srcSlug).slice().sort((a?: any, b?: any) => seqOfRef(a.ref) - seqOfRef(b.ref));
-  const stories = listStories(srcSlug); // listStories already returns oldest-first
-
-  // Plan the ref renumbering up front so link remapping can see every mapping.
-  const refMap: Record<string, any> = {}; // OLD-TICKET-REF (upper) -> NEW-TICKET-REF
-  const ticketPlan: any[] = [];
-  for (const t of tickets) {
-    const newRef = dryRun ? `SQ-?` : `SQ-${nextSeq(destSlug)}`;
-    if (t.ref) refMap[String(t.ref).toUpperCase()] = newRef;
-    ticketPlan.push({ ticket: t, newRef });
-  }
-  const storyPlan: any[] = [];
-  for (const s of stories) {
-    const newRef = dryRun ? `US-?` : `US-${nextStorySeq(destSlug)}`;
-    storyPlan.push({ story: s, newRef });
-  }
-
-  const mapping = ticketPlan.map(({ ticket, newRef }: any) => ({ from: ticket.ref, to: newRef, title: ticket.title }));
-  if (dryRun) return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
-
-  // Stories first, so a moved ticket's storyId still finds its story in dest.
-  transaction(() => {
-    for (const ticket of tickets) deleteCachedRow(database(), 'tickets', ticket.id);
-    for (const story of stories) deleteCachedRow(database(), 'stories', story.id);
-    for (const { story, newRef } of storyPlan) {
-      const moved = Object.assign({}, story, { ref: newRef });
-      putStory(destSlug, moved);
-    }
-    for (const { ticket, newRef } of ticketPlan) {
-      const links = Array.isArray(ticket.links)
-        ? ticket.links.map((l?: any) => Object.assign({}, l, { ref: refMap[String(l.ref).toUpperCase()] || l.ref }))
-        : [];
-      const moved = Object.assign({}, ticket, { ref: newRef, links });
-      putTicket(destSlug, moved);
-      const srcAssets = assetsDir(srcSlug, ticket.id);
-      if (fs.existsSync(srcAssets)) {
-        try {
-          fs.cpSync(srcAssets, assetsDir(destSlug, ticket.id), { recursive: true });
-        } catch (_: any) {
-          /* an unreadable asset folder shouldn't abort the whole merge */
-        }
-      }
-    }
-    deleteCachedRow(database(), 'projects', srcSlug);
-  });
-
-  try {
-    fs.rmSync(projectDir(srcSlug), { recursive: true, force: true });
-  } catch (_: any) {
-    /* best effort; the tickets already live in dest */
-  }
-  return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
-}
-
-// Pull the numeric sequence out of an "SQ-12" ref for ordering; junk sorts last.
-function seqOfRef(ref?: any) {
-  const m = /(\d+)\s*$/.exec(String(ref || ''));
-  return m ? parseInt(m[1]!, 10) : Number.MAX_SAFE_INTEGER;
-}
 
 /* ------------------------------------------------------------------ *
  *  Plan document (SQ-1015)
@@ -1404,515 +1092,6 @@ function requireStatus(s?: any) {
 function coercePriority(p?: any, fallback?: any) {
   p = String(p || '').toLowerCase();
   return VALID_PRIORITY.includes(p) ? p : fallback;
-}
-
-const DISPATCH_DESCRIPTION_MIN = 80;
-const DISPATCH_DESCRIPTION_GUIDANCE = "the executor's entire brief is this ticket; add a description (Where / Contract / Verify) and a verify command, then dispatch";
-
-// Per-ticket executor context stays deliberately small: this data may be passed
-// through a Windows command surface with an 8191-character ceiling. Keep the
-// anchors as written so the eventual executor prompt can carry them verbatim.
-function executorText(value?: any, max?: any, label?: any) {
-  if (value == null) return '';
-  const text = String(value);
-  if (text.length > max) throw new Error(`${label} exceeds the ${max}-character executor-context limit.`);
-  return text;
-}
-
-const VERIFY_BUILTINS = new Set([
-  'bash', 'bun', 'cargo', 'cd', 'cmd', 'composer', 'dart', 'deno', 'dotnet',
-  'elixir', 'eslint', 'flutter', 'git', 'go', 'gradle', 'java', 'jest', 'just',
-  'make', 'mix', 'mvn', 'node', 'npm', 'npx', 'php', 'pnpm', 'poetry', 'powershell',
-  'pwsh', 'py', 'pytest', 'python', 'python3', 'rake', 'ruby', 'sh', 'tox', 'tsc',
-  'uv', 'vitest', 'yarn',
-]);
-
-function manualVerify(value?: any) {
-  return /^manual:\s+\S/i.test(String(value || '').trim());
-}
-
-function verifyCommandError(value?: any) {
-  const command = String(value || '').trim();
-  if (!command || manualVerify(command)) return null;
-  if (/^manual:/i.test(command)) {
-    return 'Manual verification must say what was checked: `manual: <what you checked>`. Otherwise provide a runnable command such as `cd <repo-relative-dir> && <command>`.';
-  }
-  const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1]
-    || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2]
-    || '';
-  const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase())
-    || /[\\/]|\.(?:bat|cmd|com|exe|ps1|sh)$/i.test(first);
-  const proseStarter = /^(?:check|confirm|ensure|inspect|look|open|read|review|verify)\s/i.test(command);
-  if (command.endsWith('.') || proseStarter || !likelyExecutable && /[.!?]/.test(command)) {
-    return 'Verify must be a runnable command such as `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.';
-  }
-  for (const match of command.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\}|(?::[^}]*)\})/g)) {
-    const name = match[1] || match[2];
-    if (name && process.env[name] == null && !match[0].includes(':-')) {
-      return `Verify references unset environment variable ${name}. Set a portable default such as \`${'${'}${name}:-/tmp}\`, or use \`manual: <what you checked>\`.`;
-    }
-  }
-  for (const match of command.matchAll(/%([A-Za-z_][A-Za-z0-9_]*)%/g)) {
-    const name = match[1];
-    if (name != null && process.env[name] == null) {
-      return `Verify references unset environment variable ${name}. Set a portable default or use \`manual: <what you checked>\`.`;
-    }
-  }
-  return null;
-}
-
-function requireVerifyCommand(value?: any) {
-  const error = verifyCommandError(value);
-  if (error) throw new Error(error);
-}
-
-function ticketReferenceWarnings(slug?: any, title?: any, description?: any) {
-  const refs = new Set((`${title || ''}\n${description || ''}`.match(/\bSQ-\d+\b/gi) || []).map((ref?: any) => ref.toUpperCase()));
-  if (!refs.size) return [];
-  const known = new Set(listTickets(slug).map((ticket?: any) => String(ticket.ref).toUpperCase()));
-  const unknown = [...refs].filter((ref?: any) => !known.has(ref));
-  return unknown.length ? [`Unknown ticket refs: ${unknown.join(', ')}.`] : [];
-}
-
-function ticketPrescribesFix(description?: any) {
-  const body = String(description || '');
-  if (/^\s*fix\s*:/im.test(body)) return true;
-  if (/\b(?:replace|change)\s+\S[\s\S]{0,160}?\s+(?:with|to)\s+\S/i.test(body)) return true;
-  if (/```(?:diff|patch)?\s*\r?\n[\s\S]*?^-\S[\s\S]*?^\+\S[\s\S]*?```/im.test(body)) return true;
-  return (body.match(/^\s*\d+[.)]\s+(?:add|change|replace|remove|rename|move|update|set|delete|edit|wire)\b/gim) || []).length >= 2;
-}
-
-function ticketCategoryWarnings(ticket?: any) {
-  if (ticketCategory(ticket) !== 'coding.hard' || !ticketPrescribesFix(ticket && ticket.description)) return [];
-  return ['coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.'];
-}
-
-function readonlyCategoryWriteIntentWarning(ticket?: any) {
-  if (!categoryReadOnly(ticket)) return null;
-  const writesFiles = normalizeFiles(ticket.files).length > 0;
-  const writesContracts = (normalizeContracts(ticket.contracts).changes || []).length > 0;
-  if (!writesFiles && !writesContracts) return null;
-  return 'Readonly category contradicts declared write intent (files or changes). Resolve the category or set an explicit readonly override before dispatch.';
-}
-
-// The complexity 4+ message below already names missing file scope, so skip this one there
-// to avoid reporting the same gap twice.
-function noDeclaredScopeWarning(ticket?: any) {
-  if (dispatchReadOnly(ticket)) return null;
-  if (Array.isArray(ticket.files) && ticket.files.length) return null;
-  if (Number(ticket?.complexity) >= 4) return null;
-  return 'Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.';
-}
-
-const BROWSER_REVIEW_SIGNAL = /\b(?:browser|visual|screenshot|playwright|ui review|e2e)\b/i;
-
-function readonlyBrowserReviewWarning(ticket?: any) {
-  if (!dispatchReadOnly(ticket)) return null;
-  const signal = [ticket?.title, ticket?.description, ticketCategory(ticket)].join('\n');
-  if (!BROWSER_REVIEW_SIGNAL.test(signal)) return null;
-  return 'Planning-depth warning: this readonly browser/visual ticket may need a driver script. Read-only executors cannot write one; grant write scope with an explicit no-repo-writes mandate, or use a browser tool that needs no script.';
-}
-
-function relativePathWithin(root?: any, target?: any) {
-  const relative = path.relative(String(root), String(target));
-  return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : relative === '' ? '.' : null;
-}
-
-function packageRootForScope(projectPath?: any, scope?: any) {
-  const absolute = path.resolve(String(projectPath), String(scope));
-  let directory = path.dirname(absolute);
-  for (;;) {
-    if (!relativePathWithin(projectPath, directory)) return null;
-    if (fs.existsSync(path.join(directory, 'package.json'))) return directory;
-    const parent = path.dirname(directory);
-    if (parent === directory) return null;
-    directory = parent;
-  }
-}
-
-function buildOutputDirectories(source?: any) {
-  const outputs = new Map<string, any>();
-  const add = (directory?: any, sourceDirectory?: any) => {
-    const value = String(directory || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
-    if (!value || value.includes('..') || path.isAbsolute(value)) return;
-    const current = outputs.get(value);
-    outputs.set(value, { directory: value, sourceDirectory: sourceDirectory || current?.sourceDirectory || null });
-  };
-  const text = String(source || '');
-  for (const match of text.matchAll(/--(?:outdir|out-dir|output-dir)\s*(?:=|\s+)\s*["']?([^"'\s;&]+)/gi)) add(match[1]);
-  for (const match of text.matchAll(/(?:outdir|outDir|outputDir)\s*:\s*["']([^"']+)["']/g)) add(match[1]);
-  for (const helper of text.matchAll(/(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)[^)]*\)\s*\{([\s\S]{0,2000}?)\n\}/g)) {
-    const [helperName, parameter, body] = [helper[1], helper[2], helper[3]];
-    if (!helperName || !parameter || !body || !new RegExp(`(?:outdir|outDir)\\s*:\\s*path\\.join\\([^)]*,\\s*${parameter}\\s*\\)`).test(body)) continue;
-    const call = new RegExp(`\\b${helperName}\\s*\\(\\s*["']([^"']+)["']`, 'g');
-    for (const match of text.matchAll(call)) add(match[1], match[1]);
-  }
-  return [...outputs.values()];
-}
-
-function packageBuildOutputs(packageRoot?: any) {
-  let manifest: any;
-  try {
-    manifest = JSON.parse(fs.readFileSync(path.join(String(packageRoot), 'package.json'), 'utf8'));
-  } catch (_: any) {
-    return [];
-  }
-  const build = String(manifest?.scripts?.build || '');
-  if (!build) return [];
-  const outputs = buildOutputDirectories(build);
-  for (const match of build.matchAll(/\bnode\s+(?:["']([^"']+)["']|([^\s;&]+))/g)) {
-    const script = path.resolve(String(packageRoot), match[1] || match[2]);
-    if (!relativePathWithin(packageRoot, script) || !fs.existsSync(script)) continue;
-    try {
-      outputs.push(...buildOutputDirectories(fs.readFileSync(script, 'utf8')));
-    } catch (_: any) {
-      /* A package build script that cannot be read cannot prove an output target. */
-    }
-  }
-  return [...new Map(outputs.map((output?: any) => [output.directory, output])).values()];
-}
-
-function isTrackedBuildOutput(projectPath?: any, output?: any) {
-  const relative = relativePathWithin(projectPath, output);
-  if (!relative || relative === '.') return false;
-  try {
-    return Boolean(execFileSync('git', ['ls-files', '--', relative], {
-      cwd: projectPath,
-      encoding: 'utf8',
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim());
-  } catch (_: any) {
-    return false;
-  }
-}
-
-function scopeIncludesPath(files?: any, projectPath?: any, target?: any) {
-  return normalizeFiles(files).some((file?: any) => {
-    const declared = path.resolve(String(projectPath), file);
-    return declared === target || relativePathWithin(target, declared) !== null;
-  });
-}
-
-function sourceBuildOutputWarnings(ticket?: any, projectPath?: any) {
-  if (!projectPath || !Array.isArray(ticket?.files)) return [];
-  const warnings = new Set<string>();
-  for (const scope of normalizeFiles(ticket.files)) {
-    const packageRoot = packageRootForScope(projectPath, scope);
-    if (!packageRoot) continue;
-    const sourceRelative = relativePathWithin(packageRoot, path.resolve(projectPath, scope))?.replace(/\\/g, '/');
-    if (!sourceRelative || (sourceRelative !== 'src' && !sourceRelative.startsWith('src/'))) continue;
-    const sourceDirectory = sourceRelative.split('/')[1] || null;
-    for (const output of packageBuildOutputs(packageRoot)) {
-      if (output.sourceDirectory && sourceDirectory && output.sourceDirectory !== sourceDirectory) continue;
-      const target = path.resolve(packageRoot, output.directory);
-      if (!isTrackedBuildOutput(projectPath, target) || scopeIncludesPath(ticket.files, projectPath, target)) continue;
-      const packageRelative = relativePathWithin(projectPath, packageRoot)?.replace(/\\/g, '/') || '.';
-      const display = packageRelative === '.' ? output.directory : `${packageRelative}/${output.directory}`;
-      warnings.add(`Planning-depth warning: declared source scope under ${packageRelative}/src omits tracked build output ${display}. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.`);
-    }
-  }
-  return [...warnings];
-}
-
-function verifyCommandWarning(ticket?: any, projectPath?: any) {
-  const verify = String(ticket?.executorVerify || '').trim();
-  if (!verify) return null;
-  const match = /^cd\s+(?:["']([^"']+)["']|([^&;\s]+))\s*&&/.exec(verify);
-  if (!match) return 'Planning-depth warning: record verify commands as `cd <repo-relative-dir> && ...`, then run that exact string before submitting.';
-  const directory = path.resolve(String(projectPath || ''), match[1] || match[2]);
-  if (!projectPath || !relativePathWithin(projectPath, directory) || !fs.existsSync(directory)) {
-    return 'Planning-depth warning: the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting.';
-  }
-  return null;
-}
-
-function dispatchDescriptionError(ticket?: any) {
-  if (!ticket || !ticket.model || !ticket.effort) return null;
-  if (String(ticket.description || '').trim().length >= DISPATCH_DESCRIPTION_MIN) return null;
-  return `dispatch: ${DISPATCH_DESCRIPTION_GUIDANCE}.`;
-}
-
-function storyContractDriftWarnings(ticket?: any) {
-  const contractDrift = ticket && (ticket.storyContractDrift || dispatchState(ticket)?.storyContractDrift);
-  if (!contractDrift) return [];
-  return [`Dispatch warning: ${contractDrift.storyRef || 'story'} execution contract changed from revision ${contractDrift.fromRevision} to ${contractDrift.toRevision} while this ticket was claimed; the next briefing uses revision ${contractDrift.toRevision}.`];
-}
-
-function claudeWebSearchUnavailable(ticket?: any) {
-  const model = normalizeRouteModel(ticket && ticket.model);
-  const effort = coerceEffort(ticket && ticket.effort);
-  return ['opus', 'sonnet', 'fable'].includes(String(model)) && ['xhigh', 'max'].includes(String(effort));
-}
-
-const DISPATCH_SYMBOL_CHECK_MAX = 12;
-const DISPATCH_SYMBOL_CHECK_MAX_SCOPES = 64;
-const DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES = 256 * 1024;
-
-function ticketSymbolReferences(ticket?: any) {
-  const candidates = `${ticket?.title || ''}\n${ticket?.description || ''}`.matchAll(/`([^`\r\n]+)`/g);
-  const symbols: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    const symbol = String(candidate[1] || '').trim();
-    if (symbol.length < 3 || !/[_.]|\(\)/.test(symbol)) continue;
-    if (!/^[A-Za-z_$][\w$]*(?:[._][A-Za-z_$][\w$]*)*(?:\(\))?$/.test(symbol)) continue;
-    const key = symbol.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    symbols.push(symbol);
-    if (symbols.length >= DISPATCH_SYMBOL_CHECK_MAX) break;
-  }
-  return symbols;
-}
-
-function symbolSearchIsBounded(projectPath?: any, target?: any, scopes?: any) {
-  if (!projectPath || !target || scopes.length > DISPATCH_SYMBOL_CHECK_MAX_SCOPES) return false;
-  const args = ['ls-tree', '-r', '--name-only', String(target)];
-  if (scopes.length) args.push('--', ...scopes);
-  try {
-    execFileSync('git', args, {
-      cwd: projectPath,
-      encoding: 'utf8',
-      windowsHide: true,
-      stdio: 'pipe',
-      maxBuffer: DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES,
-    });
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function symbolExistsOnTarget(projectPath?: any, target?: any, symbol?: any, scopes?: any) {
-  const args = ['grep', '-F', '-q', '--', String(symbol), String(target)];
-  if (scopes.length) args.push('--', ...scopes);
-  const result = spawnSync('git', args, {
-    cwd: projectPath,
-    windowsHide: true,
-    stdio: 'ignore',
-    timeout: 3000,
-  });
-  if (result.error || result.signal || result.status == null) return null;
-  return result.status === 0;
-}
-
-function symbolExistenceWarnings(ticket?: any, slug?: any) {
-  const projectPath = slug ? readMeta(slug)?.path : null;
-  const symbols = ticketSymbolReferences(ticket);
-  if (!projectPath || !symbols.length) return [];
-  let target: any;
-  try {
-    target = integrationTarget(slug);
-  } catch (_) {
-    return [];
-  }
-  const scopes = dispatchDeclaredFiles(ticket);
-  if (!symbolSearchIsBounded(projectPath, target.upstream, scopes)) return [];
-  const warnings: string[] = [];
-  for (const symbol of symbols) {
-    const exists = symbolExistsOnTarget(projectPath, target.upstream, symbol, scopes);
-    if (exists === false) warnings.push(`ticket names \`${symbol}\` but it does not appear on ${target.upstream}; verify this claim before acting.`);
-  }
-  return warnings;
-}
-
-function crossTicketStateWarnings(ticket?: any, slug?: any) {
-  if (!ticket || !slug) return [];
-  const writtenAt = Date.parse(ticket.referenceUpdatedAt || ticket.updatedAt);
-  if (!Number.isFinite(writtenAt)) return [];
-  const refs = new Set((String(ticket.description || '').match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase()));
-  refs.delete(String(ticket.ref || '').toUpperCase());
-  const warnings: string[] = [];
-  for (const ref of refs) {
-    const referenced = getTicket(slug, ref);
-    const transition = referenced?.statusTransition;
-    const changedAt = Date.parse(transition?.at);
-    if (!referenced || !Number.isFinite(changedAt) || changedAt <= writtenAt) continue;
-    const from = transition.from || 'unknown';
-    const to = transition.to || referenced.status || 'unknown';
-    warnings.push(`${ref} changed state (${from} -> ${to}) after this ticket was written; its claims may be stale.`);
-  }
-  return warnings;
-}
-
-function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
-  return [...symbolExistenceWarnings(ticket, slug), ...crossTicketStateWarnings(ticket, slug)]
-    .map((warning) => `Dispatch warning: ${warning}`);
-}
-
-function dispatchWarnings(ticket?: any, slug?: any) {
-  const warnings: any[] = dispatchUncertaintyWarnings(ticket, slug);
-  const projectPath = slug ? readMeta(slug)?.path : null;
-  if (projectPath) {
-    const browserReview = readonlyBrowserReviewWarning(ticket);
-    if (browserReview) warnings.push(`Dispatch warning: ${browserReview.replace('Planning-depth warning: ', '')}`);
-    const verify = verifyCommandWarning(ticket, projectPath);
-    if (verify) warnings.push(`Dispatch warning: ${verify.replace('Planning-depth warning: ', '')}`);
-    for (const warning of sourceBuildOutputWarnings(ticket, projectPath)) {
-      warnings.push(`Dispatch warning: ${warning.replace('Planning-depth warning: ', '')}`);
-    }
-  }
-  if (claudeWebSearchUnavailable(ticket)) {
-    warnings.push('Dispatch warning: WebSearch is unavailable on this Claude xhigh/max route. Put web research in a research-category ticket.');
-  }
-  if (readOnlyOverrideActive(ticket)) {
-    warnings.push(ticket.readonlyOverride
-      ? 'readonly override active: this ticket closes with done + comment despite its category default.'
-      : 'readonly override active: this read-only category routes through the writing executor.');
-  }
-  const contradiction = readonlyCategoryWriteIntentWarning(ticket);
-  if (contradiction) warnings.push(`Dispatch warning: ${contradiction}`);
-  const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
-  if (worktreeWarning) warnings.push(worktreeWarning);
-  const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
-  if (/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || '')) && !String(ticket.executorVerify || '').trim()) {
-    warnings.push('Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.');
-  }
-  warnings.push(...storyContractDriftWarnings(ticket));
-  const declaredFiles = dispatchDeclaredFiles(ticket);
-  const outside = externalDeclaredFiles(declaredFiles);
-  if (outside.length) {
-    warnings.push(`Dispatch warning: declared paths are outside the repo worktree: ${outside.join(', ')}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`);
-  }
-  if (!slug || !declaredFiles.length) return warnings;
-  for (const sibling of listTickets(slug)) {
-    if (sibling.id === ticket.id) continue;
-    const dispatch = dispatchState(sibling);
-    const liveClaim = sibling.claim && sibling.claim.by && !claimReclaimable(sibling);
-    const liveDispatch = dispatch && !dispatch.terminalAt && ['prepared', 'launched', 'bound', 'claimed'].includes(pulseDispatchState(dispatch));
-    if (!liveClaim && !liveDispatch) continue;
-    const overlaps = overlappingScopePaths(declaredFiles, dispatchDeclaredFiles(sibling));
-    const contractReasons = contractCollisionReasons(ticket, sibling);
-    if (!overlaps.length && !contractReasons.length) continue;
-    if (overlaps.length) {
-      const lockfilesOnly = overlaps.every((file?: any) => /(?:^|\/)(?:Cargo\.lock|package-lock\.json|pnpm-lock\.yaml)$/i.test(file));
-      const lockfileGuidance = lockfilesOnly
-        ? ' Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.'
-        : '';
-      warnings.push(`Dispatch warning: ${ticket.ref} overlaps in-flight ${sibling.ref} at ${overlaps.join(', ')} — parallel is fine in isolated worktrees unless the same symbols/regions change; assess.${lockfileGuidance}`);
-    }
-    for (const collision of contractReasons) {
-      warnings.push(`Dispatch warning: contract edge with in-flight ${sibling.ref}: ${collision.message} Serialize unless a reviewed contract waiver applies.`);
-    }
-  }
-  return warnings;
-}
-
-function dispatchDeclaredFiles(ticket?: any) {
-  const dispatch = dispatchState(ticket);
-  return normalizeFiles(dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : ticket && ticket.files);
-}
-
-function externalDeclaredFiles(files?: any) {
-  return commitScope.validateRelativeScopes(files).outside;
-}
-
-function nonRepoExternalOutput(ticket?: any, files?: any) {
-  const declaredFiles = normalizeFiles(files);
-  const outside = externalDeclaredFiles(declaredFiles);
-  return declaredFiles.length > 0
-    && outside.length === declaredFiles.length
-    && dispatchReadOnly(ticket);
-}
-
-// Route by remaining uncertainty, not original difficulty: once an investigation has
-// settled the exact edit, the implementation ticket belongs on a cheap tier. A false
-// positive on an evidence block (log excerpt, test output, measured table) is worse
-// than a miss, so a block must read as an edit AND not read as a transcript.
-const JUDGMENT_TIER_CATEGORIES = ['coding.normal', 'coding.hard', 'debugging', 'plugin-dev', 'ui-frontend'];
-const PRESOLVED_BLOCK_MIN_LINES = 20;
-const PRESOLVED_BLOCK_MIN_CHARS = 1200;
-const EVIDENCE_SHARE = 0.25;
-const EVIDENCE_LINE = /^\s*(?:\||at\s+\S.*:\d+:\d+|(?:not )?ok\s|[#$>]\s|(?:npm|node|git|pwsh|PS|yarn|pnpm|cargo|python)\s|(?:\[[^\]]*\]\s*)?(?:ERROR|WARN|INFO|DEBUG|TRACE)\b|(?:pass|fail|tests|suites|skipped|todo|cancelled|duration_ms)\s+\d|[\w.]*(?:Error|Exception):)/;
-const EVIDENCE_TIMESTAMP = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
-const DEFINITION_SHAPES = [
-  /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*[\w$]*\s*\(/m,
-  /^\s*(?:export\s+)?(?:abstract\s+)?class\s+[\w$]+/m,
-  /^\s*(?:export\s+)?(?:const|let|var)\s+[\w$]+[^=\n]*=\s*(?:async\s*)?(?:function\b|\([^)\n]*\)\s*=>|[\w$]+\s*=>)/m,
-  /^\s*def\s+[\w$]+\s*\(/m,
-  /^\s*(?:public|private|protected|internal)\s+(?:static\s+)?[\w<>\[\],\s]+\s+[\w$]+\s*\(/m,
-];
-
-function fencedBlocks(description?: any) {
-  const blocks: any[] = [];
-  const body = String(description || '');
-  const fence = /^[ \t]*```+[ \t]*([^\n`]*)\r?\n([\s\S]*?)^[ \t]*```+[ \t]*$/gm;
-  let match: any;
-  while ((match = fence.exec(body))) blocks.push({ info: String(match[1]).trim().toLowerCase(), body: String(match[2]) });
-  return blocks;
-}
-
-function diffShapedBlock(block?: any) {
-  if (/^(?:diff|patch)\b/.test(block.info)) return true;
-  if (/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(block.body)) return true;
-  if (/^--- .+\r?\n\+\+\+ /m.test(block.body)) return true;
-  const added = (block.body.match(/^\+(?!\+)\s*\S/gm) || []).length;
-  const removed = (block.body.match(/^-(?!-)\s*\S/gm) || []).length;
-  return added >= 2 && removed >= 2;
-}
-
-function evidenceShapedBlock(lines?: any) {
-  const filled = lines.filter((line?: any) => line.trim());
-  if (!filled.length) return true;
-  const evidence = filled.filter((line?: any) => EVIDENCE_LINE.test(line) || EVIDENCE_TIMESTAMP.test(line)).length;
-  return evidence / filled.length >= EVIDENCE_SHARE;
-}
-
-function embedsCompleteEdit(description?: any) {
-  for (const block of fencedBlocks(description)) {
-    const lines = block.body.split(/\r?\n/);
-    if (lines.length < PRESOLVED_BLOCK_MIN_LINES && block.body.length < PRESOLVED_BLOCK_MIN_CHARS) continue;
-    if (evidenceShapedBlock(lines)) continue;
-    if (diffShapedBlock(block) || DEFINITION_SHAPES.some((shape?: any) => shape.test(block.body))) return true;
-  }
-  return false;
-}
-
-function presolvedRoutingWarnings(ticket?: any) {
-  if (!JUDGMENT_TIER_CATEGORIES.includes(String(ticketCategory(ticket) || ''))) return [];
-  if (!embedsCompleteEdit(ticket && ticket.description)) return [];
-  return ['Planning-depth warning: this description embeds what looks like a complete edit; route by remaining uncertainty, so a fully resolved approach belongs on coding.easy or direct-ok, not a judgment tier.'];
-}
-
-function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
-  if (!ticket) return [];
-  const warnings: any[] = [];
-  const outside = externalDeclaredFiles(ticket.files);
-  if (outside.length) {
-    warnings.push(`Planning-depth warning: declared paths are outside the repo worktree: ${outside.join(', ')}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`);
-  }
-  if (Number(ticket.complexity) >= 4) {
-    const missing: any[] = [];
-    if (!String(ticket.executorAnchors || '').trim()) missing.push('executor anchors');
-    if (!String(ticket.executorVerify || '').trim()) missing.push('verify command');
-    if (!Array.isArray(ticket.files) || !ticket.files.length) missing.push('file scope');
-    if (missing.length) {
-      warnings.push(`Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: ${missing.join(', ')}.`);
-    }
-  }
-  warnings.push(...presolvedRoutingWarnings(ticket));
-  const contradiction = readonlyCategoryWriteIntentWarning(ticket);
-  if (contradiction) warnings.push(contradiction);
-  const noScope = noDeclaredScopeWarning(ticket);
-  if (noScope) warnings.push(noScope);
-  const browserReview = readonlyBrowserReviewWarning(ticket);
-  if (browserReview) warnings.push(browserReview);
-  const verify = verifyCommandWarning(ticket, projectPath);
-  if (verify) warnings.push(verify);
-  if (!projectPath || !Array.isArray(ticket.files)) return warnings;
-  warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
-  const absent = ticket.files.filter((file?: any) => !fs.existsSync(path.resolve(projectPath, file)));
-  if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(', ')}.`);
-  return warnings;
-}
-
-function normalizeReadonlyOverride(value?: any) {
-  return typeof value === 'boolean' ? value : null;
-}
-
-function requestedReadonlyOverride(fields?: any) {
-  return normalizeReadonlyOverride(fields?.readonlyOverride === undefined ? fields?.readonly : fields.readonlyOverride);
 }
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -2636,6 +1815,19 @@ const {
   storyExecutionContract,
   updateStory,
 } = stories;
+
+projectsLayer = createProjects({
+  acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
+  deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash,
+  path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction,
+});
+
+warningsLayer = createWarnings({
+  categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly,
+  dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles,
+  normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory,
+});
+DISPATCH_DESCRIPTION_MIN = warningsLayer.DISPATCH_DESCRIPTION_MIN;
 
 const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createPulse({
   boardConfig,
