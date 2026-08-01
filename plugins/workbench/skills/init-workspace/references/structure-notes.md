@@ -1,6 +1,6 @@
 # Structure notes
 
-A short doc capturing **how the project is meant to be laid out** — the organizing principle and where
+A short doc capturing **how the project is meant to be laid out** : the organizing principle and where
 things belong. It's the intent behind the directory tree, written down so a fresh session (or a new
 contributor) puts new code in the right place instead of guessing.
 
@@ -8,11 +8,11 @@ contributor) puts new code in the right place instead of guessing.
 
 - **Greenfield (empty repo / bare scaffold / just a spec):** this is a **real deliverable.** There's
   no code yet for `map-codebase` to read, so the structure notes are where the intended shape gets
-  captured. Spend real effort here — it's the seed the whole map grows from.
+  captured. Spend real effort here : it's the seed the whole map grows from.
 - **Existing codebase:** keep it **light.** `map-codebase` will document the actual structure
   (`directory-structure.md`). Here you're just capturing the *rules of the road* that aren't obvious
   from the tree: what the organizing principle is, and any "new X goes here, never there" conventions.
-- **Not-a-codebase (wiki/notes/content):** capture the content organization instead — folder taxonomy,
+- **Not-a-codebase (wiki/notes/content):** capture the content organization instead : folder taxonomy,
   naming conventions, front-matter/tagging rules, where a new note or page goes.
 
 ## Where it goes
@@ -33,7 +33,7 @@ contributor) puts new code in the right place instead of guessing.
 <one or two lines: the purpose, from the interview>
 
 ## Organizing principle
-<layer-based | feature/domain-based | hexagonal/clean | monorepo | flat — and the one-line why>
+<layer-based | feature/domain-based | hexagonal/clean | monorepo | flat : and the one-line why>
 
 ## Where things go
 | Kind of thing | Lives in | Notes |
@@ -45,7 +45,7 @@ contributor) puts new code in the right place instead of guessing.
 
 ## Conventions that aren't obvious from the tree
 - <new modules go here, not there>
-- <this directory is a pure leaf — nothing imports upward into it>
+- <this directory is a pure leaf : nothing imports upward into it>
 - <naming: files kebab-case, types PascalCase, ...>
 
 ## Planned but not built yet   (greenfield only)
