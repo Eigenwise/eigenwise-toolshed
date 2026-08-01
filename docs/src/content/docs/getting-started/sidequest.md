@@ -38,7 +38,7 @@ Check the installed CLI version with `sidequest --version` (also `sidequest -V` 
 
 Preview a ticket before writing it with `sidequest add -t "title" --category <id> --dry-run`. The preview validates the input and shows what would be created without changing the board. The flag also appears in the profile and merge command forms where those commands support a preview.
 
-`sidequest list` and the MCP `list` tool show active tickets by default. Pass `--status done` or `status: "done"` to inspect completed work, or `--all` / `all: true` for every non-archived status. The dashboard keeps its Done column. List results are paged, so follow `nextCursor` when one is returned. `sidequest models` and the MCP `models` tool return compact routes by default; use `--full` or `full: true` for configured routes, resolved executors, and warnings.
+`sidequest list` and the MCP `list` tool show active tickets by default. Pass `--status done` or `status: "done"` to inspect completed work, or `--all` / `all: true` for every non-archived status. The dashboard keeps its Done column. List results are paged, so follow `nextCursor` when one is returned. MCP list reads return brief ticket rows by default; pass `detail: true` when you need full ticket bodies and comment threads. `sidequest models` and the MCP `models` tool return compact routes by default; use `--full` or `full: true` for configured routes, resolved executors, and warnings.
 
 Manage user stories through `sidequest story add|list|show|update|rm` or the compact MCP `story` tool. Pass `action: "add" | "list" | "show" | "update" | "rm"`; `show`, `update`, and `rm` take a story `ref` or `id` in `story`. The MCP `story_contract` tool reads or updates execution contracts separately.
 
@@ -110,6 +110,8 @@ The refusal includes the recovery. If `claude-code-proxy` is missing, run `node 
 Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. The board applies local overrides on top of the selected profile, and the dashboard marks each row as profile, override, pinned, board-only, or disabled.
 
 ### Category and comment reads
+
+Board MCP reads are brief by default to keep orchestration payloads small. Use `detail: true` with `list` for full ticket bodies and comment threads, `full: true` with `pulse` for the full submission, git, and dispatch lifecycle, and `full: true` with `ready` for full ticket records instead of ref/title rows. `full: true` with `category_list` returns the complete category rows. `changes` is the compact polling read and has no full-payload switch. Follow `nextCursor` on paged reads until it is null.
 
 Compact MCP reads for `category_list` and `comments` return `total`, `returned`, and `nextCursor`. Follow `nextCursor` until it is null. Compact category descriptions and comment bodies mark excerpts explicitly; `full:true` returns exact text. Compact comments are newest-first for orchestration, while full comments stay chronological. `full:true` without a cursor or limit keeps the one-call complete response. The CLI JSON shapes do not use this pagination and remain unchanged.
 
