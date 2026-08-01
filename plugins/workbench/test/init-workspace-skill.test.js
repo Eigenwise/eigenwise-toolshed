@@ -24,19 +24,24 @@ test('init-workspace enables agent teams and doctor only reports masked projects
   assert.match(doctorSkill, /Do not fix it from the doctor/);
 });
 
-test('init-workspace configures compaction through explicit project-local choices', () => {
+test('init-workspace configures a global compaction window and a project-local policy through explicit choices', () => {
   assert.match(skill, /### Compaction configuration/);
   assert.match(skill, /Ask one `AskUserQuestion` that explicitly records both settings before any write/);
-  assert.match(skill, /show its current `autoCompactWindow` and\n`SIDEQUEST_COMPACTION_POLICY` values/);
+  assert.match(skill, /read\n`~\/.claude\/settings\.json` and the project's `\.claude\/settings\.local\.json` first/);
+  assert.match(skill, /Show the global\n`autoCompactWindow` and the project's `SIDEQUEST_COMPACTION_POLICY` values/);
+  assert.match(skill, /leftover `autoCompactWindow`.*overrides the\nglobal preference and offer to remove it/s);
   assert.match(skill, /recommended 350000 \(trigger ~317k\)/);
   assert.match(skill, /aggressive 250000 \(trigger\n  ~217k\)/);
   assert.match(skill, /leave default \(on 1M-pinned models auto-compact effectively never fires: trigger = window\n  - 33k\)/);
   assert.match(skill, /custom 100000-1000000/);
-  assert.match(skill, /Choosing leave default removes `autoCompactWindow`/);
+  assert.match(skill, /removes `autoCompactWindow` from\n  `~\/.claude\/settings\.json`/);
+  assert.match(skill, /project environment settings mask global env/);
   assert.match(skill, /experimental until the US-40 spike verdict/);
   assert.match(skill, /configureSidequestCompaction/);
-  assert.match(skill, /preserves unknown top-level keys and every existing `env` entry/);
-  assert.match(skill, /Never write user, shared, or global settings/);
+  assert.match(skill, /removeProjectAutoCompactWindow/);
+  assert.match(skill, /preserving its existing keys including `env`, `enabledPlugins`, and\n`marketplaces`/);
+  assert.match(skill, /writes only\n`SIDEQUEST_COMPACTION_POLICY` to the project's `\.claude\/settings\.local\.json` `env` block/);
+  assert.doesNotMatch(skill, /writes that project's `\.claude\/settings\.local\.json`,\n  preserves unknown top-level keys/);
 });
 
 test('init-workspace installs selected plugins before dependent workspace artifacts', () => {

@@ -23,15 +23,15 @@ The reload boundary matters because Claude Code discovers plugin skills and hook
 
 ### Compaction configuration
 
-`/workbench:init-workspace` asks how much context to keep before Claude Code auto-compacts. The recommended window is `350000` tokens, which means compaction starts at roughly `317000` tokens. The aggressive option is `250000` (roughly `217000`), and custom values can range from `100000` to `1000000`. The practical trigger is the selected window minus about `33000` tokens. Leaving the setting at its default means auto-compaction effectively never fires on models pinned to a 1M-token context window.
+`/workbench:init-workspace` asks how much context to keep before Claude Code auto-compacts. The window is a user preference stored in `~/.claude/settings.json`, so it applies to every project. The recommended window is `350000` tokens, which means compaction starts at roughly `317000` tokens. The aggressive option is `250000` (roughly `217000`), and custom values can range from `100000` to `1000000`. The practical trigger is the selected window minus about `33000` tokens. Leaving the setting at its default removes `autoCompactWindow`; on models pinned to a 1M-token context window, auto-compaction effectively never fires. You can also change the global window with `/autocompact`.
 
-The same step asks for `SIDEQUEST_COMPACTION_POLICY`:
+The same setup step asks for a project-specific `SIDEQUEST_COMPACTION_POLICY`:
 
 - `pin` preserves active board state in the compaction summary. Unset has the same behavior.
 - `off` disables the Sidequest compaction policy.
 - `veto` preserves board state and can delay compaction during unsafe moments. Veto is experimental and should stay disabled until the spike confirms that hook blocks do not trip Claude Code's auto-compact failure breaker.
 
-Workbench writes these choices to the project's `.claude/settings.local.json` and preserves the rest of that file. It does not change user, shared, or global settings.
+Workbench writes the policy to the project's `.claude/settings.local.json` and preserves the rest of that file. Project environment blocks mask global environment values, so global settings cannot reliably carry this policy. If setup finds an older project-local `autoCompactWindow`, it tells you that it overrides the global preference and offers to remove it.
 
 At session start, Workbench can tell you when the loaded Workbench version is behind the installed version. Run `/reload-plugins` to pick up the installed version, or restart Claude Code if reload does not work. It can also report Toolshed updates available from its cached marketplace data. That cached signal is not a live network check: run `/update-toolshed`, then `/reload-plugins` to refresh the plugins and load them in the current session.
 

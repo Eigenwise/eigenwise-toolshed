@@ -170,23 +170,26 @@ Gateway wiring is global and has no mode to choose, so do not ask about it. If t
 
 ### Compaction configuration
 
-Ask one `AskUserQuestion` that explicitly records both settings before any write. On re-entry, read the
-project's `.claude/settings.local.json` first and show its current `autoCompactWindow` and
-`SIDEQUEST_COMPACTION_POLICY` values. An absent window means **leave default**. An unset policy has the
-same behavior as **pin**, but still ask the user to choose and write the selected value. Never silently
-apply either recommendation.
+Ask one `AskUserQuestion` that explicitly records both settings before any write. On re-entry, read
+`~/.claude/settings.json` and the project's `.claude/settings.local.json` first. Show the global
+`autoCompactWindow` and the project's `SIDEQUEST_COMPACTION_POLICY` values. An absent window means
+**leave default**. If the project file has a leftover `autoCompactWindow`, explain that it overrides the
+global preference and offer to remove it. An unset policy has the same behavior as **pin**, but still ask
+the user to choose and write the selected value. Never silently apply either recommendation.
 
 - **Auto-compact window:** **recommended 350000 (trigger ~317k)**, **aggressive 250000 (trigger
   ~217k)**, **leave default (on 1M-pinned models auto-compact effectively never fires: trigger = window
   - 33k)**, or **custom 100000-1000000**. Custom values are numbers; normalize them through the helper,
-  which clamps them to that inclusive range. Choosing leave default removes `autoCompactWindow`.
+  which clamps them to that inclusive range. Choosing leave default removes `autoCompactWindow` from
+  `~/.claude/settings.json`.
 - **Sidequest compaction policy:** **pin** (board-state pinning in compaction summaries, safe default),
   **veto** (pinning plus block mid-wave compaction), or **off**. Warn before accepting **veto** that it is
   experimental until the US-40 spike verdict confirms hook blocks do not trip Claude Code's auto-compact
-  failure breaker.
+  failure breaker. Keep this in the project `env` block: project environment settings mask global env, so
+  global env is not a reliable carrier.
 
-Store the explicit choices in the session/bootstrap plan. This stays one compact configuration step, not a
-wizard.
+Store the explicit choices, including whether to remove a leftover project window, in the session/bootstrap
+plan. This stays one compact configuration step, not a wizard.
 
 Keep it short and propose defaults from what you detected, so the user confirms rather than types
 essays. The project-intent answer was collected before the picker; use it to seed the map and structure
@@ -271,18 +274,20 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/install-workspace-plugins.js" --plan "<session-s
 If either command fails, stop. Report the helper's exact failed command and error, say which steps
 succeeded and which were not run, and give this recovery: fix the reported problem, then rerun the
 same installer command with the same plan. It is idempotent. Do not write dependent artifacts, request
-a reload, or claim the workspace setup completed after a partial install. After a successful result,
-merge the plan's non-plugin settings without replacing existing values, then apply the recorded compaction
-choice with Workbench's merge-safe helper:
+a reload, or claim the workspace setup completed after a partial install. After a successful result, merge the plan's non-plugin settings without replacing existing values, then
+apply the recorded compaction choices with Workbench's merge-safe helper:
 
 ```sh
-node -e "const { configureSidequestCompaction } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); configureSidequestCompaction(process.cwd(), { autoCompactWindow: <recorded window or null>, policy: '<recorded policy>' });"
+node -e "const { configureSidequestCompaction } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); configureSidequestCompaction(process.cwd(), { autoCompactWindow: <recorded window or null>, policy: '<recorded policy>', removeProjectAutoCompactWindow: <recorded true or false> });"
 ```
 
-Run it only against the target project directory. It writes that project's `.claude/settings.local.json`,
-preserves unknown top-level keys and every existing `env` entry, and leaves the file unchanged on an
-idempotent re-run. Never write user, shared, or global settings. Continue with the other pre-reload
-artifacts.
+Run it only against the target project directory. It writes the selected window to
+`~/.claude/settings.json`, preserving its existing keys including `env`, `enabledPlugins`, and
+`marketplaces`; this is the one approved global-settings exception. It writes only
+`SIDEQUEST_COMPACTION_POLICY` to the project's `.claude/settings.local.json` `env` block, preserving
+unknown top-level keys and every existing `env` entry. If accepted, it also removes that project's leftover
+`autoCompactWindow` override. Both files stay unchanged on an idempotent re-run. Continue with the other
+pre-reload artifacts.
 
 ### 2b. Telemetry and reload handling
 
