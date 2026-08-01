@@ -3,6 +3,10 @@
 Internal test helper code for the Eigenwise Toolshed repository. This directory is not a Claude Code
 plugin and has no `.claude-plugin/plugin.json`, skills, hooks, or release version.
 
+> Start with the [test-support guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/test-support/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+
+Test-support is project-scoped internal tooling, not a user-installable plugin. It travels with the repository and is not installed separately.
+
 ## `windows-hide.js`
 
 The helper scans JavaScript production files for `child_process` calls and reports whether each call hides

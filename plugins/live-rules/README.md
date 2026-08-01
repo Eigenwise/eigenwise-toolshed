@@ -16,16 +16,22 @@ rules apply on prompts, directory rules apply in their folder, and path/glob rul
 edits a matching file. Existing `.claude/live-rules.md` projects stay supported and can migrate without
 changing rule behavior.
 
+> Start with the [live-rules guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+
 It is the same idea behind [codebase-mapper](../codebase-mapper) (a hook that re-injects context so
 it stays salient), pointed at a different job: instead of a map of your codebase, it injects **your
 rules**, scoped to the moment they matter.
 
 ## Install
 
+Install live-rules at project scope by default, so its rules travel with the repo.
+
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install live-rules@eigenwise-toolshed
+/plugin install live-rules@eigenwise-toolshed --scope project
 ```
+
+`/workbench:init-workspace` installs and configures live-rules for a project for you, so manual installation is the fallback.
 
 Then run `/reload-plugins` (or restart Claude Code).
 

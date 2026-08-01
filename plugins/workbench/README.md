@@ -8,9 +8,11 @@
 
 Workbench owns the lifecycle of a Claude Code workspace: set it up, keep its plugins current, check local health, and improve the workflow after real use. Version `0.75.0` is declared in [plugin.json](.claude-plugin/plugin.json).
 
+> Start with the [workbench guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+
 ## Install
 
-Install Workbench once at user scope. It stays outside generated project settings, so a workspace never loads a second project-scoped copy or duplicate hooks.
+Install Workbench by hand first at user scope. It stays outside generated project settings, so a workspace never loads a second project-scoped copy or duplicate hooks.
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed

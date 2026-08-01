@@ -15,6 +15,8 @@ your ChatGPT Plus/Pro subscription through Codex's own OAuth sign-in, not an Ope
 pay-per-token API account. Claude requests keep flowing to api.anthropic.com with your normal
 claude.ai login. Both subscriptions, one harness.
 
+> Start with the [model-gateway guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+
 ## How it works
 
 ```
@@ -49,10 +51,10 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install model-gateway@eigenwise-toolshed
+/plugin install model-gateway@eigenwise-toolshed --scope user
 ```
 
-**Install it at user scope** (that's the default for `/plugin install`) so its keepalive hook is
+**Install it at user scope, as required** (that's the default for `/plugin install`) so its keepalive hook is
 available wherever you work. Wiring is global: `node <plugin>/bin/model-gateway.js env --write-user` writes
 `~/.claude/settings.json` once and covers every project and executor worktree. Run `/update-toolshed`
 to write that block and reconcile any leftover per-project wiring. Per-project wiring used to be the
@@ -69,6 +71,8 @@ and offers to finish the job. `setup` downloads claude-code-proxy and starts the
 `/update-toolshed` to wire every recorded project locally. The only thing it can't do for you is
 the ChatGPT browser sign-in, which it asks for when needed. Restart Claude Code and open `/model`:
 the Codex rows are there.
+
+`/workbench:init-workspace` installs and configures model-gateway for a project for you, so manual installation is the fallback.
 
 Prefer doing it by hand? Same thing:
 

@@ -3,6 +3,17 @@
 Mines your recent Claude Code transcripts for work that keeps getting redone, then routes each finding
 to the cheapest durable fix.
 
+> Start with the [skill-retro guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/skill-retro/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+
+Install skill-retro at project scope by default, so its config travels with the repo.
+
+```text
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install skill-retro@eigenwise-toolshed --scope project
+```
+
+`/workbench:init-workspace` installs and configures skill-retro for a project for you, so manual installation is the fallback.
+
 The point is the routing. Detecting that you ran the same command eleven times is easy; deciding whether
 that wants a skill, a bundled script, a live rule, a memory entry, a codebase-map edit, or nothing at
 all is the part worth doing, and it is the part a padded report gets wrong.
