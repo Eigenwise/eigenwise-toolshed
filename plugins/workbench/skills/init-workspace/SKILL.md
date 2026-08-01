@@ -14,8 +14,9 @@ plan, sequence workspace artifacts around the plugin-reload boundary, and verify
 works before you call it done.
 
 The only prerequisite is **Workbench installed at user scope**. If it is not installed, stop and give
-the user the Install commands from the Workbench README. Do not install Workbench as part of generated
-project settings.
+the user the Install commands from the Workbench README. If Workbench is installed only at project scope,
+say that `init-workspace` requires the user-scope install and tell them to reinstall it at user scope before
+rerunning this skill. Do not install Workbench as part of generated project settings.
 
 Keep the whole thing **tech- and purpose-agnostic**: the logic below is generic. The stack-specific
 choices come from `references/stack-plugins.md` (which plugins) and `references/rule-templates.md`
@@ -45,6 +46,20 @@ steps. The `enable-project-telemetry` skill owns telemetry mechanics and verific
 
 ## Before Phase 0 — Toolshed setup
 
+### Orientation
+
+Before the telemetry question, open with a short plain-language orientation in the user's terms. Cover the
+substance without reciting a fixed script: you will ask a few setup questions, show the proposed install and
+stop for approval, install the chosen plugins, request one reload, then build and verify the workspace. Say it
+usually takes about 10–20 minutes, with large existing codebases taking longer to map. Explain that setup
+merges into the project's `.claude/` directory and never overwrites existing Claude config; name
+`~/.claude/settings.json` as the one possible global write when the compaction window is configured. Promise
+to name the concrete files before each write and to stop for confirmation before installing anything.
+
+Every user-facing question below must include one short sentence saying why the answer matters. Keep that
+reason in the question itself, not in follow-up prose, and adapt the wording to the project rather than turning
+the flow into a script.
+
 ### Telemetry consent
 
 This is the first question in the whole flow. Before inspecting the directory, asking about the stack, or
@@ -57,7 +72,8 @@ When telemetry is not enabled, use one `AskUserQuestion` with this plain explana
 project telemetry? Each project must opt in: this writes only its `.claude/settings.local.json` and sends usage
 metadata through the local Collector to local Grafana. You can see API-equivalent cost; input, output, and cache
 token totals; tool-call names and counts; plus model, session, agent, and activity information. It never records
-prompt or response text, code or file contents, tool inputs or results, credentials, or environment values."**
+prompt or response text, code or file contents, tool inputs or results, credentials, or environment values. This
+helps you inspect local usage and cost without exposing project content."**
 
 - **Yes:** hand off to `/workbench:enable-project-telemetry`; it owns consent confirmation, setup, and
   verification. After it finishes, stop. Tell the user to restart Claude Code because its OTEL settings only
@@ -72,7 +88,8 @@ answered setup questions.
 ### Project intent
 
 Ask this plain-text question before listing any plugin options: **"What is this project for, and who is
-it for? One or two lines is plenty."** For a non-empty repo, first inspect only enough of the visible
+it for? One or two lines is plenty. This lets me recommend only the setup that fits your project."** For a
+non-empty repo, first inspect only enough of the visible
 project signals to pair the question with a useful inference, such as "I see a Rust audio-plugin project;
 what does it make and who uses it?" Keep that inference tentative and let the user correct it.
 
@@ -83,7 +100,8 @@ asking again. A telemetry restart does not create an answer because this questio
 
 Ask this third, before Phase 0. Read the current Toolshed marketplace manifest and
 `references/stack-plugins.md`, then offer the available plugins with a one-line plain-language description
-and a recommendation grounded in the stated project purpose and any visible stack signals. Say why when
+and a recommendation grounded in the stated project purpose and any visible stack signals. In the picker
+question, say that this choice decides which workspace tools will be installed and verified. Say why when
 a plugin fits (for example, "recommended for this project because ...") and say "probably not needed
 here" when it does not. Do not fall back to generic core/extra tiers. Do not maintain a hard-coded plugin
 list in this skill: the current marketplace/catalog is the source of truth. Include the already-installed
@@ -133,14 +151,16 @@ content → `writing`; source corpora, datasets, or citation-heavy material → 
 or music-production files → `creative-music`. If signals conflict, choose the closest fit and say why.
 
 Use one `AskUserQuestion` that proposes the inferred starter and offers: **Use this profile**, **Choose
-another starter**, or **Make a project profile**. Keep it conversational: do not turn category routing into
+another starter**, or **Make a project profile**. In the question, say that the profile controls which models
+and effort levels future Sidequest work uses. Keep it conversational: do not turn category routing into
 a form or walk through every category. If the user chooses another starter, show the available profiles from
 `sidequest profile list` and let them name one in plain text. Record the accepted profile choice in the
 session/bootstrap plan; if Sidequest was not selected, skip this step.
 
 For **Make a project profile**, propose a small delta from the closest starter using the scan and the stated
 project purpose. Say which categories would change and why, then let the user confirm or tweak that delta in
-plain language. Create `<project>-routing` by cloning the closest starter, apply only the confirmed delta,
+plain language; in that question, say the accepted delta becomes this project's Sidequest routing policy.
+Create `<project>-routing` by cloning the closest starter, apply only the confirmed delta,
 and select it for the board:
 
 ```sh
@@ -166,11 +186,20 @@ when they explicitly choose it. If Sidequest was not selected, skip this questio
 
 ## Phase 1 — Interview and selection
 
-Gateway wiring is global and has no mode to choose, so do not ask about it. If the gateway is unwired, invoke `/model-gateway:model-gateway` and use its `env --write-user` command, then record the wiring result in the session/bootstrap plan. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH. If the user enables Remote Control compatibility, explain first that the Codex/Grok rows disappear from `/model`; explicit ids such as `/model claude-gpt-5.6-terra` still work and persist as the default, and disabling compatibility restores the rows.
+Model Gateway is a user-scope plugin and its wiring is global-only, so there is no per-project gateway
+choice to make. Say this plainly before wiring it. If the gateway is unwired, invoke
+`/model-gateway:model-gateway` and use its `env --write-user` command, then record the wiring result in the
+session/bootstrap plan. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command
+is not on PATH. If the user enables Remote Control compatibility, explain first that the Codex/Grok rows
+disappear from `/model`; explicit ids such as `/model claude-gpt-5.6-terra` still work and persist as the
+default, and disabling compatibility restores the rows.
 
 ### Compaction configuration
 
-Ask one `AskUserQuestion` that explicitly records both settings before any write. On re-entry, read
+Ask one `AskUserQuestion` that explicitly records both settings before any write. In the question, say that
+the compaction window writes to the global `~/.claude/settings.json` and affects every project, while the
+Sidequest policy writes to this project's `.claude/settings.local.json`; these choices decide when long
+sessions compact and how Sidequest protects board state. On re-entry, read
 `~/.claude/settings.json` and the project's `.claude/settings.local.json` first. Show the global
 `autoCompactWindow` and the project's `SIDEQUEST_COMPACTION_POLICY` values. An absent window means
 **leave default**. If the project file has a leftover `autoCompactWindow`, explain that it overrides the
@@ -197,14 +226,19 @@ notes, and do not ask it again. Ask what you genuinely can't infer. A good compa
 recite):
 
 1. **Stack** — confirm what you detected, and anything not yet visible (intended stack for
-   greenfield; test framework; deploy target like Cloudflare/Vercel/AWS).
+   greenfield; test framework; deploy target like Cloudflare/Vercel/AWS). Say in the question that this
+   determines the relevant plugin prerequisites, starter rules, and verification commands.
 2. **Codebase or not?** Confirm your Phase 0 read ("this looks like a docs wiki, so I'll skip the
-   codebase map, sound right?").
+   codebase map, sound right?"). Say that the answer decides whether setup builds and maintains a codebase map.
 3. **Team or solo, and any existing conventions** worth encoding as rules (commit style, a
-   `CONTRIBUTING` or style doc to point a rule at, house preferences).
+   `CONTRIBUTING` or style doc to point a rule at, house preferences). Say that this keeps future sessions
+   and collaborators following the same project conventions.
 4. **Stack extras** — recommend only missing catalog plugins that fit the confirmed project. Keep the
-   picker selection unless the user changes it; do not repeat the broad Toolshed plugin question.
-5. **CLAUDE.md?** Recommend a lightweight static one seeded through `/init`; they can skip it for now if they prefer. Either answer keeps the live-rules plan. CLAUDE.md holds always-loaded project context; live rules handle conditional behavioral enforcement.
+   picker selection unless the user changes it; do not repeat the broad Toolshed plugin question. Say that
+   only confirmed extras will be added to the install plan.
+5. **CLAUDE.md?** Recommend a lightweight static one seeded through `/init`; they can skip it for now if they
+   prefer. Either answer keeps the live-rules plan. Say that this choice decides whether setup creates
+   always-loaded project context; live rules still handle conditional behavioral enforcement.
 
 Use the `AskUserQuestion` tool for the choices with clear options (stack extras, codebase-or-not,
 `CLAUDE.md` yes/no); ask the open ones (what is this, conventions) in plain text. If the user said
@@ -213,7 +247,8 @@ stack extras.
 
 Before creating an LSP plugin plan, run its required binary check from the catalog. Report a missing
 binary and its exact install hint, but never run a package manager yourself. Let the user either install
-it, continue knowing code intelligence stays unavailable until they do, or drop that plugin.
+it, continue knowing code intelligence stays unavailable until they do, or drop that plugin. In the question,
+say that this choice decides whether setup can verify that plugin's code intelligence now.
 
 ### Git setup for non-repos
 
@@ -257,7 +292,12 @@ records, and only non-plugin settings to merge.
   This adds `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"` without replacing existing `env` keys. Never
   write it to shared `.claude/settings.json`.
 
-Run the helper's read-only pass first, then show the user the install delta. The LSP checks already run
+Run the helper's read-only pass first, then show the user the install delta and a concrete write preview before
+touching project or global configuration. Name every planned path from the bootstrap plan, including the
+project's `.claude/` files, optional root `CLAUDE.md` or `.gitignore`, and the global
+`~/.claude/settings.json` compaction exception when selected; also say which existing files will be merged and
+left intact. Ask for approval before installation, with one sentence that the answer matters because the next
+step installs the selected plugins and writes exactly this listed configuration. The LSP checks already run
 in Phase 1, so use their results to settle any missing-binary choice before the install:
 
 ```sh
@@ -397,15 +437,20 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 
 - Tell the user **exactly what they got**: which plugins are enabled, which rules are live (and that
   editing them takes effect next prompt), whether a map was built, where the board is, and Model Gateway
-  wiring as `wired` or `not wired` with its mode. For `not wired`, include the exact recovery command:
-  the model-gateway skill's `env --write-user` command
-  command for global mode.
+  wiring as `wired` or `not wired` with its mode. For `not wired`, include the model-gateway skill's exact
+  `env --write-user` recovery command for global mode.
+- Give a practical handover using only the tools that were selected and verified. Tell them they can say
+  "build/add/implement ..." or run `/sidequest:feature` for feature work when Sidequest is enabled; run
+  `/codebase-mapper:update-codebase-map` after structural code changes when a map exists; ask to "add a live
+  rule for ..." or run `/live-rules:add-rule` for a new project rule; and run `/workbench:retro` for a deeper
+  workspace reflection. Also name `/workbench:workbench-doctor` for health checks and
+  `/workbench:update-toolshed` for updates. Keep this as a short next-actions list, not another inventory.
 - **Commit reminder.** If the project is a git repo, tell them to commit `.claude/` so the team and
   every future session share the setup. Offer to do it (ship-by-default if that's their preference). If
   they declined Git setup, say once that the workspace is uncommitted and that they can run `git init`,
   add a stack-appropriate `.gitignore`, then commit `.claude/` when they want to back it up.
-- **Point at the self-improvement loop.** Remind them the workspace now nudges itself to improve after
-  work, and that `retro` runs a deeper reflection pass on demand.
+- Point them to https://eigenwise.github.io/eigenwise-toolshed/ for setup details, plugin guides, and anything
+  deeper than this handover.
 
 ## Guidelines
 
@@ -424,6 +469,11 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 ## Success criteria
 
 - [ ] Workbench is installed at user scope
+- [ ] The user received the short orientation before the first question, including order, timing, merge-only
+      behavior, install approval, reload, and verification
+- [ ] Every user-facing question included one sentence explaining why the answer matters
+- [ ] Before each write, the user was told the concrete paths; the compaction question and write preview named
+      `~/.claude/settings.json` as the one global-settings exception
 - [ ] Telemetry consent was the first question; a yes completed the telemetry flow and restarted Claude Code
       before resuming
 - [ ] Project intent was asked before the picker; current marketplace catalog plugin picker came third with
