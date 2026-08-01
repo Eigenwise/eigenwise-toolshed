@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const AGENT_TEAMS_ENV = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS';
+const AUTO_COMPACT_WINDOW_MIN = 100_000;
+const AUTO_COMPACT_WINDOW_MAX = 1_000_000;
+const SIDEQUEST_COMPACTION_POLICY_ENV = 'SIDEQUEST_COMPACTION_POLICY';
+const SIDEQUEST_COMPACTION_POLICIES = new Set(['pin', 'veto', 'off']);
 
 function projectSettingsPath(projectDir) {
   return path.join(path.resolve(projectDir), '.claude', 'settings.local.json');
@@ -42,6 +46,30 @@ function enableAgentTeams(projectDir) {
   return { changed, settings, settingsPath };
 }
 
+function clampAutoCompactWindow(window) {
+  if (typeof window !== 'number' || !Number.isFinite(window)) {
+    throw new TypeError('autoCompactWindow must be a finite number');
+  }
+  return Math.min(AUTO_COMPACT_WINDOW_MAX, Math.max(AUTO_COMPACT_WINDOW_MIN, Math.trunc(window)));
+}
+
+function configureSidequestCompaction(projectDir, { autoCompactWindow, policy }) {
+  if (!SIDEQUEST_COMPACTION_POLICIES.has(policy)) {
+    throw new TypeError(`Sidequest compaction policy must be one of: ${[...SIDEQUEST_COMPACTION_POLICIES].join(', ')}`);
+  }
+
+  const before = readProjectSettings(projectDir);
+  const settings = structuredClone(before);
+  if (autoCompactWindow == null) delete settings.autoCompactWindow;
+  else settings.autoCompactWindow = clampAutoCompactWindow(autoCompactWindow);
+
+  const configured = mergeProjectEnvironment(settings, { [SIDEQUEST_COMPACTION_POLICY_ENV]: policy });
+  const changed = JSON.stringify(before) !== JSON.stringify(configured);
+  const settingsPath = projectSettingsPath(projectDir);
+  if (changed) writeProjectSettings(projectDir, configured);
+  return { changed, settings: configured, settingsPath };
+}
+
 function agentTeamsWarning(projectDir) {
   const settings = readProjectSettings(projectDir);
   if (!settings.env || Object.hasOwn(settings.env, AGENT_TEAMS_ENV)) return null;
@@ -50,7 +78,12 @@ function agentTeamsWarning(projectDir) {
 
 module.exports = {
   AGENT_TEAMS_ENV,
+  AUTO_COMPACT_WINDOW_MAX,
+  AUTO_COMPACT_WINDOW_MIN,
+  SIDEQUEST_COMPACTION_POLICY_ENV,
   agentTeamsWarning,
+  clampAutoCompactWindow,
+  configureSidequestCompaction,
   enableAgentTeams,
   mergeProjectEnvironment,
   projectSettingsPath,
