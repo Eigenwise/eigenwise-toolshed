@@ -513,6 +513,7 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       by,
       at: submittedAt,
       commit,
+      commentId: comment ? comment.id : null,
       gitRef: gitRef || submissionGitRef(t),
       verify,
       worktree,

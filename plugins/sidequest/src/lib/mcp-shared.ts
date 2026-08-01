@@ -241,7 +241,7 @@ const MODEL_FILTER_PROP = { type: 'string', description: 'Filter by resolved mod
 const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   pulse: 'Liveness: status, claim, activity.',
   changes: 'THE polling read.',
-  ready: 'Unclaimed, unblocked tickets in safe waves.',
+  ready: 'Ready: ref/title rows.',
   story: 'Manage stories.',
   story_log: 'Story log.',
   checkpoint: 'Record candidate; retain claim.',
@@ -390,7 +390,7 @@ const PAGED_FULL_DEFAULT_LIMIT = 10;
 const PAGE_LIMIT_MAX = 100;
 const boundedExcerpt = store.boundedExcerpt;
 
-function compactComment(comment?: any) {
+function compactComment(comment?: any, preserveBody = false) {
   const base: any = {
     id: comment.id,
     at: comment.at,
@@ -398,7 +398,9 @@ function compactComment(comment?: any) {
     kind: comment.kind,
   };
   if (comment.bodyOmitted) return Object.assign(base, { bodyOmitted: true });
-  const body = boundedExcerpt(comment.body);
+  const body = preserveBody
+    ? { text: String(comment.body || ''), length: String(comment.body || '').length, truncated: false }
+    : boundedExcerpt(comment.body);
   return Object.assign(base, {
     body: body.text,
     bodyLength: body.length,
@@ -406,17 +408,28 @@ function compactComment(comment?: any) {
   });
 }
 
+function preservesFinalReport(ticket?: any, comment?: any) {
+  if (!comment) return false;
+  if (ticket?.completion?.commentId === comment.id) return true;
+  if (ticket?.submission?.commentId === comment.id) return true;
+  return ticket?.submission?.by === comment.by && ticket?.submission?.at === comment.at;
+}
+
+function compactListRow(ticket?: any) {
+  return Object.fromEntries(Object.entries(ticket || {}).filter(([, value]) =>
+    value != null && (!Array.isArray(value) || value.length > 0)));
+}
+
 function categoryListEntry(category?: any, localRow?: any, ticketCount?: any, full?: any) {
   if (!full) {
-    const description = boundedExcerpt(category.description);
+    const description = boundedExcerpt(String(category.description || '').replace(/\s+/g, ' ').trim());
     return {
       id: category.id,
       name: category.name,
+      route: category.route ? { model: category.route.model, effort: category.route.effort } : null,
       description: description.text,
       descriptionLength: description.length,
       descriptionTruncated: description.truncated,
-      enabled: category.enabled,
-      readonly: category.readonly === true,
     };
   }
   return Object.assign({}, category, {
@@ -656,6 +669,8 @@ module.exports = {
   PAGE_LIMIT_MAX,
   boundedExcerpt,
   compactComment,
+  preservesFinalReport,
+  compactListRow,
   categoryListEntry,
   pageArguments,
   pageRows,

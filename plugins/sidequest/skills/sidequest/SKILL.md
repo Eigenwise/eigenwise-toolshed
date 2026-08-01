@@ -131,7 +131,8 @@ it with `mcp__plugin_sidequest_board__add`, then keep going. Filing a ticket is 
 `sidequest list` (this project; `--status todo` for one column) · `projects` (every board) ·
 `update SQ-3 --status done` (move; also `-p -t -d -l`) · `rm SQ-3` (delete). `--json` reads data;
 `--brief` on `list`/`ready` implies `--json` and drops bodies. **Default to
-`--brief` for routine orchestration reads.** "Close / ship it" → `--status done`.
+`--brief` for routine orchestration reads.** MCP `ready` defaults to a count plus ref/title rows;
+pass `full:true` only when you need ticket records. "Close / ship it" → `--status done`.
 
 ## Work a ticket (safe with other agents)
 

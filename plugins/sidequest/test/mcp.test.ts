@@ -417,6 +417,9 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   assert.match(tools.find((tool: any) => tool.name === 'changes').description, /^THE polling read/);
   assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref']);
   assert.equal(comments.inputSchema.properties.full.type, 'boolean');
+  const ready = tools.find((tool: any) => tool.name === 'ready');
+  assert.match(ready.description, /ref\/title/);
+  assert.equal(ready.inputSchema.properties.full.type, 'boolean');
   assert.equal(Object.hasOwn(tools.find((tool: any) => tool.name === 'unarchive').inputSchema.properties, 'full'), false);
   for (const tool of tools) {
     const source = mcp.TOOLS.find((candidate: any) => candidate.name === tool.name);
@@ -601,7 +604,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(categoryPayload.returned, categoryPayload.categories.length);
   const localCategory = categoryPayload.categories.find((category: any) => category.id === 'payload-0');
   assert.equal(localCategory.localRow, undefined);
-  assert.equal(localCategory.route, undefined);
+  assert.deepEqual(localCategory.route, { model: 'sonnet', effort: 'low' });
   const fullCategories = await callTool('category_list', { project, full: true });
   assert.equal(fullCategories.categories.find((category: any) => category.id === 'payload-0').localRow.data, undefined);
 
@@ -625,6 +628,17 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(pulsePayload.submission, undefined);
   assert.equal(pulsePayload.git, undefined);
   assert.equal(pulsePayload.dispatch.tokenPrefix, undefined);
+
+  for (const [name, args, maxBytes] of [
+    ['list', { project }, 13000],
+    ['comments', { project, ref: ticket.ref }, 13000],
+    ['changes', { project }, 1200],
+    ['ready', { project }, 1200],
+    ['integrate', { project, ref: 'SQ-999999', by: 'payload-tester' }, 1200],
+  ] as const) {
+    const result = await callToolRaw(name, args);
+    assert.ok(Buffer.byteLength(result.content[0].text) <= maxBytes, `${name} is ${Buffer.byteLength(result.content[0].text)} bytes`);
+  }
 });
 
 test('dispatch warns about external output outside the repo worktree', async () => {
@@ -984,17 +998,23 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   gitAt(worktree, ['reset', '--', 'foreign.js']);
   fs.unlinkSync(path.join(worktree, 'foreign.js'));
 
+  const finalReport = `MCP terminal evidence ${'x'.repeat(1600)}`;
   const submitted = await callTool('submit', {
     project, ref: ticket.ref, by, commit: committed.commit,
     worktree: explicitPath, verify: 'node --test plugins/sidequest/test/mcp.test.js',
-    body: 'MCP terminal evidence',
+    body: finalReport,
   });
   assert.equal(submitted.ok, true);
   assert.equal(submitted.submission, undefined, 'submit acknowledgement omits stored submission details');
   assert.equal(store.getTicket(project, ticket.ref).submission.commit, committed.commit);
   const after = store.getTicket(project, ticket.ref);
   assert.equal(after.claim, null, 'submit releases the claim');
-  assert.ok(after.comments.some((comment: any) => comment.body === 'MCP terminal evidence'));
+  const reportComment = after.comments.find((comment: any) => comment.body === finalReport);
+  assert.equal(after.submission.commentId, reportComment.id);
+  const comments = await callTool('comments', { project, ref: ticket.ref });
+  const reportRead = comments.comments.find((comment: any) => comment.id === reportComment.id);
+  assert.equal(reportRead.body, finalReport, 'the newest executor final report remains verbatim');
+  assert.equal(reportRead.bodyTruncated, false);
 
   const malformed = store.createTicket(project, {
     title: 'MCP malformed submission', files: ['lib/other.js'], complexity: 3,
@@ -2232,13 +2252,13 @@ test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', 
   const after = await callTool('list', {});
   const t = after.tickets.find((x: any) => x.ref === ref);
   assert.strictEqual(t.status, 'todo');
-  assert.strictEqual(t.claim, null);
+  assert.equal(Object.hasOwn(t, 'claim'), false);
 });
 
-test('MCP board reads omit category taxonomy while preserving the claim idle window and category rows', async () => {
+test('MCP board reads omit taxonomy and default ready rows stay summary-sized', async () => {
   const added = await callTool('add', { title: 'trimmed taxonomy response', category: 'coding.easy' });
   const list = await callTool('list', {});
-  const ready = await callTool('ready', { brief: true });
+  const ready = await callTool('ready', {});
   const changes = await callTool('changes', {});
   const pulse = await callTool('pulse', { ref: added.ref });
 
@@ -2247,9 +2267,10 @@ test('MCP board reads omit category taxonomy while preserving the claim idle win
   assert.equal(changes.categories, undefined);
   assert.equal(pulse.categories, undefined);
   assert.equal(typeof list.claimIdleMs, 'number');
-  assert.equal(typeof ready.claimIdleMs, 'number');
+  assert.equal(ready.claimIdleMs, undefined);
   assert.equal(list.tickets.find((ticket: any) => ticket.ref === added.ref).categoryId, 'coding.easy');
-  assert.equal(typeof ready.tickets.find((ticket: any) => ticket.ref === added.ref).categoryName, 'string');
+  assert.deepEqual(ready.tickets.find((ticket: any) => ticket.ref === added.ref), { ref: added.ref, title: 'trimmed taxonomy response' });
+  assert.equal(ready.count, ready.tickets.length);
 });
 
 test('MCP brief ready response stays under 2 KB', async () => {
@@ -2516,7 +2537,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   assert.strictEqual(allRes.tickets.length, N, 'all 500 present under all:true');
   assert.strictEqual(allRes.nextCursor, null, 'all:true has no next page');
   const allChars = await resultChars('list', { project: big.slug, all: true });
-  assert.ok(allChars > 100000, `unbounded all:true overflows (${allChars} chars) — reproduces the bug`);
+  assert.ok(allChars < 100000, `compact all:true stays under the result ceiling (${allChars} chars)`);
 
   // Page 1 (default): bounded well under the ceiling, reports the true total, and
   // hands back a cursor because there's more.
