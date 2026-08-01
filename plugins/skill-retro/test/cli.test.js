@@ -12,6 +12,15 @@ const { mine, writeResults } = require('../lib/mine.js');
 const { enabled, every, stateFile } = require('../hooks/session-nudge.js');
 const { createTranscript, makeRoot } = require('./helpers/transcripts.js');
 
+function fixturePath(...segments) {
+  return path.join(os.tmpdir(), 'skill-retro-fixture', ...segments);
+}
+
+test('CLI fixtures reject hardcoded Windows paths', () => {
+  const source = fs.readFileSync(__filename, 'utf8');
+  assert.doesNotMatch(source, /['"`](?:[A-Za-z]:[\\/]|\\\\)/);
+});
+
 test('the CLI defaults to this project, seven days, and five sessions', () => {
   const options = parseArgs([]);
   assert.equal(options.command, 'mine');
@@ -41,14 +50,14 @@ test('a run writes a report, a findings file, and the salvaged bodies beside the
   const root = makeRoot();
   createTranscript({ root, slug: 'proj', sessionId: 's1' })
     .prompt('go')
-    .tool('Write', { file_path: 'C:/tmp/probe.mjs', content: 'console.log(1);' })
+    .tool('Write', { file_path: fixturePath('probe.mjs'), content: 'console.log(1);' })
     .write();
   createTranscript({ root, slug: 'proj', sessionId: 's2' })
     .prompt('go')
-    .tool('Write', { file_path: 'C:/tmp/probe.mjs', content: 'console.log(2);' })
+    .tool('Write', { file_path: fixturePath('probe.mjs'), content: 'console.log(2);' })
     .write();
 
-  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: 'C:/project', git: () => new Set() });
+  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: fixturePath('project'), git: () => new Set() });
   const outputDir = path.join(os.tmpdir(), `skill-retro-cli-${Date.now()}`);
   const { findingsFile } = writeResults(result, outputDir);
   fs.writeFileSync(path.join(outputDir, 'report.md'), formatReport(result), 'utf8');
@@ -70,7 +79,7 @@ test('the report always states the window, including what the cap skipped', asyn
     fs.utimesSync(file, new Date(age), new Date(age));
   }
 
-  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: 'C:/project', git: () => new Set(), now });
+  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: fixturePath('project'), git: () => new Set(), now });
   const report = formatReport(result);
   assert.match(report, /Window: /);
   assert.match(report, /capped at 5 sessions \(3 older ones/);
@@ -83,7 +92,7 @@ test('the ranked table and detail render elapsed command time', async () => {
   for (let index = 0; index < 3; index += 1) main.tool('Bash', { command: 'npm run verify' }, { result: 'ok', durationMs: 40000 });
   main.write();
 
-  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: 'C:/project', git: () => new Set() });
+  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: fixturePath('project'), git: () => new Set() });
   const report = formatReport(result);
   assert.match(report, /\| # \| Finding \| Route \| Who \| Time \| Spread \|/);
   assert.match(report, /2\.0 min \(100\.0%\)/);
@@ -93,7 +102,7 @@ test('the ranked table and detail render elapsed command time', async () => {
 test('a quiet window is reported as a real result, not as an empty one', async () => {
   const root = makeRoot();
   createTranscript({ root, slug: 'proj', sessionId: 's1' }).prompt('go').write();
-  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: 'C:/project', git: () => new Set() });
+  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: fixturePath('project'), git: () => new Set() });
   assert.match(formatReport(result), /That is a real result, not an empty one/);
 });
 
@@ -111,7 +120,11 @@ test('the nudge threshold is configurable and falls back to a sane default', () 
 });
 
 test('nudge state is kept per project, outside the project directory', () => {
-  const file = stateFile('C:/dev/app', { CLAUDE_CONFIG_DIR: 'C:/cfg' });
-  assert.equal(path.dirname(file), path.join('C:/cfg', 'skill-retro-state'));
-  assert.match(path.basename(file), /^C--dev-app\.json$/);
+  const configDir = path.join(os.tmpdir(), 'skill-retro-config');
+  const project = path.posix.join('/dev', 'app');
+  const file = stateFile(project, { CLAUDE_CONFIG_DIR: configDir });
+  const slug = path.resolve(project).replace(/[^a-zA-Z0-9]/g, '-');
+
+  assert.equal(path.dirname(file), path.join(configDir, 'skill-retro-state'));
+  assert.equal(path.basename(file), `${slug}.json`);
 });
