@@ -376,6 +376,10 @@ test('serve-shim binds a second RC-compatibility listener only when the hosts en
   const compatHealth = await waitForHealthz(compatPort);
   assert.equal(compatHealth.compat.hostsDetected, true);
   assert.equal(compatHealth.compat.port80Bound, true);
+
+  const catalog = await request(compatPort, 'GET', '/v1/models');
+  assert.equal(catalog.status, 200);
+  assert.ok(JSON.parse(catalog.body).data.some((model) => model.id === 'claude-gpt-5.6-terra'));
 });
 
 test('serve-shim stays default-only when no hosts entry is present', async (t) => {
