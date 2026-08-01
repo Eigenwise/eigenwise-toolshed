@@ -332,7 +332,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Check scope; auto-approves eligible plugin tests.',
+    description: 'Request scope.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -340,27 +340,42 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         files: { type: 'array', items: { type: 'string' }, minItems: 1 },
-        reason: { type: 'string' },
       },
-      required: ['ref', 'by'],
+      required: ['ref', 'by', 'files'],
     },
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'scopeRequest');
-      const reason = String(args.reason || '').trim();
-      const res = args.files == null && reason
-        ? store.denyScopeRequest(slug, args.ref, by, reason, { source: 'mcp' })
-        : store.requestScope(slug, args.ref, by, args.files, { source: 'mcp', worktree: args.worktree });
-      const changed = res.ok && res.denied
-        ? { denied: res.denied }
-        : res.ok && res.scopeRequest !== undefined ? {
-          covered: res.covered || [],
-          approved: res.approved || [],
-          autoApproved: !!res.autoApproved,
-          scopeRequest: res.scopeRequest,
-          command: res.command,
-        } : null;
+      const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp', worktree: args.worktree });
+      const changed = res.ok && res.scopeRequest !== undefined ? {
+        covered: res.covered || [],
+        approved: res.approved || [],
+        autoApproved: !!res.autoApproved,
+        scopeRequest: res.scopeRequest,
+        command: res.command,
+      } : null;
       return mutationAck(slug, res, changed);
+    },
+  },
+  {
+    name: 'scopeDeny',
+    description: 'Deny scope.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        by: { type: 'string' },
+        reason: { type: 'string' },
+      },
+      required: ['ref', 'by', 'reason'],
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      const by = requireBy(args, 'scopeDeny');
+      const reason = requiredText(args, 'reason', 'scopeDeny');
+      const res = store.denyScopeRequest(slug, args.ref, by, reason, { source: 'mcp' });
+      return mutationAck(slug, res, res.ok ? { denied: res.denied } : null);
     },
   },
   {
@@ -411,7 +426,7 @@ const tools: ToolDefinition[] = [
           ok: false,
           ticket,
           reason: 'scope_request_pending',
-          message: `commit: refused ${ticket.ref}; scope approval remains pending for ${pending.join(', ')}.${covered.length ? ` Already effective: ${covered.join(', ')}.` : ''} Approve the request with \`${approval}\` before committing.`,
+          message: `commit: refused ${ticket.ref}; scope approval remains pending for ${pending.join(', ')}.${covered.length ? ` Already effective: ${covered.join(', ')}.` : ''} Approve the request with \`${approval}\` or deny it with \`sidequest scope-deny ${ticket.ref} --reason "why"\` before committing.`,
         });
       }
       const scope = store.effectiveScope(slug, ticket.files);
