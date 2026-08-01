@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.329.0 (2026-08-01)
+
+### sidequest 3.53.0 → 3.53.1
+
+#### Fixes
+
+- Document the story decision log and scope denial (SQ-1245) [`fc79ced`](https://github.com/Eigenwise/eigenwise-toolshed/commit/fc79ced7)
+  The Sidequest README and the getting-started page now cover what the story decision log keeps, that a clear archives instead of deleting, how to read the full history, and how an orchestrator denies a scope request.
+
 ## v3.328.0 (2026-08-01)
 
 ### sidequest 3.52.0 → 3.53.0
