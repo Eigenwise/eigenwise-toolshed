@@ -341,6 +341,7 @@ const {
   legacyCategoryForComplexity,
   normalizeRoute,
   claudeQuotaFailure,
+  classifyDispatchFailure,
   getRoutingFallback,
   setRoutingFallback,
   routingProfileSettings,
@@ -483,6 +484,7 @@ const {
   integrationTargetCommit,
   spawnDescription,
   claudeQuotaFailure: (...args) => claudeQuotaFailure(...args),
+  classifyDispatchFailure: (...args) => classifyDispatchFailure(...args),
   SHARED_TREE_ARTIFACT_MARKER,
   assertDispatchTransport,
   assertSidequestInstall,
@@ -1407,7 +1409,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (opts.claimRelease) {
       t.claimRelease = Object.assign({ by, at: now, source: opts.source || "store" }, opts.claimRelease);
     }
-    setDispatchTerminal(t, opts.status === "done" ? "done" : "released", opts.source || "cli");
+    setDispatchTerminal(t, opts.status === "done" ? "done" : "released", opts.source || "cli", { failureShape: "unknown" });
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     if (reopenedSubmission) t.submission = null;
@@ -1795,6 +1797,7 @@ module.exports = {
   sharedTreeArtifactMode,
   resolveCategoryRoute,
   claudeQuotaFailure,
+  classifyDispatchFailure,
   classifyModelFilter,
   getRoutingFallback,
   setRoutingFallback,
