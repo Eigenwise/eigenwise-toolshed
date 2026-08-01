@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.315.0 (2026-08-01)
+
+### sidequest 3.50.7 → 3.50.8
+
+#### Fixes
+
+- Extract the routing, category, and profile store domain behind the unchanged facade (SQ-1161) [`891f452`](https://github.com/Eigenwise/eigenwise-toolshed/commit/891f452)
+
 ## v3.314.0 (2026-08-01)
 
 ### sidequest 3.50.6 → 3.50.7
