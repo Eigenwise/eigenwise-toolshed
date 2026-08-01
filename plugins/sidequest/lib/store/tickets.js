@@ -406,6 +406,48 @@ function createTickets(dependencies) {
       return { ok: true, ticket: t, scopeRequest: t.scopeRequest, command, comment };
     });
   }
+  function denyScopeRequest(slug, idOrRef, by, reason, opts) {
+    opts = opts || {};
+    by = String(by || "orchestrator").trim() || "orchestrator";
+    reason = String(reason || "").trim();
+    if (!reason) throw new Error("scope-deny reason is required");
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    return withTicketLock(slug, found.id, () => {
+      const t = getTicket(slug, found.id);
+      if (!t) return { ok: false, reason: "not_found" };
+      const request = t.scopeRequest;
+      if (!request) return { ok: false, reason: "no_scope_request", ticket: t };
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const denied = {
+        by,
+        reason,
+        files: normalizeFiles(request.files),
+        requested: normalizeFiles(request.requested || request.files),
+        covered: normalizeFiles(request.covered),
+        at: now
+      };
+      clearScopeRequestMarker(t);
+      const dispatch = dispatchState(t);
+      const resumed = reopenScopePausedDispatch(t, now);
+      t.scopeRequest = null;
+      if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
+      if (!Array.isArray(t.comments)) t.comments = [];
+      const comment = createComment({
+        by,
+        body: `Scope expansion denied: ${reason}. Original declared scope remains unchanged; commit within it or release the ticket if it cannot complete the work.`,
+        kind: "comment",
+        source: opts.source || "cli"
+      }, now);
+      t.comments.push(comment);
+      t.lastEventType = "scope_denied";
+      t.lastEventSource = opts.source || "cli";
+      t.updatedAt = now;
+      putTicket(slug, t);
+      queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
+      return { ok: true, ticket: t, denied, comment };
+    });
+  }
   function overlappingScopePaths(filesA, filesB) {
     const a = normalizeFiles(filesA);
     const b = normalizeFiles(filesB);
@@ -767,6 +809,6 @@ function createTickets(dependencies) {
   function listActive(slug) {
     return queryTickets(String(slug || ""), { archived: false });
   }
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, pendingScopeApprovalWarning, clearScopeRequestMarker, captureScopePauseRecovery, requestScope, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, pendingScopeApprovalWarning, clearScopeRequestMarker, captureScopePauseRecovery, requestScope, denyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 module.exports = { createTickets };

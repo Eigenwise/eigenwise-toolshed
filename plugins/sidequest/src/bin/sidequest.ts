@@ -4,7 +4,7 @@ const { fail } = require('./sidequest-cmd-shared');
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require('./sidequest-cmd-server');
 const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require('./sidequest-cmd-tickets');
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require('./sidequest-cmd-configuration');
-const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish } = require('./sidequest-cmd-execution');
+const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeDeny, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish } = require('./sidequest-cmd-execution');
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require('./sidequest-cmd-collaboration');
 const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require('./sidequest-cmd-dispatch');
 const { cmdStory } = require('./sidequest-cmd-story');
@@ -103,6 +103,7 @@ const HELP_COMMANDS: any = {
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]',
   'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]',
+  'scope-deny': 'sidequest scope-deny <id|SQ-n> --reason "why" [--by who]',
   assign: 'sidequest assign <id|SQ-n> [--to who=you]',
   unassign: 'sidequest unassign <id|SQ-n>',
   remind: 'sidequest remind <id|SQ-n> (--in 1h|3h|tomorrow | --at "date/time")',
@@ -136,7 +137,7 @@ const HELP_COMMANDS: any = {
 const HELP_ALIASES: any = {
   new: 'add', ticket: 'add', ls: 'list', edit: 'update', set: 'update', remove: 'rm', delete: 'rm',
   profiles: 'profile', categories: 'category', global_fallback: 'global-fallback', take: 'claim', grab: 'next',
-  drain: 'work', complete: 'done', finish: 'done', unclaim: 'release', scope_request: 'scope-request', restore: 'unarchive',
+  drain: 'work', complete: 'done', finish: 'done', unclaim: 'release', scope_request: 'scope-request', scope_deny: 'scope-deny', restore: 'unarchive',
   native_agent: 'native-agent', board_config: 'board-config', boards: 'projects', archive_board: 'archive-board',
   unarchive_board: 'unarchive-board', 'restore-board': 'unarchive-board', open: 'dashboard', board: 'dashboard',
 };
@@ -389,6 +390,10 @@ async function main() {
     case 'scope-request':
     case 'scope_request':
       await cmdScopeRequest(opts, positional);
+      break;
+    case 'scope-deny':
+    case 'scope_deny':
+      await cmdScopeDeny(opts, positional);
       break;
     case 'commit':
       await cmdCommit(opts, positional);

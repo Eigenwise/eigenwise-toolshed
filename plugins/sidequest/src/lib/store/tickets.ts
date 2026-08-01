@@ -393,6 +393,49 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
   });
 }
 
+function denyScopeRequest(slug?: any, idOrRef?: any, by?: any, reason?: any, opts?: any) {
+  opts = opts || {};
+  by = String(by || 'orchestrator').trim() || 'orchestrator';
+  reason = String(reason || '').trim();
+  if (!reason) throw new Error('scope-deny reason is required');
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    const request = t.scopeRequest;
+    if (!request) return { ok: false, reason: 'no_scope_request', ticket: t };
+    const now = new Date().toISOString();
+    const denied = {
+      by,
+      reason,
+      files: normalizeFiles(request.files),
+      requested: normalizeFiles(request.requested || request.files),
+      covered: normalizeFiles(request.covered),
+      at: now,
+    };
+    clearScopeRequestMarker(t);
+    const dispatch = dispatchState(t);
+    const resumed = reopenScopePausedDispatch(t, now);
+    t.scopeRequest = null;
+    if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
+    if (!Array.isArray(t.comments)) t.comments = [];
+    const comment = createComment({
+      by,
+      body: `Scope expansion denied: ${reason}. Original declared scope remains unchanged; commit within it or release the ticket if it cannot complete the work.`,
+      kind: 'comment',
+      source: opts.source || 'cli',
+    }, now);
+    t.comments.push(comment);
+    t.lastEventType = 'scope_denied';
+    t.lastEventSource = opts.source || 'cli';
+    t.updatedAt = now;
+    putTicket(slug, t);
+    queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
+    return { ok: true, ticket: t, denied, comment };
+  });
+}
+
 // Do two declared scopes collide? A path conflicts with an equal path or with
 // one that is a directory-prefix of it (case-insensitive, "/"-normalized).
 // Empty scopes never conflict mechanically — "no declaration" means "no
@@ -817,7 +860,7 @@ function listActive(slug?: any) {
   return queryTickets(String(slug || ''), { archived: false });
 }
 
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, pendingScopeApprovalWarning, clearScopeRequestMarker, captureScopePauseRecovery, requestScope, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, pendingScopeApprovalWarning, clearScopeRequestMarker, captureScopePauseRecovery, requestScope, denyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 
 module.exports = { createTickets };

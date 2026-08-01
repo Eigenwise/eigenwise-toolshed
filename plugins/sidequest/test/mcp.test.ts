@@ -1307,6 +1307,57 @@ test('MCP scopeRequest pauses a claimed executor until the orchestrator expands 
   assert.deepEqual(approved.files, ['lib', 'other/new.js']);
 });
 
+test('MCP scope request denial clears a pending request without widening or releasing the ticket', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'MCP scope denial', files: ['lib/allowed.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a denied request leaves only the original scope committable',
+  });
+  const by = 'mcp-scope-denial-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope denial fixture requires a local direct claim.' })).ok, true);
+  const checkpoint = store.checkpointTicket(project, ticket.ref, by, { worktree, verify: 'scope denial fixture' }).checkpoint;
+  const requested = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['foreign/denied.js'] });
+  assert.deepEqual(requested.scopeRequest.files, ['foreign/denied.js']);
+
+  const denied = await callTool('scopeRequest', {
+    project,
+    ref: ticket.ref,
+    by: 'mcp-scope-denial-orchestrator',
+    reason: 'The requested file belongs to another ticket.',
+  });
+  assert.equal(denied.ok, true);
+  assert.equal(denied.denied.reason, 'The requested file belongs to another ticket.');
+  const afterDeny = store.getTicket(project, ticket.ref);
+  assert.equal(afterDeny.claim.by, by, 'denial keeps the executor claim');
+  assert.equal(afterDeny.checkpoint.id, checkpoint.id, 'denial keeps the checkpoint');
+  assert.equal(afterDeny.scopeRequest, null);
+  assert.deepEqual(afterDeny.files, ['lib/allowed.js']);
+  assert.match(afterDeny.comments.at(-1).body, /requested file belongs to another ticket/i);
+
+  fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'lib', 'allowed.js'), 'allowed\n');
+  const committed = await callTool('commit', { project, ref: ticket.ref, by, message: 'commit original scope after denial', worktree });
+  assert.ok(committed.commit, 'the board commit tool accepts the original scope after denial');
+
+  fs.writeFileSync(path.join(worktree, 'lib', 'allowed.js'), 'allowed again\n');
+  fs.mkdirSync(path.join(worktree, 'foreign'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'foreign', 'denied.js'), 'denied\n');
+  const scopedCommit = await callTool('commit', { project, ref: ticket.ref, by, message: 'must leave denied scope behind', worktree });
+  assert.ok(scopedCommit.commit);
+  assert.deepEqual(gitAt(worktree, ['show', '--format=', '--name-only', 'HEAD']).split(/\r?\n/).filter(Boolean), ['lib/allowed.js']);
+  assert.match(gitAt(worktree, ['status', '--porcelain']), /\?\? foreign\//, 'the denied path stays outside the board commit');
+
+  const noPending = await callTool('scopeRequest', {
+    project,
+    ref: ticket.ref,
+    by: 'mcp-scope-denial-orchestrator',
+    reason: 'A second denial has nothing to resolve.',
+  });
+  assert.equal(noPending.ok, false);
+  assert.equal(noPending.reason, 'no_scope_request');
+});
+
 test('MCP mixed scope requests keep the full intent and block partial commits', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
