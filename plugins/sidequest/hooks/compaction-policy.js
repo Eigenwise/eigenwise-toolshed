@@ -135,6 +135,7 @@ async function boardState(cwd) {
   return { instruction: boundedInstruction(lines), unsafeReason: unsafe };
 }
 async function compactionPolicyOutput(input) {
+  if (input.hook_event_name !== "PreCompact" || input.trigger !== "auto") return "";
   const mode = policy();
   if (mode === "off") return "";
   const sessionId = String(input.session_id || input.sessionId || process.env.CLAUDE_CODE_SESSION_ID || "").trim();
@@ -149,7 +150,7 @@ async function compactionPolicyOutput(input) {
       return state.instruction;
     }
     const counter = readCounter(sessionId);
-    if (counter.blocks >= 3) {
+    if (counter.blocks >= 2) {
       writeCounter(sessionId, 0);
       return state.instruction;
     }
@@ -163,7 +164,9 @@ async function compactionPolicyOutput(input) {
 
 // src/hooks/compaction-policy.ts
 async function main() {
-  const output = await compactionPolicyOutput(readStdin() || {});
+  const input = readStdin() || {};
+  if (input.hook_event_name !== "PreCompact" || input.trigger !== "auto") return;
+  const output = await compactionPolicyOutput(input);
   if (output) process.stdout.write(output);
 }
 main().catch((error) => {

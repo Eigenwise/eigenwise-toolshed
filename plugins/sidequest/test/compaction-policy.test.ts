@@ -34,7 +34,7 @@ function createDoing(title: string): { ticket: any; story: any } {
 
 test('PreCompact pinning preserves active board identifiers within its prompt budget', () => {
   const { ticket, story } = createDoing('Keep this active ticket intact');
-  const result = run({ cwd: boardPath, session_id: 'pinning-shape' });
+  const result = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'pinning-shape' });
 
   assert.equal(result.status, 0);
   assert.equal(result.stderr, '');
@@ -49,7 +49,7 @@ test('PreCompact pinning preserves active board identifiers within its prompt bu
 
 test('PreCompact pinning stays within the prompt budget for crowded boards', () => {
   for (let index = 0; index < 12; index += 1) createDoing(`Crowded active ticket ${index}: ${'detail '.repeat(60)}`);
-  const result = run({ cwd: boardPath, session_id: 'pinning-budget' });
+  const result = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'pinning-budget' });
 
   assert.equal(result.status, 0);
   assert.ok(Buffer.byteLength(result.stdout, 'utf8') <= 1500);
@@ -58,8 +58,8 @@ test('PreCompact pinning stays within the prompt budget for crowded boards', () 
 
 test('PreCompact veto emits bounded JSON before falling back to pinning', () => {
   const { ticket } = createDoing('Veto while this claim is fresh');
-  const payload = { cwd: boardPath, session_id: 'bounded-veto' };
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  const payload = { hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'bounded-veto' };
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
     const result = run(payload, { SIDEQUEST_COMPACTION_POLICY: 'veto' });
     assert.equal(result.status, 0);
     assert.ok(Buffer.byteLength(result.stdout, 'utf8') <= 1500);
@@ -74,8 +74,16 @@ test('PreCompact veto emits bounded JSON before falling back to pinning', () => 
   assert.ok(!delayed.stdout.includes('"decision":"block"'));
 });
 
+test('PreCompact ignores manual compaction', () => {
+  const result = run({ hook_event_name: 'PreCompact', trigger: 'manual', cwd: boardPath, session_id: 'manual-compaction' }, { SIDEQUEST_COMPACTION_POLICY: 'veto' });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+
 test('PreCompact off stays silent and a board read failure stays non-blocking', () => {
-  const payload = { cwd: boardPath, session_id: 'no-op' };
+  const payload = { hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'no-op' };
   const off = run(payload, { SIDEQUEST_COMPACTION_POLICY: 'off' });
   assert.equal(off.status, 0);
   assert.equal(off.stdout, '');
@@ -86,10 +94,9 @@ test('PreCompact off stays silent and a board read failure stays non-blocking', 
   assert.match(unavailable.stderr, /could not read board state/);
 });
 
-test('PreCompact registers only automatic compaction', () => {
+test('PreCompact registers without a matcher', () => {
   const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8'));
   assert.deepEqual(config.hooks.PreCompact, [{
-    matcher: 'auto',
     hooks: [{
       type: 'command',
       command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/compaction-policy.js"',
