@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.321.0 (2026-08-01)
+
+### model-gateway 0.44.3 → 0.44.4
+
+#### Fixes
+
+- Correct model-gateway Remote Control and wiring documentation (SQ-1186)
+
 ## v3.320.0 (2026-08-01)
 
 ### model-gateway 0.44.2 → 0.44.3
