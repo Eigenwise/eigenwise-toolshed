@@ -129,6 +129,8 @@ Use read-only tools or native `Explore` to gather enough evidence for precise ti
 
 Read-only executors can use any MCP server you have configured, so a visual-review ticket can use Playwright and a research ticket can use a docs MCP. Their repository contract stays read-only: Bash is available for inspection, tests, and verification, but they do not modify the working tree. If a configured MCP can push to a remote or write files, use the per-board `readOnlyDeniedTools` setting to subtract matching tools from the resolved list, for example `readOnlyDeniedTools: ["mcp__remote__*"]`.
 
+Executors post checkpoint comments with findings as they work. These are durable handoffs, not chatter, so an executor death loses one step instead of the whole run. For read-only executors, those comments are the only durable output.
+
 ### Session reminder and routing toggle
 
 A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
