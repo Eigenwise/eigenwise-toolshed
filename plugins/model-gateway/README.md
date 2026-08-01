@@ -151,6 +151,12 @@ the same time without touching the OS — no hosts-file changes, custom CA, admi
 binary patching is possible for both features simultaneously. So it's opt-in, detected, and
 completely reversible:
 
+Anthropic's [official Remote Control documentation](https://code.claude.com/docs/en/remote-control)
+also requires Claude Code v2.1.51 or later, a Pro/Max/Team/Enterprise subscription (not an API key),
+a full-scope claude.ai login, and prior workspace trust. Team and Enterprise admins must enable the
+feature. Before blaming gateway compatibility, check `claude --version`, run `/status`, and use
+`/login` with the claude.ai option; unset `ANTHROPIC_API_KEY` if it is forcing API-key auth.
+
 1. Run `node <plugin>/bin/model-gateway.js remote-control doctor` first. It is read-only and
    reports partial blocks, conflicting mappings, elevation needs, port conflicts, stale settings,
    and recovery failures.
@@ -178,6 +184,15 @@ completely reversible:
 5. Run `remote-control disable --confirm` after another direct confirmation to remove only the
    plugin-marked block, restore default mode, and verify it. If you manually remove the hosts block,
    the next `ensure` also reverts the gateway automatically.
+
+If RC compatibility breaks ordinary Claude requests, recover in this order: run
+`remote-control doctor`; run `remote-control disable --confirm` (or remove only the marked hosts
+block if the command cannot run); run `ensure`; verify `doctor` reports default mode; then fully
+restart Claude Code. If Remote Control still fails after the gateway is healthy, follow Anthropic's
+official recovery guidance: refresh the full-scope session with `claude auth login`, retry
+`claude remote-control --verbose`, and confirm outbound HTTPS to the Anthropic API on port 443 is
+not blocked. A machine that was offline for roughly ten minutes must start a new Remote Control
+session rather than resume the expired one.
 
 Notes:
 - Port 80 needs no special privilege on Windows, but Linux and macOS reserve ports below 1024 for

@@ -12,6 +12,7 @@ const test = require('node:test');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gw = require(CLI);
+const { createHostsBypassResolver } = require('../lib/request-worker.js');
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -42,7 +43,7 @@ async function stopChild(child) {
   if (!child.closed) await once(child, 'close');
 }
 
-function spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home }) {
+function spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home, anthropicUpstream }) {
   const child = spawn(process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
@@ -53,6 +54,7 @@ function spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home }) {
       CODEX_GATEWAY_REQUEST_LOG: '0',
       CODEX_GATEWAY_COMPAT_PORT: String(compatPort),
       CODEX_GATEWAY_HOSTS_FILE: hostsFile,
+      ...(anthropicUpstream ? { CODEX_GATEWAY_ANTHROPIC_UPSTREAM: anthropicUpstream } : {}),
     },
     stdio: 'ignore',
   });
@@ -233,9 +235,9 @@ test('writeEnv switches only the plugin-owned base URL and leaves unrelated sett
 
 // ---------------------------------------------------- DNS recursion guard
 
-test('createHostsBypassResolver resolves via DNS directly, never via the hosts-aware OS resolver', async () => {
+test('worker hosts-bypass lookup preserves the legacy single-address callback contract', async () => {
   let resolve4Calls = 0;
-  const resolver = gw.createHostsBypassResolver({
+  const resolver = createHostsBypassResolver({
     resolve4: async () => { resolve4Calls++; return ['203.0.113.9']; }, // TEST-NET-3, stands in for "the real IP"
     resolve6: async () => { throw new Error('should not be reached when A succeeds'); },
   });
@@ -248,8 +250,19 @@ test('createHostsBypassResolver resolves via DNS directly, never via the hosts-a
   assert.equal(resolve4Calls, 1);
 });
 
+test('worker hosts-bypass lookup honors Node 22 all:true with an address-record array', async () => {
+  const resolver = createHostsBypassResolver({
+    resolve4: async () => ['203.0.113.10'],
+    resolve6: async () => { throw new Error('should not be reached when A succeeds'); },
+  });
+  const result = await new Promise((resolve, reject) => {
+    resolver.lookup('api.anthropic.com', { all: true }, (err, addresses) => (err ? reject(err) : resolve(addresses)));
+  });
+  assert.deepEqual(result, [{ address: '203.0.113.10', family: 4 }]);
+});
+
 test('createHostsBypassResolver falls back to AAAA when A resolution fails', async () => {
-  const resolver = gw.createHostsBypassResolver({
+  const resolver = createHostsBypassResolver({
     resolve4: async () => { throw new Error('no A record'); },
     resolve6: async () => ['2001:db8::9'], // documentation range, stands in for a real AAAA
   });
@@ -261,7 +274,7 @@ test('createHostsBypassResolver falls back to AAAA when A resolution fails', asy
 });
 
 test('createHostsBypassResolver errors closed instead of recursing when DNS is unreachable', async () => {
-  const resolver = gw.createHostsBypassResolver({
+  const resolver = createHostsBypassResolver({
     resolve4: async () => { throw new Error('ENOTFOUND'); },
     resolve6: async () => { throw new Error('ENOTFOUND'); },
   });
@@ -314,6 +327,40 @@ test('serve-shim stays default-only when no hosts entry is present', async (t) =
 
   // nothing should be listening on the would-be compat port
   await assert.rejects(request(compatPort, 'GET', '/healthz'));
+});
+
+test('serve-shim forwards an unexpected bodyless request without crashing on raw.length', async (t) => {
+  const hostsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-bodyless-'));
+  const hostsFile = path.join(hostsDir, 'hosts');
+  fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
+
+  const upstreamPort = await freePort();
+  const upstream = http.createServer((req, res) => {
+    assert.equal(req.method, 'GET');
+    assert.equal(req.url, '/unexpected-probe');
+    res.writeHead(204);
+    res.end();
+  });
+  await new Promise((resolve) => upstream.listen(upstreamPort, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve()))));
+
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const compatPort = await freePort();
+  spawnShim(t, {
+    shimPort,
+    proxyPort,
+    compatPort,
+    hostsFile,
+    home: hostsDir,
+    anthropicUpstream: `http://127.0.0.1:${upstreamPort}`,
+  });
+
+  await waitForHealthz(shimPort);
+  const response = await request(shimPort, 'GET', '/unexpected-probe');
+  assert.equal(response.status, 204);
+  assert.equal(response.body, '');
+  assert.equal((await waitForHealthz(shimPort)).ok, true);
 });
 
 test('serve-shim safely retains default mode when the compatibility port is unavailable', async (t) => {

@@ -725,9 +725,20 @@ function createHostsBypassResolver({ resolve4, resolve6, ttlMs = 5 * 60 * 1000 }
     return cache.value || null; // serve stale on a transient DNS blip rather than recurse
   }
   function lookup(hostname, options, callback) {
+    if (typeof options === 'function') {
+      callback = options;
+      options = {};
+    }
+    const all = options?.all === true;
     resolve(hostname).then(
       (r) => (r
-        ? callback(null, r.address, r.family)
+        // Node 22's connection auto-selection asks custom lookups for
+        // `all: true` and requires an array of { address, family } records.
+        // Returning the legacy scalar shape in that mode makes Node treat
+        // the first character of the address as a record, then fail with
+        // `Invalid IP address: undefined`. Older callers still require the
+        // three-argument callback shape.
+        ? (all ? callback(null, [r]) : callback(null, r.address, r.family))
         : callback(new Error(`model-gateway: could not resolve ${hostname} via DNS to bypass the hosts compatibility entry`))),
       callback,
     );
@@ -1975,11 +1986,12 @@ function runWorker() {
         fallback: false,
         via: 'direct',
       });
-      recordRequestBodyHighWater(requestSessionId(req), raw.length);
+      const requestBodyBytes = raw?.length || 0;
+      recordRequestBodyHighWater(requestSessionId(req), requestBodyBytes);
       const usageCapture = pathOnly === '/v1/messages' && usageEmitter.enabled && parsedPayload
         ? usageEmitter.start({
           payload: parsedPayload,
-          requestBodyBytes: raw.length,
+          requestBodyBytes,
           requestHeaders: req.headers,
           route: {
             requestedModel,
@@ -2034,4 +2046,4 @@ function runWorker() {
   }
 }
 
-module.exports = { runWorker };
+module.exports = { createHostsBypassResolver, runWorker };
