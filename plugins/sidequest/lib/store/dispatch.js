@@ -1,6 +1,6 @@
 "use strict";
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, commitScope, crypto, database, db, dispatchReadOnly, dispatchRouteRefusal, dispatchRouteState, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchRouteRefusal, dispatchRouteState, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
   function dispatchTokenPrefix(token) {
     return token ? String(token).slice(0, 12) : null;
   }
@@ -253,12 +253,32 @@ function createDispatch(dependencies) {
     }
     return null;
   }
-  function setDispatchTerminal(ticket, outcome, source) {
+  function appendDispatchAttempt(state, outcome, source, failureShape, at) {
+    const route = state && state.route && typeof state.route === "object" ? state.route : {};
+    const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
+    attempts.push({
+      route: normalizeRoute(route),
+      executor: state.executor || null,
+      tokenPrefix: state.tokenPrefix || null,
+      preparedAt: state.preparedAt || null,
+      launchedAt: state.launchedAt || null,
+      outcome,
+      failureShape,
+      terminalAt: at,
+      terminalSource: source || "store"
+    });
+    state.attempts = attempts.slice(-8);
+  }
+  function setDispatchTerminal(ticket, outcome, source, opts) {
     const state = dispatchState(ticket);
     if (!state) return;
+    const at = (/* @__PURE__ */ new Date()).toISOString();
+    const failureShape = opts && opts.failureShape || classifyDispatchFailure(opts && opts.error);
     state.outcome = outcome;
-    state.terminalAt = (/* @__PURE__ */ new Date()).toISOString();
+    state.failureShape = failureShape;
+    state.terminalAt = at;
     state.terminalSource = source || "store";
+    appendDispatchAttempt(state, outcome, source, failureShape, at);
     delete state.supersededTokens;
   }
   function reopenScopePausedDispatch(ticket, now) {
@@ -602,6 +622,7 @@ function createDispatch(dependencies) {
         preparedAt: state.preparedAt || null,
         launchedAt: state.launchedAt || null,
         outcome: "quota_exhausted",
+        failureShape: classifyDispatchFailure(opts.error),
         terminalAt: now,
         terminalSource: opts.source || "agent-launch-failure",
         failure: { kind: "claude_quota_exhausted", signature: failure.signature }

@@ -495,7 +495,7 @@ ${verify.outputTail}` : null
       t.scopeRequest = null;
       delete t.scopePauseRecovery;
       t.claim = null;
-      setDispatchTerminal(t, "submitted", opts.source || "cli");
+      setDispatchTerminal(t, "submitted", opts.source || "cli", { failureShape: "unknown" });
       t.dispatchNonce = null;
       t.dispatchExecutor = null;
       t.status = "doing";

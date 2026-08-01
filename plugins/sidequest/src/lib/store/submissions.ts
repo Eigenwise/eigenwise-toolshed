@@ -527,7 +527,7 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     t.scopeRequest = null;
     delete t.scopePauseRecovery;
     t.claim = null;
-    setDispatchTerminal(t, 'submitted', opts.source || 'cli');
+    setDispatchTerminal(t, 'submitted', opts.source || 'cli', { failureShape: 'unknown' });
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     t.status = 'doing'; // ready-for-integration parks in doing, never done

@@ -306,3 +306,65 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
   assert.deepEqual(overridden.fallback, { model: 'codex-gpt-5-6-sol', effort: 'medium' });
   assert.equal(store.claudeQuotaFailure('Agent launch failed: network unavailable'), null);
 });
+
+test('dispatch failures have closed shapes and terminal attempts stay bounded', () => {
+  assert.equal(store.classifyDispatchFailure('Prompt is too long'), 'context_overflow');
+  assert.equal(store.classifyDispatchFailure('Request too large (max 32MB)'), 'context_overflow');
+  assert.equal(store.classifyDispatchFailure('gateway not serving'), 'provider_unavailable');
+  assert.equal(store.classifyDispatchFailure('not authenticated'), 'auth_failure');
+  assert.equal(store.classifyDispatchFailure("You've reached your Fable 5 limit"), 'quota_exhausted');
+  assert.equal(store.classifyDispatchFailure(), 'process_death');
+  assert.equal(store.classifyDispatchFailure('unexpected launch failure'), 'unknown');
+
+  const released = createFixture('released attempt');
+  const preparedRelease = store.prepareDispatch(slug, released.ref, { sessionId: 'released-attempt' });
+  assert.equal(store.claimTicket(slug, released.ref, 'released-worker', {
+    token: preparedRelease.token,
+    executor: preparedRelease.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, released.ref, 'released-worker', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.getTicket(slug, released.ref).dispatch.attempts.at(-1).failureShape, 'unknown');
+
+  const submitted = createFixture('submitted attempt');
+  const preparedSubmission = store.prepareDispatch(slug, submitted.ref, { sessionId: 'submitted-attempt' });
+  assert.equal(store.claimTicket(slug, submitted.ref, 'submitted-worker', {
+    token: preparedSubmission.token,
+    executor: preparedSubmission.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.submitTicket(slug, submitted.ref, 'submitted-worker', { commit: 'abc1234def5678', source: 'test' }).ok, true);
+  assert.equal(store.getTicket(slug, submitted.ref).dispatch.attempts.at(-1).failureShape, 'unknown');
+
+  const stopped = createFixture('stopped attempt');
+  const preparedStopped = store.prepareDispatch(slug, stopped.ref, { sessionId: 'stopped-attempt' });
+  assert.equal(store.recordDispatchLaunch(slug, stopped.ref, {
+    sessionId: 'stopped-attempt',
+    token: preparedStopped.token,
+    executor: preparedStopped.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.markDispatchStopped('stopped-attempt', preparedStopped.ticket.dispatchExecutor).ok, true);
+  assert.equal(store.getTicket(slug, stopped.ref).dispatch.failureShape, 'process_death');
+
+  const reconciled = createFixture('reconciled attempt');
+  const preparedReconciled = store.prepareDispatch(slug, reconciled.ref, { sessionId: 'reconciled-attempt' });
+  assert.equal(store.recordDispatchLaunch(slug, reconciled.ref, {
+    sessionId: 'reconciled-attempt',
+    token: preparedReconciled.token,
+    executor: preparedReconciled.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.deepEqual(store.reconcileLaunchedDispatches('reconciled-attempt', { source: 'test' }).reconciled, [reconciled.ref]);
+  const pulse = store.pulsePayload(slug, reconciled.ref);
+  assert.equal(pulse.dispatch.failureShape, 'process_death');
+  assert.equal(pulse.dispatch.attempts.at(-1).outcome, 'failed');
+
+  let bounded = createFixture('bounded attempts');
+  for (let index = 0; index < 9; index++) {
+    const prepared = store.prepareDispatch(slug, bounded.ref, { sessionId: `bounded-attempt-${index}` });
+    assert.equal(store.recordDispatchLaunch(slug, bounded.ref, {
+      sessionId: `bounded-attempt-${index}`,
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+    assert.equal(store.markDispatchStopped(`bounded-attempt-${index}`, prepared.ticket.dispatchExecutor).ok, true);
+  }
+  assert.equal(store.getTicket(slug, bounded.ref).dispatch.attempts.length, 8);
+});

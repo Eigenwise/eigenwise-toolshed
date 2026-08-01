@@ -136,7 +136,8 @@ function createPulse(dependencies) {
         claimedAt: dispatch.claimedAt || null,
         terminalAt: dispatch.terminalAt || null,
         terminalSource: dispatch.terminalSource || null,
-        outcome: dispatch.outcome || null
+        outcome: dispatch.outcome || null,
+        failureShape: dispatch.failureShape || null
       } : null,
       checkpoint: checkpointProjection(ticket),
       ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},

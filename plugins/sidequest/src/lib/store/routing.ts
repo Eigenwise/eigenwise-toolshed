@@ -264,6 +264,17 @@ function claudeQuotaFailure(error?: any) {
   return CLAUDE_QUOTA_FAILURES.find((failure?: any) => text.includes(failure.signature)) || null;
 }
 
+function classifyDispatchFailure(error?: any) {
+  const text = String(error || '').trim();
+  if (!text) return 'process_death';
+  const normalized = text.toLowerCase();
+  if (claudeQuotaFailure(text)) return 'quota_exhausted';
+  if (/prompt is too long|request too large \(max 32mb\)|context (?:length|window).*(?:exceed|too (?:large|long)|overflow)|maximum context/.test(normalized)) return 'context_overflow';
+  if (/not authenticated|unauthenticated|authentication failed|authorization failed|credential(?:s)? (?:rejected|invalid|expired)|(?:invalid|rejected) (?:credential|token)|\b401\b/.test(normalized)) return 'auth_failure';
+  if (/backend (?:is )?(?:down|unavailable)|gateway (?:is )?(?:down|unavailable|not serving)|(?:model|model id).*(?:not (?:found|resolvable|available)|unavailable)|could not resolve.*model/.test(normalized)) return 'provider_unavailable';
+  return 'unknown';
+}
+
 function getRoutingFallback() {
   const cache = residentCache();
   if (cache.routingFallback !== undefined) return cloneCached(cache.routingFallback);
@@ -1266,6 +1277,7 @@ function applyDerivedRouting(t?: any, opts?: any) {
     legacyCategoryForComplexity,
     normalizeRoute,
     claudeQuotaFailure,
+    classifyDispatchFailure,
     getRoutingFallback,
     setRoutingFallback,
     routingProfileSettings,
