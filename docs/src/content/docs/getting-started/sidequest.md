@@ -61,7 +61,9 @@ sidequest story log US-27 --clear --by orchestrator
 
 Without an entry or `--clear`, the command reads the log. Entries are one-line `DECISION:`, `CONSTRAINT:`, or `DISCOVERY:` findings. Use `-m` or `--body-file`, and attach `--ref` and `--by` when recording work. The `story_log` MCP tool provides the same read, append, and clear operations.
 
-Later-wave briefings include the live log automatically. Keep entries under 280 bytes, with a 4 KiB limit for the whole rendered packet. A full log refuses new entries, so fold durable findings into the story contract at integration, then clear the log.
+Later-wave briefings include a recent window of the live log automatically. The briefing window has a 4 KiB budget, and the briefing says how many earlier entries it left out. The stored log has no aggregate size limit, so appending a decision does not fail because sibling executors already wrote decisions. Use `sidequest story log US-27 --full` when you need the complete history, including entries archived by an earlier clear. The story execution contract keeps its separate 4 KiB limit.
+
+`--clear` archives the current entries instead of deleting them. A clear leaves the active log empty, but the entries and their sequence numbers survive in the archived history. Read them back with `sidequest story log US-27 --full`; the normal read shows only the current active window. Each entry still has a 280-byte limit. Keep findings terse so they fit in handoffs and remain useful.
 
 ## Board display names
 
