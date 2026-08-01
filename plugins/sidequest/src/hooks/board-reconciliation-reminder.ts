@@ -16,6 +16,7 @@ interface Ticket {
   claim?: { by?: string } | null;
   dispatch?: { sessionId?: string | null; terminalAt?: string | null } | null;
   submission?: { commit?: string; integratedAt?: string | null } | null;
+  scopeRequest?: { files?: string[] } | null;
 }
 
 interface Store {
@@ -47,6 +48,10 @@ function nudgeOff(): boolean {
 
 function pendingSubmission(ticket: Ticket): boolean {
   return Boolean(ticket.submission?.commit && !ticket.submission.integratedAt);
+}
+
+function pendingScopeApproval(ticket: Ticket): boolean {
+  return Boolean(ticket.scopeRequest);
 }
 
 function liveDispatch(ticket: Ticket, sessionId: string, store: Store): boolean {
@@ -92,8 +97,8 @@ function canRemind(reminder: Reminder): ReminderKind | null {
 
 function escalatedMessage(reminder: Reminder): string {
   const refs = reminder.pendingRefs.join(', ');
-  const verb = reminder.pendingRefs.length === 1 ? 'has' : 'have';
-  return byteCapped(`Sidequest: ${refs} ${verb} been pending integration for ${ESCALATION_STOP_THRESHOLD} consecutive stops. Integrate or clear them before finishing.`);
+  const verb = reminder.pendingRefs.length === 1 ? 'is' : 'are';
+  return byteCapped(`Sidequest: ${refs} ${verb} still pending integration after ${ESCALATION_STOP_THRESHOLD} consecutive stops. Checkpoint and hold; never release, releasing loses work.`);
 }
 
 function reconciliationMessage(data: HookInput): Reminder | null {
@@ -112,18 +117,29 @@ function reconciliationMessage(data: HookInput): Reminder | null {
     const touched = (ticket: Ticket): boolean => claimedRefs.has(String(ticket.ref || '')) || ticket.dispatch?.sessionId === sessionId;
     const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== 'done'
       && touched(ticket)
-      && (!liveDispatch(ticket, sessionId, store) || pendingSubmission(ticket)));
-    const doing = open.filter((ticket) => ticket.status === 'doing' && !pendingSubmission(ticket));
+      && (!liveDispatch(ticket, sessionId, store) || pendingSubmission(ticket) || pendingScopeApproval(ticket)));
+    const doing = open.filter((ticket) => ticket.status === 'doing' && !pendingSubmission(ticket) && !pendingScopeApproval(ticket));
     const submissions = open.filter(pendingSubmission);
+    const scopeApprovals = open.filter(pendingScopeApproval);
     const pendingRefs = submissions.map((ticket) => String(ticket.ref || '')).filter(Boolean);
-    const otherOpen = open.length - doing.length - submissions.length;
+    const otherOpen = open.length - doing.length - submissions.length - scopeApprovals.length;
     if (!open.length) return null;
 
-    const state = [
+    const actionable = [
       doing.length ? `${countLabel(doing.length, 'ticket')} in doing` : '',
-      submissions.length ? `${countLabel(submissions.length, 'submission')} pending integration` : '',
       otherOpen ? `${countLabel(otherOpen, 'ticket')} still open` : '',
-    ].filter(Boolean).join(' / ');
+    ].filter(Boolean);
+    const waits = [
+      scopeApprovals.length ? `${countLabel(scopeApprovals.length, 'ticket')} waiting on scope approval from the orchestrator` : '',
+      submissions.length ? `${countLabel(submissions.length, 'submission')} pending integration` : '',
+    ].filter(Boolean);
+    const state = [...actionable, ...waits].join(' / ');
+    const closeActionable = actionable.length
+      ? ` Update or close ${actionable.length === 1 && doing.length === 1 ? 'it' : 'them'} before finishing.`
+      : '';
+    const holdWaits = waits.length
+      ? ' Pending approval is a wait, not a finished ticket. Checkpoint and hold; never release, releasing loses work.'
+      : '';
     const signature = JSON.stringify(open.map((ticket) => ({
       ref: ticket.ref || '',
       status: ticket.status || '',
@@ -131,10 +147,11 @@ function reconciliationMessage(data: HookInput): Reminder | null {
       dispatchSessionId: ticket.dispatch?.sessionId || '',
       submissionCommit: ticket.submission?.commit || '',
       integratedAt: ticket.submission?.integratedAt || '',
+      scopeRequest: ticket.scopeRequest?.files || [],
     })).sort((left, right) => left.ref.localeCompare(right.ref)));
     return {
       sessionId,
-      message: byteCapped(`Sidequest: ${state} on this board. Update or close them before finishing.`),
+      message: byteCapped(`Sidequest: ${state}.${closeActionable}${holdWaits}`),
       pendingRefs,
       state: signature,
     };
