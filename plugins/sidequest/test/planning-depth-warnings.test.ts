@@ -251,7 +251,7 @@ test('add warns for a write-scope ticket with no declared files, not when files 
   const withFiles = cliJson(['add', '-t', 'scope declared', '--category', 'coding.normal', '--description', 'Add a thing.', '--file', 'lib/existing.js']);
   assert.deepStrictEqual(withFiles.warnings, []);
 
-  const readonly = cliJson(['add', '-t', 'readonly ticket', '--category', 'research', '--description', 'Look something up.']);
+  const readonly = cliJson(['add', '-t', 'readonly ticket', '--category', 'source-lookup', '--description', 'Look something up.']);
   assert.deepStrictEqual(readonly.warnings, []);
 });
 
@@ -281,10 +281,10 @@ test('warns when tracked package build output is omitted from source scope', () 
 });
 
 test('warns only when a readonly ticket signals browser or visual work', () => {
-  const browser = cliJson(['add', '-t', 'visual review', '--category', 'research', '--description', 'Open the browser and take a screenshot.']);
+  const browser = cliJson(['add', '-t', 'visual review', '--category', 'source-lookup', '--description', 'Open the browser and take a screenshot.']);
   assert.deepStrictEqual(browser.warnings, [READONLY_BROWSER_WARNING]);
 
-  const ordinary = cliJson(['add', '-t', 'read docs', '--category', 'research', '--description', 'Read the existing docs.']);
+  const ordinary = cliJson(['add', '-t', 'read docs', '--category', 'source-lookup', '--description', 'Read the existing docs.']);
   assert.deepStrictEqual(ordinary.warnings, []);
 });
 

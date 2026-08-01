@@ -67,10 +67,7 @@ const OLD_CODEBASE_EXPLORATION = {
   description: "Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.",
   contract: "Read before concluding; cite files and symbols, with no edits."
 };
-const V5_CODEBASE_EXPLORATION = {
-  description: OLD_CODEBASE_EXPLORATION.description,
-  contract: "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact directory as its only write scope."
-};
+const V5_CODEBASE_EXPLORATION_CONTRACT = "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact directory as its only write scope.";
 const LEGACY_RUNTIME = {
   "grade-1": "haiku",
   "grade-2": "sonnet",
@@ -384,7 +381,7 @@ function openDb(homeRoot) {
       } catch {
         category = null;
       }
-      if (category && category.description === V5_CODEBASE_EXPLORATION.description && (category.contract === V5_CODEBASE_EXPLORATION.contract || category.contract === import_category_defaults.DEFAULT_CATEGORIES.find((entry) => entry.id === "codebase-exploration")?.contract) && !Object.hasOwn(category, "artifactRoots")) {
+      if (category && (category.contract === V5_CODEBASE_EXPLORATION_CONTRACT || category.contract === import_category_defaults.DEFAULT_CATEGORIES.find((entry) => entry.id === "codebase-exploration")?.contract) && !Object.hasOwn(category, "artifactRoots")) {
         const next = import_category_defaults.DEFAULT_CATEGORIES.find((entry) => entry.id === "codebase-exploration");
         if (next) {
           category.contract = next.contract;

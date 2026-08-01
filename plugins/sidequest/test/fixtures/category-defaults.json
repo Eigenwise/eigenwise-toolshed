@@ -98,14 +98,11 @@
     "name": "Source lookup",
     "description": "Resolve a bounded external documentation or factual question with a small authoritative source set. The narrow search surface and concrete answer make medium research capability sufficient. Use evidence-research when claims must be reconciled across sources.",
     "route": {
-      "model": "codex-gpt-5-6-luna",
-      "effort": "medium"
-    },
-    "fallback": {
       "model": "sonnet",
       "effort": "medium"
     },
-    "contract": "Prefer primary sources, cite material claims, stop when the bounded question is answered, and make no repository edits.",
+    "fallback": null,
+    "contract": "Prefer primary sources, cite each material claim, stop when the bounded question is answered, and make no project edits.",
     "artifactRoots": [],
     "readonly": true,
     "enabled": true

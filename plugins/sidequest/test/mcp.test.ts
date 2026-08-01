@@ -1714,7 +1714,7 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
   assert.match(dispatched.warnings[0], /no verify command/);
 
   seedCatalog([{ id: 'claude-gpt-5.6-luna', slug: 'codex-gpt-5-6-luna', label: 'GPT-5.6 Luna' }]);
-  const research = await callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'research' });
+  const research = await callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'source-lookup' });
   assert.deepEqual((await callTool('dispatch', { ref: research.ref, full: true })).warnings, []);
 });
 

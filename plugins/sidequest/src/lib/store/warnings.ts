@@ -415,7 +415,7 @@ function nonRepoExternalOutput(ticket?: any, files?: any) {
 // settled the exact edit, the implementation ticket belongs on a cheap tier. A false
 // positive on an evidence block (log excerpt, test output, measured table) is worse
 // than a miss, so a block must read as an edit AND not read as a transcript.
-const JUDGMENT_TIER_CATEGORIES = ['coding.normal', 'coding.hard', 'debugging', 'plugin-dev', 'ui-frontend'];
+const JUDGMENT_TIER_CATEGORIES = ['coding.normal', 'coding.hard', 'debugging', 'plugin-dev', 'interaction-design-implementation'];
 const PRESOLVED_BLOCK_MIN_LINES = 20;
 const PRESOLVED_BLOCK_MIN_CHARS = 1200;
 const EVIDENCE_SHARE = 0.25;

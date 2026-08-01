@@ -252,7 +252,7 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
       route: { model: 'opus', effort: 'high' },
       fallback: { model: 'codex-gpt-5-6-sol', effort: 'high' },
     }],
-    ['visual-review', {
+    ['visual-evaluation', {
       route: { model: 'opus', effort: 'medium' },
       fallback: { model: 'codex-gpt-5-6-terra', effort: 'medium' },
     }],
@@ -271,7 +271,7 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
     });
     const launched = launch(ticket, `quota-${categoryId}`);
     assert.deepEqual(launched.prepared.ticket.dispatch.route, route);
-    const error = categoryId === 'visual-review'
+    const error = categoryId === 'visual-evaluation'
       ? 'Agent launch failed: Your Claude Code subscription does not include access to Opus 5'
       : "Agent launch failed: You've reached your Opus 5 limit";
     const recovered = store.recoverDispatchQuotaFailure(slug, ticket.ref, {

@@ -73,6 +73,7 @@ test('every starter category carries a distinct full resolution contract', () =>
     const resolutionKeys = profile.categories.map((category) => {
       assert.equal(typeof category.contract, 'string', `${profile.id}/${category.id} has no contract`);
       assert.ok(category.contract.trim(), `${profile.id}/${category.id} has an empty contract`);
+      assert.match(category.description, /medium|high|xhigh|expensive|default|mechanic/i, `${profile.id}/${category.id} does not justify its route`);
       return JSON.stringify({
         route: category.route,
         contract: category.contract,
