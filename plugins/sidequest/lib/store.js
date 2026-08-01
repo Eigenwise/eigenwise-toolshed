@@ -20,6 +20,9 @@ const { createStories } = require("./store/stories.js");
 const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
 const { createReads } = require("./store/reads.js");
+const { createClaims } = require("./store/claims.js");
+const { createLocks } = require("./store/locks.js");
+const { createPulse } = require("./store/pulse.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
@@ -182,6 +185,19 @@ function cloneCached(value) {
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
+const {
+  acquireLock,
+  busyWait,
+  releaseLock,
+  testClaimLockDelayMs,
+  ticketLockPath,
+  withTicketLock
+} = createLocks({
+  fs,
+  path,
+  ticketsDir,
+  transaction
+});
 const { copyAsset, saveAssetData, assetPath } = createAssets({ assetsDir, ensureDir });
 const {
   NOTIFICATION_KINDS,
@@ -210,6 +226,31 @@ const {
   releaseLock,
   transaction,
   writeGlobal
+});
+const {
+  DEFAULT_CLAIM_ABANDON_MIN,
+  DEFAULT_CLAIM_IDLE_MIN,
+  DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
+  autoReleasedClaimMessage,
+  claimAbandonMs,
+  claimActivityMs,
+  claimIdleAge,
+  claimIdleMs,
+  claimReclaimable,
+  claimReleaseNote,
+  claimReleaseVerdict,
+  claimVerification,
+  preparedDispatchTtlMs,
+  recordClaimVerification,
+  resumableScopePause,
+  touchClaim,
+  touchClaimActivity
+} = createClaims({
+  dispatchState,
+  fs,
+  getTicket,
+  putTicket,
+  withTicketLock
 });
 const {
   addComment,
@@ -3460,239 +3501,6 @@ const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 function priorityRank(p) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? PRIORITY_RANK[String(p)] ?? 9 : 9;
 }
-const DEFAULT_CLAIM_IDLE_MIN = 60;
-const DEFAULT_CLAIM_ABANDON_MIN = 24 * 60;
-const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
-const VERIFY_START_COMMENT = "[sidequest:verify-start] ";
-const VERIFY_COMPLETE_COMMENT = "[sidequest:verify-complete]";
-function preparedDispatchTtlMs() {
-  const hours = Number(process.env.SIDEQUEST_PREPARED_DISPATCH_TTL_HOURS);
-  return (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_PREPARED_DISPATCH_TTL_HOURS) * 60 * 60 * 1e3;
-}
-function envMinutesMs(fallbackMinutes, ...names) {
-  for (const name of names) {
-    const raw = process.env[name];
-    if (raw == null || String(raw).trim() === "") continue;
-    const minutes = Number(raw);
-    if (Number.isFinite(minutes) && minutes > 0) return minutes * 60 * 1e3;
-  }
-  return fallbackMinutes * 60 * 1e3;
-}
-function claimIdleMs() {
-  return envMinutesMs(DEFAULT_CLAIM_IDLE_MIN, "SIDEQUEST_CLAIM_IDLE_MIN", "SIDEQUEST_CLAIM_TTL_MIN");
-}
-function claimAbandonMs() {
-  return envMinutesMs(DEFAULT_CLAIM_ABANDON_MIN, "SIDEQUEST_CLAIM_ABANDON_MIN");
-}
-function claimActivityMs(ticket) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by) return Number.NaN;
-  let latest = Number.NaN;
-  const consider = (value) => {
-    const ms = Date.parse(value);
-    if (Number.isFinite(ms) && (!Number.isFinite(latest) || ms > latest)) latest = ms;
-  };
-  consider(claim.at);
-  consider(claim.activeAt);
-  consider(claimVerification(ticket)?.startedAt);
-  for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
-    if (comment && comment.by === claim.by) consider(comment.at);
-  }
-  return latest;
-}
-function claimIdleAge(ticket, now) {
-  const latest = claimActivityMs(ticket);
-  return Number.isFinite(latest) ? Math.max(0, now - latest) : Number.POSITIVE_INFINITY;
-}
-function claimVerification(ticket) {
-  const claim = ticket?.claim;
-  const verification = claim?.verification;
-  if (!claim?.by || !verification || verification.by !== claim.by) return null;
-  const startedAt = String(verification.startedAt || "");
-  const command = String(verification.command || "").trim();
-  if (!Number.isFinite(Date.parse(startedAt)) || !command) return null;
-  return { startedAt, command };
-}
-function verificationComment(body) {
-  const text = String(body || "");
-  if (text.startsWith(VERIFY_START_COMMENT)) {
-    const command = text.slice(VERIFY_START_COMMENT.length).trim();
-    return command ? { kind: "start", command } : null;
-  }
-  return text === VERIFY_COMPLETE_COMMENT ? { kind: "complete" } : null;
-}
-function recordClaimVerification(ticket, comment) {
-  const claim = ticket?.claim;
-  if (!claim?.by || comment?.by !== claim.by) return;
-  const event = verificationComment(comment.body);
-  if (!event) return;
-  const dispatch = dispatchState(ticket);
-  if (event.kind === "start") {
-    claim.verification = { by: claim.by, startedAt: comment.at, command: event.command };
-    if (dispatch) delete dispatch.verifyStopAt;
-    return;
-  }
-  if (claimVerification(ticket)) delete claim.verification;
-  if (dispatch) delete dispatch.verifyStopAt;
-}
-function resumableScopePause(ticket) {
-  const dispatch = dispatchState(ticket);
-  return Boolean(
-    dispatch && dispatch.terminalAt && ticket?.claim?.by && ticket?.scopeRequest && ["scope_paused", "stopped_claimed"].includes(dispatch.outcome)
-  );
-}
-function observedStop(dispatch, claim) {
-  if (!dispatch || dispatch.outcome !== "stopped_claimed" || !dispatch.terminalAt) return false;
-  const stoppedMs = Date.parse(dispatch.terminalAt);
-  const claimedMs = Date.parse(claim && claim.at);
-  if (!Number.isFinite(stoppedMs)) return false;
-  return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
-}
-function missingStoppedWorktree(dispatch) {
-  if (!dispatch || dispatch.sharedTree !== false || !dispatch.terminalAt || !dispatch.worktree) return false;
-  try {
-    return !fs.existsSync(dispatch.worktree);
-  } catch (_) {
-    return false;
-  }
-}
-function claimReleaseVerdict(ticket, now) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by) return null;
-  const atMs = Number.isFinite(Number(now)) ? Number(now) : Date.now();
-  const idleMs = claimIdleAge(ticket, atMs);
-  const dispatch = dispatchState(ticket);
-  const verification = claimVerification(ticket);
-  if (verification) {
-    if (idleMs > claimAbandonMs()) {
-      return { kind: "abandoned_verifying", idleMs, at: verification.startedAt, reason: "its verification marker never completed past the unobserved-death backstop" };
-    }
-    return null;
-  }
-  if (resumableScopePause(ticket)) {
-    if (missingStoppedWorktree(dispatch)) {
-      return { kind: "missing_worktree", idleMs, at: dispatch.terminalAt, reason: "its stopped executor worktree no longer exists" };
-    }
-    return null;
-  }
-  if (observedStop(dispatch, claim)) {
-    return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor was observed to stop while still holding the claim" };
-  }
-  const liveAgent = Boolean(dispatch && !dispatch.terminalAt);
-  if (!liveAgent && idleMs > claimIdleMs()) {
-    return { kind: "idle", idleMs, reason: "no board activity from the claim holder and no live executor associated" };
-  }
-  if (!liveAgent && idleMs > claimAbandonMs()) {
-    return { kind: "abandoned", idleMs, reason: "no board activity from the claim holder past the unobserved-death backstop" };
-  }
-  return null;
-}
-function claimReclaimable(ticket, now) {
-  return Boolean(claimReleaseVerdict(ticket, now));
-}
-function autoReleasedClaimMessage(ref, release) {
-  const when = release && release.at ? ` at ${release.at}` : "";
-  const why = release && (release.reason || release.kind) || "the claim sweep released it";
-  return `${ref}'s claim was auto-released${when}: ${why}. Its dispatch token went with it, so this closeout cannot be recorded. Your commits are safe — do NOT discard, reset, or redo the work. Recovery: have the orchestrator run \`sidequest dispatch ${ref}\`, claim with that fresh token and executor, then hand in the SAME commit.`;
-}
-function claimIdleLabel(idleMs) {
-  return Number.isFinite(idleMs) ? `${Math.round(Number(idleMs) / 6e4)}m` : "an unknown time";
-}
-function claimReleaseNote(ticket, verdict) {
-  const by = ticket && ticket.claim && ticket.claim.by;
-  const idle = claimIdleLabel(verdict && verdict.idleMs);
-  if (verdict.kind === "observed_stop") {
-    return `↩️ Auto-released to **todo**: its executor was observed to stop while holding the claim (SubagentStop at ${verdict.at}, was claimed by \`${by}\`). It is back in the ready pool; re-dispatch to continue the work.`;
-  }
-  if (verdict.kind === "abandoned_verifying") {
-    return `↩️ Auto-released to **todo**: verification from \`${by}\` never completed for ${idle}, past the unobserved-death backstop.`;
-  }
-  if (verdict.kind === "idle") {
-    return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle} and no live executor is associated with this ticket.`;
-  }
-  return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle}, past the unobserved-death backstop (nothing ever reported that executor stopping).`;
-}
-function touchClaimActivity(ticket, by, now) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by || by != null && claim.by !== by) return false;
-  claim.activeAt = now || (/* @__PURE__ */ new Date()).toISOString();
-  return true;
-}
-function touchClaim(slug, idOrRef, by) {
-  const found = getTicket(slug, idOrRef);
-  if (!found) return { ok: false, reason: "not_found" };
-  return withTicketLock(slug, found.id, () => {
-    const t = getTicket(slug, found.id);
-    if (!t) return { ok: false, reason: "not_found" };
-    if (!touchClaimActivity(t, by)) return { ok: false, reason: "not_owner", ticket: t };
-    putTicket(slug, t);
-    return { ok: true, ticket: t };
-  });
-}
-function ticketLockPath(slug, id) {
-  return path.join(ticketsDir(slug), "." + path.basename(String(id)) + ".lock");
-}
-const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
-function busyWait(ms) {
-  Atomics.wait(LOCK_SLEEP, 0, 0, ms);
-}
-function testClaimLockDelayMs() {
-  const delay = Number(process.env.SIDEQUEST_TEST_CLAIM_LOCK_DELAY_MS);
-  return Number.isInteger(delay) && delay > 0 ? delay : 0;
-}
-function acquireLock(lockPath) {
-  const STALE_LOCK_MS = 3e4;
-  const RETRY_MS = 10;
-  const MAX_ATTEMPTS = STALE_LOCK_MS / RETRY_MS;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    try {
-      const fd = fs.openSync(lockPath, "wx");
-      try {
-        fs.writeSync(fd, String(process.pid) + " " + (/* @__PURE__ */ new Date()).toISOString());
-      } catch (_) {
-      }
-      fs.closeSync(fd);
-      return true;
-    } catch (e) {
-      if (!e || e.code !== "EEXIST") return false;
-      try {
-        const st = fs.statSync(lockPath);
-        if (Date.now() - st.mtimeMs > STALE_LOCK_MS) {
-          try {
-            fs.unlinkSync(lockPath);
-          } catch (_) {
-          }
-          continue;
-        }
-      } catch (_) {
-        continue;
-      }
-      busyWait(RETRY_MS);
-    }
-  }
-  return false;
-}
-function releaseLock(lockPath) {
-  const RETRY_MS = 5;
-  for (let attempt = 0; attempt < 1e3; attempt++) {
-    try {
-      fs.unlinkSync(lockPath);
-      return;
-    } catch (error) {
-      if (!error || !["EACCES", "EBUSY", "EPERM"].includes(error.code)) return;
-      busyWait(RETRY_MS);
-    }
-  }
-}
-function withTicketLock(slug, id, fn) {
-  const lock = ticketLockPath(slug, id);
-  if (!acquireLock(lock)) return { ok: false, reason: "busy" };
-  try {
-    return transaction(fn);
-  } finally {
-    releaseLock(lock);
-  }
-}
 function stableExecutorName(ticket, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error("dispatch executor requires a routable ticket.");
   const resolved = resolveExec(ticket.model, ticket.effort);
@@ -5710,167 +5518,6 @@ function claimPulse(ticket, now) {
     verifying: Boolean(claimVerification(ticket))
   };
 }
-function boundedExcerpt(value, maxChars = 1200) {
-  const text = String(value || "");
-  if (text.length <= maxChars) return { text, length: text.length, truncated: false };
-  const tailLength = Math.min(240, Math.floor(maxChars / 4));
-  const marker = `
-[… ${text.length - maxChars} more chars; use full:true …]
-`;
-  const headLength = maxChars - tailLength - marker.length;
-  return {
-    text: `${text.slice(0, headLength)}${marker}${text.slice(-tailLength)}`,
-    length: text.length,
-    truncated: true
-  };
-}
-const COMMENT_BODY_RETENTION = 10;
-function commentHistory(comments, full = false) {
-  const history = Array.isArray(comments) ? comments : [];
-  const omittedBodies = full ? 0 : Math.max(0, history.length - COMMENT_BODY_RETENTION);
-  if (!omittedBodies) return { comments: history, omittedBodies: 0, notice: null };
-  const notice = `${omittedBodies} earlier comment bodies omitted — pass --full to see them.`;
-  return {
-    comments: history.map((comment, index) => {
-      if (index >= omittedBodies) return comment;
-      const { body: _body, ...metadata } = comment;
-      return Object.assign(metadata, { bodyOmitted: true });
-    }),
-    omittedBodies,
-    notice
-  };
-}
-function lastCommentPulse(ticket) {
-  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
-  const comment = comments[comments.length - 1];
-  if (!comment) return null;
-  return {
-    at: comment.at,
-    by: comment.by,
-    kind: comment.kind,
-    body: String(comment.body || "").slice(0, 100)
-  };
-}
-function latestCommentExcerpt(ticket) {
-  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
-  const comment = comments[comments.length - 1];
-  if (!comment) return null;
-  const body = boundedExcerpt(comment.body, 200);
-  return {
-    by: comment.by,
-    kind: comment.kind,
-    body: body.text,
-    bodyLength: body.length,
-    bodyTruncated: body.truncated
-  };
-}
-function gitPulse(projectPath, files) {
-  if (!projectPath || !Array.isArray(files) || !files.length) return null;
-  try {
-    const git = (args) => execFileSync("git", args, {
-      cwd: projectPath,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true
-    }).trim();
-    if (git(["rev-parse", "--is-inside-work-tree"]) !== "true") return null;
-    const commit = git(["log", "-1", "--format=%H%x1f%s%x1f%cI", "--", ...files]);
-    const [hash, subject, at] = commit ? commit.split("") : [];
-    const changed = git(["status", "--porcelain", "--", ...files]);
-    return {
-      commit: hash ? { hash, subject, at } : null,
-      dirty: Boolean(changed)
-    };
-  } catch (_) {
-    return null;
-  }
-}
-function claimActivityPulse(ticket, git) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by || claimReleaseVerdict(ticket)) return { working: false, lastActivityAt: null };
-  const activity = [claim.at];
-  for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
-    if (comment && comment.by === claim.by) activity.push(comment.at);
-  }
-  if (git && git.commit && git.commit.at) activity.push(git.commit.at);
-  const timestamps = activity.filter((at) => Number.isFinite(Date.parse(at))).sort((a, b) => Date.parse(b) - Date.parse(a));
-  return { working: true, lastActivityAt: timestamps[0] || null };
-}
-function pulsePayload(slug, idOrRef) {
-  const ticket = getTicket(slug, idOrRef);
-  if (!ticket) return null;
-  const meta = readMeta(slug);
-  const git = gitPulse(meta && meta.path, ticket.files);
-  const activity = claimActivityPulse(ticket, git);
-  const dispatch = dispatchState(ticket);
-  const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
-  return {
-    ref: ticket.ref,
-    title: ticket.title,
-    status: ticket.status,
-    direct: ticket.directClaim || null,
-    claim: claimPulse(ticket, Date.now()),
-    working: activity.working,
-    lastActivityAt: activity.lastActivityAt,
-    comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
-    lastComment: lastCommentPulse(ticket),
-    dispatchExecutor: ticket.dispatchExecutor || null,
-    dispatch: dispatch ? {
-      state: pulseDispatchState(dispatch),
-      sessionId: dispatch.sessionId || null,
-      tokenPrefix: dispatch.tokenPrefix || null,
-      executor: dispatch.executor || null,
-      route: normalizeRoute(dispatch.route),
-      recovery: dispatch.recovery || null,
-      attempts: Array.isArray(dispatch.attempts) ? dispatch.attempts : [],
-      agentId: dispatch.agentId || null,
-      agentName: dispatch.agentName || null,
-      preparedAt: dispatch.preparedAt || null,
-      launchedAt: dispatch.launchedAt || null,
-      boundAt: dispatch.boundAt || null,
-      claimedAt: dispatch.claimedAt || null,
-      terminalAt: dispatch.terminalAt || null,
-      terminalSource: dispatch.terminalSource || null,
-      outcome: dispatch.outcome || null
-    } : null,
-    checkpoint: checkpointProjection(ticket),
-    ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
-    ...warnings.length ? { warnings } : {},
-    submission: submissionProjection(ticket.submission),
-    delivery: boardConfig(slug)?.delivery || "merge",
-    git
-  };
-}
-function changesPayload(slug, since) {
-  const serverTime = (/* @__PURE__ */ new Date()).toISOString();
-  const nowMs = Date.parse(serverTime);
-  const defaultSince = new Date(Date.now() - 60 * 60 * 1e3).toISOString();
-  const after = since == null ? defaultSince : String(since);
-  const afterMs = Date.parse(after);
-  if (!Number.isFinite(afterMs)) throw new Error("changes: --since must be an ISO timestamp.");
-  const changedAt = (ticket) => {
-    const updatedMs = Date.parse(ticket.updatedAt);
-    const expiresMs = Date.parse(ticket.checkpoint && ticket.checkpoint.expiresAt);
-    return Number.isFinite(expiresMs) && expiresMs <= nowMs ? Math.max(updatedMs, expiresMs) : updatedMs;
-  };
-  const tickets = listTickets(slug).filter((ticket) => changedAt(ticket) > afterMs).sort((a, b) => changedAt(a) - changedAt(b)).map((ticket) => {
-    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
-    return {
-      ref: ticket.ref,
-      title: ticket.title,
-      status: ticket.status,
-      lastEventType: ticket.lastEventType || null,
-      lastEventSource: ticket.lastEventSource || null,
-      lastComment: latestCommentExcerpt(ticket),
-      claim: claimPulse(ticket, nowMs),
-      checkpoint: checkpointProjection(ticket, nowMs),
-      ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
-      ...warnings.length ? { warnings } : {},
-      updatedAt: ticket.updatedAt
-    };
-  });
-  return { since: after, serverTime, tickets };
-}
 function readServerInfo() {
   return readGlobal("server-info", null);
 }
@@ -5913,6 +5560,24 @@ const {
   storyExecutionContract,
   updateStory
 } = stories;
+const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createPulse({
+  boardConfig,
+  checkpointProjection,
+  claimPulse,
+  claimReleaseVerdict,
+  claimVerification,
+  dispatchState,
+  execFileSync,
+  getTicket,
+  listTickets,
+  normalizeRoute,
+  oracleProjection,
+  pulseDispatchState,
+  readMeta,
+  storyContractDriftWarnings,
+  storyDecisionLogWarnings,
+  submissionProjection
+});
 module.exports = {
   VALID_STATUS,
   VALID_PRIORITY,
