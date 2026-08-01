@@ -13,7 +13,11 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 
 ## Documentation
 
-Start with the [Eigenwise Toolshed documentation](https://eigenwise.github.io/eigenwise-toolshed/). The direct guides are [getting started](https://eigenwise.github.io/eigenwise-toolshed/getting-started/), [Workbench](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/), [Model Gateway](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/), [Sidequest](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/), [Codebase Mapper](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/), [Live Rules](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/), [Skill Retro](https://eigenwise.github.io/eigenwise-toolshed/getting-started/skill-retro/), [observability](https://eigenwise.github.io/eigenwise-toolshed/observability/), and the [plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/).
+The docs site is where the real guides live. This README is a signpost, not the full manual.
+
+**[Read the Eigenwise Toolshed documentation](https://eigenwise.github.io/eigenwise-toolshed/)**
+
+Start with [getting started](https://eigenwise.github.io/eigenwise-toolshed/getting-started/), [Workbench](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/), [Sidequest](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/), or the [plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/).
 
 > Sharp little tools for Claude Code, kept in one shed. 🛠️
 
@@ -30,7 +34,34 @@ Start with the [Eigenwise Toolshed documentation](https://eigenwise.github.io/ei
 
 *More tools will move into the shed over time.*
 
-## Install
+## Start here
+
+Use this path for a first install:
+
+1. Add the marketplace:
+   ```text
+   /plugin marketplace add Eigenwise/eigenwise-toolshed
+   ```
+2. Install Workbench at user scope:
+   ```text
+   /plugin install workbench@eigenwise-toolshed --scope user
+   ```
+3. Reload the plugins:
+   ```text
+   /reload-plugins
+   ```
+4. In any project, run `/workbench:init-workspace` or ask **"set up a Claude workspace here"**. It interviews you, then installs and configures every other plugin for that project. You do not need to install them by hand.
+
+Workbench is the workspace manager, so install it once at user scope and use it everywhere.
+
+| Plugin scope | Use it for |
+|--------------|------------|
+| **Workbench: user** | It manages every workspace. A second project-scoped copy loads its hooks twice, and `init-workspace` requires the user-scope install. |
+| **Model Gateway: user, required** | Its wiring is global-only and writes `~/.claude/settings.json`. Its keepalive hook must be live in every project and every executor worktree. There is no project-scoped wiring anymore. |
+| **Everything else: project** | Sidequest, codebase-mapper, live-rules, and skill-retro keep their config with the repo. `init-workspace` installs them for you. |
+
+<details>
+<summary>Installing by hand instead</summary>
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
@@ -42,13 +73,8 @@ Start with the [Eigenwise Toolshed documentation](https://eigenwise.github.io/ei
 /plugin install live-rules@eigenwise-toolshed
 ```
 
-Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.
-
-Quickest start: install **workbench** at user scope, reload, then in any project ask *"set up a Claude workspace here"*. Workbench owns setup, updates, health, retrospectives, and the freshness guard.
-
-## Why workbench?
-
-Workbench owns the workspace lifecycle in one user-scope install. It sets up project-side configuration, updates Toolshed plugins, checks local health, runs retrospectives, and covers freshness checks.
+Then run `/reload-plugins` (or restart Claude Code). The marketplace is public, so there is no auth step.
+</details>
 
 ## Why codebase-mapper?
 
