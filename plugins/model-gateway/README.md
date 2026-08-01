@@ -63,6 +63,8 @@ block takes precedence over user settings, so `doctor` reports an unwired projec
 global wiring. Settings changes apply to new Claude Code sessions, so restart open sessions after
 wiring.
 
+`env --mode global --reconcile` is a separate, confirmation-gated cleanup. It lists recorded projects whose local URL differs from the new global URL; without the flag, those other project `.claude/settings.local.json` files stay unchanged. With the flag, it removes only Model Gateway's own wiring keys, skips projects that already agree, and leaves unrelated env and top-level settings alone. It cannot change `process.env.ANTHROPIC_BASE_URL`, and cleanup affects the next session after a restart.
+
 On your next session, Claude notices the plugin isn't set up yet (a one-line SessionStart nudge)
 and offers to finish the job. `setup` downloads claude-code-proxy and starts the gateway; then run
 `/update-toolshed` to wire every recorded project locally. The only thing it can't do for you is
@@ -107,7 +109,7 @@ release and is the upgrade path.
 | `models` | Show exactly what the shim advertises to the picker |
 | `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
 | `pin [--opus\|--sonnet\|--fable <model\|default>]` | Show or persist the native Claude alias pins |
-| `env [--write-user\|--write-project\|--remove] [--mode local\|global]` | Write the private local or global wiring, and persist that mode |
+| `env [--write-user\|--write-project\|--remove] [--mode local\|global] [--reconcile]` | Write private local or global wiring, persist that mode, or confirmation-gated cleanup of plugin-owned keys in other recorded projects (reconcile requires global) |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
 | `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility procedure, or read-only diagnosis |
 
@@ -140,6 +142,13 @@ The shim emits one `gateway.token.usage` OTLP log after each successful proxied 
 This is counts-only telemetry. Prompts, tool schemas, tool arguments, tool results, response text, credentials, arbitrary headers, baggage, and error text never enter the record. JSON and SSE inspection is bounded and fail-open, and the loopback POST runs after the client response finishes. `CODEX_GATEWAY_USAGE_ENDPOINT` overrides the default `http://127.0.0.1:4318/v1/logs`; set it to `0` to disable export. The standard OTLP logs and base endpoint variables work as fallbacks. See [the usage observability design](docs/usage-observability.md) for the field contract, cache math, dashboard views, and known gaps.
 
 `doctor` and `/healthz` report whether the gateway URL is wired through Claude Code settings. A shell-only `ANTHROPIC_BASE_URL` can miss background sessions, so the shim warns about it. Fast-mode availability and WebFetch domain-safety checks bypass the gateway. Output tokens have no source split, and per-section cache attribution stays estimated.
+
+Claude Code resolves `ANTHROPIC_BASE_URL` in this order: process environment, the current project's
+`.claude/settings.local.json`, the project's shared `.claude/settings.json`, then user
+`~/.claude/settings.json`. `doctor` marks the winner `[effective]` and the configured wiring scope
+`[selected mode]`. If those disagree about compat versus default mode, `doctor` exits 1 and names
+both files plus the fix. A process-environment winner cannot be fixed by rewriting settings; unset
+that environment value and start a new session.
 
 After changing any of these variables, restart the gateway (`stop`, then `start`) so its detached shim gets the new environment.
 
@@ -179,8 +188,19 @@ feature. Before blaming gateway compatibility, check `claude --version`, run `/s
    the plugin-owned `ANTHROPIC_BASE_URL` to `http://api.anthropic.com` and starts a second listener
    on that port next to the usual `127.0.0.1:18764`. Nothing else in your settings changes. You get
    exactly one line telling you to restart Claude Code.
-4. Restart Claude Code. `/model` still shows the Codex rows, and `/remote-control` is now available,
-   because Claude Code sees the real Anthropic host.
+4. Restart Claude Code. Claude Code may render its built-in first-party model list for the
+   `api.anthropic.com` hostname, so the Codex rows can disappear from `/model` even though the
+   compat listener still serves the full catalog. To keep using Codex, pin a visible Claude alias to
+   a Codex id, then rewire and restart. For example:
+
+   ```bash
+   node <plugin>/bin/model-gateway.js pin --opus claude-gpt-5.6-terra
+   node <plugin>/bin/model-gateway.js env --write-user
+   ```
+
+   Pick the visible Opus row. The shim routes the pinned `claude-gpt-*` id to Codex. Sidequest
+   dispatch is unaffected: it resolves its explicit route marker directly and never depends on
+   `/model` discovery.
 5. Run `remote-control disable --confirm` after another direct confirmation to remove only the
    plugin-marked block, restore default mode, and verify it. If you manually remove the hosts block,
    the next `ensure` also reverts the gateway automatically.

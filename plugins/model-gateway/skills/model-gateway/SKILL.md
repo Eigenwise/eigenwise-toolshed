@@ -43,6 +43,19 @@ the saved mode, run `/workbench:update-toolshed --wiring-mode local` or
 `/workbench:update-toolshed --wiring-mode global`. The global switch preserves existing local blocks
 and names them as redundant; it never deletes them. All wiring changes apply to new Claude Code
 sessions, so restart after the write. The Codex rows appear in `/model` labeled "From gateway".
+
+The winning `ANTHROPIC_BASE_URL` source follows Claude Code's precedence: process environment,
+current-project `.claude/settings.local.json`, project `.claude/settings.json`, then user
+`~/.claude/settings.json`. `doctor` marks the winner `[effective]` and the configured scope
+`[selected mode]`. A contradiction between those modes is a hard failure with both files and the
+exact fix. If process environment wins, unset it and start a new session; rewriting settings cannot
+override it.
+
+`env --mode global --reconcile` is confirmation-gated and only valid with `--mode global`. Plain global mode writes user settings, then lists recorded projects whose local URL differs without
+changing their files. The confirmed command writes to OTHER projects' `.claude/settings.local.json`
+files and removes only Model Gateway-owned keys: its base URL, the three Claude alias pins, and
+static gateway flags whose values equal plugin defaults. It leaves unrelated settings alone, skips
+projects already agreeing, cannot change `process.env`, and needs a restart to affect a new session.
 Discovery needs Claude Code v2.1.129+ and fails silently if the shim answers slowly; `models` shows
 exactly what's advertised.
 
@@ -87,8 +100,14 @@ back, or you kill the session that was about to use it.
   references incrementally on Codex models.
 - The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models); override it in
   `~/.claude/model-gateway/models.json` (JSON array of ids).
-- Claude models keep working normally at the same time (passthrough path); subagents can mix
-  tiers freely.
+- **RC-compat and missing Codex rows**: compat mode still serves the complete Codex catalog, but
+  Claude Code uses its built-in first-party list when the hostname is `api.anthropic.com`. Pin a
+  visible Claude alias to a Codex id, rewire, restart, and choose that visible row, for example:
+  `pin --opus claude-gpt-5.6-terra`, then `env --write-user` (or `env --write-project`). The shim
+  routes the pinned `claude-gpt-*` id to Codex. Sidequest dispatch is unaffected because it resolves
+  its explicit route marker and never uses picker discovery.
+- Claude models keep working normally at the same time (passthrough path); subagents can mix tiers
+  freely.
 
 ## RC-compatibility mode (restoring `/remote-control`)
 

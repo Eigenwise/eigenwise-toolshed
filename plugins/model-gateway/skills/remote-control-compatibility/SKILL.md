@@ -25,8 +25,9 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control <command>
    node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control doctor
    ```
 
-   Stop and explain any partial plugin block, non-loopback mapping for `api.anthropic.com`, missing
-   elevation, port-80 conflict, or failed gateway recovery. Do not repair unrelated hosts entries.
+   Stop and explain any partial plugin block, non-loopback mapping for `api.anthropic.com`, an
+   existing settings precedence contradiction, missing elevation, port-80 conflict, or failed
+   gateway recovery. Do not repair unrelated hosts entries.
 
 2. Explain exactly what will be added:
 
@@ -49,9 +50,11 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control <command>
    node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control enable --confirm
    ```
 
-   It backs up the hosts file, adds only the marker-delimited block, starts/reconciles the gateway,
-   and verifies the loopback mapping, port 80, shim health, Codex discovery, and Remote Control
-   eligibility. The user must restart Claude Code before `/remote-control` appears.
+   It backs up the hosts file, adopts an existing unmarked `127.0.0.1 api.anthropic.com` entry in
+   place when one is already present, adds only the marker-delimited block when needed, starts/
+   reconciles the gateway, and verifies the loopback mapping, port 80, shim health, Codex discovery,
+   and Remote Control eligibility. A successful `--confirm` run does not ask for another
+   confirmation. The user must restart Claude Code before `/remote-control` appears.
 
 ## Disable
 
@@ -75,4 +78,6 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control <command>
   or disable compatibility. `doctor` reports the owning failure code when available.
 - If the plugin block is partial or malformed, do not edit around it. Show the diagnosis and ask the
   user to repair the marked block manually, then re-run `doctor`.
+- An unmarked exact `127.0.0.1 api.anthropic.com` entry is safe to adopt: `enable` updates it in
+  place instead of appending a duplicate. A successful `enable --confirm` does not prompt again.
 - `remote-control doctor` is always safe and read-only.
