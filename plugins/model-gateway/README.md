@@ -94,8 +94,33 @@ settings if selected). `models` should return `claude-gpt-*` rows. Then
 open `/model` and select a row labeled `From gateway`. If the rows are missing, check that Claude
 Code is v2.1.129 or newer, restart once more, and run `models` to confirm the shim has a catalog.
 
-Model discovery needs Claude Code v2.1.129+. Re-running `setup` later downloads the latest proxy
-release and is the upgrade path.
+`doctor` also prints a fallback diagnostic. If a dispatch appears to use a different model than the
+one served, reproduce it in a throwaway session with `CLAUDE_CODE_NO_MODEL_FALLBACK=true`. That turns
+silent fallback into a thrown error identifying the call site. Unset the variable afterwards; normal
+operation should keep graceful fallback for transient 5xx errors.
+
+
+### Upgrades and Windows recovery
+
+`setup` verifies the downloaded archive when a release checksum is published, compares the installed
+and downloaded proxy versions, and restarts only when the proxy changed. The shim is supervised as a
+single instance: `ensure` reaps orphaned listeners, checks the version reported by `/healthz`, and
+replaces a stale supervisor when the installed plugin version differs from the serving version. `doctor`
+prints both values and fails with `VERSION MISMATCH` until the stale supervisor is replaced.
+
+On Windows, an upgrade can fail because the running proxy executable is locked. The installer restores
+the previous binary and restarts it so the working gateway stays available. Reboot Windows, then run
+`node <plugin>/bin/model-gateway.js setup` again. Do not delete the restored executable while the proxy
+is running.
+
+### Migrating from codex-gateway
+
+`codex-gateway` was renamed to `model-gateway` in 0.38.0. Install and invoke `model-gateway`; the
+plugin keeps resolving legacy `claude-codex-*` model ids saved in existing project settings, while the
+picker advertises the current `claude-gpt-*` and `claude-grok-*` ids. Re-run `setup`, then
+`env --write-user`, and restart Claude Code. `/update-toolshed` also migrates old per-project wiring
+to the global user block. Remove old wiring before uninstalling the old plugin so sessions do not keep
+pointing at a dead shim.
 
 ## Commands
 
@@ -151,7 +176,66 @@ that environment value and start a new session.
 
 After changing any of these variables, restart the gateway (`stop`, then `start`) so its detached shim gets the new environment.
 
-## RC-compatibility mode (restoring `/remote-control`)
+### Settings and environment owned by the plugin
+
+`env --write-user` owns one `env` block in `~/.claude/settings.json`. It writes the gateway URL,
+model discovery, non-streaming fallback protection, tool search, and the output-token limit:
+
+```json
+{
+  "ANTHROPIC_BASE_URL": "http://127.0.0.1:18764",
+  "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+  "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
+  "ENABLE_TOOL_SEARCH": "true",
+  "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1m]",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5[1m]"
+}
+```
+
+The three alias values are detected from the installed Claude CLI, cached under
+`~/.claude/model-gateway/detected-pins.json`, and can be overridden in
+`~/.claude/model-gateway/pins.json`. `env --remove` removes only these gateway-owned keys and the
+legacy `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` value. It never removes unrelated settings.
+
+The plugin's state lives under `~/.claude/model-gateway/`: the downloaded proxy is in `bin/`, logs
+are in `logs/`, route and dispatch metadata use `request-routes.jsonl` and `dispatch-routes.json`,
+the catalog is `catalog.json`, and supervisor or upstream failure markers are stored beside them.
+ChatGPT/Codex OAuth belongs to claude-code-proxy at `~/.config/claude-code-proxy/` (Windows normally
+uses `%APPDATA%\\claude-code-proxy\\`); this plugin does not store those credentials. Grok CLI OAuth
+belongs to `~/.grok/auth.json` unless `CODEX_GATEWAY_GROK_HOME` changes that directory.
+
+Optional process environment overrides are grouped by purpose:
+
+- **Ports and runtime:** `CODEX_GATEWAY_PORT` (shim, default `18764`),
+  `CODEX_GATEWAY_WORKER_PORT`, `CODEX_GATEWAY_PROXY_PORT` (proxy, default `18765`),
+  `CODEX_GATEWAY_SOCKET_PATH`, and `CODEX_GATEWAY_DRAIN_TIMEOUT_MS`.
+- **Models and routing:** `CODEX_GATEWAY_CONTEXT_WINDOW`, `CODEX_GATEWAY_COMPACT_TRIGGER`,
+  `CODEX_GATEWAY_GROK_ENDPOINT`, `CODEX_GATEWAY_ANTHROPIC_UPSTREAM`,
+  `CODEX_GATEWAY_DISPATCH_CACHE_PATH`, `CODEX_GATEWAY_DISPATCH_CACHE_TTL_MS`,
+  `CODEX_GATEWAY_DISPATCH_CACHE_MAX_SESSIONS`, and `CODEX_GATEWAY_LIST_DISPATCH_MODEL=1`.
+- **Compaction and streaming:** `CODEX_GATEWAY_SENTRY=0`,
+  `CODEX_GATEWAY_COMPACT_STREAM_GUARD=0`, `CODEX_GATEWAY_COMPACT_STREAM_RETRIES`,
+  `CODEX_GATEWAY_COMPACT_STREAM_RETRY_DELAY_MS`, `CODEX_GATEWAY_COMPACT_STREAM_MAX_BYTES`,
+  `CODEX_GATEWAY_SSE_HEARTBEAT_S`, `CODEX_GATEWAY_WS_UPGRADE_RETRIES`, and
+  `CODEX_GATEWAY_WS_UPGRADE_RETRY_DELAY_MS`.
+- **Diagnostics and telemetry:** `CODEX_GATEWAY_REQUEST_LOG=0`,
+  `CODEX_GATEWAY_REQUEST_LOG_PATH`, `CLAUDE_CODE_PROPAGATE_TRACEPARENT=1`,
+  `CODEX_GATEWAY_TELEMETRY_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+  `OTEL_EXPORTER_OTLP_ENDPOINT`, and `CODEX_GATEWAY_USAGE_ENDPOINT` (set the gateway-specific
+  telemetry or usage endpoint to `0` to disable that export). `MODEL_GATEWAY_REQUEST_BODY_DIR`
+  changes the local request-body high-water directory.
+- **Advanced setup and compatibility:** `CODEX_GATEWAY_CLAUDE_BIN`,
+  `CODEX_GATEWAY_PIN_CACHE_TTL_MS`, `CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS`,
+  `CODEX_GATEWAY_KEEP_PLAN_TOOLS=1`, `CODEX_GATEWAY_HOSTS_FILE`, and
+  `CODEX_GATEWAY_COMPAT_PORT`.
+
+These overrides are for the detached gateway process. Changing a shell variable alone does not
+rewrite Claude Code settings or update an already-running shim; use `env --write-user`, then restart
+as appropriate.
+
+### RC-compatibility mode (restoring `/remote-control`)
 
 Claude Code's built-in `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the
 real Anthropic host. Remote Control and the Codex/Grok rows in `/model` cannot both work. RC-compatibility
