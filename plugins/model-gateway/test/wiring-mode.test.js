@@ -221,6 +221,16 @@ function runDoctor(home, project) {
   return runNode(home, project, `require(${JSON.stringify(COMMANDS)}).commands.doctor({ readiness: ${JSON.stringify(readiness)} })`);
 }
 
+test('doctor explains the no-model-fallback diagnostic for model divergence', (t) => {
+  const { home, project } = fixture(t);
+  const result = runDoctor(home, project);
+
+  assert.match(result.output, /CLAUDE_CODE_NO_MODEL_FALLBACK=true/);
+  assert.match(result.output, /throwaway session/);
+  assert.match(result.output, /unset it afterwards/);
+  assert.match(result.output, /transient 5xx/);
+});
+
 test('effectiveBaseUrl follows Claude Code precedence and reports shadowed definitions', (t) => {
   const { home, project } = fixture(t);
   const local = path.join(project, '.claude', 'settings.local.json');
