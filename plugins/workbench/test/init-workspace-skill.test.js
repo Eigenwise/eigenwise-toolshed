@@ -84,15 +84,16 @@ test('init-workspace offers Git before writing greenfield workspace artifacts', 
 
 test('Workbench skills hand off global gateway wiring to the installed gateway skill', () => {
   for (const document of [skill, telemetrySkill]) {
-    assert.match(document, /invoke `\/model-gateway:model-gateway` and use its `env --write-user` command/);
-    assert.match(document, /installed plugin command is not on PATH/);
-    assert.match(document, /wiring is global and has no mode to choose, so do not ask about it/);
+    assert.match(document, /invoke\s+`\/model-gateway:model-gateway` and use its `env --write-user` command/);
+    assert.match(document, /installed plugin command\s+is not on PATH/);
     assert.doesNotMatch(document, /`codex-gateway env --/);
     // The mode interview is gone with per-project wiring. Leaving any of it behind
     // would have a skill ask a question the CLI can no longer answer.
     assert.doesNotMatch(document, /--show-mode|--mode global|--mode local|--write-project/);
     assert.doesNotMatch(document, /ask exactly once/);
   }
+  assert.match(skill, /wiring is global-only, so there is no per-project gateway\s+choice to make/);
+  assert.match(telemetrySkill, /wiring is global and has no mode to choose, so do not ask about it/);
 });
 
 test('init-workspace starts with telemetry consent, project intent, then the live plugin picker', () => {
@@ -137,7 +138,7 @@ test('init-workspace rechecks pending telemetry once in Phase 4', () => {
 test('init-workspace keeps CLAUDE.md and live rules as complementary defaults', () => {
   assert.match(skill, /Recommend a lightweight static one seeded through `\/init`/);
   assert.match(skill, /Either answer keeps the live-rules plan/);
-  assert.match(skill, /CLAUDE\.md holds always-loaded project context;\s+live rules handle conditional behavioral enforcement/);
+  assert.match(skill, /whether setup creates\s+always-loaded project context; live rules still handle conditional behavioral enforcement/);
   assert.match(skill, /Recommend a lightweight `CLAUDE\.md` alongside live rules/);
   assert.match(skill, /They have separate jobs: `CLAUDE\.md` is the\nalways-loaded, static project context/);
   assert.match(skill, /Live rules are conditional, targeted behavioral enforcement that gets injected when applicable/);
@@ -146,11 +147,11 @@ test('init-workspace keeps CLAUDE.md and live rules as complementary defaults', 
 });
 
 test('init-workspace writes new live rules as atomic files with a verified manifest', () => {
-  assert.match(skill, /create a new workspace's `\.claude\/live-rules\/` directory directly/);
-  assert.match(skill, /every selected starter rule as one `\.claude\/live-rules\/rules\/<stable-name>\.md`/);
-  assert.match(skill, /SHA-256 hash of\nthe exact UTF-8 rule file contents/);
+  assert.match(skill, /[Cc]reate a new workspace's `\.claude\/live-rules\/`\s+directory directly/);
+  assert.match(skill, /every accepted project rule as one\s+`\.claude\/live-rules\/rules\/<stable-name>\.md`/);
+  assert.match(skill, /SHA-256 hash of\s+the exact UTF-8 rule file contents/);
   assert.match(skill, /Generate and validate those hashes mechanically, never by hand/);
-  assert.match(skill, /fresh workspace\s+never creates `\.claude\/live-rules\.md`/);
+  assert.match(skill, /fresh workspace never creates\s+`\.claude\/live-rules\.md`/);
   assert.match(skill, /migrate its rules into atomic files without deleting the\noriginal/);
 
   assert.match(ruleTemplates, /individual rule files/);
@@ -205,8 +206,8 @@ test('init-workspace proposes a routing profile from repository signals', () => 
   assert.match(skill, /<project>-routing/);
   assert.match(skill, /sidequest profile create <project>-routing --from <starter>/);
   assert.match(skill, /sidequest profile use <project>-routing --project <board>/);
-  assert.match(skill, /never `--profile <starter>`/);
+  assert.match(skill, /never `--profile\s+<starter>`/);
   assert.match(skill, /do not turn category routing into\na form or walk through every category/);
-  assert.match(skill, /Phase 4 applies the profile/);
+  assert.match(skill, /Phase 4\s+applies the profile/);
   assert.match(skill, /apply the profile recorded after Phase 0/);
 });
