@@ -39,6 +39,16 @@
         ]
       },
       {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-oversized-skill.js\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "TaskOutput",
         "hooks": [
           {
