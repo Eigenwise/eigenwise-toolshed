@@ -8,6 +8,31 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.325.0 (2026-08-01)
+
+### model-gateway 0.46.1 → 0.46.2
+
+#### Fixes
+
+- Doctor guidance for CLAUDE_CODE_NO_MODEL_FALLBACK silent-fallback diagnosis (SQ-1204)
+
+### sidequest 3.50.13 → 3.51.0
+
+#### Features
+
+- Add PreCompact compaction-policy hook (board-state pinning + gated veto) (SQ-1201)
+- Brief-by-default board MCP read results (SQ-1203)
+
+#### Fixes
+
+- Fix compaction-policy hook registration (matcher never fired on 2.1.220) (SQ-1207)
+
+### workbench 0.73.1 → 0.74.0
+
+#### Features
+
+- init-workspace compaction configuration step (window + policy) (SQ-1202)
+
 ## v3.324.0 (2026-08-01)
 
 ### model-gateway 0.46.0 → 0.46.1
