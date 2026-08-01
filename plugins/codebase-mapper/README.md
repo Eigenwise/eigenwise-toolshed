@@ -13,6 +13,8 @@ A self-maintaining **codebase map** for Claude Code: small Markdown docs under
 `.claude/.codebase-info/` that describe how your project is built. The map is injected at session start
 and into matching work subagents, so Claude starts already knowing the layout instead of grepping around blind.
 
+> Start with the [codebase-mapper guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+
 You install one plugin, run one skill, and get a map generated from your actual code: a compact
 `INDEX.md` hub plus the detailed docs your project warrants. A bundled `SessionStart` hook puts that
 hub in front of Claude when a session starts, and the `update-codebase-map` skill refreshes the docs
@@ -78,10 +80,14 @@ committed beside it, so you can see what the docs look like in practice.
 
 ## Install
 
+Install codebase-mapper at project scope by default, so its config travels with the repo.
+
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install codebase-mapper@eigenwise-toolshed
+/plugin install codebase-mapper@eigenwise-toolshed --scope project
 ```
+
+`/workbench:init-workspace` installs and configures codebase-mapper for a project for you, so manual installation is the fallback.
 
 ## Skills
 

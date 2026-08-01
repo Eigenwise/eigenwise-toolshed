@@ -8,12 +8,18 @@ Sidequest is a local Kanban board and work router for Claude Code. It keeps tick
 
 The board is local-only. The server binds to `127.0.0.1`, ticket content stays on disk, and the plugin has no hosted service.
 
+> Start with the [sidequest guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+
 ## Install
+
+Install Sidequest at project scope by default, so its config travels with the repo.
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install sidequest@eigenwise-toolshed
+/plugin install sidequest@eigenwise-toolshed --scope project
 ```
+
+`/workbench:init-workspace` installs and configures Sidequest for a project for you, so manual installation is the fallback.
 
 Reload Claude Code after installing or upgrading. The installed plugin runs committed CommonJS files and has no runtime or frontend install step. Development requires Node 22.5+.
 
