@@ -617,11 +617,15 @@ const tools: ToolDefinition[] = [
         overrideLegacyScope: args.overrideLegacyScope === true,
         skipVerify: args.skipVerify === true,
       });
-      if (!delivery.ok) return mutationAck(slug, delivery, delivery.outside?.length ? { strayPaths: delivery.outside } : null);
+      if (!delivery.ok) {
+        const failure: any = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
+        if (delivery.reason === 'verify_failed') failure.verifyFailed = delivery.verify;
+        return Object.assign(mutationAck(slug, delivery), failure);
+      }
       const integration = delivery.integration;
       const verification = store.verifyIntegration(slug, args.ref, { by, skipVerify: args.skipVerify === true });
       if (!verification.ok) {
-        return mutationAck(slug, verification, { delivery: integration, verifyFailed: verification.verify });
+        return Object.assign(mutationAck(slug, verification), { delivery: integration, verifyFailed: verification.verify });
       }
       const verifyReason = verification.verify.status === 'skipped'
         ? 'Verify skipped by choice.'

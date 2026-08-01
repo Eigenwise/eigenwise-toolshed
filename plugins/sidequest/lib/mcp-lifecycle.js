@@ -590,11 +590,15 @@ const tools = [
         overrideLegacyScope: args.overrideLegacyScope === true,
         skipVerify: args.skipVerify === true
       });
-      if (!delivery.ok) return mutationAck(slug, delivery, delivery.outside?.length ? { strayPaths: delivery.outside } : null);
+      if (!delivery.ok) {
+        const failure = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
+        if (delivery.reason === "verify_failed") failure.verifyFailed = delivery.verify;
+        return Object.assign(mutationAck(slug, delivery), failure);
+      }
       const integration = delivery.integration;
       const verification = store.verifyIntegration(slug, args.ref, { by, skipVerify: args.skipVerify === true });
       if (!verification.ok) {
-        return mutationAck(slug, verification, { delivery: integration, verifyFailed: verification.verify });
+        return Object.assign(mutationAck(slug, verification), { delivery: integration, verifyFailed: verification.verify });
       }
       const verifyReason = verification.verify.status === "skipped" ? "Verify skipped by choice." : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.manual}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
       const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`;

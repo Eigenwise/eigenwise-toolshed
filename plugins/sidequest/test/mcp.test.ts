@@ -648,6 +648,44 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   }
 });
 
+test('integrate returns actionable preflight verification failures', async () => {
+  const project = store.ensureProject(committedRepo('sq-mcp-integrate-verify-failure-')).slug;
+  const original = store.integrateSubmission;
+  const verify = {
+    status: 'failed',
+    command: 'node --test failing-test.js',
+    exitCode: 7,
+    logPath: 'C:/tmp/integration-verify.log',
+    outputTail: 'not ok 1 - integration verify failure',
+  };
+  store.integrateSubmission = () => ({
+    ok: false,
+    reason: 'verify_failed',
+    ticket: { ref: 'SQ-verify-failure', status: 'doing' },
+    verify,
+  });
+  try {
+    const result = await callHandler('integrate', { project, ref: 'SQ-verify-failure', by: 'payload-tester' });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'verify_failed');
+    assert.deepEqual(result.verifyFailed, verify);
+  } finally {
+    store.integrateSubmission = original;
+  }
+});
+
+test('verify commands reject direct multi-plugin directory chaining', () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-multi-plugin-verify-')).slug;
+  assert.throws(() => store.createTicket(project, {
+    title: 'unsafe multi-plugin verify',
+    executorVerify: 'cd plugins/sidequest && npm test; cd plugins/skill-retro && npm test',
+  }), /multi-plugin verify commands/);
+  assert.doesNotThrow(() => store.createTicket(project, {
+    title: 'safe multi-plugin verify',
+    executorVerify: '(cd plugins/sidequest && npm test) && (cd plugins/skill-retro && npm test)',
+  }));
+});
+
 test('dispatch warns about external output outside the repo worktree', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-dispatch-external-')).slug;
   const outside = path.join(os.tmpdir(), `sq-mcp-dispatch-audition-${process.pid}.html`);
