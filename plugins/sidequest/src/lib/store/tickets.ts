@@ -223,13 +223,13 @@ function autoApprovedPluginTestScope(ticket?: any, requested?: any, additions?: 
   return normalizeFiles(normalizeFiles(additions).map(pluginTestDirectory).filter(Boolean));
 }
 
-function createScopeRequestMarker(slug?: any, ticket?: any, request?: any, worktree?: any) {
+function createScopeRequestMarker(slug?: any, ticket?: any, request?: any) {
   const dispatch = dispatchState(ticket);
   if (!dispatch || dispatch.sharedTree !== false) return { ok: true };
-  const supplied = String(worktree || '').trim();
-  if (!supplied) return { ok: false, reason: 'worktree_required' };
+  const worktree = String(dispatch.worktree || '').trim();
+  if (!worktree) return { ok: false, reason: 'worktree_unavailable' };
   try {
-    const root = commitScope.repoRoot(supplied);
+    const root = commitScope.repoRoot(worktree);
     const linked = commitScope.linkedWorktree(root);
     if (!linked.ok || !linked.linked) return { ok: false, reason: 'worktree_isolation' };
     fs.mkdirSync(assetsDir(slug, ticket.id), { recursive: true });
@@ -364,7 +364,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     }
     const command = scopeExpansionCommand(t, requested);
     const request = { by, files: additions, requested, covered, at: now };
-    const marker = createScopeRequestMarker(slug, t, request, opts.worktree);
+    const marker = createScopeRequestMarker(slug, t, request);
     if (!marker.ok) return { ok: false, reason: marker.reason, ticket: t };
     t.scopeRequest = request;
     const dispatch = dispatchState(t);

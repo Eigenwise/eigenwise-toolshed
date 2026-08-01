@@ -350,7 +350,7 @@ const tools: ToolDefinition[] = [
       const reason = String(args.reason || '').trim();
       const res = args.files == null && reason
         ? store.denyScopeRequest(slug, args.ref, by, reason, { source: 'mcp' })
-        : store.requestScope(slug, args.ref, by, args.files, { source: 'mcp', worktree: args.worktree });
+        : store.requestScope(slug, args.ref, by, args.files, { source: 'mcp' });
       const changed = res.ok && res.denied
         ? { denied: res.denied }
         : res.ok && res.scopeRequest !== undefined ? {
