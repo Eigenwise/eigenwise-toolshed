@@ -35,9 +35,15 @@ Workbench writes the policy to the project's `.claude/settings.local.json` and p
 
 At session start, Workbench can tell you when the loaded Workbench version is behind the installed version. Run `/reload-plugins` to pick up the installed version, or restart Claude Code if reload does not work. It can also report Toolshed updates available from its cached marketplace data. That cached signal is not a live network check: run `/update-toolshed`, then `/reload-plugins` to refresh the plugins and load them in the current session.
 
-## Observability stack
+## Hook lifecycle and observability details
 
-Workbench can prepare the local observer and an OpenTelemetry Collector. The collector is downloaded as a binary, so SQLite and collector observability work without Docker. Docker is only required for the optional Grafana dashboard. Run `/workbench:enable-project-telemetry` for one project, or `/workbench:workbench-doctor` to check the install without changing it.
+Workbench hooks are fail-open and short-lived. `SessionStart` runs freshness, billing-path, and metadata observation checks; `SessionEnd`, `Stop`, `SubagentStart`, and `SubagentStop` record lifecycle metadata. `UserPromptSubmit` checks plugin freshness, `PreToolUse` records tool metadata and runs the request-body high-water preflight for `Agent` and `Task`, and `PostToolUse` records completion metadata. The hooks never store prompts, responses, code, tool inputs or results, credentials, or environment values.
+
+The bundled commands live under the plugin's `bin/` directory. `update-toolshed --check` is read-only, `install-workspace-plugins --check` inventories a plan, `project-telemetry` enables or disables a repository, `verify-project-telemetry --audit` explains missing attribution, `setup-observability --check` inspects sinks and ports, `install-otel-collector` writes a Collector config, `workbench-observer` runs the canonical observer, `token-usage-report` reads the local SQLite report, and `workbench-statusline` provides the optional statusline shim. The observer and Collector are managed locally by a detached ensure worker, which adopts healthy listeners, heals managed version drift, and stays a no-op without consent.
+
+Supported telemetry sinks are `grafana-lgtm`, `otlp`, `posthog`, and `none`. SQLite remains the source of truth. Grafana and generic OTLP receive redacted signals through the Collector; PostHog emits content-free events and requires an explicit HTTPS regional host, `phc_` key, and remote-egress consent; `none` keeps local SQLite and reports only. Remote OTLP also requires HTTPS. The request high-water guard reads the gateway's real per-session peak and warns near the 32 MB body limit before an executor starts.
+
+## Observability stack
 
 The statusline shim is installed by the setup flow when selected. It reports the current context and usage path while the observer records metadata counts. Use `/workbench:workbench-doctor` when the dashboard is empty or the statusline says the local service is unavailable.
 

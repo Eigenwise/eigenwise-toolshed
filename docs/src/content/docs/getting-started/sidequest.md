@@ -133,6 +133,22 @@ A board can opt out of routed dispatches with `sidequest routing disabled --proj
 
 On the first prompt in each session, an active routed board adds one advisory reminder: gather enough read-only evidence or use `Explore`, then write precise tickets and route implementation by default. It leaves informed inline judgment to the orchestrator. The inline hook records activity counters without blocking or injecting repeat reminders. Both skip subagents, automation prompts, and boards with routing disabled.
 
+### MCP surface and local boundary
+
+The MCP server mirrors the CLI and stays local. Read tools cover tickets, stories, contracts, decision logs, liveness, changes, readiness, comments, and categories. Collaboration tools cover ticket CRUD, plans, links, assignments, dispatch, and native-agent cleanup. Lifecycle tools cover claims, checkpoints, scope requests, commits, submissions, integration, grooming close, verdicts, releases, and claim sweeps. Administration tools cover routing profiles, category mutations, fallbacks, board configuration, projects, models, and board archive/restore. The dashboard and MCP server bind to loopback, keep board data on disk, and provide no hosted service.
+
+Routine reads are intentionally compact: `list`, `ready`, `pulse`, and `changes` return brief payloads, comments elide older bodies on long threads, and `detail: true` or `full: true` is opt-in for handoffs and audits. This keeps repeated orchestration reads from dominating context and billing.
+
+### Hooks and safety guards
+
+Sidequest hooks cover prompt reminders, tool preflight, failed-agent quota recovery, stop and compaction guidance, session claim reconciliation, and executor registration and cleanup. Pre-tool guards protect the Claude home directory, Windows paths, destructive Git commands, shared-tree commits, worktree isolation, task output, peer messages, repeated commands, and executor identity. Compaction uses only automatic `PreCompact`: `pin` preserves active tickets and held publish locks in a 1500-byte-bounded instruction, `veto` can block at most two unsafe automatic attempts, and `off` disables the policy. Counters live under `SIDEQUEST_HOME/compaction-policy/` per session.
+
+### CLI and environment reference
+
+The CLI includes ticket, story, profile, category, routing, readiness, claim, checkpoint, dispatch, native-agent, commit, submit, integrate, done, release, grooming, verdict, scope-request, reconciliation, comments, plans, links, assignments, reminders, archive, board, dashboard, and server commands. Operational commands include `claims sweep`, `worktrees sweep`, `recover-shared`, and `publish lock|unlock|status|queue`.
+
+The main settings are `SIDEQUEST_HOME` (central SQLite store), `SIDEQUEST_AGENTS_DIR` (executor directory), `SIDEQUEST_PORT` (dashboard port), `SIDEQUEST_CLAIM_IDLE_MIN` and `SIDEQUEST_CLAIM_ABANDON_MIN` (activity backstops), legacy `SIDEQUEST_CLAIM_TTL_MIN`, `SIDEQUEST_NUDGE`, and `SIDEQUEST_COMPACTION_POLICY`. When Workbench observability is enabled, Sidequest sends lifecycle metadata only, never ticket text, comments, prompts, attachments, tokens, credentials, or errors.
+
 ## Work a ticket
 
 Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.

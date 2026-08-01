@@ -3,7 +3,7 @@ title: Dashboard
 description: Inspect local Claude Code activity from one place.
 ---
 
-The dashboard reads local telemetry from enabled projects. Use the project filter for one codebase, or the global view for a cross-project picture.
+The dashboard reads local telemetry from enabled projects. Use the project filter for one codebase, or the global view for a cross-project picture. It is a local view over SQLite and loopback services, not a hosted telemetry console. The global view includes board-wide MCP connection activity; per-project views filter project-attributed records.
 
 ## Board routing
 

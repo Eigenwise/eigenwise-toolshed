@@ -49,6 +49,8 @@ export default defineConfig({
             { label: 'Codebase Mapper', slug: 'getting-started/codebase-mapper' },
             { label: 'Live Rules', slug: 'getting-started/live-rules' },
             { label: 'Skill Retro', slug: 'getting-started/skill-retro' },
+            { label: 'Release process', slug: 'release-process' },
+            { label: 'Contributing and docs internals', slug: 'contributing' },
           ],
         },
         {
