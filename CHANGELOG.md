@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.332.0 (2026-08-01)
+
+### sidequest 3.54.0 → 3.54.1
+
+#### Fixes
+
+- Scope-request markers stay out of your repo (SQ-1253) [`09e0294`](https://github.com/Eigenwise/eigenwise-toolshed/commit/09e02943)
+  Asking to widen a ticket's scope used to drop a `.sidequest/scope-request-*.json` file into the executor's worktree and stage it, so it could ride along into a commit and land on main as a stray board artifact. The marker now lives in Sidequest's own asset directory. Nothing is written to your working tree and nothing is staged, so there's no `.gitignore` entry to discover after the fact.
+- The high-stakes review advisory now tells you how to satisfy it (SQ-1257) [`e87cb07`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e87cb077)
+  Integrating a high-stakes ticket without a review used to warn `high-stakes ticket integrated without a recorded review pass` and stop there, leaving you to guess the mechanism. The obvious guess is wrong: `verdict` belongs to the experiment loop and refuses with `no_oracle`. The advisory now names the exact way to close it, record a comment beginning `reviewed-by: <ref>`, and it resolves on its own when a completed `review-audit` ticket links to the one being integrated. The `no_oracle` refusal points at the review path too, instead of only saying no.
+
 ## v3.331.0 (2026-08-01)
 
 ### sidequest 3.53.2 → 3.54.0
