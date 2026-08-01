@@ -3,11 +3,15 @@ title: Workbench setup
 description: Set up and maintain a Claude Code workspace with Workbench.
 ---
 
-Workbench handles workspace setup, plugin updates, local health checks, observability setup, and retrospectives.
+Workbench handles workspace setup, plugin updates, local health checks, observability setup, and retrospectives. It is the only plugin you install by hand before anything else.
+
+Install it for your user account:
 
 ```text
 /plugin install workbench@eigenwise-toolshed --scope user
 ```
+
+User scope matters because Workbench is the workspace manager you want in every project. A second project-scoped copy would double-load its hooks, and `/workbench:init-workspace` requires the user-scope install.
 
 Reload Claude Code after installing. From a project directory, run `/workbench:init-workspace`. The setup interview proceeds in these steps:
 
