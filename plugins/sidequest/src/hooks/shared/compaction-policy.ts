@@ -108,6 +108,7 @@ async function boardState(cwd: string): Promise<{ instruction: string; unsafeRea
 }
 
 export async function compactionPolicyOutput(input: Record<string, unknown>): Promise<string> {
+  if (input.hook_event_name !== 'PreCompact' || input.trigger !== 'auto') return '';
   const mode = policy();
   if (mode === 'off') return '';
   const sessionId = String(input.session_id || input.sessionId || process.env.CLAUDE_CODE_SESSION_ID || '').trim();
@@ -122,7 +123,7 @@ export async function compactionPolicyOutput(input: Record<string, unknown>): Pr
       return state.instruction;
     }
     const counter = readCounter(sessionId);
-    if (counter.blocks >= 3) {
+    if (counter.blocks >= 2) {
       writeCounter(sessionId, 0);
       return state.instruction;
     }
