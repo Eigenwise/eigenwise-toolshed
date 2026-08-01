@@ -23,12 +23,12 @@ __export(category_defaults_exports, {
   STARTER_ROUTING_PROFILES: () => STARTER_ROUTING_PROFILES
 });
 module.exports = __toCommonJS(category_defaults_exports);
-const ROUTING_PROFILE_SEED_REVISION = 4;
+const ROUTING_PROFILE_SEED_REVISION = 5;
 const DEFAULT_CATEGORIES = [
   {
     id: "codebase-exploration",
     name: "Codebase exploration",
-    description: "Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.",
+    description: "Trace and explain how an unfamiliar code path, feature, or convention works. Existing code bounds the answer and no design choice is required, so medium code reasoning is sufficient. The deliverable is a grounded map of existing code, not an implementation or design recommendation.",
     route: { model: "codex-gpt-5-6-luna", effort: "medium" },
     fallback: null,
     contract: "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact path under .claude/.codebase-info as its only write scope.",
@@ -39,7 +39,7 @@ const DEFAULT_CATEGORIES = [
   {
     id: "debugging",
     name: "Debugging",
-    description: 'Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. The first job is to reproduce and narrow the hypothesis space. Use testing instead when the intended behavior is already known and only verification is needed — the two share a verification step but start from opposite certainty about the cause. "Why is this slow" belongs here; "does approach X make it faster" is spike-investigation.',
+    description: 'Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. Selecting and eliminating competing hypotheses requires high-capability reasoning. Use behavior-verification when the intended behavior is already known and only verification is needed. "Why is this slow" belongs here; "does approach X make it faster" is spike-investigation.',
     route: { model: "opus", effort: "high" },
     fallback: { model: "codex-gpt-5-6-terra", effort: "high" },
     contract: "Reproduce first; use a hypothesis loop and prove the fix.",
@@ -49,7 +49,7 @@ const DEFAULT_CATEGORIES = [
   {
     id: "experiment",
     name: "Experiment",
-    description: "Use ONLY when the verdict is a human's judgement and no offline metric has been shown to reproduce it. If a test can decide, it is coding or debugging.",
+    description: "Use ONLY when the verdict is a human's judgement and no offline metric has been shown to reproduce it. Comparing candidates against an irreducibly subjective oracle requires high-capability judgement. If a test can decide, it is coding or debugging.",
     route: { model: "opus", effort: "high" },
     fallback: { model: "codex-gpt-5-6-sol", effort: "high" },
     contract: "Read the experiment log fully before the first edit. Run one hypothesis per round. Always commit the candidate to sidequest/experiment/<ref> and pin refs/sidequest/<ref>/r<N>, even when it loses. Write the oracle ask as a blind ranked comparison. Never paraphrase the user's verdict. Hand off with release and the oracle ask.",
@@ -58,19 +58,19 @@ const DEFAULT_CATEGORIES = [
     enabled: true
   },
   {
-    id: "docs-writing",
-    name: "Documentation writing",
-    description: "Write or edit prose from supplied facts and a clear audience, without needing to investigate technical truth beyond the provided context. Use `research` when sources must be found or checked.",
+    id: "implementation-explanation",
+    name: "Implementation-grounded explanation",
+    description: "Explain established technical behavior for a named audience when the implementation already supplies the factual boundary. Known code bounds both facts and structure, so medium code-and-language capability is sufficient.",
     route: { model: "codex-gpt-5-6-luna", effort: "medium" },
-    fallback: null,
-    contract: "Preserve the requested voice and scope; do not invent facts.",
+    fallback: { model: "sonnet", effort: "medium" },
+    contract: "Verify every behavioral claim against the supplied implementation, preserve the requested voice and scope, and do not invent APIs or guarantees.",
     artifactRoots: [],
     enabled: true
   },
   {
     id: "general",
     name: "General fallback",
-    description: "Required and undeletable fallback. Use only when no more specific category fits or the request is too underspecified to classify safely. Reclassify after the first concrete evidence appears.",
+    description: "Required and undeletable fallback. Use only when no more specific capability fits or the request is too underspecified to classify safely. This route performs bounded triage, so medium reasoning is sufficient. Reclassify after the first concrete evidence appears.",
     route: { model: "codex-gpt-5-6-luna", effort: "medium" },
     fallback: null,
     contract: "Clarify or inspect just enough to select a specific category; avoid broad work by default.",
@@ -88,12 +88,23 @@ const DEFAULT_CATEGORIES = [
     enabled: true
   },
   {
-    id: "research",
-    name: "Research",
-    description: "External research from web sources, at any depth: a bounded lookup with a few sources up to a substantial multi-source question needing fan-out searching and fact-checking. Scale depth to the question. Use spike-investigation when the unknown is answerable by building or running something in this repo or system.",
+    id: "source-lookup",
+    name: "Source lookup",
+    description: "Resolve a bounded external documentation or factual question with a small authoritative source set. The narrow search surface and concrete answer make medium research capability sufficient. Use evidence-research when claims must be reconciled across sources.",
     route: { model: "codex-gpt-5-6-luna", effort: "medium" },
     fallback: { model: "sonnet", effort: "medium" },
-    contract: "Prefer primary sources and cross-check material claims; deliver a concise cited synthesis. For a bounded lookup, invoke the saved `web-research` Workflow with the ticket question as `args`. For a substantial question, fan out searches across angles and adversarially verify key claims against independent sources. No repository edits.",
+    contract: "Prefer primary sources, cite material claims, stop when the bounded question is answered, and make no repository edits.",
+    artifactRoots: [],
+    readonly: true,
+    enabled: true
+  },
+  {
+    id: "evidence-research",
+    name: "Evidence research",
+    description: "Investigate a substantial external question through fan-out searching, independent verification, or reconciliation of conflicting sources. The breadth and conflict resolution require high research capability. Use spike-investigation when the unknown is answerable by building or running something in this repo or system.",
+    route: { model: "sonnet", effort: "high" },
+    fallback: null,
+    contract: "Fan out across distinct source angles, prefer primary sources, verify key claims independently, state remaining uncertainty, and make no repository edits.",
     artifactRoots: [],
     readonly: true,
     enabled: true
@@ -101,7 +112,7 @@ const DEFAULT_CATEGORIES = [
   {
     id: "review-audit",
     name: "Review or audit",
-    description: "Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review: threat-model the change and hunt injection, authz, secrets exposure, and unsafe-input issues when the ticket calls for it.",
+    description: "Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. Adversarially checking interactions and tracing concrete impact requires high code-review capability. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review when the ticket calls for it.",
     route: { model: "codex-gpt-5-6-terra", effort: "high" },
     fallback: { model: "sonnet", effort: "high" },
     contract: "Report concrete findings with evidence, confidence, and impact; do not edit unless asked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.",
@@ -112,7 +123,7 @@ const DEFAULT_CATEGORIES = [
   {
     id: "spike-investigation",
     name: "Spike or investigation",
-    description: `Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system ("does approach X actually work/perform here"); if it's answerable by reading external sources — docs, tool behavior, comparative research — use research instead. Also covers direction-setting design: a system boundary, migration, or cross-cutting technical direction where several valid approaches have material tradeoffs and the deliverable is a decision framework and recommendation rather than implementation.`,
+    description: "Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. Comparing viable approaches under material uncertainty requires high technical reasoning. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system; use source-lookup or evidence-research for external-source questions.",
     route: { model: "opus", effort: "high" },
     fallback: { model: "codex-gpt-5-6-sol", effort: "high" },
     contract: "Timebox exploration; record what was tested, ruled out, and recommended. For design-direction work: state constraints, compare viable options, recommend one, and name tradeoffs.",
@@ -141,32 +152,32 @@ const DEFAULT_CATEGORIES = [
     enabled: true
   },
   {
-    id: "testing",
-    name: "Testing and verification",
-    description: "Add, run, repair, or interpret a focused test or verification flow where the intended behavior is already known. Use `debugging` when the cause of a failing result is unknown.",
-    route: { model: "codex-gpt-5-6-luna", effort: "high" },
+    id: "behavior-verification",
+    name: "Behavior verification",
+    description: "Add, run, repair, or interpret a focused verification flow where the intended behavior and deciding signal are already known. Those fixed constraints make medium execution-and-test reasoning sufficient. Use debugging when the cause of a failing result is unknown.",
+    route: { model: "codex-gpt-5-6-luna", effort: "medium" },
     fallback: null,
-    contract: "Exercise the named behavior and report the observed result faithfully.",
+    contract: "Exercise the named behavior with the narrowest reliable check and report the observed result faithfully.",
     artifactRoots: [],
     enabled: true
   },
   {
-    id: "ui-frontend",
-    name: "UI and frontend work",
-    description: "Build or substantially reshape a user-facing interface where visual hierarchy, interaction design, and implementation must work together. Includes charts, graphs, dashboards, and any data visualization, in any medium (HTML, SVG, plotting libraries, notebooks). Use `coding.easy` for a purely mechanical UI tweak.",
+    id: "interaction-design-implementation",
+    name: "Interaction design and implementation",
+    description: "Build or substantially reshape a user-facing interface where visual hierarchy, interaction design, and implementation must work together. Coordinating those concerns and judging rendered results requires high frontend capability. Includes charts, dashboards, and other data visualization. Use coding.easy for a purely mechanical UI tweak.",
     route: { model: "codex-gpt-5-6-terra", effort: "high" },
     fallback: { model: "sonnet", effort: "high" },
-    contract: "Match the product's visual language and validate the rendered flow, not only source code. For charts and data visualizations, read the dataviz skill's references before writing chart code, follow its palette/form/accessibility rules, and verify the RENDERED output.",
+    contract: "Match the product's visual language and validate the rendered flow, not only source code. For charts and data visualizations, read the dataviz skill's references before writing chart code, follow its palette, form, and accessibility rules, and verify the rendered output.",
     artifactRoots: [],
     enabled: true
   },
   {
-    id: "visual-review",
-    name: "Visual review",
-    description: `Fresh-eyes review of a RENDERED interface — a dashboard, web UI, TUI, or report — judged visually through browser screenshots (Playwright) as a first-time user would see it: confusing representations, misleading labels or units, naming defects, dead panels, layout and flow problems. Belongs here: "review this dashboard's UX", "does this page make sense", screenshot-driven design critique. Does not belong here: reviewing code or diffs (review-audit), building or fixing UI (ui-frontend/coding), or anything whose evidence is source files rather than pixels.`,
+    id: "visual-evaluation",
+    name: "Visual evaluation",
+    description: "Judge a rendered interface through browser screenshots as a first-time user would see it, finding confusing representations, misleading labels, dead panels, and layout or flow problems. Visual judgement needs a multimodal model, while the bounded review-only deliverable keeps effort at medium. Source-code evidence belongs in review-audit.",
     route: { model: "opus", effort: "medium" },
     fallback: { model: "codex-gpt-5-6-terra", effort: "medium" },
-    contract: "Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliverable is a prioritized findings comment on the ticket — worst problems first, each naming the exact panel/element and what a user would misunderstand.",
+    contract: "Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliver a prioritized findings comment on the ticket, worst problems first, with each finding naming the exact element and what a user would misunderstand.",
     artifactRoots: [],
     readonly: true,
     enabled: true
@@ -174,29 +185,29 @@ const DEFAULT_CATEGORIES = [
 ];
 const CREATIVE_MUSIC_CATEGORIES = [
   {
-    id: "creative-direction",
-    name: "Creative direction",
-    description: "Shape a musical concept, mood, structure, or artistic direction before detailed composition or production work begins.",
+    id: "concept-framing",
+    name: "Concept framing",
+    description: "Resolve an open musical brief into a coherent mood, structure, palette, and artistic direction before detailed writing begins. The open-ended aesthetic choices require high creative capability.",
     route: { model: "fable", effort: "high" },
     fallback: { model: "opus", effort: "high" },
-    contract: "State genre, instrumentation, audience, and mood assumptions explicitly. Do not invent artist attribution or claim a style choice came from a source that was not provided.",
+    contract: "State genre, instrumentation, audience, mood, and reference assumptions explicitly. Present a coherent direction without composing details the brief has not reached, and never invent attribution.",
     artifactRoots: [],
     enabled: true
   },
   {
-    id: "music-composition",
-    name: "Music composition",
-    description: "Write or develop lyrics, harmony, melody, arrangement, orchestration, or production direction for a concrete musical piece.",
+    id: "musical-generation",
+    name: "Musical generation",
+    description: "Generate or develop lyrics, harmony, melody, arrangement, orchestration, or production choices for a concrete piece. Maintaining long-range musical and lyrical coherence requires high creative capability.",
     route: { model: "fable", effort: "high" },
     fallback: { model: "opus", effort: "high" },
-    contract: "State genre, instrumentation, performer, and audience assumptions. Keep proposed musical choices internally consistent and never invent attribution.",
+    contract: "State genre, instrumentation, performer, audience, and structural assumptions. Keep musical choices internally consistent and never invent attribution.",
     artifactRoots: [],
     enabled: true
   },
   {
-    id: "critique-revision",
-    name: "Critique and revision",
-    description: "Critique an existing musical draft and revise its lyrics, harmony, arrangement, production, or overall structure.",
+    id: "evaluative-revision",
+    name: "Evaluative revision",
+    description: "Diagnose weaknesses in an existing musical draft and make targeted lyrical, harmonic, structural, arrangement, or production revisions. The supplied draft narrows the solution space, so medium creative capability is sufficient.",
     route: { model: "fable", effort: "medium" },
     fallback: { model: "opus", effort: "medium" },
     contract: "Name the supplied genre, instrumentation, audience, and intent assumptions, then tie each revision to a specific weakness in the draft.",
@@ -204,73 +215,78 @@ const CREATIVE_MUSIC_CATEGORIES = [
     enabled: true
   },
   {
-    id: "research",
-    name: "Research",
-    description: "Find sourced musical, historical, cultural, technical, or production context needed to support creative work.",
+    id: "context-research",
+    name: "Context research",
+    description: "Establish musical, historical, cultural, technical, or production context from authoritative sources. Evaluating domain-specific claims across sources requires high research capability. Creative generation belongs in concept-framing or musical-generation.",
     route: { model: "sonnet", effort: "high" },
     fallback: null,
-    contract: "Prefer primary sources, cite material claims, state uncertainty, and never invent attribution.",
+    contract: "Prefer primary sources, cite material claims, state uncertainty, never invent attribution, and make no project edits.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   },
   {
     id: "general",
     name: "General fallback",
-    description: "Handle creative-music work that does not yet fit a more specific direction, composition, revision, or research category.",
+    description: "Handle creative-music work whose needed capability is not yet clear. Musical fluency is still needed to classify the brief. Medium effort is enough because the first step is clarification.",
     route: { model: "fable", effort: "medium" },
     fallback: { model: "opus", effort: "medium" },
-    contract: "Clarify genre, instrumentation, audience, and intended outcome before proceeding. Never invent attribution.",
+    contract: "Clarify genre, instrumentation, audience, source material, and intended outcome before proceeding. Never invent attribution.",
     artifactRoots: [],
     enabled: true
   }
 ];
 const RESEARCH_CATEGORIES = [
   {
-    id: "quick-research",
-    name: "Quick research",
-    description: "Answer a bounded factual question with a small number of authoritative sources and a clearly limited search surface.",
+    id: "source-lookup",
+    name: "Source lookup",
+    description: "Answer a bounded factual question from a small authoritative source set. The narrow search surface and concrete stopping point make medium research capability sufficient.",
     route: { model: "sonnet", effort: "medium" },
     fallback: null,
-    contract: "Prefer primary sources, cite each material claim, and stop when the bounded question is answered.",
+    contract: "Prefer primary sources, cite each material claim, stop when the bounded question is answered, and make no project edits.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   },
   {
-    id: "deep-research",
-    name: "Deep research",
-    description: "Investigate a substantial question through fan-out searching, independent verification, and reconciliation of conflicting evidence.",
+    id: "evidence-investigation",
+    name: "Evidence investigation",
+    description: "Investigate a substantial question through source fan-out, independent verification, and reconciliation of conflicting evidence. The breadth and conflict resolution require high research capability.",
     route: { model: "sonnet", effort: "high" },
     fallback: null,
-    contract: "Fan out across distinct source angles, verify key claims independently, and state remaining uncertainty.",
+    contract: "Fan out across distinct source angles, verify key claims independently, state remaining uncertainty, and make no project edits.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   },
   {
-    id: "analysis-synthesis",
-    name: "Analysis and synthesis",
-    description: "Turn an established source set into a recommendation, decision, or explanatory synthesis where evidence and uncertainty must stay visible.",
+    id: "evidence-synthesis",
+    name: "Evidence synthesis",
+    description: "Turn an established source set into a recommendation, decision, or explanatory model while keeping evidence, inference, and uncertainty separate. Weighing plausible readings and downstream implications requires high open-ended synthesis capability.",
     route: { model: "fable", effort: "high" },
     fallback: { model: "opus", effort: "high" },
-    contract: "Separate source evidence from inference, compare plausible readings, and qualify recommendations with uncertainty.",
+    contract: "Separate source evidence from inference, compare plausible readings, qualify recommendations with uncertainty, and make no project edits.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   },
   {
     id: "general",
     name: "General fallback",
-    description: "Handle research work whose depth or deliverable is not yet clear enough for a more specific category.",
+    description: "Handle research work whose question, source standard, or deliverable is not yet clear enough to classify. This route only bounds the inquiry, so medium research capability is sufficient.",
     route: { model: "sonnet", effort: "medium" },
     fallback: null,
-    contract: "Bound the question, identify the needed source quality, and report uncertainty explicitly.",
+    contract: "Bound the question, identify the needed source quality and output, report uncertainty explicitly, and make no project edits.",
     artifactRoots: [],
+    readonly: true,
     enabled: true
   }
 ];
 const WRITING_CATEGORIES = [
   {
-    id: "drafting",
-    name: "Drafting",
-    description: "Create original prose from supplied facts, goals, audience, and voice constraints.",
+    id: "prose-generation",
+    name: "Prose generation",
+    description: "Create original prose by reconciling supplied facts, goals, audience, structure, and voice constraints. Sustaining those open-ended language choices across a new draft requires high creative-writing capability.",
     route: { model: "fable", effort: "high" },
     fallback: { model: "opus", effort: "high" },
     contract: "Honor the requested audience and voice, distinguish assumptions from facts, and do not invent support.",
@@ -278,9 +294,9 @@ const WRITING_CATEGORIES = [
     enabled: true
   },
   {
-    id: "editing",
-    name: "Editing",
-    description: "Revise existing prose for clarity, structure, tone, concision, or consistency without changing its factual basis.",
+    id: "meaning-preserving-revision",
+    name: "Meaning-preserving revision",
+    description: "Improve existing prose for clarity, structure, tone, concision, or consistency without changing its factual basis. The source draft constrains both meaning and scope, so medium creative-writing capability is sufficient.",
     route: { model: "fable", effort: "medium" },
     fallback: { model: "opus", effort: "medium" },
     contract: "Preserve meaning and voice unless the brief explicitly asks to change them. Flag unsupported claims instead of rewriting them as fact.",
@@ -288,32 +304,23 @@ const WRITING_CATEGORIES = [
     enabled: true
   },
   {
-    id: "fact-checking",
-    name: "Fact checking",
-    description: "Verify factual claims in a draft against authoritative sources and identify unsupported, outdated, or misleading language.",
+    id: "source-verification",
+    name: "Source verification",
+    description: "Verify supplied factual claims against authoritative sources and identify false, unsupported, outdated, or misleading language. Comparing claims with source context and uncertainty requires high research capability.",
     route: { model: "sonnet", effort: "high" },
     fallback: null,
-    contract: "Cite authoritative sources, separate false from unverified, and state confidence and uncertainty.",
+    contract: "Cite authoritative sources, separate false from unverified, state confidence and uncertainty, and do not revise the draft or project files.",
     artifactRoots: [],
-    enabled: true
-  },
-  {
-    id: "docs-writing",
-    name: "Documentation writing",
-    description: "Write or revise technical documentation from an established implementation and known product behavior.",
-    route: { model: "codex-gpt-5-6-luna", effort: "medium" },
-    fallback: { model: "sonnet", effort: "medium" },
-    contract: "Verify behavior against the supplied implementation, write for the named audience, and do not invent APIs or guarantees.",
-    artifactRoots: [],
+    readonly: true,
     enabled: true
   },
   {
     id: "general",
     name: "General fallback",
-    description: "Handle writing work whose source material or requested operation is not yet clear enough for a more specific category.",
-    route: { model: "fable", effort: "medium" },
-    fallback: { model: "opus", effort: "medium" },
-    contract: "Clarify audience, voice, source material, and factual constraints before drafting.",
+    description: "Handle writing work whose source material, audience, or requested operation is not yet clear enough to classify. Clarifying those constraints needs broad language understanding, while medium effort is sufficient because drafting waits until classification.",
+    route: { model: "sonnet", effort: "medium" },
+    fallback: null,
+    contract: "Clarify audience, voice, source material, factual constraints, and intended operation before writing.",
     artifactRoots: [],
     enabled: true
   }
@@ -322,25 +329,25 @@ const STARTER_ROUTING_PROFILES = [
   {
     id: "coding",
     name: "Coding",
-    description: "Software engineering, debugging, verification, technical research, and interface work.",
+    description: "Software work separated by the capability needed to explore, decide, implement, verify, review, research, explain, or judge a rendered result.",
     categories: DEFAULT_CATEGORIES
   },
   {
     id: "creative-music",
     name: "Creative music",
-    description: "Creative direction, composition, production, critique, and sourced musical context.",
+    description: "Musical work separated by concept framing, generation, evaluative revision, and sourced context research.",
     categories: CREATIVE_MUSIC_CATEGORIES
   },
   {
     id: "research",
     name: "Research",
-    description: "Bounded lookup, deep source verification, and evidence-led synthesis.",
+    description: "Research separated by bounded retrieval, multi-source investigation, and evidence synthesis.",
     categories: RESEARCH_CATEGORIES
   },
   {
     id: "writing",
     name: "Writing",
-    description: "Original drafting, editing, fact checking, and technical documentation.",
+    description: "Writing separated by open-ended generation, constrained revision, and source verification.",
     categories: WRITING_CATEGORIES
   }
 ];
