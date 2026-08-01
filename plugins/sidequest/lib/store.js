@@ -21,6 +21,7 @@ const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
 const { createReads } = require("./store/reads.js");
 const { createClaims } = require("./store/claims.js");
+const { createLocks } = require("./store/locks.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
@@ -183,6 +184,19 @@ function cloneCached(value) {
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
+const {
+  acquireLock,
+  busyWait,
+  releaseLock,
+  testClaimLockDelayMs,
+  ticketLockPath,
+  withTicketLock
+} = createLocks({
+  fs,
+  path,
+  ticketsDir,
+  transaction
+});
 const { copyAsset, saveAssetData, assetPath } = createAssets({ assetsDir, ensureDir });
 const {
   NOTIFICATION_KINDS,
@@ -3485,70 +3499,6 @@ function listActive(slug) {
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 function priorityRank(p) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? PRIORITY_RANK[String(p)] ?? 9 : 9;
-}
-function ticketLockPath(slug, id) {
-  return path.join(ticketsDir(slug), "." + path.basename(String(id)) + ".lock");
-}
-const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
-function busyWait(ms) {
-  Atomics.wait(LOCK_SLEEP, 0, 0, ms);
-}
-function testClaimLockDelayMs() {
-  const delay = Number(process.env.SIDEQUEST_TEST_CLAIM_LOCK_DELAY_MS);
-  return Number.isInteger(delay) && delay > 0 ? delay : 0;
-}
-function acquireLock(lockPath) {
-  const STALE_LOCK_MS = 3e4;
-  const RETRY_MS = 10;
-  const MAX_ATTEMPTS = STALE_LOCK_MS / RETRY_MS;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    try {
-      const fd = fs.openSync(lockPath, "wx");
-      try {
-        fs.writeSync(fd, String(process.pid) + " " + (/* @__PURE__ */ new Date()).toISOString());
-      } catch (_) {
-      }
-      fs.closeSync(fd);
-      return true;
-    } catch (e) {
-      if (!e || e.code !== "EEXIST") return false;
-      try {
-        const st = fs.statSync(lockPath);
-        if (Date.now() - st.mtimeMs > STALE_LOCK_MS) {
-          try {
-            fs.unlinkSync(lockPath);
-          } catch (_) {
-          }
-          continue;
-        }
-      } catch (_) {
-        continue;
-      }
-      busyWait(RETRY_MS);
-    }
-  }
-  return false;
-}
-function releaseLock(lockPath) {
-  const RETRY_MS = 5;
-  for (let attempt = 0; attempt < 1e3; attempt++) {
-    try {
-      fs.unlinkSync(lockPath);
-      return;
-    } catch (error) {
-      if (!error || !["EACCES", "EBUSY", "EPERM"].includes(error.code)) return;
-      busyWait(RETRY_MS);
-    }
-  }
-}
-function withTicketLock(slug, id, fn) {
-  const lock = ticketLockPath(slug, id);
-  if (!acquireLock(lock)) return { ok: false, reason: "busy" };
-  try {
-    return transaction(fn);
-  } finally {
-    releaseLock(lock);
-  }
 }
 function stableExecutorName(ticket, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error("dispatch executor requires a routable ticket.");
