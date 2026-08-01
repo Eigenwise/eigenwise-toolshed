@@ -119,7 +119,14 @@ let DISPATCH_DESCRIPTION_MIN: any;
 function executorText(...args: any[]) { return warningsLayer.executorText(...args); }
 function manualVerify(...args: any[]) { return warningsLayer.manualVerify(...args); }
 function verifyCommandError(...args: any[]) { return warningsLayer.verifyCommandError(...args); }
-function requireVerifyCommand(...args: any[]) { return warningsLayer.requireVerifyCommand(...args); }
+function requireVerifyCommand(...args: any[]) {
+  warningsLayer.requireVerifyCommand(...args);
+  const command = String(args[0] || '').trim();
+  const pluginDirectoryChanges = command.match(/(?:^|[;&]{1,2})\s*cd\s+plugins\/[^\s;&]+/g) || [];
+  if (pluginDirectoryChanges.length > 1) {
+    throw new Error('multi-plugin verify commands must use one subshell per plugin joined with &&, for example: (cd plugins/a && npm test) && (cd plugins/b && npm test)');
+  }
+}
 function ticketReferenceWarnings(...args: any[]) { return warningsLayer.ticketReferenceWarnings(...args); }
 function ticketPrescribesFix(...args: any[]) { return warningsLayer.ticketPrescribesFix(...args); }
 function ticketCategoryWarnings(...args: any[]) { return warningsLayer.ticketCategoryWarnings(...args); }

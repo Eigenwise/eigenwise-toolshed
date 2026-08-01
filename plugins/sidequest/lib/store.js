@@ -187,7 +187,12 @@ function verifyCommandError(...args) {
   return warningsLayer.verifyCommandError(...args);
 }
 function requireVerifyCommand(...args) {
-  return warningsLayer.requireVerifyCommand(...args);
+  warningsLayer.requireVerifyCommand(...args);
+  const command = String(args[0] || "").trim();
+  const pluginDirectoryChanges = command.match(/(?:^|[;&]{1,2})\s*cd\s+plugins\/[^\s;&]+/g) || [];
+  if (pluginDirectoryChanges.length > 1) {
+    throw new Error("multi-plugin verify commands must use one subshell per plugin joined with &&, for example: (cd plugins/a && npm test) && (cd plugins/b && npm test)");
+  }
 }
 function ticketReferenceWarnings(...args) {
   return warningsLayer.ticketReferenceWarnings(...args);
