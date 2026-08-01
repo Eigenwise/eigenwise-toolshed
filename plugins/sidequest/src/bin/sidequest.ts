@@ -130,7 +130,7 @@ const HELP_COMMANDS: any = {
   dashboard: 'sidequest dashboard [--port N] [--no-open]',
   serve: 'sidequest serve [--port N]',
   stop: 'sidequest stop',
-  story: 'sidequest story <add|list|show|contract|update|rm> ... [--json]',
+  story: 'sidequest story <add|list|show|contract|update|rm> ... [--full] [--json]',
 };
 
 const HELP_ALIASES: any = {

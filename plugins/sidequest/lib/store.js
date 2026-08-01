@@ -1665,7 +1665,7 @@ const stories = createStories({
   updateTicket
 });
 const {
-  STORY_DECISION_LOG_MAX_BYTES,
+  STORY_DECISION_LOG_BRIEFING_MAX_BYTES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,
   STORY_LOG_ENTRY_TEXT_MAX_BYTES,
   appendStoryLogEntry,
@@ -1679,6 +1679,7 @@ const {
   storyDecisionLog,
   storyDecisionLogWarnings,
   storyExecutionContract,
+  storyReadPayload,
   updateStory
 } = stories;
 projectsLayer = createProjects({
@@ -1912,11 +1913,12 @@ module.exports = {
   STORY_PALETTE,
   STORY_COLOR_NAMES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,
-  STORY_DECISION_LOG_MAX_BYTES,
+  STORY_DECISION_LOG_BRIEFING_MAX_BYTES,
   STORY_LOG_ENTRY_TEXT_MAX_BYTES,
   storyExecutionContract,
   normalizeStoryLogEntry,
   storyDecisionLog,
+  storyReadPayload,
   appendStoryLogEntry,
   clearStoryLog,
   storyDecisionLogWarnings,

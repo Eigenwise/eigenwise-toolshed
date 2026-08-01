@@ -53,7 +53,7 @@ function coerceStoryId(slug?: any, val?: any) {
 }
 
 const STORY_EXECUTION_CONTRACT_MAX_BYTES = 4 * 1024;
-const STORY_DECISION_LOG_MAX_BYTES = 4 * 1024;
+const STORY_DECISION_LOG_BRIEFING_MAX_BYTES = 4 * 1024;
 const STORY_LOG_ENTRY_TEXT_MAX_BYTES = 280;
 const STORY_LOG_KINDS = new Set(['DECISION', 'CONSTRAINT', 'DISCOVERY']);
 
@@ -99,9 +99,9 @@ function normalizeStoryLogEntry(value?: any) {
   return { kind, text };
 }
 
-function storyDecisionLogEntries(story?: any) {
-  if (!story || !Array.isArray(story.decisionLog)) return [];
-  return story.decisionLog
+function normalizeStoredStoryLogEntries(entries?: any) {
+  if (!Array.isArray(entries)) return [];
+  return entries
     .filter((entry?: any) => entry && Number.isInteger(Number(entry.seq)) && STORY_LOG_KINDS.has(String(entry.kind)))
     .map((entry?: any) => ({
       seq: Number(entry.seq),
@@ -111,6 +111,14 @@ function storyDecisionLogEntries(story?: any) {
       kind: String(entry.kind),
       text: String(entry.text),
     }));
+}
+
+function storyDecisionLogEntries(story?: any) {
+  return normalizeStoredStoryLogEntries(story?.decisionLog);
+}
+
+function archivedStoryDecisionLogEntries(story?: any) {
+  return normalizeStoredStoryLogEntries(story?.archivedDecisionLog);
 }
 
 function renderStoryDecisionLog(story?: any, entries?: any) {
@@ -126,14 +134,45 @@ function renderStoryDecisionLog(story?: any, entries?: any) {
   ].join('\n');
 }
 
-function storyDecisionLog(story?: any) {
-  const entries = storyDecisionLogEntries(story);
+function recentStoryDecisionLogEntries(story?: any, entries?: any) {
+  const selected: any[] = [];
+  const source = entries || [];
+  for (let index = source.length - 1; index >= 0; index--) {
+    const candidate = [source[index], ...selected];
+    if (Buffer.byteLength(renderStoryDecisionLog(story, candidate), 'utf8') > STORY_DECISION_LOG_BRIEFING_MAX_BYTES) break;
+    selected.unshift(source[index]);
+  }
+  return selected;
+}
+
+function storyDecisionLog(story?: any, options?: any) {
+  const activeEntries = storyDecisionLogEntries(story);
+  const archivedEntries = archivedStoryDecisionLogEntries(story);
+  const full = options?.full === true;
+  const entries = full
+    ? [...archivedEntries, ...activeEntries].sort((left, right) => left.seq - right.seq)
+    : recentStoryDecisionLogEntries(story, activeEntries);
+  const totalEntries = archivedEntries.length + activeEntries.length;
   return {
     revision: Number(story && story.logRevision) || 0,
     entries,
     bytes: Buffer.byteLength(renderStoryDecisionLog(story, entries), 'utf8'),
-    capacity: STORY_DECISION_LOG_MAX_BYTES,
+    capacity: STORY_DECISION_LOG_BRIEFING_MAX_BYTES,
+    totalEntries,
+    omittedEntries: totalEntries - entries.length,
+    archivedEntries: archivedEntries.length,
   };
+}
+
+function storyReadPayload(story?: any, options?: any) {
+  if (!story) return story;
+  const { archivedDecisionLog: _archivedDecisionLog, ...visibleStory } = story;
+  const log = storyDecisionLog(story, options);
+  return Object.assign(visibleStory, {
+    decisionLog: log.entries,
+    decisionLogOmittedEntries: log.omittedEntries,
+    archivedDecisionLogEntries: log.archivedEntries,
+  });
 }
 
 function storyLogClaimRefusal(story?: any, ticketRef?: any, by?: any) {
@@ -167,11 +206,7 @@ function appendStoryLogEntry(slug?: any, storyRef?: any, value?: any) {
       kind: normalized.kind,
       text: normalized.text,
     };
-    const nextEntries = [...entries, entry];
-    if (Buffer.byteLength(renderStoryDecisionLog(Object.assign({}, story, { logRevision: seq }), nextEntries), 'utf8') > STORY_DECISION_LOG_MAX_BYTES) {
-      throw new Error(`story log: ${story.ref} decision log is full (${STORY_DECISION_LOG_MAX_BYTES} bytes, ${entries.length} entries). Condense it into the story execution contract with story_contract, then clear with story_log --clear.`);
-    }
-    story.decisionLog = nextEntries;
+    story.decisionLog = [...entries, entry];
     story.logRevision = seq;
     story.updatedAt = entry.at;
     putStory(slug, story);
@@ -183,6 +218,7 @@ function clearStoryLog(slug?: any, storyRef?: any) {
   return transaction(() => {
     const story = getStory(slug, storyRef);
     if (!story) return null;
+    story.archivedDecisionLog = [...archivedStoryDecisionLogEntries(story), ...storyDecisionLogEntries(story)];
     story.decisionLog = [];
     story.updatedAt = new Date().toISOString();
     putStory(slug, story);
@@ -238,6 +274,7 @@ function createStory(slug?: any, fields?: any) {
       executionContract,
       contractRevision: executionContract ? 1 : 0,
       decisionLog: [],
+      archivedDecisionLog: [],
       logRevision: 0,
       createdAt: now,
       updatedAt: now,
@@ -293,7 +330,7 @@ function deleteStory(slug?: any, idOrRef?: any) {
 }
 
   return {
-    STORY_DECISION_LOG_MAX_BYTES,
+    STORY_DECISION_LOG_BRIEFING_MAX_BYTES,
     STORY_EXECUTION_CONTRACT_MAX_BYTES,
     STORY_LOG_ENTRY_TEXT_MAX_BYTES,
     appendStoryLogEntry,
@@ -307,6 +344,7 @@ function deleteStory(slug?: any, idOrRef?: any) {
     storyDecisionLog,
     storyDecisionLogWarnings,
     storyExecutionContract,
+    storyReadPayload,
     updateStory,
   };
 }

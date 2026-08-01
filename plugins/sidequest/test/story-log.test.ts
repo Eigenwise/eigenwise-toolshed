@@ -66,7 +66,14 @@ test('CLI story log reads, appends a body file, and clears after promotion', () 
   const read = cliJson(['story', 'log', createdStory.ref, '--json']);
   assert.equal(read.story.entries.length, 1);
   const cleared = cliJson(['story', 'log', createdStory.ref, '--clear', '--by', 'orchestrator', '--json']);
-  assert.deepEqual(cleared.story, { ref: createdStory.ref, logBytes: 0, logCapacity: 4096, logRevision: 1, entries: [] });
+  assert.equal(cleared.story.logBytes, 0);
+  assert.equal(cleared.story.logCapacity, 4096);
+  assert.equal(cleared.story.logRevision, 1);
+  assert.deepEqual(cleared.story.entries, []);
+  assert.equal(cleared.story.archivedEntries, 1);
+  const full = cliJson(['story', 'log', createdStory.ref, '--full', '--json']);
+  assert.equal(full.story.entries.length, 1);
+  assert.equal(full.story.entries[0].text, 'first line second line');
 });
 
 test('append refuses unclaimed, wrong-owner, and non-member ticket attribution', () => {
@@ -128,29 +135,50 @@ test('entry text over 280 UTF-8 bytes is refused rather than truncated', () => {
   assert.equal(store.storyDecisionLog(store.getStory(slug, createdStory.ref)).entries.length, 0);
 });
 
-test('rendered decision log refuses entries beyond 4096 bytes without eviction', () => {
+test('appends beyond the former aggregate limit and defaults reads to the briefing window', () => {
   const createdStory = story('Log capacity');
   const ticket = member(createdStory.ref);
   claim(ticket.ref, 'capacity-worker');
 
-  let refusal: Error | null = null;
-  for (let index = 0; index < 100 && !refusal; index++) {
-    try {
-      append(createdStory.ref, ticket.ref, 'capacity-worker', `DISCOVERY: ${String(index).padStart(2, '0')} ${'x'.repeat(270)}`);
-    } catch (error: any) {
-      refusal = error;
-    }
+  for (let index = 0; index < 61; index++) {
+    append(createdStory.ref, ticket.ref, 'capacity-worker', `DISCOVERY: ${String(index).padStart(2, '0')} ${'x'.repeat(270)}`);
   }
 
-  assert.ok(refusal);
   const stored = store.getStory(slug, createdStory.ref);
   const log = store.storyDecisionLog(stored);
-  assert.match(
-    refusal?.message || '',
-    new RegExp(`^story log: ${createdStory.ref} decision log is full \\(4096 bytes, ${log.entries.length} entries\\)\\. Condense it into the story execution contract with story_contract, then clear with story_log --clear\\.$`),
-  );
-  assert.ok(log.bytes <= store.STORY_DECISION_LOG_MAX_BYTES);
-  assert.equal(stored.logRevision, log.entries.length);
+  assert.equal(stored.logRevision, 61);
+  assert.equal(stored.decisionLog.length, 61);
+  assert.ok(log.entries.length < 61);
+  assert.equal(log.omittedEntries, 61 - log.entries.length);
+  assert.equal(log.totalEntries, 61);
+  assert.ok(log.bytes <= store.STORY_DECISION_LOG_BRIEFING_MAX_BYTES);
+  assert.equal(log.capacity, store.STORY_DECISION_LOG_BRIEFING_MAX_BYTES);
+  const shown = cliJson(['story', 'show', createdStory.ref, '--json']);
+  assert.equal(shown.story.decisionLog.length, log.entries.length);
+  assert.equal(shown.story.decisionLogOmittedEntries, log.omittedEntries);
+  assert.equal(shown.story.archivedDecisionLog, undefined);
+  const full = cliJson(['story', 'show', createdStory.ref, '--full', '--json']);
+  assert.equal(full.story.decisionLog.length, 61);
+});
+
+test('briefings retain the newest decision log entries within the 4 KB packet', () => {
+  const createdStory = story('Briefing window');
+  const ticket = member(createdStory.ref);
+  claim(ticket.ref, 'briefing-worker');
+
+  for (let index = 1; index <= 30; index++) {
+    append(createdStory.ref, ticket.ref, 'briefing-worker', `DISCOVERY: ${String(index).padStart(2, '0')} ${'x'.repeat(270)}`);
+  }
+
+  const briefing = require('../lib/agentsync.js').renderTicketBriefing({
+    ref: ticket.ref, title: ticket.title, model: 'opus', effort: 'high', category: {}, storyId: createdStory.id,
+  }, 'story-log-token', slug);
+  const packetStart = briefing.indexOf('## Story decision log');
+  const packet = briefing.slice(packetStart, briefing.indexOf('## This ticket', packetStart));
+  assert.ok(Buffer.byteLength(packet, 'utf8') <= 4096);
+  assert.match(packet, /#30 DISCOVERY/);
+  assert.doesNotMatch(packet, /#1 DISCOVERY/);
+  assert.match(packet, /omitted \d+ earlier entries.*sidequest story log US-\d+ --full/);
 });
 
 test('sequence numbers remain monotonic after the log is cleared', () => {
@@ -163,10 +191,14 @@ test('sequence numbers remain monotonic after the log is cleared', () => {
   const cleared = store.clearStoryLog(slug, createdStory.ref);
   assert.equal(cleared.logRevision, 2);
   assert.deepEqual(cleared.decisionLog, []);
+  assert.equal(cleared.archivedDecisionLog.length, 2);
+  const archived = store.storyDecisionLog(cleared, { full: true });
+  assert.deepEqual(archived.entries.map((entry: any) => entry.seq), [1, 2]);
 
   const updated = append(createdStory.ref, ticket.ref, 'sequence-worker', 'DISCOVERY: third');
   assert.equal(updated.logRevision, 3);
   assert.equal(updated.decisionLog[0].seq, 3);
+  assert.deepEqual(store.storyDecisionLog(updated, { full: true }).entries.map((entry: any) => entry.seq), [1, 2, 3]);
 });
 
 test('claim stamps the current story log sequence', () => {
