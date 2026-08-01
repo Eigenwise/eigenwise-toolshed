@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.313.0 (2026-08-01)
+
+### sidequest 3.50.5 → 3.50.6
+
+#### Fixes
+
+- Extract the comment, plan, and board-read store domains behind the unchanged facade (SQ-1157) [`009dd6a`](https://github.com/Eigenwise/eigenwise-toolshed/commit/009dd6a)
+
 ## v3.312.0 (2026-08-01)
 
 ### sidequest 3.50.4 → 3.50.5
