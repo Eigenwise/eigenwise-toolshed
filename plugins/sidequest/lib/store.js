@@ -1017,7 +1017,7 @@ function autoStoryColor(index) {
   const n = STORY_PALETTE.length;
   return STORY_PALETTE[((index || 0) % n + n) % n];
 }
-configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
+configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput: (...args) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 function parseTicketData(slug, data) {
   try {
     const ticket = typeof data === "string" ? JSON.parse(data) : data;

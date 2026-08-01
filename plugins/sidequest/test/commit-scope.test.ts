@@ -73,6 +73,7 @@ test('configured generated pairs add only tracked outputs to effective scope and
   fs.mkdirSync(path.dirname(path.join(root, output)), { recursive: true });
   fs.writeFileSync(path.join(root, source), 'export const worker = true;\n');
   fs.writeFileSync(path.join(root, output), 'exports.worker = true;\n');
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'package.json'), JSON.stringify({ scripts: { build: 'esbuild --outdir lib' } }));
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'tracked source and output']);
   const slug = store.ensureProject(root, 'generated pairs').slug;
@@ -80,12 +81,53 @@ test('configured generated pairs add only tracked outputs to effective scope and
 
   const scope = store.effectiveScope(slug, [source]);
   assert.deepEqual(scope, [source, output]);
-  assert.deepEqual(store.effectiveScope(slug, [output]), [output], 'generated output declarations do not pull source back into scope');
+  assert.deepEqual(store.effectiveScope(slug, [output]), [output, source], 'a tracked generated output admits its source');
+  const outputDirectoryScope = store.effectiveScope(slug, ['plugins/sidequest/lib']);
+  assert.ok(commitScope.isInScope(source, outputDirectoryScope), 'a tracked output directory admits each paired source');
+  assert.equal(commitScope.isInScope('plugins/sidequest/src/hooks/worker.ts', outputDirectoryScope), false, 'output scope does not admit unrelated sources');
   fs.writeFileSync(path.join(root, source), 'export const worker = false;\n');
   fs.writeFileSync(path.join(root, output), 'exports.worker = false;\n');
   const committed = commitScope.commitScoped(root, 'paired output', scope);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths.sort(), [output, source]);
+});
+
+test('ambiguous generated output mappings do not admit a source', () => {
+  const root = repo();
+  const sourceA = 'plugins/sidequest/src/lib-a/worker.ts';
+  const sourceB = 'plugins/sidequest/src/lib-b/worker.ts';
+  const output = 'plugins/sidequest/lib/worker.js';
+  for (const file of [sourceA, sourceB, output]) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), 'export const worker = true;\n');
+  }
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'package.json'), JSON.stringify({ scripts: { build: 'esbuild --outdir lib' } }));
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'ambiguous generated pair fixture']);
+  const slug = store.ensureProject(root, 'ambiguous generated pairs').slug;
+  store.setBoardConfig(slug, { generatedPairs: [
+    { from: 'plugins/*/src/lib-a/*.ts', to: 'plugins/*/lib/*.js' },
+    { from: 'plugins/*/src/lib-b/*.ts', to: 'plugins/*/lib/*.js' },
+  ] });
+
+  assert.deepEqual(store.effectiveScope(slug, [output]), [output]);
+});
+
+test('tracked generated pairs outside a package build output do not admit sources', () => {
+  const root = repo();
+  const source = 'plugins/sidequest/src/lib/worker.ts';
+  const output = 'plugins/sidequest/lib/worker.js';
+  for (const file of [source, output]) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), 'export const worker = true;\n');
+  }
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'package.json'), JSON.stringify({ scripts: { build: 'esbuild --outdir dist' } }));
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'non-build generated pair fixture']);
+  const slug = store.ensureProject(root, 'non-build generated pair').slug;
+  store.setBoardConfig(slug, { generatedPairs: [{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }] });
+
+  assert.deepEqual(store.effectiveScope(slug, [output]), [output]);
 });
 
 test('generated pairs leave unmapped boards and untracked counterparts unchanged', () => {

@@ -1,6 +1,6 @@
 'use strict';
 
-function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
+function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
 function defaultProjectName(absPath?: any) {
   return path.basename(path.resolve(absPath)) || 'project';
 }
@@ -82,22 +82,51 @@ function generatedPathFor(source?: any, pair?: any) {
   return String(pair.to).split('*').map((part: string, index: number) => `${part}${index < match.length - 1 ? match[index + 1] : ''}`).join('');
 }
 
-function trackedGeneratedPaths(config?: any, files?: any) {
-  if (!config || !config.path || !Array.isArray(config.generatedPairs) || !config.generatedPairs.length || !Array.isArray(files)) return [];
-  const candidates = Array.from(new Set(files.flatMap((file: any) => config.generatedPairs.map((pair: any) => generatedPathFor(file, pair)).filter(Boolean))));
-  if (!candidates.length) return [];
+function trackedPaths(config?: any, paths?: any) {
+  if (!config || !config.path || !Array.isArray(paths) || !paths.length) return [];
   try {
-    const tracked = execFileSync('git', ['ls-files', '-z', '--', ...candidates], {
+    return execFileSync('git', ['ls-files', '-z', '--', ...paths], {
       cwd: config.path,
       encoding: 'utf8',
       windowsHide: true,
       stdio: 'pipe',
     }).split('\0').filter(Boolean);
-    const candidateKeys = new Set(candidates.map((candidate: any) => process.platform === 'win32' ? candidate.toLowerCase() : candidate));
-    return tracked.filter((trackedPath: string) => candidateKeys.has(process.platform === 'win32' ? trackedPath.toLowerCase() : trackedPath));
   } catch (_: any) {
     return [];
   }
+}
+
+function trackedGeneratedPaths(config?: any, files?: any) {
+  if (!config || !Array.isArray(config.generatedPairs) || !config.generatedPairs.length || !Array.isArray(files)) return [];
+  const candidates = Array.from(new Set(files.flatMap((file: any) => config.generatedPairs.map((pair: any) => generatedPathFor(file, pair)).filter(Boolean))));
+  if (!candidates.length) return [];
+  const candidateKeys = new Set(candidates.map((candidate: any) => process.platform === 'win32' ? candidate.toLowerCase() : candidate));
+  return trackedPaths(config, candidates).filter((trackedPath: string) => candidateKeys.has(process.platform === 'win32' ? trackedPath.toLowerCase() : trackedPath));
+}
+
+function trackedBuildOutputPath(config?: any, output?: any) {
+  if (!config || !config.path || !packageRootForScope || !packageBuildOutputs || !isTrackedBuildOutput) return false;
+  const packageRoot = packageRootForScope(config.path, output);
+  if (!packageRoot) return false;
+  const outputPath = path.resolve(config.path, String(output));
+  return packageBuildOutputs(packageRoot).some((buildOutput: any) => {
+    const directory = path.resolve(packageRoot, buildOutput.directory);
+    const relative = path.relative(directory, outputPath);
+    return (relative === '' || !relative.startsWith('..') && !path.isAbsolute(relative))
+      && isTrackedBuildOutput(config.path, directory);
+  });
+}
+
+function trackedSourcePaths(config?: any, files?: any) {
+  if (!config || !Array.isArray(config.generatedPairs) || !config.generatedPairs.length || !Array.isArray(files)) return [];
+  const sources = new Set<string>();
+  for (const output of trackedPaths(config, files)) {
+    if (!trackedBuildOutputPath(config, output)) continue;
+    const candidates = new Set(config.generatedPairs.map((pair: any) => generatedPathFor(output, { from: pair.to, to: pair.from })).filter(Boolean));
+    const [source] = candidates;
+    if (candidates.size === 1 && typeof source === 'string') sources.add(source);
+  }
+  return [...sources];
 }
 
 function defaultAlwaysInScope(absPath?: any) {
@@ -297,12 +326,14 @@ function setBoardConfig(slug?: any, patch?: any) {
 
 function effectiveScope(slug?: any, files?: any) {
   const config = boardConfig(slug);
-  const paired = trackedGeneratedPaths(Object.assign({ path: readMeta(slug)?.path }, config), files);
-  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...((config && config.alwaysInScope) || []), ...paired]));
+  const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
+  const paired = trackedGeneratedPaths(generatedConfig, files);
+  const sources = trackedSourcePaths(generatedConfig, files);
+  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...((config && config.alwaysInScope) || []), ...paired, ...sources]));
 }
 
 
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApprovePluginTests, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, trackedSourcePaths, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApprovePluginTests, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 
 module.exports = { createConfig };
