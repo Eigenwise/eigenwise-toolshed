@@ -8,6 +8,44 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.334.0 (2026-08-02)
+
+### sidequest 3.55.0 → 3.56.0
+
+#### Features
+
+- Dispatched executors are blocked from loading oversized bundled skills (SQ-1251) [`96597ca`](https://github.com/Eigenwise/eigenwise-toolshed/commit/96597cad)
+  The bundled `claude-api` skill is 932 KB across 64 files. `shared/model-migration.md` alone is 176 KB, roughly 44k tokens, and a full load runs to about 230k. An executor that reached for it to check one SDK signature spent its whole context budget on reference material, which is the entire budget for a routed executor doing a small ticket.
+
+  A PreToolUse guard now refuses a `Skill` call from a dispatched executor when the skill's directory exceeds 256 KB, and points at a targeted `Read` or a research ticket instead. It matches on the skill name rather than its location, since the bundled path is content-hashed per Claude Code version and would go stale on every upgrade, and it falls open on any error so a guard bug can never block work. The executor briefing says the same thing in prose, so the rule is visible before the refusal fires. Orchestrators and non-dispatched agents are unaffected.
+- Scope requests can be denied over MCP, not only approved (SQ-1252) [`a40c7d3`](https://github.com/Eigenwise/eigenwise-toolshed/commit/a40c7d3f)
+  An executor could ask to widen its scope, and an orchestrator over MCP had no way to say no. A pending request blocks the board `commit` tool, and the only things that cleared it were approving the exact paths you meant to refuse, or releasing the ticket and throwing away finished work. The CLI had a deny; MCP did not, and the refusal message named only the approve path. Denial was reachable only through an overload where omitting `files` and passing a `reason` to `scopeRequest` meant deny, which nothing documented and no caller would guess.
+
+  `scopeDeny` is now its own tool taking `ref`, `by`, and a required `reason`, and it is in the executor read-only allowlist. `scopeRequest` requires `files` and no longer doubles as a denial. The `commit` refusal names both paths, so whoever reads it can approve or refuse without going to the source.
+
+#### Fixes
+
+- Plugin test suites run under the same hermetic git env as the release cut (SQ-1250) [`d1d06d2`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d1d06d26)
+  The release cut runs every plugin suite with `GIT_CONFIG_NOSYSTEM=1` and global/system gitconfig pointed at the null device, so a fixture that leaned on ambient git config behaved one way under `npm run test:full` and another way inside `cut.mjs`. On a box with `init.defaultBranch=main` in the system gitconfig, a bare `git init` yields `main` normally and `master` under the cut. That killed two v3.330.0 cuts while the same checkout tested green, and the cut is the worst place to find out: it aborts after bumping versions, so every attempt costs a rewound release commit and two tags.
+
+  `test:full` now builds its environment from the cut's own `suiteEnvironment()`, and CI sets the same variables, so the three run identically. A new test asserts the env is actually in effect and that `git init` in a scratch repo produces `master`, which fails loudly if the wiring is ever dropped.
+- A ticket waiting on scope approval is no longer counted as closeable (SQ-1260) [`5ae0ec7`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5ae0ec73)
+  The stop-hook reminder counted every non-done ticket the session touched as something to update or close, with no exception for one blocked on a pending scope request. An executor that had filed a request and stopped to wait read that as instruction and released the ticket. A released dispatch cannot be resumed, so the work either needed hand-salvaging out of the worktree or was simply lost, and it always cost a full respawn. It hit three times in one evening, once on a complete uncommitted tree. The race makes it worse than a plain miscount: an executor waiting on approval is idle, and idle is exactly when the hook fires, so the blocked state is the one most likely to be counted.
+
+  Tickets waiting on scope approval and submissions pending integration are now reported separately from actionable ones. The message names them as waits rather than work, and both the ordinary and escalated reminders now say to checkpoint and hold, never release.
+- Committed build output pulls its own source into scope (SQ-1261) [`214ce98`](https://github.com/Eigenwise/eigenwise-toolshed/commit/214ce985)
+  Scope already worked one way: declare `src/lib/store.ts` and the generated `lib/store.js` came along, because a generated pair says where the output lands. Going the other direction did nothing. An executor whose ticket scoped a tracked build output, or who reached one through a rebuild, had to file a scope request for the source and wait for an orchestrator to approve it, and a scope request costs a round trip while the executor sits idle.
+
+  Worse, an executor that pushed through committed the output while its source stayed out of scope and uncommitted, so the commit's `lib/*.js` no longer matched its `src/*.ts`. The next build silently reverts it.
+
+  `effectiveScope` now runs the generated pairs backwards too. A scoped path that is tracked, sits under a package's declared build output directory, and maps back to exactly one source under the reversed pair brings that source in with it. Ambiguous reverse matches are left alone, so a pair set that could resolve two ways still needs the request.
+- Scope requests from an isolated executor no longer demand a worktree the MCP schema cannot express (SQ-1262) [`717b8c0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/717b8c0b)
+  An executor running under worktree isolation called `scopeRequest` over MCP and got back `worktree_required`. There was nothing it could do about that. The tool's schema declares `ref`, `by`, `files`, and `project`, so `args.worktree` was structurally always undefined and the refusal could never be satisfied by any MCP caller. The path it needed was its own working directory, and it still had no way to hand it over.
+
+  Under the isolation mode the skill recommends by default, that left one move: release the ticket. Which is correct, and costs a whole spawn to discover the escape hatch does not open.
+
+  The worktree now comes from the dispatch record, which already stores it, so nothing has to be passed. Since SQ-1253 moved the marker into Sidequest's own assets directory the value is only used to confirm the caller really is isolated, and the dispatch record is a better source for that than a caller-supplied string anyway. A dispatch with no recorded worktree reports `worktree_unavailable`, which says what is actually wrong.
+
 ## v3.333.0 (2026-08-01)
 
 ### sidequest 3.54.1 → 3.55.0
