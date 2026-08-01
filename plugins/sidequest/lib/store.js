@@ -16,6 +16,7 @@ const { assertSidequestInstall, assertDispatchTransport } = require("./dispatch-
 const { createAssets } = require("./store/assets.js");
 const { createNotifications } = require("./store/notifications.js");
 const { createWorkers } = require("./store/workers.js");
+const { createStories } = require("./store/stories.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
@@ -2000,7 +2001,7 @@ function mergeProject(srcSlug, destSlug, opts) {
   if (!readMeta(srcSlug)) throw new Error(`source board "${srcSlug}" does not exist`);
   if (!readMeta(destSlug)) throw new Error(`destination board "${destSlug}" does not exist`);
   const tickets = listTickets(srcSlug).slice().sort((a, b) => seqOfRef(a.ref) - seqOfRef(b.ref));
-  const stories = listStories(srcSlug);
+  const stories2 = listStories(srcSlug);
   const refMap = {};
   const ticketPlan = [];
   for (const t of tickets) {
@@ -2009,7 +2010,7 @@ function mergeProject(srcSlug, destSlug, opts) {
     ticketPlan.push({ ticket: t, newRef });
   }
   const storyPlan = [];
-  for (const s of stories) {
+  for (const s of stories2) {
     const newRef = dryRun ? `US-?` : `US-${nextStorySeq(destSlug)}`;
     storyPlan.push({ story: s, newRef });
   }
@@ -2017,7 +2018,7 @@ function mergeProject(srcSlug, destSlug, opts) {
   if (dryRun) return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   transaction(() => {
     for (const ticket of tickets) deleteCachedRow(database(), "tickets", ticket.id);
-    for (const story of stories) deleteCachedRow(database(), "stories", story.id);
+    for (const story of stories2) deleteCachedRow(database(), "stories", story.id);
     for (const { story, newRef } of storyPlan) {
       const moved = Object.assign({}, story, { ref: newRef });
       putStory(destSlug, moved);
@@ -5918,242 +5919,6 @@ function assignTicket(slug, idOrRef, assignee, opts) {
     return { ok: true, ticket: t };
   });
 }
-function newStoryId() {
-  return "st_" + Date.now().toString(36) + "_" + crypto.randomBytes(4).toString("hex");
-}
-function listStories(slug) {
-  const out = db.listRows(database(), "stories", { project: slug }).filter((s) => s && s.id);
-  out.sort((a, b) => (a.order || 0) - (b.order || 0));
-  return out;
-}
-function getStory(slug, idOrRef) {
-  const wanted = String(idOrRef);
-  const wantedRef = wanted.toUpperCase();
-  for (const s of listStories(slug)) {
-    if (s.id === wanted || String(s.ref).toUpperCase() === wantedRef) return s;
-  }
-  return null;
-}
-function coerceStoryId(slug, val) {
-  if (val == null) return null;
-  const s = String(val).trim();
-  if (!s || s.toLowerCase() === "none" || s.toLowerCase() === "null") return null;
-  const story = getStory(slug, s);
-  return story ? story.id : null;
-}
-const STORY_EXECUTION_CONTRACT_MAX_BYTES = 4 * 1024;
-const STORY_DECISION_LOG_MAX_BYTES = 4 * 1024;
-const STORY_LOG_ENTRY_TEXT_MAX_BYTES = 280;
-const STORY_LOG_KINDS = /* @__PURE__ */ new Set(["DECISION", "CONSTRAINT", "DISCOVERY"]);
-function normalizeStoryExecutionContract(value) {
-  if (value == null) return null;
-  const contract = String(value).trim();
-  if (!contract) return null;
-  const bytes = Buffer.byteLength(contract, "utf8");
-  if (bytes > STORY_EXECUTION_CONTRACT_MAX_BYTES) {
-    throw new Error(`story execution contract exceeds the ${STORY_EXECUTION_CONTRACT_MAX_BYTES}-byte limit.`);
-  }
-  return contract;
-}
-function storyExecutionContract(story) {
-  if (!story || !story.executionContract) return null;
-  return {
-    revision: Number(story.contractRevision) || 1,
-    body: String(story.executionContract)
-  };
-}
-function normalizeStoryLogEntry(value) {
-  const raw = value && typeof value === "object" ? value.text ?? value.entry ?? value.body : value;
-  let text = String(raw == null ? "" : raw).replace(/\s*[\r\n]+\s*/g, " ").trim();
-  const prefixed = text.match(/^(DECISION|CONSTRAINT|DISCOVERY)\s*:\s*/i);
-  const explicitKind = value && typeof value === "object" && value.kind != null ? String(value.kind).trim().toUpperCase() : null;
-  const kind = explicitKind || (prefixed?.[1]?.toUpperCase() ?? null);
-  if (!kind || !STORY_LOG_KINDS.has(kind)) {
-    throw new Error("story log entry kind must be DECISION, CONSTRAINT, or DISCOVERY.");
-  }
-  if (prefixed && (!explicitKind || explicitKind === prefixed?.[1]?.toUpperCase())) {
-    text = text.slice(prefixed[0].length).trim();
-  }
-  if (!text) throw new Error("story log entry text is required.");
-  if (Buffer.byteLength(text, "utf8") > STORY_LOG_ENTRY_TEXT_MAX_BYTES) {
-    throw new Error(`story log entry text exceeds the ${STORY_LOG_ENTRY_TEXT_MAX_BYTES}-byte limit.`);
-  }
-  return { kind, text };
-}
-function storyDecisionLogEntries(story) {
-  if (!story || !Array.isArray(story.decisionLog)) return [];
-  return story.decisionLog.filter((entry) => entry && Number.isInteger(Number(entry.seq)) && STORY_LOG_KINDS.has(String(entry.kind))).map((entry) => ({
-    seq: Number(entry.seq),
-    at: String(entry.at),
-    by: String(entry.by),
-    ref: entry.ref == null ? null : String(entry.ref),
-    kind: String(entry.kind),
-    text: String(entry.text)
-  }));
-}
-function renderStoryDecisionLog(story, entries) {
-  const log = entries || storyDecisionLogEntries(story);
-  if (!log.length) return "";
-  const lastEntry = log[log.length - 1];
-  const lastSeq = Number(story && story.logRevision) || lastEntry?.seq;
-  const countLabel = `${log.length} ${log.length === 1 ? "entry" : "entries"}`;
-  return [
-    `## Story decision log (${story?.ref}, ${countLabel} through #${lastSeq})`,
-    "Findings appended by sibling executors on this story. The contract above outranks these.",
-    ...log.map((entry) => `- #${entry.seq} ${entry.kind} (${entry.ref || "orchestrator"}, ${entry.by}): ${entry.text}`)
-  ].join("\n");
-}
-function storyDecisionLog(story) {
-  const entries = storyDecisionLogEntries(story);
-  return {
-    revision: Number(story && story.logRevision) || 0,
-    entries,
-    bytes: Buffer.byteLength(renderStoryDecisionLog(story, entries), "utf8"),
-    capacity: STORY_DECISION_LOG_MAX_BYTES
-  };
-}
-function storyLogClaimRefusal(story, ticketRef, by) {
-  return `story log: ${ticketRef} is not claimed by "${by}", or it is not a member of ${story.ref}. Append from a ticket you hold, or use story_contract.`;
-}
-function appendStoryLogEntry(slug, storyRef, value) {
-  const normalized = normalizeStoryLogEntry(value);
-  return transaction(() => {
-    const story = getStory(slug, storyRef);
-    if (!story) throw new Error(`story log: ${storyRef} was not found.`);
-    const by = String(value && typeof value === "object" ? value.by || "orchestrator" : "orchestrator").trim() || "orchestrator";
-    const requestedRef = value && typeof value === "object" && value.ref != null ? String(value.ref).trim() : "";
-    let ticketRef = null;
-    if (requestedRef) {
-      const ticket = getTicket(slug, requestedRef);
-      ticketRef = ticket ? ticket.ref : requestedRef;
-      if (!ticket || ticket.storyId !== story.id || !ticket.claim || ticket.claim.by !== by || claimReclaimable(ticket)) {
-        throw new Error(storyLogClaimRefusal(story, ticketRef, by));
-      }
-    }
-    const entries = storyDecisionLogEntries(story);
-    const seq = (Number(story.logRevision) || 0) + 1;
-    const entry = {
-      seq,
-      at: (/* @__PURE__ */ new Date()).toISOString(),
-      by,
-      ref: ticketRef,
-      kind: normalized.kind,
-      text: normalized.text
-    };
-    const nextEntries = [...entries, entry];
-    if (Buffer.byteLength(renderStoryDecisionLog(Object.assign({}, story, { logRevision: seq }), nextEntries), "utf8") > STORY_DECISION_LOG_MAX_BYTES) {
-      throw new Error(`story log: ${story.ref} decision log is full (${STORY_DECISION_LOG_MAX_BYTES} bytes, ${entries.length} entries). Condense it into the story execution contract with story_contract, then clear with story_log --clear.`);
-    }
-    story.decisionLog = nextEntries;
-    story.logRevision = seq;
-    story.updatedAt = entry.at;
-    putStory(slug, story);
-    return story;
-  });
-}
-function clearStoryLog(slug, storyRef) {
-  return transaction(() => {
-    const story = getStory(slug, storyRef);
-    if (!story) return null;
-    story.decisionLog = [];
-    story.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-    putStory(slug, story);
-    return story;
-  });
-}
-function storyDecisionLogWarnings(ticket, slug) {
-  if (!ticket || !ticket.storyId || !slug) return [];
-  const story = getStory(slug, ticket.storyId);
-  if (!story) return [];
-  const seenSeq = Number(ticket.storyLogSeenSeq) || 0;
-  const lastSeq = Number(story.logRevision) || 0;
-  if (lastSeq <= seenSeq) return [];
-  const gained = lastSeq - seenSeq;
-  const firstSeq = seenSeq + 1;
-  const range = firstSeq === lastSeq ? `#${firstSeq}` : `#${firstSeq}-#${lastSeq}`;
-  const noun = gained === 1 ? "entry" : "entries";
-  const pronoun = gained === 1 ? "it is" : "they are";
-  return [`Dispatch warning: ${story.ref} decision log gained ${gained} ${noun} (${range}) since ${ticket.ref} was claimed; ${pronoun} not in its briefing.`];
-}
-function markStoryContractDrift(slug, story, fromRevision, changedAt) {
-  const toRevision = Number(story && story.contractRevision) || 0;
-  for (const ticket of listTickets(slug)) {
-    if (ticket.storyId !== story.id || !ticket.claim || !ticket.claim.by || claimReclaimable(ticket)) continue;
-    ticket.storyContractDrift = {
-      storyRef: story.ref,
-      fromRevision: Number(fromRevision) || 0,
-      toRevision,
-      changedAt
-    };
-    ticket.lastEventType = "story-contract";
-    ticket.lastEventSource = "story";
-    ticket.updatedAt = changedAt;
-    putTicket(slug, ticket);
-  }
-}
-function createStory(slug, fields) {
-  return transaction(() => {
-    fields = fields || {};
-    const id = newStoryId();
-    const seq = nextStorySeq(slug);
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    const executionContract = normalizeStoryExecutionContract(fields.executionContract);
-    const story = {
-      id,
-      ref: `US-${seq}`,
-      title: String(fields.title || "Untitled story").trim().slice(0, 200) || "Untitled story",
-      description: String(fields.description || "").trim(),
-      color: parseStoryColor(fields.color) || autoStoryColor(seq - 1),
-      executionContract,
-      contractRevision: executionContract ? 1 : 0,
-      decisionLog: [],
-      logRevision: 0,
-      createdAt: now,
-      updatedAt: now,
-      order: Date.now()
-    };
-    putStory(slug, story);
-    return story;
-  });
-}
-function updateStory(slug, idOrRef, patch) {
-  return transaction(() => {
-    const s = getStory(slug, idOrRef);
-    if (!s) return null;
-    patch = patch || {};
-    if (patch.title != null) s.title = String(patch.title).trim().slice(0, 200) || s.title;
-    if (patch.description != null) s.description = String(patch.description).trim();
-    if (patch.color != null) {
-      const c = parseStoryColor(patch.color);
-      if (c) s.color = c;
-    }
-    if (patch.order != null && Number.isFinite(Number(patch.order))) s.order = Number(patch.order);
-    const previousRevision = Number(s.contractRevision) || 0;
-    const nextContract = patch.executionContract === void 0 ? s.executionContract || null : normalizeStoryExecutionContract(patch.executionContract);
-    const contractChanged = nextContract !== (s.executionContract || null);
-    if (contractChanged) {
-      s.executionContract = nextContract;
-      s.contractRevision = previousRevision + 1;
-    }
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    s.updatedAt = now;
-    putStory(slug, s);
-    if (contractChanged) markStoryContractDrift(slug, s, previousRevision, now);
-    return s;
-  });
-}
-function deleteStory(slug, idOrRef) {
-  const s = getStory(slug, idOrRef);
-  if (!s) return false;
-  if (!deleteCachedRow(database(), "stories", s.id)) return false;
-  try {
-    for (const t of listTickets(slug)) {
-      if (t.storyId === s.id) updateTicket(slug, t.id, { storyId: null, source: "cli" });
-    }
-  } catch (_) {
-  }
-  return true;
-}
 const COMMENT_BODY_MAX = 16e3;
 const COMMENT_BODY_ADVISORY_BYTES = 4096;
 function commentBodyAdvisory(body) {
@@ -6604,6 +6369,39 @@ function writeServerInfo(info) {
 function clearServerInfo() {
   deleteCachedRow(database(), "globals", "server-info");
 }
+const stories = createStories({
+  autoStoryColor,
+  claimReclaimable,
+  crypto,
+  database,
+  deleteCachedRow,
+  db,
+  getTicket,
+  listTickets,
+  nextStorySeq,
+  parseStoryColor,
+  putStory,
+  putTicket,
+  transaction,
+  updateTicket
+});
+const {
+  STORY_DECISION_LOG_MAX_BYTES,
+  STORY_EXECUTION_CONTRACT_MAX_BYTES,
+  STORY_LOG_ENTRY_TEXT_MAX_BYTES,
+  appendStoryLogEntry,
+  clearStoryLog,
+  coerceStoryId,
+  createStory,
+  deleteStory,
+  getStory,
+  listStories,
+  normalizeStoryLogEntry,
+  storyDecisionLog,
+  storyDecisionLogWarnings,
+  storyExecutionContract,
+  updateStory
+} = stories;
 module.exports = {
   VALID_STATUS,
   VALID_PRIORITY,
