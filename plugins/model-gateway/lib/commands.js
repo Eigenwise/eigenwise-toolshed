@@ -731,6 +731,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   const status = await statusReport({ readiness });
   const servingVersion = readiness.checks.servingVersion;
   log(`serving shim version: ${servingVersion || 'unavailable'}`);
+  log('model fallback diagnostic: if dispatch and served models appear different, reproduce in a throwaway session with CLAUDE_CODE_NO_MODEL_FALLBACK=true; unset it afterwards. It turns silent fallback into a thrown error identifying the call site, while normal operation should keep graceful fallback for transient 5xx errors.');
   if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) {
     log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${CLI_PATH}" ensure to replace the stale supervisor.`);
   }
