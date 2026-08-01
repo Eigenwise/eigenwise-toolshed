@@ -33,5 +33,5 @@ template: splash
 </section>
 
 <section>
-  <p class="page-ledge">The docs are being filled in now. Start with setup, then use the reference when you want the detail behind a plugin or command.</p>
+  <p class="page-ledge">Start with setup, then use the reference when you want the detail behind a plugin or command.</p>
 </section>

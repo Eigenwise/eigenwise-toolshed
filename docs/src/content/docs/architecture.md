@@ -3,7 +3,7 @@ title: Architecture
 description: How the Toolshed pieces fit together on your machine.
 ---
 
-Toolshed is a marketplace of independent Claude Code plugins. The six published areas are Workbench, Model Gateway, Sidequest, Codebase Mapper, Live Rules, and the marketplace metadata. Hooks run at Claude Code lifecycle points, local observers turn selected activity into counts, and the dashboard reads the resulting loopback data. Sidequest keeps tickets and dispatch policy in its own store. Model Gateway sits in front of the model API only when you choose a gateway model.
+Toolshed is a marketplace of six independent Claude Code plugins: Workbench, Model Gateway, Sidequest, Codebase Mapper, Live Rules, and Skill Retro. Hooks run at Claude Code lifecycle points, local observers turn selected activity into counts, and the dashboard reads the resulting loopback data. Sidequest keeps tickets and dispatch policy in its own store. Model Gateway sits in front of the model API only when you choose a gateway model.
 
 ```mermaid
 flowchart LR

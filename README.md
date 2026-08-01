@@ -11,16 +11,22 @@
 
 A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins by [Eigenwise](https://eigenwise.io).
 
+## Documentation
+
+Start with the [Eigenwise Toolshed documentation](https://eigenwise.github.io/eigenwise-toolshed/). The direct guides are [getting started](https://eigenwise.github.io/eigenwise-toolshed/getting-started/), [Workbench](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/), [Model Gateway](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/), [Sidequest](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/), [Codebase Mapper](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/), [Live Rules](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/), [Skill Retro](https://eigenwise.github.io/eigenwise-toolshed/getting-started/skill-retro/), [observability](https://eigenwise.github.io/eigenwise-toolshed/observability/), and the [plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/).
+
 > Sharp little tools for Claude Code, kept in one shed. 🛠️
 
 ## Plugins
 
 | Plugin | What it does |
 |--------|--------------|
-| [**workbench**](./plugins/workbench) | The one user-scope install for workspace setup, Toolshed updates, health checks, retrospectives, and the freshness guard. Use `/init-workspace`, `/update-toolshed`, `/workbench-doctor`, and `/retro`. |
-| [**codebase-mapper**](./plugins/codebase-mapper) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
-| [**live-rules**](./plugins/live-rules) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
-| [**sidequest**](./plugins/sidequest) | The Toolshed's core work board and board-first orchestration loop. Tickets are classified into categories that route each one to a concrete model and reasoning effort, then dispatched to token-gated executors. Side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in. |
+| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | The one user-scope install for workspace setup, Toolshed updates, health checks, retrospectives, and the freshness guard. Use `/init-workspace`, `/update-toolshed`, `/workbench-doctor`, and `/retro`. |
+| [**model-gateway**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) | Puts ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker through a local gateway. |
+| [**sidequest**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/) | The Toolshed's core work board and board-first orchestration loop. Tickets are classified into categories that route each one to a concrete model and reasoning effort, then dispatched to token-gated executors. Side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in. |
+| [**codebase-mapper**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
+| [**skill-retro**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/skill-retro/) | Mines recent Claude Code transcripts for repeated work and routes each finding to a durable fix. |
+| [**live-rules**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
 
 *More tools will move into the shed over time.*
 
@@ -29,9 +35,11 @@ A small, growing marketplace of [Claude Code](https://claude.com/claude-code) pl
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
 /plugin install workbench@eigenwise-toolshed --scope user
-/plugin install codebase-mapper@eigenwise-toolshed
-/plugin install live-rules@eigenwise-toolshed
+/plugin install model-gateway@eigenwise-toolshed --scope user
 /plugin install sidequest@eigenwise-toolshed
+/plugin install codebase-mapper@eigenwise-toolshed
+/plugin install skill-retro@eigenwise-toolshed
+/plugin install live-rules@eigenwise-toolshed
 ```
 
 Then run `/reload-plugins` (or restart Claude Code) and you're set. It's a public marketplace, so there's no auth to deal with.
