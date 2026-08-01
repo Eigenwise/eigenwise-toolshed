@@ -157,6 +157,15 @@ The main settings are `SIDEQUEST_HOME` (central SQLite store), `SIDEQUEST_AGENTS
 
 Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
 
+### Flagged uncertainty at dispatch
+
+Dispatch can add a **Flagged uncertainty** section to the executor briefing when it finds claims that may need a fresh look. The checks are bounded to the ticket's declared scope and the integration target, so a skipped check does not prove that a claim is correct.
+
+- **Symbol checks** look for backticked symbol-shaped references from the ticket title and description. If a referenced symbol does not appear on the integration target, the warning says to verify the claim before acting.
+- **Cross-ticket state checks** look for `SQ-<number>` references in the description. If a referenced ticket changed state after this ticket was written, the warning includes the old and new states and says that the claim may be stale.
+
+Treat these as review prompts, not permission to fill in missing context. If the briefing or another instruction names a file, symbol, or state that does not exist in the executor's worktree, stop immediately and report the contradiction on the ticket. Do not investigate around it or assume the base is wrong. The orchestrator can correct the ticket or dispatch a fresh executor with an updated brief.
+
 ### Dispatch needs this session's board MCP, not just an install
 
 A dispatched native Agent inherits the parent Claude Code session's connected MCP snapshot, not a fresh lookup of Claude Code's plugin registry. Installing Sidequest for a project, or reinstalling it mid-session, does not reach a conversation that is already open — a freshly spawned Agent can still come up with zero board tools even though the install itself is fine. Never assume a fresh Agent independently discovers a newly installed MCP server.
