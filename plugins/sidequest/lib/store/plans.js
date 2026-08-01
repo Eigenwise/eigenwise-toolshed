@@ -230,7 +230,7 @@ ${block}
         return {
           ok: false,
           reason: "no_oracle",
-          message: `${ticket.ref} is not awaiting an oracle verdict. Release an active experiment round with --oracle before recording a verdict.`
+          message: `${ticket.ref} is not awaiting an oracle verdict. Release an active experiment round with --oracle before recording a verdict, or link a completed review-audit ticket for a high-stakes review pass.`
         };
       }
       const existing = readExperimentLog(slug, ticket);
