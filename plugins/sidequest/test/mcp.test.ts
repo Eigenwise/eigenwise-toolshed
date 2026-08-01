@@ -1333,6 +1333,34 @@ test('MCP scopeRequest never auto-approves plugin source, hooks, or manifests', 
   }
 });
 
+test('MCP scopeRequest admits a source paired to a tracked declared build output', async () => {
+  const worktree = createGitWorktree();
+  const source = 'plugins/sidequest/src/lib/store/worker.ts';
+  const output = 'plugins/sidequest/lib/store/worker.js';
+  for (const file of [source, output]) {
+    fs.mkdirSync(path.dirname(path.join(worktree, file)), { recursive: true });
+    fs.writeFileSync(path.join(worktree, file), 'export const worker = true;\n');
+  }
+  fs.writeFileSync(path.join(worktree, 'plugins', 'sidequest', 'package.json'), JSON.stringify({ scripts: { build: 'esbuild --outdir lib' } }));
+  gitAt(worktree, ['add', '.']);
+  gitAt(worktree, ['commit', '-m', 'generated scope fixture']);
+  const project = store.ensureProject(worktree).slug;
+  store.setBoardConfig(project, { generatedPairs: [{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }] });
+  const ticket = store.createTicket(project, {
+    title: 'Generated output scope', files: ['plugins/sidequest/lib'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'the paired TypeScript source must stay editable without an approval round trip',
+  });
+  const by = 'mcp-generated-output-scope-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The generated scope fixture requires a local direct claim.' })).ok, true);
+
+  const covered = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: [source] });
+  assert.deepEqual(covered.covered, [source]);
+  assert.equal(covered.scopeRequest, null);
+
+  const unrelated = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['plugins/sidequest/src/bin/worker.ts'] });
+  assert.deepEqual(unrelated.scopeRequest.files, ['plugins/sidequest/src/bin/worker.ts']);
+});
+
 test('MCP scopeRequest pauses a claimed executor until the orchestrator expands scope', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-request-'))).slug;
   const ticket = store.createTicket(project, {

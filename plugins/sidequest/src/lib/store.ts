@@ -931,7 +931,7 @@ function autoStoryColor(index?: any) {
   return STORY_PALETTE[(((index || 0) % n) + n) % n];
 }
 
-configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
+configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput: (...args: any[]) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args: any[]) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args: any[]) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 
 
 /* ------------------------------------------------------------------ *
