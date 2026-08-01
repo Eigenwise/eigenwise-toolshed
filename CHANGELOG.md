@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.312.0 (2026-08-01)
+
+### sidequest 3.50.4 → 3.50.5
+
+#### Fixes
+
+- Extract the story store domain behind the unchanged facade (SQ-1155) [`c33bc37`](https://github.com/Eigenwise/eigenwise-toolshed/commit/c33bc37)
+
 ## v3.311.0 (2026-08-01)
 
 ### sidequest 3.50.3 → 3.50.4
