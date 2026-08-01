@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { suiteEnvironment } from '../../../scripts/release/cut.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testDirectory = path.join(pluginRoot, 'test');
@@ -18,6 +19,7 @@ function runTests(files) {
     cwd: pluginRoot,
     stdio: 'inherit',
     windowsHide: true,
+    env: suiteEnvironment(),
   });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
