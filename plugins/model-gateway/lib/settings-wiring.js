@@ -35,8 +35,25 @@ function selectedWiringScope() {
 
 function settingsPath(scope) {
   if (scope === 'project') return path.join(process.cwd(), '.claude', 'settings.local.json');
-  if (scope === 'legacy-project') return path.join(process.cwd(), '.claude', 'settings.json');
+  if (scope === 'legacy-project' || scope === 'project-shared') return path.join(process.cwd(), '.claude', 'settings.json');
   return path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+function effectiveBaseUrl() {
+  const definitions = [];
+  if (typeof process.env.ANTHROPIC_BASE_URL === 'string') {
+    definitions.push({ source: 'env', file: null, value: process.env.ANTHROPIC_BASE_URL });
+  }
+  for (const source of ['project-local', 'project-shared', 'user']) {
+    const scope = source === 'project-local' ? 'project' : source;
+    const file = settingsPath(scope);
+    try {
+      const value = JSON.parse(fs.readFileSync(file, 'utf8')).env?.ANTHROPIC_BASE_URL;
+      if (typeof value === 'string') definitions.push({ source, file, value });
+    } catch {}
+  }
+  const [winner, ...shadowed] = definitions;
+  return winner ? { ...winner, shadowed } : { value: null, source: null, file: null, shadowed: [] };
 }
 
 function readSettingsForWrite(file) {
@@ -153,4 +170,4 @@ function wiredMode() {
 }
 
 
-module.exports = { cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, hasWiringMode, isWired, migrateLegacyProjectSettings, readSettingsForWrite, selectedWiringScope, settingsPath, wiredMode, wiringMode, wiringModeDefaultNotice, writeSettings, writeWiringMode };
+module.exports = { cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, hasWiringMode, isWired, migrateLegacyProjectSettings, readSettingsForWrite, selectedWiringScope, settingsPath, wiredMode, wiringMode, wiringModeDefaultNotice, writeSettings, writeWiringMode };

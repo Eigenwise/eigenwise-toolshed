@@ -30,7 +30,6 @@
 const { fork, spawn, spawnSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 const crypto = require('node:crypto');
-const dns = require('node:dns');
 const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
@@ -158,7 +157,7 @@ const {
 } = require('./process-supervision.js');
 
 const {
-  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, hasWiringMode, isWired, migrateLegacyProjectSettings,
+  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, hasWiringMode, isWired, migrateLegacyProjectSettings,
   readSettingsForWrite, selectedWiringScope, settingsPath, wiredMode, wiringMode, wiringModeDefaultNotice,
   writeSettings, writeWiringMode,
 } = require('./settings-wiring.js');
@@ -698,8 +697,8 @@ async function syncCompatMode() {
 
 // ------------------------------------------------------------------ doctor
 
-async function doctor() {
-  const readiness = await getCodexReadiness();
+async function doctor({ readiness: suppliedReadiness = null } = {}) {
+  const readiness = suppliedReadiness || await getCodexReadiness();
   log(`binary: ${readiness.checks.proxyBinary ? PROXY_BIN : 'MISSING (run setup)'}`);
   if (readiness.checks.proxyBinary) {
     const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
@@ -727,31 +726,45 @@ async function doctor() {
   }
   const activeMode = wiringMode();
   const activeScope = selectedWiringScope();
+  const effective = effectiveBaseUrl();
   const wiring = new Map();
+  const modeFor = (base) => (base === COMPAT_BASE_URL ? 'compat' : base === DEFAULT_BASE_URL ? 'default' : null);
+  const labelFor = {
+    env: 'process env',
+    'project-local': 'project settings.local.json',
+    'project-shared': 'project settings.json',
+    user: 'user settings.json',
+  };
+  const scopeFor = { 'project-local': 'project', user: 'user' };
   log(`wiring mode: ${activeMode} (${activeMode === 'local' ? 'per-project .claude/settings.local.json' : 'global ~/.claude/settings.json'})`);
   if (!hasWiringMode()) log(wiringModeDefaultNotice());
-  for (const scope of ['project', 'user']) {
-    const label = scope === 'project' ? 'project settings.local.json' : 'user settings.json';
-    try {
-      const settings = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
-      const base = settings.env?.ANTHROPIC_BASE_URL;
-      const wired = ourBaseUrls().includes(base);
-      wiring.set(scope, { wired, hasEnv: Boolean(settings.env) });
-      const modeLabel = base === COMPAT_BASE_URL ? ' [RC-compatibility mode]' : base === DEFAULT_BASE_URL ? ' [default mode]' : '';
-      log(`${label}: ${wired ? 'wired' + modeLabel : 'not wired'} (${settingsPath(scope)})${scope === activeScope ? ' [active]' : ''}`);
-    } catch {
-      wiring.set(scope, { wired: false, hasEnv: false });
-      log(`${label}: not wired${scope === activeScope ? ' [active]' : ''}`);
+  for (const source of ['env', 'project-local', 'project-shared', 'user']) {
+    const scope = scopeFor[source];
+    const file = source === 'env' ? null : settingsPath(source === 'project-local' ? 'project' : source);
+    let base = source === 'env' ? process.env.ANTHROPIC_BASE_URL : null;
+    if (file) {
+      try { base = JSON.parse(fs.readFileSync(file, 'utf8')).env?.ANTHROPIC_BASE_URL; } catch {}
     }
+    const wired = ourBaseUrls().includes(base);
+    const mode = modeFor(base);
+    wiring.set(source, { base, file, mode, wired });
+    const tags = [source === effective.source ? ' [effective]' : '', scope === activeScope ? ' [selected mode]' : ''].join('');
+    const modeLabel = mode === 'compat' ? ' [RC-compatibility mode]' : mode === 'default' ? ' [default mode]' : '';
+    log(`${labelFor[source]}: ${wired ? 'wired' + modeLabel : 'not wired'}${file ? ` (${file})` : ''}${tags}`);
   }
-  if (!wiring.get(activeScope).wired) {
-    const command = activeScope === 'project' ? 'env --write-project' : 'env --write-user';
-    console.error(`model-gateway: ERROR: active ${activeScope} wiring is not configured. Run /model-gateway:model-gateway, then use its ${command} command and restart Claude Code.`);
+  const effectiveWired = ourBaseUrls().includes(effective.value);
+  const effectiveScope = scopeFor[effective.source] || activeScope;
+  if (!effectiveWired) {
+    const command = effectiveScope === 'project' ? 'env --write-project' : 'env --write-user';
+    console.error(`model-gateway: ERROR: active ${effectiveScope} wiring is not configured. Run /model-gateway:model-gateway, then use its ${command} command and restart Claude Code.`);
     process.exitCode = 1;
   }
-  const projectWiring = wiring.get('project');
-  if (activeMode === 'global' && projectWiring.hasEnv && !projectWiring.wired) {
-    console.error('model-gateway: ERROR: project settings.local.json has an env block without ANTHROPIC_BASE_URL, so it masks global user wiring. Run /model-gateway:model-gateway, then use its env --write-project command and restart Claude Code.');
+  const selectedSource = activeScope === 'project' ? 'project-local' : 'user';
+  const selected = wiring.get(selectedSource);
+  const effectiveMode = modeFor(effective.value);
+  if (effectiveMode && selected.mode && effectiveMode !== selected.mode) {
+    const effectiveLocation = effective.file || 'process env ANTHROPIC_BASE_URL';
+    console.error(`model-gateway: ERROR: effective ${effectiveLocation} uses ${effectiveMode} mode, but shadowed ${selected.file} uses ${selected.mode} mode. Run /model-gateway:model-gateway, then use its env --write-${activeScope} command and restart Claude Code.`);
     process.exitCode = 1;
   }
   if (activeMode === 'local') log('Local wiring applies to new Claude Code sessions. Use /model-gateway:model-gateway to run its env --write-project command in a new project.');
@@ -1307,47 +1320,6 @@ async function catalogCommand() {
   else log(JSON.stringify(catalog, null, 2));
 }
 
-// dns.resolve4()/resolve6() query DNS directly and, unlike dns.lookup() (what
-// http/https use by default), never consult the OS hosts file. That's exactly
-// why this exists: RC-compatibility mode only works because the user's hosts
-// file maps COMPAT_HOST to loopback, but that same mapping would make the
-// shim's own "everything else -> real Anthropic" forward resolve right back
-// to itself if it used the default resolver — infinite self-forwarding. A
-// factory (not a module singleton) so tests can inject fake resolvers and get
-// an isolated cache. On resolution failure this errors closed rather than
-// falling back to dns.lookup(), which would silently recreate the recursion.
-function createHostsBypassResolver({ resolve4, resolve6, ttlMs = 5 * 60 * 1000 } = {}) {
-  const doResolve4 = resolve4 || dns.promises.resolve4;
-  const doResolve6 = resolve6 || dns.promises.resolve6;
-  let cache = { at: 0, value: null };
-  async function resolve(hostname) {
-    const now = Date.now();
-    if (cache.value && now - cache.at < ttlMs) return cache.value;
-    let result = null;
-    try {
-      const addrs = await doResolve4(hostname);
-      if (addrs && addrs.length) result = { address: addrs[0], family: 4 };
-    } catch { /* try AAAA below */ }
-    if (!result) {
-      try {
-        const addrs = await doResolve6(hostname);
-        if (addrs && addrs.length) result = { address: addrs[0], family: 6 };
-      } catch { /* both failed */ }
-    }
-    if (result) { cache = { at: now, value: result }; return result; }
-    return cache.value || null; // serve stale on a transient DNS blip rather than recurse
-  }
-  function lookup(hostname, options, callback) {
-    resolve(hostname).then(
-      (r) => (r
-        ? callback(null, r.address, r.family)
-        : callback(new Error(`model-gateway: could not resolve ${hostname} via DNS to bypass the hosts compatibility entry`))),
-      callback,
-    );
-  }
-  return { lookup, resolve };
-}
-
 function loopbackTelemetryEndpoint() {
   if (!ROUTE_TELEMETRY_ENABLED) return null;
   const explicit = process.env.CODEX_GATEWAY_TELEMETRY_ENDPOINT;
@@ -1730,7 +1702,7 @@ const commands = {
   catalog: () => catalogCommand(),
   pin: () => pinCommand(),
   env: () => envCommand(),
-  doctor: () => doctor(),
+  doctor: (options) => doctor(options),
   'remote-control': () => remoteControlCommand(),
   'serve-shim': () => runShim(),
   'serve-worker': () => runWorker(),
@@ -1756,8 +1728,8 @@ module.exports = {
   hasWiringMode,
   wiringModeDefaultNotice,
   migrateLegacyProjectSettings,
+  effectiveBaseUrl,
   settingsPath,
-  createHostsBypassResolver,
   COMPAT_HOST,
   COMPAT_PORT,
   DEFAULT_BASE_URL,
