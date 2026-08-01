@@ -382,7 +382,7 @@ async function cmdScopeRequest(opts: any, positional: any) {
   if (files == null) fail('scope-request: pass one or more requested paths with --file or --files.');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
-  const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || 'cli', force: !!opts.force, worktree: process.cwd() });
+  const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || 'cli', force: !!opts.force });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;

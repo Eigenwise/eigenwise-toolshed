@@ -346,7 +346,7 @@ const tools: ToolDefinition[] = [
     handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'scopeRequest');
-      const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp', worktree: args.worktree });
+      const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp' });
       const changed = res.ok && res.scopeRequest !== undefined ? {
         covered: res.covered || [],
         approved: res.approved || [],

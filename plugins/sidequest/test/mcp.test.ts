@@ -1387,6 +1387,22 @@ test('MCP scopeRequest pauses a claimed executor until the orchestrator expands 
   assert.deepEqual(approved.files, ['lib', 'other/new.js']);
 });
 
+test('MCP scopeRequest infers an isolated executor worktree from its dispatch', async () => {
+  const fixture = isolatedDispatch('sq-mcp-scope-isolated-', 'a1262scope', ['src']);
+  const requested = await callTool('scopeRequest', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    files: ['other/scope-request.md'],
+  });
+
+  const ticket = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(requested.ok, true, JSON.stringify(requested));
+  assert.deepEqual(requested.scopeRequest.files, ['other/scope-request.md']);
+  assert.equal(ticket.dispatch.worktree, fixture.worktree);
+  assert.ok(fs.existsSync(store.assetPath(fixture.project, ticket.id, `scope-request-${ticket.id}.json`)));
+});
+
 test('MCP scopeDeny clears a pending request without widening or releasing the ticket', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
