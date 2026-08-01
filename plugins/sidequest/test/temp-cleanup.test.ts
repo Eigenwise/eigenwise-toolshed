@@ -22,6 +22,11 @@ function aged(root: string, name: string) {
   return directory;
 }
 
+test('cleanup fixtures reject hardcoded Windows paths', () => {
+  const source = fs.readFileSync(__filename, 'utf8');
+  assert.doesNotMatch(source, /['"`](?:[A-Za-z]:[\\/]|\\\\)/);
+});
+
 test('cleanup removes old roots, keeps recent roots, and reports reparse points', () => {
   const root = sandbox();
   const oldRoot = path.join(root, 'sq-cleanup-old');
@@ -56,16 +61,18 @@ test('cleanup records classification failures and continues scanning', () => {
   const root = sandbox();
   const badRoot = aged(root, 'sq-cleanup-bad');
   const goodRoot = aged(root, 'sq-cleanup-good');
-  const originalRealpath = fs.realpathSync.native;
-  Object.defineProperty(fs.realpathSync, 'native', {
+  const originalLstat = fs.lstatSync;
+  const originalLstatDescriptor = Object.getOwnPropertyDescriptor(fs, 'lstatSync');
+  let badRootChecks = 0;
+  Object.defineProperty(fs, 'lstatSync', {
     configurable: true,
     value: (candidate: fs.PathLike, options?: any) => {
-      if (path.resolve(String(candidate)) === path.resolve(badRoot)) {
-        const error = new Error(`ENOENT: no such file or directory, realpath '${badRoot}'`);
+      if (path.resolve(String(candidate)) === path.resolve(badRoot) && ++badRootChecks === 2) {
+        const error = new Error(`ENOENT: no such file or directory, lstat '${badRoot}'`);
         (error as NodeJS.ErrnoException).code = 'ENOENT';
         throw error;
       }
-      return originalRealpath(candidate, options);
+      return originalLstat(candidate, options);
     },
   });
 
@@ -77,7 +84,7 @@ test('cleanup records classification failures and continues scanning', () => {
     assert.ok(report.skippedUnsafe.includes(badRoot));
     assert.ok(report.failed.some((failure) => failure.path === badRoot && failure.error.includes('ENOENT')));
   } finally {
-    Object.defineProperty(fs.realpathSync, 'native', { configurable: true, value: originalRealpath });
+    Object.defineProperty(fs, 'lstatSync', originalLstatDescriptor!);
   }
 });
 
