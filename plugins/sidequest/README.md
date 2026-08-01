@@ -1,30 +1,12 @@
 # sidequest
 
-# ⚠️ UNDER HEAVY CONSTRUCTION
-
-**Sidequest is changing quickly and may break, reroute work unexpectedly, or require migration between releases. Don't rely on it for critical unattended work yet.**
-
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Fsidequest%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
-[![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
 
-*Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
+Sidequest is a local Kanban board and work router for Claude Code. It keeps tickets in one central SQLite store, shows every project in one dashboard, and routes ticketed work to concrete models and effort through category policy.
 
-**A Trello-light quest log for Claude Code.** The stray issues you mention while Claude is busy with
-something else — *"oh, and the contact form doesn't send"* — get captured as **tickets** on the spot,
-with any image you pasted attached, and land on a **live, self-hosted Kanban dashboard** that spans
-every project you work in.
-
-You stay on your main quest; the side quests get written down.
-
-*Why this exists, what bet it makes, and what it costs: [WHY.md](WHY.md).*
-
-![The sidequest dashboard showing one board across every project](docs/board.png)
-
-*One live board across every project you work in. It's completely local: the server binds to `127.0.0.1`, nothing phones home, and there's no hosted version. Free and MIT.*
+The board is local-only. The server binds to `127.0.0.1`, ticket content stays on disk, and the plugin has no hosted service.
 
 ## Install
 
@@ -33,395 +15,205 @@ You stay on your main quest; the side quests get written down.
 /plugin install sidequest@eigenwise-toolshed
 ```
 
-Then run `/reload-plugins` (or restart Claude Code). The installed plugin runs committed CommonJS JavaScript and
-has no frontend or runtime install step. Repository development uses Node 22.5+.
+Reload Claude Code after installing or upgrading. The installed plugin runs committed CommonJS files and has no runtime or frontend install step. Development requires Node 22.5+.
 
-## The idea
+Open the dashboard with `/sidequest:board`, `sidequest dashboard`, or a natural-language request such as “show me the board”.
 
-You're deep in a CSS fix. You say *"oh and the checkout throws on Safari."* Normally that either
-derails the current task or gets forgotten three messages later. sidequest does neither:
+## Board model
 
-1. The **Sidequest skill** keeps filing side issues in scope without interrupting the work in progress.
-2. Claude files the ticket directly with the MCP `add` tool (or the CLI): title, description, priority,
-   labels, and any **pasted image**, then the main task keeps moving.
-3. The ticket appears on your **board**. Ask *"show me the dashboard"* and it opens in your browser,
-   live-updating as new tickets land.
+A board is anchored to a repository path. The CLI walks up to the nearest `.git`; `--project <path-or-slug>` targets another registered board. Tickets have `SQ-n` refs and statuses `todo`, `doing`, and `done`. Stories group related tickets under `US-n` refs. Tickets can also have priority, labels, images, comments, reminders, links, persistent assignees, declared files, contract edges, a category, and a high-stakes flag.
 
-Nothing leaves your machine. The board server binds to `127.0.0.1` only.
-
-## Capturing side issues
-
-The Sidequest skill tells Claude to file a separate issue directly as a ticket and keep going. It carries
-the developer-to-developer detail available, while a thin issue can stay thin. Filing a ticket never asks
-Claude to work it.
-
-- **Pasted images become attachments.** Paste a screenshot with your message and Claude carries it into
-  the ticket; you'll see the thumbnail on the card and full-size in the board's lightbox.
-- **It doesn't derail the current task.** Claude makes one MCP `add` call (or a single quick CLI call),
-  then continues what it was doing.
-
-You can also just ask directly: *"make a ticket for the flaky signup test, high priority."*
-
-## The dashboard
-
-Ask *"show me the dashboard"*, *"open the board"*, or run **`/sidequest:board`**. Claude starts the
-local server (idempotently — it reuses one that's already running) and opens your browser.
-
-- **Live.** The board polls every ~2.5s, so tickets added from anywhere (the CLI, MCP,
-  another window) show up on their own and animate in — no refresh. It only re-renders when something
-  actually changed, pauses polling while its browser tab is in the background, and refreshes instantly
-  the moment you switch back to it.
-- **Every project at once.** The left rail is a switcher across all your boards, plus an **All boards**
-  view. Because tickets are stored centrally (not inside each repo), one dashboard covers every folder
-  you work in simultaneously.
-- **Manage by hand.** Drag cards between **To do / Doing / Done**, click a card to edit title,
-  description, priority, labels, and images, paste or drop new screenshots, or delete it. Filter by
-  priority and search across everything.
-
-It's a self-contained page — no CDN, no fonts, no network calls beyond its own local API.
-
-![A ticket detail modal with priority, category, files, and comments](docs/ticket.png)
-
-*Click any card to open the ticket: priority, status, assignee, story, category, files, comments, reminders, and links.*
-
-### Notifications and the bell inbox
-
-When **Claude** changes the board while you're working elsewhere, sidequest tells you — but it never
-nags you about your own edits. Notifications live in a small **persistent queue on the server**, not
-just in the open tab, so they survive a reload and pile up even while no dashboard is open.
-
-- **The bell is an inbox.** Click it to open a readable list of what happened — comments, new tickets, status
-  changes, and reminders — newest first, each linking straight to its ticket. It's split into **Needs you**
-  (your reminders) and **Activity** (new tickets, moves, comments) so reminders stay visible. A gold badge on
-  the bell shows the unread count; click a notification (or **mark all read**) to clear it.
-- **Sidebar unread badge.** Each project also shows a small gold badge counting the tickets Claude
-  created or moved between columns since you last opened that board. Open the board and the badge
-  clears. Changes *you* make in the dashboard (in any tab) never raise a badge or an inbox entry.
-- **Desktop notification.** Toggle this from the **gear** menu ("Desktop notifications") — when Claude
-  does something in the background and you're not looking at the dashboard, you get a native toast on
-  top of the inbox entry. Click it to jump straight to that board.
-- **Choose what pings you.** The gear menu lets you pick which events notify (and queue): **comments**,
-  **new tickets**, and **status changes** — each a toggle, honored server-side so an opted-out kind never
-  queues even with no tab open.
-- **Mute a whole project.** The gear menu also has a per-project switch — turn a board off and it queues
-  **nothing**, of any kind, regardless of the toggles above; its row in the sidebar shows a muted-bell
-  mark. Handy for a chatty background project you don't want pinging you while you focus elsewhere.
-
-The distinction is by origin: a change made through the dashboard is *you*; a change made by the CLI or
-a subagent is *Claude*. Only the latter notifies, badges, or queues. (While a board's tab is fully
-backgrounded, the browser throttles its timers, so a desktop toast can lag a little; the inbox itself
-doesn't need the tab open at all.)
-
-## User stories
-
-Bigger than a single ticket? Group the pieces under a **user story**. Every ticket in a story is
-**color-coded** to it on the board, so a multi-part feature reads as one arc instead of scattered cards.
-Claude decides on its own whether an incoming request is a standalone ticket or a story-with-tickets
-(and files it accordingly) — you can also drive it by hand.
+The store is central, so one dashboard can switch among all projects and an **All boards** view. Board display names can change without changing the stable board ID or repository path.
 
 ```bash
-sidequest story add -t "Checkout revamp" --color teal    # prints its US-n ref
-sidequest add -t "Cart totals wrong" --story US-1 --complexity 3 --why "..."   # file a ticket straight into the story
-sidequest update SQ-7 --story US-1                       # or move an existing ticket in (--story none clears)
-sidequest story list                                     # stories with their color + ticket count
-sidequest story show US-1                                # the story and every ticket in it
+sidequest add -t "Safari checkout error" -d "Reproduction and expected behavior" \
+  --category debugging --priority high --file src/checkout.ts --verify "npm test -- checkout"
+sidequest story add -t "Checkout revamp" --color teal
+sidequest update SQ-7 --story US-1
+sidequest link SQ-7 depends-on SQ-3
+sidequest remind SQ-7 --in 1h
+sidequest assign SQ-7 --to you
 ```
 
-A distinct color is auto-assigned per story; override it with a hex (`#7a5ba8`) or a name
-(`terracotta, teal, violet, olive, rose, steel, amber, green`). On the dashboard each card wears its
-story's color as a top rail and a chip, a **Story** filter in the toolbar narrows the board to one
-story, and the ticket editor has a **Story** field to pick, clear, or create a story inline. Deleting a
-story keeps its tickets — they're just detached.
+Claims are separate from assignees. A claim says an executor is actively working; it is atomic and must succeed before work starts. An assignee is persistent human or agent ownership and never expires.
 
-## Category-based routing
+## Categories and routing
 
-Categories choose a concrete model and reasoning effort for each ticket. The shipped taxonomy covers
-coding, debugging, reviews, testing, research, docs, UI work, and a required `general` fallback. Routes
-can name Claude runtimes or Codex models discovered through [model-gateway](../model-gateway).
+Categories describe the work and select a concrete model plus reasoning effort. The shipped taxonomy covers coding, debugging, review, testing, research, documentation, UI work, and a required `general` fallback. The live category catalog is the authority. Choose a category by its description and persist its ID on the ticket. Do not hand-pick `--model` or `--effort` when filing a ticket.
+
+A board selects a routing profile and can add, override, pin, detach, or disable local category rows. A category has a primary route and may have a fallback. If the primary route is unavailable, Sidequest tries the category fallback and then the global fallback, recording warnings instead of silently changing providers. Provider-specific quota recovery can prepare a configured fallback with a fresh dispatch token. Generic executor failures do not change the route.
 
 ```bash
 sidequest category list
-sidequest add -t "Fix the checkout error" --category debugging
-sidequest category edit coding.normal --route-model codex-gpt-5-6-terra --route-effort high   # shared default, or --project . to fork it for one board
-sidequest category reset coding.normal --project .                                            # drop this board's copy, follow the shared default again
-sidequest category add release-check --name "Release checks" --description "Focused release verification" \
-  --contract "Run the named checks and report failures." \
-  --route-model sonnet --route-effort medium \
-  --fallback-model haiku --fallback-effort medium
+sidequest category add release-check --name "Release checks" \
+  --description "Focused release verification" \
+  --route-model sonnet --route-effort medium
+sidequest category edit coding.normal --profile default \
+  --route-model codex-gpt-5-6-terra --route-effort high
+sidequest category reset coding.normal --project .
 sidequest global-fallback --model sonnet --effort medium
+sidequest models
+sidequest route debugging --json
 ```
 
-Each category has a primary route and may define its own fallback. If that model is unavailable, sidequest
-tries the category fallback, then the required global fallback, and reports a warning for the route that
-was skipped. A native Agent launch can reveal a Claude quota limit that catalog availability cannot see.
-For the exact supported quota signature, the failure hook records the primary attempt and prepares this
-ticket's configured fallback with a fresh claim token. Run `dispatch` again to get that prepared fallback.
-The recovery survives a session restart, applies only to that ticket's active dispatch, and ends when the
-dispatch finishes or is released, so future tickets and later dispatches use category policy again. Generic
-Agent failures never change the route. The CLI, MCP surfaces, and dashboard expose the same category CRUD
-operations and usage counts.
+Profiles are managed with `profile list`, `show`, `create`, `edit`, `retire`, `use`, `repoint`, `promote`, and `new-board`. Category mutations require an explicit `--profile` or `--project` scope. Read-only categories dispatch restricted executors and close with `done` rather than a repository submission.
 
-Categories live in a shared default policy. Pick a board to customize a category just for it: editing a
-category on a board forks it into that board's own copy. The fork stops following the shared default
-entirely — later edits to the shared default won't reach it — and other boards are untouched. **Reset**
-drops the board's copy so it follows the shared default again. Deleting a shared default leaves any board
-that forked it with its working copy, so a board is never stranded. `general` cannot be removed or disabled,
-but a board can fork it like any other.
+Legacy `--complexity` plus `--why` remains accepted for existing intake and maps to a category at read time. New tickets should use `--category`.
 
-Tickets keep their category ID as policy, so changing a category updates the next dispatch without rewriting
-existing tickets. New tickets should use `--category` so the dispatch intent is explicit. Routed work stays in
-the current Claude Code conversation: Sidequest returns its stable native Agent executor, then the
-conversation invokes it through Agent. Sidequest owns this routing boundary. Do not recreate a standalone
-Switchboard. Any future extraction must be a shared library imported by Sidequest, with Sidequest still
-owning ticket routing and execution.
+## MCP tools
 
-## File scopes & parallel waves
+The plugin registers one Sidequest MCP server. MCP and CLI use the same store and policy. Routed executors use MCP lifecycle tools, including `commit` and `submit`, with their absolute worktree path.
 
-Declare which files a ticket will touch and the board can tell you **what's safe to run in parallel** —
-mechanically, instead of hoping two agents don't collide.
+Routine reads are brief by default. Use the opt-in full/detail fields when you need large payloads. Paged responses include `nextCursor`; follow it until it is `null`.
+
+### Read tools
+
+- `list`: active tickets by default, compact rows, paging. `detail: true` returns full ticket bodies and comment threads; `status: "done"` or `all: true` includes completed tickets.
+- `pulse`: compact liveness read. `full: true` includes submission, git, and dispatch lifecycle.
+- `changes`: compact polling delta with `serverTime`; use that value as the next `since` value.
+- `ready`: ready tickets grouped into safe waves. Default output is count plus ref/title rows; `full: true` returns ticket records.
+- `story`: add, list, show, update, or remove stories.
+- `story_contract`: read or set a story execution contract.
+- `story_log`: read, append, or clear a story decision log.
+
+`comments` is brief/newest-first for routine orchestration and supports `full: true` for exact chronological bodies. `category_list` is compact by default and supports `full: true` for complete category rows.
+
+### Ticket and collaboration tools
+
+- `add`, `update`, `remove`, `archive`, `unarchive`
+- `comment`, `comments`, `plan`
+- `link`, `unlink`, `assign`
+- `dispatch`, `native_agent`, `native_agent_cleanup`
+
+### Lifecycle and delivery tools
+
+- `claim`, `checkpoint`, `next`, `done`, `release`, `verdict`
+- `scopeRequest`, `commit`, `submit`, `integrate`, `groomClose`
+- `sweepClaims`
+
+Repository executors normally follow `dispatch → token claim → scoped commit → submit → orchestrator integration`. The orchestrator owns publish, versioning, and pushing. Direct claim/done is reserved for deliberate inline-safe work, non-repository work, or read-only/artifact contracts that explicitly allow it.
+
+### Routing and board administration tools
+
+- Profiles: `profile_list`, `profile_get`, `profile_create`, `profile_edit`, `profile_retire`, `profile_use`, `profile_repoint`, `profile_promote`, `new_board_profile`
+- Routes and categories: `route_recipe`, `category_list`, `category_add`, `category_edit`, `category_detach`, `category_relink`, `category_rm`, `global_fallback`
+- Board and project administration: `board_config`, `models`, `projects`, `archive_board`, `unarchive_board`
+
+## Dashboard
+
+The dashboard is a self-contained local page. It polls about every 2.5 seconds, pauses in a background tab, and refreshes when you return. It supports board switching, search, priority/status/category/story/assignee filters, drag-and-drop status changes, ticket editing, comments, links, reminders, attachments, archive views, board archive/restore, and permanent board deletion.
+
+The notification bell is a persistent server-side inbox for Claude-originated comments, new tickets, status changes, and reminders. Dashboard-originated edits do not notify. The gear menu controls event preferences, desktop notifications, and per-project muting.
+
+## Working tickets and parallel waves
+
+A ticket description is the executor's specification. Include exact files, anchors, behavior, edge cases, dependencies, and a runnable verify command. Declare every affected surface with `--file`; directory scopes cover descendants.
 
 ```bash
-sidequest add -t "CLI part" --file bin/cli.js --file README.md --category coding.easy   # --file repeatable; dir prefixes cover subtrees
-sidequest update SQ-7 --file none                                # clear the scope
-sidequest ready                                                  # groups the ready set into waves
+sidequest ready --json --brief
+sidequest dispatch SQ-7
 ```
 
-`ready` partitions unclaimed, unblocked tickets into **waves**: within a wave no two tickets' scopes
-overlap (a path conflicts with an equal path or a directory prefix of it), so Claude fans out one
-executor per ticket, one wave at a time. Tickets without a declared scope never mechanically conflict —
-Claude falls back to judgment for those. Cards show a small 📁 count, and the ticket editor has a
-comma-separated **Files** field.
+`ready` excludes claimed, blocked, done, and archived tickets, then groups the rest into waves whose declared file scopes do not overlap. Independent tickets can run in parallel. Shared runtime resources such as ports, servers, and databases still need serialization.
 
-This pairs with category routing into a planning doctrine the skill teaches: scope work by affected
-surfaces, not just anchor files. A storage change commonly includes the store, CLI, MCP, skill/docs, and
-applicable full tests. Declare every surface, then shape stories as design → parallel wave(s) → integrate.
-The thinking stays on the top model, the labor gets cheap and wide.
+Worktree isolation is enabled by default for declared-file dispatches. A board can disable it with `board-config --no-worktree-isolation`, or an explicit shared-tree/artifact dispatch can opt out. Worktree setup is configured per board and shown verbatim to the executor; Sidequest does not execute or shell-escape that command.
 
-## Reminders
+Claims are released on observed executor death, then by activity-based backstops when no live executor is associated. They do not expire merely because a long-running executor has been working. `pulse` reports whether a claim is reclaimable. Preserve a dead executor's worktree and commit before redispatching.
 
-Set a time-based nudge on any ticket — it fires into the bell inbox later, even if you've closed the
-tab (as long as the dashboard server is running).
+## Publish lock and delivery
+
+The orchestrator integrates submitted work. Delivery can merge, replay, or apply, configured per board with `board-config --delivery`. Integration rechecks scope and the recorded verify command. A publish lock protects release operations and pushes to the published/default branch.
 
 ```bash
-sidequest remind SQ-3 --in 1h                    # presets: 1h | 3h | tomorrow (9am)
-sidequest remind SQ-3 --at "2026-07-05T09:00"    # or a specific date/time
-sidequest unremind SQ-3                          # cancel a pending one
+sidequest publish lock --by <who>
+sidequest integrate SQ-7 --by <who> --mode replay
+sidequest publish queue
+sidequest publish unlock --by <who>
 ```
 
-On the dashboard, a ticket's editor has the same presets plus a custom datetime picker, and a
-cancellable "🔔 in 1h" chip shows on the card and in the modal while one's pending. A reminder due
-while the server was down fires on the very next tick after it's back up — nothing is lost.
+Executors do not push, bump manifests, or assign release versions. Partial submissions with unscoped paths are rejected until scope is approved and the commit is complete.
 
-## Assigning tickets
+## Hooks
 
-Separate from a **claim** (atomic, expires, gates `next`/`ready`), a ticket can also carry a persistent
-**assignee** — normally you, the human, tracking who owns it rather than who's actively working it.
+The shipped hook registry covers the full Claude Code session and executor lifecycle:
 
-```bash
-sidequest assign SQ-3               # assign to "you"
-sidequest assign SQ-3 --to Kenny    # or a specific name
-sidequest unassign SQ-3             # clear it
+- `UserPromptSubmit`: board-first reminder.
+- `PreToolUse`: near-turn-cap warning, inline-work nudge, executor identity enforcement, task-output and peer-message guards, home-delete protection, repeated-command warning, Windows-path protection, destructive-git protection, shared-tree commit protection, and worktree-isolation protection.
+- `PostToolUseFailure` for `Agent`: quota-fallback preparation.
+- `Stop`: compaction suggestion and board-reconciliation reminder.
+- `PreCompact`: compaction policy.
+- `PostCompact`: post-compaction recovery guidance.
+- `SessionStart`: registry write and session setup.
+- `SessionEnd`: release/reconcile the session's claims.
+- `SubagentStart` and `SubagentStop`: executor registration, lifecycle reporting, and claim/worktree cleanup.
+- `TeammateIdle`: teammate liveness handling.
+
+### Compaction policy
+
+`SIDEQUEST_COMPACTION_POLICY` controls the `PreCompact` hook:
+
+- `pin` is the default. For an automatic compaction, it injects a bounded summary of active doing tickets, active stories, and a held publish lock so those facts survive compaction.
+- `veto` is opt-in. When fresh claims or a publish lock make automatic compaction unsafe, it blocks at most two automatic attempts, then allows compaction with the pinned summary. Manual compaction is never vetoed.
+- `off` disables the policy.
+
+The hook only acts on automatic `PreCompact` events. Its injected instruction is capped at 1500 bytes. Veto counters are persisted under `SIDEQUEST_HOME/compaction-policy/` per session.
+
+## Token diet and read conventions
+
+Use `list --brief` and `ready --brief` for routine orchestration. Use `changes` for polling and `pulse` for one-ticket liveness. Avoid repeating broad reads while an executor is running. Request `detail: true` or `full: true` only for audit, handoff, integration, or troubleshooting. Comments keep metadata while eliding old bodies in large threads; use full comments when exact text matters.
+
+Ticket and story decision logs are handoffs, not diaries. Record decisions, constraints, discoveries, verification evidence, and integration risks. Keep story log entries short and promote durable findings into the story contract.
+
+## CLI reference
+
+The CLI entry point is `bin/sidequest.js`. Common commands are:
+
+```text
+add, list, update, rm
+story add|list|show|contract|log|update|rm
+profile hygiene|list|show|create|edit|retire|use|repoint|promote|new-board
+category list|add|edit|rm|disable|enable|pin|reset
+global-fallback, models, route, routing
+ready, next, claim, checkpoint, dispatch, briefing, native-agent
+commit, submit, integrate, done, release, groom-close, verdict, scope-request
+reconcile, claims sweep, worktrees sweep, recover-shared
+comment, comments, plan, link, unlink
+assign, unassign, remind, unremind
+archive, unarchive, archive-board, unarchive-board
+projects, board-config, merge
+dashboard, serve, stop
+publish lock|unlock|status|queue
 ```
 
-The dashboard has an assignee chip on each card and a filter in the toolbar (**Everyone** / **Mine** /
-**Agents** / **Unassigned**) — "Agents" means a live claim (or a non-"you" assignee), "Unassigned" means
-neither. Assignment never expires and never blocks an agent from claiming and working an assigned
-ticket.
+Run `sidequest <command> --help` for options. The target board defaults to `$CLAUDE_PROJECT_DIR` or the current repository. Use `--project` to target another board.
 
-## Multiple projects
+## Storage and configuration
 
-Run Claude in `~/work/shop` and `~/work/api` at the same time and each gets its own board,
-automatically, keyed by the folder's absolute path. The single dashboard shows both (and any others),
-so you never juggle windows. Nothing is written into your repos.
+By default:
 
-## Managing tickets from chat
-
-Ask in plain language and the `sidequest` skill maps it to the CLI:
-
-| You say | What happens |
-|---|---|
-| "show me the board" / `/sidequest:board` | Opens the live dashboard in your browser |
-| "make a ticket for X, high priority, label bug" | Creates a ticket on the current board |
-| "list my tickets" / "what's open" | Lists tickets, grouped by column |
-| "close SQ-3" / "mark SQ-3 done" | Moves SQ-3 to **Done** |
-| "move SQ-2 to doing" | Moves SQ-2 to **Doing** |
-| "bump SQ-5 to urgent" | Changes priority |
-| "delete SQ-4" | Removes the ticket |
-
-## Working the board (safe with multiple agents)
-
-sidequest isn't just a place to *record* work — Claude (or several agents at once) can **work** it. The
-board may be shared across sessions, browser tabs, or teammates, so a ticket must be **claimed** before
-anyone touches it, and claiming is **atomic**: two workers can never both win the same ticket.
-
-Because tickets get *executed* by agents (often smaller ones), the skill holds descriptions to a
-**developer-to-developer standard**: exact files and functions, the behavioral contract, bounds, and
-how to verify — never a manager's one-liner. The category route and fallback chain determine which
-executor runs the work, so precision substitutes for model capability.
-
-Routed executors use MCP, not shell commands, for the lifecycle:
-
-- `mcp__plugin_sidequest_board__claim` takes the prepared token, exact executor, and effort.
-- `mcp__plugin_sidequest_board__commit` takes `ref`, `by`, `message`, and the absolute worktree root. It
-  commits only declared paths and leaves foreign staged paths alone.
-- The executor pins the returned hash locally at `refs/sidequest/SQ-n`, then
-  `mcp__plugin_sidequest_board__submit` validates that scoped range from the same worktree and parks it.
-
-- **Routed repo lifecycle:** dispatch → token claim → scoped commit → submit → orchestrator publish. The
-  executor uses the exact dispatch executor and unchanged `spawn.prompt`. The token and claim guard prove the
-  resolved route; the executor never pushes or assigns release versions. `submit` parks the verified local
-  commit for the orchestrator's serialized publish transaction.
-- **Direct claim/done is narrow.** For deliberate inline work on a routed ticket, the user must first apply the `direct-ok` label, then use `sidequest claim SQ-3 --by <worker> --direct --reason "No routed executor is available for this user-approved inline review"`, followed by `done`. The reason must be at least 20 characters. Use direct work only for intentional inline work or non-repository work. Routed repository work ends with `submit`.
-- **Claim before work, always.** The claim is the atomic check that the ticket is still free. If it fails,
-  don't work the ticket.
-- **`--by`** is a unique worker id. Concurrent workers must use distinct ids.
-- **Steerable background execution is the default.** The orchestrator plans and integrates; short bounded
-  executors do the labor. Synchronous runs are only for a tight wave when blindness is acceptable.
-- **Crash-safe salvage.** Claims release after an observed executor stop, then after `SIDEQUEST_CLAIM_IDLE_MIN` (default 60 min) with no live executor, or after the `SIDEQUEST_CLAIM_ABANDON_MIN` 24-hour backstop. Idleness starts at the holder's last board write, not its claim time. Preserve its worktree and verified commit or in-scope diff before redispatching. SessionEnd releases its own claims.
-- **Release versions stay central.** The orchestrator alone assigns matching versions in both
-  `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` during publish. Executors never edit
-  manifests or bump versions.
-
-## Fan out over independent tickets
-
-Because claiming is atomic, Claude doesn't have to work a backlog one ticket at a time — when several
-tickets are **ready and independent**, it works them **in parallel**, one subagent per ticket.
-
-![Claude filing tickets then launching three parallel executor agents by category route](docs/fan-out.png)
-
-*Claude splits the ready tickets into waves by the files they touch, then launches a wave of executors in parallel, each on the category route and effort the ticket resolved to. A ticket that overlaps another waits for the next wave.*
-
-```bash
-sidequest ready [--json] [--brief]   # the fan-out set: unclaimed, unblocked, not done, not archived
-                                     # --brief: compact tickets, no bodies (the cheap orchestration read; implies --json)
+```text
+~/.claude/sidequest/
+  sidequest.db
+  server.json
+  projects/<board-slug>/assets/<id>/<image>
 ```
 
-Each routed subagent dispatches, token-claims, does the scoped work, commits, and submits; if a claim
-loses a race it just moves on, so two agents never collide. Only **independent** tickets are parallelized —
-anything that shares files or has a `depends-on` link stays sequential (blocked tickets aren't even in
-`ready`). The bundled hook and skill make this the default behavior, not an afterthought.
+SQLite uses Node's built-in `node:sqlite` with WAL mode. Older JSON stores migrate non-destructively on first open.
 
-A bounded documentation artifact can remain in the shared working tree for the caller to review. Its category
-must grant structured `artifactRoots`, the ticket must declare exactly one path under an approved root and carry
-the artifact lifecycle sentence, and dispatch must use `--shared-tree` (MCP `sharedTree:true`). The shipped
-`codebase-exploration` category approves `.claude/.codebase-info`. Dispatch pins the authority, root, scope, and
-a bounded content-aware fingerprint for each existing dirty path, including Git status, index identity, file type,
-and worktree content identity. `done` rechecks direct real paths, rejects symlinks/junctions/reparse indirection,
-and lists newly changed or modified pre-existing paths outside scope while leaving untouched caller dirt alone.
-Marker or contract text alone grants nothing. Other routed repository work commits and submits. Released work can
-only close through `groom-close --reason <evidence>` (MCP `groomClose`), which records its administrative purpose,
-actor, reason, and timestamp; executor `done` and `update` cannot spoof that authority.
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIDEQUEST_HOME` | `~/.claude/sidequest` | Central board store and isolated-test home. |
+| `SIDEQUEST_AGENTS_DIR` | derived from `SIDEQUEST_HOME` | Explicit generated executor-agent directory. |
+| `SIDEQUEST_PORT` | `41730` | Preferred dashboard port; Sidequest chooses the next free port if occupied. |
+| `SIDEQUEST_CLAIM_IDLE_MIN` | `60` | Activity-based reclaim window with no live executor. |
+| `SIDEQUEST_CLAIM_ABANDON_MIN` | `1440` | Backstop when no death was observed. |
+| `SIDEQUEST_CLAIM_TTL_MIN` | legacy alias | Alias for `SIDEQUEST_CLAIM_IDLE_MIN`. |
+| `SIDEQUEST_NUDGE` | `on` | Set `off` to silence the SessionStart routing reminder. |
+| `SIDEQUEST_COMPACTION_POLICY` | `pin` | `pin`, `veto`, or `off` for automatic compaction. |
 
-These scope checks are lifecycle guardrails on a trusted local machine, not filesystem sandboxing. A transient hard
-link or junction created after dispatch and removed before completion is outside the Sidequest 3.0 guarantee.
+When the local Workbench observer is available on `127.0.0.1:14319`, Sidequest sends lifecycle metadata only: routing, IDs, claim worker, submission state, and status. It does not send ticket text, comments, prompts, attachments, tokens, credentials, or errors.
 
-## Native routed execution
-
-Routed tickets run through the current Claude Code conversation only. Call `sidequest dispatch SQ-n` (or
-MCP `dispatch`) to return the ticket's exact stable executor, complete `spawn` object, and claim token,
-then invoke that exact spawn spec with Agent. Pass `spawn.prompt` unchanged, including its one Codex
-route marker when present. The executor must claim with that token, exact executor, and stamped effort.
-`sidequest work`/`drain` cannot invoke the current conversation's Agent tool.
-
-Native `Explore` and the approved `claude-code-guide` and `statusline-setup` harness utilities may run without
-a prepared Sidequest dispatch. Use them or read-only tools to gather enough evidence for precise tickets, then
-route implementation by default. Other generic/custom implementation Agent launches are denied. Informed inline
-judgment remains available; routed implementation work uses a ticket and fresh dispatch.
-
-## Comments
-
-Every ticket has a durable cross-actor handoff thread. A **comment** carries decisions, non-obvious constraints,
-recurring ruled-out approaches, integration risks, verification evidence, or concise findings. Skip routine
-progress narration, self-logs, and full green logs.
-
-Stored comments can hold longer evidence from `--body-file`; executor dispatch only carries a bounded recent
-excerpt, so read `sidequest comments SQ-3` before acting on a handoff.
-
-```bash
-sidequest comment SQ-3 -m "Reusing the SQ-1 examples here."
-sidequest comments SQ-3
-```
-
-On the dashboard, open a ticket to read the thread and add a comment. Comments remain available alongside
-reminders and other ticket activity in the inbox.
-
-## Links & dependencies
-
-Relate tickets so the order of work is explicit. Links are stored on both tickets — set one side and
-the inverse is written automatically.
-
-```bash
-sidequest link SQ-4 depends-on SQ-3     # SQ-4 is blocked-by SQ-3 (and SQ-3 blocks SQ-4)
-sidequest link SQ-1 blocks SQ-2         # the other direction
-sidequest link SQ-5 related SQ-6        # a non-blocking association
-sidequest unlink SQ-4 SQ-3              # remove it
-```
-
-A ticket that is **blocked by an unfinished ticket** is shown as **⛔ blocked** and is **skipped by
-`next`/`ready`** — an agent grabbing the top task never picks up work that isn't ready. Once the blocker
-is `done`, it unblocks automatically. On the dashboard, links (and an unlink ✕) live in the ticket detail.
-
-## Board archive and deletion
-
-Boards can be archived when you want them out of the active switcher without losing their data. Archive and restore use an explicit board reference, so they never silently target the current directory's board:
-
-```bash
-sidequest archive-board <board-ref>       # hide the board and keep all tickets
-sidequest unarchive-board <board-ref>     # restore an archived board
-sidequest projects --archived             # list archived boards
-```
-
-The dashboard exposes the same controls from a board's context menu. Archived boards appear under **Archived boards** in the sidebar, with **Restore board** available. Archiving is reversible and keeps the board and tickets intact.
-
-Permanent deletion is a separate action. The dashboard's **Delete board…** prompt asks for a plain confirmation before it sends the delete request. Deletion removes the board directory and all of its tickets and assets permanently; there is no restore path. The CLI intentionally exposes archive and restore, but no board-delete command.
-
-## Archive
-
-Finished work piles up in **Done**. Archive it to tuck it away — kept and fully restorable, just out of
-the board's way (hidden from the columns, the counts, `next`, and `ready`).
-
-```bash
-sidequest archive --done       # archive every done ticket (the usual "clear out Done")
-sidequest archive SQ-3         # archive one
-sidequest unarchive SQ-3       # restore it
-sidequest list --archived      # see what's archived
-```
-
-On the dashboard, the **Done** column header has an **Archive all** button, each ticket has an
-**Archive** action in its detail, and a quiet **Archive** entry at the bottom of the sidebar opens a
-separate, list-style archive view (with **Restore** on every row) — deliberately plain and off to the
-side, so it never competes with the live board.
-
-## Two ways in: MCP tools and the CLI
-
-sidequest ships an **MCP server** alongside the CLI, so Claude works the board through typed tools
-(`mcp__plugin_sidequest_board__claim`, `…__ready`, `…__add`, `…__done`, …) instead of shelling out to the
-CLI on every action. Same store, same rules — but one tool approval covers the whole set instead of a Bash
-prompt per call, the data comes back as structured JSON, and a multi-line ticket description is just a
-string (no shell-quoting). It registers automatically when the plugin loads; you don't configure anything.
-
-The **CLI is the human/admin/orchestrator interface** and does everything the tools do plus
-`dashboard`/`serve`. Routed executors use only MCP lifecycle tools, including `commit` and `submit`; the
-explicit worktree argument lets the server operate on their isolated checkout. The category taxonomy and
-route shape are the same across CLI, MCP, and dashboard.
-
-### Local Workbench telemetry
-
-When the Workbench observer is running on `127.0.0.1:14319`, Sidequest sends a small lifecycle snapshot
-for each ticket write. It includes only routing and lifecycle metadata: category, configured and resolved
-route, executor, dispatch/task/session/agent IDs, claim worker, submission state, and status. The endpoint
-is loopback-only, requests time out after 250 ms, and observer failures never affect a board mutation.
-
-Ticket titles, descriptions, comments, prompts, attachment paths and contents, dispatch tokens, tool
-payloads, errors, and credentials stay out of telemetry. Each snapshot has a stable source event ID, so
-observer deduplication covers writes reached through either MCP or the CLI. Use `sidequest changes --since
-<serverTime>` to backfill a missed interval.
-
-## Developing Sidequest
-
-Runtime sources live under `src/` and compile to the committed CommonJS distribution in `bin/`, `lib/`, and
-`hooks/`. The marketplace cache runs those generated `.js` files directly, so contributors commit generated
-output and users do not install dependencies or build on their machines. The Node floor stays at 22.5+.
+## Development
 
 From `plugins/sidequest/`:
 
@@ -434,128 +226,7 @@ npm run test:full
 npm run test:perf
 ```
 
-`test:full` type-checks, rebuilds, and runs the TypeScript test suites against the committed distribution.
-`test:perf` runs the isolated performance checks separately. Keep generated output in sync before committing.
-
-### Dashboard development
-
-The dashboard source is a private Svelte 5 and TypeScript app under `dashboard/`. Its production build is
-committed under `dashboard/dist/`; the installed plugin serves that build and never installs frontend
-packages. For local development, run an isolated Sidequest server, then from `plugins/sidequest/dashboard/`
-run `npm ci` and `npm run dev`. Vite serves the app with hot reload and proxies `/api` (including asset
-requests) to the isolated server.
-
-Run `npm run check`, `npm test`, and `npm run build` while developing. Run `npm run test:e2e` with Playwright
-against the built app and a synthetic isolated board, then confirm a clean build produces no diff in the
-committed `dist/` tree. Never use a live board for tests or screenshots.
-
-## CLI
-
-Every action is a thin wrapper over one script, usable directly too:
-
-```bash
-node <plugin>/bin/sidequest.js add -t "Title" -d "Details" -p high -l bug -l ui -i /path/to/shot.png --category debugging
-node <plugin>/bin/sidequest.js list [--status todo|doing|done] [--json] [--brief]
-node <plugin>/bin/sidequest.js update SQ-3 --status done      # -t -d -p -s -l -i  ·  --story US-1|none
-node <plugin>/bin/sidequest.js rm SQ-3
-node <plugin>/bin/sidequest.js story add -t "Epic" [--color teal]   # group tickets; file into it with --story US-n
-node <plugin>/bin/sidequest.js story list|show US-1|update US-1|rm US-1
-node <plugin>/bin/sidequest.js add -t "Task" --category coding.normal
-node <plugin>/bin/sidequest.js category list|add|edit|rm <id>
-node <plugin>/bin/sidequest.js global-fallback --model sonnet --effort medium
-node <plugin>/bin/sidequest.js models                               # categories, routes, and fallback chain
-node <plugin>/bin/sidequest.js next --category coding.normal --by <you>  # claim work by category route
-node <plugin>/bin/sidequest.js ready [--json] [--brief]       # the fan-out set (unclaimed, unblocked)
-node <plugin>/bin/sidequest.js dispatch SQ-3                 # stable routed executor, spawn, token
-node <plugin>/bin/sidequest.js reconcile [--session <id>]     # release a session's stale claims now (SessionEnd hook calls this)
-node <plugin>/bin/sidequest.js update SQ-3 -l direct-ok         # user grants the deliberate inline exception
-node <plugin>/bin/sidequest.js claim SQ-3 --by <worker> --direct --reason "No routed executor is available for this user-approved inline review"
-node <plugin>/bin/sidequest.js done SQ-3 --by <worker>                    # direct inline or non-repo work
-node <plugin>/bin/sidequest.js submit SQ-3 --by <worker> --commit <hash> --verify "<exact command>"
-node <plugin>/bin/sidequest.js done SQ-3 --by <worker>       # direct inline or non-repo work only
-node <plugin>/bin/sidequest.js link SQ-4 depends-on SQ-3      # dependencies (blocks | depends-on | related)
-node <plugin>/bin/sidequest.js comment SQ-3 -m "note"
-node <plugin>/bin/sidequest.js archive --done                # tuck away all done  ·  unarchive <ref> restores
-node <plugin>/bin/sidequest.js assign SQ-3 [--to who=you]     # persistent owner  ·  unassign SQ-3 clears it
-node <plugin>/bin/sidequest.js remind SQ-3 --in 1h            # or --at "<date/time>"  ·  unremind SQ-3 cancels
-node <plugin>/bin/sidequest.js projects [--json]
-node <plugin>/bin/sidequest.js dashboard [--port N] [--no-open]
-node <plugin>/bin/sidequest.js serve [--port N]               # run the server in the foreground
-node <plugin>/bin/sidequest.js stop                           # stop the running server
-```
-
-The target board defaults to `$CLAUDE_PROJECT_DIR` (or the current directory); pass
-`--project <path-or-slug>` to point elsewhere.
-
-## Where things live
-
-Board data lives in a single SQLite database, stored centrally so it never clutters a repo and one
-dashboard can aggregate every project:
-
-```
-~/.claude/sidequest/
-  sidequest.db                    # all board data: projects, tickets, stories, prefs (SQLite)
-  server.json                     # the running dashboard's port + pid
-  projects/
-    <folder>-<hash>/
-      assets/<id>/<image>         # attached screenshots (on disk, referenced from the db)
-```
-
-Each ticket gets a short human ref (`SQ-1`, `SQ-2`, …) and each story a `US-1`, `US-2`, … per project.
-
-Storage runs on Node's built-in `node:sqlite`, so there's no native dependency to build — but it needs
-**Node 22.5+**. WAL mode is on, so the dashboard reading and an agent writing don't block each other.
-After a schema-bumping Sidequest upgrade, a loaded MCP server or old session can still write the old store
-shape. Reload plugins before writing; until then, write through the new CLI and use MCP only for reads.
-
-**Upgrading from the JSON store.** Older builds kept one JSON file per ticket and story plus
-`meta.json`, `model-prefs.json`, and friends. The first time a newer build opens your home it migrates
-all of that into `sidequest.db` in a single pass, **non-destructively** — the old JSON tree is left
-exactly where it was, so you can roll back just by downgrading the plugin. The migration is guarded by
-a marker in the db: it runs once and is a no-op on every start after.
-
-### Configuration
-
-Two optional environment variables (set them in `.claude/settings.json` under `env`, or your shell):
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `SIDEQUEST_HOME` | `~/.claude/sidequest` | Where the central store lives. Point several machines at a synced folder to share boards. When set, the generated Codex-backend exec agents go under `<home>/agents` instead of `~/.claude/agents`, so an isolated/test instance never writes into your live agents dir. |
-| `SIDEQUEST_AGENTS_DIR` | (see `SIDEQUEST_HOME`) | Explicit override for where the generated exec agents are written. Wins over the `SIDEQUEST_HOME` rule above. |
-| `SIDEQUEST_PORT` | `41730` | Preferred dashboard port. If taken, the next free port is used. |
-| `SIDEQUEST_CLAIM_IDLE_MIN` | `60` | Minutes without a holder board write before a claim with no live executor is reclaimable. |
-| `SIDEQUEST_CLAIM_ABANDON_MIN` | `1440` | Idle-minute backstop that reclaims a claim when no death was observed. |
-| `SIDEQUEST_CLAIM_TTL_MIN` | `60` | Legacy alias for `SIDEQUEST_CLAIM_IDLE_MIN`. |
-| `SIDEQUEST_NUDGE` | `on` | Set to `off` to silence SessionStart routing context. It does not disable the Agent execution gate. |
-
-## Troubleshooting
-
-- **The board didn't open.** The launcher prints the URL — open it manually. Check the server is up
-  with `node <plugin>/bin/sidequest.js projects` (it prints the board URL when the server is running),
-  or restart it with `stop` then `dashboard`.
-- **A ticket didn't get filed.** Sidequest never auto-creates tickets. File it explicitly, then dispatch
-  substantive work from that fresh ticket. The Agent gate only blocks unmarked generic/custom background
-  launches; it does not file work for you.
-- **Wrong board.** Tickets go to `$CLAUDE_PROJECT_DIR`. If you started Claude from a different folder
-  than you expected, pass `--project` or move the ticket on the dashboard.
-- **Port already in use.** sidequest picks the next free port automatically and records it in
-  `server.json`; the dashboard command always opens the right one.
-- **It's safe by design.** The hook fails soft — any error produces no output and never blocks a
-  prompt. The server is local-only (`127.0.0.1`).
-
-## Clean up
-
-- Tickets for one project: remove its project data with the board's project controls or delete the matching project data under `~/.claude/sidequest/projects/`.
-- Everything: delete `~/.claude/sidequest/` (stop the server first with `… stop`).
-- Plugin: `/plugin uninstall sidequest@eigenwise-toolshed`.
-
-## Support
-
-sidequest is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
-
-| Ko-fi | GitHub Sponsors |
-|:-----:|:---------------:|
-| <a href="https://ko-fi.com/eigenwise"><img height="32" alt="Support me on Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg"></a> | <a href="https://github.com/sponsors/Eigenwise"><img height="32" alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a> |
+The installed plugin serves committed generated CommonJS files from `bin/`, `lib/`, and `hooks/`. Dashboard source is under `dashboard/`; its committed production build is under `dashboard/dist/`. Never use a live board for tests or screenshots.
 
 ## License
 
