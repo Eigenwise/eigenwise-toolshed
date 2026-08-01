@@ -52,6 +52,7 @@ const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const BOARD_RECONCILIATION_REMINDER = path.join(HOOKS, 'board-reconciliation-reminder.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 const GUARD_SHARED_TREE_COMMIT = path.join(HOOKS, 'guard-shared-tree-commit.js');
+const GUARD_OVERSIZED_SKILL = path.join(HOOKS, 'guard-oversized-skill.js');
 
 // Budget tests pin the plugin root because the nudge embeds it in CLI fallbacks.
 const BUDGET = {
@@ -203,6 +204,38 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
     mode: 'bypassPermissions',
   });
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+});
+
+test('pre-tool hook: oversized bundled skills are denied for dispatched executors only', () => {
+  const skills = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-bundled-skills-'));
+  const skill = path.join(skills, 'claude-api');
+  fs.mkdirSync(skill);
+  fs.writeFileSync(path.join(skill, 'SKILL.md'), Buffer.alloc(256 * 1024 + 1));
+  const payload = {
+    tool_name: 'Skill',
+    tool_input: { skill: 'claude-api' },
+    agent_type: 'sidequest-exec-dispatch-high',
+  };
+
+  const blocked = runHookOutput(GUARD_OVERSIZED_SKILL, payload);
+  assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /claude-api/);
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /targeted Read/);
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /research ticket/);
+
+  const futureSkill = path.join(skills, 'reference-monolith');
+  fs.mkdirSync(futureSkill);
+  fs.writeFileSync(path.join(futureSkill, 'SKILL.md'), Buffer.alloc(256 * 1024 + 1));
+  const future = runHookOutput(GUARD_OVERSIZED_SKILL, {
+    ...payload,
+    tool_input: { skill: 'reference-monolith' },
+  }, { SIDEQUEST_BUNDLED_SKILLS_DIR: skills });
+  assert.equal(future.hookSpecificOutput.permissionDecision, 'deny');
+
+  assert.equal(runHookOutput(GUARD_OVERSIZED_SKILL, {
+    tool_name: 'Skill',
+    tool_input: { skill: 'claude-api' },
+  }, { SIDEQUEST_BUNDLED_SKILLS_DIR: skills }), null);
 });
 
 test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
@@ -1818,6 +1851,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('inline-work-nudge.js'))), 'the inline-work reminder must be registered for every tool');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Agent'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Skill'
+    && entry.hooks.some((hook?: any) => hook.command.includes('guard-oversized-skill.js'))), 'the oversized Skill guard must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Edit|Write|MultiEdit|NotebookEdit'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the helper write guard must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'TaskOutput'

@@ -52,6 +52,12 @@ test('mid-task sub-delegation uses cheap scoped helpers', () => {
   assert.match(executorTemplate, /work that grows scope goes back to the board as a filed ticket/);
 });
 
+test('executor reference lookup guidance avoids large skill loads', () => {
+  assert.match(executorTemplate, /Reference-heavy skills are not how executors look something up/);
+  assert.match(executorTemplate, /targeted `Read`/);
+  assert.match(executorTemplate, /file and dispatch a research ticket/);
+});
+
 test('executor completion reports land on the board without a routine message', () => {
   assert.match(executorTemplate, /full final report: changed paths, verification evidence, commit hash/);
   assert.match(executorTemplate, /keep the terminal board comment to the commit\n   hash, verify evidence, and a reference to the submission instead of repeating its narrative/);
