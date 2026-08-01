@@ -174,6 +174,8 @@ Use `list --brief` and `ready --brief` for routine orchestration. Use `changes` 
 
 Ticket and story decision logs are handoffs, not diaries. Record decisions, constraints, discoveries, verification evidence, and integration risks. Keep story log entries short and promote durable findings into the story contract.
 
+Story decision logs keep the full active history. Executor briefings carry a recent window inside a 4 KiB briefing budget, with omitted entries called out. Use `sidequest story log US-n --full` to read the complete history, including entries moved to the archive by `--clear`. Clearing a log empties the active window and preserves the entries and their sequence numbers for later reads. Each entry is limited to 280 bytes. The story execution contract has its own separate 4 KiB limit.
+
 ## CLI reference
 
 The CLI entry point is `bin/sidequest.js`. Common commands are:
