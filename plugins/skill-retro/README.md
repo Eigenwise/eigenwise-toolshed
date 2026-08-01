@@ -7,6 +7,25 @@ The point is the routing. Detecting that you ran the same command eleven times i
 that wants a skill, a bundled script, a live rule, a memory entry, a codebase-map edit, or nothing at
 all is the part worth doing, and it is the part a padded report gets wrong.
 
+## When it runs
+
+Mining is explicit: invoke the `skill-retro` skill or run the CLI when you want a cross-session review.
+The plugin does not mine during normal prompts or session shutdown. Its optional hooks only count finished
+sessions and deliver a nudge later:
+
+- `SessionEnd` records one completed session when `SKILL_RETRO_NUDGE=on`.
+- `SessionStart` mentions the retro after `SKILL_RETRO_NUDGE_EVERY` sessions, defaulting to 10.
+
+The nudge never scans transcripts. It is disabled unless enabled in the project's
+`.claude/settings.local.json`.
+
+## From findings to changes
+
+The miner reports proposed routes; review them before writing anything. Check existing skills, scripts,
+live rules, memory, codebase-map docs, and tickets first, then apply each approved fix through the tool that
+owns it. Re-run verification after changes. A finding can route to a new artifact, an amendment to an
+existing artifact, or a ticket when no clear owner exists.
+
 ## Why a script does the reading
 
 A busy session is around 37 MB and 11,700 JSONL records. Reading one into context would exhaust the

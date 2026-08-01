@@ -41,6 +41,15 @@ It derives paths, SHA-256 hashes, and rule metadata from the files on disk, vali
 
 Projects using the old `.claude/live-rules.md` format remain readable. The maintenance path can call `migrateLegacyRules(projectDir)` to write the atomic copy without deleting the original, then commit the new directory after checking the generated rules.
 
+## Rules used by this repository
+
+This repository keeps its own conditional release guidance under `.claude/live-rules/rules/`:
+
+- `release-publication.md` is prompt-keyword scoped to `ship`, `publish`, `release`, `bump`, `hotfix`, and `marketplace`. It explains the release fragment, publish lock, `scripts/release/cut.mjs`, atomic push, and paused `release-cut.yml` flow.
+- `manifest-versioning.md` is file-scoped to `.claude-plugin/marketplace.json` and `plugins/*/.claude-plugin/plugin.json`. It allows normal metadata edits but keeps the `version` field owned by `scripts/release/cut.mjs`.
+
+These are examples of combining prompt and file scopes with repository-specific workflow rules. They are ordinary project rule files, not built-in live-rules behavior.
+
 ## Why not just use `CLAUDE.md`?
 
 For the longer comparison with `CLAUDE.md` and `AGENTS.md`, see [Why live-rules exists](./WHY.md).
