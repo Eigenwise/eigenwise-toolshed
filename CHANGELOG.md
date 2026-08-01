@@ -8,6 +8,36 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.328.0 (2026-08-01)
+
+### sidequest 3.52.0 → 3.53.0
+
+#### Features
+
+- Unbind the story decision log from the briefing budget (SQ-1240) [`623369a`](https://github.com/Eigenwise/eigenwise-toolshed/commit/623369ae)
+  Story logs no longer refuse an append at 4 KB. The 4 KB ceiling was always a briefing budget, and enforcing it as a storage limit meant the only escape was `story_log --clear`, which destroyed the history it was condensing. Storage now holds the full log, clearing archives instead of deleting, briefings still carry the newest entries inside 4 KB, and `sidequest story log --full` reads the whole thing.
+- An orchestrator can now deny a scope request (SQ-1242) [`e2c8354`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e2c8354a)
+  A pending scope request had exactly two outcomes: grant it, or throw the executor's work away. `scopeRequest` now takes a reason with no files, which denies the request, clears the pending state and the marker, and keeps the claim, the checkpoint, and the original scope intact. The reason comes back to the executor so it knows why. CLI: `sidequest scope-deny`.
+
+#### Fixes
+
+- Make the temp-cleanup and skill-retro CLI tests platform-independent (SQ-1241) [`ffd5e65`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ffd5e652)
+  Two test fixtures assumed a POSIX filesystem and only ever ran green on one platform. They now assert the same behavior on Windows and POSIX alike.
+
+### skill-retro 0.3.1 → 0.3.2
+
+#### Fixes
+
+- Make the temp-cleanup and skill-retro CLI tests platform-independent (SQ-1241) [`ffd5e65`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ffd5e652)
+  Two test fixtures assumed a POSIX filesystem and only ever ran green on one platform. They now assert the same behavior on Windows and POSIX alike.
+
+### workbench 0.76.0 → 0.76.1
+
+#### Fixes
+
+- Point users at the docs, loudly (SQ-1243)
+  The root README and the init-workspace handover now say plainly that reading the docs matters for these plugins, and the handover names the specific page for each plugin just installed. People skip plugin docs by default, and these plugins route work to other models, write project config, and inject context on every prompt.
+
 ## v3.327.0 (2026-08-01)
 
 ### codebase-mapper 2.12.0 → 2.12.1
