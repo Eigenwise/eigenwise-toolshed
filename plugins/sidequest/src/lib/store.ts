@@ -59,6 +59,7 @@ const { createCache } = require('./store/cache.js');
 const { createConfig } = require('./store/config.js');
 const { createSweeps } = require('./store/sweeps.js');
 const { createServer } = require('./store/server.js');
+const { createProjects } = require('./store/projects.js');
 
 let cacheLayer: any;
 function sqliteDataVersion(...args: any[]) { return cacheLayer.sqliteDataVersion(...args); }
@@ -94,6 +95,23 @@ function normalizeBoardName(...args: any[]) { return configLayer.normalizeBoardN
 function boardConfig(...args: any[]) { return configLayer.boardConfig(...args); }
 function setBoardConfig(...args: any[]) { return configLayer.setBoardConfig(...args); }
 function effectiveScope(...args: any[]) { return configLayer.effectiveScope(...args); }
+
+let projectsLayer: any;
+function ensureProject(...args: any[]) { return projectsLayer.ensureProject(...args); }
+function readMeta(...args: any[]) { return projectsLayer.readMeta(...args); }
+function metaLockPath(...args: any[]) { return projectsLayer.metaLockPath(...args); }
+function withMetaLock(...args: any[]) { return projectsLayer.withMetaLock(...args); }
+function nextSeq(...args: any[]) { return projectsLayer.nextSeq(...args); }
+function nextStorySeq(...args: any[]) { return projectsLayer.nextStorySeq(...args); }
+function setProjectNotify(...args: any[]) { return projectsLayer.setProjectNotify(...args); }
+function setProjectRouting(...args: any[]) { return projectsLayer.setProjectRouting(...args); }
+function projectRoutingEnabled(...args: any[]) { return projectsLayer.projectRoutingEnabled(...args); }
+function archiveProject(...args: any[]) { return projectsLayer.archiveProject(...args); }
+function unarchiveProject(...args: any[]) { return projectsLayer.unarchiveProject(...args); }
+function deleteProjectExact(...args: any[]) { return projectsLayer.deleteProjectExact(...args); }
+function listProjects(...args: any[]) { return projectsLayer.listProjects(...args); }
+function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
+function mergeProject(...args: any[]) { return projectsLayer.mergeProject(...args); }
 
 let dispatch: any;
 function dispatchState(...args: any[]) { return dispatch.dispatchState(...args); }
@@ -863,378 +881,6 @@ function autoStoryColor(index?: any) {
 
 configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 
-// Register (or refresh) a project and return { slug, dir, meta }. Creates the
-// directory tree on first use. `name` overrides the display name (defaults to
-// the folder basename).
-function ensureProject(absPath?: any, name?: any) {
-  const resolved = path.resolve(absPath);
-  const slug = slugify(resolved);
-  const dir = projectDir(slug);
-  ensureDir(ticketsDir(slug));
-  let meta: any;
-  let changed = false;
-  transaction(() => {
-    const handle = database();
-    meta = db.getRow(handle, 'projects', slug);
-    if (!meta || typeof meta !== 'object') {
-      meta = {
-        path: resolved,
-        name: name || defaultProjectName(resolved),
-        createdAt: new Date().toISOString(),
-        seq: 0,
-        storySeq: 0,
-        alwaysInScope: defaultAlwaysInScope(resolved),
-        worktreeIsolation: true,
-      };
-      db.putRow(handle, 'projects', { slug, data: meta });
-      changed = true;
-    } else {
-      if (meta.path !== resolved) { meta.path = resolved; changed = true; }
-      if (name && meta.name !== name) { meta.name = name; changed = true; }
-      if (!meta.name) { meta.name = defaultProjectName(resolved); changed = true; }
-      if (typeof meta.seq !== 'number') { meta.seq = 0; changed = true; }
-      if (typeof meta.storySeq !== 'number') { meta.storySeq = 0; changed = true; }
-      if (changed) db.putRow(handle, 'projects', { slug, data: meta });
-    }
-    const pointer = handle.prepare('SELECT project FROM project_routing_profiles WHERE project = ?').get(slug);
-    if (!pointer) {
-      const settings = handle.prepare('SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1').get();
-      if (!settings?.new_project_profile_id) throw new Error('The new-board routing profile is not configured.');
-      db.putRow(handle, 'project_routing_profiles', {
-        project: slug,
-        profile_id: settings.new_project_profile_id,
-        assigned_at: new Date().toISOString(),
-        assigned_by: 'ensure-project',
-      });
-      changed = true;
-    }
-  });
-  if (changed) invalidateStoreCaches();
-  return { slug, dir, meta };
-}
-
-function readMeta(slug?: any) {
-  const key = String(slug || '');
-  const cache = residentCache();
-  if (cache.metadata.has(key)) return cloneCached(cache.metadata.get(key));
-  const meta = db.getRow(database(), 'projects', key);
-  cache.metadata.set(key, meta);
-  return cloneCached(meta);
-}
-
-function metaLockPath(slug?: any) {
-  return path.join(projectDir(slug), '.meta.lock');
-}
-
-function withMetaLock(slug?: any, fn?: any) {
-  const lock = metaLockPath(slug);
-  const locked = acquireLock(lock);
-  try {
-    return transaction(fn);
-  } finally {
-    if (locked) releaseLock(lock);
-  }
-}
-
-// Locked read-modify-write so two concurrent createTicket calls never mint the
-// same human-facing SQ-N ref (a bare read+increment+write here would race).
-// acquireLock already retries internally on contention; if it still can't get
-// the lock (e.g. a wedged/unwritable dir), fall back to an unlocked bump rather
-// than blocking ticket creation entirely.
-function nextSeq(slug?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug) || { seq: 0 };
-    meta.seq = (typeof meta.seq === 'number' ? meta.seq : 0) + 1;
-    putProject(slug, meta);
-    return meta.seq;
-  });
-}
-
-// The story counter is a second monotonic sequence on the same project row,
-// minting US-1, US-2, … independently of the SQ-N ticket refs.
-function nextStorySeq(slug?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug) || { storySeq: 0 };
-    meta.storySeq = (typeof meta.storySeq === 'number' ? meta.storySeq : 0) + 1;
-    putProject(slug, meta);
-    return meta.storySeq;
-  });
-}
-
-// Turn a board's per-project notifications on or off. When off, the board is
-// muted: queueEventNotification below drops every background event for it, even
-// with a dashboard tab open. Stored on the project row (absent == on).
-function setProjectNotify(slug?: any, on?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    meta.notify = on !== false;
-    putProject(slug, meta);
-    return { ok: true, notify: meta.notify };
-  });
-}
-
-function setProjectRouting(slug?: any, routing?: any) {
-  if (!['enabled', 'disabled'].includes(routing)) throw new Error('Routing must be enabled or disabled.');
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    meta.routing = routing;
-    putProject(slug, meta);
-    return { ok: true, routing: meta.routing };
-  });
-}
-
-function projectRoutingEnabled(slug?: any) {
-  const meta = readMeta(slug);
-  return !meta || meta.routing !== 'disabled';
-}
-
-// Board-level archive is a reversible project-row stamp. Project data and tickets
-// remain in place, and repeat calls keep the original archive timestamp.
-function archiveProject(slug?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    if (meta.archivedAt) return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: true };
-    meta.archivedAt = new Date().toISOString();
-    putProject(slug, meta);
-    return { ok: true, slug, archivedAt: meta.archivedAt, alreadyArchived: false };
-  });
-}
-
-function unarchiveProject(slug?: any) {
-  return withMetaLock(slug, () => {
-    const meta = readMeta(slug);
-    if (!meta) return { ok: false, reason: 'not_found' };
-    if (!meta.archivedAt) return { ok: true, slug, wasArchived: false };
-    delete meta.archivedAt;
-    putProject(slug, meta);
-    return { ok: true, slug, wasArchived: true };
-  });
-}
-
-// Permanent deletion is deliberately strict: callers must already have the exact
-// stored slug. This avoids turning an untrusted display name or path into a new
-// project lookup at a destructive boundary.
-function deleteProjectExact(slug?: any) {
-  if (typeof slug !== 'string' || !/^[a-z0-9][a-z0-9-]{1,80}$/.test(slug)) return { ok: false, reason: 'not_found' };
-  if (!readMeta(slug)) return { ok: false, reason: 'not_found' };
-  transaction(() => {
-    for (const ticket of db.listRows(database(), 'tickets', { project: slug })) deleteCachedRow(database(), 'tickets', ticket.id);
-    for (const story of db.listRows(database(), 'stories', { project: slug })) deleteCachedRow(database(), 'stories', story.id);
-    deleteCachedRow(database(), 'projects', slug);
-  });
-  fs.rmSync(projectDir(slug), { recursive: true, force: true });
-  return { ok: true, slug };
-}
-
-// List every registered project with live ticket counts. Sorted by most recent
-// activity so the busiest board floats to the top of the switcher. By default,
-// archived boards are hidden. Pass { archived: true } to list only archived
-// boards, or { all: true } for internal resolution.
-function listProjects(opts?: any) {
-  opts = opts || {};
-  const cache = residentCache();
-  const cacheKey = `projects:${opts.all ? 'all' : opts.archived ? 'archived' : 'active'}`;
-  const cached = cache.snapshots.get(cacheKey);
-  if (cached) return cloneCached(cached);
-
-  const rows = db.selectRows(database(), `
-    SELECT
-      p.slug,
-      p.data,
-      COALESCE(t.todo, 0) AS todo,
-      COALESCE(t.doing, 0) AS doing,
-      COALESCE(t.done, 0) AS done,
-      COALESCE(t.active, 0) AS active,
-      COALESCE(t.archived, 0) AS archived,
-      t.last_activity,
-      COALESCE(s.stories, 0) AS stories
-    FROM projects p
-    LEFT JOIN (
-      SELECT
-        project,
-        SUM(CASE WHEN archived = 0 AND status = 'todo' THEN 1 ELSE 0 END) AS todo,
-        SUM(CASE WHEN archived = 0 AND status = 'doing' THEN 1 ELSE 0 END) AS doing,
-        SUM(CASE WHEN archived = 0 AND status = 'done' THEN 1 ELSE 0 END) AS done,
-        SUM(CASE WHEN archived = 0 THEN 1 ELSE 0 END) AS active,
-        SUM(CASE WHEN archived != 0 THEN 1 ELSE 0 END) AS archived,
-        MAX(json_extract(data, '$.updatedAt')) AS last_activity
-      FROM tickets
-      GROUP BY project
-    ) t ON t.project = p.slug
-    LEFT JOIN (
-      SELECT project, COUNT(*) AS stories
-      FROM stories
-      GROUP BY project
-    ) s ON s.project = p.slug
-  `);
-
-  const out: any[] = [];
-  for (const row of rows) {
-    let meta: any;
-    try { meta = JSON.parse(row.data); } catch (_: any) { continue; }
-    if (!meta || !meta.path) continue;
-    const archivedAt = meta.archivedAt || null;
-    if (!opts.all && (opts.archived ? !archivedAt : !!archivedAt)) continue;
-    const counts = { todo: Number(row.todo) || 0, doing: Number(row.doing) || 0, done: Number(row.done) || 0 };
-    out.push({
-      slug: slugify(meta.path),
-      name: meta.name || row.slug,
-      path: meta.path || '',
-      counts,
-      total: Number(row.active) || 0,
-      archived: Number(row.archived) || 0,
-      open: counts.todo + counts.doing,
-      lastActivity: row.last_activity || meta.createdAt || null,
-      notify: meta.notify !== false,
-      routing: meta.routing === 'disabled' ? 'disabled' : 'enabled',
-      stories: Number(row.stories) || 0,
-      archivedAt,
-    });
-  }
-  out.sort((a?: any, b?: any) => String(b.lastActivity || '').localeCompare(String(a.lastActivity || '')));
-  cache.snapshots.set(cacheKey, out);
-  return cloneCached(out);
-}
-
-// Resolve a caller-supplied --project reference to the ONE already-registered
-// board it names — an exact slug, a case-insensitive display NAME, or a
-// filesystem path. NEVER creates or matches anything outside the registered
-// set (see SQ-86): a name is not a slug, so a bare display name used to miss
-// the slug lookup, fall into ensureProject(), and get treated as a raw path
-// resolved against cwd — silently minting a phantom empty board that happened
-// to share the real project's display name (or a real one's if two directories
-// share a basename, e.g. "BMR" run from both C:\dev\BMR and C:\dev\BMR\BMR).
-// Returns { ok:true, slug, meta } on a clean match, or { ok:false, reason,
-// ...} for the caller (the CLI) to turn into a hard error:
-//   - reason 'ambiguous' + matches: 2+ registered boards share that NAME —
-//     the caller must re-run with the disambiguating path.
-//   - reason 'not_found' + known: nothing matched — known is the list of
-//     registered display names to surface in the error.
-function findProject(ref?: any) {
-  const arg = String(ref == null ? '' : ref).trim();
-  if (!arg) return { ok: false, reason: 'not_found', known: listProjects({ all: true }).map((project?: any) => project.name) };
-
-  if (path.isAbsolute(arg)) {
-    const resolvedPath = path.resolve(arg);
-    const slug = slugify(resolvedPath);
-    const meta = readMeta(slug);
-    if (meta && normalizeForHash(meta.path) === normalizeForHash(resolvedPath)) return { ok: true, slug, meta };
-  } else {
-    const meta = readMeta(arg);
-    if (meta) return { ok: true, slug: arg, meta };
-  }
-
-  const projects = db.selectRows(database(), 'SELECT slug, data FROM projects ORDER BY slug')
-    .map((row?: any) => {
-      try { return { slug: row.slug, meta: JSON.parse(row.data) }; } catch (_: any) { return null; }
-    })
-    .filter(Boolean);
-
-  const wantedName = arg.toLowerCase();
-  const byName = projects.filter((project?: any) => String(project.meta.name || project.slug).trim().toLowerCase() === wantedName);
-  if (byName.length === 1) return { ok: true, slug: byName[0].slug, meta: byName[0].meta };
-  if (byName.length > 1) {
-    return {
-      ok: false,
-      reason: 'ambiguous',
-      matches: byName.map((project?: any) => ({ slug: project.slug, name: project.meta.name || project.slug, path: project.meta.path || '' })),
-    };
-  }
-
-  if (!path.isAbsolute(arg)) {
-    const wantedPath = normalizeForHash(path.resolve(arg));
-    const byPath = projects.find((project?: any) => project.meta.path && normalizeForHash(path.resolve(project.meta.path)) === wantedPath);
-    if (byPath) return { ok: true, slug: byPath.slug, meta: byPath.meta };
-  }
-
-  return { ok: false, reason: 'not_found', known: projects.map((project?: any) => project.meta.name || project.slug) };
-}
-
-// Fold one board (src) entirely into another (dest): move every ticket, story,
-// and attached asset over, then delete the source board. Used to collapse the
-// duplicate boards that older versions minted when the CLI ran from a subfolder
-// (see nearestRepoRoot / SQ-94). The renumbering rules that make this safe:
-//   - Ticket SQ-n / story US-n refs are re-minted ABOVE dest's live counters
-//     (via nextSeq/nextStorySeq), so they never collide with dest's own refs.
-//   - Stable ids (tk_… / st_…) are kept as-is. They're globally unique, so the
-//     ticket/story JSON drops into dest without a filename clash, the assets
-//     folder (keyed by ticket id) copies 1:1, and a ticket's storyId (which
-//     points at a story's stable id, never its ref) still resolves after the
-//     move — no membership is orphaned.
-//   - Intra-board links (links[].ref, which point by SQ-ref) are rewritten
-//     through the old->new ref map so dependencies survive the renumber.
-// dryRun computes and returns the same mapping without touching disk. Returns
-// { tickets, stories, mapping: [{ from, to, title }] }.
-function mergeProject(srcSlug?: any, destSlug?: any, opts?: any) {
-  opts = opts || {};
-  const dryRun = !!opts.dryRun;
-  if (srcSlug === destSlug) throw new Error('source and destination are the same board');
-  if (!readMeta(srcSlug)) throw new Error(`source board "${srcSlug}" does not exist`);
-  if (!readMeta(destSlug)) throw new Error(`destination board "${destSlug}" does not exist`);
-
-  // Oldest-first so re-minted refs preserve the source's creation order.
-  const tickets = listTickets(srcSlug).slice().sort((a?: any, b?: any) => seqOfRef(a.ref) - seqOfRef(b.ref));
-  const stories = listStories(srcSlug); // listStories already returns oldest-first
-
-  // Plan the ref renumbering up front so link remapping can see every mapping.
-  const refMap: Record<string, any> = {}; // OLD-TICKET-REF (upper) -> NEW-TICKET-REF
-  const ticketPlan: any[] = [];
-  for (const t of tickets) {
-    const newRef = dryRun ? `SQ-?` : `SQ-${nextSeq(destSlug)}`;
-    if (t.ref) refMap[String(t.ref).toUpperCase()] = newRef;
-    ticketPlan.push({ ticket: t, newRef });
-  }
-  const storyPlan: any[] = [];
-  for (const s of stories) {
-    const newRef = dryRun ? `US-?` : `US-${nextStorySeq(destSlug)}`;
-    storyPlan.push({ story: s, newRef });
-  }
-
-  const mapping = ticketPlan.map(({ ticket, newRef }: any) => ({ from: ticket.ref, to: newRef, title: ticket.title }));
-  if (dryRun) return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
-
-  // Stories first, so a moved ticket's storyId still finds its story in dest.
-  transaction(() => {
-    for (const ticket of tickets) deleteCachedRow(database(), 'tickets', ticket.id);
-    for (const story of stories) deleteCachedRow(database(), 'stories', story.id);
-    for (const { story, newRef } of storyPlan) {
-      const moved = Object.assign({}, story, { ref: newRef });
-      putStory(destSlug, moved);
-    }
-    for (const { ticket, newRef } of ticketPlan) {
-      const links = Array.isArray(ticket.links)
-        ? ticket.links.map((l?: any) => Object.assign({}, l, { ref: refMap[String(l.ref).toUpperCase()] || l.ref }))
-        : [];
-      const moved = Object.assign({}, ticket, { ref: newRef, links });
-      putTicket(destSlug, moved);
-      const srcAssets = assetsDir(srcSlug, ticket.id);
-      if (fs.existsSync(srcAssets)) {
-        try {
-          fs.cpSync(srcAssets, assetsDir(destSlug, ticket.id), { recursive: true });
-        } catch (_: any) {
-          /* an unreadable asset folder shouldn't abort the whole merge */
-        }
-      }
-    }
-    deleteCachedRow(database(), 'projects', srcSlug);
-  });
-
-  try {
-    fs.rmSync(projectDir(srcSlug), { recursive: true, force: true });
-  } catch (_: any) {
-    /* best effort; the tickets already live in dest */
-  }
-  return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
-}
-
-// Pull the numeric sequence out of an "SQ-12" ref for ordering; junk sorts last.
-function seqOfRef(ref?: any) {
-  const m = /(\d+)\s*$/.exec(String(ref || ''));
-  return m ? parseInt(m[1]!, 10) : Number.MAX_SAFE_INTEGER;
-}
 
 /* ------------------------------------------------------------------ *
  *  Plan document (SQ-1015)
@@ -2636,6 +2282,12 @@ const {
   storyExecutionContract,
   updateStory,
 } = stories;
+
+projectsLayer = createProjects({
+  acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
+  deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash,
+  path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction,
+});
 
 const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createPulse({
   boardConfig,
