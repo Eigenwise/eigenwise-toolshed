@@ -22,6 +22,7 @@ const { createPlans } = require("./store/plans.js");
 const { createReads } = require("./store/reads.js");
 const { createClaims } = require("./store/claims.js");
 const { createLocks } = require("./store/locks.js");
+const { createPulse } = require("./store/pulse.js");
 const AGENT_DESCRIPTION_MAX_LENGTH = 120;
 const ARTIFACT_BASELINE_MAX_PATHS = 500;
 const WORKTREE_SETUP_MAX_LENGTH = 1e3;
@@ -5517,167 +5518,6 @@ function claimPulse(ticket, now) {
     verifying: Boolean(claimVerification(ticket))
   };
 }
-function boundedExcerpt(value, maxChars = 1200) {
-  const text = String(value || "");
-  if (text.length <= maxChars) return { text, length: text.length, truncated: false };
-  const tailLength = Math.min(240, Math.floor(maxChars / 4));
-  const marker = `
-[… ${text.length - maxChars} more chars; use full:true …]
-`;
-  const headLength = maxChars - tailLength - marker.length;
-  return {
-    text: `${text.slice(0, headLength)}${marker}${text.slice(-tailLength)}`,
-    length: text.length,
-    truncated: true
-  };
-}
-const COMMENT_BODY_RETENTION = 10;
-function commentHistory(comments, full = false) {
-  const history = Array.isArray(comments) ? comments : [];
-  const omittedBodies = full ? 0 : Math.max(0, history.length - COMMENT_BODY_RETENTION);
-  if (!omittedBodies) return { comments: history, omittedBodies: 0, notice: null };
-  const notice = `${omittedBodies} earlier comment bodies omitted — pass --full to see them.`;
-  return {
-    comments: history.map((comment, index) => {
-      if (index >= omittedBodies) return comment;
-      const { body: _body, ...metadata } = comment;
-      return Object.assign(metadata, { bodyOmitted: true });
-    }),
-    omittedBodies,
-    notice
-  };
-}
-function lastCommentPulse(ticket) {
-  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
-  const comment = comments[comments.length - 1];
-  if (!comment) return null;
-  return {
-    at: comment.at,
-    by: comment.by,
-    kind: comment.kind,
-    body: String(comment.body || "").slice(0, 100)
-  };
-}
-function latestCommentExcerpt(ticket) {
-  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
-  const comment = comments[comments.length - 1];
-  if (!comment) return null;
-  const body = boundedExcerpt(comment.body, 200);
-  return {
-    by: comment.by,
-    kind: comment.kind,
-    body: body.text,
-    bodyLength: body.length,
-    bodyTruncated: body.truncated
-  };
-}
-function gitPulse(projectPath, files) {
-  if (!projectPath || !Array.isArray(files) || !files.length) return null;
-  try {
-    const git = (args) => execFileSync("git", args, {
-      cwd: projectPath,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true
-    }).trim();
-    if (git(["rev-parse", "--is-inside-work-tree"]) !== "true") return null;
-    const commit = git(["log", "-1", "--format=%H%x1f%s%x1f%cI", "--", ...files]);
-    const [hash, subject, at] = commit ? commit.split("") : [];
-    const changed = git(["status", "--porcelain", "--", ...files]);
-    return {
-      commit: hash ? { hash, subject, at } : null,
-      dirty: Boolean(changed)
-    };
-  } catch (_) {
-    return null;
-  }
-}
-function claimActivityPulse(ticket, git) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by || claimReleaseVerdict(ticket)) return { working: false, lastActivityAt: null };
-  const activity = [claim.at];
-  for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
-    if (comment && comment.by === claim.by) activity.push(comment.at);
-  }
-  if (git && git.commit && git.commit.at) activity.push(git.commit.at);
-  const timestamps = activity.filter((at) => Number.isFinite(Date.parse(at))).sort((a, b) => Date.parse(b) - Date.parse(a));
-  return { working: true, lastActivityAt: timestamps[0] || null };
-}
-function pulsePayload(slug, idOrRef) {
-  const ticket = getTicket(slug, idOrRef);
-  if (!ticket) return null;
-  const meta = readMeta(slug);
-  const git = gitPulse(meta && meta.path, ticket.files);
-  const activity = claimActivityPulse(ticket, git);
-  const dispatch = dispatchState(ticket);
-  const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
-  return {
-    ref: ticket.ref,
-    title: ticket.title,
-    status: ticket.status,
-    direct: ticket.directClaim || null,
-    claim: claimPulse(ticket, Date.now()),
-    working: activity.working,
-    lastActivityAt: activity.lastActivityAt,
-    comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
-    lastComment: lastCommentPulse(ticket),
-    dispatchExecutor: ticket.dispatchExecutor || null,
-    dispatch: dispatch ? {
-      state: pulseDispatchState(dispatch),
-      sessionId: dispatch.sessionId || null,
-      tokenPrefix: dispatch.tokenPrefix || null,
-      executor: dispatch.executor || null,
-      route: normalizeRoute(dispatch.route),
-      recovery: dispatch.recovery || null,
-      attempts: Array.isArray(dispatch.attempts) ? dispatch.attempts : [],
-      agentId: dispatch.agentId || null,
-      agentName: dispatch.agentName || null,
-      preparedAt: dispatch.preparedAt || null,
-      launchedAt: dispatch.launchedAt || null,
-      boundAt: dispatch.boundAt || null,
-      claimedAt: dispatch.claimedAt || null,
-      terminalAt: dispatch.terminalAt || null,
-      terminalSource: dispatch.terminalSource || null,
-      outcome: dispatch.outcome || null
-    } : null,
-    checkpoint: checkpointProjection(ticket),
-    ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
-    ...warnings.length ? { warnings } : {},
-    submission: submissionProjection(ticket.submission),
-    delivery: boardConfig(slug)?.delivery || "merge",
-    git
-  };
-}
-function changesPayload(slug, since) {
-  const serverTime = (/* @__PURE__ */ new Date()).toISOString();
-  const nowMs = Date.parse(serverTime);
-  const defaultSince = new Date(Date.now() - 60 * 60 * 1e3).toISOString();
-  const after = since == null ? defaultSince : String(since);
-  const afterMs = Date.parse(after);
-  if (!Number.isFinite(afterMs)) throw new Error("changes: --since must be an ISO timestamp.");
-  const changedAt = (ticket) => {
-    const updatedMs = Date.parse(ticket.updatedAt);
-    const expiresMs = Date.parse(ticket.checkpoint && ticket.checkpoint.expiresAt);
-    return Number.isFinite(expiresMs) && expiresMs <= nowMs ? Math.max(updatedMs, expiresMs) : updatedMs;
-  };
-  const tickets = listTickets(slug).filter((ticket) => changedAt(ticket) > afterMs).sort((a, b) => changedAt(a) - changedAt(b)).map((ticket) => {
-    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
-    return {
-      ref: ticket.ref,
-      title: ticket.title,
-      status: ticket.status,
-      lastEventType: ticket.lastEventType || null,
-      lastEventSource: ticket.lastEventSource || null,
-      lastComment: latestCommentExcerpt(ticket),
-      claim: claimPulse(ticket, nowMs),
-      checkpoint: checkpointProjection(ticket, nowMs),
-      ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
-      ...warnings.length ? { warnings } : {},
-      updatedAt: ticket.updatedAt
-    };
-  });
-  return { since: after, serverTime, tickets };
-}
 function readServerInfo() {
   return readGlobal("server-info", null);
 }
@@ -5720,6 +5560,24 @@ const {
   storyExecutionContract,
   updateStory
 } = stories;
+const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createPulse({
+  boardConfig,
+  checkpointProjection,
+  claimPulse,
+  claimReleaseVerdict,
+  claimVerification,
+  dispatchState,
+  execFileSync,
+  getTicket,
+  listTickets,
+  normalizeRoute,
+  oracleProjection,
+  pulseDispatchState,
+  readMeta,
+  storyContractDriftWarnings,
+  storyDecisionLogWarnings,
+  submissionProjection
+});
 module.exports = {
   VALID_STATUS,
   VALID_PRIORITY,
