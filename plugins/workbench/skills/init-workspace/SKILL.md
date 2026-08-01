@@ -168,6 +168,26 @@ when they explicitly choose it. If Sidequest was not selected, skip this questio
 
 Gateway wiring is global and has no mode to choose, so do not ask about it. If the gateway is unwired, invoke `/model-gateway:model-gateway` and use its `env --write-user` command, then record the wiring result in the session/bootstrap plan. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH. If the user enables Remote Control compatibility, explain first that the Codex/Grok rows disappear from `/model`; explicit ids such as `/model claude-gpt-5.6-terra` still work and persist as the default, and disabling compatibility restores the rows.
 
+### Compaction configuration
+
+Ask one `AskUserQuestion` that explicitly records both settings before any write. On re-entry, read the
+project's `.claude/settings.local.json` first and show its current `autoCompactWindow` and
+`SIDEQUEST_COMPACTION_POLICY` values. An absent window means **leave default**. An unset policy has the
+same behavior as **pin**, but still ask the user to choose and write the selected value. Never silently
+apply either recommendation.
+
+- **Auto-compact window:** **recommended 350000 (trigger ~317k)**, **aggressive 250000 (trigger
+  ~217k)**, **leave default (on 1M-pinned models auto-compact effectively never fires: trigger = window
+  - 33k)**, or **custom 100000-1000000**. Custom values are numbers; normalize them through the helper,
+  which clamps them to that inclusive range. Choosing leave default removes `autoCompactWindow`.
+- **Sidequest compaction policy:** **pin** (board-state pinning in compaction summaries, safe default),
+  **veto** (pinning plus block mid-wave compaction), or **off**. Warn before accepting **veto** that it is
+  experimental until the US-40 spike verdict confirms hook blocks do not trip Claude Code's auto-compact
+  failure breaker.
+
+Store the explicit choices in the session/bootstrap plan. This stays one compact configuration step, not a
+wizard.
+
 Keep it short and propose defaults from what you detected, so the user confirms rather than types
 essays. The project-intent answer was collected before the picker; use it to seed the map and structure
 notes, and do not ask it again. Ask what you genuinely can't infer. A good compact set (adapt, don't
@@ -252,8 +272,17 @@ If either command fails, stop. Report the helper's exact failed command and erro
 succeeded and which were not run, and give this recovery: fix the reported problem, then rerun the
 same installer command with the same plan. It is idempotent. Do not write dependent artifacts, request
 a reload, or claim the workspace setup completed after a partial install. After a successful result,
-merge the plan's non-plugin settings without replacing existing values, then continue with the other
-pre-reload artifacts.
+merge the plan's non-plugin settings without replacing existing values, then apply the recorded compaction
+choice with Workbench's merge-safe helper:
+
+```sh
+node -e "const { configureSidequestCompaction } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); configureSidequestCompaction(process.cwd(), { autoCompactWindow: <recorded window or null>, policy: '<recorded policy>' });"
+```
+
+Run it only against the target project directory. It writes that project's `.claude/settings.local.json`,
+preserves unknown top-level keys and every existing `env` entry, and leaves the file unchanged on an
+idempotent re-run. Never write user, shared, or global settings. Continue with the other pre-reload
+artifacts.
 
 ### 2b. Telemetry and reload handling
 

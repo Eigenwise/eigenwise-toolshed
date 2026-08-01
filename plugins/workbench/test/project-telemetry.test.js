@@ -8,7 +8,12 @@ const path = require('node:path');
 const test = require('node:test');
 const { buildObservation, projectMetadata } = require('../hooks/observability.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
-const { agentTeamsWarning, enableAgentTeams } = require('../lib/project-settings.js');
+const {
+  agentTeamsWarning,
+  clampAutoCompactWindow,
+  configureSidequestCompaction,
+  enableAgentTeams,
+} = require('../lib/project-settings.js');
 const {
   applyProjectTelemetry,
   disableProjectTelemetry,
@@ -121,6 +126,74 @@ test('warns only when a project environment masks agent teams', (t) => {
 
   enableAgentTeams(projectDir);
   assert.equal(agentTeamsWarning(projectDir), null);
+});
+
+test('configures Sidequest compaction without replacing project settings', (t) => {
+  const { projectDir } = temporaryProject(t);
+  const settingsPath = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify({
+    unknownSetting: { preserved: true },
+    env: {
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318',
+    },
+  }));
+
+  const first = configureSidequestCompaction(projectDir, {
+    autoCompactWindow: 350_000,
+    policy: 'pin',
+  });
+  const second = configureSidequestCompaction(projectDir, {
+    autoCompactWindow: 350_000,
+    policy: 'pin',
+  });
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+  assert.deepEqual(settings.unknownSetting, { preserved: true });
+  assert.equal(settings.autoCompactWindow, 350_000);
+  assert.deepEqual(settings.env, {
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+    OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318',
+    SIDEQUEST_COMPACTION_POLICY: 'pin',
+  });
+});
+
+test('clamps custom compaction windows to Claude Code limits', () => {
+  assert.equal(clampAutoCompactWindow(1), 100_000);
+  assert.equal(clampAutoCompactWindow(2_000_000), 1_000_000);
+  assert.throws(() => clampAutoCompactWindow('350000'), /finite number/);
+});
+
+test('leaving the compaction window at default removes only that setting', (t) => {
+  const { projectDir } = temporaryProject(t);
+  const settingsPath = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify({
+    autoCompactWindow: 250_000,
+    unknownSetting: true,
+    env: { KEEP_ME: 'yes' },
+  }));
+
+  configureSidequestCompaction(projectDir, { autoCompactWindow: null, policy: 'off' });
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+
+  assert.equal(Object.hasOwn(settings, 'autoCompactWindow'), false);
+  assert.equal(settings.unknownSetting, true);
+  assert.deepEqual(settings.env, {
+    KEEP_ME: 'yes',
+    SIDEQUEST_COMPACTION_POLICY: 'off',
+  });
+});
+
+test('rejects unsupported Sidequest compaction policies', (t) => {
+  const { projectDir } = temporaryProject(t);
+  assert.throws(
+    () => configureSidequestCompaction(projectDir, { autoCompactWindow: 350_000, policy: 'unknown' }),
+    /pin, veto, off/,
+  );
 });
 
 test('disable restores only telemetry values owned by Workbench', (t) => {

@@ -24,6 +24,21 @@ test('init-workspace enables agent teams and doctor only reports masked projects
   assert.match(doctorSkill, /Do not fix it from the doctor/);
 });
 
+test('init-workspace configures compaction through explicit project-local choices', () => {
+  assert.match(skill, /### Compaction configuration/);
+  assert.match(skill, /Ask one `AskUserQuestion` that explicitly records both settings before any write/);
+  assert.match(skill, /show its current `autoCompactWindow` and\n`SIDEQUEST_COMPACTION_POLICY` values/);
+  assert.match(skill, /recommended 350000 \(trigger ~317k\)/);
+  assert.match(skill, /aggressive 250000 \(trigger\n  ~217k\)/);
+  assert.match(skill, /leave default \(on 1M-pinned models auto-compact effectively never fires: trigger = window\n  - 33k\)/);
+  assert.match(skill, /custom 100000-1000000/);
+  assert.match(skill, /Choosing leave default removes `autoCompactWindow`/);
+  assert.match(skill, /experimental until the US-40 spike verdict/);
+  assert.match(skill, /configureSidequestCompaction/);
+  assert.match(skill, /preserves unknown top-level keys and every existing `env` entry/);
+  assert.match(skill, /Never write user, shared, or global settings/);
+});
+
 test('init-workspace installs selected plugins before dependent workspace artifacts', () => {
   assert.match(skill, /only prerequisite is \*\*Workbench installed at user scope\*\*/);
   assert.match(skill, /Build the installer plan in the \*\*current session scratchpad\*\*/);
