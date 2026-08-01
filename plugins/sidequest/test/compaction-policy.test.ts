@@ -18,10 +18,12 @@ const { slug } = store.ensureProject(boardPath);
 const hookPath = path.join(__dirname, '..', 'hooks', 'compaction-policy.js');
 
 function run(payload: unknown, env: Record<string, string> = {}) {
+  const inheritedEnv = { ...process.env };
+  delete inheritedEnv.SIDEQUEST_COMPACTION_POLICY;
   return spawnSync(process.execPath, [hookPath], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: { ...inheritedEnv, ...env },
   });
 }
 
