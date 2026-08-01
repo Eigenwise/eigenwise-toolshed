@@ -41,6 +41,8 @@ The `state` value points at the repair path:
 | `serving-version-mismatch` | Run `node <plugin>/bin/model-gateway.js ensure`, then retry. |
 | `upstream-blocked` | Run `node <plugin>/bin/model-gateway.js setup`. If it persists, wait for a `claude-code-proxy` update or explicitly re-route the ticket. Codex tickets remain blocked. |
 
+The `doctor` output also includes a model fallback diagnostic. If the model used by a dispatch and the served model appear different, reproduce the problem in a throwaway session with `CLAUDE_CODE_NO_MODEL_FALLBACK=true`. That turns silent fallback into a thrown error identifying the call site. Unset the variable afterwards; normal operation keeps graceful fallback for transient 5xx errors.
+
 ### Add Grok subscription models
 
 Install the official Grok CLI and run `grok` once to sign in with your SuperGrok subscription. Model Gateway reads that CLI login from `~/.grok/auth.json`, refreshes it when needed, and adds `claude-grok-*` rows such as `claude-grok-4.5`, `claude-grok-build`, and `claude-grok-4.1-fast` to `/model`. No xAI API key is needed. If `doctor` reports Grok auth missing or refresh fails, run `grok` and log in again. Update the Grok CLI if it reports an outdated version header.
