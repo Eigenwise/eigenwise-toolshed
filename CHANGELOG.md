@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.326.0 (2026-08-01)
+
+### workbench 0.74.0 → 0.75.0
+
+#### Features
+
+- init-workspace configures the auto-compact window globally (per-project window writes removed) (SQ-1208)
+
 ## v3.325.0 (2026-08-01)
 
 ### model-gateway 0.46.1 → 0.46.2
