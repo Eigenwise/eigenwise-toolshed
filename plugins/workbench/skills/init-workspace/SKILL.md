@@ -143,9 +143,18 @@ match `~/.claude/plugins/cache/eigenwise-toolshed/sidequest/<version>` and its f
 entry's `version`; otherwise stop and ask the user to reinstall Sidequest. Invoke
 `node "<installPath>/plugins/sidequest/bin/sidequest.js" profile list`. Never PATH-probe or search the cache.
 
+### Recurring work and capabilities
+
+When Sidequest is selected, build the routing input before proposing any category. Inspect what is actually
+visible: existing skills, the folder taxonomy, file types, maintenance scripts, and the stated project purpose.
+Turn those signals into a short list in this form: **"This project repeatedly needs X, which takes capability
+Y."** Ask the user to confirm or correct the list, and say in the question that the accepted capabilities
+will determine which Sidequest categories the project gets. Record the accepted list in the session/bootstrap
+plan. Derive project-profile categories from this list, never from the starter's existing category set.
+
 ### Routing profile
 
-When Sidequest is selected, make one routing choice immediately after this scan and before the Phase 1
+When Sidequest is selected, make one routing choice immediately after the capability step and before the Phase 1
 interview. Infer a starter from plain repo signals: code and build files → `coding`; docs, posts, or
 content → `writing`; source corpora, datasets, or citation-heavy material → `research`; audio, scores,
 or music-production files → `creative-music`. If signals conflict, choose the closest fit and say why.
@@ -157,21 +166,28 @@ a form or walk through every category. If the user chooses another starter, show
 `sidequest profile list` and let them name one in plain text. Record the accepted profile choice in the
 session/bootstrap plan; if Sidequest was not selected, skip this step.
 
-For **Make a project profile**, propose a small delta from the closest starter using the scan and the stated
-project purpose. Say which categories would change and why, then let the user confirm or tweak that delta in
-plain language; in that question, say the accepted delta becomes this project's Sidequest routing policy.
-Create `<project>-routing` by cloning the closest starter, apply only the confirmed delta,
-and select it for the board:
+For **Make a project profile**, derive the final category set from the accepted recurring-work and capability
+list plus the stated project purpose. Consult the closest starter as a reference for category shape and useful
+precedent, never as the category baseline. Removing an inherited category is as normal as adding one. For every
+category in the proposed final set, state why this project needs it and why its model and effort fit that work.
+Remove anything you cannot justify; **"it came with the starter" is not a justification.** Give every derived
+category a non-empty `contract` with standing instructions for its executor, and set its complete policy:
+route, `contract`, `readonly`, and `artifactRoots`. A route without a contract is half-configured. Let the user
+confirm or tweak the complete set in plain language; in that question, say the accepted set becomes this
+project's Sidequest routing policy.
+
+Create `<project>-routing` by cloning the closest starter for the profile plumbing, then reconcile the clone to
+the confirmed final set and select it for the board:
 
 ```sh
 sidequest profile create <project>-routing --from <starter> --description "<confirmed purpose>"
 sidequest profile use <project>-routing --project <board>
 ```
 
-Apply profile-category changes with `--profile <project>-routing`, never `--profile <starter>`. A starter is
-shared policy and setup must never mutate it. Do not create a project profile when the user accepts or picks
-a starter. Keep the selected profile and any confirmed delta in the plan; Phase 4 applies the profile after
-Sidequest creates or opens the board.
+Apply every profile-category add, edit, or removal with `--profile <project>-routing`, never `--profile
+<starter>`. A starter is shared policy and setup must never mutate it. Do not create a project profile when the
+user accepts or picks a starter. Keep the selected profile and confirmed final category set in the plan; Phase 4
+applies the profile after Sidequest creates or opens the board.
 
 ### Executor worktree isolation
 
@@ -337,24 +353,30 @@ plugin reload in Phase 3.
 
 ### 2c. Atomic live rules
 
-After a successful install, create a new workspace's `.claude/live-rules/` directory directly. Write
-every selected starter rule as one `.claude/live-rules/rules/<stable-name>.md` file, then atomically
-write `.claude/live-rules/manifest.json`. Follow the exact individual-rule and manifest format in
-`references/rule-templates.md`: every manifest entry needs its relative rule path, the SHA-256 hash of
-the exact UTF-8 rule file contents, and copied applicability metadata (`description`, `globs`, `dirs`,
-`prompt`, `enabled`). Generate and validate those hashes mechanically, never by hand. A fresh workspace
-never creates `.claude/live-rules.md`.
+After a successful install, write the rules this project needs, using `references/rule-templates.md` as
+reference material rather than a catalog to copy from. Create a new workspace's `.claude/live-rules/`
+directory directly. Write every accepted project rule as one
+`.claude/live-rules/rules/<stable-name>.md` file, then atomically write
+`.claude/live-rules/manifest.json`. Follow the exact individual-rule and manifest format in the reference:
+every manifest entry needs its relative rule path, the SHA-256 hash of the exact UTF-8 rule file contents,
+and applicability metadata (`description`, `globs`, `dirs`, `prompt`, `enabled`) derived for this project.
+Generate and validate those hashes mechanically, never by hand. A fresh workspace never creates
+`.claude/live-rules.md`.
 
-- The **craft baseline** (global, `priority` 90–100): atomic commits / two hats, simple design,
+- Write the **craft baseline** (global, `priority` 90–100): atomic commits / two hats, simple design,
   surgical/Karpathy directive, verify-before-done, no-inline-comments/naming. Ship these on every
   workspace.
-- The **self-improvement rule** from `references/self-improvement.md` — the baked-in loop. Ship it on
+- Write the **self-improvement rule** from `references/self-improvement.md`, the baked-in loop. Ship it on
   every workspace.
-- The **stack-specific rules** for the detected stack (`priority` 50–70, scoped with `globs`/`dirs`/
-  `prompt`): e.g. the Python-uv rule, the Svelte-runes rule, the RL reproducibility bundle. Only add
-  rules whose scope matches files that exist or clearly will.
-- Optionally the **guidelines-pointer** rule plus a copied `clean-code-principles.md` if the user
-  wants the deeper digest available (copy `references/clean-code-principles.md` into `.claude/`).
+- Write any other rule only when a visible project signal justifies it, such as an existing file, a confirmed
+  stack choice, a maintenance script, or a stated convention. Scope it with the appropriate `globs`, `dirs`,
+  or `prompt`; do not ship a catalog rule because it might become useful later.
+- Optionally write the **guidelines-pointer** rule and copy `clean-code-principles.md` if the user wants the
+  deeper digest available (copy `references/clean-code-principles.md` into `.claude/`).
+
+Derive every generated rule's wording for this project and make it conform to the project's own voice and
+style rules. Compare generated text with the relevant template blocks: byte-identical output means the rule
+was copied instead of derived, so rewrite it for this project or drop it.
 
 Keep bodies tight. Follow the live-rules format exactly (no bare `---` inside a body, use `***`). Write
 rule files plus the manifest through temporary siblings and rename them into place together. If a
@@ -479,12 +501,17 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 - [ ] Project intent was asked before the picker; current marketplace catalog plugin picker came third with
       intent-grounded recommendations, before Phase 0
 - [ ] Phase 0 assessment done (new/existing, codebase/not, existing `.claude/` read and merged)
-- [ ] When Sidequest is selected, routing profile and executor checkout choice recorded in the bootstrap plan
+- [ ] When Sidequest is selected, recurring jobs and required capabilities were confirmed before routing; routing
+      profile and executor checkout choice were recorded in the bootstrap plan
+- [ ] Every derived category is justified by this project's recurring work and by its selected model and effort;
+      every one has a non-empty `contract` and complete `readonly` and `artifactRoots` policy
 - [ ] Stack and compact project-detail interview complete; LSP binary prerequisites checked
 - [ ] Bootstrap plan created in the session scratchpad; helper check and install both succeeded
 - [ ] CLI-owned `enabledPlugins` left to `claude plugin install`; only non-plugin settings and portable
       marketplace declarations merged
-- [ ] Live rules and structure notes written after the successful install
+- [ ] Live rules and structure notes written after the successful install; every rule beyond the craft baseline
+      and self-improvement rule is justified by an observed project need, and every generated rule follows the
+      project's voice and style and is not byte-identical to a template block
 - [ ] Codebase map built via `map-codebase` (or deliberately skipped for a not-a-codebase project)
 - [ ] One reload requested after all pre-reload work; user reloaded before Phase 4
 - [ ] Every selected plugin verified installed, enabled, requested-scope, and usable; relevant hooks fire
@@ -493,7 +520,7 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 ## References
 
 - `references/stack-plugins.md` — stack → installable plugins/marketplaces/LSP catalog
-- `references/rule-templates.md` — craft-baseline and stack-specific starter live-rules, lift-ready
+- `references/rule-templates.md` — craft-baseline and stack-specific live-rule reference material
 - `references/self-improvement.md` — the baked-in self-improvement live rule and how to install it
 - `references/structure-notes.md` — the structure-notes template and when it's a real deliverable
 - `references/clean-code-principles.md` — optional bundled digest for the guidelines-pointer rule
