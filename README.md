@@ -11,13 +11,24 @@
 
 A small, growing marketplace of [Claude Code](https://claude.com/claude-code) plugins by [Eigenwise](https://eigenwise.io).
 
-## Documentation
+## 📖 Read the docs first. Really.
 
-The docs site is where the real guides live. This README is a signpost, not the full manual.
+Nobody reads the docs for a plugin. Fair enough, most plugins are one command
+and a config key. These are not that.
+
+Sidequest sends your work to different models and runs them in worktrees.
+Workbench writes config into your projects. Model Gateway puts other providers
+in your `/model` picker. Live Rules injects text into Claude's context on every
+prompt. Install these blind and you WILL see behavior you didn't ask for, with
+no idea which plugin did it.
+
+Twenty minutes up front saves you that.
 
 **[Read the Eigenwise Toolshed documentation](https://eigenwise.github.io/eigenwise-toolshed/)**
 
-Start with [getting started](https://eigenwise.github.io/eigenwise-toolshed/getting-started/), [Workbench](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/), [Sidequest](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/), or the [plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/).
+Start with [getting started](https://eigenwise.github.io/eigenwise-toolshed/getting-started/), then the page for whichever plugin you're installing: [Workbench](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/), [Sidequest](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/), or the [plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/) for every skill, hook, and command.
+
+This README is a signpost. The guides are over there.
 
 > Sharp little tools for Claude Code, kept in one shed. 🛠️
 

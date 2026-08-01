@@ -18,6 +18,8 @@ jobs:
       - name: Create GitHub Release from a marketplace tag
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout here, so gh cannot infer the repo from a git remote.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then

@@ -49,12 +49,12 @@ jobs:
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
+          # An existing tag is authoritative: cut.mjs only tags a commit whose six
+          # plugin suites passed. main routinely advances past it before this cron
+          # runs, so tag != main HEAD is the normal state, not a reason to bail.
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > "$RUNNER_TEMP/tag.json" 2>/dev/null; then
             tag_sha="$(node -p "require(process.env.RUNNER_TEMP + '/tag.json').object.sha")"
-            if [ "$tag_sha" != "$sha" ]; then
-              echo "$TAG already exists at $tag_sha, not main at $sha."
-              exit 1
-            fi
+            echo "Releasing existing $TAG at $tag_sha (main is at $sha)."
           else
             gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
               -f "ref=refs/tags/$TAG" \

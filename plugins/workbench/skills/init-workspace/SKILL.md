@@ -471,8 +471,12 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
   every future session share the setup. Offer to do it (ship-by-default if that's their preference). If
   they declined Git setup, say once that the workspace is uncommitted and that they can run `git init`,
   add a stack-appropriate `.gitignore`, then commit `.claude/` when they want to back it up.
-- Point them to https://eigenwise.github.io/eigenwise-toolshed/ for setup details, plugin guides, and anything
-  deeper than this handover.
+- **Send them to the docs, and say why it matters.** Most people skip the docs for a plugin, and these
+  plugins punish that: they route work to other models, write config into the project, and inject context
+  on every prompt. Point at https://eigenwise.github.io/eigenwise-toolshed/getting-started/ and name the
+  specific page for each plugin you just installed, so the link is one click from something they now have.
+  Say plainly that this handover is the short version and the guides cover the behavior they'll actually
+  hit. Do not bury this in a list of other links.
 
 ## Guidelines
 
