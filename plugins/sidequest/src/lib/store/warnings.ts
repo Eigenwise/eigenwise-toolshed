@@ -241,19 +241,32 @@ function claudeWebSearchUnavailable(ticket?: any) {
 }
 
 const DISPATCH_SYMBOL_CHECK_MAX = 12;
-const DISPATCH_SYMBOL_CHECK_MAX_SCOPES = 64;
 const DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES = 256 * 1024;
+const CODE_SYMBOL_CONTEXT = /\b(?:code\s+)?(?:symbol|function|class|method|export|type|interface|constant|identifier)\s*(?:named|called)?\s*$/i;
+
+function declaredOutputNames(ticket?: any) {
+  return new Set(normalizeFiles(ticket?.files).map((file?: any) => path.basename(String(file).replace(/[\\/]+$/, '')).toLowerCase()));
+}
+
+function checkableCodeSymbol(symbol?: any, prefix?: any) {
+  if (!/^[A-Za-z_$][\w$]*(?:\(\))?$/.test(String(symbol))) return false;
+  const name = String(symbol).replace(/\(\)$/, '');
+  if (/^c_[a-z0-9]+_[a-z0-9]+$/i.test(name) || /^[A-Z][A-Z0-9_]*$/.test(name)) return false;
+  if (String(symbol).endsWith('()') || /^_?[A-Z]/.test(name) || /^[a-z$][A-Za-z0-9$]*[A-Z][\w$]*$/.test(name)) return true;
+  return CODE_SYMBOL_CONTEXT.test(String(prefix));
+}
 
 function ticketSymbolReferences(ticket?: any) {
-  const candidates = `${ticket?.title || ''}\n${ticket?.description || ''}`.matchAll(/`([^`\r\n]+)`/g);
+  const text = `${ticket?.title || ''}\n${ticket?.description || ''}`;
+  const candidates = text.matchAll(/`([^`\r\n]+)`/g);
+  const declaredOutputs = declaredOutputNames(ticket);
   const symbols: string[] = [];
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const symbol = String(candidate[1] || '').trim();
-    if (symbol.length < 3 || !/[_.]|\(\)/.test(symbol)) continue;
-    if (!/^[A-Za-z_$][\w$]*(?:[._][A-Za-z_$][\w$]*)*(?:\(\))?$/.test(symbol)) continue;
     const key = symbol.toLowerCase();
-    if (seen.has(key)) continue;
+    const prefix = text.slice(Math.max(0, Number(candidate.index || 0) - 80), candidate.index);
+    if (symbol.length < 3 || declaredOutputs.has(key) || !checkableCodeSymbol(symbol, prefix) || seen.has(key)) continue;
     seen.add(key);
     symbols.push(symbol);
     if (symbols.length >= DISPATCH_SYMBOL_CHECK_MAX) break;
@@ -261,12 +274,10 @@ function ticketSymbolReferences(ticket?: any) {
   return symbols;
 }
 
-function symbolSearchIsBounded(projectPath?: any, target?: any, scopes?: any) {
-  if (!projectPath || !target || scopes.length > DISPATCH_SYMBOL_CHECK_MAX_SCOPES) return false;
-  const args = ['ls-tree', '-r', '--name-only', String(target)];
-  if (scopes.length) args.push('--', ...scopes);
+function symbolSearchIsBounded(projectPath?: any, target?: any) {
+  if (!projectPath || !target) return false;
   try {
-    execFileSync('git', args, {
+    execFileSync('git', ['ls-tree', '-r', '--name-only', String(target)], {
       cwd: projectPath,
       encoding: 'utf8',
       windowsHide: true,
@@ -279,10 +290,8 @@ function symbolSearchIsBounded(projectPath?: any, target?: any, scopes?: any) {
   }
 }
 
-function symbolExistsOnTarget(projectPath?: any, target?: any, symbol?: any, scopes?: any) {
-  const args = ['grep', '-F', '-q', '--', String(symbol), String(target)];
-  if (scopes.length) args.push('--', ...scopes);
-  const result = spawnSync('git', args, {
+function symbolExistsOnTarget(projectPath?: any, target?: any, symbol?: any) {
+  const result = spawnSync('git', ['grep', '-F', '-q', '--', String(symbol), String(target)], {
     cwd: projectPath,
     windowsHide: true,
     stdio: 'ignore',
@@ -290,6 +299,21 @@ function symbolExistsOnTarget(projectPath?: any, target?: any, symbol?: any, sco
   });
   if (result.error || result.signal || result.status == null) return null;
   return result.status === 0;
+}
+
+function currentSymbolTarget(projectPath?: any, target?: any) {
+  const local = `refs/heads/${target.branch}`;
+  try {
+    execFileSync('git', ['rev-parse', '--verify', `${local}^{commit}`], {
+      cwd: projectPath,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: 'pipe',
+    });
+    return local;
+  } catch (_) {
+    return target.upstream;
+  }
 }
 
 function symbolExistenceWarnings(ticket?: any, slug?: any) {
@@ -302,12 +326,12 @@ function symbolExistenceWarnings(ticket?: any, slug?: any) {
   } catch (_) {
     return [];
   }
-  const scopes = dispatchDeclaredFiles(ticket);
-  if (!symbolSearchIsBounded(projectPath, target.upstream, scopes)) return [];
+  const snapshot = currentSymbolTarget(projectPath, target);
+  if (!symbolSearchIsBounded(projectPath, snapshot)) return [];
   const warnings: string[] = [];
   for (const symbol of symbols) {
-    const exists = symbolExistsOnTarget(projectPath, target.upstream, symbol, scopes);
-    if (exists === false) warnings.push(`ticket names \`${symbol}\` but it does not appear on ${target.upstream}; verify this claim before acting.`);
+    const exists = symbolExistsOnTarget(projectPath, snapshot, symbol);
+    if (exists === false) warnings.push(`ticket text includes \`${symbol}\`, but it was not found in the current ${target.branch} snapshot. Context only: check the relevant path if it affects the task.`);
   }
   return warnings;
 }
