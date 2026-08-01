@@ -1,6 +1,6 @@
 "use strict";
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, autoReleasedClaimMessage, boardConfig, boundedExcerptForSubmission, claimReclaimable, clearScopeRequestMarker, commitScope, coerceStatus, createComment, crypto, dispatchState, effectiveScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, unregisterClaim, verifyCommandError, withTicketLock } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, autoReleasedClaimMessage, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, coerceStatus, createComment, crypto, dispatchState, effectiveScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, unregisterClaim, verifyCommandError, withTicketLock } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
   const SUBMISSION_GITREF_MAX = 200;
@@ -460,6 +460,14 @@ ${verify.outputTail}` : null
           ...t.claimRelease ? { claimRelease: t.claimRelease, message: autoReleasedClaimMessage(t.ref, t.claimRelease) } : {}
         };
       }
+      if (t.scopeRequest) {
+        return {
+          ok: false,
+          reason: "scope_request_pending",
+          ticket: t,
+          message: `submit: refused ${t.ref}; scope approval remains pending. Approve or deny the request before submitting.`
+        };
+      }
       const readiness = submissionReadiness({ unscopedPaths: opts.unscopedPaths });
       if (!readiness.ok) {
         return {
@@ -491,8 +499,6 @@ ${verify.outputTail}` : null
       }, range || {});
       const dispatch = dispatchState(t);
       const previousStatus = t.status;
-      clearScopeRequestMarker(t);
-      t.scopeRequest = null;
       delete t.scopePauseRecovery;
       t.claim = null;
       setDispatchTerminal(t, "submitted", opts.source || "cli", { failureShape: "unknown" });

@@ -203,7 +203,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'commit', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'scopeRequest', 'scopeDeny', 'commit', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -409,7 +409,7 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   const total = descriptionBytes(tools);
   assert.ok(total <= 5000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
   const payload = JSON.stringify({ tools });
-  assert.ok(payload.length <= 17000, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
+  assert.ok(payload.length <= 17200, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
@@ -1045,6 +1045,18 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   gitAt(worktree, ['reset', '--', 'foreign.js']);
   fs.unlinkSync(path.join(worktree, 'foreign.js'));
 
+  const requested = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['foreign/denied.js'] });
+  assert.deepEqual(requested.scopeRequest.files, ['foreign/denied.js']);
+  const blockedByScope = await callTool('submit', {
+    project, ref: ticket.ref, by, commit: committed.commit,
+    worktree: explicitPath, verify: 'node --test plugins/sidequest/test/mcp.test.js',
+    body: 'Scope-pending submission evidence',
+  });
+  assert.equal(blockedByScope.ok, false);
+  assert.equal(blockedByScope.reason, 'scope_request_pending');
+  assert.ok(store.getTicket(project, ticket.ref).scopeRequest, 'submit keeps the pending scope request');
+  assert.equal((await callTool('scopeDeny', { project, ref: ticket.ref, by: 'mcp-worktree-orchestrator', reason: 'The file is outside this ticket.' })).ok, true);
+
   const finalReport = `MCP terminal evidence ${'x'.repeat(1600)}`;
   const submitted = await callTool('submit', {
     project, ref: ticket.ref, by, commit: committed.commit,
@@ -1347,7 +1359,7 @@ test('MCP scopeRequest pauses a claimed executor until the orchestrator expands 
   assert.deepEqual(approved.files, ['lib', 'other/new.js']);
 });
 
-test('MCP scope request denial clears a pending request without widening or releasing the ticket', async () => {
+test('MCP scopeDeny clears a pending request without widening or releasing the ticket', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
   const ticket = store.createTicket(project, {
@@ -1360,7 +1372,7 @@ test('MCP scope request denial clears a pending request without widening or rele
   const requested = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['foreign/denied.js'] });
   assert.deepEqual(requested.scopeRequest.files, ['foreign/denied.js']);
 
-  const denied = await callTool('scopeRequest', {
+  const denied = await callTool('scopeDeny', {
     project,
     ref: ticket.ref,
     by: 'mcp-scope-denial-orchestrator',
@@ -1388,7 +1400,7 @@ test('MCP scope request denial clears a pending request without widening or rele
   assert.deepEqual(gitAt(worktree, ['show', '--format=', '--name-only', 'HEAD']).split(/\r?\n/).filter(Boolean), ['lib/allowed.js']);
   assert.match(gitAt(worktree, ['status', '--porcelain']), /\?\? foreign\//, 'the denied path stays outside the board commit');
 
-  const noPending = await callTool('scopeRequest', {
+  const noPending = await callTool('scopeDeny', {
     project,
     ref: ticket.ref,
     by: 'mcp-scope-denial-orchestrator',
@@ -1429,6 +1441,7 @@ test('MCP mixed scope requests keep the full intent and block partial commits', 
   assert.equal(blocked.reason, 'scope_request_pending');
   assert.match(blocked.message, new RegExp(`Already effective: ${docsFile}`));
   assert.match(blocked.message, new RegExp(`sidequest update ${ticket.ref} --files`));
+  assert.match(blocked.message, new RegExp(`sidequest scope-deny ${ticket.ref} --reason`));
   assert.equal(gitAt(worktree, ['rev-parse', 'HEAD']), base);
 
   await callTool('update', { project, ref: ticket.ref, by: 'mcp-mixed-scope-approver', files: [sourceFile] });

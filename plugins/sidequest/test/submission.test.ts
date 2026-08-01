@@ -132,6 +132,21 @@ test('CLI update reports a scope request that remains pending after a partial ap
   assert.strictEqual(runCli(['release', t.ref, '--by', by]).status, 0);
 });
 
+test('submit keeps a pending scope request in place', () => {
+  const t = addTicket('pending scope blocks submit');
+  const by = 'worker-a';
+  assert.strictEqual(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.requestScope(slug, t.ref, by, ['lib/new.js']).ok, true);
+
+  const refused = store.submitTicket(slug, t.ref, by, { commit: COMMIT });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'scope_request_pending');
+  const after = store.getTicket(slug, t.ref);
+  assert.deepStrictEqual(after.files, ['lib/fixture.js']);
+  assert.deepStrictEqual(after.scopeRequest.files, ['lib/new.js']);
+  assert.strictEqual(after.claim.by, by);
+});
+
 test('submit requires a held claim, records the submission, and releases the claim in doing', () => {
   const t = addTicket('submit happy path');
 
